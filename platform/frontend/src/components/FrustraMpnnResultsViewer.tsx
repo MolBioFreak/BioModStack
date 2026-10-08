@@ -19,7 +19,6 @@ import {
     validateFrustraMpnnOwnedSettings,
     type FrustraMpnnClassCounts,
     type FrustraMpnnClassFractions,
-    type FrustraMpnnLandscapeFilters,
     type FrustraMpnnRequestedSettings,
 } from '../lib/frustraMpnnApi.js';
 import { assertFrustraMpnnSourceBinding, assertTerminalSourceAuthority } from '../lib/frustraMpnnViewerAuthority.js';
@@ -31,6 +30,7 @@ import {
 import {
     CANONICAL_AMINO_ACIDS,
     groupExact20Landscape,
+    type CmLandscapeResidue,
 } from './conformationalMapping/conformationalMappingSemantics.js';
 import type { ResidueRef } from '../structureViewer/contracts/structureIdentity.js';
 import type { StructureSceneController } from '../structureViewer/runtime/StructureSceneController.js';
@@ -127,8 +127,9 @@ export default function FrustraMpnnResultsViewer({
     const [slotStatus, setSlotStatus] = useState<'' | 'ok' | 'missing'>('');
     const [mutationFilter, setMutationFilter] = useState('');
     const [selectedResidue, setSelectedResidue] = useState<ResidueRef | null>(null);
-    const [metricWorkbenchOpen, setMetricWorkbenchOpen] = useState(true);
-    const pendingRestoreOffset = useRef<number | null>(null);
+    const [metricWorkbenchOpen, setMetricWorkbenchOpen] = useState(false);
+    const pendingRestoreInvocation = useRef<string | null>(null);
+    const [selectedLandscapeKey, setSelectedLandscapeKey] = useState<string | null>(null);
     const [restoredPresentation, setRestoredPresentation] = useState<StructureScenePresentation | null>(null);
     const [frustrampnnSettings, setFrustrampnnSettings] = useState<FrustraMpnnRequestedSettings>(CANONICAL_FRUSTRAMPNN_SETTINGS);
 
@@ -212,9 +213,14 @@ export default function FrustraMpnnResultsViewer({
         setSearchParams(next);
     };
     useEffect(() => {
-        setOffset(pendingRestoreOffset.current ?? 0);
-        pendingRestoreOffset.current = null;
+        if (pendingRestoreInvocation.current === selectedInvocation) {
+            pendingRestoreInvocation.current = null;
+            return;
+        }
+        pendingRestoreInvocation.current = null;
+        setOffset(0);
         setSelectedResidue(null);
+        setSelectedLandscapeKey(null);
     }, [selectedInvocation]);
 
     const detail = useQuery({
@@ -306,20 +312,11 @@ export default function FrustraMpnnResultsViewer({
         queryFn: ({ signal }) => fetchFrustraMpnnStructureMap(structureMapArtifact!.download_url, signal),
         enabled: Boolean(canonicalSucceeded && structureMapArtifact),
     });
-    const filters: FrustraMpnnLandscapeFilters = {
-        ...(chainFilter.trim() ? { auth_asym_id: chainFilter.trim() } : {}),
-        ...(slotStatus ? { status: slotStatus } : {}),
-        ...(mutationFilter ? { mutation_aa: mutationFilter } : {}),
-    };
-    const landscape = useQuery({
-        queryKey: ['frustrampnn-landscape-page', job.id, selectedInvocation, offset, filters],
-        queryFn: ({ signal }) => fetchFrustraMpnnLandscape(job.id, selectedInvocation!, offset, PAGE_SIZE, filters, signal),
-        enabled: Boolean(selectedInvocation && canonicalSucceeded),
-    });
     const completeLandscape = useQuery({
         queryKey: ['frustrampnn-landscape-complete', job.id, selectedInvocation],
         queryFn: ({ signal }) => collectCompleteFrustraMpnnLandscape(
             (pageOffset, limit) => fetchFrustraMpnnLandscape(job.id, selectedInvocation!, pageOffset, limit, {}, signal),
+            undefined, detail.data?.summary.slot_support.expected,
         ),
         enabled: Boolean(selectedInvocation && canonicalSucceeded),
         staleTime: Infinity,
@@ -377,11 +374,41 @@ export default function FrustraMpnnResultsViewer({
         }
     }, [allResidues, canonicalSucceeded, completeLandscape.data, detail.data, identityAuthorityArtifact, job.id, structureArtifact, structureMap.data, structureMapArtifact]);
 
+    // Filter only the validated immutable collection; table navigation makes no new reads.
+    const filteredRows = useMemo(() => completeLandscape.data?.filter((row) => (
+        (!chainFilter || row.auth_asym_id === chainFilter)
+        && (!slotStatus || row.status === slotStatus)
+        && (!mutationFilter || row.mutation_aa === mutationFilter)
+    )), [completeLandscape.data, chainFilter, slotStatus, mutationFilter]);
+    const landscape = {
+        data: filteredRows ? { rows: filteredRows.slice(offset, offset + PAGE_SIZE), total: filteredRows.length, next_offset: offset + PAGE_SIZE < filteredRows.length ? offset + PAGE_SIZE : null } : undefined,
+        isFetching: completeLandscape.isFetching,
+        isError: completeLandscape.isError,
+        error: completeLandscape.error,
+    };
+    const matchingProfiles = allResidues.filter((residue) => selectedLandscapeKey
+        ? residue.key === selectedLandscapeKey
+        : selectedResidue && residue.auth_asym_id === selectedResidue.authAsymId
+            && residue.auth_seq_id === String(selectedResidue.authSeqId)
+            && residue.insertion_code === (selectedResidue.insertionCode ?? '')
+            && (!selectedResidue.sourceInstanceId || residue.entity_instance_id === selectedResidue.sourceInstanceId));
+    // Retained reviews carry author identity only; never guess among matching entities.
+    const selectedProfile = matchingProfiles.length === 1 ? matchingProfiles[0] : undefined;
+    const selectLandscapeResidue = (residue: CmLandscapeResidue) => {
+        setSelectedLandscapeKey(residue.key);
+        const profile = metricResult.bundle?.residueProfiles.find((item) => item.residue.key === residue.key);
+        setSelectedResidue(profile?.identity ?? {
+            documentId: 'primary', sourceInstanceId: residue.entity_instance_id,
+            authAsymId: residue.auth_asym_id, authSeqId: Number(residue.auth_seq_id),
+            insertionCode: residue.insertion_code,
+        });
+    };
     const authorChains = useMemo(() => Array.from(new Set(allResidues.map((residue) => residue.auth_asym_id))), [allResidues]);
     const pageResidues = useMemo(() => {
         if (!landscape.data || slotStatus || mutationFilter) return [];
         try { return groupExact20Landscape(landscape.data.rows); } catch { return []; }
-    }, [landscape.data, mutationFilter, slotStatus]);
+    }, [filteredRows, offset, mutationFilter, slotStatus]);
+    const visibleProfiles = selectedProfile ? [selectedProfile, ...pageResidues.filter((residue) => residue.key !== selectedProfile.key)] : pageResidues;
     const coverageReadiness = detail.data ? buildFrustraMpnnCoverageReadiness(
         detail.data.summary.residue_support,
         detail.data.summary.slot_support,
@@ -438,7 +465,7 @@ export default function FrustraMpnnResultsViewer({
                     <div className="flex items-center gap-4">
                         <button type="button" onClick={onBack} className="rounded-lg border border-slate-700 px-3 py-2 text-sm hover:border-slate-500">← {backLabel}</button>
                         <div>
-                            <h1 className="text-lg font-semibold">FrustraMPNN Results Viewer</h1>
+                            <h1 className="text-lg font-semibold">FrustraMPNN results</h1>
                             <p className="mt-1 text-xs text-slate-500">{resultContext.executionLabel} <span className="font-mono">{job.id}</span></p>
                         </div>
                     </div>
@@ -498,14 +525,8 @@ export default function FrustraMpnnResultsViewer({
                 {resultContext.canReanalyzePersistedInputs && reanalysis.isError && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(reanalysis.error, 'Reanalysis child could not be queued.')}</div>}
                 {resultContext.canReanalyzePersistedInputs && nextReceipt.data && <div role="status" aria-live="polite" className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-sm text-cyan-100">Reanalysis child {nextReceipt.data.status}.{nextResultJobId && <button type="button" onClick={() => onOpenJob(nextResultJobId)} className="ml-2 underline">Open child results</button>}</div>}
 
-                {handoffSource ? <FrustraMpnnCandidateHandoffPanel
-                    key={JSON.stringify([handoffSource.parent_job_id, handoffSource.invocation_id, handoffSource.summary.landscape_sha256])}
-                    parentJobId={handoffSource.parent_job_id}
-                    parentInvocationId={handoffSource.invocation_id}
-                    parentLandscapeSha256={handoffSource.summary.landscape_sha256}
-                    onOpenJob={onOpenJob}
-                /> : <p role="status" className="text-xs text-slate-400">External candidate reanalysis requires an available selected parent landscape.</p>}
-                <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5" aria-label="Persisted execution state">
+                <details className="rounded-xl border border-slate-800 p-3"><summary className="cursor-pointer text-sm">Execution details</summary>
+                <section className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5" aria-label="Persisted execution state">
                     {[
                         ['Requested', receipt.data?.created_at ?? job.created_at],
                         ['Status', explicitState],
@@ -514,6 +535,7 @@ export default function FrustraMpnnResultsViewer({
                         ['Failure class', detail.data?.failure_class ?? (canonicalSucceeded ? 'none' : state === 'failed' ? 'scheduler_failure' : 'none')],
                     ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-800 bg-slate-900/60 p-3"><div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</div><div className="mt-1 break-words text-sm text-slate-200">{value}</div></div>)}
                 </section>
+                </details>
                 {detail.data?.failure_class && <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100"><span className="font-semibold">Failure class persisted:</span> {detail.data.failure_class}. Unsafe runtime internals are not exposed by this response.</div>}
 
                 {statisticsAnalysis.isError && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(statisticsAnalysis.error, 'Derived statistics lifecycle is unavailable.')}</div>}
@@ -527,7 +549,7 @@ export default function FrustraMpnnResultsViewer({
                 />}
                 {detail.data && <FrustraMpnnResultAuthoritySurface detail={detail.data} statisticsOverride={fetchedStatistics} />}
 
-                {detail.data && <details aria-label="FrustraMPNN reanalysis settings" className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                {resultContext.canReanalyzePersistedInputs && detail.data && <details aria-label="FrustraMPNN reanalysis settings" className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
                     <summary className="cursor-pointer font-semibold">Reanalysis settings</summary>
                     <p className="mt-1 text-xs text-slate-500">Edit a complete requested-settings document for the next governed child.</p>
                     <FrustraMpnnSettingsPanel
@@ -551,12 +573,12 @@ export default function FrustraMpnnResultsViewer({
                         <section className="grid gap-4 xl:grid-cols-2">
                             <section className="rounded-xl border border-emerald-500/25 bg-gradient-to-br from-emerald-950/25 to-slate-900/60 p-4">
                                 <div className="flex flex-wrap items-start justify-between gap-3">
-                                    <div><h2 className="font-semibold">Landscape analysis readiness</h2><p className="mt-1 text-xs text-slate-400">Can this persisted result support complete residue- and mutation-level interpretation?</p></div>
+                                    <div><h2 className="font-semibold">Coverage</h2><p className="mt-1 text-xs text-slate-400">Available residues and substitution scores.</p></div>
                                     <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${coverageReadiness?.status === 'Complete' ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200' : 'border-amber-400/40 bg-amber-400/10 text-amber-100'}`}>{coverageReadiness?.status}</span>
                                 </div>
                                 <div className="mt-4 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
                                     <div className="rounded-lg border border-slate-700/80 bg-slate-950/35 p-3"><div className="text-slate-400">Residues analyzed</div><div className="mt-1 text-xl font-semibold text-slate-100">{detail.data.summary.residue_support.scoreable.toLocaleString()} <span className="text-sm font-normal text-slate-500">/ {detail.data.summary.residue_support.expected.toLocaleString()}</span></div><div className="mt-1 text-emerald-300">{pct(coverageReadiness?.residueCoverage ?? 0)} coverage</div></div>
-                                    <div className="rounded-lg border border-slate-700/80 bg-slate-950/35 p-3"><div className="text-slate-400">Mutation scores available</div><div className="mt-1 text-xl font-semibold text-slate-100">{detail.data.summary.slot_support.scoreable.toLocaleString()} <span className="text-sm font-normal text-slate-500">/ {detail.data.summary.slot_support.expected.toLocaleString()}</span></div><div className="mt-1 text-emerald-300">{pct(coverageReadiness?.slotCoverage ?? 0)} coverage</div></div>
+                                    <div className="rounded-lg border border-slate-700/80 bg-slate-950/35 p-3"><div className="text-slate-400">Substitution scores available</div><div className="mt-1 text-xl font-semibold text-slate-100">{detail.data.summary.slot_support.scoreable.toLocaleString()} <span className="text-sm font-normal text-slate-500">/ {detail.data.summary.slot_support.expected.toLocaleString()}</span></div><div className="mt-1 text-emerald-300">{pct(coverageReadiness?.slotCoverage ?? 0)} coverage</div></div>
                                     <div className="rounded-lg border border-slate-700/80 bg-slate-950/35 p-3"><div className="text-slate-400">Unresolved data</div><div className="mt-1 text-xl font-semibold text-slate-100">{coverageReadiness?.missingSlots.toLocaleString()} <span className="text-sm font-normal text-slate-500">missing slots</span></div><div className="mt-1 text-slate-400">{coverageReadiness?.missingResidues.toLocaleString()} residues · {coverageReadiness?.issueCount.toLocaleString()} mapping issues</div></div>
                                 </div>
                                 {coverageReadiness && (coverageReadiness.issueCount > 0 || coverageReadiness.missingness.length > 0) && <details className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs"><summary className="cursor-pointer font-medium text-amber-100">Review coverage diagnostics</summary><ul className="mt-2 list-disc pl-5 text-amber-200">{coverageReadiness.missingness.map(([reason, count]) => <li key={reason}>{reason.replaceAll('_', ' ')}: {count.toLocaleString()}</li>)}</ul></details>}
@@ -589,7 +611,7 @@ export default function FrustraMpnnResultsViewer({
                                 showMetricWorkbench={Boolean(metricResult.bundle) && metricWorkbenchOpen}
                                 onMetricWorkbenchVisibilityChange={setMetricWorkbenchOpen}
                                 showSequenceTrack={Boolean(metricResult.bundle) && metricWorkbenchOpen}
-                                residueSelections={selectedResidue ? [selectedResidue] : []}
+                                residueSelections={selectedProfile && metricResult.bundle ? metricResult.bundle.residueProfiles.filter((profile) => profile.residue.key === selectedProfile.key).map((profile) => profile.identity) : []}
                                 onControllerReady={setSceneController}
                                 restoredPresentation={restoredPresentation}
                                 showM6Workbench
@@ -598,7 +620,7 @@ export default function FrustraMpnnResultsViewer({
 
                         <section id="frustrampnn-landscape" className="scroll-mt-4 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
                             <div className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-800 p-3">
-                                <div><h2 className="font-semibold">Exact residue explorer</h2><p className="mt-1 text-xs text-slate-500">Navigate the complete mutation map, select an exact author residue, then inspect its canonical 20-substitution profile below.</p></div>
+                                <div><h2 className="font-semibold">Residue explorer</h2><p className="mt-1 text-xs text-slate-500">Select a residue to inspect all 20 slots. Table filters do not hide the selected profile.</p></div>
                                 <div className="flex flex-wrap items-end gap-2 text-xs">
                                     <label className="text-slate-400">Author chain<select aria-label="Filter by exact author chain" value={chainFilter} onChange={(event) => { setChainFilter(event.target.value); setOffset(0); }} className="mt-1 block min-w-24 rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-200"><option value="">All chains</option>{authorChains.map((chain) => <option key={chain} value={chain}>{chain}</option>)}</select></label>
                                     <label className="text-slate-400">Slot status<select aria-label="Filter by FrustraMPNN slot status" value={slotStatus} onChange={(event) => { setSlotStatus(event.target.value as typeof slotStatus); setOffset(0); }} className="mt-1 block rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-200"><option value="">All statuses</option><option value="ok">Scoreable</option><option value="missing">Missing</option></select></label>
@@ -609,21 +631,18 @@ export default function FrustraMpnnResultsViewer({
                             {allResidues.length > 0 ? <FrustraMpnnLandscapeOverview
                                 residues={allResidues}
                                 selectedResidue={selectedResidue}
-                                onSelectResidue={(residue) => {
-                                    const profile = metricResult.bundle?.residueProfiles.find((item) => item.residue.key === residue.key);
-                                    setSelectedResidue(profile?.identity ?? null);
-                                }}
+                                selectedKey={selectedProfile?.key}
+                                onSelectResidue={selectLandscapeResidue}
                             /> : completeLandscape.isLoading ? <div role="status" className="border-b border-slate-800 p-4 text-sm text-slate-400">Loading the complete persisted landscape…</div> : null}
-                            <aside aria-label="Planned frustration-guided mutation workflow" className="m-3 rounded-xl border border-violet-500/30 bg-violet-500/5 p-3">
-                                <div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="text-sm font-semibold text-violet-100">Future: frustration-guided mutation reorchestration</h3><p className="mt-1 max-w-5xl text-xs text-slate-400">Planned workflow: select exact persisted residue/mutation evidence from this map, create an explicit mutation set, and submit a new provenance-linked sample through the single scheduler for fresh structure and FrustraMPNN analysis. FrustraMPNN remains the analysis authority; it will not silently redesign or overwrite the source Design.</p></div><span className="rounded-full border border-violet-400/30 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-violet-200">Planned · not active</span></div>
-                            </aside>
                             {landscape.isError && <div role="alert" className="m-3 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-100">{errorMessage(landscape.error, 'Landscape page unavailable.')}</div>}
-                            {pageResidues.length > 0 ? (
+                            {visibleProfiles.length > 0 && (
                                 <section aria-label="Exact 20-substitution residue profiles" className="border-t border-slate-800">
-                                    <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-950/35 px-3 py-2"><div><h3 className="text-sm font-medium text-slate-200">Exact 20-substitution profiles</h3><p className="text-[11px] text-slate-500">Scores are persisted authority. A cyan row marks the residue currently synchronized with the structure.</p></div>{selectedResidue && <span className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 font-mono text-[11px] text-cyan-200">Selected {selectedResidue.authAsymId}:{selectedResidue.authSeqId}{selectedResidue.insertionCode}</span>}</div>
-                                    <div className="max-h-[650px] overflow-auto"><table className="min-w-[1100px] text-left text-[10px]"><thead className="sticky top-0 z-10 bg-slate-950 text-slate-400 shadow-sm"><tr><th className="sticky left-0 z-20 min-w-36 bg-slate-950 p-2">Author residue</th>{CANONICAL_AMINO_ACIDS.map((aa) => <th key={aa} className="p-2 text-center font-mono text-xs">{aa}</th>)}</tr></thead><tbody>{pageResidues.map((residue, rowIndex) => { const isSelected = selectedResidue?.authAsymId === residue.auth_asym_id && String(selectedResidue.authSeqId) === residue.auth_seq_id && (selectedResidue.insertionCode ?? '') === residue.insertion_code; return <tr key={residue.key} className={`border-t border-slate-800/80 ${isSelected ? 'bg-cyan-500/8' : rowIndex % 2 === 0 ? 'bg-slate-950/20' : ''}`}><th className={`sticky left-0 p-2 ${isSelected ? 'bg-cyan-950/90' : 'bg-slate-900'}`}><button type="button" aria-label={`Select exact author residue ${residue.auth_asym_id} ${residue.auth_seq_id}${residue.insertion_code}, wild type ${residue.wt}`} className={`w-full rounded px-2 py-1.5 text-left hover:bg-cyan-500/10 hover:text-cyan-200 ${isSelected ? 'font-semibold text-cyan-200' : 'text-slate-300'}`} onClick={() => { const profile = metricResult.bundle?.residueProfiles.find((item) => item.residue.key === residue.key); setSelectedResidue(profile?.identity ?? null); }}><span className="font-mono">{residue.auth_asym_id}:{residue.auth_seq_id}{residue.insertion_code}</span><span className="ml-2 text-slate-500">WT {residue.wt}</span></button></th>{residue.slots.map((slot) => <td key={slot.mutation_aa} className="p-1"><div title={`${residue.wt}→${slot.mutation_aa} · ${slot.status}${slot.reason ? ` · ${slot.reason}` : ''}`} className={`relative rounded border px-1 py-2 text-center font-mono ${classStyle(slot.class)} ${slot.mutation_aa === residue.wt ? 'ring-1 ring-inset ring-white/70' : ''}`}><span className="text-[11px]">{fmt(slot.score)}</span>{slot.mutation_aa === residue.wt && <span className="absolute right-0.5 top-0 text-[7px] text-white">WT</span>}</div></td>)}</tr>; })}</tbody></table></div>
+                                    <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-950/35 px-3 py-2"><div><h3 className="text-sm font-medium text-slate-200">Exact 20-substitution profiles</h3><p className="text-[11px] text-slate-500">The selected profile appears first, independently of table filters. Missing scores remain unavailable.</p></div>{selectedResidue && <span className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 font-mono text-[11px] text-cyan-200">Selected {selectedResidue.authAsymId}:{selectedResidue.authSeqId}{selectedResidue.insertionCode}</span>}</div>
+                                    {selectedProfile && !metricResult.bundle && <p role="status" className="p-3 text-xs text-slate-400">Selected profile available; structure mapping unavailable.</p>}
+                                    <div className="max-h-[650px] overflow-auto"><table className="min-w-[1100px] text-left text-[10px]"><thead className="sticky top-0 z-10 bg-slate-950 text-slate-400 shadow-sm"><tr><th className="sticky left-0 z-20 min-w-36 bg-slate-950 p-2">Author residue</th>{CANONICAL_AMINO_ACIDS.map((aa) => <th key={aa} className="p-2 text-center font-mono text-xs">{aa}</th>)}</tr></thead><tbody>{visibleProfiles.map((residue, rowIndex) => { const isSelected = selectedProfile?.key === residue.key; return <tr key={residue.key} className={`border-t border-slate-800/80 ${isSelected ? 'bg-cyan-500/8' : rowIndex % 2 === 0 ? 'bg-slate-950/20' : ''}`}><th className={`sticky left-0 p-2 ${isSelected ? 'bg-cyan-950/90' : 'bg-slate-900'}`}><button type="button" aria-label={`Select exact author residue ${residue.auth_asym_id} ${residue.auth_seq_id}${residue.insertion_code}, wild type ${residue.wt}`} className={`w-full rounded px-2 py-1.5 text-left hover:bg-cyan-500/10 hover:text-cyan-200 ${isSelected ? 'font-semibold text-cyan-200' : 'text-slate-300'}`} onClick={() => selectLandscapeResidue(residue)}><span className="font-mono">{residue.auth_asym_id}:{residue.auth_seq_id}{residue.insertion_code}</span><span className="ml-2 text-slate-500">WT {residue.wt}</span></button></th>{residue.slots.map((slot) => <td key={slot.mutation_aa} className="p-1"><div title={`${residue.wt}→${slot.mutation_aa} · ${slot.status}${slot.reason ? ` · ${slot.reason}` : ''}`} className={`relative rounded border px-1 py-2 text-center font-mono ${classStyle(slot.class)} ${slot.mutation_aa === residue.wt ? 'ring-1 ring-inset ring-white/70' : ''}`}><span className="text-[11px]">{fmt(slot.score)}</span>{slot.mutation_aa === residue.wt && <span className="absolute right-0.5 top-0 text-[7px] text-white">WT</span>}</div></td>)}</tr>; })}</tbody></table></div>
                                 </section>
-                            ) : (
+                            )}
+                            {(slotStatus || mutationFilter || !visibleProfiles.length) && (
                                 <div className="max-h-[650px] overflow-auto"><table className="w-full min-w-[900px] text-left text-xs"><thead className="sticky top-0 bg-slate-900 text-slate-400"><tr><th className="p-2">Exact author residue</th><th className="p-2">WT→mutation</th><th className="p-2">Score</th><th className="p-2">Canonical class</th><th className="p-2">Support / reason</th></tr></thead><tbody>{landscape.data?.rows.map((row) => <tr key={`${row.entity_instance_id}:${row.sequence_index}:${row.mutation_aa}`} className="border-t border-slate-800"><td className="p-2">{row.auth_asym_id}:{row.auth_seq_id}{row.insertion_code}</td><td className="p-2">{row.wt}→{row.mutation_aa}</td><td className="p-2">{fmt(row.score)}</td><td className="p-2">{row.class ?? 'unavailable'}</td><td className="p-2">{row.status}{row.reason ? ` · ${row.reason}` : ''}</td></tr>)}</tbody></table></div>
                             )}
                             <div className="flex items-center justify-between border-t border-slate-800 p-3 text-xs"><span>{landscape.data ? (landscape.data.rows.length > 0 ? `${offset + 1}–${offset + landscape.data.rows.length} of ${landscape.data.total}` : `0 of ${landscape.data.total}`) : 'loading'} persisted slots</span><div className="flex gap-2"><button type="button" disabled={offset === 0 || landscape.isFetching} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))} className="rounded border border-slate-700 px-3 py-1.5 disabled:opacity-30">Previous</button><button type="button" disabled={landscape.data?.next_offset == null || landscape.isFetching} onClick={() => setOffset(landscape.data!.next_offset!)} className="rounded border border-slate-700 px-3 py-1.5 disabled:opacity-30">Next</button></div></div>
@@ -649,10 +668,12 @@ export default function FrustraMpnnResultsViewer({
                                 setChainFilter(typeof review.filters.chain === 'string' ? review.filters.chain : '');
                                 setSlotStatus(review.filters.slot_status === 'ok' || review.filters.slot_status === 'missing' ? review.filters.slot_status : '');
                                 setMutationFilter(typeof review.filters.mutation === 'string' ? review.filters.mutation : '');
-                                const restoredOffset = typeof review.viewer_state.landscape_offset === 'number' ? review.viewer_state.landscape_offset : 0;
-                                pendingRestoreOffset.current = restoredOffset;
+                                const savedOffset = review.viewer_state.landscape_offset;
+                                const restoredOffset = typeof savedOffset === 'number' && Number.isInteger(savedOffset) && savedOffset >= 0 ? savedOffset : 0;
+                                pendingRestoreInvocation.current = reference.invocation_id === selectedInvocation ? null : reference.invocation_id;
+                                setSelectedLandscapeKey(null);
                                 setOffset(restoredOffset);
-                                setMetricWorkbenchOpen(review.viewer_state.metric_workbench_open !== false);
+                                setMetricWorkbenchOpen(review.viewer_state.metric_workbench_open === true);
                                 setRestoredPresentation({
                                     camera: review.viewer_state.structure_camera as StructureScenePresentation['camera'],
                                     representations: review.viewer_state.structure_representations as StructureScenePresentation['representations'],
@@ -669,9 +690,19 @@ export default function FrustraMpnnResultsViewer({
                             }}
                         />}
 
-                        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><h2 className="font-semibold">Governed artifacts</h2><p className="mt-1 text-xs text-slate-500">Authenticated content-addressed downloads. Runtime filesystem paths and storage topology are not exposed.</p><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{artifacts.data?.items.map((artifact) => <a key={artifact.artifact_id} href={artifact.download_url} className="rounded-lg border border-slate-800 p-3 text-xs hover:border-cyan-500 focus:border-cyan-400"><div className="font-medium text-slate-200">{artifact.role.replaceAll('_', ' ')}</div><div className="mt-1 text-slate-500">{artifact.media_type} · {artifact.size_bytes.toLocaleString()} bytes</div><div className="mt-1 font-mono text-[10px] text-slate-600" title={artifact.content_sha256}>{shortHash(artifact.content_sha256)}</div></a>)}</div></section>
+                        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><h2 className="font-semibold">Downloads</h2><p className="mt-1 text-xs text-slate-500">Saved structures and analysis files.</p><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{artifacts.data?.items.map((artifact) => <a key={artifact.artifact_id} href={artifact.download_url} className="rounded-lg border border-slate-800 p-3 text-xs hover:border-cyan-500 focus:border-cyan-400"><div className="font-medium text-slate-200">{artifact.role.replaceAll('_', ' ')}</div><div className="mt-1 text-slate-500">{artifact.media_type} · {artifact.size_bytes.toLocaleString()} bytes</div><div className="mt-1 font-mono text-[10px] text-slate-600" title={artifact.content_sha256}>{shortHash(artifact.content_sha256)}</div></a>)}</div></section>
                     </>
                 )}
+                <details className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                    <summary className="cursor-pointer font-semibold">Optional: analyze external candidates</summary>
+                {handoffSource ? <FrustraMpnnCandidateHandoffPanel
+                    key={JSON.stringify([handoffSource.parent_job_id, handoffSource.invocation_id, handoffSource.summary.landscape_sha256])}
+                    parentJobId={handoffSource.parent_job_id}
+                    parentInvocationId={handoffSource.invocation_id}
+                    parentLandscapeSha256={handoffSource.summary.landscape_sha256}
+                    onOpenJob={onOpenJob}
+                /> : <p role="status" className="text-xs text-slate-400">External candidate reanalysis requires an available selected parent landscape.</p>}
+                </details>
                 {comparisonIdentityError && <div role="alert">Comparison reference does not match the exact requested job and invocation.</div>}
                 {detail.data && !canonicalSucceeded && <div role={canonicalAuthorityError ? 'alert' : 'status'} className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 text-sm text-amber-100">{detail.data.status === 'failed' ? 'Failed: the selected persisted invocation has no canonical result matrix.' : detail.data.status === 'not_run' ? 'Not run: the selected invocation was explicitly skipped and has no canonical result matrix.' : `Typed result missingness: ${canonicalAuthorityError ?? 'canonical_result_unavailable'}`}</div>}
                 {!detail.data && (state === 'queued' || state === 'running') && <div role="status" aria-live="polite" className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-5 text-sm text-cyan-100">{state === 'queued' ? 'Queued: waiting for scheduler admission.' : 'Running: this job has not published terminal result authority yet.'}</div>}
