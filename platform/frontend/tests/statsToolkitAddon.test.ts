@@ -7,12 +7,14 @@ const appSource = readFileSync(resolve('src/App.tsx'), 'utf8');
 const layoutSource = readFileSync(resolve('src/components/Layout.tsx'), 'utf8');
 const launcherSource = readFileSync(resolve('src/components/StatsToolkitLauncher.tsx'), 'utf8');
 
-test('core exposes one external Stats Toolkit launcher without bundling analytics', () => {
+test('core embeds the isolated Stats Toolkit inside the BioModStack tab', () => {
   assert.match(appSource, /path="\/stats" element=\{<StatsToolkitLauncher \/>\}/);
   assert.match(layoutSource, /to="\/stats"/);
   assert.match(layoutSource, />\s*Stats Toolkit\s*<\/Link>/);
   assert.match(launcherSource, /fetch\('\/api\/system\/stats-toolkit'/);
-  assert.match(launcherSource, /Open Stats Toolkit/);
-  assert.match(launcherSource, /href=\{status\?\.entry_url/);
-  assert.doesNotMatch(launcherSource, /iframe/i);
+  assert.match(launcherSource, /<iframe/);
+  assert.match(launcherSource, /src=\{status\.entry_url\}/);
+  assert.match(launcherSource, /BioModStack Stats Toolkit workspace/);
+  assert.doesNotMatch(launcherSource, /Open Stats Toolkit/);
+  assert.doesNotMatch(launcherSource, /href=\{status\?\.entry_url/);
 });
