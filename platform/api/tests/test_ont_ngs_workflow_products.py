@@ -33,6 +33,53 @@ def test_all_canonical_ont_products_have_direct_entrypoints() -> None:
         workflow_text = (REPO_ROOT / rel_path).read_text(encoding="utf-8")
         assert "workflow {" in workflow_text
         assert "NANOPORE_METHYLATION" in workflow_text
+        assert f"params.ont_workflow_id = params.ont_workflow_id ?: '{workflow_id}'" in workflow_text
+        assert "params.manifest_contract = params.manifest_contract ?: 'sequence_qc.manifest.v1'" in workflow_text
+
+
+def test_direct_ont_entrypoints_bind_product_specific_cli_defaults() -> None:
+    expected_defaults = {
+        "ont_basecall_dna": {
+            "params.ont_molecule_type = params.ont_molecule_type ?: 'dna'",
+            "params.run_modkit = params.run_modkit != null ? params.run_modkit : false",
+            "params.run_fastq_qc = params.run_fastq_qc != null ? params.run_fastq_qc : false",
+            "params.modified_bases = params.modified_bases ?: 'none'",
+        },
+        "ont_basecall_rna": {
+            "params.ont_molecule_type = params.ont_molecule_type ?: 'rna'",
+            "params.run_modkit = params.run_modkit != null ? params.run_modkit : false",
+            "params.run_fastq_qc = params.run_fastq_qc != null ? params.run_fastq_qc : false",
+            "params.modified_bases = params.modified_bases ?: 'none'",
+        },
+        "ont_plasmid_qc": {
+            "params.run_modkit = params.run_modkit != null ? params.run_modkit : false",
+            "params.run_fastq_qc = params.run_fastq_qc != null ? params.run_fastq_qc : true",
+            "params.fastq_minimap2_preset = params.fastq_minimap2_preset ?: 'map-ont'",
+            "params.modified_bases = params.modified_bases ?: 'none'",
+        },
+        "ont_construct_screening": {
+            "params.run_modkit = params.run_modkit != null ? params.run_modkit : false",
+            "params.run_fastq_qc = params.run_fastq_qc != null ? params.run_fastq_qc : true",
+            "params.fastq_minimap2_preset = params.fastq_minimap2_preset ?: 'map-ont'",
+            "params.modified_bases = params.modified_bases ?: 'none'",
+        },
+        "ont_methylation_analysis": {
+            "params.run_modkit = params.run_modkit != null ? params.run_modkit : true",
+            "params.run_fastq_qc = params.run_fastq_qc != null ? params.run_fastq_qc : true",
+            "params.modified_bases = params.modified_bases ?: '6mA 4mC_5mC'",
+        },
+        "ont_fastq_qc": {
+            "params.run_modkit = params.run_modkit != null ? params.run_modkit : false",
+            "params.run_fastq_qc = params.run_fastq_qc != null ? params.run_fastq_qc : true",
+            "params.fastq_minimap2_preset = params.fastq_minimap2_preset ?: 'map-ont'",
+            "params.modified_bases = params.modified_bases ?: 'none'",
+        },
+    }
+
+    for workflow_id, expected_lines in expected_defaults.items():
+        workflow_text = (REPO_ROOT / EXPECTED_ONT_ENTRYPOINTS[workflow_id]).read_text(encoding="utf-8")
+        for expected_line in expected_lines:
+            assert expected_line in workflow_text
 
 
 def test_legacy_nanopore_methylation_profile_routes_to_canonical_direct_entrypoint() -> None:
