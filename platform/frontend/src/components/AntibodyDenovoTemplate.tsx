@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, type CDRAnnotationResponse } from '../lib/api';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { parsePDBFile, type Chain } from '../utils/pdbUtils';
+import { getModelByNumber, parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
@@ -77,6 +77,44 @@ const parseLoopLengthRanges = (raw: unknown): Record<string, LoopLengthRange> =>
     return parsed;
 };
 
+const themedPanelStyle: React.CSSProperties = {
+    backgroundColor: 'var(--bg-secondary)',
+    borderColor: 'var(--border-primary)',
+    color: 'var(--text-primary)',
+};
+
+const themedInsetStyle: React.CSSProperties = {
+    backgroundColor: 'color-mix(in srgb, var(--bg-tertiary) 58%, transparent)',
+    borderColor: 'var(--border-primary)',
+    color: 'var(--text-primary)',
+};
+
+const themedMutedInsetStyle: React.CSSProperties = {
+    backgroundColor: 'color-mix(in srgb, var(--bg-tertiary) 42%, transparent)',
+    borderColor: 'var(--border-primary)',
+    color: 'var(--text-secondary)',
+};
+
+const themedSelectedStyle = (accent: string): React.CSSProperties => ({
+    backgroundColor: `color-mix(in srgb, ${accent} 14%, transparent)`,
+    borderColor: `color-mix(in srgb, ${accent} 72%, var(--border-primary))`,
+    color: 'var(--text-primary)',
+});
+
+const themedTagStyle = (accent: string): React.CSSProperties => ({
+    backgroundColor: `color-mix(in srgb, ${accent} 12%, transparent)`,
+    borderColor: `color-mix(in srgb, ${accent} 56%, var(--border-primary))`,
+    color: 'var(--text-primary)',
+});
+
+const residueKeyForChain = (chain: Chain, residue: Chain['residues'][number]) =>
+    `${chain.id}${residue.resNum}${residue.iCode || ''}`;
+
+const buildAvailableResidueKeySet = (chains: Chain[]) =>
+    new Set(
+        chains.flatMap((chain) => chain.residues.map((residue) => residueKeyForChain(chain, residue)))
+    );
+
 export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ onBack, initialValues }) => {
     const location = useLocation();
     const refinementState = location.state as {
@@ -88,7 +126,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const refinementParentJobId = refinementState?.sourceJobId;
     const refinementDesignIds = refinementState?.selectedDesignIds;
 
-    const restoringSelectionRef = useRef<{ chain: string | null; residues: string[] } | null>(null);
+    const restoringSelectionRef = useRef<{ chain: string | null; residues: string[]; modelNumber: number | null } | null>(null);
 
     const normalizeProtenixModel = (model?: string) => {
         if (!model) return 'protenix_base_20250630_v1.0.0';
@@ -248,8 +286,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [isUploading, setIsUploading] = useState(false);
     const [uploadedPath, setUploadedPath] = useState<string | null>(null);
 
+    const [parsedTargetStructure, setParsedTargetStructure] = useState<ParsedPDB | null>(null);
     const [parsedChains, setParsedChains] = useState<Chain[]>([]);
     const [parsedFrameworkChains, setParsedFrameworkChains] = useState<Chain[]>([]);
+    const [selectedTargetModel, setSelectedTargetModel] = useState<number | null>(
+        Number.isFinite(Number(initialValues?.target_model_number))
+            ? Number(initialValues?.target_model_number)
+            : 1
+    );
     const [selectedChain, setSelectedChain] = useState<string | null>(null);
     const [selectedResidues, setSelectedResidues] = useState<Set<string>>(new Set());
     const [isParsing, setIsParsing] = useState(false);
@@ -436,30 +480,28 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         return [];
     };
 
+    const getSavedTargetModelNumber = (saved: Record<string, any>): number | null => {
+        const raw = saved.target_model_number ?? saved.selected_target_model ?? saved.target_model;
+        const parsed = Number(raw);
+        return Number.isFinite(parsed) && parsed >= 1 ? parsed : null;
+    };
+
     const queueRestoredSelection = (saved: Record<string, any>) => {
         const residues = getSavedResidueSelection(saved);
-        const chain = saved.selected_chain || saved.antigen_chains || null;
-        restoringSelectionRef.current = { chain, residues };
+        const rawChain = saved.selected_chain || saved.antigen_chains || null;
+        const chain = typeof rawChain === 'string'
+            ? rawChain.split(',').map((token) => token.trim()).find(Boolean) || null
+            : null;
+        const savedModel = getSavedTargetModelNumber(saved);
+        restoringSelectionRef.current = { chain, residues, modelNumber: savedModel };
+        if (savedModel != null) {
+            setSelectedTargetModel(savedModel);
+        }
         if (chain) {
             setSelectedChain(chain);
         }
         setSelectedResidues(new Set(residues));
     };
-
-    useEffect(() => {
-        const queuedRestore = restoringSelectionRef.current;
-        if (!queuedRestore || parsedChains.length === 0) {
-            return;
-        }
-        const chainIds = parsedChains.map((chain) => chain.id);
-        if (!queuedRestore.chain || chainIds.includes(queuedRestore.chain)) {
-            if (queuedRestore.chain) {
-                setSelectedChain(queuedRestore.chain);
-            }
-            setSelectedResidues(new Set(queuedRestore.residues));
-            restoringSelectionRef.current = null;
-        }
-    }, [parsedChains]);
 
     const restoreTargetFromSaved = async (saved: Record<string, any>) => {
         const savedSource = saved.target_source as { type?: string; url?: string; path?: string; designId?: string; pdbId?: string; name?: string } | undefined;
@@ -695,62 +737,88 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
     }, [initialValues]);
 
-    // Auto-parse PDB when file is selected
+    // Parse the uploaded/selected target structure, preserving all available models.
     useEffect(() => {
-        // Clean up old blob URL
+        if (!targetPdb) {
+            setParsedTargetStructure(null);
+            setParsedChains([]);
+            setSelectedChain(null);
+            setSelectedTargetModel(1);
+            if (!restoringSelectionRef.current) {
+                setSelectedResidues(new Set());
+            }
+            return;
+        }
+
+        setIsParsing(true);
+
+        parsePDBFile(targetPdb)
+            .then((result) => {
+                setParsedTargetStructure(result);
+                const queuedModel = restoringSelectionRef.current?.modelNumber ?? null;
+                const preferredModel =
+                    queuedModel
+                    ?? getSavedTargetModelNumber(initialValues || {})
+                    ?? selectedTargetModel;
+                const resolvedModel = getModelByNumber(result, preferredModel) ?? result.models[0] ?? null;
+                setSelectedTargetModel(resolvedModel?.modelNumber ?? 1);
+                if (!uploadedPath && !initialValues) setUploadedPath(null);
+                console.log(
+                    '[ANTIBODY_DENOVO] Parsed target PDB models:',
+                    result.models.map((model) => `${model.label}:${model.chains.map((c) => `${c.id}:${c.length}aa`).join('|')}`)
+                );
+            })
+            .catch((err) => {
+                console.error('[ANTIBODY_DENOVO] Failed to parse PDB:', err);
+                setParsedTargetStructure(null);
+                setParsedChains([]);
+            })
+            .finally(() => setIsParsing(false));
+    }, [targetPdb]);
+
+    // Keep the active target chains/viewer content aligned to the currently selected model.
+    useEffect(() => {
         if (pdbBlobUrl) {
             URL.revokeObjectURL(pdbBlobUrl);
             setPdbBlobUrl(null);
         }
 
-        if (targetPdb) {
-            setIsParsing(true);
+        if (!parsedTargetStructure) {
+            return;
+        }
 
-            // Create blob URL for Molstar viewer
-            const blobUrl = URL.createObjectURL(targetPdb);
-            setPdbBlobUrl(blobUrl);
-
-            parsePDBFile(targetPdb)
-                .then(result => {
-                    setParsedChains(result.chains);
-                    // Auto-select first chain with most residues IF NOT ALREADY SELECTED (e.g. by clone)
-                    // If clone set selectedChain, verify it exists, otherwise fallback
-                    if (result.chains.length > 0) {
-                        const chainIds = result.chains.map(c => c.id);
-                        const queuedRestore = restoringSelectionRef.current;
-                        if (queuedRestore?.chain && chainIds.includes(queuedRestore.chain)) {
-                            setSelectedChain(queuedRestore.chain);
-                            setSelectedResidues(new Set(queuedRestore.residues));
-                            restoringSelectionRef.current = null;
-                        } else if (!selectedChain || !chainIds.includes(selectedChain)) {
-                            const longestChain = result.chains.reduce((a, b) =>
-                                a.length > b.length ? a : b
-                            );
-                            setSelectedChain(longestChain.id);
-                            // Clear selection only if we CHANGED the chain automatically
-                            if (!queuedRestore) setSelectedResidues(new Set());
-                            restoringSelectionRef.current = null;
-                        } else if (queuedRestore) {
-                            setSelectedResidues(new Set(queuedRestore.residues));
-                            restoringSelectionRef.current = null;
-                        }
-                    }
-                    if (!uploadedPath && !initialValues) setUploadedPath(null); // Only clear if new upload
-                    console.log('[ANTIBODY_DENOVO] Parsed PDB:', result.chains.map(c => `${c.id}:${c.length}aa`));
-                })
-                .catch(err => {
-                    console.error('[ANTIBODY_DENOVO] Failed to parse PDB:', err);
-                    setParsedChains([]);
-                })
-                .finally(() => setIsParsing(false));
-        } else {
+        const activeModel = getModelByNumber(parsedTargetStructure, selectedTargetModel);
+        if (!activeModel) {
             setParsedChains([]);
             setSelectedChain(null);
-            if (!restoringSelectionRef.current) {
-                setSelectedResidues(new Set());
-            }
+            return;
         }
-    }, [targetPdb]);
+
+        const chainIds = activeModel.chains.map((chain) => chain.id);
+        const availableResidues = buildAvailableResidueKeySet(activeModel.chains);
+        const queuedRestore = restoringSelectionRef.current;
+        const nextResidues = new Set(
+            (queuedRestore?.residues || Array.from(selectedResidues)).filter((key) => availableResidues.has(key))
+        );
+
+        setParsedChains(activeModel.chains);
+        setPdbBlobUrl(URL.createObjectURL(new Blob([activeModel.content], { type: 'text/plain' })));
+
+        if (activeModel.chains.length > 0) {
+            if (queuedRestore?.chain && chainIds.includes(queuedRestore.chain)) {
+                setSelectedChain(queuedRestore.chain);
+                restoringSelectionRef.current = null;
+            } else if (!selectedChain || !chainIds.includes(selectedChain)) {
+                const longestChain = activeModel.chains.reduce((a, b) => (a.length > b.length ? a : b));
+                setSelectedChain(longestChain.id);
+            }
+        } else {
+            setSelectedChain(null);
+        }
+
+        setSelectedResidues(nextResidues);
+        restoringSelectionRef.current = null;
+    }, [parsedTargetStructure, selectedTargetModel]);
 
     // Parse custom framework PDB for accurate CDR mapping when uploaded.
     useEffect(() => {
@@ -941,7 +1009,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (selectedChain && parsedChains.length > 1) {
                 console.log(`[ANTIBODY_DENOVO] Extracting chain ${selectedChain} from multi-chain PDB`);
                 try {
-                    const extractResult = await extractChain(pdbPath, selectedChain);
+                    const extractResult = await extractChain(
+                        pdbPath,
+                        selectedChain,
+                        undefined,
+                        selectedTargetModel ?? undefined
+                    );
                     pdbPath = extractResult.data.output_path;
                     console.log(`[ANTIBODY_DENOVO] Extracted chain to: ${pdbPath}`);
                 } catch (err) {
@@ -1040,6 +1113,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
                 params: {
                     target_pdb: isRefinementMode ? undefined : pdbPath,
+                    target_model_number: isRefinementMode ? undefined : selectedTargetModel || undefined,
                     pdb_source: isRefinementMode ? undefined : 'upload',
                     epitope_residues: isRefinementMode ? undefined : epitopeString,
                     antigen_chains: isRefinementMode ? undefined : selectedChain || undefined, // Send selected chain
@@ -1334,6 +1408,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         )
         : undefined;
     const availableMutagenesisLoops = availableDesignLoops;
+    const availableTargetModels = parsedTargetStructure?.models ?? [];
+    const activeTargetModel = parsedTargetStructure ? getModelByNumber(parsedTargetStructure, selectedTargetModel) : null;
+    const activeTargetResidues = buildAvailableResidueKeySet(parsedChains);
 
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1347,10 +1424,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         ← Back
                     </button>
                     <div>
-                        <h2 className="text-lg font-semibold text-slate-200">
+                        <h2 className="text-lg font-semibold text-[var(--text-primary)]">
                             {isRefinementMode ? 'Custom Refinement Round' : 'De Novo Antibody Design'}
                         </h2>
-                        <p className="text-sm text-slate-500">
+                        <p className="text-sm text-[var(--text-secondary)]">
                             {isRefinementMode ? `Configuring a downstream orchestrator run for ${refinementDesignIds?.length} designs.` : 'Generate novel antibodies targeting an antigen'}
                         </p>
                     </div>
@@ -1358,36 +1435,39 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             </div>
 
             {isRefinementMode && (
-                <div className="bg-indigo-500/20 text-indigo-200 p-4 rounded-lg mb-6 border border-indigo-500/40 animate-in fade-in slide-in-from-top-4">
+                <div
+                    className="mb-6 rounded-lg border p-4 animate-in fade-in slide-in-from-top-4"
+                    style={themedTagStyle('var(--accent-primary)')}
+                >
                     <div className="flex items-center gap-2 mb-2">
-                        <svg className="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg className="w-5 h-5 text-[var(--accent-primary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                         </svg>
-                        <h3 className="font-semibold text-indigo-200 text-sm">Target & Epitope configuration disabled</h3>
+                        <h3 className="text-sm font-semibold text-[var(--text-primary)]">Target & Epitope configuration disabled</h3>
                     </div>
-                    <p className="text-xs opacity-90 leading-relaxed max-w-3xl">
+                    <p className="max-w-3xl text-xs leading-relaxed text-[var(--text-secondary)]">
                         You arrived here from an active interactive job (<code>{refinementParentJobId}</code>). The structural targets and complexes are fixed to the selected designs. Configure exactly how you want your {refinementDesignIds?.length} selections to be processed below.
                     </p>
                 </div>
             )}
 
             {/* Pipeline Visualization */}
-            <div className="mb-6 p-4 bg-slate-900/50 rounded-lg border border-slate-700/50">
+            <div className="mb-6 rounded-lg border p-4" style={themedPanelStyle}>
                 <div className="flex items-start justify-between gap-4 mb-3">
                     <div>
-                        <h3 className="text-sm font-medium text-slate-300">Workflow Pipeline</h3>
-                        <p className="mt-1 text-xs text-slate-500">
+                        <h3 className="text-sm font-medium text-[var(--text-primary)]">Workflow Pipeline</h3>
+                        <p className="mt-1 text-xs text-[var(--text-secondary)]">
                             {isRefinementMode
                                 ? 'Selected designs are re-queued through the workflow UI only. Choose which stages to rerun below.'
                                 : 'Backbone generation, sequence design, optional maturation, structural validation, then optional review/QC.'}
                         </p>
                     </div>
                     <div className="flex flex-wrap justify-end gap-2 text-[11px]">
-                        <span className="rounded-full border border-slate-700 bg-slate-800/80 px-2.5 py-1 text-slate-300">
-                            Validator: <span className="font-medium text-cyan-300">{structureValidator === 'protenix' ? 'Protenix' : 'Boltz2'}</span>
+                        <span className="rounded-full border px-2.5 py-1" style={themedMutedInsetStyle}>
+                            Validator: <span className="font-medium text-[var(--accent-primary)]">{structureValidator === 'protenix' ? 'Protenix' : 'Boltz2'}</span>
                         </span>
                         {interactiveWorkflow && (
-                            <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-amber-200">
+                            <span className="rounded-full border px-2.5 py-1" style={themedTagStyle('var(--warning)')}>
                                 Review Gate: {interactiveGateStage === 'post_structure_validation'
                                     ? 'After validation'
                                     : interactiveGateStage === 'post_fampnn'
@@ -1399,51 +1479,54 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 </div>
                 <div className="flex flex-wrap items-stretch gap-2">
                     {(() => {
-                        const steps: Array<{ title: string; detail: string; tone: string; optional?: boolean }> = [
+                        const steps: Array<{ title: string; detail: string; accent?: string; muted?: boolean; optional?: boolean }> = [
                             {
                                 title: isRefinementMode ? 'Selected Inputs' : 'RFantibody',
                                 detail: isRefinementMode ? 'Reuse selected backbones or re-screen inputs' : 'Generate backbone ensemble',
-                                tone: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+                                accent: 'var(--success)',
                             },
                             {
                                 title: seqDesigner === 'none' ? 'Sequence Design' : seqDesigner.toUpperCase(),
                                 detail: seqDesigner === 'none' ? 'Skipped in this round' : 'Sequence redesign + filter',
-                                tone: seqDesigner === 'none'
-                                    ? 'border-slate-700 bg-slate-800/60 text-slate-500'
-                                    : 'border-blue-500/30 bg-blue-500/10 text-blue-200',
+                                accent: seqDesigner === 'none' ? undefined : 'var(--link)',
+                                muted: seqDesigner === 'none',
                                 optional: true,
                             },
                             {
                                 title: 'PPIFlow',
                                 detail: qualitySettings.run_maturation ? 'Maturation loop enabled' : 'Optional maturation loop',
-                                tone: qualitySettings.run_maturation
-                                    ? 'border-teal-500/30 bg-teal-500/10 text-teal-200'
-                                    : 'border-slate-700 bg-slate-800/60 text-slate-500',
+                                accent: qualitySettings.run_maturation ? 'var(--accent-secondary)' : undefined,
+                                muted: !qualitySettings.run_maturation,
                                 optional: true,
                             },
                             {
                                 title: structureValidator === 'protenix' ? 'Protenix' : 'Boltz2',
                                 detail: runStructureValidation ? 'Structure validation' : 'Skipped in this round',
-                                tone: runStructureValidation
-                                    ? 'border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-200'
-                                    : 'border-slate-700 bg-slate-800/60 text-slate-500',
+                                accent: runStructureValidation ? 'var(--accent-primary)' : undefined,
+                                muted: !runStructureValidation,
                                 optional: true,
                             },
                         ];
 
                         return steps.map((step, idx) => (
                             <React.Fragment key={step.title}>
-                                {idx > 0 && <span className="self-center text-slate-600">-&gt;</span>}
-                                <div className={`min-w-[150px] rounded-xl border px-3 py-2 ${step.tone}`}>
+                                {idx > 0 && <span className="self-center text-[var(--text-muted)]">-&gt;</span>}
+                                <div
+                                    className="min-w-[150px] rounded-xl border px-3 py-2"
+                                    style={step.muted ? themedMutedInsetStyle : themedSelectedStyle(step.accent || 'var(--accent-primary)')}
+                                >
                                     <div className="flex items-center justify-between gap-2">
-                                        <span className="text-sm font-semibold">{idx + 1}. {step.title}</span>
+                                        <span className="text-sm font-semibold text-[var(--text-primary)]">{idx + 1}. {step.title}</span>
                                         {step.optional && (
-                                            <span className="rounded-full border border-current/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide opacity-80">
+                                            <span
+                                                className="rounded-full border px-1.5 py-0.5 text-[10px] uppercase tracking-wide"
+                                                style={{ borderColor: 'color-mix(in srgb, var(--border-primary) 75%, transparent)', color: 'var(--text-secondary)' }}
+                                            >
                                                 Optional
                                             </span>
                                         )}
                                     </div>
-                                    <div className="mt-1 text-[11px] opacity-85">{step.detail}</div>
+                                    <div className="mt-1 text-[11px] text-[var(--text-secondary)]">{step.detail}</div>
                                 </div>
                             </React.Fragment>
                         ));
@@ -1451,27 +1534,27 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
                     {interactiveWorkflow && (
-                        <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-amber-200">
+                        <span className="rounded-full border px-2.5 py-1" style={themedTagStyle('var(--warning)')}>
                             Interactive review enabled
                         </span>
                     )}
                     {runFrustrampnn && (
-                        <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-rose-200">
+                        <span className="rounded-full border px-2.5 py-1" style={themedTagStyle('var(--error)')}>
                             FrustraMPNN QC
                         </span>
                     )}
                     {useManualMutagenesis && (
-                        <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-emerald-200">
+                        <span className="rounded-full border px-2.5 py-1" style={themedTagStyle('var(--success)')}>
                             Manual mutation sets
                         </span>
                     )}
                     {useAntiberty && (
-                        <span className="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2.5 py-1 text-yellow-200">
+                        <span className="rounded-full border px-2.5 py-1" style={themedTagStyle('var(--warning)')}>
                             AntiBERTy scoring
                         </span>
                     )}
                     {useThermoMPNN && (
-                        <span className="rounded-full border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-1 text-indigo-200">
+                        <span className="rounded-full border px-2.5 py-1" style={themedTagStyle('var(--accent-primary)')}>
                             ThermoMPNN stability
                         </span>
                     )}
@@ -1959,26 +2042,25 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     {/* Job Name & GPU Pinning */}
                     <div className="flex gap-6">
                         <div className="flex-1">
-                            <label className="block text-sm font-medium text-slate-400 mb-2">Job Name</label>
+                            <label className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">Job Name</label>
                             <input
                                 type="text"
                                 value={jobName}
                                 onChange={(e) => setJobName(e.target.value)}
-                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                                className="w-full rounded-lg border px-4 py-2.5 text-[var(--text-primary)] outline-none focus:ring-2"
+                                style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-primary)', caretColor: 'var(--accent-primary)' }}
                                 placeholder="antibody_design"
                             />
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-slate-400 mb-2">
-                                GPU Pinning {pinnedGpus.length > 0 && <span className="text-accent">({pinnedGpus.length} selected)</span>}
+                            <label className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">
+                                GPU Pinning {pinnedGpus.length > 0 && <span className="text-[var(--accent-primary)]">({pinnedGpus.length} selected)</span>}
                             </label>
                             <div className="flex gap-2">
                                 <button
                                     onClick={() => setPinnedGpus([])}
-                                    className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${pinnedGpus.length === 0
-                                        ? 'bg-slate-600 text-white ring-2 ring-slate-400'
-                                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                                        }`}
+                                    className="rounded-lg border px-3 py-2 text-sm font-medium transition-all"
+                                    style={pinnedGpus.length === 0 ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
                                 >
                                     Auto
                                 </button>
@@ -1997,10 +2079,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                     : [...prev, gpu.id].sort()
                                             );
                                         }}
-                                        className={`px-3 py-2 rounded-lg font-medium text-sm transition-all ${pinnedGpus.includes(gpu.id)
-                                            ? 'bg-accent text-white ring-2 ring-accent'
-                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                                            }`}
+                                        className="rounded-lg border px-3 py-2 text-sm font-medium transition-all"
+                                        style={pinnedGpus.includes(gpu.id) ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
                                     >
                                         {gpu.name}
                                     </button>
@@ -2012,9 +2092,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         type="checkbox"
                                         checked={lockGpus}
                                         onChange={e => setLockGpus(e.target.checked)}
-                                        className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-accent focus:ring-accent"
+                                        className="h-4 w-4 rounded"
+                                        style={{ borderColor: 'var(--border-primary)', backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent-primary)' }}
                                     />
-                                    <span className="text-sm text-slate-400">Lock selected GPU(s) exclusively during workflow</span>
+                                    <span className="text-sm text-[var(--text-secondary)]">Lock selected GPU(s) exclusively during workflow</span>
                                 </label>
                             )}
                         </div>
@@ -2061,7 +2142,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     {/* Framework Selection */}
                     {!isRefinementMode && (
                         <div>
-                            <label className="block text-sm font-medium text-slate-400 mb-2">Antibody Framework</label>
+                            <label className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">Antibody Framework</label>
                             <div className="grid grid-cols-2 gap-3 mb-3">
                                 {[
                                     { id: 'standard-fv', name: 'Standard Fv', desc: 'hu-4D5-8 (Herceptin)', color: 'blue' },
@@ -2072,19 +2153,23 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     <button
                                         key={fw.id}
                                         onClick={() => setFrameworkType(fw.id as FrameworkType)}
-                                        className={`p-3 rounded-lg border transition-all ${frameworkType === fw.id
-                                            ? fw.id === 'standard-fv'
-                                                ? 'bg-blue-600/20 border-blue-500 text-blue-400'
-                                                : fw.id === 'nanobody'
-                                                    ? 'bg-accent/20 border-accent text-accent'
-                                                    : fw.id === 'sabdab'
-                                                        ? 'bg-emerald-600/20 border-emerald-500 text-emerald-400'
-                                                        : 'bg-amber-600/20 border-amber-500 text-amber-400'
-                                            : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
-                                            }`}
+                                        className="rounded-lg border p-3 text-left transition-all"
+                                        style={
+                                            frameworkType === fw.id
+                                                ? themedSelectedStyle(
+                                                    fw.id === 'standard-fv'
+                                                        ? 'var(--link)'
+                                                        : fw.id === 'nanobody'
+                                                            ? 'var(--accent-primary)'
+                                                            : fw.id === 'sabdab'
+                                                                ? 'var(--success)'
+                                                                : 'var(--warning)'
+                                                )
+                                                : themedInsetStyle
+                                        }
                                     >
-                                        <div className="text-sm font-medium">{fw.name}</div>
-                                        <div className="text-xs opacity-75">{fw.desc}</div>
+                                        <div className="text-sm font-medium text-[var(--text-primary)]">{fw.name}</div>
+                                        <div className="text-xs text-[var(--text-secondary)]">{fw.desc}</div>
                                     </button>
                                 ))}
                             </div>
@@ -2376,27 +2461,56 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     )}
 
                     {/* Chain Selector (when PDB is parsed) */}
-                    {parsedChains.length > 1 && (
-                        <div>
-                            <label className="block text-sm font-medium text-slate-400 mb-2">Antigen Chain</label>
-                            <div className="flex gap-2 flex-wrap">
-                                {parsedChains.map(chain => (
-                                    <button
-                                        key={chain.id}
-                                        onClick={() => {
-                                            setSelectedChain(chain.id);
-                                            setSelectedResidues(new Set()); // Clear selection when chain changes
-                                        }}
-                                        className={`px-4 py-2 rounded-lg font-medium transition-all ${selectedChain === chain.id
-                                            ? 'bg-blue-600 text-white'
-                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                                            }`}
-                                    >
-                                        Chain {chain.id} ({chain.length} aa)
-                                    </button>
-                                ))}
-                            </div>
-                            <p className="mt-1 text-xs text-slate-500">Select the chain representing the antigen/target</p>
+                    {(availableTargetModels.length > 1 || parsedChains.length > 1) && (
+                        <div className="grid gap-4 md:grid-cols-2">
+                            {availableTargetModels.length > 1 && (
+                                <div>
+                                    <label className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">Target Conformation</label>
+                                    <div className="flex items-center gap-3">
+                                        <select
+                                            value={selectedTargetModel ?? availableTargetModels[0]?.modelNumber ?? 1}
+                                            onChange={(e) => setSelectedTargetModel(Number(e.target.value))}
+                                            className="min-w-[12rem] rounded-lg border px-3 py-2 text-sm text-[var(--text-primary)] outline-none"
+                                            style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-primary)' }}
+                                        >
+                                            {availableTargetModels.map((model) => (
+                                                <option key={model.modelNumber} value={model.modelNumber}>
+                                                    {model.label}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <span className="text-xs text-[var(--text-secondary)]">
+                                            {activeTargetModel
+                                                ? `${activeTargetModel.chains.length} chain${activeTargetModel.chains.length === 1 ? '' : 's'}`
+                                                : `${availableTargetModels.length} models`}
+                                        </span>
+                                    </div>
+                                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                                        Choose the specific target conformation to visualize, select hotspots on, and launch into the workflow.
+                                    </p>
+                                </div>
+                            )}
+                            {parsedChains.length > 1 && (
+                                <div>
+                                    <label className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">Antigen Chain</label>
+                                    <div className="flex flex-wrap gap-2">
+                                        {parsedChains.map((chain) => (
+                                            <button
+                                                key={chain.id}
+                                                onClick={() => {
+                                                    setSelectedChain(chain.id);
+                                                    setSelectedResidues(new Set());
+                                                }}
+                                                className="rounded-lg border px-4 py-2 font-medium transition-all"
+                                                style={selectedChain === chain.id ? themedSelectedStyle('var(--link)') : themedInsetStyle}
+                                            >
+                                                Chain {chain.id} ({chain.length} aa)
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Select the chain representing the antigen/target</p>
+                                </div>
+                            )}
                         </div>
                     )}
 
@@ -2404,9 +2518,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     {parsedChains.length > 0 && (
                         <div className="space-y-4">
                             <div className="flex items-center justify-between">
-                                <label className="block text-sm font-medium text-slate-400">
+                                <label className="block text-sm font-medium text-[var(--text-secondary)]">
                                     Epitope Selection
-                                    <span className="ml-2 text-xs text-slate-500 font-normal">
+                                    <span className="ml-2 text-xs font-normal text-[var(--text-secondary)]">
                                         (Select hotspot residues the antibody should target)
                                     </span>
                                 </label>
@@ -2420,10 +2534,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                 setViewerMode('target');
                                                 setShow3DViewer(show3DViewer && viewerMode === 'target' ? false : true);
                                             }}
-                                            className={`px-3 py-1.5 text-xs rounded-lg transition-all flex items-center gap-2 ${show3DViewer && viewerMode === 'target'
-                                                ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/50'
-                                                : 'bg-slate-700 text-slate-400 hover:bg-slate-600 border border-slate-600/40'
-                                                }`}
+                                            className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-all"
+                                            style={show3DViewer && viewerMode === 'target' ? themedSelectedStyle('var(--success)') : themedMutedInsetStyle}
                                         >
                                             Target 3D
                                         </button>
@@ -2435,10 +2547,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                 setViewerMode('framework');
                                                 setShow3DViewer(show3DViewer && viewerMode === 'framework' ? false : true);
                                             }}
-                                            className={`px-3 py-1.5 text-xs rounded-lg transition-all flex items-center gap-2 ${show3DViewer && viewerMode === 'framework'
-                                                ? 'bg-accent/20 text-accent border border-accent/50'
-                                                : 'bg-slate-700 text-slate-400 hover:bg-slate-600 border border-slate-600/40'
-                                                }`}
+                                            className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-all"
+                                            style={show3DViewer && viewerMode === 'framework' ? themedSelectedStyle('var(--accent-primary)') : themedMutedInsetStyle}
                                         >
                                             Framework 3D
                                         </button>
@@ -2450,10 +2560,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             {(pdbBlobUrl || frameworkPdbUrl) && show3DViewer && (
                                 <div className="animate-in fade-in slide-in-from-top-2 duration-300">
                                     {/* Label showing current view */}
-                                    <div className="text-xs text-slate-500 mb-2">
+                                    <div className="mb-2 text-xs text-[var(--text-secondary)]">
                                         {viewerMode === 'framework' ? 'Framework Template Preview' : 'Target Antigen Preview'}
                                         {viewerMode === 'framework' && detectedCDRs && (
-                                            <span className="ml-2 text-emerald-400">(CDRs highlighted)</span>
+                                            <span className="ml-2 text-[var(--success)]">(CDRs highlighted)</span>
+                                        )}
+                                        {viewerMode === 'target' && activeTargetModel && availableTargetModels.length > 1 && (
+                                            <span className="ml-2 text-[var(--accent-primary)]">({activeTargetModel.label})</span>
                                         )}
                                     </div>
                                     <EpitopeMolstarViewer
@@ -2479,7 +2592,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                             return cdrResidues;
                                         })()}
                                         onResidueClick={viewerMode === 'target' ? (residueKey) => {
-                                            setSelectedResidues(prev => {
+                                            if (!activeTargetResidues.has(residueKey)) {
+                                                return;
+                                            }
+                                            if (selectedChain && !residueKey.startsWith(selectedChain)) {
+                                                return;
+                                            }
+                                            setSelectedResidues((prev) => {
                                                 const next = new Set(prev);
                                                 if (next.has(residueKey)) {
                                                     next.delete(residueKey);
@@ -2495,7 +2614,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
                             {/* 2D Sequence Grid */}
                             <div>
-                                <div className="text-xs text-slate-500 mb-1">2D Sequence View (shift+click for range)</div>
+                                <div className="mb-1 text-xs text-[var(--text-secondary)]">
+                                    2D Sequence View (shift+click for range)
+                                    {activeTargetModel && availableTargetModels.length > 1 && (
+                                        <span className="ml-2 text-[var(--accent-primary)]">Bound to {activeTargetModel.label}</span>
+                                    )}
+                                </div>
                                 <EpitopeSelector
                                     chains={parsedChains}
                                     selectedResidues={selectedResidues}
@@ -2867,10 +2991,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
                 {/* RIGHT COLUMN: Quality Settings & Debug */}
                 <div className="space-y-5">
-                    <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 space-y-4">
+                    <div className="space-y-4 rounded-lg border p-4" style={themedPanelStyle}>
                         <div>
-                            <h3 className="text-sm font-semibold text-slate-200">Execution Mode</h3>
-                            <p className="text-xs text-slate-500 mt-1">
+                            <h3 className="text-sm font-semibold text-[var(--text-primary)]">Execution Mode</h3>
+                            <p className="mt-1 text-xs text-[var(--text-secondary)]">
                                 Choose whether the workflow pauses for manual review or runs through without intervention.
                             </p>
                         </div>
@@ -2882,10 +3006,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     interactiveWorkflowTouchedRef.current = true;
                                     setInteractiveWorkflow(false);
                                 }}
-                                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${!interactiveWorkflow
-                                    ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
-                                    : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
-                                    }`}
+                                className="rounded-lg border px-3 py-2 text-sm transition-colors"
+                                style={!interactiveWorkflow ? themedSelectedStyle('var(--success)') : themedInsetStyle}
                             >
                                 Static
                             </button>
@@ -2895,18 +3017,16 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     interactiveWorkflowTouchedRef.current = true;
                                     setInteractiveWorkflow(true);
                                 }}
-                                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${interactiveWorkflow
-                                    ? 'border-amber-400 bg-amber-400/10 text-amber-300'
-                                    : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
-                                    }`}
+                                className="rounded-lg border px-3 py-2 text-sm transition-colors"
+                                style={interactiveWorkflow ? themedSelectedStyle('var(--warning)') : themedInsetStyle}
                             >
                                 Interactive
                             </button>
                         </div>
 
                         {interactiveWorkflow && (
-                            <div className="space-y-2 rounded-lg border border-slate-700/50 bg-slate-950/40 p-3">
-                                <label className="block text-xs text-slate-500">Pause After</label>
+                            <div className="space-y-2 rounded-lg border p-3" style={themedInsetStyle}>
+                                <label className="block text-xs text-[var(--text-secondary)]">Pause After</label>
                                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                                     <button
                                         type="button"
@@ -2914,10 +3034,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                             interactiveGateStageTouchedRef.current = true;
                                             setInteractiveGateStage('post_rfantibody');
                                         }}
-                                        className={`rounded-lg border px-3 py-2 text-sm transition-colors ${interactiveGateStage === 'post_rfantibody'
-                                            ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
-                                            : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
-                                            }`}
+                                        className="rounded-lg border px-3 py-2 text-sm transition-colors"
+                                        style={interactiveGateStage === 'post_rfantibody' ? themedSelectedStyle('var(--success)') : themedMutedInsetStyle}
                                     >
                                         RFantibody Review
                                     </button>
@@ -2927,10 +3045,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                             interactiveGateStageTouchedRef.current = true;
                                             setInteractiveGateStage('post_fampnn');
                                         }}
-                                        className={`rounded-lg border px-3 py-2 text-sm transition-colors ${interactiveGateStage === 'post_fampnn'
-                                            ? 'border-blue-400 bg-blue-400/10 text-blue-300'
-                                            : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
-                                            }`}
+                                        className="rounded-lg border px-3 py-2 text-sm transition-colors"
+                                        style={interactiveGateStage === 'post_fampnn' ? themedSelectedStyle('var(--link)') : themedMutedInsetStyle}
                                     >
                                         FAMPNN Review
                                     </button>
@@ -2940,15 +3056,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                             interactiveGateStageTouchedRef.current = true;
                                             setInteractiveGateStage('post_structure_validation');
                                         }}
-                                        className={`rounded-lg border px-3 py-2 text-sm transition-colors ${interactiveGateStage === 'post_structure_validation'
-                                            ? 'border-cyan-400 bg-cyan-400/10 text-cyan-300'
-                                            : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
-                                            }`}
+                                        className="rounded-lg border px-3 py-2 text-sm transition-colors"
+                                        style={interactiveGateStage === 'post_structure_validation' ? themedSelectedStyle('var(--accent-primary)') : themedMutedInsetStyle}
                                     >
                                         Structure Review
                                     </button>
                                 </div>
-                                <p className="text-xs text-slate-500">
+                                <p className="text-xs text-[var(--text-secondary)]">
                                     {interactiveGateStage === 'post_rfantibody'
                                         ? 'Pause immediately after RFantibody backbone generation so you can reject visibly detached or malformed backbones before FAMPNN, MSA, and validator compute.'
                                         : interactiveGateStage === 'post_fampnn'
@@ -2959,10 +3073,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         )}
                     </div>
 
-                    <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 space-y-4">
+                    <div className="space-y-4 rounded-lg border p-4" style={themedPanelStyle}>
                         <div>
-                            <h3 className="text-sm font-semibold text-slate-200">Structure Validator</h3>
-                            <p className="text-xs text-slate-500 mt-1">
+                            <h3 className="text-sm font-semibold text-[var(--text-primary)]">Structure Validator</h3>
+                            <p className="mt-1 text-xs text-[var(--text-secondary)]">
                                 Select the structural validation backend for post-FAMPNN candidate evaluation.
                             </p>
                         </div>
@@ -2971,25 +3085,21 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             <button
                                 type="button"
                                 onClick={() => setStructureValidator('boltz2')}
-                                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${structureValidator === 'boltz2'
-                                    ? 'border-accent bg-accent/10 text-accent'
-                                    : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
-                                    }`}
+                                className="rounded-lg border px-3 py-2 text-sm transition-colors"
+                                style={structureValidator === 'boltz2' ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
                             >
                                 Boltz-2
                             </button>
                             <button
                                 type="button"
                                 onClick={() => setStructureValidator('protenix')}
-                                className={`rounded-lg border px-3 py-2 text-sm transition-colors ${structureValidator === 'protenix'
-                                    ? 'border-cyan-400 bg-cyan-400/10 text-cyan-300'
-                                    : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-600'
-                                    }`}
+                                className="rounded-lg border px-3 py-2 text-sm transition-colors"
+                                style={structureValidator === 'protenix' ? themedSelectedStyle('var(--link)') : themedInsetStyle}
                             >
                                 Protenix
                             </button>
                         </div>
-                        <p className="text-xs text-slate-500">
+                        <p className="text-xs text-[var(--text-secondary)]">
                             {structureValidator === 'protenix'
                                 ? 'Protenix inference controls live in Quality Settings. Flexible co-fold remains the default; anchored-target mode uses task-local target templates without freezing the binder.'
                                 : 'Boltz-2 controls and post-validation filters live inside Quality Settings. Flexible co-fold remains the default; anchored-target mode injects templates only on the target chains.'}
@@ -3615,6 +3725,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     protect_fr_contacts: frameworkProtection.protectFrContacts,
                     // Target info - now includes full source context
                     target_pdb: uploadedPath || targetSource?.path || undefined,
+                    target_model_number: selectedTargetModel || undefined,
                     target_source: targetSource,
                     uploaded_path: uploadedPath,
                     selected_chain: selectedChain,

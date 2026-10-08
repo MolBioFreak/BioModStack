@@ -18,6 +18,17 @@ export interface LigandSelectorProps {
     onImportProtein?: () => void;  // Callback to open sequence library/import modal for adding protein
 }
 
+export function componentIdFromIndex(index: number): string {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    let value = Math.max(0, Math.floor(index));
+    let label = '';
+    do {
+        label = alphabet[value % alphabet.length] + label;
+        value = Math.floor(value / alphabet.length) - 1;
+    } while (value >= 0);
+    return label;
+}
+
 const AVAILABLE_LIGANDS = [
     { ccd: 'ATP', name: 'ATP (Adenosine Triphosphate)', type: 'ligand' as const },
     { ccd: 'ADP', name: 'ADP (Adenosine Diphosphate)', type: 'ligand' as const },
@@ -50,6 +61,7 @@ const reverseComplement = (seq: string, isRna: boolean = false): string => {
 export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, onImportProtein }: LigandSelectorProps) {
     const [customSmiles, setCustomSmiles] = useState('');
     const [customName, setCustomName] = useState('');
+    const [presetComponentCopies, setPresetComponentCopies] = useState(1);
     const [dnaSequence, setDnaSequence] = useState('');
     const [rnaSequence, setRnaSequence] = useState('');
     const [isDsDna, setIsDsDna] = useState(false);
@@ -128,7 +140,7 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
                 // Add template strand
                 setLigands(prev => {
                     const newLigands = [...prev, {
-                        id: String.fromCharCode(66 + baseId), // B, C, D...
+                        id: componentIdFromIndex(1 + baseId),
                         type: type,
                         sequence: validSeq,
                         name: `${type.toUpperCase()} 5'→3' (${validSeq.length}nt)`
@@ -137,7 +149,7 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
                     if (isDoubleStranded) {
                         const complement = reverseComplement(validSeq, isRna);
                         newLigands.push({
-                            id: String.fromCharCode(66 + baseId + 1),
+                            id: componentIdFromIndex(1 + baseId + 1),
                             type: type,
                             sequence: complement,
                             name: `${type.toUpperCase()} 3'→5' (${complement.length}nt)`
@@ -155,7 +167,7 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
         const validSeq = peptideSequence.toUpperCase().replace(/[^ACDEFGHIKLMNPQRSTVWY]/g, '');
         if (validSeq.length >= 3 && validSeq.length <= 15) {
             setLigands(prev => [...prev, {
-                id: String.fromCharCode(66 + prev.length),
+                id: componentIdFromIndex(1 + prev.length),
                 type: 'peptide',
                 sequence: validSeq,
                 name: `Peptide (${validSeq.length}aa)`
@@ -168,7 +180,7 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
         const validSeq = proteinSequence.toUpperCase().replace(/[^ACDEFGHIKLMNPQRSTVWY]/g, '');
         if (validSeq.length >= 16) {
             setLigands(prev => [...prev, {
-                id: String.fromCharCode(66 + prev.length),
+                id: componentIdFromIndex(1 + prev.length),
                 type: 'protein',
                 sequence: validSeq,
                 name: proteinName.trim() || `Protein Chain (${validSeq.length}aa)`
@@ -179,22 +191,30 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
     };
 
 
-    const addLigandByCcd = (ccd: string) => {
+    const addLigandByCcd = (ccd: string, copies: number = 1) => {
         const selected = AVAILABLE_LIGANDS.find(l => l.ccd === ccd);
-        if (selected && !ligands.find(l => l.ccd === selected.ccd)) {
-            setLigands(prev => [...prev, {
-                id: String.fromCharCode(66 + prev.length), // B, C, D...
-                type: selected.type,
-                ccd: selected.ccd,
-                name: selected.name
-            }]);
+        const normalizedCopies = Number.isFinite(copies) ? Math.max(1, Math.min(12, Math.floor(copies))) : 1;
+        if (selected) {
+            setLigands(prev => {
+                const next = [...prev];
+                for (let idx = 0; idx < normalizedCopies; idx += 1) {
+                    const displaySuffix = normalizedCopies > 1 ? ` #${idx + 1}` : '';
+                    next.push({
+                        id: componentIdFromIndex(1 + next.length),
+                        type: selected.type,
+                        ccd: selected.ccd,
+                        name: `${selected.name}${displaySuffix}`,
+                    });
+                }
+                return next;
+            });
         }
     };
 
     const addCustomSmiles = () => {
         if (customSmiles.trim()) {
             setLigands(prev => [...prev, {
-                id: String.fromCharCode(66 + prev.length),
+                id: componentIdFromIndex(1 + prev.length),
                 type: 'ligand',
                 smiles: customSmiles.trim(),
                 name: customName.trim() || `Custom (${customSmiles.slice(0, 15)}...)`
@@ -221,7 +241,7 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
                 {/* Ligand Dropdown */}
                 <select
                     onChange={(e) => {
-                        addLigandByCcd(e.target.value);
+                        addLigandByCcd(e.target.value, presetComponentCopies);
                         e.target.value = '';
                     }}
                     className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm flex-1 min-w-[200px]"
@@ -230,20 +250,32 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
                     <option value="" disabled>+ Add Ligand/Ion...</option>
                     <optgroup label="Nucleotides">
                         {AVAILABLE_LIGANDS.filter(l => ['ATP', 'ADP', 'GTP', 'GDP', 'NAD', 'FAD', 'FMN', 'COA'].includes(l.ccd)).map(l => (
-                            <option key={l.ccd} value={l.ccd} disabled={ligands.some(sl => sl.ccd === l.ccd)}>{l.name}</option>
+                            <option key={l.ccd} value={l.ccd}>{l.name}</option>
                         ))}
                     </optgroup>
                     <optgroup label="Ions">
                         {AVAILABLE_LIGANDS.filter(l => l.type === 'ion').map(l => (
-                            <option key={l.ccd} value={l.ccd} disabled={ligands.some(sl => sl.ccd === l.ccd)}>{l.name}</option>
+                            <option key={l.ccd} value={l.ccd}>{l.name}</option>
                         ))}
                     </optgroup>
                     <optgroup label="Other Cofactors">
                         {AVAILABLE_LIGANDS.filter(l => l.ccd === 'HEM').map(l => (
-                            <option key={l.ccd} value={l.ccd} disabled={ligands.some(sl => sl.ccd === l.ccd)}>{l.name}</option>
+                            <option key={l.ccd} value={l.ccd}>{l.name}</option>
                         ))}
                     </optgroup>
                 </select>
+                <div className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-2 py-2">
+                    <span className="text-xs text-slate-400">copies</span>
+                    <input
+                        type="number"
+                        min={1}
+                        max={12}
+                        step={1}
+                        value={presetComponentCopies}
+                        onChange={(e) => setPresetComponentCopies(Math.max(1, Math.min(12, parseInt(e.target.value || '1', 10) || 1)))}
+                        className="w-14 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-center text-sm text-white"
+                    />
+                </div>
 
                 {/* Custom SMILES Input (Optional) */}
                 {showCustomSmiles && (
@@ -491,9 +523,12 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
                                 }`}
                         >
                             <span className="font-mono text-xs opacity-60">[{lig.id}]</span>
-                            <span>{lig.ccd || lig.name}</span>
+                            <span>{lig.name || lig.ccd}</span>
+                            {lig.ccd && lig.name && lig.name !== lig.ccd && (
+                                <span className="text-xs opacity-60">({lig.ccd})</span>
+                            )}
                             {lig.smiles && <span className="text-xs opacity-60">(SMILES)</span>}
-                            {lig.sequence && <span className="text-xs opacity-60">({lig.sequence.length}nt)</span>}
+                            {lig.sequence && <span className="text-xs opacity-60">({lig.type === 'protein' || lig.type === 'peptide' ? `${lig.sequence.length}aa` : `${lig.sequence.length}nt`})</span>}
                             <button
                                 onClick={() => removeLigand(idx)}
                                 className="hover:text-[var(--error)] transition-colors"

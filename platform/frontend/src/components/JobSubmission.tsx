@@ -550,7 +550,7 @@ export function JobSubmission() {
                 ...mergedParams,
                 complex_components: [
                     { type: 'protein', id: 'A', sequence: mergedParams.sequence || params.sequence },
-                    ...ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles, sequence: l.sequence }))
+                    ...ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles, sequence: l.sequence, name: l.name }))
                 ]
             } : mergedParams;
 
@@ -588,7 +588,7 @@ export function JobSubmission() {
                 ...filteredParams,
                 complex_components: [
                     { type: 'protein', id: 'A', sequence: proteinSeq },
-                    ...ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles, sequence: l.sequence }))
+                    ...ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles, sequence: l.sequence, name: l.name }))
                 ]
             } : filteredParams;
 

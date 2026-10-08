@@ -12,7 +12,7 @@ interface Selection {
 interface Props {
     structureUrl?: string;
     format?: 'cif' | 'pdb';
-    alphafoldView?: boolean;  // Enable pLDDT coloring
+    alphafoldView?: boolean;  // Deprecated global AF-style color theme; prefer residueColors
     hideControls?: boolean;  // Hide Mol* control panels (for compact view)
     height?: number | string;
     backgroundColor?: string;
@@ -230,7 +230,9 @@ export default function MolstarViewer({
                 'bg-color-r': bgColor.r.toString(),
                 'bg-color-g': bgColor.g.toString(),
                 'bg-color-b': bgColor.b.toString(),
-                'alphafold-view': alphafoldView ? 'true' : 'false',
+                // Avoid the global AlphaFold/pLDDT theme because it bleeds into atom-level
+                // representations. pLDDT coloring should come from our residueColors overlay.
+                'alphafold-view': residueColors && residueColors.size > 0 ? 'false' : (alphafoldView ? 'true' : 'false'),
                 'hide-controls': hideControls ? 'true' : 'false',
                 'sequence-panel': 'false',
                 'left-panel': 'false',

@@ -76,10 +76,11 @@ export default function EpitopeMolstarViewer({
             // Extract residue info from click event
             // PDBe Molstar click events include residue and chain data
             const chainId = detail?.authChainId || detail?.chainId;
-            const residueNumber = detail?.residueNumber;
+            const residueNumber = detail?.authResidueNumber ?? detail?.residueNumber;
+            const insertionCode = detail?.insCode || detail?.insertionCode || '';
 
             if (chainId && residueNumber !== undefined) {
-                const residueKey = `${chainId}${residueNumber}`;
+                const residueKey = `${chainId}${residueNumber}${insertionCode || ''}`;
                 console.log('[EpitopeMolstarViewer] 3D Click:', residueKey);
                 onResidueClick(residueKey);
             }
@@ -139,6 +140,7 @@ export default function EpitopeMolstarViewer({
             if (selections.length > 0) {
                 const selectData = selections.map(sel => ({
                     struct_asym_id: sel.chain_id,
+                    auth_asym_id: sel.chain_id,
                     start_residue_number: sel.start_residue_number,
                     end_residue_number: sel.end_residue_number,
                     color: sel.color ? rgbToHex(sel.color.r, sel.color.g, sel.color.b) : undefined,
@@ -217,7 +219,7 @@ export default function EpitopeMolstarViewer({
             {/* Instructions overlay */}
             <div className="absolute top-2 left-2 z-10 px-2 py-1 bg-slate-800/90 text-slate-300 text-xs rounded flex items-center gap-2">
                 <span className="text-blue-400">🔍</span>
-                3D Preview - Use 2D grid below to select epitopes
+                3D Preview - Click residues here or use the 2D grid below
             </div>
 
             {/* Selection count */}

@@ -1,4 +1,4 @@
-import { startTransition, useDeferredValue, useEffect, useState } from 'react';
+import { startTransition, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Config, Data, Layout } from 'plotly.js';
@@ -17,7 +17,9 @@ const MAX_WINDOW_RETENTION_MS = 60 * 60 * 1000;
 const INFRA_TELEMETRY_STORAGE_KEY = 'bms_infra_live_telemetry_v1';
 const INFRA_STORAGE_WRITE_DEBOUNCE_MS = 1500;
 const DASHBOARD_CONTROL_POLL_INTERVAL_MS = 3000;
-const MIN_GAP_BREAK_MS = 4000;
+const MIN_GAP_BREAK_MS = 12000;
+const INFRA_LIVE_SHARED_QUERY_KEY = ['infra-live-shared'];
+const INFRA_LIVE_SHARED_STATUS_QUERY_KEY = ['infra-live-shared-status'];
 
 type PollPreset = 1000 | 2000 | 5000;
 type WindowPreset = 1 | 3 | 5 | 10 | 15 | 30 | 60;
@@ -77,6 +79,7 @@ interface TimeSeriesPlotProps {
     showXAxisLabels?: boolean;
     traceType?: 'scatter' | 'scattergl';
     compact?: boolean;
+    redrawKey?: string | number;
 }
 
 interface PersistedInfraTelemetryState {
@@ -90,6 +93,11 @@ interface RestoredInfraTelemetryState {
     pollIntervalMs: PollPreset;
     windowMinutes: WindowPreset;
     samples: LiveSample[];
+}
+
+interface SharedTelemetryStatus {
+    lastUpdatedMs: number | null;
+    error: string | null;
 }
 
 export interface InfraLiveTelemetryProps {
@@ -152,21 +160,23 @@ function SegmentedControl<T extends string | number>({
     value,
     options,
     onChange,
+    compact = false,
 }: {
     label: string;
     value: T;
     options: ReadonlyArray<{ value: T; label: string }>;
     onChange: (value: T) => void;
+    compact?: boolean;
 }) {
     return (
         <div>
             <div
-                className="mb-2 text-xs font-semibold uppercase text-[var(--text-muted)]"
+                className={`font-semibold uppercase text-[var(--text-muted)] ${compact ? 'mb-1 text-[9px]' : 'mb-2 text-xs'}`}
                 style={{ letterSpacing: '0.16em' }}
             >
                 {label}
             </div>
-            <div className="inline-flex rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-1">
+            <div className={`inline-flex border border-[var(--border-primary)] bg-[var(--bg-primary)] ${compact ? 'rounded-lg p-0.5' : 'rounded-xl p-1'}`}>
                 {options.map((option) => {
                     const active = option.value === value;
                     return (
@@ -174,7 +184,9 @@ function SegmentedControl<T extends string | number>({
                             key={String(option.value)}
                             type="button"
                             onClick={() => onChange(option.value)}
-                            className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                            className={`border font-medium transition-colors ${
+                                compact ? 'rounded-md px-2 py-1 text-[10px]' : 'rounded-lg px-3 py-2 text-sm'
+                            } ${
                                 active
                                     ? 'text-[var(--accent-primary)]'
                                     : 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
@@ -252,13 +264,10 @@ function normalizeSamples(samples: LiveSample[]): LiveSample[] {
 function sampleGapAllowance(previous: LiveSample, current: LiveSample, defaultGapBreakMs: number): number {
     const previousPoll = isValidPollPreset(previous.pollIntervalMs) ? previous.pollIntervalMs : defaultGapBreakMs;
     const currentPoll = isValidPollPreset(current.pollIntervalMs) ? current.pollIntervalMs : defaultGapBreakMs;
-    return Math.max(defaultGapBreakMs, Math.round(previousPoll * 2.5), Math.round(currentPoll * 2.5));
+    return Math.max(defaultGapBreakMs, Math.round(previousPoll * 6), Math.round(currentPoll * 6));
 }
 
 function shouldBreakBetweenSamples(previous: LiveSample, current: LiveSample, defaultGapBreakMs: number): boolean {
-    if (previous.pollIntervalMs !== current.pollIntervalMs) {
-        return true;
-    }
     return current.timestampMs - previous.timestampMs > sampleGapAllowance(previous, current, defaultGapBreakMs);
 }
 
@@ -373,6 +382,32 @@ function loadPersistedTelemetryState(
             samples: [],
         };
     }
+}
+
+function persistTelemetryState(state: PersistedInfraTelemetryState): void {
+    if (typeof window === 'undefined') return;
+    try {
+        window.localStorage.setItem(INFRA_TELEMETRY_STORAGE_KEY, JSON.stringify(state));
+    } catch {
+        // Ignore storage quota / availability failures and keep live telemetry flowing.
+    }
+}
+
+function mergeTelemetrySample(previousSamples: LiveSample[], nextSample: LiveSample): LiveSample[] {
+    const normalizedPrevious = normalizeSamples(previousSamples);
+    if (normalizedPrevious.length > 0 && normalizedPrevious[normalizedPrevious.length - 1]?.timestamp === nextSample.timestamp) {
+        return normalizedPrevious;
+    }
+    return trimRetainedSamples(normalizeSamples([...normalizedPrevious, nextSample]), nextSample.timestampMs);
+}
+
+function readSharedTelemetryStatus(queryClient: ReturnType<typeof useQueryClient>): SharedTelemetryStatus {
+    return (
+        queryClient.getQueryData<SharedTelemetryStatus>(INFRA_LIVE_SHARED_STATUS_QUERY_KEY) ?? {
+            lastUpdatedMs: null,
+            error: null,
+        }
+    );
 }
 
 function getCpuPowerScale(cpu: SystemStatus['cpu']): number | null {
@@ -554,7 +589,7 @@ function GpuProcessList({ gpu, compact = false }: { gpu: GPUStatus; compact?: bo
                         <span className="max-w-[170px] truncate text-[11px] font-medium text-[var(--text-primary)]">
                             {process.name}
                         </span>
-                        <span className="rounded-full border border-accent/20 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+                        <span className="inline-flex min-w-[3.1rem] items-center justify-center rounded-md border border-accent/20 bg-accent/10 px-1.5 py-0.5 text-center text-[10px] font-medium text-accent">
                             {formatGpuProcessMemory(process.memory_mb)}
                         </span>
                     </div>
@@ -569,7 +604,7 @@ function GpuProcessList({ gpu, compact = false }: { gpu: GPUStatus; compact?: bo
                 <div className="text-xs font-semibold uppercase text-[var(--text-muted)]" style={{ letterSpacing: '0.16em' }}>
                     Active Processes
                 </div>
-                <div className="rounded-full border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1 text-xs font-medium text-[var(--text-secondary)]">
+                <div className="inline-flex min-w-[2rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1 text-xs font-medium text-[var(--text-secondary)]">
                     {processes.length}
                 </div>
             </div>
@@ -583,7 +618,7 @@ function GpuProcessList({ gpu, compact = false }: { gpu: GPUStatus; compact?: bo
                             <div className="min-w-0">
                                 <div className={`truncate font-medium text-[var(--text-primary)] ${compact ? 'text-xs' : 'text-sm'}`}>{process.name}</div>
                             </div>
-                            <div className={`rounded-full border border-accent/20 bg-accent/10 font-medium text-accent ${compact ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-1 text-xs'}`}>
+                            <div className={`inline-flex min-w-[3.25rem] items-center justify-center rounded-md border border-accent/20 bg-accent/10 text-center font-medium text-accent ${compact ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-1 text-xs'}`}>
                                 {formatGpuProcessMemory(process.memory_mb)}
                             </div>
                         </div>
@@ -614,7 +649,7 @@ function GpuCompactProcessChips({ gpu }: { gpu: GPUStatus }) {
                         {process.name}
                     </span>
                     <span
-                        className="rounded-full px-1.5 py-0.5 text-[9px] font-medium"
+                        className="inline-flex min-w-[3rem] items-center justify-center rounded-md px-1.5 py-0.5 text-center text-[9px] font-medium"
                         style={{
                             color: 'var(--accent-primary)',
                             backgroundColor: 'color-mix(in srgb, var(--accent-primary) 12%, transparent)',
@@ -626,7 +661,7 @@ function GpuCompactProcessChips({ gpu }: { gpu: GPUStatus }) {
                 </div>
             ))}
             {hiddenCount > 0 ? (
-                <div className="rounded-full border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1 text-[10px] font-medium text-[var(--text-secondary)]">
+                <div className="inline-flex min-w-[2.1rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1 text-[10px] font-medium text-[var(--text-secondary)]">
                     +{hiddenCount}
                 </div>
             ) : null}
@@ -722,7 +757,7 @@ function GpuInlinePowerControl({
         return (
             <div className="mb-1 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/70 px-2 py-1.5">
                 <div className="flex min-w-[16rem] flex-[1.25] items-center gap-2">
-                    <span className="rounded-full border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1 text-[10px] font-medium text-[var(--text-secondary)]">
+                    <span className="inline-flex min-w-[3.2rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1 text-center text-[10px] font-medium text-[var(--text-secondary)]">
                         {gpu.power_draw_w.toFixed(1)}W
                     </span>
                     <input
@@ -747,7 +782,7 @@ function GpuInlinePowerControl({
 
                 {fan ? (
                     <div className="flex min-w-[18rem] flex-[1.4] items-center gap-1.5">
-                        <span className="rounded-full border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1 text-[10px] font-medium text-[var(--text-secondary)]">
+                        <span className="inline-flex min-w-[3.9rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1 text-center text-[10px] font-medium text-[var(--text-secondary)]">
                             Fan {fan.current_percent != null ? `${fan.current_percent}%` : 'n/a'}
                         </span>
                         <button
@@ -816,7 +851,7 @@ function GpuInlinePowerControl({
 
     return (
         <div className={`flex flex-wrap items-center rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/70 ${compact ? 'mb-1 gap-1.5 px-2 py-1' : 'mb-2.5 gap-1.5 px-2.5 py-2'}`}>
-            <span className={`rounded-full border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1 font-medium text-[var(--text-secondary)] ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
+            <span className={`inline-flex min-w-[3.4rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1 text-center font-medium text-[var(--text-secondary)] ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
                 {gpu.power_draw_w.toFixed(1)}W
             </span>
             <button
@@ -860,7 +895,7 @@ function GpuInlinePowerControl({
             ) : null}
             {fan ? (
                 <>
-                    <span className={`rounded-full border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1 font-medium text-[var(--text-secondary)] ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
+                    <span className={`inline-flex min-w-[4rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1 text-center font-medium text-[var(--text-secondary)] ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
                         Fan {fan.current_percent != null ? `${fan.current_percent}%` : 'n/a'}
                     </span>
                     <button
@@ -989,6 +1024,7 @@ function TimeSeriesPlot({
     showXAxisLabels = true,
     traceType = 'scattergl',
     compact = false,
+    redrawKey,
 }: TimeSeriesPlotProps) {
     const revision =
         samples.length === 0
@@ -1039,6 +1075,7 @@ function TimeSeriesPlot({
 
     return (
         <Plot
+            key={redrawKey != null ? String(redrawKey) : undefined}
             data={series.map((item) => ({ ...item, type: traceType, connectgaps: false }))}
             layout={layout}
             config={PLOT_CONFIG}
@@ -1057,6 +1094,7 @@ function CpuPanel({
     compact = false,
     traceType = 'scattergl',
     gapBreakMs,
+    redrawKey,
 }: {
     current: SystemStatus['cpu'];
     samples: LiveSample[];
@@ -1064,6 +1102,7 @@ function CpuPanel({
     compact?: boolean;
     traceType?: 'scatter' | 'scattergl';
     gapBreakMs: number;
+    redrawKey: string | number;
 }) {
     const powerScale = getCpuPowerScale(current) ?? 350;
     const tempColor = getTempBandColor(current.temperature);
@@ -1095,6 +1134,7 @@ function CpuPanel({
                     samples={samples}
                     yAxis={{ title: 'Scale %', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
                     compact={compact}
+                    redrawKey={redrawKey}
                     series={[
                         {
                             x: cpuUtilTrace.x,
@@ -1147,6 +1187,7 @@ function RamPanel({
     compact = false,
     traceType = 'scattergl',
     gapBreakMs,
+    redrawKey,
 }: {
     current: SystemStatus['ram'];
     samples: LiveSample[];
@@ -1154,6 +1195,7 @@ function RamPanel({
     compact?: boolean;
     traceType?: 'scatter' | 'scattergl';
     gapBreakMs: number;
+    redrawKey: string | number;
 }) {
     const ramUsedTrace = buildGapAwareTraceData(
         samples,
@@ -1178,6 +1220,7 @@ function RamPanel({
                     samples={samples}
                     yAxis={{ title: 'Scale %', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
                     compact={compact}
+                    redrawKey={redrawKey}
                     series={[
                         {
                             x: ramUsedTrace.x,
@@ -1230,6 +1273,7 @@ function GpuPanel({
     traceType = 'scattergl',
     powerControls,
     gapBreakMs,
+    redrawKey,
 }: {
     gpu: GPUStatus;
     samples: LiveSample[];
@@ -1238,6 +1282,7 @@ function GpuPanel({
     traceType?: 'scatter' | 'scattergl';
     powerControls?: GpuInlinePowerControlProps;
     gapBreakMs: number;
+    redrawKey: string | number;
 }) {
     const totalGb = gpu.memory_total_mb / 1024;
     const currentVramGb = (gpu.memory_used_mb + gpu.reserved_memory_mb) / 1024;
@@ -1275,6 +1320,7 @@ function GpuPanel({
                     samples={samples}
                     yAxis={{ title: 'Scale %', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
                     compact={compact}
+                    redrawKey={redrawKey}
                     series={[
                         {
                             x: gpuUtilTrace.x,
@@ -1348,6 +1394,76 @@ function buildSample(payload: SystemStatus, pollIntervalMs: PollPreset): LiveSam
     };
 }
 
+export function InfraTelemetryCollector({
+    defaultPollIntervalMs = 1000,
+    defaultWindowMinutes = 3,
+}: Pick<InfraLiveTelemetryProps, 'defaultPollIntervalMs' | 'defaultWindowMinutes'> = {}) {
+    const queryClient = useQueryClient();
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+
+        let cancelled = false;
+        let timeoutId: number | undefined;
+
+        const scheduleNext = (delayMs: number) => {
+            if (cancelled) return;
+            timeoutId = window.setTimeout(run, delayMs);
+        };
+
+        const run = async () => {
+            const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            const persisted = loadPersistedTelemetryState(defaultPollIntervalMs, defaultWindowMinutes);
+            let nextDelayMs = persisted.pollIntervalMs;
+
+            try {
+                const response = await fetchSystemStatus();
+                if (cancelled) return;
+
+                queryClient.setQueryData(INFRA_LIVE_SHARED_QUERY_KEY, response);
+                queryClient.setQueryData<SharedTelemetryStatus>(INFRA_LIVE_SHARED_STATUS_QUERY_KEY, {
+                    lastUpdatedMs: Date.now(),
+                    error: null,
+                });
+
+                const nextSample = buildSample(response.data, persisted.pollIntervalMs);
+                const nextSamples = mergeTelemetrySample(persisted.samples, nextSample);
+                persistTelemetryState({
+                    version: 3,
+                    pollIntervalMs: persisted.pollIntervalMs,
+                    windowMinutes: persisted.windowMinutes,
+                    samples: nextSamples,
+                });
+            } catch (error) {
+                if (cancelled) return;
+                const message = error instanceof Error ? error.message : 'Unknown telemetry error';
+                const previousStatus = readSharedTelemetryStatus(queryClient);
+                queryClient.setQueryData<SharedTelemetryStatus>(INFRA_LIVE_SHARED_STATUS_QUERY_KEY, {
+                    lastUpdatedMs: previousStatus.lastUpdatedMs,
+                    error: message,
+                });
+            }
+
+            const nextPersisted = loadPersistedTelemetryState(defaultPollIntervalMs, defaultWindowMinutes);
+            const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            const elapsedMs = Math.max(0, endedAt - startedAt);
+            nextDelayMs = Math.max(0, nextPersisted.pollIntervalMs - elapsedMs);
+            scheduleNext(nextDelayMs);
+        };
+
+        run();
+
+        return () => {
+            cancelled = true;
+            if (timeoutId != null) {
+                window.clearTimeout(timeoutId);
+            }
+        };
+    }, [defaultPollIntervalMs, defaultWindowMinutes, queryClient]);
+
+    return null;
+}
+
 export function InfraLiveTelemetry({
     showXAxisLabels = true,
     defaultPollIntervalMs = 1000,
@@ -1364,12 +1480,18 @@ export function InfraLiveTelemetry({
     const [windowMinutes, setWindowMinutes] = useState<WindowPreset>(restoredState.windowMinutes);
     const [samples, setSamples] = useState<LiveSample[]>(restoredState.samples);
 
-    const { data, isLoading, error } = useQuery({
-        queryKey: ['infra-live-telemetry', pollIntervalMs],
+    const { data } = useQuery({
+        queryKey: INFRA_LIVE_SHARED_QUERY_KEY,
         queryFn: () => fetchSystemStatus(),
-        refetchInterval: pollIntervalMs,
+        enabled: false,
         refetchOnWindowFocus: false,
-        staleTime: 0,
+        staleTime: Infinity,
+    });
+    const { data: sharedStatus } = useQuery({
+        queryKey: INFRA_LIVE_SHARED_STATUS_QUERY_KEY,
+        queryFn: async () => ({ lastUpdatedMs: null, error: null } as SharedTelemetryStatus),
+        enabled: false,
+        staleTime: Infinity,
     });
 
     const payload = data?.data;
@@ -1436,21 +1558,18 @@ export function InfraLiveTelemetry({
     useEffect(() => {
         if (!payload) return;
         startTransition(() => {
-            setSamples((prev) => {
-                const normalizedPrev = normalizeSamples(prev);
-                if (normalizedPrev.length > 0 && normalizedPrev[normalizedPrev.length - 1]?.timestamp === payload.timestamp) {
-                    return prev;
-                }
-                const next = normalizeSamples([...normalizedPrev, buildSample(payload, pollIntervalMs)]);
-                const latestTime = next[next.length - 1]?.timestampMs ?? Date.parse(payload.timestamp);
-                if (Number.isNaN(latestTime)) {
-                    return next;
-                }
-                const cutoff = latestTime - MAX_WINDOW_RETENTION_MS;
-                return next.filter((sample) => sample.timestampMs >= cutoff);
-            });
+            setSamples((prev) => mergeTelemetrySample(prev, buildSample(payload, pollIntervalMs)));
         });
     }, [payload, pollIntervalMs]);
+
+    useEffect(() => {
+        persistTelemetryState({
+            version: 3,
+            pollIntervalMs,
+            windowMinutes,
+            samples: trimRetainedSamples(samples),
+        });
+    }, [pollIntervalMs, windowMinutes]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return undefined;
@@ -1462,11 +1581,7 @@ export function InfraLiveTelemetry({
                 windowMinutes,
                 samples: trimRetainedSamples(samples),
             };
-            try {
-                window.localStorage.setItem(INFRA_TELEMETRY_STORAGE_KEY, JSON.stringify(persistedState));
-            } catch {
-                // Ignore storage quota / availability failures and keep live telemetry flowing.
-            }
+            persistTelemetryState(persistedState);
         }, INFRA_STORAGE_WRITE_DEBOUNCE_MS);
 
         return () => window.clearTimeout(timeoutId);
@@ -1477,7 +1592,7 @@ export function InfraLiveTelemetry({
         Number.isNaN(latestTimestampMs)
             ? samples
             : samples.filter((sample) => sample.timestampMs >= latestTimestampMs - windowMinutes * 60 * 1000);
-    const deferredSamples = useDeferredValue(visibleSamples);
+    const plotRedrawKey = `${variant}:${traceType}:${showXAxisLabels ? 'x' : 'nx'}:${windowMinutes}`;
     const gapBreakMs = Math.max(MIN_GAP_BREAK_MS, pollIntervalMs * 3);
     const currentLimits = powerControlData?.data.limits ?? {};
     const currentFanControls = fanControlData?.data.gpus ?? {};
@@ -1494,73 +1609,38 @@ export function InfraLiveTelemetry({
             }>
                 {variant === 'infra' ? (
                     <div>
-                        <div className="mb-2 flex flex-wrap items-center gap-2">
-                            <span
-                                className="inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase"
-                                style={{
-                                    letterSpacing: '0.18em',
-                                    color: 'var(--accent-primary)',
-                                    backgroundColor: 'color-mix(in srgb, var(--accent-primary) 12%, transparent)',
-                                    border: '1px solid color-mix(in srgb, var(--accent-primary) 24%, var(--border-primary))',
-                                }}
-                            >
-                                Live Overlay
-                            </span>
-                            <span
-                                className="inline-flex rounded-full px-3 py-1 text-xs font-medium"
-                                style={{
-                                    color: 'var(--success)',
-                                    backgroundColor: 'color-mix(in srgb, var(--success) 12%, transparent)',
-                                    border: '1px solid color-mix(in srgb, var(--success) 24%, var(--border-primary))',
-                                }}
-                            >
-                                Live
-                            </span>
-                        </div>
                         <h2 className="text-3xl font-bold text-[var(--text-primary)]">Live BMS Telemetry</h2>
                         <p className="mt-2 max-w-4xl text-sm text-[var(--text-muted)]">
                             Live CPU, RAM, and per-GPU charts rendered directly from the BMS telemetry API with no external monitor in the loop.
                         </p>
                     </div>
-                ) : (
-                    <div className="flex flex-wrap items-center gap-2">
-                        <span
-                            className="inline-flex rounded-full px-3 py-1 text-xs font-medium"
-                            style={{
-                                color: 'var(--success)',
-                                backgroundColor: 'color-mix(in srgb, var(--success) 12%, transparent)',
-                                border: '1px solid color-mix(in srgb, var(--success) 24%, var(--border-primary))',
-                            }}
-                        >
-                            Live
-                        </span>
-                        <span className="text-sm font-medium text-[var(--text-secondary)]">Dashboard Telemetry</span>
-                    </div>
-                )}
+                ) : null}
 
-                <div className="flex flex-wrap items-start gap-4">
+                <div className="flex flex-wrap items-start justify-end gap-2">
                     <SegmentedControl
                         label="Poll"
                         value={pollIntervalMs}
                         options={POLL_PRESETS}
                         onChange={setPollIntervalMs}
+                        compact={compact}
                     />
                     <SegmentedControl
                         label="Window"
                         value={windowMinutes}
                         options={WINDOW_PRESETS}
                         onChange={setWindowMinutes}
+                        compact={compact}
                     />
                 </div>
             </div>
 
-            {isLoading && (
+            {!payload && !sharedStatus?.error && (
                 <div className="rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/70 p-5 text-sm text-[var(--text-secondary)]">
                     Loading live telemetry...
                 </div>
             )}
 
-            {error && (
+            {sharedStatus?.error && !payload && (
                 <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-5 text-sm text-red-200">
                     Failed to fetch live telemetry from the BMS API.
                 </div>
@@ -1571,19 +1651,21 @@ export function InfraLiveTelemetry({
                     <div className={`grid xl:grid-cols-2 ${compact ? 'gap-2' : 'gap-6'}`}>
                         <CpuPanel
                             current={payload.cpu}
-                            samples={deferredSamples}
+                            samples={visibleSamples}
                             showXAxisLabels={showXAxisLabels}
                             compact={compact}
                             traceType={traceType}
                             gapBreakMs={gapBreakMs}
+                            redrawKey={`${plotRedrawKey}:cpu`}
                         />
                         <RamPanel
                             current={payload.ram}
-                            samples={deferredSamples}
+                            samples={visibleSamples}
                             showXAxisLabels={showXAxisLabels}
                             compact={compact}
                             traceType={traceType}
                             gapBreakMs={gapBreakMs}
+                            redrawKey={`${plotRedrawKey}:ram`}
                         />
                     </div>
 
@@ -1592,11 +1674,12 @@ export function InfraLiveTelemetry({
                             <GpuPanel
                                 key={gpu.index}
                                 gpu={gpu}
-                                samples={deferredSamples}
+                                samples={visibleSamples}
                                 showXAxisLabels={showXAxisLabels}
                                 compact={compact}
                                 traceType={traceType}
                                 gapBreakMs={gapBreakMs}
+                                redrawKey={`${plotRedrawKey}:gpu:${gpu.index}`}
                                 powerControls={compact ? {
                                     gpu,
                                     currentLimit: currentLimits[gpu.index] ?? gpu.power_limit_w,

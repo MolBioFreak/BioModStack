@@ -8,7 +8,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchInputPresets, fetchJobs, fetchDesigns } from '../lib/api';
 
-interface ReferenceStructure {
+export interface ReferenceStructure {
     url: string;
     format: 'pdb' | 'cif';
     name: string;

@@ -349,15 +349,7 @@ export function Dashboard() {
 
 
     return (
-        <div className="min-h-screen bg-slate-950 p-6">
-            {/* Header */}
-            <header className="mb-8">
-                <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-400 via-accent to-accent-secondary bg-clip-text text-transparent">
-                    BioModStack
-                </h1>
-                <p className="text-slate-400 mt-2">Protein Modification & Design Platform</p>
-            </header>
-
+        <div className="min-h-screen bg-slate-950 px-6 pt-3 pb-6">
             {/* System Overview & GPU Status */}
             <DashboardTelemetry />
 

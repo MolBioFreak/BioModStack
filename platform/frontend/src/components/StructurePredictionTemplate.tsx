@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { submitJob, fetchMsaCacheInfo, type MsaCacheInfo } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { SequenceManager } from './SequenceManager';
-import { LigandSelector, type LigandEntry } from './LigandSelector';
+import { LigandSelector, componentIdFromIndex, type LigandEntry } from './LigandSelector';
 import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 
@@ -102,15 +102,28 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             return [];
         }
         // First component is the primary protein (goes into sequence)
-        // Rest are ligands/DNA/RNA
-        return components.slice(1).map((c: any) => ({
-            id: c.id || '',
-            type: c.type || 'protein',
-            sequence: c.sequence,
-            ccd: c.ccd,
-            smiles: c.smiles,
-            name: c.name || `Chain ${c.id}`
-        }));
+        // Rest are ligands/DNA/RNA. Expand counted components into distinct entries so
+        // retries and cloned jobs preserve repeated ions/cofactors in the UI.
+        const expanded: LigandEntry[] = [];
+        components.slice(1).forEach((component: any) => {
+            const countRaw = component?.count ?? 1;
+            const count = Number.isFinite(Number(countRaw))
+                ? Math.max(1, Math.min(12, Math.floor(Number(countRaw))))
+                : 1;
+            for (let idx = 0; idx < count; idx += 1) {
+                const baseName = component?.name || `Chain ${component?.id || componentIdFromIndex(1 + expanded.length)}`;
+                const displayName = count > 1 ? `${baseName} #${idx + 1}` : baseName;
+                expanded.push({
+                    id: count > 1 ? componentIdFromIndex(1 + expanded.length) : (component?.id || componentIdFromIndex(1 + expanded.length)),
+                    type: component?.type || 'protein',
+                    sequence: component?.sequence,
+                    ccd: component?.ccd,
+                    smiles: component?.smiles,
+                    name: displayName,
+                });
+            }
+        });
+        return expanded;
     });
 
     const [showInputModal, setShowInputModal] = useState(false);
@@ -282,7 +295,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         if (ligands.length > 0) {
             params.complex_components = [
                 { type: 'protein', id: 'A', sequence: sequence.trim() },
-                ...ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles, sequence: l.sequence }))
+                ...ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles, sequence: l.sequence, name: l.name }))
             ];
         }
 
