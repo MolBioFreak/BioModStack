@@ -1,0 +1,2 @@
+# Preserve raw GenBank note-wrapping fixture bytes, including CRLF and spaces.
+packages/bio-parsers/test/testData/genbank/BlueScribe.gb -text whitespace=-blank-at-eol,cr-at-eol
