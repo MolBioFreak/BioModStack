@@ -304,6 +304,10 @@ def main():
     parser.add_argument("--configs", type=str, nargs='+', help="Paths to multiple design spec YAMLs for batch processing")
     parser.add_argument("--out_dir", type=str, required=True, help="Output directory")
     parser.add_argument("--num_designs", type=int, default=10, help="Number of designs to generate per config")
+    parser.add_argument("--diffusion_batch_size", type=int, default=None,
+                        help="Number of diffusion samples per BoltzGen trunk run")
+    parser.add_argument("--batch_size", type=int, default=None,
+                        help=argparse.SUPPRESS)
     parser.add_argument("--protocol", type=str, default="auto", 
                         help="BoltzGen protocol (auto, protein-anything, protein-small_molecule, etc)")
     
@@ -341,6 +345,9 @@ def main():
     else:
         print("Error: Must provide --config or --configs")
         sys.exit(1)
+
+    if args.diffusion_batch_size is None and args.batch_size is not None:
+        args.diffusion_batch_size = args.batch_size
     
     print(f"Processing {len(config_files)} config file(s) in batch mode")
     
@@ -371,7 +378,10 @@ def main():
         
         # BoltzGen CLI: boltzgen run <design_spec.yaml> --output <dir> --num_designs N --protocol X
         cmd = f"boltzgen run {config_path} --output {batch_out_dir} --num_designs {args.num_designs} --protocol {protocol}"
-        
+
+        if args.diffusion_batch_size:
+            cmd += f" --diffusion_batch_size {args.diffusion_batch_size}"
+
         # Add diffusion parameters if specified
         if args.step_scale:
             cmd += f" --step_scale {args.step_scale}"

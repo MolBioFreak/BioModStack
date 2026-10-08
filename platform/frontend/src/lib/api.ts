@@ -267,6 +267,21 @@ export const submitJob = (jobData: Partial<Job>) => {
     return api.post('/api/jobs', jobData);
 };
 
+export interface BoltzGenPreviewResponse {
+    yaml_text: string;
+    scaffold_specs: Array<Record<string, any>>;
+    resolved_params: Record<string, any>;
+    notes: string[];
+    check_ok: boolean;
+    check_stdout?: string | null;
+    check_stderr?: string | null;
+}
+
+export const previewBoltzGenDesignSpec = (payload: {
+    params: Record<string, any>;
+    validate?: boolean;
+}) => api.post<BoltzGenPreviewResponse>('/api/boltzgen/preview', payload);
+
 export type AntibodyIterationAction =
     | 'validate_boltz2'
     | 'validate_protenix'
@@ -1375,10 +1390,15 @@ export interface SequencePrimer {
     id: string;
     name: string;
     sequence: string;
+    sequence_type?: 'dna' | 'rna';
     start: number;
     end: number;
+    strand?: number;
     tm?: number;
     gc_percent?: number;
+    tm_algorithm?: string;
+    tm_salt_correction?: string;
+    tm_settings?: PrimerTmSettings;
 }
 
 export interface NucleotideSequence {
@@ -1840,13 +1860,80 @@ export const annotateFrameworkCdrs = (pdbCode: string, scheme: string = 'imgt') 
 // PRIMER LIBRARY API (MolBio Toolkit)
 // ============================================================
 
+export interface PrimerTmSettings {
+    algorithm: string;
+    salt_correction: string;
+    primer_concentration_nM: number;
+    template_concentration_nM: number;
+    na_mM: number;
+    k_mM: number;
+    tris_mM: number;
+    mg_mM: number;
+    dntps_mM: number;
+    dmso_percent: number;
+    formamide_percent: number;
+    self_complementary: boolean;
+}
+
+export interface PrimerTmOption {
+    id: string;
+    label: string;
+    description: string;
+    sequence_types: Array<'dna' | 'rna'>;
+    polymer_pairing?: string | null;
+}
+
+export interface PrimerTmSaltCorrectionOption {
+    id: string;
+    label: string;
+    description: string;
+}
+
+export interface PrimerTmOptionsResponse {
+    algorithms: PrimerTmOption[];
+    salt_corrections: PrimerTmSaltCorrectionOption[];
+    defaults: {
+        dna: PrimerTmSettings;
+        rna: PrimerTmSettings;
+    };
+}
+
+export interface PrimerTmInput {
+    id?: string;
+    name?: string;
+    sequence: string;
+    sequence_type?: 'dna' | 'rna';
+    complement_sequence?: string;
+    shift?: number;
+}
+
+export interface PrimerTmResult {
+    id?: string | null;
+    name?: string | null;
+    sequence: string;
+    sequence_type: 'dna' | 'rna';
+    length: number;
+    gc_percent: number;
+    tm: number | null;
+    algorithm: string;
+    algorithm_label: string;
+    salt_correction: string;
+    salt_correction_label: string;
+    polymer_pairing: string;
+    warnings: string[];
+}
+
 export interface Primer {
     id: string;
     name: string;
     sequence: string;
+    sequence_type: 'dna' | 'rna';
     length: number;
     tm: number | null;
     gc_percent: number | null;
+    tm_algorithm: string | null;
+    tm_salt_correction: string | null;
+    tm_settings: PrimerTmSettings | null;
     primer_type: string;
     description: string | null;
     target_sequence_id: string | null;
@@ -1862,6 +1949,7 @@ export interface Primer {
 export interface PrimerCreate {
     name: string;
     sequence: string;
+    sequence_type?: 'dna' | 'rna';
     primer_type?: string;
     description?: string;
     target_sequence_id?: string;
@@ -1869,11 +1957,13 @@ export interface PrimerCreate {
     binding_end?: number;
     binding_strand?: number;
     tags?: string[];
+    tm_settings?: PrimerTmSettings;
 }
 
 export interface PrimerUpdate {
     name?: string;
     sequence?: string;
+    sequence_type?: 'dna' | 'rna';
     primer_type?: string;
     description?: string;
     target_sequence_id?: string;
@@ -1882,7 +1972,16 @@ export interface PrimerUpdate {
     binding_strand?: number;
     tags?: string[];
     is_favorite?: boolean;
+    tm_settings?: PrimerTmSettings;
 }
+
+export const fetchPrimerTmOptions = () =>
+    api.get<PrimerTmOptionsResponse>('/api/molbio/primer-tm/options');
+
+export const calculatePrimerTm = (data: {
+    primers: PrimerTmInput[];
+    settings?: PrimerTmSettings;
+}) => api.post<PrimerTmResult[]>('/api/molbio/primer-tm/calculate', data);
 
 export const fetchPrimers = (params?: {
     search?: string;

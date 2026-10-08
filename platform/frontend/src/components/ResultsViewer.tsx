@@ -1869,6 +1869,7 @@ export function ResultsViewer() {
         if (!activeLineageRootJob?.id) return;
         const sourceFilter = (
             family === 'rfantibody'
+            || family === 'boltzgen'
             || family === 'fampnn'
             || family === 'ppiflow'
             || family === 'validation'
@@ -3091,7 +3092,17 @@ export function ResultsViewer() {
             ];
         }
         return [
-            { label: 'Output', value: getOutputSourceLabel(selectedDesign), tone: selectedDesignSource === 'rfantibody' ? 'text-violet-300' : selectedDesignSource === 'fampnn' ? 'text-emerald-300' : 'text-cyan-300' },
+            {
+                label: 'Output',
+                value: getOutputSourceLabel(selectedDesign),
+                tone: selectedDesignSource === 'rfantibody'
+                    ? 'text-violet-300'
+                    : selectedDesignSource === 'boltzgen'
+                        ? 'text-amber-300'
+                        : selectedDesignSource === 'fampnn'
+                            ? 'text-emerald-300'
+                            : 'text-cyan-300',
+            },
             { label: 'Binder Type', value: (selectedDesign.antibody_type ?? antibodyData?.antibody_type)?.toUpperCase() || '—', tone: 'text-slate-200' },
             ...(selectedDesignSource === 'fampnn'
                 ? [
@@ -4484,7 +4495,7 @@ export function ResultsViewer() {
                                                             <button
                                                                 type="button"
                                                                 onClick={() => handleSelectLineageGroup(group.family)}
-                                                                className={`rounded-lg border px-3 py-2 text-xs transition-colors ${((activeLineageRootJob?.id === selectedJobId && outputSourceFilter === ((group.family === 'rfantibody' || group.family === 'fampnn' || group.family === 'ppiflow' || group.family === 'validation') ? group.family : 'all')) || selectedLineageGroupKey === `${group.jobs[0].parent_job_id}:${group.family}`)
+                                                                className={`rounded-lg border px-3 py-2 text-xs transition-colors ${((activeLineageRootJob?.id === selectedJobId && outputSourceFilter === ((group.family === 'rfantibody' || group.family === 'boltzgen' || group.family === 'fampnn' || group.family === 'ppiflow' || group.family === 'validation') ? group.family : 'all')) || selectedLineageGroupKey === `${group.jobs[0].parent_job_id}:${group.family}`)
                                                                     ? 'border-sky-400/60 bg-sky-500/15 text-white'
                                                                     : 'border-slate-700 bg-slate-900/70 text-slate-200 hover:border-slate-600'
                                                                     }`}
@@ -4893,7 +4904,7 @@ export function ResultsViewer() {
                                                         type="button"
                                                         onClick={() => {
                                                             setIterationMessage(null);
-                                                            let paramOverrides = undefined;
+                                                            let paramOverrides: Record<string, unknown> | undefined = undefined;
 
                                                             if (showParamOverrides) {
                                                                 paramOverrides = {
@@ -5257,7 +5268,7 @@ export function ResultsViewer() {
                                                 type="button"
                                                 onClick={() => {
                                                     setIterationMessage(null);
-                                                    let paramOverrides = undefined;
+                                                    let paramOverrides: Record<string, unknown> | undefined = undefined;
 
                                                     if (showParamOverrides) {
                                                         paramOverrides = {
@@ -6401,12 +6412,15 @@ export function ResultsViewer() {
                                                                 <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
                                                                     <div className="text-[11px] uppercase tracking-wider text-slate-500">Lineage & Source</div>
                                                                     <div className="mt-3 space-y-2 text-xs">
-                                                                        {selectedDesignLineageRows.map(([label, value]) => (
-                                                                            <div key={label} className="flex items-start justify-between gap-3 rounded-lg bg-slate-950/40 px-3 py-2">
+                                                                        {selectedDesignLineageRows.map((entry) => {
+                                                                            const [label, value] = entry;
+                                                                            return (
+                                                                            <div key={label ?? 'lineage'} className="flex items-start justify-between gap-3 rounded-lg bg-slate-950/40 px-3 py-2">
                                                                                 <span className="text-slate-500">{label}</span>
                                                                                 <span className="max-w-[60%] break-words text-right font-mono text-slate-200">{value}</span>
                                                                             </div>
-                                                                        ))}
+                                                                            );
+                                                                        })}
                                                                     </div>
                                                                 </div>
                                                             )}

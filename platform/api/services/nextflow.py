@@ -39,6 +39,7 @@ from antibody_pipeline_contract import (
     ANTIBODY_REFINEMENT_PIPELINE,
     is_antibody_pipeline_mode,
 )
+from .boltzgen_scaffolding import prepare_boltzgen_params_for_launch
 from .gpu_config import read_scheduler_config
 
 # Project root (parent of platform directory)
@@ -1381,7 +1382,8 @@ async def launch_nextflow_job(
                 else "auto"
             )
 
-    preflight_notes: List[str] = []
+    launch_params, boltzgen_notes = await prepare_boltzgen_params_for_launch(launch_params)
+    preflight_notes: List[str] = list(boltzgen_notes)
     is_protenix = _is_protenix_job(model_id, launch_params)
     if is_protenix:
         launch_params, preflight_notes = _apply_protenix_preflight(launch_params)
@@ -2413,6 +2415,14 @@ def build_nextflow_command(
     elif model_id == 'boltzgen':
         # For BoltzGen: Apply all BoltzGen-specific parameter mappings
         # These were previously in global param_mapping and broke other workflows!
+        if 'boltzgen_binding_site_residues' not in params:
+            site_alias = (
+                params.get('binding_site_residues')
+                or params.get('epitope_residues')
+                or params.get('selected_residues')
+            )
+            if site_alias:
+                params['boltzgen_binding_site_residues'] = site_alias
         boltzgen_mappings = {
             # Schema-native keys
             'target_pdb': 'boltzgen_target_pdb_path',

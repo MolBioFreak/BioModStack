@@ -79,9 +79,9 @@ export function DesignComparePane({ designs, preSelectedId }: DesignComparePaneP
 
         if (maxLen === 0) return [];
 
-        const dataPoints = [];
+        const dataPoints: Array<{ residue: number; [key: string]: number }> = [];
         for (let i = 0; i < maxLen; i++) {
-            const point: any = { residue: i + 1 };
+            const point: { residue: number; [key: string]: number } = { residue: i + 1 };
             metricsMap.forEach(m => {
                 const design = designs.find(d => d.id === m.id);
                 if (m.data && m.data.plddt && m.data.plddt[i] !== undefined) {

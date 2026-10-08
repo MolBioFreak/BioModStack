@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, type CDRAnnotationResponse, type RfScreeningScope } from '../lib/api';
+import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, previewBoltzGenDesignSpec, type BoltzGenPreviewResponse, type CDRAnnotationResponse, type RfScreeningScope } from '../lib/api';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getModelByNumber, parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
@@ -48,6 +48,8 @@ type MutagenesisMethod = 'explicit_substitutions' | 'cdr_indels';
 type MutagenesisLaunchMode = 'seeded_refinement' | 'exact_evaluation';
 type DeNovoGenerator = 'rfantibody' | 'boltzgen';
 type DeNovoOrchestrationStage = 'sequence_design' | 'ppiflow' | 'validation' | 'qc';
+type BoltzgenScaffoldSource = 'default_ensemble' | 'selected_scaffold' | 'sequence_template';
+type BoltzgenCheckpointMode = 'both' | 'diverse' | 'adherence';
 
 const normalizeRfScreeningScope = (value: unknown): RfScreeningScope =>
     value === 'whole_antibody' ? 'whole_antibody' : 'cdr_loops';
@@ -62,6 +64,7 @@ const DEFAULT_RFA_LOOP_LENGTH_RANGES: Record<string, LoopLengthRange> = {
 };
 
 const DEFAULT_BOLTZGEN_VHH_FRAMEWORK = `QVQLVESGGGLVQPGGSLRLSCAASGGSEYSYSTFSLGWFRQAPGQGLEAVAAIASMGGLTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAAVRGYFMRLPSSHNFRYWGQGTLVTVS`;
+const DEFAULT_BOLTZGEN_ENSEMBLE = ['3DWT', '5U64', '7EOW', '8Z8M'];
 
 const cloneDefaultLoopRanges = (): Record<string, LoopLengthRange> =>
     Object.fromEntries(
@@ -485,7 +488,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const showDebugPanel = true;
     const refinementSourceIsPpiFlow = isRefinementMode && refinementSourceOutputSourceFilter === 'ppiflow';
     const refinementBlocksImmediatePpiFlowBackbone = isRefinementMode && (
-        refinementSourceOutputSourceFilter === 'fampnn'
+        refinementSourceOutputSourceFilter === 'boltzgen'
+        || refinementSourceOutputSourceFilter === 'fampnn'
         || refinementSourceOutputSourceFilter === 'validation'
     );
     const ppiflowBackboneRegionMode = normalizePpiFlowRegionMode(qualitySettings.ppiflow_backbone_region_mode);
@@ -562,6 +566,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [boltzgenUseFrameworkTemplate, setBoltzgenUseFrameworkTemplate] = useState(
         initialValues?.boltzgen_use_framework_template !== false
     );
+    const [boltzgenScaffoldSource, setBoltzgenScaffoldSource] = useState<BoltzgenScaffoldSource>(
+        (initialValues?.boltzgen_scaffold_source as BoltzgenScaffoldSource) || 'default_ensemble'
+    );
     const [boltzgenNanobodyFramework, setBoltzgenNanobodyFramework] = useState(
         initialValues?.boltzgen_nanobody_framework || DEFAULT_BOLTZGEN_VHH_FRAMEWORK
     );
@@ -576,6 +583,28 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [boltzgenCdrH2Length, setBoltzgenCdrH2Length] = useState(initialValues?.boltzgen_cdr_h2_length || '6-10');
     const [boltzgenCdrH3Length, setBoltzgenCdrH3Length] = useState(initialValues?.boltzgen_cdr_h3_length || '12-18');
     const [showBoltzgenFrameworkBrowser, setShowBoltzgenFrameworkBrowser] = useState(false);
+    const [boltzgenCheckpointMode, setBoltzgenCheckpointMode] = useState<BoltzgenCheckpointMode>(
+        (initialValues?.boltzgen_checkpoint_mode as BoltzgenCheckpointMode) || 'both'
+    );
+    const [boltzgenSkipInverseFolding, setBoltzgenSkipInverseFolding] = useState(Boolean(initialValues?.boltzgen_skip_inverse_folding));
+    const [boltzgenInverseFoldAvoid, setBoltzgenInverseFoldAvoid] = useState(initialValues?.boltzgen_inverse_fold_avoid || '');
+    const [boltzgenInverseFoldNumSequences, setBoltzgenInverseFoldNumSequences] = useState(initialValues?.boltzgen_inverse_fold_num_sequences || 1);
+    const [boltzgenAvoidCysteine, setBoltzgenAvoidCysteine] = useState(
+        initialValues?.boltzgen_avoid_cysteine ?? true
+    );
+    const [boltzgenStepScale, setBoltzgenStepScale] = useState<number | ''>(initialValues?.boltzgen_step_scale || 1.8);
+    const [boltzgenNoiseScale, setBoltzgenNoiseScale] = useState<number | ''>(initialValues?.boltzgen_noise_scale || 0.98);
+    const [boltzgenBudget, setBoltzgenBudget] = useState<number | ''>(initialValues?.boltzgen_budget || 50);
+    const [boltzgenAlpha, setBoltzgenAlpha] = useState(initialValues?.boltzgen_alpha || 0.01);
+    const [boltzgenMaxRmsd, setBoltzgenMaxRmsd] = useState<number | ''>(initialValues?.boltzgen_max_rmsd || 2.0);
+    const [boltzgenMinPlddt, setBoltzgenMinPlddt] = useState<number | ''>(initialValues?.boltzgen_min_plddt || 70);
+    const [boltzgenMinConfScore, setBoltzgenMinConfScore] = useState<number | ''>(initialValues?.boltzgen_min_conf_score || '');
+    const [boltzgenFilterBiased, setBoltzgenFilterBiased] = useState(initialValues?.boltzgen_filter_biased !== false);
+    const [boltzgenMetricsOverride, setBoltzgenMetricsOverride] = useState(initialValues?.boltzgen_metrics_override || '');
+    const [boltzgenAdditionalFilters, setBoltzgenAdditionalFilters] = useState(initialValues?.boltzgen_additional_filters || '');
+    const [boltzgenSizeBuckets, setBoltzgenSizeBuckets] = useState(initialValues?.boltzgen_size_buckets || '');
+    const [showBoltzgenPreview, setShowBoltzgenPreview] = useState(false);
+    const [boltzgenPreview, setBoltzgenPreview] = useState<BoltzGenPreviewResponse | null>(null);
 
     // Viewer mode - toggle between target and framework preview
     type ViewerMode = 'target' | 'framework';
@@ -837,6 +866,19 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
     });
 
+    const boltzgenPreviewMutation = useMutation({
+        mutationFn: async (payload: { params: Record<string, any>; validate?: boolean }) => previewBoltzGenDesignSpec(payload),
+        onSuccess: (response) => {
+            setBoltzgenPreview(response.data);
+            setShowBoltzgenPreview(true);
+        },
+        onError: (error: any) => {
+            const detail = error.response?.data?.detail;
+            const message = typeof detail === 'object' ? JSON.stringify(detail, null, 2) : (detail || error.message);
+            window.alert('BoltzGen preview failed:\n' + message);
+        },
+    });
+
     const launchMutagenesisMutation = useMutation({
         mutationFn: async (data: any) => launchManualMutagenesis(data),
         onSuccess: () => {
@@ -845,6 +887,149 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             navigate('/');
         },
     });
+
+    const serializeSabdabFramework = () => (
+        sabdabFramework ? {
+            type: sabdabFramework.type,
+            id: sabdabFramework.id,
+            name: sabdabFramework.name,
+            pdbCode: sabdabFramework.pdbCode,
+            sequence: sabdabFramework.sequence,
+            filePath: sabdabFramework.filePath,
+            cdrH3Length: sabdabFramework.cdrH3Length,
+            hChain: sabdabFramework.hChain,
+            lChain: sabdabFramework.lChain,
+            antigenChain: sabdabFramework.antigenChain,
+        } : null
+    );
+
+    const resolveTargetPdbPathForLaunch = async (allowSkipFallback: boolean = false) => {
+        let pdbPath = targetSource?.path || uploadedPath;
+        if (!pdbPath && targetPdb) {
+            pdbPath = await handleFileUpload(targetPdb);
+        }
+        if (!pdbPath && allowSkipFallback) {
+            pdbPath = isRefinementMode ? 'refinement_mode' : skipRFantibody ? rfantibodyInputPdbs : fampnnCollectedPdbs;
+        }
+        if (!pdbPath) {
+            throw new Error('Failed to determine PDB file path');
+        }
+
+        if (selectedChain && parsedChains.length > 1) {
+            const extractResult = await extractChain(
+                pdbPath,
+                selectedChain,
+                undefined,
+                selectedTargetModel ?? undefined
+            );
+            pdbPath = extractResult.data.output_path;
+        }
+
+        return pdbPath;
+    };
+
+    const buildBoltzgenInverseFoldAvoid = () => {
+        if (boltzgenAvoidCysteine) {
+            const avoidSet = new Set(
+                boltzgenInverseFoldAvoid
+                    .split('')
+                    .map((value) => value.trim().toUpperCase())
+                    .filter((value) => value.match(/[A-Z]/))
+            );
+            avoidSet.add('C');
+            return Array.from(avoidSet).join('');
+        }
+        return boltzgenInverseFoldAvoid.trim() || undefined;
+    };
+
+    const buildStandaloneBoltzgenParams = (pdbPath: string, epitopeString: string) => {
+        const boltzgenParams: Record<string, any> = {
+            diffusion_method: 'boltzgen',
+            run_boltzgen_only: true,
+            run_docking: false,
+            run_diffdock: false,
+            run_unidock: false,
+            boltzgen_mode: 'nanobody_binder',
+            boltzgen_protocol: 'nanobody-anything',
+            boltzgen_num_designs: numDesigns,
+            boltzgen_batch_size: Math.max(1, Number(boltzgenBatchSize) || 1),
+            boltzgen_scaffold_length: boltzgenScaffoldLength,
+            boltzgen_target_pdb_path: pdbPath,
+            boltzgen_cdr_h1_length: boltzgenCdrH1Length,
+            boltzgen_cdr_h2_length: boltzgenCdrH2Length,
+            boltzgen_cdr_h3_length: boltzgenCdrH3Length,
+            boltzgen_use_framework_template: boltzgenUseFrameworkTemplate,
+            boltzgen_scaffold_source: boltzgenUseFrameworkTemplate ? boltzgenScaffoldSource : undefined,
+            framework_type: 'nanobody',
+            antibody_format: 'vhh',
+            antibody_chains: 'H',
+            binder_chains: 'H',
+            antigen_chains: selectedChain || undefined,
+            target_chains: selectedChain || undefined,
+            boltzgen_binding_site_residues: epitopeString || undefined,
+            epitope_residues: epitopeString || undefined,
+            selected_residues: epitopeString || undefined,
+            pinned_gpus: pinnedGpus.length > 0 ? pinnedGpus : undefined,
+            lock_gpus: lockGpus && pinnedGpus.length > 0,
+            interactive_swa: interactiveWorkflow,
+            interactive_gating: interactiveWorkflow,
+            interactive_gate_stage: interactiveWorkflow ? 'post_rfantibody' : undefined,
+            stage_family: 'boltzgen',
+            stage_mode: 'nanobody_binder',
+            out_dir: customOutputDir.trim() || undefined,
+            sabdab_framework: serializeSabdabFramework(),
+            custom_framework_path: customFrameworkPath || undefined,
+            boltzgen_checkpoint_mode: boltzgenCheckpointMode !== 'both' ? boltzgenCheckpointMode : undefined,
+            boltzgen_skip_inverse_folding: boltzgenSkipInverseFolding || undefined,
+            boltzgen_inverse_fold_num_sequences: boltzgenInverseFoldNumSequences > 1 ? boltzgenInverseFoldNumSequences : undefined,
+            boltzgen_inverse_fold_avoid: buildBoltzgenInverseFoldAvoid(),
+            boltzgen_avoid_cysteine: boltzgenAvoidCysteine,
+            boltzgen_step_scale: boltzgenStepScale || undefined,
+            boltzgen_noise_scale: boltzgenNoiseScale || undefined,
+            boltzgen_budget: boltzgenBudget || undefined,
+            boltzgen_alpha: boltzgenAlpha,
+            boltzgen_max_rmsd: boltzgenMaxRmsd || undefined,
+            boltzgen_min_plddt: boltzgenMinPlddt || undefined,
+            boltzgen_min_conf_score: boltzgenMinConfScore || undefined,
+            boltzgen_filter_biased: boltzgenFilterBiased,
+            boltzgen_metrics_override: boltzgenMetricsOverride.trim() || undefined,
+            boltzgen_additional_filters: boltzgenAdditionalFilters.trim() || undefined,
+            boltzgen_size_buckets: boltzgenSizeBuckets.trim() || undefined,
+        };
+
+        if (boltzgenUseFrameworkTemplate && boltzgenScaffoldSource === 'sequence_template' && boltzgenNanobodyFramework.trim()) {
+            boltzgenParams.boltzgen_nanobody_framework = boltzgenNanobodyFramework.trim();
+        }
+        if (boltzgenParallelMode) {
+            boltzgenParams.boltzgen_parallel_mode = true;
+            boltzgenParams.boltzgen_designs_per_job = Math.max(1, Number(boltzgenDesignsPerJob) || 1);
+        }
+        if (boltzgenReuseExisting) {
+            boltzgenParams.boltzgen_reuse = true;
+        }
+
+        return boltzgenParams;
+    };
+
+    const handleBoltzgenPreview = async () => {
+        if (!targetPdb && !targetSource?.path && !uploadedPath) {
+            window.alert('Choose a target structure before previewing the BoltzGen design spec.');
+            return;
+        }
+        if (boltzgenUseFrameworkTemplate && boltzgenScaffoldSource === 'selected_scaffold' && !sabdabFramework?.pdbCode && !customFrameworkPath) {
+            window.alert('Select a SAbDab framework or switch the scaffold source before previewing the BoltzGen design spec.');
+            return;
+        }
+
+        try {
+            const pdbPath = await resolveTargetPdbPathForLaunch(false);
+            const epitopeString = Array.from(selectedResidues).sort().join(',');
+            const params = buildStandaloneBoltzgenParams(pdbPath, epitopeString);
+            await boltzgenPreviewMutation.mutateAsync({ params, validate: true });
+        } catch (error: any) {
+            window.alert(`BoltzGen preview failed:\n${error?.message || error}`);
+        }
+    };
 
     const applyRefinementPreset = (preset: RefinementPreset) => {
         setRefinementPreset(preset);
@@ -942,6 +1127,27 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             if (typeof initialValues.boltzgen_parallel_mode === 'boolean') setBoltzgenParallelMode(initialValues.boltzgen_parallel_mode);
             if (initialValues.boltzgen_designs_per_job) setBoltzgenDesignsPerJob(initialValues.boltzgen_designs_per_job);
             if (typeof initialValues.boltzgen_reuse === 'boolean') setBoltzgenReuseExisting(initialValues.boltzgen_reuse);
+            if (initialValues.boltzgen_scaffold_source === 'default_ensemble' || initialValues.boltzgen_scaffold_source === 'selected_scaffold' || initialValues.boltzgen_scaffold_source === 'sequence_template') {
+                setBoltzgenScaffoldSource(initialValues.boltzgen_scaffold_source);
+            }
+            if (initialValues.boltzgen_checkpoint_mode === 'both' || initialValues.boltzgen_checkpoint_mode === 'diverse' || initialValues.boltzgen_checkpoint_mode === 'adherence') {
+                setBoltzgenCheckpointMode(initialValues.boltzgen_checkpoint_mode);
+            }
+            if (typeof initialValues.boltzgen_skip_inverse_folding === 'boolean') setBoltzgenSkipInverseFolding(initialValues.boltzgen_skip_inverse_folding);
+            if (typeof initialValues.boltzgen_inverse_fold_avoid === 'string') setBoltzgenInverseFoldAvoid(initialValues.boltzgen_inverse_fold_avoid);
+            if (typeof initialValues.boltzgen_inverse_fold_num_sequences === 'number') setBoltzgenInverseFoldNumSequences(initialValues.boltzgen_inverse_fold_num_sequences);
+            if (typeof initialValues.boltzgen_avoid_cysteine === 'boolean') setBoltzgenAvoidCysteine(initialValues.boltzgen_avoid_cysteine);
+            if (typeof initialValues.boltzgen_step_scale === 'number') setBoltzgenStepScale(initialValues.boltzgen_step_scale);
+            if (typeof initialValues.boltzgen_noise_scale === 'number') setBoltzgenNoiseScale(initialValues.boltzgen_noise_scale);
+            if (typeof initialValues.boltzgen_budget === 'number') setBoltzgenBudget(initialValues.boltzgen_budget);
+            if (typeof initialValues.boltzgen_alpha === 'number') setBoltzgenAlpha(initialValues.boltzgen_alpha);
+            if (typeof initialValues.boltzgen_max_rmsd === 'number') setBoltzgenMaxRmsd(initialValues.boltzgen_max_rmsd);
+            if (typeof initialValues.boltzgen_min_plddt === 'number') setBoltzgenMinPlddt(initialValues.boltzgen_min_plddt);
+            if (typeof initialValues.boltzgen_min_conf_score === 'number') setBoltzgenMinConfScore(initialValues.boltzgen_min_conf_score);
+            if (typeof initialValues.boltzgen_filter_biased === 'boolean') setBoltzgenFilterBiased(initialValues.boltzgen_filter_biased);
+            if (typeof initialValues.boltzgen_metrics_override === 'string') setBoltzgenMetricsOverride(initialValues.boltzgen_metrics_override);
+            if (typeof initialValues.boltzgen_additional_filters === 'string') setBoltzgenAdditionalFilters(initialValues.boltzgen_additional_filters);
+            if (typeof initialValues.boltzgen_size_buckets === 'string') setBoltzgenSizeBuckets(initialValues.boltzgen_size_buckets);
             if (typeof initialValues.out_dir === 'string') setCustomOutputDir(initialValues.out_dir);
             if (initialValues.target_dna_seq) {
                 setTargetDnaSeq(initialValues.target_dna_seq);
@@ -1274,92 +1480,18 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
 
         try {
-            // Step 1: Determine PDB path based on source
-            // - targetSource.path: file from previous run, preset, or RCSB PDB  
-            // - uploadedPath: manually uploaded file (already on server)
-            // - handleFileUpload: new file upload (needs to be uploaded first)
-            // - When skipping, use a placeholder or the input dir path
-            let pdbPath = targetSource?.path || uploadedPath;
-            if (!pdbPath && targetPdb) {
-                pdbPath = await handleFileUpload(targetPdb);
-            }
-            // When skipping or in refinement mode, don't require a target PDB
-            if (!pdbPath && (skippingEarlySteps || isRefinementMode)) {
-                pdbPath = isRefinementMode ? 'refinement_mode' : skipRFantibody ? rfantibodyInputPdbs : fampnnCollectedPdbs;
-            }
-
-            if (!pdbPath) {
-                alert('Failed to determine PDB file path');
-                return;
-            }
-
-            // Step 1b: Extract selected chain if multi-chain PDB with specific chain selected
-            // This ensures only the target chain is sent to design pipelines
-            if (selectedChain && parsedChains.length > 1) {
-                console.log(`[ANTIBODY_DENOVO] Extracting chain ${selectedChain} from multi-chain PDB`);
-                try {
-                    const extractResult = await extractChain(
-                        pdbPath,
-                        selectedChain,
-                        undefined,
-                        selectedTargetModel ?? undefined
-                    );
-                    pdbPath = extractResult.data.output_path;
-                    console.log(`[ANTIBODY_DENOVO] Extracted chain to: ${pdbPath}`);
-                } catch (err) {
-                    console.error('[ANTIBODY_DENOVO] Chain extraction failed:', err);
-                    alert(`Failed to extract chain ${selectedChain}: ${err}`);
-                    return;
-                }
-            }
+            const pdbPath = await resolveTargetPdbPathForLaunch(skippingEarlySteps || isRefinementMode);
 
             // Format selected residues for backend
             const epitopeString = Array.from(selectedResidues).sort().join(',');
 
             if (!isRefinementMode && deNovoGenerator === 'boltzgen') {
-                const boltzgenParams: Record<string, any> = {
-                    diffusion_method: 'boltzgen',
-                    run_boltzgen_only: true,
-                    run_docking: false,
-                    run_diffdock: false,
-                    run_unidock: false,
-                    boltzgen_mode: 'nanobody_binder',
-                    boltzgen_protocol: 'nanobody-anything',
-                    boltzgen_num_designs: numDesigns,
-                    boltzgen_batch_size: Math.max(1, Number(boltzgenBatchSize) || 1),
-                    boltzgen_scaffold_length: boltzgenScaffoldLength,
-                    boltzgen_target_pdb_path: pdbPath,
-                    boltzgen_cdr_h1_length: boltzgenCdrH1Length,
-                    boltzgen_cdr_h2_length: boltzgenCdrH2Length,
-                    boltzgen_cdr_h3_length: boltzgenCdrH3Length,
-                    framework_type: 'nanobody',
-                    antibody_format: 'vhh',
-                    antibody_chains: 'H',
-                    binder_chains: 'H',
-                    antigen_chains: selectedChain || undefined,
-                    target_chains: selectedChain || undefined,
-                    epitope_residues: epitopeString || undefined,
-                    selected_residues: epitopeString || undefined,
-                    pinned_gpus: pinnedGpus.length > 0 ? pinnedGpus : undefined,
-                    lock_gpus: lockGpus && pinnedGpus.length > 0,
-                    interactive_swa: interactiveWorkflow,
-                    interactive_gating: interactiveWorkflow,
-                    interactive_gate_stage: interactiveWorkflow ? 'post_rfantibody' : undefined,
-                    stage_family: 'boltzgen',
-                    stage_mode: 'nanobody_binder',
-                    out_dir: customOutputDir.trim() || undefined,
-                };
+                if (boltzgenUseFrameworkTemplate && boltzgenScaffoldSource === 'selected_scaffold' && !sabdabFramework?.pdbCode && !customFrameworkPath) {
+                    alert('Select a SAbDab framework or switch the scaffold source before launching BoltzGen.');
+                    return;
+                }
 
-                if (boltzgenUseFrameworkTemplate && boltzgenNanobodyFramework.trim()) {
-                    boltzgenParams.boltzgen_nanobody_framework = boltzgenNanobodyFramework.trim();
-                }
-                if (boltzgenParallelMode) {
-                    boltzgenParams.boltzgen_parallel_mode = true;
-                    boltzgenParams.boltzgen_designs_per_job = Math.max(1, Number(boltzgenDesignsPerJob) || 1);
-                }
-                if (boltzgenReuseExisting) {
-                    boltzgenParams.boltzgen_reuse = true;
-                }
+                const boltzgenParams = buildStandaloneBoltzgenParams(pdbPath, epitopeString);
 
                 await submitMutation.mutateAsync({
                     name: jobName,
@@ -2692,12 +2824,23 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     <div>
                                         <h3 className="text-sm font-semibold text-slate-200">Antibody Framework</h3>
                                         <p className="text-xs text-slate-500 mt-1">
-                                            Keep the same shell as RFantibody, but swap the core generator setup to BoltzGen nanobody mode.
+                                            Keep the same antibody shell as RFantibody, but drive the generator with native BoltzGen nanobody scaffold or sequence-template inputs.
                                         </p>
                                     </div>
-                                    <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] text-amber-200">
-                                        Core Step
-                                    </span>
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={handleBoltzgenPreview}
+                                            disabled={boltzgenPreviewMutation.isPending}
+                                            className="rounded-lg border px-2.5 py-1 text-[11px] transition-colors disabled:opacity-50"
+                                            style={themedInsetStyle}
+                                        >
+                                            {boltzgenPreviewMutation.isPending ? 'Previewing...' : 'Preview Spec'}
+                                        </button>
+                                        <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] text-amber-200">
+                                            Core Step
+                                        </span>
+                                    </div>
                                 </div>
 
                                 <div className="grid grid-cols-2 gap-3 mb-4">
@@ -2707,7 +2850,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         className="rounded-lg border px-3 py-2 text-sm transition-colors"
                                         style={boltzgenUseFrameworkTemplate ? themedSelectedStyle('var(--warning)') : themedInsetStyle}
                                     >
-                                        Use VHH Template
+                                        Scaffold / Template
                                     </button>
                                     <button
                                         type="button"
@@ -2720,72 +2863,102 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 </div>
 
                                 {boltzgenUseFrameworkTemplate && (
-                                    <div className="mb-4">
-                                        <div className="mb-2 flex items-center justify-between gap-3">
-                                            <div className="text-xs text-slate-500">Template source</div>
-                                            <button
-                                                type="button"
-                                                onClick={() => setShowBoltzgenFrameworkBrowser((current) => !current)}
-                                                className="rounded-lg border px-2.5 py-1 text-[11px] transition-colors"
-                                                style={showBoltzgenFrameworkBrowser ? themedSelectedStyle('var(--warning)') : themedInsetStyle}
-                                            >
-                                                {showBoltzgenFrameworkBrowser ? 'Hide SAbDab Browser' : 'Browse SAbDab'}
-                                            </button>
+                                    <div className="mb-4 space-y-3">
+                                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                                            {[
+                                                ['default_ensemble', 'Default Ensemble', `${DEFAULT_BOLTZGEN_ENSEMBLE.join(', ')}`],
+                                                ['selected_scaffold', 'Selected Scaffold', 'One SAbDab/custom framework'],
+                                                ['sequence_template', 'Sequence Template', 'Legacy editable VHH sequence'],
+                                            ].map(([id, label, detail]) => (
+                                                <button
+                                                    key={id}
+                                                    type="button"
+                                                    onClick={() => setBoltzgenScaffoldSource(id as BoltzgenScaffoldSource)}
+                                                    className="rounded-lg border px-3 py-2 text-left text-sm transition-colors"
+                                                    style={boltzgenScaffoldSource === id ? themedSelectedStyle('var(--warning)') : themedInsetStyle}
+                                                >
+                                                    <div className="font-medium text-slate-200">{label}</div>
+                                                    <div className="text-[11px] text-slate-500">{detail}</div>
+                                                </button>
+                                            ))}
                                         </div>
 
-                                        {sabdabFramework?.pdbCode && (
-                                            <div className="mb-3 flex items-center gap-2 text-xs">
-                                                <span className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">
-                                                    {sabdabFramework.pdbCode}
-                                                </span>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        setSabdabFramework(null);
-                                                        setBoltzgenNanobodyFramework(DEFAULT_BOLTZGEN_VHH_FRAMEWORK);
-                                                    }}
-                                                    className="text-slate-400 hover:text-red-400"
-                                                >
-                                                    Clear
-                                                </button>
+                                        {boltzgenScaffoldSource === 'default_ensemble' && (
+                                            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-[11px] text-slate-400">
+                                                Curated nanobody ensemble. The backend hydrates scaffold-backed specs from {DEFAULT_BOLTZGEN_ENSEMBLE.join(', ')} and preserves their framework geometry while replacing the CDR loops.
                                             </div>
                                         )}
 
-                                        {showBoltzgenFrameworkBrowser && (
-                                            <div className="mb-3 rounded-lg border border-slate-700 bg-slate-900/60 p-3">
-                                                <FrameworkBrowser
-                                                    onSelect={(framework) => {
-                                                        setSabdabFramework(framework);
-                                                        if (framework?.sequence) {
-                                                            setBoltzgenNanobodyFramework(framework.sequence);
-                                                        }
-                                                        if (framework?.cdrH3Length) {
-                                                            const min = Math.max(8, framework.cdrH3Length - 3);
-                                                            const max = framework.cdrH3Length + 3;
-                                                            setBoltzgenCdrH3Length(`${min}-${max}`);
-                                                        }
-                                                        setShowBoltzgenFrameworkBrowser(false);
-                                                    }}
-                                                    selectedFramework={sabdabFramework}
-                                                    showCustomUpload={false}
-                                                />
+                                        {boltzgenScaffoldSource === 'selected_scaffold' && (
+                                            <div>
+                                                <div className="mb-2 flex items-center justify-between gap-3">
+                                                    <div className="text-xs text-slate-500">SAbDab scaffold source</div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setShowBoltzgenFrameworkBrowser((current) => !current)}
+                                                        className="rounded-lg border px-2.5 py-1 text-[11px] transition-colors"
+                                                        style={showBoltzgenFrameworkBrowser ? themedSelectedStyle('var(--warning)') : themedInsetStyle}
+                                                    >
+                                                        {showBoltzgenFrameworkBrowser ? 'Hide SAbDab Browser' : 'Browse SAbDab'}
+                                                    </button>
+                                                </div>
+
+                                                {sabdabFramework?.pdbCode && (
+                                                    <div className="mb-3 flex items-center gap-2 text-xs">
+                                                        <span className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">
+                                                            {sabdabFramework.pdbCode}
+                                                        </span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setSabdabFramework(null);
+                                                                setBoltzgenNanobodyFramework(DEFAULT_BOLTZGEN_VHH_FRAMEWORK);
+                                                            }}
+                                                            className="text-slate-400 hover:text-red-400"
+                                                        >
+                                                            Clear
+                                                        </button>
+                                                    </div>
+                                                )}
+
+                                                {showBoltzgenFrameworkBrowser && (
+                                                    <div className="mb-3 rounded-lg border border-slate-700 bg-slate-900/60 p-3">
+                                                        <FrameworkBrowser
+                                                            onSelect={(framework) => {
+                                                                setSabdabFramework(framework);
+                                                                if (framework?.sequence) {
+                                                                    setBoltzgenNanobodyFramework(framework.sequence);
+                                                                }
+                                                                if (framework?.cdrH3Length) {
+                                                                    const min = Math.max(8, framework.cdrH3Length - 3);
+                                                                    const max = framework.cdrH3Length + 3;
+                                                                    setBoltzgenCdrH3Length(`${min}-${max}`);
+                                                                }
+                                                                setShowBoltzgenFrameworkBrowser(false);
+                                                            }}
+                                                            selectedFramework={sabdabFramework}
+                                                            showCustomUpload={false}
+                                                        />
+                                                    </div>
+                                                )}
                                             </div>
+                                        )}
+
+                                        {boltzgenScaffoldSource === 'sequence_template' && (
+                                            <label className="block text-xs text-slate-500">
+                                                VHH framework sequence
+                                                <textarea
+                                                    value={boltzgenNanobodyFramework}
+                                                    onChange={(e) => setBoltzgenNanobodyFramework(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
+                                                    rows={3}
+                                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-amber-500 outline-none"
+                                                />
+                                            </label>
                                         )}
                                     </div>
                                 )}
-
-                                <label className="block text-xs text-slate-500">
-                                    VHH framework sequence
-                                    <textarea
-                                        value={boltzgenNanobodyFramework}
-                                        onChange={(e) => setBoltzgenNanobodyFramework(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
-                                        rows={3}
-                                        disabled={!boltzgenUseFrameworkTemplate}
-                                        className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-amber-500 outline-none disabled:opacity-50"
-                                    />
-                                </label>
                                 <p className="mt-2 text-[11px] text-slate-500">
-                                    The target chain and selected epitope residues above feed the same batch-run-filter loop, but BoltzGen now owns the initial generator settings in this section.
+                                    The target chain and selected epitope residues above feed the same batch-run-filter loop, but BoltzGen now owns the initial generator spec, filtering, and checkpoint settings in this section.
                                 </p>
                             </div>
 
@@ -2830,6 +3003,209 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     Keep the initial batch broad enough to seed a useful refinement set. Most campaigns should leave downstream modules off here, rank the batch outputs, then continue with the selected subset.
                                 </p>
                             </div>
+
+                            <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-4">
+                                <div className="mb-3">
+                                    <h3 className="text-sm font-semibold text-slate-200">BoltzGen Controls</h3>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Late-alpha runtime controls wired directly into the BoltzGen launcher and filter pass.
+                                    </p>
+                                </div>
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                    <label className="text-xs text-slate-500">
+                                        Checkpoint mode
+                                        <select
+                                            value={boltzgenCheckpointMode}
+                                            onChange={(e) => setBoltzgenCheckpointMode(e.target.value as BoltzgenCheckpointMode)}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        >
+                                            <option value="both">Both checkpoints</option>
+                                            <option value="diverse">Diverse only</option>
+                                            <option value="adherence">Adherence only</option>
+                                        </select>
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Inverse-fold sequences
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            value={boltzgenInverseFoldNumSequences}
+                                            onChange={(e) => setBoltzgenInverseFoldNumSequences(Math.max(1, Number(e.target.value) || 1))}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Inverse-fold avoid AA set
+                                        <input
+                                            type="text"
+                                            value={boltzgenInverseFoldAvoid}
+                                            onChange={(e) => setBoltzgenInverseFoldAvoid(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
+                                            placeholder="e.g. CM"
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Diversity budget
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            value={boltzgenBudget}
+                                            onChange={(e) => setBoltzgenBudget(e.target.value ? Math.max(1, Number(e.target.value) || 1) : '')}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Step scale
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            step={0.01}
+                                            value={boltzgenStepScale}
+                                            onChange={(e) => setBoltzgenStepScale(e.target.value ? Number(e.target.value) : '')}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Noise scale
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            step={0.01}
+                                            value={boltzgenNoiseScale}
+                                            onChange={(e) => setBoltzgenNoiseScale(e.target.value ? Number(e.target.value) : '')}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Min pLDDT
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            max={100}
+                                            step={1}
+                                            value={boltzgenMinPlddt}
+                                            onChange={(e) => setBoltzgenMinPlddt(e.target.value ? Number(e.target.value) : '')}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Max refold RMSD
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            step={0.1}
+                                            value={boltzgenMaxRmsd}
+                                            onChange={(e) => setBoltzgenMaxRmsd(e.target.value ? Number(e.target.value) : '')}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Min confidence score
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            max={1}
+                                            step={0.01}
+                                            value={boltzgenMinConfScore}
+                                            onChange={(e) => setBoltzgenMinConfScore(e.target.value ? Number(e.target.value) : '')}
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500">
+                                        Metrics override
+                                        <input
+                                            type="text"
+                                            value={boltzgenMetricsOverride}
+                                            onChange={(e) => setBoltzgenMetricsOverride(e.target.value)}
+                                            placeholder="plddt=none filter_rmsd=none"
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500 sm:col-span-2">
+                                        Additional filters
+                                        <input
+                                            type="text"
+                                            value={boltzgenAdditionalFilters}
+                                            onChange={(e) => setBoltzgenAdditionalFilters(e.target.value)}
+                                            placeholder="affinity_probability>0.8 design_ptm>=0.75"
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                    <label className="text-xs text-slate-500 sm:col-span-2">
+                                        Size buckets
+                                        <input
+                                            type="text"
+                                            value={boltzgenSizeBuckets}
+                                            onChange={(e) => setBoltzgenSizeBuckets(e.target.value)}
+                                            placeholder="1-5:4 6-10:8 11-18:8"
+                                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-amber-500"
+                                        />
+                                    </label>
+                                </div>
+                                <div className="mt-4 flex flex-wrap gap-4">
+                                    <label className="flex items-center gap-2 text-sm text-slate-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={boltzgenSkipInverseFolding}
+                                            onChange={(e) => setBoltzgenSkipInverseFolding(e.target.checked)}
+                                            className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-amber-500"
+                                        />
+                                        Skip inverse folding
+                                    </label>
+                                    <label className="flex items-center gap-2 text-sm text-slate-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={boltzgenAvoidCysteine}
+                                            onChange={(e) => setBoltzgenAvoidCysteine(e.target.checked)}
+                                            className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-amber-500"
+                                        />
+                                        Avoid cysteine
+                                    </label>
+                                    <label className="flex items-center gap-2 text-sm text-slate-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={boltzgenFilterBiased}
+                                            onChange={(e) => setBoltzgenFilterBiased(e.target.checked)}
+                                            className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-amber-500"
+                                        />
+                                        Filter biased compositions
+                                    </label>
+                                </div>
+                            </div>
+
+                            {showBoltzgenPreview && boltzgenPreview && (
+                                <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-4">
+                                    <div className="mb-3 flex items-center justify-between gap-3">
+                                        <div>
+                                            <h3 className="text-sm font-semibold text-slate-200">BoltzGen Preflight</h3>
+                                            <p className="text-xs text-slate-500 mt-1">
+                                                Generated design spec plus `boltzgen check` status from the current nanobody settings.
+                                            </p>
+                                        </div>
+                                        <span className={`rounded-full px-2.5 py-1 text-[11px] ${boltzgenPreview.check_ok ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-200' : 'border border-amber-500/30 bg-amber-500/10 text-amber-200'}`}>
+                                            {boltzgenPreview.check_ok ? 'Check Passed' : 'Check Pending / Warn'}
+                                        </span>
+                                    </div>
+                                    {boltzgenPreview.notes?.length > 0 && (
+                                        <div className="mb-3 rounded-lg border border-slate-700 bg-slate-950/60 p-3 text-[11px] text-slate-400">
+                                            {boltzgenPreview.notes.join(' | ')}
+                                        </div>
+                                    )}
+                                    {boltzgenPreview.scaffold_specs?.length > 0 && (
+                                        <div className="mb-3 flex flex-wrap gap-2 text-[11px]">
+                                            {boltzgenPreview.scaffold_specs.map((spec, index) => (
+                                                <span key={`${spec.name || spec.path || index}`} className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-200">
+                                                    {spec.name || spec.path || `scaffold_${index + 1}`}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+                                    <pre className="max-h-80 overflow-auto rounded-lg border border-slate-700 bg-slate-950/80 p-3 text-[11px] text-slate-200">{boltzgenPreview.yaml_text}</pre>
+                                    {(boltzgenPreview.check_stdout || boltzgenPreview.check_stderr) && (
+                                        <pre className="mt-3 max-h-48 overflow-auto rounded-lg border border-slate-700 bg-slate-950/80 p-3 text-[11px] text-slate-400">{[boltzgenPreview.check_stdout, boltzgenPreview.check_stderr].filter(Boolean).join('\n\n')}</pre>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     ) : (
                         <>
@@ -4485,6 +4861,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                             setBoltzgenNanobodyFramework(p.boltzgen_nanobody_framework);
                             loaded.push('boltzgen_nanobody_framework');
                         }
+                        if (p.boltzgen_scaffold_source === 'default_ensemble' || p.boltzgen_scaffold_source === 'selected_scaffold' || p.boltzgen_scaffold_source === 'sequence_template') {
+                            setBoltzgenScaffoldSource(p.boltzgen_scaffold_source);
+                            loaded.push('boltzgen_scaffold_source');
+                        }
                         if (typeof p.boltzgen_scaffold_length === 'string') {
                             setBoltzgenScaffoldLength(p.boltzgen_scaffold_length);
                             loaded.push('boltzgen_scaffold_length');
@@ -4492,6 +4872,25 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         if (typeof p.boltzgen_cdr_h1_length === 'string') { setBoltzgenCdrH1Length(p.boltzgen_cdr_h1_length); loaded.push('boltzgen_cdr_h1_length'); }
                         if (typeof p.boltzgen_cdr_h2_length === 'string') { setBoltzgenCdrH2Length(p.boltzgen_cdr_h2_length); loaded.push('boltzgen_cdr_h2_length'); }
                         if (typeof p.boltzgen_cdr_h3_length === 'string') { setBoltzgenCdrH3Length(p.boltzgen_cdr_h3_length); loaded.push('boltzgen_cdr_h3_length'); }
+                        if (p.boltzgen_checkpoint_mode === 'both' || p.boltzgen_checkpoint_mode === 'diverse' || p.boltzgen_checkpoint_mode === 'adherence') {
+                            setBoltzgenCheckpointMode(p.boltzgen_checkpoint_mode);
+                            loaded.push('boltzgen_checkpoint_mode');
+                        }
+                        if (typeof p.boltzgen_skip_inverse_folding === 'boolean') { setBoltzgenSkipInverseFolding(p.boltzgen_skip_inverse_folding); loaded.push('boltzgen_skip_inverse_folding'); }
+                        if (typeof p.boltzgen_inverse_fold_avoid === 'string') { setBoltzgenInverseFoldAvoid(p.boltzgen_inverse_fold_avoid); loaded.push('boltzgen_inverse_fold_avoid'); }
+                        if (typeof p.boltzgen_inverse_fold_num_sequences === 'number') { setBoltzgenInverseFoldNumSequences(p.boltzgen_inverse_fold_num_sequences); loaded.push('boltzgen_inverse_fold_num_sequences'); }
+                        if (typeof p.boltzgen_avoid_cysteine === 'boolean') { setBoltzgenAvoidCysteine(p.boltzgen_avoid_cysteine); loaded.push('boltzgen_avoid_cysteine'); }
+                        if (typeof p.boltzgen_step_scale === 'number') { setBoltzgenStepScale(p.boltzgen_step_scale); loaded.push('boltzgen_step_scale'); }
+                        if (typeof p.boltzgen_noise_scale === 'number') { setBoltzgenNoiseScale(p.boltzgen_noise_scale); loaded.push('boltzgen_noise_scale'); }
+                        if (typeof p.boltzgen_budget === 'number') { setBoltzgenBudget(p.boltzgen_budget); loaded.push('boltzgen_budget'); }
+                        if (typeof p.boltzgen_alpha === 'number') { setBoltzgenAlpha(p.boltzgen_alpha); loaded.push('boltzgen_alpha'); }
+                        if (typeof p.boltzgen_max_rmsd === 'number') { setBoltzgenMaxRmsd(p.boltzgen_max_rmsd); loaded.push('boltzgen_max_rmsd'); }
+                        if (typeof p.boltzgen_min_plddt === 'number') { setBoltzgenMinPlddt(p.boltzgen_min_plddt); loaded.push('boltzgen_min_plddt'); }
+                        if (typeof p.boltzgen_min_conf_score === 'number') { setBoltzgenMinConfScore(p.boltzgen_min_conf_score); loaded.push('boltzgen_min_conf_score'); }
+                        if (typeof p.boltzgen_filter_biased === 'boolean') { setBoltzgenFilterBiased(p.boltzgen_filter_biased); loaded.push('boltzgen_filter_biased'); }
+                        if (typeof p.boltzgen_metrics_override === 'string') { setBoltzgenMetricsOverride(p.boltzgen_metrics_override); loaded.push('boltzgen_metrics_override'); }
+                        if (typeof p.boltzgen_additional_filters === 'string') { setBoltzgenAdditionalFilters(p.boltzgen_additional_filters); loaded.push('boltzgen_additional_filters'); }
+                        if (typeof p.boltzgen_size_buckets === 'string') { setBoltzgenSizeBuckets(p.boltzgen_size_buckets); loaded.push('boltzgen_size_buckets'); }
                         if (typeof p.interactive_swa === 'boolean') { setInteractiveWorkflow(p.interactive_swa); loaded.push('interactive_swa'); }
                         else if (typeof p.interactive_gating === 'boolean') { setInteractiveWorkflow(p.interactive_gating); loaded.push('interactive_gating'); }
                         if (
@@ -4720,6 +5119,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     protect_vhh_tetrad: protectTetrad,
                     boltzgen_mode: 'nanobody_binder',
                     boltzgen_use_framework_template: boltzgenUseFrameworkTemplate,
+                    boltzgen_scaffold_source: boltzgenScaffoldSource,
                     boltzgen_batch_size: boltzgenBatchSize,
                     boltzgen_parallel_mode: boltzgenParallelMode,
                     boltzgen_designs_per_job: boltzgenDesignsPerJob,
@@ -4729,6 +5129,22 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     boltzgen_cdr_h1_length: boltzgenCdrH1Length,
                     boltzgen_cdr_h2_length: boltzgenCdrH2Length,
                     boltzgen_cdr_h3_length: boltzgenCdrH3Length,
+                    boltzgen_checkpoint_mode: boltzgenCheckpointMode,
+                    boltzgen_skip_inverse_folding: boltzgenSkipInverseFolding,
+                    boltzgen_inverse_fold_avoid: boltzgenInverseFoldAvoid,
+                    boltzgen_inverse_fold_num_sequences: boltzgenInverseFoldNumSequences,
+                    boltzgen_avoid_cysteine: boltzgenAvoidCysteine,
+                    boltzgen_step_scale: boltzgenStepScale,
+                    boltzgen_noise_scale: boltzgenNoiseScale,
+                    boltzgen_budget: boltzgenBudget,
+                    boltzgen_alpha: boltzgenAlpha,
+                    boltzgen_max_rmsd: boltzgenMaxRmsd,
+                    boltzgen_min_plddt: boltzgenMinPlddt,
+                    boltzgen_min_conf_score: boltzgenMinConfScore,
+                    boltzgen_filter_biased: boltzgenFilterBiased,
+                    boltzgen_metrics_override: boltzgenMetricsOverride.trim() || undefined,
+                    boltzgen_additional_filters: boltzgenAdditionalFilters.trim() || undefined,
+                    boltzgen_size_buckets: boltzgenSizeBuckets.trim() || undefined,
                     // Framework protection (for framework_allowed and full_design modes)
                     protected_positions: frameworkProtection.protectedPositions.join(','),
                     protect_disulfides: frameworkProtection.protectDisulfides,
