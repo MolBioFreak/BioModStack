@@ -1,0 +1,140 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+%labels
+    Author BioModStack Pipeline
+    Version 1.0.0
+    Description OpenMM 8.1+ physics refinement and MM-GBSA scoring container
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=America/Chicago
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+    
+    # System packages
+    apt-get update && apt-get install -y --no-install-recommends \
+        git \
+        wget \
+        curl \
+        ca-certificates \
+        build-essential \
+        && rm -rf /var/lib/apt/lists/*
+    
+    # Python 3.11 (required for OpenMM-ML compatibility)
+    apt-get update && apt-get install -y \
+        software-properties-common \
+        && add-apt-repository ppa:deadsnakes/ppa -y \
+        && apt-get update && apt-get install -y \
+        python3.11 \
+        python3.11-dev \
+        python3.11-venv \
+        && rm -rf /var/lib/apt/lists/*
+        
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+    
+    # UV Package Manager (BioModStack standard - 10-100x faster than pip)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+    
+    # Virtual Environment
+    uv venv /opt/venv
+    . /opt/venv/bin/activate
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CORE DEPENDENCIES: OpenMM + Physics Stack
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    # PyTorch (CUDA 12.1 stable - required for OpenMM-ML/MACE)
+    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    
+    # OpenMM Core + PDBFixer (structure preparation)
+    uv pip install openmm pdbfixer
+    
+    # OpenMM-ML (Neural Network Force Field integration)
+    uv pip install openmm-ml
+    
+    # Neural Network Force Fields
+    # MACE-OFF: Equivariant message-passing for organic molecules
+    uv pip install mace-torch
+    # ANI-2x: Universal organic molecule potential
+    uv pip install torchani
+    
+    # Analysis and utilities
+    uv pip install \
+        mdtraj \
+        biopython \
+        numpy \
+        scipy \
+        pandas
+    
+    # Cleanup
+    apt-get clean
+    rm -rf /root/.cache/uv
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export CUDA_DEVICE_ORDER=PCI_BUS_ID
+    export PYTHONUNBUFFERED=1
+    # OpenMM GPU platform selection
+    export OPENMM_DEFAULT_PLATFORM=CUDA
+
+%runscript
+    exec python3 "$@"
+
+%test
+    . /opt/venv/bin/activate
+    echo "=== OpenMM Container Verification ==="
+    
+    # Core OpenMM
+    python3 -c "import openmm; print(f'✓ OpenMM {openmm.__version__}')"
+    python3 -c "from openmm import app; print('✓ OpenMM App layer')"
+    
+    # PDBFixer
+    python3 -c "from pdbfixer import PDBFixer; print('✓ PDBFixer')"
+    
+    # Force Fields
+    python3 -c "from openmm.app import ForceField; ff = ForceField('amber14-all.xml'); print('✓ AMBER14SB force field')"
+    
+    # OpenMM-ML (NNFF integration)
+    python3 -c "import openmmml; print('✓ OpenMM-ML')"
+    
+    # MACE
+    python3 -c "import mace; print('✓ MACE-torch')"
+    
+    # ANI
+    python3 -c "import torchani; print('✓ TorchANI (ANI-2x)')"
+    
+    # Analysis
+    python3 -c "import mdtraj; print(f'✓ MDTraj {mdtraj.version.short_version}')"
+    python3 -c "from Bio.PDB import PDBParser; print('✓ BioPython')"
+    
+    # GPU Platform check
+    python3 -c "
+import openmm
+platforms = [openmm.Platform.getPlatform(i).getName() for i in range(openmm.Platform.getNumPlatforms())]
+print(f'✓ Available platforms: {platforms}')
+if 'CUDA' in platforms:
+    print('✓ CUDA platform available')
+else:
+    print('⚠ CUDA platform not available (CPU-only mode)')
+"
+    
+    echo "=== All imports successful ==="
+
+%help
+    OpenMM Physics Refinement Container
+    
+    Provides:
+    - OpenMM 8.1+ energy minimization and molecular dynamics
+    - PDBFixer for structure preparation (missing atoms, hydrogens)
+    - AMBER14SB and CHARMM36m force fields
+    - OpenMM-ML for Neural Network Force Field integration
+    - MACE-OFF and ANI-2x potentials for near-QM accuracy
+    - MDTraj for trajectory analysis
+    
+    Usage:
+    - Energy minimization: python /scripts/relax_openmm.py --input structure.pdb
+    - MM-GBSA scoring: python /scripts/score_mmgbsa.py --complex complex.pdb
+    
+    Part of BioModStack physics refinement layer.

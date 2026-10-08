@@ -75,6 +75,7 @@ include { PrepBoltz ; PrepBoltzWithMSA ; RunBoltz } from '../modules/boltz'
 include { GenerateLocalMSA ; BoltzFromSequenceWithMSA } from '../modules/structure_prediction'
 include { ANARCI } from '../modules/utils/anarci'
 include { PredictTargetComplex } from '../modules/predict_target_complex'
+include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm'
 
 // =============================================================================
 // ORCHESTRATOR SPAWN-WAIT-COLLECT PROCESSES
@@ -455,6 +456,7 @@ process WaitAndAggregateChildResults {
     python3 ${projectDir}/scripts/wait_for_children.py \\
         --parent_job_id "${parent_job_id}" \\
         --stage "boltz2" \\
+        --batch_name "${batch_name}" \\
         --output wait_result.json \\
         --api_url "http://localhost:8000" \\
         2>&1 | tee wait.log
@@ -476,6 +478,7 @@ with open('wait_result.json') as f:
     for child_dir in \$CHILD_DIRS; do
         if [ -d "\$child_dir" ]; then
             TOTAL_CHILDREN=\$((TOTAL_CHILDREN + 1))
+            child_idx="\$TOTAL_CHILDREN"
             
             # Look for Boltz-validated PDBs in child output
             # Search multiple possible locations where Boltz outputs may be published
@@ -486,7 +489,7 @@ with open('wait_result.json') as f:
                         if [ -f "\$pdb" ]; then
                             # Copy with unique naming
                             basename=\$(basename "\$pdb")
-                            cp "\$pdb" "validated_designs/\$basename"
+                            cp "\$pdb" "validated_designs/\${child_idx}_\$basename"
                             TOTAL_PDBS=\$((TOTAL_PDBS + 1))
                         fi
                     done
@@ -501,6 +504,10 @@ with open('wait_result.json') as f:
             done
         fi
     done
+
+    if [ "${expected_child_count}" -gt 0 ] && [ "\$TOTAL_CHILDREN" -lt "${expected_child_count}" ]; then
+        echo "Warning: expected ${expected_child_count} child jobs but found \$TOTAL_CHILDREN" | tee -a wait.log
+    fi
     
     echo "Collected \$TOTAL_PDBS validated PDBs from \$TOTAL_CHILDREN child jobs"
     
@@ -566,7 +573,9 @@ workflow ANTIBODY_DENOVO {
     // The placeholder triggers preset selection in the process script
     // Use safe path resolution to avoid Channel.value() DSL2 error with undefined params
     def framework_path = params.framework_pdb ? file(params.framework_pdb) : file("${projectDir}/lib/NO_FRAMEWORK")
-    framework_for_rfantibody = Channel.value(framework_path)
+    framework_for_rfantibody = framework_pdb_ch
+        .map { meta, pdb -> pdb }
+        .ifEmpty { framework_path }
     
     // Multi-GPU parallelism for RFantibody
     // Parse available GPUs from pinned_gpus param (e.g., "0,2" -> [0, 2])
@@ -645,7 +654,10 @@ workflow ANTIBODY_DENOVO {
         )
         
         // Create backbone_designs channel from collected outputs
-        backbone_designs = CollectChildOutputs.out.pdbs.flatten().toList().map { pdbs ->
+        backbone_designs = CollectChildOutputs.out.pdbs
+            .flatten()
+            .collect()
+            .map { pdbs ->
             def meta = [id: params.name ?: "antibody"]
             [meta, pdbs]
         }
@@ -754,7 +766,7 @@ workflow ANTIBODY_DENOVO {
             
             // PrepFAMPNN generates constraint CSV and preps structures
             fampnn_prep_input = all_backbone_pdbs.map { pdbs ->
-                [pdbs, file("${projectDir}/lib/NO_JSON")]
+                [pdbs, file("${projectDir}/lib/empty-meta.jsonl")]
             }
             PrepFAMPNN(fampnn_prep_input)
             
@@ -827,7 +839,7 @@ workflow ANTIBODY_DENOVO {
                 
                 // Collect PDBs and JSONs for filtering
                 fampnn_filter_input = CollectFAMPNNOutputs.out.pdbs
-                    .combine(CollectFAMPNNOutputs.out.jsons.ifEmpty(file("${projectDir}/lib/NO_JSON")))
+                    .combine(CollectFAMPNNOutputs.out.jsons.ifEmpty(file("${projectDir}/lib/empty-meta.jsonl")))
                 
                 FilterFAMPNN(fampnn_filter_input)
                 
@@ -882,7 +894,7 @@ workflow ANTIBODY_DENOVO {
         // FIRST run PrepMPNN to generate PDBs with FIXED labels in B-factors
         // Map backbones to [pdbs, dummy_json] input for PrepMPNN
         mpnn_prep_input = backbone_designs.map { meta, pdbs ->
-             [pdbs, file("${projectDir}/lib/NO_JSON")]
+             [pdbs, file("${projectDir}/lib/empty-meta.jsonl")]
         }
         PrepMPNN(mpnn_prep_input)
 
@@ -1045,6 +1057,10 @@ workflow ANTIBODY_DENOVO {
                     tuple(sequence, pdb.baseName, pdb)
                 }
             }
+
+        design_sequences = design_sequences.ifEmpty {
+            error "No sequences available for Boltz validation (upstream produced zero designs)"
+        }
         
         // Step 2: Generate MSA ONCE using first design's sequence
         first_design_for_msa = design_sequences
@@ -1185,6 +1201,95 @@ workflow ANTIBODY_DENOVO {
         validated_structures = all_sequences
     }
 
+    // =========================================================================
+    // Step 3.5: Physics Refinement with OpenMM (Optional)
+    // =========================================================================
+    // CDR-only energy minimization with framework restraints to preserve
+    // validated AI geometry while resolving atomic-level clashes.
+    // MM-GBSA scoring for binding affinity estimation (full tier only).
+
+    if (params.openmm_enabled == true) {
+        log.info("Step 3.5: Running OpenMM physics refinement...")
+        log.info("  Compute tier: ${params.openmm_compute_tier ?: 'fast'}")
+        log.info("  CDR-only mode: ${params.openmm_cdr_only ?: true}")
+        log.info("  Restraint mode: ${params.openmm_restraint_mode ?: 'framework'}")
+        
+        // Batch validated structures for GPU processing
+        openmm_batched = validated_structures
+            .map { meta, pdb -> pdb }
+            .collect()
+            .flatten()
+            .buffer(size: 10, remainder: true)
+            .map { batch -> tuple("openmm_${batch.hashCode()}", batch) }
+        
+        // Run energy minimization
+        OpenMMRelaxation(
+            openmm_batched,
+            params.openmm_compute_tier ?: 'fast',
+            params.openmm_cdr_only ?: true,
+            params.openmm_restraint_mode ?: 'framework',
+            params.openmm_antibody_chain ?: 'H',
+            params.openmm_force_field ?: 'amber14sb'
+        )
+        
+        // REPORT STAGE: openmm_relaxation
+        OpenMMRelaxation.out.relaxed_pdbs.subscribe { pdbs ->
+            try {
+                def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
+                def args = [params.job_id, "openmm_relaxation", "complete"] + report_files.collect { it.toString() }
+                def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                proc.waitFor()
+            } catch (Exception e) {
+                println "Warning: Failed to report stage openmm_relaxation: ${e.message}"
+            }
+        }
+        
+        // Run MM-GBSA scoring for full tier or explicit request
+        if (params.openmm_compute_tier == 'full' || params.openmm_mmgbsa_mode != 'off') {
+            log.info("  Running MM-GBSA binding affinity scoring...")
+            
+            // Batch relaxed structures for scoring
+            mmgbsa_batched = OpenMMRelaxation.out.relaxed_pdbs
+                .collect()
+                .flatten()
+                .buffer(size: 5, remainder: true)
+                .map { batch -> tuple("mmgbsa_${batch.hashCode()}", batch) }
+            
+            OpenMMScore(
+                mmgbsa_batched,
+                params.openmm_mmgbsa_mode ?: 'interface',
+                params.openmm_binder_chains ?: 'H',
+                params.openmm_target_chains ?: 'A',
+                params.openmm_force_field ?: 'amber14sb'
+            )
+            
+            // REPORT STAGE: openmm_mmgbsa
+            OpenMMScore.out.scores_json.subscribe { jsons ->
+                try {
+                    def args = [params.job_id, "openmm_mmgbsa", "complete"]
+                    def proc = ["python3", "${projectDir}/scripts/stage_reporter.py", *args].execute()
+                    proc.waitFor()
+                } catch (Exception e) {
+                    println "Warning: Failed to report stage openmm_mmgbsa: ${e.message}"
+                }
+            }
+        }
+        
+        // Use relaxed structures for downstream stages
+        refined_structures = OpenMMRelaxation.out.relaxed_pdbs
+            .flatten()
+            .map { pdb ->
+                def name = pdb.baseName.replace('_relaxed', '')
+                def meta = [id: name]
+                [meta, pdb]
+            }
+    }
+    else {
+        // Skip OpenMM - pass validated structures directly
+        refined_structures = validated_structures
+    }
+
     // Step 4: Immunogenicity Scoring with AntiBERTy
     // ---------------------------------------------------------------------------
     log.info("Step 4: Scoring immunogenicity with AntiBERTy...")
@@ -1192,7 +1297,7 @@ workflow ANTIBODY_DENOVO {
     if (params.run_immunogenicity_scoring != false) {
         // Extract sequences from structures for AntiBERTy
         // AntiBERTy expects FASTA input
-        antiberty_input = validated_structures.map { meta, pdb ->
+        antiberty_input = refined_structures.map { meta, pdb ->
             // Convert PDB to FASTA (simplified - actual implementation needs extraction)
             [meta, pdb]
         }
@@ -1202,16 +1307,16 @@ workflow ANTIBODY_DENOVO {
 
         // Filter high-risk sequences
         if (params.filter_immunogenic != false) {
-            antiberty_filter_input = ANTIBERTY_SCORE.out.scores.join(validated_structures)
+            antiberty_filter_input = ANTIBERTY_SCORE.out.scores.join(refined_structures)
             ANTIBERTY_FILTER(antiberty_filter_input)
             filtered_structures = ANTIBERTY_FILTER.out.filtered_fasta
         }
         else {
-            filtered_structures = validated_structures
+            filtered_structures = refined_structures
         }
     }
     else {
-        filtered_structures = validated_structures
+        filtered_structures = refined_structures
         immunogenicity_scores = Channel.empty()
     }
 
