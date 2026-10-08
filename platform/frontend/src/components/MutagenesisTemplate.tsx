@@ -245,11 +245,28 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
     return (
         <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 shadow-xl animate-in fade-in slide-in-from-bottom-4">
             <header className="flex justify-between items-center mb-6 border-b border-slate-800 pb-4">
-                <div>
-                    <h2 className="text-xl font-bold bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent flex items-center gap-2">
-                        <span>🧬</span> Mutagenesis Library
-                    </h2>
-                    <p className="text-slate-400 text-sm">Generate variant libraries for structure prediction</p>
+                <div className="flex items-center gap-6">
+                    <div>
+                        <h2 className="text-xl font-bold bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">
+                            Mutagenesis Library
+                        </h2>
+                        <p className="text-slate-400 text-sm">Generate variant libraries for structure prediction</p>
+                    </div>
+                    {/* Top-level workflow tabs */}
+                    <div className="flex bg-slate-800/50 p-1 rounded-lg">
+                        <button
+                            onClick={() => setMode('library')}
+                            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode !== 'affinityMaturation' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                        >
+                            Standard Workflow
+                        </button>
+                        <button
+                            onClick={() => setMode('affinityMaturation')}
+                            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode === 'affinityMaturation' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                        >
+                            Affinity Maturation
+                        </button>
+                    </div>
                 </div>
                 <button onClick={onBack} className="text-slate-400 hover:text-white px-3 py-1 rounded hover:bg-slate-800 transition-colors">
                     Cancel
@@ -266,7 +283,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 onClick={() => setShowSequenceManager(true)}
                                 className="px-3 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-300 text-xs rounded-lg transition-colors flex items-center gap-2"
                             >
-                                📚 Sequence Library
+                                Sequence Library
                             </button>
                             <button
                                 onClick={() => {
@@ -275,7 +292,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 }}
                                 className="px-3 py-1 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-600/30 text-cyan-400 text-xs rounded-lg transition-colors flex items-center gap-2"
                             >
-                                🧬 Import PDB
+                                Import PDB
                             </button>
                             <button
                                 onClick={() => {
@@ -327,14 +344,14 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                         : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
                                         }`}
                                 >
-                                    {show3DViewer ? '🔍 Hide 3D' : '🧬 Show 3D'}
+                                    {show3DViewer ? 'Hide 3D' : 'Show 3D'}
                                 </button>
                             </div>
                             {show3DViewer && (
                                 <div className="animate-in fade-in slide-in-from-top-2 duration-300">
                                     <div className="text-xs text-slate-500 mb-2">
                                         {mutationPositionsSet.size > 0
-                                            ? `🎯 ${mutationPositionsSet.size} mutation positions highlighted`
+                                            ? `${mutationPositionsSet.size} mutation positions highlighted`
                                             : 'Define regions or mutations to highlight positions'}
                                     </div>
                                     <EpitopeMolstarViewer
@@ -348,27 +365,23 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                     )}
                 </section>
 
-                {/* 2. Mode Toggle */}
-                <div className="flex bg-slate-800/50 p-1 rounded-lg w-fit">
-                    <button
-                        onClick={() => setMode('library')}
-                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'library' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                    >
-                        📚 Library Generator
-                    </button>
-                    <button
-                        onClick={() => setMode('manual')}
-                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'manual' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                    >
-                        ✍️ Manual Editor
-                    </button>
-                    <button
-                        onClick={() => setMode('affinityMaturation')}
-                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'affinityMaturation' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                    >
-                        🧬 Affinity Maturation
-                    </button>
-                </div>
+                {/* 2. Mode Toggle - Only show for Standard Workflow */}
+                {mode !== 'affinityMaturation' && (
+                    <div className="flex bg-slate-800/50 p-1 rounded-lg w-fit">
+                        <button
+                            onClick={() => setMode('library')}
+                            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'library' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                        >
+                            Library Generator
+                        </button>
+                        <button
+                            onClick={() => setMode('manual')}
+                            className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${mode === 'manual' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                        >
+                            Manual Editor
+                        </button>
+                    </div>
+                )}
 
                 {/* 3. Library Generator UI */}
                 {mode === 'library' && (
@@ -720,7 +733,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                         {/* FrustraMPNN Analysis Section */}
                         <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
                             <div className="flex justify-between items-center mb-4">
-                                <h4 className="text-sm font-semibold text-slate-300">🔬 FrustraMPNN Analysis</h4>
+                                <h4 className="text-sm font-semibold text-slate-300">FrustraMPNN Analysis</h4>
                                 <button
                                     onClick={() => {
                                         setFrustrampnnLoading(true);
@@ -738,7 +751,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                     className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm rounded transition-colors flex items-center gap-2"
                                 >
                                     {frustrampnnLoading ? (
-                                        <><span className="animate-spin">⏳</span> Analyzing...</>
+                                        <><span className="animate-spin">...</span> Analyzing...</>
                                     ) : (
                                         <>Run Analysis</>
                                     )}
@@ -778,8 +791,8 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                                     <td className="py-2 px-2 font-mono font-bold text-purple-400">{row.aa}</td>
                                                     <td className="py-2 px-2">
                                                         <span className={`px-2 py-0.5 rounded text-xs font-medium ${row.frustration > 0.7 ? 'bg-red-500/20 text-red-400' :
-                                                                row.frustration > 0.5 ? 'bg-amber-500/20 text-amber-400' :
-                                                                    'bg-green-500/20 text-green-400'
+                                                            row.frustration > 0.5 ? 'bg-amber-500/20 text-amber-400' :
+                                                                'bg-green-500/20 text-green-400'
                                                             }`}>
                                                             {row.frustration.toFixed(2)}
                                                         </span>
@@ -802,7 +815,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                         {/* Mutation Generation Options */}
                         {frustrampnnResults.filter(r => r.selected).length > 0 && (
                             <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
-                                <h4 className="text-sm font-semibold text-slate-300 mb-3">🎯 Generation Options</h4>
+                                <h4 className="text-sm font-semibold text-slate-300 mb-3">Generation Options</h4>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
                                         <label className="block text-xs text-slate-400 mb-2">Allowed AAs (override FrustraMPNN)</label>
@@ -845,7 +858,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
 
                         {/* PPIFlow Refinement Options */}
                         <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800">
-                            <h4 className="text-sm font-semibold text-slate-300 mb-3">⚙️ Refinement Pipeline</h4>
+                            <h4 className="text-sm font-semibold text-slate-300 mb-3">Refinement Pipeline</h4>
                             <p className="text-xs text-slate-500 mb-4">Order: Boltz-2 → [PPIFlow Rotamer] → [PPIFlow Flow] → [Final Boltz-2]</p>
                             <div className="space-y-3">
                                 <label className="flex items-center gap-3 text-sm text-slate-300 cursor-pointer">
