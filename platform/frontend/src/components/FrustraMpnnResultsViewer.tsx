@@ -452,7 +452,7 @@ export default function FrustraMpnnResultsViewer({
             </header>
             <main className="mx-auto max-w-[1800px] space-y-4 p-6">
                 <section aria-label="FrustraMPNN data scope" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3">
-                    <div><h2 className="text-sm font-semibold">Data scope</h2><p className="mt-1 text-xs text-slate-500">This job is the default. Whole experiment requires exact Project Manager lineage.</p></div>
+                    <div><h2 className="text-sm font-semibold">Data scope</h2><p className="mt-1 text-xs text-slate-500">Compare this job or its experiment.</p></div>
                     <div className="flex gap-2" role="group" aria-label="FrustraMPNN data scope choices">
                         <button type="button" aria-pressed={scope === 'this-job'} onClick={() => onScopeChange?.('this-job')} className={`rounded-lg border px-3 py-1.5 text-xs ${scope === 'this-job' ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-300'}`}>This job</button>
                         <button type="button" aria-pressed={scope === 'whole-experiment'} disabled={!onScopeChange} onClick={() => onScopeChange?.('whole-experiment')} className={`rounded-lg border px-3 py-1.5 text-xs disabled:opacity-40 ${scope === 'whole-experiment' ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-300'}`}>Whole experiment</button>
@@ -504,7 +504,7 @@ export default function FrustraMpnnResultsViewer({
                     parentInvocationId={handoffSource.invocation_id}
                     parentLandscapeSha256={handoffSource.summary.landscape_sha256}
                     onOpenJob={onOpenJob}
-                /> : <p role="status" className="text-xs text-slate-400">External candidate reanalysis requires an available selected parent landscape.</p>}
+                /> : <p role="status" className="text-xs text-slate-400">Select an available result to analyze another structure.</p>}
                 <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5" aria-label="Persisted execution state">
                     {[
                         ['Requested', receipt.data?.created_at ?? job.created_at],
@@ -514,7 +514,7 @@ export default function FrustraMpnnResultsViewer({
                         ['Failure class', detail.data?.failure_class ?? (canonicalSucceeded ? 'none' : state === 'failed' ? 'scheduler_failure' : 'none')],
                     ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-800 bg-slate-900/60 p-3"><div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</div><div className="mt-1 break-words text-sm text-slate-200">{value}</div></div>)}
                 </section>
-                {detail.data?.failure_class && <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100"><span className="font-semibold">Failure class persisted:</span> {detail.data.failure_class}. Unsafe runtime internals are not exposed by this response.</div>}
+                {detail.data?.failure_class && <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100"><span className="font-semibold">Analysis failure:</span> {detail.data.failure_class}.</div>}
 
                 {statisticsAnalysis.isError && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(statisticsAnalysis.error, 'Derived statistics lifecycle is unavailable.')}</div>}
                 {statistics.isError && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(statistics.error, 'Completed derived statistics are unavailable.')}</div>}
@@ -529,7 +529,7 @@ export default function FrustraMpnnResultsViewer({
 
                 {detail.data && <details aria-label="FrustraMPNN reanalysis settings" className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
                     <summary className="cursor-pointer font-semibold">Reanalysis settings</summary>
-                    <p className="mt-1 text-xs text-slate-500">Edit a complete requested-settings document for the next governed child.</p>
+                    <p className="mt-1 text-xs text-slate-500">Settings for the next analysis.</p>
                     <FrustraMpnnSettingsPanel
                         value={frustrampnnSettings}
                         onChange={setFrustrampnnSettings}
@@ -551,7 +551,7 @@ export default function FrustraMpnnResultsViewer({
                         <section className="grid gap-4 xl:grid-cols-2">
                             <section className="rounded-xl border border-emerald-500/25 bg-gradient-to-br from-emerald-950/25 to-slate-900/60 p-4">
                                 <div className="flex flex-wrap items-start justify-between gap-3">
-                                    <div><h2 className="font-semibold">Landscape analysis readiness</h2><p className="mt-1 text-xs text-slate-400">Can this persisted result support complete residue- and mutation-level interpretation?</p></div>
+                                    <div><h2 className="font-semibold">Analysis coverage</h2><p className="mt-1 text-xs text-slate-400">Available residue and mutation scores.</p></div>
                                     <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${coverageReadiness?.status === 'Complete' ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200' : 'border-amber-400/40 bg-amber-400/10 text-amber-100'}`}>{coverageReadiness?.status}</span>
                                 </div>
                                 <div className="mt-4 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
@@ -620,7 +620,7 @@ export default function FrustraMpnnResultsViewer({
                             {landscape.isError && <div role="alert" className="m-3 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-100">{errorMessage(landscape.error, 'Landscape page unavailable.')}</div>}
                             {pageResidues.length > 0 ? (
                                 <section aria-label="Exact 20-substitution residue profiles" className="border-t border-slate-800">
-                                    <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-950/35 px-3 py-2"><div><h3 className="text-sm font-medium text-slate-200">Exact 20-substitution profiles</h3><p className="text-[11px] text-slate-500">Scores are persisted authority. A cyan row marks the residue currently synchronized with the structure.</p></div>{selectedResidue && <span className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 font-mono text-[11px] text-cyan-200">Selected {selectedResidue.authAsymId}:{selectedResidue.authSeqId}{selectedResidue.insertionCode}</span>}</div>
+                                    <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-950/35 px-3 py-2"><div><h3 className="text-sm font-medium text-slate-200">Exact 20-substitution profiles</h3><p className="text-[11px] text-slate-500">The cyan row is selected in the structure.</p></div>{selectedResidue && <span className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 font-mono text-[11px] text-cyan-200">Selected {selectedResidue.authAsymId}:{selectedResidue.authSeqId}{selectedResidue.insertionCode}</span>}</div>
                                     <div className="max-h-[650px] overflow-auto"><table className="min-w-[1100px] text-left text-[10px]"><thead className="sticky top-0 z-10 bg-slate-950 text-slate-400 shadow-sm"><tr><th className="sticky left-0 z-20 min-w-36 bg-slate-950 p-2">Author residue</th>{CANONICAL_AMINO_ACIDS.map((aa) => <th key={aa} className="p-2 text-center font-mono text-xs">{aa}</th>)}</tr></thead><tbody>{pageResidues.map((residue, rowIndex) => { const isSelected = selectedResidue?.authAsymId === residue.auth_asym_id && String(selectedResidue.authSeqId) === residue.auth_seq_id && (selectedResidue.insertionCode ?? '') === residue.insertion_code; return <tr key={residue.key} className={`border-t border-slate-800/80 ${isSelected ? 'bg-cyan-500/8' : rowIndex % 2 === 0 ? 'bg-slate-950/20' : ''}`}><th className={`sticky left-0 p-2 ${isSelected ? 'bg-cyan-950/90' : 'bg-slate-900'}`}><button type="button" aria-label={`Select exact author residue ${residue.auth_asym_id} ${residue.auth_seq_id}${residue.insertion_code}, wild type ${residue.wt}`} className={`w-full rounded px-2 py-1.5 text-left hover:bg-cyan-500/10 hover:text-cyan-200 ${isSelected ? 'font-semibold text-cyan-200' : 'text-slate-300'}`} onClick={() => { const profile = metricResult.bundle?.residueProfiles.find((item) => item.residue.key === residue.key); setSelectedResidue(profile?.identity ?? null); }}><span className="font-mono">{residue.auth_asym_id}:{residue.auth_seq_id}{residue.insertion_code}</span><span className="ml-2 text-slate-500">WT {residue.wt}</span></button></th>{residue.slots.map((slot) => <td key={slot.mutation_aa} className="p-1"><div title={`${residue.wt}→${slot.mutation_aa} · ${slot.status}${slot.reason ? ` · ${slot.reason}` : ''}`} className={`relative rounded border px-1 py-2 text-center font-mono ${classStyle(slot.class)} ${slot.mutation_aa === residue.wt ? 'ring-1 ring-inset ring-white/70' : ''}`}><span className="text-[11px]">{fmt(slot.score)}</span>{slot.mutation_aa === residue.wt && <span className="absolute right-0.5 top-0 text-[7px] text-white">WT</span>}</div></td>)}</tr>; })}</tbody></table></div>
                                 </section>
                             ) : (
@@ -669,7 +669,7 @@ export default function FrustraMpnnResultsViewer({
                             }}
                         />}
 
-                        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><h2 className="font-semibold">Governed artifacts</h2><p className="mt-1 text-xs text-slate-500">Authenticated content-addressed downloads. Runtime filesystem paths and storage topology are not exposed.</p><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{artifacts.data?.items.map((artifact) => <a key={artifact.artifact_id} href={artifact.download_url} className="rounded-lg border border-slate-800 p-3 text-xs hover:border-cyan-500 focus:border-cyan-400"><div className="font-medium text-slate-200">{artifact.role.replaceAll('_', ' ')}</div><div className="mt-1 text-slate-500">{artifact.media_type} · {artifact.size_bytes.toLocaleString()} bytes</div><div className="mt-1 font-mono text-[10px] text-slate-600" title={artifact.content_sha256}>{shortHash(artifact.content_sha256)}</div></a>)}</div></section>
+                        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><h2 className="font-semibold">Downloads</h2><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{artifacts.data?.items.map((artifact) => <a key={artifact.artifact_id} href={artifact.download_url} className="rounded-lg border border-slate-800 p-3 text-xs hover:border-cyan-500 focus:border-cyan-400"><div className="font-medium text-slate-200">{artifact.role.replaceAll('_', ' ')}</div><div className="mt-1 text-slate-500">{artifact.media_type} · {artifact.size_bytes.toLocaleString()} bytes</div><div className="mt-1 font-mono text-[10px] text-slate-600" title={artifact.content_sha256}>{shortHash(artifact.content_sha256)}</div></a>)}</div></section>
                     </>
                 )}
                 {comparisonIdentityError && <div role="alert">Comparison reference does not match the exact requested job and invocation.</div>}

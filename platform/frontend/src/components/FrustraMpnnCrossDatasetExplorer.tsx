@@ -75,18 +75,18 @@ export default function FrustraMpnnCrossDatasetExplorer({ currentDatasetId }: Pr
             <div className="border-b border-indigo-500/20 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                        <h2 className="font-semibold">Cross-dataset multidimensional explorer</h2>
-                        <p className="mt-1 max-w-5xl text-xs text-slate-400">Purpose: compare hundreds of canonical FrustraMPNN results without one API request per result. One bounded server response supplies stable workflow, dataset, job, design, invocation, provenance, and metric dimensions. The 3D axes plus color encode four independently selectable dimensions; every point remains traceable on hover and in the JSON export.</p>
+                        <h2 className="font-semibold">Compare datasets</h2>
+                        <p className="mt-1 max-w-5xl text-xs text-slate-400">Compare results using three axes and color. Hover over a point to identify its source.</p>
                     </div>
-                    <button type="button" onClick={downloadJson} disabled={!page} className="rounded border border-indigo-400/40 px-3 py-1.5 text-xs text-indigo-100 disabled:opacity-40">Export machine-readable JSON</button>
+                    <button type="button" onClick={downloadJson} disabled={!page} className="rounded border border-indigo-400/40 px-3 py-1.5 text-xs text-indigo-100 disabled:opacity-40">Export JSON</button>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                    <button type="button" onClick={() => setScope('all')} className={`rounded px-3 py-1.5 ${scope === 'all' ? 'bg-indigo-500 text-white' : 'border border-slate-700 text-slate-300'}`}>All persisted datasets</button>
+                    <button type="button" onClick={() => setScope('all')} className={`rounded px-3 py-1.5 ${scope === 'all' ? 'bg-indigo-500 text-white' : 'border border-slate-700 text-slate-300'}`}>All datasets</button>
                     <button type="button" onClick={() => setScope('current')} className={`rounded px-3 py-1.5 ${scope === 'current' ? 'bg-indigo-500 text-white' : 'border border-slate-700 text-slate-300'}`}>Current dataset only</button>
-                    {page && <span className="self-center font-mono text-slate-500">{page.items.length.toLocaleString()} of {page.total.toLocaleString()} result points · schema {page.schema_version}</span>}
+                    {page && <span className="self-center font-mono text-slate-500">{page.items.length.toLocaleString()} of {page.total.toLocaleString()} result points</span>}
                 </div>
             </div>
-            {query.isLoading && <div role="status" className="p-4 text-sm text-slate-400">Loading bounded cross-dataset analytics…</div>}
+            {query.isLoading && <div role="status" className="p-4 text-sm text-slate-400">Loading dataset comparison…</div>}
             {query.isError && <div role="alert" className="p-4 text-sm text-red-300">Cross-dataset analytics unavailable: {query.error instanceof Error ? query.error.message : 'request failed'}</div>}
             {page && <div className="p-3">
                 {page.next_offset != null && <div role="alert" className="mb-3 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">Showing the first {page.items.length.toLocaleString()} of {page.total.toLocaleString()} ordered results. Filter to explicit datasets before drawing conclusions from omitted points.</div>}
@@ -98,16 +98,15 @@ export default function FrustraMpnnCrossDatasetExplorer({ currentDatasetId }: Pr
                     </label>)}
                 </div>
                 <article className="mt-3 rounded-lg border border-slate-800 bg-slate-950/40 p-2">
-                    <h3 className="px-2 pt-2 text-sm font-medium">Traceable 3D result space</h3>
-                    <p className="px-2 text-xs text-slate-500">Question: which results occupy similar or exceptional regions across four selected FrustraMPNN dimensions? This is a point-estimate comparison; no uncertainty is inferred.</p>
-                    <Plot data={plot3d} layout={{ ...baseLayout, height: 560, margin: { l: 0, r: 0, b: 0, t: 35 }, scene: { xaxis: { title: { text: metricLabel(xMetric) } }, yaxis: { title: { text: metricLabel(yMetric) } }, zaxis: { title: { text: metricLabel(zMetric) } } }, title: { text: `${model?.pointIds.length ?? 0} canonical result points` } } as Partial<Layout>} config={PLOT_CONFIG} className="h-[560px] w-full" useResizeHandler />
+                    <h3 className="px-2 pt-2 text-sm font-medium">3D result comparison</h3>
+                    <p className="px-2 text-xs text-slate-500">Points show estimates, not uncertainty.</p>
+                    <Plot data={plot3d} layout={{ ...baseLayout, height: 560, margin: { l: 0, r: 0, b: 0, t: 35 }, scene: { xaxis: { title: { text: metricLabel(xMetric) } }, yaxis: { title: { text: metricLabel(yMetric) } }, zaxis: { title: { text: metricLabel(zMetric) } } }, title: { text: `${model?.pointIds.length ?? 0} result points` } } as Partial<Layout>} config={PLOT_CONFIG} className="h-[560px] w-full" useResizeHandler />
                 </article>
                 {splomMetrics.length >= 2 && <article className="mt-3 rounded-lg border border-slate-800 bg-slate-950/40 p-2">
-                    <h3 className="px-2 pt-2 text-sm font-medium">Pairwise multidimensional structure</h3>
-                    <p className="px-2 text-xs text-slate-500">Question: which selected dimensions covary, separate workflow datasets, or expose outliers? Lower-triangle panels show the same traceable result points without projecting them into a single 3D camera angle.</p>
+                    <h3 className="px-2 pt-2 text-sm font-medium">Pairwise metric comparison</h3>
                     <Plot data={splom} layout={{ ...baseLayout, height: 620, margin: { l: 70, r: 45, b: 70, t: 30 }, dragmode: 'select' }} config={PLOT_CONFIG} className="h-[620px] w-full" useResizeHandler />
                 </article>}
-                <details className="mt-3 rounded border border-slate-800 p-3 text-xs text-slate-400"><summary className="cursor-pointer font-medium text-slate-300">Machine-readable dimension formulas</summary><dl className="mt-2 grid gap-2 md:grid-cols-2">{numericDimensions.map((dimension) => <div key={dimension.id}><dt className="font-mono text-slate-300">{dimension.id}</dt><dd>{dimension.formula ?? dimension.description ?? 'Persisted dimension'}{dimension.unit ? ` · ${dimension.unit}` : ''}</dd></div>)}</dl></details>
+                <details className="mt-3 rounded border border-slate-800 p-3 text-xs text-slate-400"><summary className="cursor-pointer font-medium text-slate-300">Metric definitions</summary><dl className="mt-2 grid gap-2 md:grid-cols-2">{numericDimensions.map((dimension) => <div key={dimension.id}><dt className="font-mono text-slate-300">{dimension.id}</dt><dd>{dimension.formula ?? dimension.description ?? 'Persisted dimension'}{dimension.unit ? ` · ${dimension.unit}` : ''}</dd></div>)}</dl></details>
             </div>}
         </section>
     );
