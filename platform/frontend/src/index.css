@@ -589,15 +589,6 @@ h6 {
   color: var(--text-secondary) !important;
 }
 
-/* Ensure OVE editor uses its own styles when loaded */
-.veEditor,
-.veEditor * {
-  /* OVE manages its own colors - don't override */
-  color: revert !important;
-  background-color: revert !important;
-  border-color: revert !important;
-}
-
 /* Fix BlueprintJS dark theme text that might leak */
 .bp3-dark,
 .bp5-dark {
@@ -605,11 +596,11 @@ h6 {
 }
 
 /* Ensure links are visible */
-a:not(.veEditor a) {
+a {
   color: var(--link);
 }
 
-a:not(.veEditor a):hover {
+a:hover {
   color: var(--link-hover);
 }
 

@@ -362,9 +362,6 @@ importers:
 
   platform/frontend:
     dependencies:
-      '@biomodstack/ove':
-        specifier: workspace:*
-        version: link:../../packages/ove-react19
       '@blueprintjs/core':
         specifier: ^5.0.0
         version: 5.19.1(@types/react@19.2.7)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
