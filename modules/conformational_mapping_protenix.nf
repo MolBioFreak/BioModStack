@@ -26,7 +26,7 @@ process CanonicalProtenixEnsemble {
     test -f "\$REGISTRY"
 
     mkdir -p native_protenix/runtime native_protenix/predictions
-    python3 ${params.code_root}/scripts/prepare_protenix_conformational_mapping.py \
+    ${params.api_python} ${params.code_root}/scripts/prepare_protenix_conformational_mapping.py \
       --request "\$REQUEST" --snapshots "\$SNAPSHOTS" --out prepared_protenix
     cp prepared_protenix/protenix_input.json native_protenix/runtime/input.json
     cp prepared_protenix/cm_protenix_composition_audits_v1.json native_protenix/runtime/composition-audit.json
@@ -127,7 +127,7 @@ runtime = {
 }
 Path(sys.argv[4]).write_text(json.dumps(runtime, sort_keys=True, separators=(',', ':')), encoding='utf-8')
 PY
-    python3 ${params.code_root}/scripts/finalize_protenix_conformational_mapping.py \
+    ${params.api_python} ${params.code_root}/scripts/finalize_protenix_conformational_mapping.py \
       --request "\$REQUEST" --snapshots "\$SNAPSHOTS" \
       --native-root native_protenix --runtime runtime.json --out canonical_protenix
     """
