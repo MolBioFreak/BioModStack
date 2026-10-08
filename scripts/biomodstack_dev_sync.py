@@ -133,9 +133,10 @@ def render_sync_units(project_root: Path, executable_path: Path | None = None) -
 
 
 def _run(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    # Keep HOME/XDG installation selection while discarding lane-process
-    # overrides; the manager must resolve the persisted installation itself.
+    # Keep HOME/XDG installation selection, but bind the manager to this source
+    # root rather than any inherited lane-process BMS_HOME/runtime overrides.
     env = {key: value for key, value in os.environ.items() if not key.startswith("BMS_")}
+    env["BMS_HOME"] = str(root.resolve())
     env["HOME"] = str(Path.home())
     env.pop("GIT_INDEX_FILE", None)
     return subprocess.run(
@@ -606,6 +607,7 @@ def _read_sync_refresh_required(state_dir: Path) -> dict[str, object] | None:
         or not _is_git_object(target)
         or not _is_git_object(rollback)
         or not _is_sha256(candidate_sha)
+        or type(phase) is not str
         or phase not in _SYNC_REFRESH_PHASES
         or not (
             (installed_sha is None and installed_b64 is None)
@@ -683,9 +685,14 @@ def _resume_sync_rollback(root: Path, state_dir: Path, marker: dict[str, object]
     rollback_revision = marker.get("rollback_revision")
     if not isinstance(rollback_revision, str) or not _is_git_object(rollback_revision):
         raise RuntimeError("Development sync rollback revision is invalid")
-    marker = _set_sync_refresh_phase(state_dir, marker, "rolling-back")
+    # An explicitly retried failure must remain fail-closed even if interrupted.
+    recovering_failure = marker.get("phase") == "rollback-failed"
+    if not recovering_failure:
+        marker = _set_sync_refresh_phase(state_dir, marker, "rolling-back")
     manager = root / "scripts" / "manage_desktop_services.py"
     try:
+        if recovering_failure:
+            validate_candidate_runtime_authority(root, rollback_revision)
         _git(root, "reset", "--hard", rollback_revision)
         _run(root, sys.executable, str(manager), "restart", "--runtime", "dev")
         rollback_deployed = _deployed_revision(root)
@@ -694,13 +701,25 @@ def _resume_sync_rollback(root: Path, state_dir: Path, marker: dict[str, object]
                 "Development rollback exposure mismatch: "
                 f"expected {rollback_revision}, got {rollback_deployed or 'unavailable'}"
             )
+        if recovering_failure and (
+            _git(root, "rev-parse", "HEAD") != rollback_revision
+            or _git(root, "status", "--porcelain")
+        ):
+            raise RuntimeError("Development rollback source verification failed")
         installed_b64 = marker.get("installed_before_base64")
         if isinstance(installed_b64, str):
             installed_before = base64.b64decode(installed_b64, validate=True)
             _atomic_write_bytes(installed_before, DEFAULT_INSTALLED_SYNC, mode=0o755)
+            if (
+                DEFAULT_INSTALLED_SYNC.read_bytes() != installed_before
+                or stat.S_IMODE(DEFAULT_INSTALLED_SYNC.stat().st_mode) != 0o755
+            ):
+                raise RuntimeError("Development rollback stable synchronizer verification failed")
         else:
             DEFAULT_INSTALLED_SYNC.unlink(missing_ok=True)
             _fsync_directory(DEFAULT_INSTALLED_SYNC.parent)
+            if DEFAULT_INSTALLED_SYNC.exists() or DEFAULT_INSTALLED_SYNC.is_symlink():
+                raise RuntimeError("Development rollback stable synchronizer removal failed")
         _clear_sync_refresh_required(state_dir)
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as rollback_error:
         try:
@@ -710,6 +729,42 @@ def _resume_sync_rollback(root: Path, state_dir: Path, marker: dict[str, object]
         raise DeploymentRollbackFailedError(
             f"Development rollback to {rollback_revision} failed: {rollback_error}"
         ) from rollback_error
+
+
+def recover_failed_rollback(root: Path, state_dir: Path) -> dict[str, object]:
+    """Retry only the recorded rollback; leave deployment paused and its queue intact."""
+    root = root.resolve()
+    if not (root / ".git").exists():
+        raise RuntimeError(f"canonical Development is not a Git worktree: {root}")
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with (state_dir / "dev-sync.lock").open("a+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        with _deployment_fence(state_dir):
+            if not _read_deployment_paused(state_dir):
+                raise RuntimeError("rollback recovery requires paused Development deployment")
+            marker = _read_sync_refresh_required(state_dir)
+            if marker is None or marker["phase"] != "rollback-failed":
+                raise RuntimeError("rollback recovery requires a rollback-failed marker")
+            if _git(root, "status", "--porcelain"):
+                raise RuntimeError("rollback recovery is blocked by dirty Development source")
+            local = _git(root, "rev-parse", "HEAD")
+            if local not in {marker["target_revision"], marker["rollback_revision"]}:
+                raise RuntimeError("rollback recovery source conflicts with recorded transaction")
+            candidate = _git_blob(root, str(marker["target_revision"]), "scripts/biomodstack_dev_sync.py")
+            if hashlib.sha256(candidate).hexdigest() != marker["sync_sha256"]:
+                raise RuntimeError("rollback recovery candidate synchronizer digest mismatch")
+            active, count = _active_development_work(root)
+            if active:
+                raise RuntimeError(f"rollback recovery is blocked by {count} active Development jobs")
+            _resume_sync_rollback(root, state_dir, marker)
+            receipt = {
+                "decision": "recovered-failed-rollback",
+                "rollback_revision": marker["rollback_revision"],
+                "target_revision": marker["target_revision"],
+                "deployment_paused": True,
+            }
+            _write_receipt(state_dir, receipt)
+            return receipt
 
 
 def _read_deployment_paused(state_dir: Path) -> bool:
@@ -1125,14 +1180,18 @@ def install_units(root: Path, systemd_dir: Path) -> list[Path]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sync canonical BioModStack Development from origin/test every 60 seconds")
-    parser.add_argument("--once", action="store_true", help="run one synchronization transaction")
-    parser.add_argument("--install", action="store_true", help="install and enable the 60-second user timer")
-    parser.add_argument(
+    control_group = parser.add_mutually_exclusive_group(required=True)
+    control_group.add_argument("--once", action="store_true", help="run one synchronization transaction")
+    control_group.add_argument("--install", action="store_true", help="install and enable the 60-second user timer")
+    control_group.add_argument(
         "--bootstrap-successor",
         metavar="REVISION",
         help="self-attest and install this exact successor synchronizer while deployment is paused",
     )
-    control_group = parser.add_mutually_exclusive_group()
+    control_group.add_argument(
+        "--recover-failed-rollback", action="store_true",
+        help="retry the recorded failed rollback with deployment paused and no active work",
+    )
     control_group.add_argument("--pause-deploy", action="store_true", help="pause automatic Development deployment")
     control_group.add_argument("--resume-deploy", action="store_true", help="resume automatic Development deployment and poll now")
     parser.add_argument("--root", type=Path, default=Path(os.getenv("BMS_DEV_CANONICAL_ROOT", DEFAULT_CANONICAL_ROOT)))
@@ -1140,6 +1199,10 @@ def main() -> int:
     parser.add_argument("--systemd-dir", type=Path, default=Path.home() / ".config" / "systemd" / "user")
     args = parser.parse_args()
     try:
+        if args.recover_failed_rollback:
+            receipt = recover_failed_rollback(args.root, args.state_dir)
+            print(json.dumps(receipt, sort_keys=True))
+            return 0
         if args.bootstrap_successor:
             authority = bootstrap_successor_sync(args.root, args.state_dir, args.bootstrap_successor)
             print(json.dumps(authority, sort_keys=True))
@@ -1162,7 +1225,8 @@ def main() -> int:
             print(json.dumps({"decision": decision, "poll_interval_seconds": SYNC_INTERVAL_SECONDS}, sort_keys=True))
             return 0
         parser.error(
-            "one of --once, --install, --bootstrap-successor, --pause-deploy, or --resume-deploy is required"
+            "one of --once, --install, --bootstrap-successor, --recover-failed-rollback, "
+            "--pause-deploy, or --resume-deploy is required"
         )
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
