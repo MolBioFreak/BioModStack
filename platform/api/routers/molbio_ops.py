@@ -37,6 +37,7 @@ from services.assembly.gibson import simulate_gibson
 from services.assembly.golden_gate import TYPE_IIS_ENZYMES, get_type_iis_enzyme, simulate_golden_gate
 from services.assembly.ligation import simulate_ligation
 from services.assembly.pydna_gibson import design_gibson
+from services.assembly.dnaweaver_gibson import DnaWeaverGibsonPlan, plan_vendor_gibson
 from services.assembly.types import (
     AssemblyError,
     AssemblyFragment,
@@ -389,6 +390,31 @@ class GibsonAssemblyRequest(BaseModel):
     maximum_overlap: Optional[int] = 80
     new_name: Optional[str] = None
     save_description: Optional[str] = None
+
+
+class DnaWeaverPlanRequest(BaseModel):
+    target_sequence: str = Field(min_length=4, max_length=200_000)
+    circular: bool = True
+    min_fragment_length: int = Field(default=500, ge=2, le=20_000)
+    max_fragment_length: int = Field(default=1500, ge=2, le=20_000)
+    overlap_length: int = Field(default=30, ge=15, le=80)
+    vendor_name: str = Field(default="Configured commercial DNA vendor", min_length=1, max_length=120)
+    price_per_bp: float = Field(default=0.15, ge=0, le=1000, allow_inf_nan=False)
+    lead_time_days: float = Field(default=10.0, ge=0, le=3650, allow_inf_nan=False)
+
+
+class DnaWeaverPlanResponse(BaseModel):
+    engine: str
+    engine_version: str
+    validator_engine: str
+    validator_version: str
+    estimated_price: Optional[float] = None
+    lead_time_days: Optional[float] = None
+    source_intervals: List[dict[str, int]]
+    pydna_exact_candidate_count: int
+    ordered_fragments: List[AssemblyFragmentSchema]
+    product: AssemblyProductResponse
+    warnings: List[str] = Field(default_factory=list)
 
 
 class GibsonDesignFragmentSchema(AssemblyFragmentSchema):
@@ -1598,6 +1624,57 @@ def _gibson_design_operation_params(
         ],
         "design_warnings": result.warnings,
     }
+
+
+def _dnaweaver_plan_to_response(plan: DnaWeaverGibsonPlan) -> DnaWeaverPlanResponse:
+    return DnaWeaverPlanResponse(
+        engine=plan.engine,
+        engine_version=plan.engine_version,
+        validator_engine=plan.validator_engine,
+        validator_version=plan.validator_version,
+        estimated_price=plan.estimated_price,
+        lead_time_days=plan.lead_time_days,
+        source_intervals=plan.source_intervals,
+        pydna_exact_candidate_count=plan.pydna_exact_candidate_count,
+        ordered_fragments=[
+            AssemblyFragmentSchema(
+                id=fragment.id,
+                name=fragment.name,
+                sequence=fragment.sequence,
+                orientation=fragment.orientation,
+                circular=False,
+                role=fragment.role,
+                source_sequence_id=fragment.source_sequence_id,
+                source_name=fragment.source_name,
+                source_revision=fragment.source_revision,
+                source_start=fragment.source_start,
+                source_end=fragment.source_end,
+                source_wraps_origin=fragment.source_wraps_origin,
+                metadata=fragment.metadata,
+            )
+            for fragment in plan.product.fragments
+        ],
+        product=assembly_product_to_response(plan.product),
+        warnings=plan.warnings,
+    )
+
+
+@router.post("/assembly/gibson/dnaweaver/plan", response_model=DnaWeaverPlanResponse)
+async def plan_dnaweaver_gibson_assembly(request: DnaWeaverPlanRequest):
+    try:
+        plan = plan_vendor_gibson(
+            request.target_sequence,
+            circular=request.circular,
+            min_fragment_length=request.min_fragment_length,
+            max_fragment_length=request.max_fragment_length,
+            overlap_length=request.overlap_length,
+            vendor_name=request.vendor_name,
+            price_per_bp=request.price_per_bp,
+            lead_time_days=request.lead_time_days,
+        )
+        return _dnaweaver_plan_to_response(plan)
+    except AssemblyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/assembly/gibson/design", response_model=GibsonDesignResponse)
