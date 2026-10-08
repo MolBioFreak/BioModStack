@@ -2214,6 +2214,15 @@ export interface DnaWeaverPlanResponse {
     selected_product: AssemblyProduct;
     target_checksum: string;
     plan_checksum: string;
+    receipt_schema_version: string;
+    planner_implementation_revision: string;
+    selected_product_checksum: string;
+    target_attestation: {
+        sequence_id: string | null;
+        revision_id: string | null;
+        revision_number: number | null;
+        revision_sha256: string;
+    };
     planning_parameters: Record<string, unknown>;
     manufacturability_profile: string;
     quality_checks: DnaWeaverQualityCheck[];

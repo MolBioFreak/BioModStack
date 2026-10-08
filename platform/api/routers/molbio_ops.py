@@ -417,7 +417,7 @@ class DnaWeaverPlanRequest(BaseModel):
     vendor_name: str = Field(
         default="Configured commercial DNA vendor", min_length=1, max_length=200
     )
-    price_per_bp: float = Field(default=0.15, ge=0.0, le=1000.0, allow_inf_nan=False)
+    price_per_bp: float = Field(default=0.08, ge=0.0, le=1000.0, allow_inf_nan=False)
     lead_time_days: float = Field(default=10.0, ge=0.0, le=3650.0, allow_inf_nan=False)
 
 
@@ -449,6 +449,10 @@ class DnaWeaverPlanResponse(BaseModel):
     selected_product: AssemblyProductResponse
     target_checksum: str
     plan_checksum: str
+    receipt_schema_version: str
+    planner_implementation_revision: str
+    selected_product_checksum: str
+    target_attestation: dict[str, Any]
     planning_parameters: dict[str, Any]
     manufacturability_profile: str
     quality_checks: List[DnaWeaverQualityCheckResponse]
@@ -878,8 +882,54 @@ async def persist_assembly_product(
     save_description: Optional[str],
     extra_operation_params: Optional[dict[str, Any]] = None,
     product_primers: Optional[list[dict[str, Any]]] = None,
+    target_attestation: Optional[dict[str, Any]] = None,
 ):
     await begin_immediate_molbio_write(session)
+    # Planning may have loaded mutable projections before the writer reservation.
+    # Force all authority checks below to read the post-lock database state rather
+    # than reusing SQLAlchemy identity-map snapshots from before BEGIN IMMEDIATE.
+    session.expire_all()
+    attested_target: Optional[NucleotideSequence] = None
+    target_input_revision = None
+    if target_attestation and target_attestation.get("sequence_id"):
+        target_id = str(target_attestation["sequence_id"])
+        attested_target = await session.get(NucleotideSequence, target_id)
+        target_revision = await current_molecular_revision(session, target_id)
+        if attested_target is None or target_revision is None:
+            raise HTTPException(
+                status_code=409,
+                detail="The attested DNA Weaver target or immutable revision no longer exists",
+            )
+        current_target_sha256 = hashlib.sha256(
+            attested_target.sequence.encode("ascii")
+        ).hexdigest()
+        if (
+            target_revision.id != target_attestation.get("revision_id")
+            or target_revision.revision_number
+            != target_attestation.get("revision_number")
+            or target_revision.content_sha256
+            != target_attestation.get("revision_sha256")
+            or current_target_sha256 != target_revision.content_sha256
+            or attested_target.is_circular != product.circular
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The DNA Weaver target changed after planning; its projection or immutable "
+                    "revision no longer matches the selected plan"
+                ),
+            )
+        target_input_revision = (
+            target_revision,
+            "target",
+            {
+                "target": {
+                    **target_attestation,
+                    "sequence_sha256": current_target_sha256,
+                    "topology": "circular" if product.circular else "linear",
+                }
+            },
+        )
     source_ids = [
         fragment.source_sequence_id
         for fragment in product.fragments
@@ -896,11 +946,13 @@ async def persist_assembly_product(
             )
         source_rows[source_id] = source
 
-    parent: Optional[NucleotideSequence] = (
+    parent: Optional[NucleotideSequence] = attested_target or (
         source_rows[distinct_source_ids[0]] if len(distinct_source_ids) == 1 else None
     )
 
-    input_revisions = []
+    input_revisions: list[tuple[Any, str, dict[str, Any]]] = (
+        [target_input_revision] if target_input_revision else []
+    )
     inline_inputs = []
     for fragment in product.fragments:
         fragment_snapshot = {
@@ -1816,6 +1868,7 @@ def _dnaweaver_plan_to_response(
             for fragment in plan.product.fragments
         ],
         quote={
+            **plan.quote_evidence,
             "vendor_name": vendor_name,
             "estimated_price": plan.estimated_price,
             "estimated_lead_time_days": plan.lead_time_days,
@@ -1827,6 +1880,10 @@ def _dnaweaver_plan_to_response(
         selected_product=assembly_product_to_response(plan.product),
         target_checksum=plan.target_checksum,
         plan_checksum=plan.plan_checksum,
+        receipt_schema_version=plan.receipt_schema_version,
+        planner_implementation_revision=plan.planner_implementation_revision,
+        selected_product_checksum=plan.selected_product_checksum,
+        target_attestation=plan.target_attestation,
         planning_parameters=plan.planning_parameters,
         manufacturability_profile=plan.manufacturability_profile,
         quality_checks=[
@@ -1845,7 +1902,9 @@ def _dnaweaver_plan_to_response(
 
 
 def _execute_dnaweaver_plan(
-    request: DnaWeaverPlanRequest, target_sequence: str
+    request: DnaWeaverPlanRequest,
+    target_sequence: str,
+    target_attestation: dict[str, Any],
 ) -> DnaWeaverGibsonPlan:
     return plan_vendor_gibson(
         target_sequence,
@@ -1856,15 +1915,26 @@ def _execute_dnaweaver_plan(
         vendor_name=request.vendor_name,
         price_per_bp=request.price_per_bp,
         lead_time_days=request.lead_time_days,
+        target_attestation=target_attestation,
     )
 
 
 async def _resolve_dnaweaver_target(
     request: DnaWeaverPlanRequest,
     session: AsyncSession,
-) -> tuple[str, Optional[NucleotideSequence]]:
+) -> tuple[str, Optional[NucleotideSequence], dict[str, Any]]:
     if not request.target_sequence_id:
-        return request.target_sequence, None
+        target = "".join(request.target_sequence.split()).upper()
+        return (
+            target,
+            None,
+            {
+                "sequence_id": None,
+                "revision_id": None,
+                "revision_number": None,
+                "revision_sha256": hashlib.sha256(target.encode("ascii")).hexdigest(),
+            },
+        )
     source = await session.get(NucleotideSequence, request.target_sequence_id)
     if source is None:
         raise AssemblyError("The selected target sequence no longer exists")
@@ -1873,7 +1943,24 @@ async def _resolve_dnaweaver_target(
         raise AssemblyError(
             "The selected target changed after it was loaded; reload it before planning or saving"
         )
-    return source.sequence, source
+    source_revision = await current_molecular_revision(session, source.id)
+    if source_revision is None:
+        raise AssemblyError("The selected target has no immutable molecular revision")
+    source_sha256 = hashlib.sha256(source.sequence.encode("ascii")).hexdigest()
+    if source_revision.content_sha256 != source_sha256:
+        raise AssemblyError(
+            "The selected target projection does not match its immutable molecular revision"
+        )
+    return (
+        source.sequence,
+        source,
+        {
+            "sequence_id": source.id,
+            "revision_id": source_revision.id,
+            "revision_number": source_revision.revision_number,
+            "revision_sha256": source_revision.content_sha256,
+        },
+    )
 
 
 def _dnaweaver_operation_params(
@@ -1886,9 +1973,10 @@ def _dnaweaver_operation_params(
         "validator_engine": plan.validator_engine,
         "validator_version": plan.validator_version,
         "plan_checksum": plan.plan_checksum,
-        "candidate_checksum": hashlib.sha256(
-            plan.product.sequence.encode("ascii")
-        ).hexdigest(),
+        "receipt_schema_version": plan.receipt_schema_version,
+        "planner_implementation_revision": plan.planner_implementation_revision,
+        "candidate_checksum": plan.selected_product_checksum,
+        "target_attestation": plan.target_attestation,
         "target_checksum": plan.target_checksum,
         "target_sequence_id": request.target_sequence_id,
         "planning_parameters": plan.planning_parameters,
@@ -1899,6 +1987,7 @@ def _dnaweaver_operation_params(
         "estimated_lead_time_days": plan.lead_time_days,
         "pydna_exact_candidate_count": plan.pydna_exact_candidate_count,
         "source_intervals": plan.source_intervals,
+        "supplier_quote": plan.quote_evidence,
         "ordered_fragments": [
             {
                 "id": fragment.id,
@@ -1927,8 +2016,10 @@ async def plan_dnaweaver_gibson_assembly(
     session: AsyncSession = Depends(get_molbio_session),
 ):
     try:
-        target, _ = await _resolve_dnaweaver_target(request, session)
-        plan = _execute_dnaweaver_plan(request, target)
+        target, _, target_attestation = await _resolve_dnaweaver_target(
+            request, session
+        )
+        plan = _execute_dnaweaver_plan(request, target, target_attestation)
         return _dnaweaver_plan_to_response(plan, vendor_name=request.vendor_name)
     except AssemblyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1940,8 +2031,14 @@ async def save_dnaweaver_gibson_assembly(
     session: AsyncSession = Depends(get_molbio_session),
 ):
     try:
-        target, _source = await _resolve_dnaweaver_target(request, session)
-        plan = _execute_dnaweaver_plan(request, target)
+        if not request.target_sequence_id:
+            raise AssemblyError(
+                "Saving an order-ready DNA Weaver plan requires a persisted target sequence and immutable revision"
+            )
+        target, _source, target_attestation = await _resolve_dnaweaver_target(
+            request, session
+        )
+        plan = _execute_dnaweaver_plan(request, target, target_attestation)
         if request.selected_plan_checksum != plan.plan_checksum:
             raise AssemblyError(
                 "Selected DNA Weaver plan checksum is stale or invalid; plan again before saving"
@@ -1956,6 +2053,7 @@ async def save_dnaweaver_gibson_assembly(
             name=request.new_name,
             save_description=request.save_description,
             extra_operation_params=_dnaweaver_operation_params(plan, request),
+            target_attestation=plan.target_attestation,
         )
         return _dnaweaver_plan_to_response(
             plan,

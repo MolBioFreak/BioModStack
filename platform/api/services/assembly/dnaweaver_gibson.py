@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import hashlib
 from importlib.metadata import version
 import json
@@ -12,6 +12,8 @@ from typing import Any
 from pydna.assembly2 import Assembly
 from pydna.dseqrecord import Dseqrecord
 
+from build_identity import current_build_identity
+
 from .common import orient_fragment
 from .gibson import simulate_gibson
 from .pydna_gibson import _candidate_sequence
@@ -19,6 +21,8 @@ from .types import AssemblyError, AssemblyFragment, AssemblyProduct
 
 ENGINE = "dnaweaver"
 VALIDATOR_ENGINE = "pydna"
+RECEIPT_SCHEMA_VERSION = "dnaweaver-gibson-plan-v4"
+PLANNER_IMPLEMENTATION = "biomodstack.services.assembly.dnaweaver_gibson"
 DNA_ALPHABET = re.compile(r"^[ACGT]+$")
 
 
@@ -35,11 +39,16 @@ class DnaWeaverGibsonPlan:
     pydna_exact_candidate_count: int
     target_checksum: str
     plan_checksum: str
+    receipt_schema_version: str
+    planner_implementation_revision: str
+    selected_product_checksum: str
+    target_attestation: dict[str, Any]
     planning_parameters: dict[str, Any]
     manufacturability_profile: str
     quality_checks: list[dict[str, Any]]
     order_ready: bool
     warnings: list[str]
+    quote_evidence: dict[str, Any]
 
 
 def _normalize_target(sequence: str) -> str:
@@ -57,6 +66,53 @@ def _dnaweaver() -> Any:
             "DNA Weaver is unavailable in this API runtime; rebuild with the BioModStack API dependency set"
         ) from exc
     return dw
+
+
+def _json_evidence(value: Any) -> Any:
+    """Project third-party quote metadata into deterministic JSON evidence."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_evidence(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_evidence(item) for item in value]
+    return str(value)
+
+
+def _quote_record(quote: Any) -> dict[str, Any]:
+    source = getattr(quote, "source", None)
+    sequence = str(quote.sequence).upper()
+    return {
+        "accepted": bool(quote.accepted),
+        "sequence": sequence,
+        "sequence_sha256": hashlib.sha256(sequence.encode("ascii")).hexdigest(),
+        "price": float(quote.price),
+        "lead_time": float(quote.lead_time),
+        "deadline": _json_evidence(quote.deadline),
+        "message": str(quote.message or ""),
+        "metadata": _json_evidence(quote.metadata),
+        "quote_id": _json_evidence(quote.id),
+        "source": {
+            "name": str(getattr(source, "name", "")),
+            "type": (
+                f"{type(source).__module__}.{type(source).__qualname__}"
+                if source is not None
+                else None
+            ),
+        },
+    }
+
+
+def _quote_evidence(quote: Any) -> dict[str, Any]:
+    evidence = _quote_record(quote)
+    evidence["assembly_plan"] = [
+        {
+            "source_interval": [int(start), int(end)],
+            **_quote_record(child),
+        }
+        for (start, end), child in sorted(quote.assembly_plan.items())
+    ]
+    return evidence
 
 
 def _validate_settings(
@@ -318,14 +374,59 @@ def _plan_checksum(
     fragments: list[AssemblyFragment],
     planner_version: str,
     validator_version: str,
+    selected_product_checksum: str,
+    target_attestation: dict[str, Any],
+    manufacturability_profile: str,
+    quality_checks: list[dict[str, Any]],
+    order_ready: bool,
+    planner_implementation_revision: str,
+    source_intervals: list[dict[str, int]],
+    estimated_price: float,
+    estimated_lead_time_days: float,
+    pydna_exact_candidate_count: int,
+    junction_evidence: list[dict[str, Any]],
+    quote_evidence: dict[str, Any],
 ) -> str:
     canonical = {
+        "receipt_schema_version": RECEIPT_SCHEMA_VERSION,
+        "planner_implementation": PLANNER_IMPLEMENTATION,
+        "planner_implementation_revision": planner_implementation_revision,
         "target_checksum": target_checksum,
+        "target_attestation": target_attestation,
         "topology": "circular" if circular else "linear",
+        "selected_product_checksum": selected_product_checksum,
         "planning_parameters": planning_parameters,
         "planner": {"engine": ENGINE, "version": planner_version},
         "validator": {"engine": VALIDATOR_ENGINE, "version": validator_version},
-        "ordered_fragment_sequences": [fragment.sequence for fragment in fragments],
+        "manufacturability_profile": manufacturability_profile,
+        "quality_checks": quality_checks,
+        "order_ready": order_ready,
+        "estimated_price": estimated_price,
+        "estimated_lead_time_days": estimated_lead_time_days,
+        "pydna_exact_candidate_count": pydna_exact_candidate_count,
+        "source_intervals": source_intervals,
+        "junctions": junction_evidence,
+        "supplier_quote": quote_evidence,
+        "ordered_fragments": [
+            {
+                "id": fragment.id,
+                "name": fragment.name,
+                "sequence": fragment.sequence,
+                "sequence_sha256": hashlib.sha256(
+                    fragment.sequence.encode("ascii")
+                ).hexdigest(),
+                "length": len(fragment.sequence),
+                "source_core_start": fragment.metadata.get("source_core_start"),
+                "source_core_end": fragment.metadata.get("source_core_end"),
+                "terminal_overlap_length": fragment.metadata.get(
+                    "terminal_overlap_length"
+                ),
+                "preparation": fragment.metadata.get("preparation"),
+                "procurement": fragment.metadata.get("procurement"),
+                "quote_metadata": fragment.metadata,
+            }
+            for fragment in fragments
+        ],
     }
     encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
@@ -343,6 +444,7 @@ def plan_vendor_gibson(
     vendor_name: str = "Configured commercial DNA vendor",
     price_per_bp: float = 0.08,
     lead_time_days: float = 10.0,
+    target_attestation: dict[str, Any] | None = None,
 ) -> DnaWeaverGibsonPlan:
     """Plan ready-linear vendor fragments, then require exact pydna validation.
 
@@ -359,6 +461,21 @@ def plan_vendor_gibson(
     )
     if price_per_bp < 0 or lead_time_days < 0:
         raise AssemblyError("Vendor price and lead time must be non-negative")
+
+    target_checksum = hashlib.sha256(target.encode("ascii")).hexdigest()
+    attestation = dict(target_attestation or {})
+    if not (
+        isinstance(attestation.get("sequence_id"), str)
+        and attestation["sequence_id"]
+        and isinstance(attestation.get("revision_id"), str)
+        and attestation["revision_id"]
+        and isinstance(attestation.get("revision_number"), int)
+        and attestation["revision_number"] >= 1
+        and attestation.get("revision_sha256") == target_checksum
+    ):
+        raise AssemblyError(
+            "Order-ready DNA Weaver planning requires a persisted immutable target revision whose SHA-256 matches the requested target"
+        )
 
     dw = _dnaweaver()
     try:
@@ -416,13 +533,40 @@ def plan_vendor_gibson(
         "price_per_bp": price_per_bp,
         "lead_time_days": lead_time_days,
     }
-    target_checksum = hashlib.sha256(target.encode("ascii")).hexdigest()
+    selected_product_checksum = hashlib.sha256(
+        json.dumps(
+            {
+                "sequence_sha256": target_checksum,
+                "topology": "circular" if circular else "linear",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    receipt_target_attestation = target_attestation or {
+        "sequence_id": None,
+        "revision_id": None,
+        "revision_number": None,
+        "revision_sha256": target_checksum,
+    }
+    manufacturability_profile = "generic_synthetic_dna_v1"
+    planner_implementation_revision = current_build_identity()["revision"]
+    if not re.fullmatch(r"[0-9a-f]{40}", planner_implementation_revision):
+        raise AssemblyError(
+            "Order-ready DNA Weaver planning requires an exact 40-character Git implementation revision"
+        )
     quality_checks, order_ready, quality_warnings = _quality_checks(
         target,
         fragments,
         circular=circular,
         overlap_length=overlap_length,
     )
+    estimated_price = (
+        sum(len(fragment.sequence) for fragment in fragments) * price_per_bp
+    )
+    estimated_lead_time_days = float(quote.lead_time)
+    junction_evidence = [asdict(junction) for junction in product.junctions]
+    quote_evidence = _quote_evidence(quote)
     plan_checksum = _plan_checksum(
         target_checksum=target_checksum,
         circular=circular,
@@ -430,6 +574,18 @@ def plan_vendor_gibson(
         fragments=fragments,
         planner_version=planner_version,
         validator_version=validator_version,
+        selected_product_checksum=selected_product_checksum,
+        target_attestation=receipt_target_attestation,
+        manufacturability_profile=manufacturability_profile,
+        quality_checks=quality_checks,
+        order_ready=order_ready,
+        planner_implementation_revision=planner_implementation_revision,
+        source_intervals=intervals,
+        estimated_price=estimated_price,
+        estimated_lead_time_days=estimated_lead_time_days,
+        pydna_exact_candidate_count=exact_count,
+        junction_evidence=junction_evidence,
+        quote_evidence=quote_evidence,
     )
     return DnaWeaverGibsonPlan(
         engine=ENGINE,
@@ -437,16 +593,20 @@ def plan_vendor_gibson(
         validator_engine=VALIDATOR_ENGINE,
         validator_version=validator_version,
         product=product,
-        estimated_price=sum(len(fragment.sequence) for fragment in fragments)
-        * price_per_bp,
-        lead_time_days=quote.lead_time,
+        estimated_price=estimated_price,
+        lead_time_days=estimated_lead_time_days,
         source_intervals=intervals,
         pydna_exact_candidate_count=exact_count,
         target_checksum=target_checksum,
         plan_checksum=plan_checksum,
+        receipt_schema_version=RECEIPT_SCHEMA_VERSION,
+        planner_implementation_revision=planner_implementation_revision,
+        selected_product_checksum=selected_product_checksum,
+        target_attestation=receipt_target_attestation,
         planning_parameters=planning_parameters,
-        manufacturability_profile="generic_synthetic_dna_v1",
+        manufacturability_profile=manufacturability_profile,
         quality_checks=quality_checks,
         order_ready=order_ready,
         warnings=quality_warnings,
+        quote_evidence=quote_evidence,
     )
