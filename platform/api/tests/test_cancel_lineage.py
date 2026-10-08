@@ -5,13 +5,18 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+
 
 API_ROOT = Path(__file__).resolve().parents[1]
 
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
-from services.job_control import _job_is_cancelable, _lineage_has_cancelable_jobs, _sort_jobs_for_cancellation
+from database import Base, Job
+from services.job_control import _job_is_cancelable, _lineage_has_cancelable_jobs, _sort_jobs_for_cancellation, cancel_job_lineage
 
 
 @dataclass
@@ -87,3 +92,55 @@ def test_sort_jobs_for_cancellation_orders_descendants_before_parent() -> None:
     )
 
     assert [job.id for job in ordered] == ["grandchild", "child", "parent"]
+
+
+@pytest.mark.asyncio
+async def test_repeat_cancellation_is_idempotent_and_clears_stale_runtime_state(tmp_path: Path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cancel.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    cancelled_at = datetime(2026, 7, 13, 12, 0, 0)
+    async with factory() as session:
+        session.add(
+            Job(
+                id="already-cancelled",
+                name="already-cancelled",
+                model_id="boltz2",
+                mode="predict",
+                params={},
+                status="cancelled",
+                queue_status="queued",
+                created_at=cancelled_at,
+                completed_at=cancelled_at,
+                paused=True,
+                assigned_gpu=2,
+                awaiting_input=True,
+                awaiting_stage="post_fampnn",
+                awaiting_payload={"stage": "post_fampnn"},
+                retry_count=2,
+                current_stage="run_boltz",
+                stage_progress="1/3",
+            )
+        )
+        await session.commit()
+
+        root, lineage = await cancel_job_lineage("already-cancelled", session)
+        assert root.id == "already-cancelled"
+        assert [job.id for job in lineage] == ["already-cancelled"]
+
+        job = await session.get(Job, "already-cancelled")
+        assert job is not None
+        assert job.status == "cancelled"
+        assert job.queue_status == "cancelled"
+        assert job.paused is False
+        assert job.assigned_gpu is None
+        assert job.awaiting_input is False
+        assert job.awaiting_stage is None
+        assert job.awaiting_payload == {}
+        assert job.retry_count == 0
+        assert job.current_stage is None
+        assert job.stage_progress is None
+
+    await engine.dispose()

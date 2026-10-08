@@ -5592,7 +5592,7 @@ async def get_job(
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     # Get design count
     design_count_query = select(func.count(Design.id)).where(Design.job_id == job.id)
     design_count = (await session.execute(design_count_query)).scalar()
@@ -5609,10 +5609,11 @@ async def get_job(
     review_count = _review_candidate_count(job)
     if (design_count or 0) == 0 and review_count is not None:
         design_count = review_count
-    if (design_count or 0) == 0 and job.status in [JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value] and job.output_dir:
-        design_count = count_structure_files(job.output_dir)
+    result_output_dir = job.child_output_dir or job.output_dir
+    if (design_count or 0) == 0 and job.status in [JobStatus.COMPLETED.value, JobStatus.AWAITING_INPUT.value] and result_output_dir:
+        design_count = count_structure_files(result_output_dir)
     completed_stages, stage_outputs = _resolve_stage_state_for_response(job)
-    
+
     return JobResponse(
         id=job.id,
         name=job.name,
@@ -5914,22 +5915,12 @@ async def reingest_job_results(
     from sqlalchemy import delete
     from services.result_ingester import ingest_job_results
     
-    async def delete_with_retry(job_id_to_delete: str, retries: int = 3) -> int:
-        for attempt in range(1, retries + 1):
-            try:
-                existing_count = (await session.execute(
-                    select(func.count(Design.id)).where(Design.job_id == job_id_to_delete)
-                )).scalar()
-                await session.execute(delete(Design).where(Design.job_id == job_id_to_delete))
-                await session.commit()
-                return existing_count or 0
-            except OperationalError as e:
-                await session.rollback()
-                if "locked" in str(e).lower() and attempt < retries:
-                    logger.warning(f"[REINGEST] DB locked, retrying delete ({attempt}/{retries}) for {job_id_to_delete}")
-                    await asyncio.sleep(0.5 * attempt)
-                    continue
-                raise
+    async def delete_for_reingest(job_id_to_delete: str) -> int:
+        existing_count = (await session.execute(
+            select(func.count(Design.id)).where(Design.job_id == job_id_to_delete)
+        )).scalar()
+        await session.execute(delete(Design).where(Design.job_id == job_id_to_delete))
+        return existing_count or 0
 
     try:
         # Fetch job
@@ -5941,13 +5932,13 @@ async def reingest_job_results(
 
         # Build job list (parent + children)
         job_ids = [job_id]
-        jobs_to_ingest = {job_id: job.output_dir}
+        jobs_to_ingest = {job_id: job.child_output_dir or job.output_dir}
         if include_children:
             child_result = await session.execute(select(Job).where(Job.parent_job_id == job_id))
             child_jobs = child_result.scalars().all()
             for child in child_jobs:
                 job_ids.append(child.id)
-                jobs_to_ingest[child.id] = child.output_dir
+                jobs_to_ingest[child.id] = child.child_output_dir or child.output_dir
         
         total_deleted = 0
         total_created = 0
@@ -5958,14 +5949,17 @@ async def reingest_job_results(
                 logger.warning(f"[REINGEST] Skipping job {jid}: no output_dir")
                 continue
             
-            deleted_count = await delete_with_retry(jid)
-            total_deleted += deleted_count
-            
             try:
-                new_count = await ingest_job_results(jid, output_dir, session)
+                deleted_count = await delete_for_reingest(jid)
+                new_count = await ingest_job_results(jid, output_dir, session, commit=False)
+                if new_count <= 0:
+                    raise ValueError("re-ingestion produced no validated designs; preserving existing results")
+                await session.commit()
+                total_deleted += deleted_count
                 total_created += new_count
                 logger.info(f"[REINGEST] Re-ingested {new_count} designs for job {jid}")
             except Exception as e:
+                await session.rollback()
                 logger.error(f"[REINGEST] Error re-ingesting job {jid}: {e}")
         
         return {
@@ -6147,10 +6141,6 @@ async def get_stage_gates(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    job_changed = _repair_job_for_response(job)
-    if job_changed:
-        await session.commit()
-
     return {
         "job_id": job_id,
         "awaiting_input": bool(job.awaiting_input),
@@ -6282,10 +6272,6 @@ async def get_children_status(
 
     result = await session.execute(query)
     children = result.scalars().all()
-
-    reconciled = _reconcile_child_jobs_from_history(children)
-    if reconciled:
-        await session.commit()
 
     if not children:
         return {

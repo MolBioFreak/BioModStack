@@ -5,13 +5,20 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+
 
 API_ROOT = Path(__file__).resolve().parents[1]
 
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
+from database import Base, Job
 from services.gpu_orchestrator import (
+    _commit_reconciled_job_mutations,
     _recover_rfantibody_parent_after_child_wait,
     _reconcile_terminal_history_without_process,
 )
@@ -112,3 +119,86 @@ def test_reconcile_terminal_history_without_process_marks_err_history_as_failed(
     assert job.queue_status == "failed"
     assert job.error_message == "Reconciled as failed: terminal .nextflow/history status ERR"
     assert job.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_worker_recovery_publish_does_not_overwrite_concurrent_cancellation(tmp_path: Path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'recovery.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with factory() as seed:
+        seed.add(Job(
+            id="recovery-race", name="recovery-race", model_id="boltz2", mode="predict",
+            params={}, status="running", queue_status="running", awaiting_input=False,
+            awaiting_payload={}, retry_count=0, max_retries=2,
+        ))
+        await seed.commit()
+
+    async with factory() as worker:
+        stale_job = (await worker.execute(select(Job).where(Job.id == "recovery-race"))).scalar_one()
+        _reconcile_terminal_history_without_process(
+            stale_job, history_status="ERR", gate_present=False,
+            age_seconds=301, stale_fail_after_seconds=300,
+        )
+        async with factory() as cancellation:
+            await cancellation.execute(
+                update(Job).where(Job.id == "recovery-race").values(
+                    status="cancelled", queue_status="cancelled", awaiting_input=False,
+                )
+            )
+            await cancellation.commit()
+
+        assert await _commit_reconciled_job_mutations(worker) == 0
+
+    async with factory() as verify:
+        final = (await verify.execute(select(Job).where(Job.id == "recovery-race"))).scalar_one()
+        assert (final.status, final.queue_status) == ("cancelled", "cancelled")
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operator_values", "expected"),
+    [
+        ({"status": "cancelled", "queue_status": "cancelled", "awaiting_input": False}, ("cancelled", "cancelled", False)),
+        ({"status": "awaiting_input", "queue_status": "completed", "awaiting_input": True}, ("awaiting_input", "completed", True)),
+    ],
+)
+async def test_worker_loop_boundary_publishes_recovery_before_next_job_db_work(
+    tmp_path: Path, operator_values: dict[str, object], expected: tuple[str, str, bool]
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'loop-boundary.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with factory() as seed:
+        for job_id in ("stale-a", "next-b"):
+            seed.add(Job(
+                id=job_id, name=job_id, model_id="boltz2", mode="predict", params={},
+                status="running", queue_status="running", awaiting_input=False,
+                awaiting_payload={}, retry_count=0, max_retries=2,
+            ))
+        await seed.commit()
+
+    async with factory() as worker:
+        stale = (await worker.execute(select(Job).where(Job.id == "stale-a"))).scalar_one()
+        _reconcile_terminal_history_without_process(
+            stale, history_status="ERR", gate_present=False,
+            age_seconds=301, stale_fail_after_seconds=300,
+        )
+        async with factory() as operator:
+            await operator.execute(update(Job).where(Job.id == "stale-a").values(**operator_values))
+            await operator.commit()
+
+        # This is the completion loop's next-job boundary.  A subsequent finalizer
+        # starts with DB work (refresh/select); it must not autoflush stale-a first.
+        assert await _commit_reconciled_job_mutations(worker) == 0
+        assert (await worker.execute(select(Job).where(Job.id == "next-b"))).scalar_one().id == "next-b"
+
+    async with factory() as verify:
+        final = (await verify.execute(select(Job).where(Job.id == "stale-a"))).scalar_one()
+        assert (final.status, final.queue_status, final.awaiting_input) == expected
+    await engine.dispose()

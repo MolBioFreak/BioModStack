@@ -1768,7 +1768,7 @@ async def launch_nextflow_job(
     """
     assert_workflow_launch_allowed("launch workflow jobs")
     from database import async_session, Job
-    from sqlalchemy import select
+    from sqlalchemy import select, inspect, update
     from schemas import JobStatus
     
     logger.info(f"Launching job {job_id} (model={model_id}, mode={mode})")
@@ -2270,26 +2270,16 @@ async def launch_nextflow_job(
                     
                 else:
                     if exit_code == 0:
-                        # Allow launcher finalization to heal stale reconciliations where
-                        # the orchestrator may have prematurely marked this job complete.
                         if job.awaiting_input:
                             job.status = JobStatus.AWAITING_INPUT.value
                             job.queue_status = 'completed'
                             job.paused = False
                             job.assigned_gpu = None
                             job.current_stage = job.awaiting_stage or job.current_stage or "Awaiting Input"
+                            job.error_message = None
                         else:
-                            job.status = JobStatus.COMPLETED.value
-                            job.queue_status = 'completed'
-                            job.paused = False
-                            job.assigned_gpu = None
-                            job.current_stage = "Complete"
-                        job.error_message = None
-                        
-                        # Ingest results into Design table
-                        try:
-                            from services.result_ingester import ingest_job_results
-                            
+                            # Keep the job non-terminal until output ingestion, validation,
+                            # and their database commit have succeeded.
                             # Extract epitope residues from job params for contact calculation
                             epitope_residues = None
                             if job.params:
@@ -2300,20 +2290,31 @@ async def launch_nextflow_job(
                                         epitope_residues = [r.strip() for r in hotspots.split(',')]
                                     elif isinstance(hotspots, list):
                                         epitope_residues = hotspots
-                            
-                            design_count = await ingest_job_results(
-                                job_id, output_dir, session,
-                                epitope_residues=epitope_residues
-                            )
-                            logger.info(f"Ingested {design_count} designs for job {job_id}")
-                            from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
 
-                            schedule_viewer_minimum_analyses_for_job(str(job.id))
-                            # BATCH-STAGE-GATE: Check if all sibling variants complete, trigger batch FrustraMPNN
-                            await maybe_trigger_batch_frustrampnn(job, session)
-                            await maybe_trigger_mutation_seed_refinement(job, session)
-                        except Exception as ingest_err:
-                            logger.warning(f"Result ingestion failed: {ingest_err}")
+                            from services.result_state_integrity import finalize_successful_job
+
+                            result_output_dir = job.child_output_dir or output_dir
+                            finalization = await finalize_successful_job(
+                                job,
+                                result_output_dir,
+                                session,
+                                epitope_residues=epitope_residues,
+                            )
+                            if finalization.completed:
+                                logger.info(
+                                    f"Ingested and validated {finalization.design_count} designs for job {job_id}"
+                                )
+                                from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
+
+                                schedule_viewer_minimum_analyses_for_job(str(job.id))
+                                # BATCH-STAGE-GATE: Check if all sibling variants complete, trigger batch FrustraMPNN
+                                await maybe_trigger_batch_frustrampnn(job, session)
+                                await maybe_trigger_mutation_seed_refinement(job, session)
+                            else:
+                                logger.warning(
+                                    f"Result ingestion failed integrity validation for job {job_id}; "
+                                    f"preserving explicit {finalization.integrity_state} state"
+                                )
                             
                     # Check for cancellation exit codes (SIGTERM=15/-15/143, SIGKILL=9/-9/137)
                     elif exit_code in (-15, -9, 143, 137):
@@ -2380,7 +2381,30 @@ async def launch_nextflow_job(
                             logger.error(f"Tail of log:\n{''.join(full_log[-20:])}")
                 
                 job.completed_at = datetime.utcnow()
-                await session.commit()
+                changes = {
+                    attribute.key: attribute.value
+                    for attribute in inspect(job).attrs
+                    if attribute.history.has_changes()
+                }
+                if changes:
+                    # A detached worker may hold a stale ORM snapshot while an
+                    # operator cancels or gates the job.  Expunge it before any
+                    # SQL, then conditionally publish only to an active row so
+                    # autoflush/direct commit cannot resurrect operator state.
+                    session.expunge(job)
+                    published = await session.execute(
+                        update(Job)
+                        .where(
+                            Job.id == job_id,
+                            Job.status == JobStatus.RUNNING.value,
+                            Job.queue_status == "running",
+                            Job.awaiting_input.is_(False),
+                        )
+                        .values(**changes)
+                    )
+                    await session.commit()
+                    if not published.rowcount:
+                        logger.info("Skipped stale Nextflow terminal publication for job %s", job_id)
                 _running_processes.pop(job_id, None)
                 
         except Exception as e:
@@ -2401,7 +2425,26 @@ async def launch_nextflow_job(
                     job.queue_status = 'failed'  # Update queue_status so job leaves the queue UI
                     job.error_message = str(e)
                     job.completed_at = datetime.utcnow()
-                    await session.commit()
+                    changes = {
+                        attribute.key: attribute.value
+                        for attribute in inspect(job).attrs
+                        if attribute.history.has_changes()
+                    }
+                    if changes:
+                        session.expunge(job)
+                        published = await session.execute(
+                            update(Job)
+                            .where(
+                                Job.id == job_id,
+                                Job.status == JobStatus.RUNNING.value,
+                                Job.queue_status == "running",
+                                Job.awaiting_input.is_(False),
+                            )
+                            .values(**changes)
+                        )
+                        await session.commit()
+                        if not published.rowcount:
+                            logger.info("Skipped stale Nextflow exception publication for job %s", job_id)
 
 
 def launch_nextflow_job_detached(

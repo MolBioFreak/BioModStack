@@ -101,10 +101,13 @@ async def cancel_job_lineage(
         raise HTTPException(status_code=404, detail="Job not found")
 
     if not _lineage_has_cancelable_jobs(lineage):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot cancel job with status: {root_job.status}",
-        )
+        # A cancellation request for an already-cancelled lineage is idempotent:
+        # accept it so stale cancellation metadata can be normalized below.
+        if not all(str(job.status or "").strip().lower() == JobStatus.CANCELLED.value for job in lineage):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot cancel job with status: {root_job.status}",
+            )
 
     now = datetime.utcnow()
     for job in lineage:
@@ -117,14 +120,19 @@ async def cancel_job_lineage(
                 logger.warning("[CANCEL] Failed to kill process for %s: %s", job.id, exc)
 
         status = str(job.status or "").strip().lower()
-        if status not in _TERMINAL_JOB_STATUSES or _job_is_cancelable(job):
+        if status == JobStatus.CANCELLED.value or status not in _TERMINAL_JOB_STATUSES or _job_is_cancelable(job):
             job.status = JobStatus.CANCELLED.value
             job.queue_status = "cancelled"
             job.paused = False
             job.assigned_gpu = None
             job.awaiting_input = False
-            job.completed_at = now
-            job.error_message = error_message
+            job.awaiting_stage = None
+            job.awaiting_payload = {}
+            job.retry_count = 0
+            job.current_stage = None
+            job.stage_progress = None
+            job.completed_at = job.completed_at or now
+            job.error_message = job.error_message or error_message
 
     await session.commit()
     return root_job, lineage
@@ -165,7 +173,7 @@ async def _force_launch_with_session(
             model_id=job.model_id,
             mode=params.get("mode", job.mode),
             params=params,
-            output_dir=job.output_dir,
+            output_dir=job.child_output_dir or job.output_dir,
         )
     )
 

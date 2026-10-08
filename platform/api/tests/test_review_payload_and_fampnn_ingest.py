@@ -478,42 +478,32 @@ def test_infer_antibody_type_from_job_params_maps_boltzgen_nanobody_mode_to_vhh(
 
 
 @pytest.mark.asyncio
-async def test_hydrate_review_job_materializes_stage_rows_even_with_parent_designs(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_hydrate_review_job_is_read_only_and_uses_child_root(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeSession:
-        def __init__(self) -> None:
-            self.scalar_calls = 0
-            self.committed = False
-
         async def scalar(self, _query):
-            self.scalar_calls += 1
-            return 0
+            raise AssertionError("GET review hydration must not query or materialize rows")
 
         async def commit(self):
-            self.committed = True
+            raise AssertionError("GET review hydration must not commit")
 
-    session = FakeSession()
-    ensured: list[str] = []
-
-    async def _fake_ensure_stage_review_rows(_session, job):
-        ensured.append(job.id)
-        return 25
-
-    monkeypatch.setattr("routers.designs.load_review_gate_snapshot", lambda *_args, **_kwargs: ("post_fampnn", {}))
-    monkeypatch.setattr("routers.designs.ensure_stage_review_rows", _fake_ensure_stage_review_rows)
-
+    observed_roots: list[str] = []
+    monkeypatch.setattr(
+        "routers.designs.load_review_gate_snapshot",
+        lambda root, *_args, **_kwargs: (observed_roots.append(root) or ("post_fampnn", {})),
+    )
     job = SimpleNamespace(
         id="job-1",
-        output_dir="/tmp/demo",
+        output_dir="/tmp/parent",
+        child_output_dir="/tmp/child",
         awaiting_stage="post_fampnn",
         awaiting_payload={},
         awaiting_input=True,
     )
 
-    review_stage = await _hydrate_review_job(session, job)
-
-    assert review_stage == "post_fampnn"
-    assert ensured == ["job-1"]
-    assert session.committed is True
+    assert await _hydrate_review_job(FakeSession(), job) == "post_fampnn"
+    assert observed_roots == ["/tmp/child"]
+    assert job.awaiting_payload == {}
+    assert job.awaiting_input is True
 
 
 def test_dedupe_review_structures_prefers_pdb_for_same_design() -> None:
