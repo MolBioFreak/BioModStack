@@ -1,5 +1,5 @@
 """
-ProteinDJ Control Platform - FastAPI Backend
+BioModStack Control Platform - FastAPI Backend
 
 Main application entry point.
 """
@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 import os
 
 from database import init_db
-from routers import jobs, gpu, files
+from routers import jobs, gpu, files, models
 
 
 @asynccontextmanager
@@ -22,9 +22,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="ProteinDJ Control Platform",
-    description="Web interface for protein design pipeline control",
-    version="0.1.0",
+    title="BioModStack Control Platform",
+    description="Extensible platform for protein modification and design",
+    version="0.2.0",
     lifespan=lifespan
 )
 
@@ -38,6 +38,7 @@ app.add_middleware(
 )
 
 # Include routers
+app.include_router(models.router, prefix="/api/models", tags=["models"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(gpu.router, prefix="/api/gpu", tags=["gpu"])
 app.include_router(files.router, prefix="/api/files", tags=["files"])
@@ -46,10 +47,11 @@ app.include_router(files.router, prefix="/api/files", tags=["files"])
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "service": "proteindj-api"}
+    return {"status": "healthy", "service": "biomodstack-api"}
 
 
 @app.get("/")
 async def root():
     """Root redirect to API docs."""
-    return {"message": "ProteinDJ API", "docs": "/docs"}
+    return {"message": "BioModStack API", "docs": "/docs"}
+

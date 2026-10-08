@@ -1,0 +1,56 @@
+# AlphaFold2 Model Configuration
+# Structure prediction with initial guess support
+
+id: af2
+name: AlphaFold2
+version: "2.3.2"
+category: structure_prediction
+description: >
+  AlphaFold2 structure prediction with support for initial guess mode.
+  Used as secondary validator, particularly effective for binder validation
+  with target structure hints.
+container: af2.sif
+
+ui_icon: brain
+ui_color: "#6366F1"
+
+inputs:
+  - fasta
+  - pdb
+outputs:
+  - pdb
+  - json
+
+modes:
+  - id: predict
+    name: Structure Prediction
+    description: Standard structure prediction from sequence
+    params: []
+
+  - id: initial_guess
+    name: Initial Guess Mode
+    description: Prediction with structure hints from input PDB
+    params:
+      - af2_initial_guess
+      - uncropped_target_pdb
+
+params:
+  - name: af2_initial_guess
+    type: boolean
+    description: Use initial guess from input structure
+    required: false
+    default: true
+
+  - name: uncropped_target_pdb
+    type: file
+    description: Full target PDB for context in binder prediction
+    required: false
+
+  - name: af2_extra_config
+    type: string
+    description: Additional AF2 parameters
+    required: false
+    hidden: true
+
+enabled: true
+experimental: false

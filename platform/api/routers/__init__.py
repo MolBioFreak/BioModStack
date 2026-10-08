@@ -1,3 +1,4 @@
 """Routers package."""
 
-from . import jobs, gpu, files
+from . import jobs, gpu, files, models
+

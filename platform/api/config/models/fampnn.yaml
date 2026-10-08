@@ -1,0 +1,68 @@
+# Full-Atom MPNN (FAMPNN) Model Configuration
+# Sequence design with sidechain awareness
+
+id: fampnn
+name: Full-Atom MPNN
+version: "1.0.0"
+category: sequence_design
+description: >
+  Full-atom message passing neural network for sequence design.
+  Unlike ProteinMPNN, considers sidechain conformations for more
+  accurate sequence predictions.
+container: fampnn.sif
+
+ui_icon: atom
+ui_color: "#06B6D4"
+
+inputs:
+  - pdb
+outputs:
+  - pdb
+  - fasta
+  - json
+
+modes:
+  - id: design
+    name: Full-Atom Sequence Design
+    description: Design sequences considering sidechain conformations
+    params:
+      - fampnn_temperature
+      - fampnn_exclude_cys
+
+params:
+  - name: fampnn_temperature
+    type: number
+    description: Sampling temperature. Higher = more diverse sequences.
+    required: false
+    default: 0.1
+    minimum: 0.01
+    maximum: 2.0
+
+  - name: fampnn_exclude_cys
+    type: boolean
+    description: Exclude cysteine residues from design
+    required: false
+    default: true
+
+  - name: fampnn_fix_target_sidechains
+    type: boolean
+    description: Fix target sidechain positions during binder design
+    required: false
+    default: false
+    hidden: true
+
+  - name: fampnn_psce_threshold
+    type: number
+    description: PSCE threshold for sidechain confidence filtering
+    required: false
+    default: 0.3
+    hidden: true
+
+  - name: fampnn_extra_config
+    type: string
+    description: Additional FAMPNN parameters
+    required: false
+    hidden: true
+
+enabled: true
+experimental: false
