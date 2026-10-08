@@ -33,12 +33,21 @@ process DoradoBasecall {
         doradoDevice = 'cuda:0'
     }
     """
-    mkdir -p /weights/dorado
+    set -euo pipefail
+
+    DORADO_MODELS_DIR=/weights/dorado
+    mkdir -p "\${DORADO_MODELS_DIR}"
+    if [[ -z "\$(find "\${DORADO_MODELS_DIR}" -mindepth 1 -print -quit)" ]]; then
+        echo "Dorado model directory is empty: \${DORADO_MODELS_DIR}" >&2
+        echo "Expected host bind: \${params.weights_root}/dorado -> \${DORADO_MODELS_DIR}" >&2
+        echo "Install or bind Dorado models before launching ONT basecalling." >&2
+        exit 1
+    fi
 
     dorado basecaller \\
         ${model} \\
         ${pod5_dir} \\
-        --models-directory /weights/dorado \\
+        --models-directory "\${DORADO_MODELS_DIR}" \\
         ${modBases} \\
         ${minQscore} \\
         ${trimAdapt} \\
