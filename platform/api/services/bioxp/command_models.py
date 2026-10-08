@@ -16,6 +16,10 @@ class CollectHardwareSnapshotCommand(_CommandBase):
     command: Literal["collect_hardware_snapshot"]
 
 
+class ActivateUsbForServiceCommand(_CommandBase):
+    command: Literal["activate_usb_for_service"]
+
+
 class ConstructPipettesCommand(_CommandBase):
     command: Literal["construct_pipettes"]
 
@@ -59,7 +63,8 @@ class RecoverRuntimeCommand(_CommandBase):
 
 
 CommandRequest: TypeAlias = Annotated[
-    CollectHardwareSnapshotCommand
+    ActivateUsbForServiceCommand
+    | CollectHardwareSnapshotCommand
     | ConstructPipettesCommand
     | InitializeWithoutMotionCommand
     | RunInitialCheckCommand

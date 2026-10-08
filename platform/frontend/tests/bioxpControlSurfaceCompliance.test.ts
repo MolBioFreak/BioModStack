@@ -5,12 +5,14 @@ import test from 'node:test';
 
 const cockpit = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
 const client = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
+const interlinkStatus = readFileSync(resolve('src/components/bioxpInterlinkStatus.ts'), 'utf8');
 
 test('BioXP page is status-first and command controls are server-driven', () => {
     for (const marker of ['Connection Status', 'Profile', 'Offline Protocol Validation', 'Local Jobs', 'COMMISSIONING_COMMANDS.map']) {
         assert.match(cockpit, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
-    assert.match(cockpit, /No normal OEM commands are available/);
+    assert.match(`${cockpit}\n${interlinkStatus}`, /No normal OEM commands are available/);
+    assert.match(`${cockpit}\n${interlinkStatus}`, /commands are temporarily locked/);
     assert.match(cockpit, /online contract verification/);
 });
 
@@ -18,8 +20,9 @@ test('canonical compact page labels the current commissioning tranche without re
     const combined = `${cockpit}\n${client}`;
     for (const marker of [
         'Collect Hardware Snapshot',
-        'Construct Four Pipettes',
-        'Initialize Without Motion',
+        'Activate USB for BioXP Service',
+        'Initialize/Verify Four Pipette Controllers',
+        'Initialize Controllers Without Motion',
         'Run OEM Initial Check',
         'INITIALIZE',
     ]) {

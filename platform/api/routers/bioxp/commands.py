@@ -11,6 +11,7 @@ from services.bioxp.command_coordinator import (
     IdempotencyConflictError,
 )
 from services.bioxp.command_models import parse_command_request
+from services.bioxp.errors import ConnectionStateError, TargetPolicyError
 from services.bioxp.runtime import BioXpRuntime
 
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
@@ -36,6 +37,11 @@ async def execute_command(
             request,
             mutations_enabled=True,
         )
+        if request.command in {"activate_usb_for_service", "collect_hardware_snapshot"} and result.remote_acknowledged:
+            try:
+                await runtime.connection.probe()
+            except (ConnectionStateError, TargetPolicyError):
+                pass
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (CommandBusyError, CommandDeniedError, IdempotencyConflictError) as exc:

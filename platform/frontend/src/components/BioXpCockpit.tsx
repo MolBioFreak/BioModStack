@@ -10,7 +10,11 @@ import {
     useCompileBioXpProtocol,
     useSubmitBioXpProtocol,
 } from '../lib/bioxpClient';
-import { deriveBioXpStatus, isBioXpCommandAvailable } from './bioxpInterlinkStatus';
+import {
+    deriveBioXpNoCommandsMessage,
+    deriveBioXpStatus,
+    isBioXpCommandAvailable,
+} from './bioxpInterlinkStatus';
 
 function EvidenceValue({ value }: { value: boolean | null }) {
     if (value === null) return <span className="text-amber-300">UNKNOWN</span>;
@@ -18,6 +22,7 @@ function EvidenceValue({ value }: { value: boolean | null }) {
 }
 
 type CommissioningCommandName =
+    | 'activate_usb_for_service'
     | 'collect_hardware_snapshot'
     | 'construct_pipettes'
     | 'initialize_without_motion'
@@ -28,7 +33,14 @@ const COMMISSIONING_COMMANDS: ReadonlyArray<{
     label: string;
     detail: string;
     tone: 'query' | 'write';
+    lifecycleStage?: string;
 }> = [
+    {
+        command: 'activate_usb_for_service',
+        label: 'Activate USB for BioXP Service',
+        detail: 'Claims the Novo USB runtime for the managed service. It does not snapshot, initialize, recover motion, home, or move hardware; motion remains blocked after activation.',
+        tone: 'write',
+    },
     {
         command: 'collect_hardware_snapshot',
         label: 'Collect Hardware Snapshot',
@@ -37,21 +49,24 @@ const COMMISSIONING_COMMANDS: ReadonlyArray<{
     },
     {
         command: 'construct_pipettes',
-        label: 'Construct Four Pipettes',
-        detail: 'Runs the current four-channel constructor stage with no motion. Requires fresh CAN_READY=true evidence.',
+        label: 'Initialize/Verify Four Pipette Controllers',
+        detail: 'Runs the OEM four-channel wake, WR, shared completion, pressure-offset, firmware, condition, and status sequence. No axis motion.',
         tone: 'write',
+        lifecycleStage: 'constructor_pipette_stage',
     },
     {
         command: 'initialize_without_motion',
-        label: 'Initialize Without Motion',
-        detail: 'Programs OEM motor-current state and the red LED stage. The robot contract forbids physical motion.',
+        label: 'Initialize Controllers Without Motion',
+        detail: 'Runs the literal OEM controller, heater, chiller, thermal, and final white-LED sequence. No axis motion.',
         tone: 'write',
+        lifecycleStage: 'initialization_without_motion',
     },
     {
         command: 'run_initial_check',
         label: 'Run OEM Initial Check',
-        detail: 'Live OEM check: LED white, door/latch reads, board deactivate/activate, and a final read. No axis motion.',
+        detail: 'Repeatable OEM check: CAN_READY wait, white LED, door/latch and 24 V checks, then board deactivate/activate. No axis motion.',
         tone: 'write',
+        lifecycleStage: 'initial_check',
     },
 ];
 
@@ -73,9 +88,16 @@ export function BioXpCockpit() {
 
     const status = statusQuery.isError ? undefined : statusQuery.data;
     const connection = status?.connection;
+    const mutationAccessEnabled = status?.mutation_access?.enabled === true;
+    const mutationAccessSetting = status?.mutation_access?.server_setting
+        ?? 'BIOMODSTACK_BIOXP_ENABLE_MUTATIONS';
     const derived = useMemo(
         () => connection ? deriveBioXpStatus(connection, nowMs) : null,
         [connection, nowMs],
+    );
+    const noCommandsMessage = deriveBioXpNoCommandsMessage(
+        connection?.command_active ?? false,
+        status?.available_commands,
     );
     const protocol: BioXpProtocol = {
         name: protocolName,
@@ -118,13 +140,19 @@ export function BioXpCockpit() {
                     <div><dt className="text-slate-500">configured</dt><dd>{String(connection?.configured ?? false)}</dd></div>
                     <div><dt className="text-slate-500">active</dt><dd>{String(connection?.active ?? false)}</dd></div>
                     <div><dt className="text-slate-500">generation</dt><dd>{connection?.generation ?? 0}</dd></div>
-                    <div><dt className="text-slate-500">fresh</dt><dd><EvidenceValue value={connection?.fresh ?? null} /></dd></div>
+                    <div><dt className="text-slate-500">runtime_fresh</dt><dd><EvidenceValue value={connection?.fresh ?? null} /></dd></div>
+                    <div><dt className="text-slate-500">hardware_fresh</dt><dd><EvidenceValue value={connection?.hardware_fresh ?? null} /></dd></div>
                     <div><dt className="text-slate-500">reachable</dt><dd><EvidenceValue value={connection?.reachable ?? null} /></dd></div>
                     <div><dt className="text-slate-500">runtime_ready</dt><dd><EvidenceValue value={connection?.runtime_ready ?? null} /></dd></div>
                     <div><dt className="text-slate-500">hardware_ready</dt><dd><EvidenceValue value={connection?.hardware_ready ?? null} /></dd></div>
                     <div><dt className="text-slate-500">target_url</dt><dd>{connection?.target_url ?? 'not configured'}</dd></div>
                 </dl>
                 {connection?.last_error && <p className="mt-3 text-sm text-red-300">last_error: {connection.last_error}</p>}
+                {status && !mutationAccessEnabled && (
+                    <p className="mt-3 rounded border border-amber-600/50 bg-amber-500/10 p-3 text-sm text-amber-200">
+                        Commissioning writes are disabled or were not advertised by the BMS server. Set <code>{mutationAccessSetting}</code>. No API key or secret is required.
+                    </p>
+                )}
                 <p className="mt-3 text-xs text-slate-500">UNKNOWN or STALE evidence never authorizes controls. Profile changes and connection actions are in the BioXP menu in the top bar. SAVED / DISCONNECTED is expected after an API restart.</p>
                 {statusQuery.isError && <p className="mt-3 text-sm text-red-300">Status unavailable; cached readiness and controls are suppressed.</p>}
             </section>
@@ -135,22 +163,44 @@ export function BioXpCockpit() {
             </section>
 
             <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h2 className="text-lg font-semibold">OEM Startup Lifecycle</h2>
+                    <span className="text-sm text-slate-400">{connection?.startup_lifecycle?.state ?? 'unavailable'}</span>
+                </div>
+                <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                    {Object.entries(connection?.startup_lifecycle?.stages ?? {}).map(([name, stage]) => (
+                        <article key={name} className="rounded border border-slate-800 p-3 text-sm">
+                            <h3 className="font-mono text-xs text-cyan-300">{name}</h3>
+                            <p className="mt-1 font-semibold">{stage.state}</p>
+                            <p className="text-xs text-slate-500">attempts={stage.attempt_count ?? 0} · repeatable={String(stage.repeatable ?? false)}</p>
+                            {stage.prerequisite && <p className="text-xs text-slate-500">requires={stage.prerequisite}</p>}
+                            {stage.error && <p className="mt-1 text-xs text-red-300">{stage.error}</p>}
+                        </article>
+                    ))}
+                </div>
+                {!connection?.startup_lifecycle && <p className="mt-3 text-sm text-amber-300">Collect a hardware snapshot or probe the active robot to load lifecycle evidence.</p>}
+            </section>
+
+            <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-5">
                 <h2 className="text-lg font-semibold">Normal Commands</h2>
-                {!status?.available_commands.length && (
+                {noCommandsMessage && (
                     <div className="mt-3 flex gap-2 rounded border border-amber-600/40 bg-amber-500/10 p-3 text-sm text-amber-200">
-                        No normal OEM commands are available. The current robot runtime has not yet advertised an admitted command capability.
+                        {noCommandsMessage}
                     </div>
                 )}
                 <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                    {COMMISSIONING_COMMANDS.map(({ command, label, detail, tone }) => {
-                        const available = isBioXpCommandAvailable(status?.available_commands, command, derived?.label);
+                    {COMMISSIONING_COMMANDS.map(({ command, label, detail, tone, lifecycleStage }) => {
+                        const available = mutationAccessEnabled
+                            && isBioXpCommandAvailable(status?.available_commands, command, derived?.label);
                         const ackReady = command !== 'run_initial_check' || initialCheckAck === 'INITIALIZE';
-                        const blockedReason = status?.unavailable_commands[command]
+                        const stage = lifecycleStage ? connection?.startup_lifecycle?.stages[lifecycleStage] : undefined;
+                        const blockedReason = status?.unavailable_commands?.[command]
                             ?? (statusQuery.isError ? 'Status is unavailable.' : 'Command is not admitted by the server.');
                         return (
                             <article key={command} className={`rounded border p-4 ${tone === 'query' ? 'border-cyan-700/60 bg-cyan-950/20' : 'border-amber-700/60 bg-amber-950/20'}`}>
                                 <h3 className="font-semibold">{label}</h3>
                                 <p className="mt-1 text-sm text-slate-300">{detail}</p>
+                                {stage && <p className="mt-2 text-xs text-cyan-300">stage={stage.state} · attempts={stage.attempt_count ?? 0}</p>}
                                 {command === 'run_initial_check' && (
                                     <label className="mt-3 block text-xs text-amber-200">Type INITIALIZE to acknowledge the live board-cycle stage
                                         <input value={initialCheckAck} onChange={(event) => setInitialCheckAck(event.target.value)} autoComplete="off" className="mt-1 w-full rounded border border-amber-700 bg-slate-950 px-2 py-1.5 text-sm" />
@@ -168,6 +218,26 @@ export function BioXpCockpit() {
                     })}
                 </div>
                 {executeCommand.error && <p className="mt-2 text-sm text-red-300">{bioXpErrorText(executeCommand.error)}</p>}
+                {executeCommand.data && (
+                    <section className={`mt-4 rounded border p-4 ${executeCommand.data.status === 'acknowledged' ? 'border-emerald-700/60 bg-emerald-950/20' : 'border-red-700/60 bg-red-950/20'}`}>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <h3 className="font-semibold">Latest Handler Result</h3>
+                            <span className="font-mono text-xs">{executeCommand.data.status}</span>
+                        </div>
+                        <p className="mt-1 text-sm">{executeCommand.data.detail}</p>
+                        <dl className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
+                            <div><dt className="text-slate-500">command_id</dt><dd className="break-all font-mono">{executeCommand.data.command_id}</dd></div>
+                            <div><dt className="text-slate-500">command</dt><dd>{executeCommand.data.command}</dd></div>
+                            <div><dt className="text-slate-500">idempotency_key</dt><dd className="break-all font-mono">{executeCommand.data.idempotency_key}</dd></div>
+                            <div><dt className="text-slate-500">generation</dt><dd>{executeCommand.data.generation}</dd></div>
+                            <div><dt className="text-slate-500">started_at</dt><dd>{executeCommand.data.started_at}</dd></div>
+                            <div><dt className="text-slate-500">finished_at</dt><dd>{executeCommand.data.finished_at}</dd></div>
+                            <div><dt className="text-slate-500">remote_acknowledged</dt><dd>{String(executeCommand.data.remote_acknowledged)}</dd></div>
+                            <div><dt className="text-slate-500">physical_effect_verified</dt><dd>{String(executeCommand.data.physical_effect_verified)}</dd></div>
+                        </dl>
+                        <pre className="mt-3 max-h-96 overflow-auto rounded bg-slate-950 p-3 text-xs text-slate-200">{JSON.stringify(executeCommand.data.handler_response, null, 2)}</pre>
+                    </section>
+                )}
             </section>
 
             {status?.available_controls.includes('emergency_stop') && connection && (

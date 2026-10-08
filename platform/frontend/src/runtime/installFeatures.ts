@@ -114,6 +114,18 @@ export function useBmsFeatures(): BmsFeatures {
     return useBmsFeatureState().features;
 }
 
+export function useResolvedBmsFeatures(): { features: BmsFeatures; resolved: boolean } {
+    const query = useQuery({
+        queryKey: ['bms-install-features'],
+        queryFn: fetchBmsFeatureState,
+        staleTime: 60_000,
+    });
+    return {
+        features: resolveBmsFeatureQueryState(query.data, query.isError).features,
+        resolved: query.isSuccess || query.isError,
+    };
+}
+
 export function resolveBmsFeatureQueryState(
     data: BmsFeatureState | undefined,
     failed: boolean,
