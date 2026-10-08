@@ -38,3 +38,10 @@ test('Results viewer labels visible rows by active result set instead of stale R
     assert.match(source, /visible in \$\{activeResultSetLabel\}/);
     assert.doesNotMatch(source, /visible in \$\{loadedSavedReviewFilterSet \? `'/);
 });
+
+test('Results viewer imports contract capability gates instead of guessing unsupported analysis', () => {
+    assert.match(source, /from ['"]\.\.\/lib\/resultCapabilities['"]/);
+    assert.match(source, /isUnsupportedResult/);
+    assert.match(source, /supportsAnalyzer/);
+    assert.match(source, /supportsViewerCapability/);
+});
