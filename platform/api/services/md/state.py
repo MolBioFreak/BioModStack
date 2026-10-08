@@ -436,6 +436,12 @@ async def request_cancel(session: AsyncSession, *, job_id: str, expected_version
     )
     if existing is not None:
         return run
+    if run.phase == "cancelling":
+        if expected_version != run.state_version:
+            raise MdStateError("MD_STATE_VERSION_CONFLICT", "state version changed")
+        # The intent is already durable. A fresh key after API/client restart must
+        # re-enter the external actuator without appending a second transition.
+        return run
     if run.phase in TERMINAL_PHASES:
         raise MdStateError("MD_CANCEL_UNAVAILABLE", "terminal run cannot be cancelled")
     return await append_event_cas(
