@@ -2440,7 +2440,17 @@ async def request_remote_result_pull(session, job, background_tasks, *, automati
         elif automatic and (job.remote_state != "results_available"
                             or (job.status, job.queue_status) != ("awaiting_input", "completed")):
             return False
-        if (job.status not in {"awaiting_input", "running"}
+        receipt = dict((job.provenance or {}).get("remote_execution_receipt") or {})
+        import_retry = (
+            not automatic
+            and (job.status, job.queue_status, job.remote_state)
+                == ("failed", "failed", "result_import_failed")
+            and receipt.get("received_manifest_sha256")
+            and receipt.get("received_manifest_sha256") == receipt.get("result_manifest_sha256")
+            and receipt.get("state") == "succeeded" and receipt.get("exit_code") == 0
+            and all(receipt.get(key) == value for key, value in identity.items() if key != "schema")
+        )
+        if not import_retry and (job.status not in {"awaiting_input", "running"}
                 or job.remote_state not in {"results_available", "result_pull_failed", "returning"}
                 or job.awaiting_stage != "remote_results"
                 or not job.awaiting_input or job.awaiting_payload != _pull_identity(job)):
@@ -2449,6 +2459,9 @@ async def request_remote_result_pull(session, job, background_tasks, *, automati
             "status": "running", "queue_status": "running", "remote_state": "returning",
             "error_message": None,
         }
+        if import_retry:
+            changes.update(completed_at=None, awaiting_input=True,
+                           awaiting_stage="remote_results", awaiting_payload=identity)
         if resuming:
             changes["provenance"] = dict(job.provenance or {}, remote_result_resume_attempted=identity)
         if not await _publish_remote_transition(session, job, changes, require_lease=False):
@@ -2508,6 +2521,7 @@ async def _prove_pull_endpoint(session, job, *, diagnostics=False):
 async def _run_requested_pull(job_id, identity, guard):
     try:
         async with async_session() as session:
+            finalizing_receipt = None
             try:
                 job = await session.get(Job, job_id)
                 if job is None or _pull_identity(job) != identity or job.remote_state != "returning":
@@ -2586,6 +2600,7 @@ async def _run_requested_pull(job_id, identity, guard):
                     return
                 # Hold the write fence across publication and receipt application.
                 await session.refresh(job)
+                finalizing_receipt = dict((job.provenance or {}).get("remote_execution_receipt") or {})
                 await _finalize_pulled_results(session, job, status, manifest, incoming)
                 await session.rollback()
                 job = await session.get(Job, job_id, populate_existing=True)
@@ -2598,7 +2613,24 @@ async def _run_requested_pull(job_id, identity, guard):
                         and job.remote_state == "returning"
                         and (job.status, job.queue_status) == ("running", "running")):
                     await _recover_result_generation(session, job)
-                    await _pull_failure(session, job, f"Result pull failed: {exc}")
+                    from services.result_state_integrity import NoDesignResults
+
+                    if isinstance(exc, NoDesignResults):
+                        # Native execution and verified receipt remain succeeded;
+                        # only the existing result owner's rejection is terminal.
+                        if (_pull_identity(job) == identity
+                                and dict((job.provenance or {}).get("remote_execution_receipt") or {}) == finalizing_receipt
+                                and (job.status, job.queue_status, job.remote_state)
+                                == ("running", "running", "returning")):
+                            await _publish_remote_transition(session, job, {
+                                "status": "failed", "queue_status": "failed",
+                                "remote_state": "result_import_failed",
+                                "awaiting_input": False, "awaiting_stage": None,
+                                "awaiting_payload": {}, "completed_at": datetime.utcnow(),
+                                "error_message": f"Result ingestion failed: {exc}"[:1500],
+                            }, require_lease=False)
+                    else:
+                        await _pull_failure(session, job, f"Result pull failed: {exc}")
     finally:
         guard.__exit__(None, None, None)
 

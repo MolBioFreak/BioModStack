@@ -435,7 +435,10 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     const previousRemoteResults = useRef<string[]>([]);
     useEffect(() => {
         if (!queueData) return;
-        const current = queueData.data.filter(job => remoteResultsState(job)).map(job => job.id);
+        const current = queueData.data.filter(job => {
+            const state = remoteResultsState(job);
+            return state && !state.terminal;
+        }).map(job => job.id);
         // Completed ingestion removes the job from the queue. Refresh existing output caches then,
         // not just when the bounded POST acknowledges the transfer request.
         for (const jobId of previousRemoteResults.current) {

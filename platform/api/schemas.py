@@ -265,6 +265,9 @@ class JobSummaryResponse(BaseModel):
     execution_bundle_sha256: Optional[str] = None
     remote_attempt_id: Optional[str] = None
     remote_state: Optional[str] = None
+    # Compact observation for list views that intentionally omit provenance.
+    # None on legacy/detail callers preserves receipt-based presentation.
+    remote_results_received: Optional[bool] = None
     current_stage: Optional[str] = None
     completed_stages: Optional[List[str]] = None
     awaiting_input: Optional[bool] = None

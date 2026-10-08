@@ -5472,6 +5472,8 @@ async def list_jobs(
         Job.provenance[("execution_plan_approval", "plan", "metadata", "static_components")].label("stage_plan_components"),
         Job.provenance[("remote_execution_assignment", "resources", "components")].label("stage_assigned_components"),
         Job.provenance["stage_terminal_states"].label("stage_terminal_states"),
+        Job.provenance[("remote_execution_receipt", "received_manifest_sha256")].label("remote_received_manifest_sha256"),
+        Job.provenance[("remote_execution_receipt", "result_manifest_sha256")].label("remote_result_manifest_sha256"),
     )
     # Use identical predicates for the bounded page and its total. These are
     # presentation filters, not changes to execution/status authority.
@@ -5663,6 +5665,11 @@ async def list_jobs(
             conformational_mapping_request_id=conformational_mapping_request_id_by_job.get(str(job.id)),
         )
         if summary:
+            received_digest = job.remote_received_manifest_sha256
+            public_fields["remote_results_received"] = (
+                isinstance(received_digest, str) and bool(received_digest)
+                and received_digest == job.remote_result_manifest_sha256
+            )
             job_responses.append(JobSummaryResponse(**public_fields))
         else:
             job_responses.append(JobResponse(

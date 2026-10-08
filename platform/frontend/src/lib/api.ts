@@ -138,6 +138,7 @@ export interface Job {
     execution_bundle_sha256?: string | null;
     remote_attempt_id?: string | null;
     remote_state?: string | null;
+    remote_results_received?: boolean | null;
     started_at?: string | null;
     completed_at?: string | null;
     vram_estimate_mb?: number | null;
@@ -3111,6 +3112,7 @@ export interface QueuedJob {
     execution_target_id?: string | null;
     remote_state?: string | null;
     remote_waiting_reason?: string | null;
+    remote_results_received?: boolean | null;
     provenance?: Record<string, unknown> | null;
     priority: number;
     vram_estimate_mb: number | null;

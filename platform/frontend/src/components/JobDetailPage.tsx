@@ -57,7 +57,8 @@ export function JobDetailPage() {
         refetchInterval: (query) => {
             const job = query.state.data;
             // Keep polling if job is running
-            return job?.status === 'running' || job?.status === 'queued' || (job && remoteResultsState(job)) ? jobPollingInterval(3000, query) : false;
+            const results = job && remoteResultsState(job);
+            return job?.status === 'running' || job?.status === 'queued' || (results && !results.terminal) ? jobPollingInterval(3000, query) : false;
         },
     });
 
