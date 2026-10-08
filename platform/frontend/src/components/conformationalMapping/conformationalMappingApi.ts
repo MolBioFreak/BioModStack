@@ -20,6 +20,22 @@ export interface CmSource {
     sha256: string;
     bytes: number;
     metadata: Record<string, unknown>;
+    managed_checkpoint?: boolean;
+    authority_receipt?: {
+        schema_name: 'cm_source_authority_receipt';
+        schema_version: 1;
+        source_id: string;
+        source_kind: CmSourceKind;
+        content_sha256: string;
+        authority_kind: 'complex_snapshot_normalization' | 'rcsb_download';
+        payload: Record<string, unknown>;
+        receipt_sha256: string;
+    } | null;
+    submission_policy?: {
+        chain_id: string;
+        test_case_id: string;
+        benchmark_name: string;
+    } | null;
     created_at?: string;
 }
 
@@ -34,6 +50,15 @@ export type CmRuntimePolicy =
     | { use_default_params: true }
     | { use_default_params: false; n_cycle: number; n_step: number };
 
+export const compileCmRuntimePolicy = (
+    backend: CmBackend,
+    useDefaults: boolean,
+    nCycle: number,
+    nStep: number,
+): CmRuntimePolicy => backend !== 'protenix_v2_ensemble' || useDefaults
+    ? { use_default_params: true }
+    : { use_default_params: false, n_cycle: nCycle, n_step: nStep };
+
 export interface CmAnalysisPolicy {
     sign_zero_epsilon: number;
     clash_detector_id: 'bms_clash';
@@ -47,10 +72,7 @@ export interface CmAnalysisPolicy {
 }
 
 export interface CmConfornetsControls {
-    chain_id: string;
     task: CmTask;
-    test_case_id: string;
-    benchmark_name: string;
     runs: number;
     saved_steps: number[];
     confornet_count: number;
@@ -68,6 +90,7 @@ export interface CmConfornetsControls {
 
 export interface CmSubmitRequest {
     name: string;
+    notes: string;
     idempotency_key: string;
     backend: CmBackend;
     ordered_seeds: number[];
@@ -101,6 +124,24 @@ export interface CmSubmitReceipt {
     idempotent_retry?: boolean;
 }
 
+export interface CmSelectedInputRecord {
+    source_id: string;
+    source_kind: string;
+    source_label: string;
+    source_sha256: string;
+    provider?: string;
+    accession?: string;
+    model_id?: string;
+    sample_id?: string;
+    chain_ids?: string[];
+}
+
+export interface CmRunRecord {
+    name: string;
+    notes: string;
+    selected_input: CmSelectedInputRecord;
+}
+
 export interface CmStatus {
     request_id: string;
     job_id: string;
@@ -111,6 +152,7 @@ export interface CmStatus {
     failure_receipt: Record<string, unknown> | null;
     retry_eligible: boolean;
     result_contract_id: string;
+    run_record: CmRunRecord | null;
 }
 
 export interface CmProgress {
@@ -309,6 +351,9 @@ export const cmApiError = (value: unknown, fallback: string): string => {
 
 export const listCmSources = async (): Promise<CmSource[]> =>
     (await api.get<{ sources: CmSource[] }>('/api/conformational-mapping/sources')).data.sources;
+
+export const cmSourceContentUrl = (sourceId: string): string =>
+    `/api/conformational-mapping/sources/${encodeURIComponent(sourceId)}/content`;
 
 export const registerCmSource = async (
     sourceKind: CmSourceKind,

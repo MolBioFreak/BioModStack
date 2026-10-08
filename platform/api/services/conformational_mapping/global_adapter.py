@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Mapping
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,7 +14,11 @@ from database import ConformationalMappingRequest, ConformationalMappingSource, 
 from paths import get_results_dir
 from routers.conformational_mapping import (
     _PERSONAL_WORKFLOW_PRINCIPAL,
+    _bind_analysis_policy,
+    _bind_confornets_submission_policy,
+    _bind_runtime_policy,
     _cm_job_admission,
+    _managed_checkpoint_for_submission,
     _runtime_registry,
     _server_confornets_identity,
 )
@@ -128,13 +133,18 @@ async def materialize_preallocated_cm_job(
         raise DispatchFailure("preallocated CM output root already contains unowned files")
     output_root.mkdir(parents=True, exist_ok=True)
 
+    try:
+        runtime_policy = _bind_runtime_policy(backend, submission["runtime_policy"])
+        analysis_policy = _bind_analysis_policy(submission["analysis_policy"])
+    except HTTPException as exc:
+        raise DispatchFailure(str(exc.detail)) from exc
     request_params: dict[str, Any] = {
         "backend": backend,
         "ordered_seeds": list(submission["ordered_seeds"]),
         "samples_per_seed": int(submission["samples_per_seed"]),
         "feature_policy": dict(submission["feature_policy"]),
-        "runtime_policy": dict(submission["runtime_policy"]),
-        "analysis_policy": dict(submission["analysis_policy"]),
+        "runtime_policy": runtime_policy,
+        "analysis_policy": analysis_policy,
     }
     analysis_targets: list[dict[str, Any]]
     if backend == "protenix_v2_ensemble":
@@ -163,7 +173,12 @@ async def materialize_preallocated_cm_job(
         analysis_targets = snapshots
     else:
         sequence_source = await _source(core_session, str(submission["registered_sequence_id"]), "protein_sequence")
-        checkpoint_source = await _source(core_session, str(submission["registered_checkpoint_id"]), "confornets_checkpoint")
+        try:
+            checkpoint_source = await _managed_checkpoint_for_submission(
+                core_session, str(submission["registered_checkpoint_id"])
+            )
+        except HTTPException as exc:
+            raise DispatchFailure(str(exc.detail)) from exc
         staged_assets = stage_registered_assets(
             [_registered(sequence_source), _registered(checkpoint_source)],
             principal_id=_PERSONAL_WORKFLOW_PRINCIPAL,
@@ -173,11 +188,13 @@ async def materialize_preallocated_cm_job(
         sequence = str(metadata.get("sequence") or "").upper()
         if len(sequence) != 540:
             raise DispatchFailure(f"CM ConforNets DRT4 sequence length is not 540: {len(sequence)}")
-        settings = dict(submission["confornets"])
+        try:
+            settings = _bind_confornets_submission_policy(submission["confornets"])
+        except HTTPException as exc:
+            raise DispatchFailure(str(exc.detail)) from exc
         settings.update(
             {
                 "sequence": sequence,
-                "chain_id": "A",
                 "checkpoint": {
                     "path": staged_assets[checkpoint_source.source_id].relative_to(output_root).as_posix(),
                     "sha256": checkpoint_source.content_sha256,

@@ -449,6 +449,7 @@ def build_import_snapshot_from_mmcif(
         "original_source_path": original_source_path,
         "original_source_sha256": hashlib.sha256(source_bytes).hexdigest(),
         "normalized_source_sha256": "0" * 64,
+        "source_model_id": str(next(iter(models))),
         "entities": [entity],
         "bonds": [],
         "instance_mappings": [mapping],

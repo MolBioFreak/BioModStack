@@ -43,6 +43,7 @@ _TOP_LEVEL_FIELDS = frozenset(
         "protenix_snapshot_id",
         "import_receipt_id",
         "resolved_import_entries",
+        "run_record",
     }
 )
 _CONFORNETS_FIELDS = frozenset(
@@ -142,6 +143,80 @@ def _sha256(value: object, *, field: str) -> str:
     return text
 
 
+def _bounded_text(
+    value: object,
+    *,
+    field: str,
+    maximum: int,
+    allow_empty: bool = False,
+) -> str:
+    if not isinstance(value, str):
+        raise ConformationalMappingRequestError(f"{field} must be text")
+    text = value.strip()
+    if not allow_empty and not text:
+        raise ConformationalMappingRequestError(f"{field} must be nonempty")
+    if len(text) > maximum:
+        raise ConformationalMappingRequestError(f"{field} exceeds {maximum} characters")
+    return text
+
+
+def _normalize_run_record(value: object) -> dict[str, Any]:
+    record = _strict_object(
+        value,
+        field="run_record",
+        allowed_fields=frozenset({"name", "notes", "selected_input"}),
+    )
+    selected = _strict_object(
+        record.get("selected_input"),
+        field="run_record.selected_input",
+        allowed_fields=frozenset({
+            "source_id", "source_kind", "source_label", "source_sha256",
+            "provider", "accession", "model_id", "sample_id", "chain_ids",
+        }),
+    )
+    normalized_input: dict[str, Any] = {
+        "source_id": _bounded_text(
+            selected.get("source_id"), field="run_record.selected_input.source_id", maximum=128,
+        ),
+        "source_kind": _bounded_text(
+            selected.get("source_kind"), field="run_record.selected_input.source_kind", maximum=64,
+        ),
+        "source_label": _bounded_text(
+            selected.get("source_label"), field="run_record.selected_input.source_label", maximum=255,
+        ),
+        "source_sha256": _sha256(
+            selected.get("source_sha256"), field="run_record.selected_input.source_sha256",
+        ),
+    }
+    for key in ("provider", "accession", "model_id", "sample_id"):
+        if key in selected:
+            normalized_input[key] = _bounded_text(
+                selected[key], field=f"run_record.selected_input.{key}", maximum=128,
+            )
+    if "chain_ids" in selected:
+        raw_chain_ids = selected["chain_ids"]
+        if not isinstance(raw_chain_ids, list) or len(raw_chain_ids) > 128:
+            raise ConformationalMappingRequestError(
+                "run_record.selected_input.chain_ids must be a bounded array"
+            )
+        chain_ids = [
+            _bounded_text(chain_id, field="run_record.selected_input.chain_ids", maximum=32)
+            for chain_id in raw_chain_ids
+        ]
+        if len(set(chain_ids)) != len(chain_ids):
+            raise ConformationalMappingRequestError(
+                "run_record.selected_input.chain_ids must be unique"
+            )
+        normalized_input["chain_ids"] = chain_ids
+    return {
+        "name": _bounded_text(record.get("name"), field="run_record.name", maximum=255),
+        "notes": _bounded_text(
+            record.get("notes", ""), field="run_record.notes", maximum=4000, allow_empty=True,
+        ),
+        "selected_input": normalized_input,
+    }
+
+
 def _validate_staged_record(value: object, *, field: str) -> dict[str, Any]:
     record = _strict_object(
         value,
@@ -238,6 +313,14 @@ def _normalize_confornets_settings(settings: Mapping[str, Any]) -> dict[str, Any
     if task == "mse" and not normalized_references:
         raise ConformationalMappingRequestError(
             "ConforNets MSE requires a non-null staged reference"
+        )
+    if task == "mse" and len(normalized_steps) != 1:
+        raise ConformationalMappingRequestError(
+            "ConforNets MSE requires exactly one saved step"
+        )
+    if task == "mse" and confornet_count != 1:
+        raise ConformationalMappingRequestError(
+            "ConforNets MSE requires exactly one ConforNet"
         )
     transfer = config["transfer_source"]
     normalized_transfer: dict[str, Any] | None = None
@@ -538,6 +621,8 @@ def validate_request_params(params: Mapping[str, Any]) -> ValidatedRequest:
         "runtime_policy": values["runtime_policy"],
         "analysis_policy": values["analysis_policy"],
     }
+    if "run_record" in values:
+        request_fields["run_record"] = _normalize_run_record(values["run_record"])
     if "state_landscape_comparison" in values:
         request_fields["state_landscape_comparison"] = values["state_landscape_comparison"]
     analysis_policy = values["analysis_policy"]
@@ -864,6 +949,7 @@ def bind_materialized_source_snapshot(
     materialized: MaterializedRequest,
     *,
     source_snapshot_sha256: str,
+    selected_input: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Atomically bind a server-generated snapshot into request and plan hashes."""
 
@@ -927,6 +1013,11 @@ def bind_materialized_source_snapshot(
         raise ConformationalMappingRequestError("source snapshot binding is external-import only")
     if "source_snapshot_sha256" in request:
         raise ConformationalMappingRequestError("source snapshot identity is already bound")
+    if selected_input is not None:
+        run_record = request.get("run_record")
+        if not isinstance(run_record, Mapping):
+            raise ConformationalMappingRequestError("external import requires an authoritative run record")
+        request["run_record"] = {**dict(run_record), "selected_input": dict(selected_input)}
     request["source_snapshot_sha256"] = source_snapshot_sha256
     request["request_sha256"] = canonical_sha256({
         key: value for key, value in request.items() if key != "request_sha256"

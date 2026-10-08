@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+import json
+import inspect
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import routers.conformational_mapping as cm_router
+from services.conformational_mapping import global_adapter as cm_global_adapter
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from database import Base, ConformationalMappingRecord, ConformationalMappingRequest, Job
+from database import Base, ConformationalMappingRecord, ConformationalMappingRequest, ConformationalMappingSource, Job
 from routers.conformational_mapping import (
     SubmitRequest,
     _mutation_principal,
@@ -181,6 +184,7 @@ async def test_completed_request_does_not_project_historical_failure_as_current(
         status="completed", progress_json={"phase": "completed"},
         failure_receipt_json={"terminal_state": "failed", "message": "historical"},
         result_contract_id="conformational_mapping_confornets_v1",
+        request_json={"run_record": {"name": "Map", "notes": "Keep context", "selected_input": {}}},
     )
     job = SimpleNamespace(status="completed")
 
@@ -197,12 +201,265 @@ async def test_completed_request_does_not_project_historical_failure_as_current(
     )
     assert result["status"] == "completed"
     assert result["failure_receipt"] is None
+    assert result["run_record"]["notes"] == "Keep context"
 
 
 def test_cm11_api_typed_submission_rejects_unknown_fields() -> None:
     SubmitRequest.model_validate(_body())
     with pytest.raises(ValidationError):
         SubmitRequest.model_validate({**_body(), "server_path": "/tmp/input.pdb"})
+
+
+def test_cm_run_notes_are_typed_and_bounded() -> None:
+    body = SubmitRequest.model_validate({**_body(), "notes": "Compare open and closed states."})
+    assert body.notes == "Compare open and closed states."
+
+    with pytest.raises(ValidationError):
+        SubmitRequest.model_validate({**_body(), "notes": "x" * 4001})
+
+
+def test_cm_run_selection_rejects_client_owned_authority() -> None:
+    with pytest.raises(ValidationError):
+        SubmitRequest.model_validate({**_body(), "selected_model_id": "1"})
+    with pytest.raises(ValidationError):
+        SubmitRequest.model_validate({**_body(), "selected_chain_ids": ["A"]})
+    assert cm_router._confornets_submission_policy() == {
+        "chain_id": "A",
+        "test_case_id": "bms-canonical-monomer",
+        "benchmark_name": "biomodstack",
+    }
+    assert cm_router._bind_confornets_submission_policy({"task": "diversity"}) == {
+        "task": "diversity",
+        **cm_router._confornets_submission_policy(),
+    }
+    for field in ("chain_id", "test_case_id", "benchmark_name"):
+        with pytest.raises(HTTPException, match="server-owned ConforNets fields"):
+            cm_router._bind_confornets_submission_policy({field: "caller-value"})
+    assert cm_router._bind_runtime_policy(
+        "protenix_v2_ensemble", {"use_default_params": False, "n_cycle": 12, "n_step": 240}
+    ) == {"use_default_params": False, "n_cycle": 12, "n_step": 240}
+    for backend in ("confornets", "external_import"):
+        assert cm_router._bind_runtime_policy(backend, {"use_default_params": True}) == {
+            "use_default_params": True
+        }
+        with pytest.raises(HTTPException, match="supported only by Protenix"):
+            cm_router._bind_runtime_policy(
+                backend, {"use_default_params": False, "n_cycle": 12, "n_step": 240}
+            )
+
+
+def test_global_cm_adapter_uses_canonical_server_policy_binders() -> None:
+    adapter_source = inspect.getsource(cm_global_adapter.materialize_preallocated_cm_job)
+    assert "_bind_runtime_policy" in adapter_source
+    assert "_bind_confornets_submission_policy" in adapter_source
+    assert "_bind_analysis_policy" in adapter_source
+    assert "_managed_checkpoint_for_submission" in adapter_source
+
+
+def test_cm_analysis_policy_is_server_owned() -> None:
+    canonical = cm_router._canonical_analysis_policy()
+    assert cm_router._bind_analysis_policy(canonical) == canonical
+    caller_override = {**canonical, "inner_support_minimum": 0.7}
+    with pytest.raises(HTTPException, match="server-owned analysis policy"):
+        cm_router._bind_analysis_policy(caller_override)
+
+
+def test_cm_source_registration_reserves_server_receipt_metadata() -> None:
+    for metadata in (
+        {"resolved_chain_ids": ["A"]},
+        {"normalization_receipt": {}},
+        {"provider_receipt": {}},
+    ):
+        with pytest.raises(HTTPException, match="server source receipts are server-owned"):
+            cm_router._reject_reserved_source_metadata(metadata)
+
+
+def test_cm_checkpoint_upload_is_rejected() -> None:
+    with pytest.raises(HTTPException, match="server-managed"):
+        cm_router._validate_upload_source_kind("confornets_checkpoint")
+
+
+@pytest.mark.asyncio
+async def test_cm_submission_accepts_only_the_installed_managed_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    managed = SimpleNamespace(source_id="cm_src_server_confornets_checkpoint_approved")
+
+    async def ensure(_session):
+        return managed
+
+    monkeypatch.setattr(cm_router, "_ensure_managed_confornets_checkpoint", ensure)
+    assert await cm_router._managed_checkpoint_for_submission(
+        SimpleNamespace(), managed.source_id
+    ) is managed
+    with pytest.raises(HTTPException, match="installed managed checkpoint"):
+        await cm_router._managed_checkpoint_for_submission(
+            SimpleNamespace(), "cm_src_caller_checkpoint"
+        )
+
+
+def test_cm_run_record_trusts_only_content_bound_provider_receipts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cm_router, "get_data_root", lambda: tmp_path)
+    source = SimpleNamespace(
+        source_id="source",
+        source_kind="structure_upload",
+        content_sha256="a" * 64,
+        metadata_json={
+            "name": "RCSB 1UBQ",
+            "provider_receipt": {
+                "provider": "RCSB",
+                "accession": "FAKE",
+                "content_sha256": "a" * 64,
+            },
+        },
+    )
+    selected = cm_router._run_record_selected_input(source, model_id=None, sample_id=None, chain_ids=[])  # type: ignore[arg-type]
+    assert "provider" not in selected
+    assert "accession" not in selected
+
+    receipt = cm_router._publish_source_authority(
+        source,  # type: ignore[arg-type]
+        authority_kind="rcsb_download",
+        payload={"provider": "RCSB", "accession": "1UBQ"},
+    )
+    selected = cm_router._run_record_selected_input(source, model_id=None, sample_id=None, chain_ids=[])  # type: ignore[arg-type]
+    assert selected["provider"] == "RCSB"
+    assert selected["accession"] == "1UBQ"
+
+    receipt_path = cm_router._source_authority_path("source")
+    tampered = {**receipt, "payload": {"provider": "RCSB", "accession": "2XYZ"}}
+    receipt_path.write_text(json.dumps(tampered), encoding="utf-8")
+    selected = cm_router._run_record_selected_input(source, model_id=None, sample_id=None, chain_ids=[])  # type: ignore[arg-type]
+    assert "provider" not in selected
+    assert "accession" not in selected
+
+
+@pytest.mark.asyncio
+async def test_cm_source_lookup_rejects_cross_principal_source() -> None:
+    source = SimpleNamespace(
+        principal_id="other-principal",
+        source_kind="structure_upload",
+        immutable=True,
+    )
+    session = SimpleNamespace(get=lambda *_args: None)
+
+    async def get(*_args):
+        return source
+
+    session.get = get
+    with pytest.raises(HTTPException, match="registered source is unavailable"):
+        await cm_router._source(session, "foreign", "owner", {"structure_upload"})
+
+
+@pytest.mark.asyncio
+async def test_cm_source_preview_returns_verified_registered_bytes(tmp_path: Path) -> None:
+    payload = b"data_preview\n#\n"
+    source_path = tmp_path / "source.cif"
+    source_path.write_bytes(payload)
+    source = SimpleNamespace(
+        source_id="preview-source",
+        principal_id=cm_router._PERSONAL_WORKFLOW_PRINCIPAL,
+        source_kind="structure_upload",
+        immutable=True,
+        storage_root=str(tmp_path),
+        relative_path="source.cif",
+        content_sha256=__import__("hashlib").sha256(payload).hexdigest(),
+        size_bytes=len(payload),
+    )
+
+    class SourceSession:
+        async def get(self, model, source_id):
+            assert model is ConformationalMappingSource
+            assert source_id == source.source_id
+            return source
+
+    response = await cm_router.source_content(
+        source.source_id,
+        _http_request(client_host="127.0.0.1"),
+        SourceSession(),  # type: ignore[arg-type]
+    )
+    assert response.body == payload
+    assert response.media_type == "chemical/x-mmcif"
+    assert response.headers["etag"] == f'"sha256:{source.content_sha256}"'
+
+
+@pytest.mark.asyncio
+async def test_cm_request_lookup_rejects_cross_principal_record(monkeypatch) -> None:
+    async def get_foreign(*_args):
+        return SimpleNamespace(principal_id="other-principal")
+
+    monkeypatch.setattr(cm_router, "get_request", get_foreign)
+    with pytest.raises(HTTPException, match="request not found"):
+        await cm_router._authorized_record(
+            "foreign-request",
+            _http_request(client_host="127.0.0.1"),
+            SimpleNamespace(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_cm_source_listing_is_principal_scoped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cm_router, "get_data_root", lambda: tmp_path)
+    monkeypatch.setattr(cm_router, "get_weights_root", lambda: tmp_path / "missing-weights")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'sources.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    request = _http_request(client_host="127.0.0.1")
+    expected_principal = _principal(request)
+    async with factory() as session:
+        session.add_all([
+            ConformationalMappingSource(
+                source_id="owned", principal_id=expected_principal, source_kind="structure_upload",
+                storage_root=str(tmp_path), relative_path="owned.cif", content_sha256="a" * 64,
+                size_bytes=1, metadata_json={
+                    "name": "owned",
+                    "managed": True,
+                    "asset_id": "confornets.of3p2.checkpoint",
+                    "provider_receipt": {"provider": "RCSB", "accession": "1UBQ", "content_sha256": "a" * 64},
+                }, immutable=True,
+            ),
+            ConformationalMappingSource(
+                source_id="foreign", principal_id="other-principal", source_kind="structure_upload",
+                storage_root=str(tmp_path), relative_path="foreign.cif", content_sha256="b" * 64,
+                size_bytes=1, metadata_json={"name": "foreign"}, immutable=True,
+            ),
+        ])
+        await session.commit()
+        result = await cm_router.list_sources(request, session)
+    assert [source["source_id"] for source in result["sources"]] == ["owned"]
+    assert result["sources"][0]["authority_receipt"] is None
+    assert result["sources"][0]["managed_checkpoint"] is False
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cm_source_listing_provisions_installed_managed_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    weights_root = tmp_path / "weights"
+    checkpoint = weights_root / "openfold3" / "of3-p2-155k.pt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"managed-checkpoint")
+    monkeypatch.setattr(cm_router, "get_weights_root", lambda: weights_root)
+    monkeypatch.setattr(cm_router, "get_data_root", lambda: tmp_path / "data")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'managed.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with factory() as session:
+        result = await cm_router.list_sources(_http_request(client_host="127.0.0.1"), session)
+    checkpoint_sources = [
+        source for source in result["sources"] if source["source_kind"] == "confornets_checkpoint"
+    ]
+    assert len(checkpoint_sources) == 1
+    assert checkpoint_sources[0]["metadata"]["managed"] is True
+    assert checkpoint_sources[0]["managed_checkpoint"] is True
+    await engine.dispose()
 
 
 def test_cm11_api_request_capability_is_secret_bound() -> None:

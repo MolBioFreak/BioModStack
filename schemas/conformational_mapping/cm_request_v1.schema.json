@@ -9,6 +9,7 @@
     "schema_name": {"const": "cm_request"},
     "schema_version": {"const": 1},
     "request_id": {"type": "string", "format": "uuid"},
+    "run_record": {"$ref": "#/$defs/run_record"},
     "backend": {"enum": ["protenix_v2_ensemble", "confornets", "external_import"]},
     "targets": {
       "type": "array",
@@ -59,6 +60,35 @@
     "request_sha256": {"$ref": "#/$defs/sha256"}
   },
   "$defs": {
+    "run_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "notes", "selected_input"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 255},
+        "notes": {"type": "string", "maxLength": 4000},
+        "selected_input": {"$ref": "#/$defs/selected_input"}
+      }
+    },
+    "selected_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "source_kind", "source_label", "source_sha256"],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "source_kind": {"type": "string", "minLength": 1, "maxLength": 64},
+        "source_label": {"type": "string", "minLength": 1, "maxLength": 255},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "provider": {"type": "string", "minLength": 1, "maxLength": 128},
+        "accession": {"type": "string", "minLength": 1, "maxLength": 128},
+        "model_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "sample_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "chain_ids": {
+          "type": "array", "maxItems": 128, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 32}
+        }
+      }
+    },
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "feature_policy": {
       "type": "object",
