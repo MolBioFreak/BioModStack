@@ -9,6 +9,7 @@ import {
     resolveSubmittedQueryName,
 } from '../utils/alignmentLabels';
 import { parseSequenceInput } from '../utils/nucleotides';
+import { createSelectionSnapshot } from '../utils/selectionActions';
 
 interface AlignmentPanelProps {
     sequenceData: SequenceData;
@@ -149,20 +150,32 @@ export function AlignmentPanel({
     const [error, setError] = useState<string | null>(null);
     const [result, setResult] = useState<SequenceAlignmentResult | null>(null);
 
-    const selectionRange = useMemo(() => {
-        if (!selection || selection.start === selection.end) return null;
-        const start = Math.min(selection.start, selection.end);
-        const end = Math.max(selection.start, selection.end);
-        return { start, end };
-    }, [selection]);
+    const selectionSnapshot = useMemo(() => createSelectionSnapshot(
+        selection,
+        sequenceData.sequence,
+        sequenceData.circular,
+    ), [selection, sequenceData.circular, sequenceData.sequence]);
+    const wrappingSelection = Boolean(selectionSnapshot?.placement.wrapsOrigin);
+    const selectionRange = selectionSnapshot && !wrappingSelection
+        ? {
+            start: selectionSnapshot.placement.start,
+            end: selectionSnapshot.placement.end,
+            sequence: selectionSnapshot.sequence,
+            coordinateLabel: selectionSnapshot.coordinateLabel,
+        }
+        : null;
 
     useEffect(() => {
+        if (referenceScope === 'selection' && wrappingSelection) {
+            setReferenceScope('full');
+            return;
+        }
         if (referenceScope === 'selection') {
             setCircularReference(false);
         } else {
             setCircularReference(sequenceData.circular);
         }
-    }, [referenceScope, sequenceData.circular]);
+    }, [referenceScope, sequenceData.circular, wrappingSelection]);
 
     useEffect(() => {
         if (!comparisonTargetId) {
@@ -178,13 +191,13 @@ export function AlignmentPanel({
 
     const referenceSequence = useMemo(() => {
         if (referenceScope === 'selection' && selectionRange) {
-            return sequenceData.sequence.slice(selectionRange.start, selectionRange.end);
+            return selectionRange.sequence;
         }
         return sequenceData.sequence;
     }, [referenceScope, selectionRange, sequenceData.sequence]);
 
     const referenceName = referenceScope === 'selection' && selectionRange
-        ? `${sequenceData.name} ${selectionRange.start + 1}-${selectionRange.end}`
+        ? `${sequenceData.name} ${selectionRange.coordinateLabel}`
         : sequenceData.name;
     const referenceOffset = referenceScope === 'selection' && selectionRange ? selectionRange.start : 0;
     const parsedQuery = useMemo(() => parseSequenceInput(queryRaw), [queryRaw]);
@@ -365,6 +378,11 @@ export function AlignmentPanel({
                         </select>
                     </label>
                 </div>
+                {wrappingSelection && (
+                    <p className="rounded border border-amber-700/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-200">
+                        Origin-spanning selections cannot use scalar-offset selection alignment. Align the whole circular construct or rotate its origin first.
+                    </p>
+                )}
 
                 <div className="grid gap-2 sm:grid-cols-2">
                     <label className="space-y-1">

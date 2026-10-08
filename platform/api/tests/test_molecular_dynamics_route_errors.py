@@ -336,6 +336,37 @@ async def test_md_route_rejects_unsafe_output_name_before_mkdir(
 
 
 @pytest.mark.asyncio
+async def test_md_route_rejects_prepared_gromacs_before_output_or_database_side_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results_root = tmp_path / "results"
+    results_root.mkdir()
+    jobs = _install_md_route_stubs(monkeypatch, results_root=results_root)
+    launch = importlib.import_module("services.md.launch_contract")
+    monkeypatch.setattr(jobs, "normalize_md_job_spec", launch.normalize_md_job_spec)
+    schemas = importlib.import_module("schemas")
+    spec = _prepared_spec()
+    spec["engine"] = "gromacs"
+
+    with pytest.raises(HTTPException) as error:
+        await jobs.create_job(
+            schemas.JobCreate(
+                name="prepared-gromacs",
+                model_id="molecular_dynamics",
+                mode="simulate",
+                params={"md_job_spec": spec},
+            ),
+            BackgroundTasks(),
+            _NoPersistenceSession(),
+        )
+
+    assert error.value.status_code == 422
+    assert _detail(error.value)["code"] == "MD_ENGINE_INPUT_UNSUPPORTED"
+    assert list(results_root.iterdir()) == []
+
+
+@pytest.mark.asyncio
 async def test_md_route_rejects_symlink_output_escape_before_materialization(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

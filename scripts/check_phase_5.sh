@@ -101,8 +101,7 @@ printf '%s\n' '[2/7] Compact BioXP API and containment contracts'
 )
 
 printf '%s\n' '[3/7] Compose contract rendering (validation-only secret)'
-BMS_ANALYTICAL_DB_PASSWORD="${BMS_ANALYTICAL_DB_PASSWORD:-phase5-validation-only}" \
-  docker compose -f "$ROOT/compose.core-runtime.yml" config >/dev/null
+docker compose -f "$ROOT/compose.core-runtime.yml" config >/dev/null
 
 printf '%s\n' '[4/7] Transactional release plan (no deploy)'
 uv run --directory "$ROOT/platform/api" \

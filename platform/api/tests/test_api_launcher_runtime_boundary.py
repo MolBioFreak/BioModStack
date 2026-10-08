@@ -35,10 +35,6 @@ def test_dev_api_launcher_does_not_inherit_container_adapter_routing(tmp_path: P
         "export BMS_DB_PATH=/mnt/BioModStack/biomodstack.db\n",
         encoding="utf-8",
     )
-    home.joinpath(".config", "biomodstack", "core-runtime.env").write_text(
-        "BMS_ANALYTICAL_DB_PASSWORD=test-only-password\n",
-        encoding="utf-8",
-    )
     fake_uv = fake_bin / "uv"
     fake_uv.write_text(
         "#!/usr/bin/env python3\n"
@@ -49,16 +45,12 @@ def test_dev_api_launcher_does_not_inherit_container_adapter_routing(tmp_path: P
         "  'workflow_adapter_url': os.environ.get('BMS_WORKFLOW_ADAPTER_URL'),\n"
         "  'data': os.environ.get('BMS_DATA'),\n"
         "  'db_path': os.environ.get('BMS_DB_PATH'),\n"
-        "  'analytical_db_password': os.environ.get('BMS_ANALYTICAL_DB_PASSWORD'),\n"
-        "  'analytical_db_port': os.environ.get('BMS_ANALYTICAL_DB_PORT'),\n"
         "}))\n",
         encoding="utf-8",
     )
     fake_uv.chmod(0o755)
 
     env = os.environ.copy()
-    env.pop("BMS_ANALYTICAL_DB_PASSWORD", None)
-    env.pop("BMS_ANALYTICAL_DB_PORT", None)
     env.update(
         {
             "HOME": str(home),
@@ -91,6 +83,4 @@ def test_dev_api_launcher_does_not_inherit_container_adapter_routing(tmp_path: P
         "workflow_adapter_url": None,
         "data": str(tmp_path / "dev-state"),
         "db_path": str(tmp_path / "dev-state" / "biomodstack.db"),
-        "analytical_db_password": "test-only-password",
-        "analytical_db_port": "55432",
     }

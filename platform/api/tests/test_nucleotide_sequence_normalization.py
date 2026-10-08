@@ -1,11 +1,15 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from routers.nucleotide_sequences import (
+    FeatureSchema,
     _sortable_timestamp,
     clean_sequence,
     molecule_label_for,
     normalize_molecule_orientation,
     normalize_molecule_strandedness,
+    normalize_feature_payloads,
     normalize_sequence_type,
 )
 
@@ -18,6 +22,12 @@ def test_explicit_rna_payload_canonicalizes_thymine_without_shortening() -> None
 def test_explicit_dna_payload_canonicalizes_uracil_without_shortening() -> None:
     assert normalize_sequence_type("dna", "AUG UAA") == "dna"
     assert clean_sequence("AUG UAA", "dna") == "ATGTAA"
+
+
+@pytest.mark.parametrize("payload", ["ATGC!!!XZ", "ACGT-ACGT", "ACGT1234"])
+def test_sequence_normalization_rejects_non_whitespace_invalid_characters(payload: str) -> None:
+    with pytest.raises(ValueError, match="invalid nucleotide"):
+        clean_sequence(payload, "dna")
 
 
 def test_sequence_type_inference_still_detects_u_only_rna() -> None:
@@ -55,3 +65,17 @@ def test_sortable_timestamp_normalizes_none_naive_and_offset_aware_values() -> N
     assert _sortable_timestamp(None) == datetime.min.replace(tzinfo=timezone.utc)
     assert _sortable_timestamp(naive) == datetime(2026, 7, 12, 8, 30, tzinfo=timezone.utc)
     assert _sortable_timestamp(eastern) == datetime(2026, 7, 12, 8, 30, tzinfo=timezone.utc)
+
+
+def test_feature_payload_normalization_uses_canonical_insdc_utr_types() -> None:
+    for alias, canonical in (
+        ("5UTR", "5'UTR"),
+        ("5′ UTR", "5'UTR"),
+        ("3UTR", "3'UTR"),
+        ("3' UTR", "3'UTR"),
+    ):
+        normalized = normalize_feature_payloads(
+            [FeatureSchema(name="UTR", type=alias, start=0, end=4)],
+            sequence_length=8,
+        )
+        assert normalized[0]["type"] == canonical

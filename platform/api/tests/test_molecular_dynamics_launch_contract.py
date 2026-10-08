@@ -179,6 +179,36 @@ def _materialize_prepared(tmp_path: Path, spec: dict[str, Any]) -> dict[str, Any
     )
 
 
+def _materialize_prepared_topology(
+    tmp_path: Path,
+    topology_text: str,
+    *,
+    sidecars: dict[str, str] | None = None,
+    runtime_identity_resolver: Any | None = None,
+) -> dict[str, Any]:
+    source_root = tmp_path / "prepared-source"
+    source_root.mkdir(parents=True, exist_ok=True)
+    coordinates = source_root / "system.gro"
+    topology = source_root / "topol.top"
+    coordinates.write_text("prepared coordinates\n", encoding="utf-8")
+    topology.write_text(topology_text, encoding="utf-8")
+    for relative, content in (sidecars or {}).items():
+        sidecar = source_root / relative
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        sidecar.write_text(content, encoding="utf-8")
+    kwargs: dict[str, Any] = {}
+    if runtime_identity_resolver is not None:
+        kwargs["runtime_identity_resolver"] = runtime_identity_resolver
+    return materialize_md_job_spec(
+        params={"md_job_spec": _prepared_spec()},
+        job_id="prepared-topology-job",
+        output_dir=tmp_path / "out",
+        resolve_runtime_path=lambda value: str(coordinates if value.endswith(".gro") else topology),
+        chemistry_catalog=_catalog(),
+        **kwargs,
+    )
+
+
 def _materialize_structure(
     tmp_path: Path,
     spec: dict[str, Any],
@@ -316,11 +346,11 @@ def test_structure_launch_rejects_coercible_non_integer_values(
 
 
 def test_prepared_resource_contract_accepts_exact_aggregate_and_field_boundaries(tmp_path: Path) -> None:
-    spec = _prepared_spec(engine="gromacs")
+    spec = _prepared_spec(engine="openmm")
     spec["replicas"] = 8
-    spec["stages"]["minimization"].update(enabled=True, steps=5_000_000)
-    spec["stages"]["nvt"].update(enabled=True, steps=5_000_000)
-    spec["stages"]["npt"].update(enabled=True, steps=2_500_000)
+    spec["stages"]["minimization"].update(steps=5_000_000)
+    spec["stages"]["nvt"].update(steps=5_000_000)
+    spec["stages"]["npt"].update(steps=2_500_000)
     spec["stages"]["production"].update(
         steps=50_000_000,
         timestep_fs=4.0,
@@ -336,14 +366,14 @@ def test_prepared_resource_contract_accepts_exact_aggregate_and_field_boundaries
 
 
 def test_prepared_resource_contract_accepts_npt_step_boundary(tmp_path: Path) -> None:
-    spec = _prepared_spec(engine="gromacs")
-    spec["stages"]["npt"].update(enabled=True, steps=5_000_000)
+    spec = _prepared_spec(engine="openmm")
+    spec["stages"]["npt"].update(steps=5_000_000)
 
     assert _materialize_prepared(tmp_path, spec)["md_job_spec"]["stages"]["npt"]["steps"] == 5_000_000
 
 
 def test_prepared_resource_contract_accepts_exact_output_record_boundaries(tmp_path: Path) -> None:
-    spec = _prepared_spec(engine="gromacs")
+    spec = _prepared_spec(engine="openmm")
     spec["replicas"] = 8
     spec["stages"]["production"].update(
         steps=50_000_000,
@@ -380,7 +410,7 @@ def test_prepared_resource_contract_rejects_output_admission_over_boundaries(
     tmp_path: Path,
     mutation: Any,
 ) -> None:
-    spec = _prepared_spec(engine="gromacs")
+    spec = _prepared_spec(engine="openmm")
     spec["replicas"] = 8
     mutation(spec)
 
@@ -420,7 +450,7 @@ def test_prepared_resource_contract_rejects_over_boundary_values_before_persiste
     tmp_path: Path,
     mutation: Any,
 ) -> None:
-    spec = _prepared_spec(engine="gromacs")
+    spec = _prepared_spec(engine="openmm")
     mutation(spec)
 
     with pytest.raises(Exception) as error:
@@ -533,6 +563,141 @@ def test_prepared_openmm_serializes_external_unreviewed_without_profile_claims(t
         assert materialized_input[f"{field}_sha256"] == hashlib.sha256(snapshot.read_bytes()).hexdigest()
     assert str(coordinates) not in json.dumps(materialized["md_job_spec"])
     assert str(topology) not in json.dumps(materialized["md_job_spec"])
+
+
+def test_prepared_gromacs_is_rejected_before_path_resolution_or_output_side_effects(tmp_path: Path) -> None:
+    resolver_calls: list[str] = []
+    spec = _prepared_spec(engine="gromacs")
+
+    with pytest.raises(Exception) as error:
+        normalize_md_job_spec(
+            params={"md_job_spec": spec},
+            job_id="prepared-gromacs-rejected",
+            resolve_runtime_path=lambda value: resolver_calls.append(value) or value,
+            chemistry_catalog=_catalog(),
+        )
+
+    assert getattr(error.value, "code", None) == "MD_ENGINE_INPUT_UNSUPPORTED"
+    assert getattr(error.value, "status_code", None) == 422
+    assert resolver_calls == []
+    assert not (tmp_path / "out").exists()
+
+
+def test_prepared_openmm_snapshots_only_declared_nested_topology_closure(tmp_path: Path) -> None:
+    materialized = _materialize_prepared_topology(
+        tmp_path,
+        '#include "molecule/main.itp"\n[ system ]\nPrepared\n',
+        sidecars={
+            "molecule/main.itp": '#include "nested/atoms.itp"\n[ moleculetype ]\nProtein 3\n',
+            "molecule/nested/atoms.itp": "[ atoms ]\n",
+            "undeclared-neighbor.itp": "must not be copied\n",
+        },
+    )
+
+    input_config = materialized["md_job_spec"]["input"]
+    closure = input_config["topology_closure"]
+    closure_root = Path(closure["root"])
+    assert [(entry["path"], entry["parent"], entry["include"]) for entry in closure["files"]] == [
+        ("molecule/main.itp", "topology.top", "molecule/main.itp"),
+        ("molecule/nested/atoms.itp", "molecule/main.itp", "nested/atoms.itp"),
+    ]
+    for entry in closure["files"]:
+        snapshot = closure_root / entry["path"]
+        assert snapshot.is_file()
+        assert entry["bytes"] == snapshot.stat().st_size
+        assert entry["sha256"] == hashlib.sha256(snapshot.read_bytes()).hexdigest()
+        assert snapshot.stat().st_mode & 0o222 == 0
+    assert not (closure_root / "undeclared-neighbor.itp").exists()
+
+
+@pytest.mark.parametrize(
+    ("include", "expected_code"),
+    [
+        ("../outside.itp", "MD_TOPOLOGY_INCLUDE_FORBIDDEN"),
+        ("/etc/hosts", "MD_TOPOLOGY_INCLUDE_FORBIDDEN"),
+        ("missing.itp", "MD_TOPOLOGY_INCLUDE_MISSING"),
+    ],
+)
+def test_prepared_topology_rejects_unsafe_or_missing_local_includes_without_path_leakage(
+    tmp_path: Path,
+    include: str,
+    expected_code: str,
+) -> None:
+    with pytest.raises(Exception) as error:
+        _materialize_prepared_topology(tmp_path, f'#include "{include}"\n')
+
+    assert getattr(error.value, "code", None) == expected_code
+    assert getattr(error.value, "status_code", None) == 422
+    assert str(tmp_path) not in str(error.value)
+    assert not (tmp_path / "out" / "inputs" / "md_job_config.json").exists()
+
+
+def test_prepared_topology_rejects_symlink_escape(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.itp"
+    outside.write_text("[ atoms ]\n", encoding="utf-8")
+    source_root = tmp_path / "prepared-source"
+    source_root.mkdir()
+    (source_root / "escape.itp").symlink_to(outside)
+
+    with pytest.raises(Exception) as error:
+        _materialize_prepared_topology(tmp_path, '#include "escape.itp"\n')
+
+    assert getattr(error.value, "code", None) == "MD_TOPOLOGY_INCLUDE_FORBIDDEN"
+    assert str(tmp_path) not in str(error.value)
+
+
+def test_prepared_topology_rejects_recursive_include_cycle(tmp_path: Path) -> None:
+    with pytest.raises(Exception) as error:
+        _materialize_prepared_topology(
+            tmp_path,
+            '#include "a.itp"\n',
+            sidecars={"a.itp": '#include "b.itp"\n', "b.itp": '#include "a.itp"\n'},
+        )
+
+    assert getattr(error.value, "code", None) == "MD_TOPOLOGY_INCLUDE_CYCLE"
+
+
+def test_runtime_force_field_include_requires_and_persists_exact_sif_identity(tmp_path: Path) -> None:
+    include = "amber99sb-ildn.ff/forcefield.itp"
+    identity = {
+        "runtime_id": "openmm-md-8.5.2",
+        "runtime_version": "8.5.2+gromacs-2025.3",
+        "sif_sha256": "d" * 64,
+        "asset_ids": ["amber99sb-ildn.ff"],
+    }
+
+    materialized = _materialize_prepared_topology(
+        tmp_path,
+        f'#include "{include}"\n',
+        runtime_identity_resolver=lambda: identity,
+    )
+
+    closure = materialized["md_job_spec"]["input"]["topology_closure"]
+    assert closure["runtime_identity"] == identity
+    assert closure["runtime_includes"] == [{"parent": "topology.top", "include": include}]
+    assert closure["files"] == []
+
+
+def test_runtime_force_field_include_is_rejected_without_bound_identity(tmp_path: Path) -> None:
+    with pytest.raises(Exception) as error:
+        _materialize_prepared_topology(
+            tmp_path,
+            '#include "amber99sb-ildn.ff/forcefield.itp"\n',
+            runtime_identity_resolver=lambda: None,
+        )
+
+    assert getattr(error.value, "code", None) == "MD_TOPOLOGY_RUNTIME_IDENTITY_REQUIRED"
+
+
+def test_raw_callers_cannot_claim_topology_closure_manifest(tmp_path: Path) -> None:
+    spec = _prepared_spec()
+    spec["input"]["topology_closure"] = {"root": "/tmp/claimed", "files": []}
+
+    with pytest.raises(Exception) as error:
+        _materialize_prepared(tmp_path, spec)
+
+    assert getattr(error.value, "code", None) == "MD_TOPOLOGY_CLOSURE_FORBIDDEN"
+    assert getattr(error.value, "status_code", None) == 422
 
 
 @pytest.mark.parametrize("digest_field", ["structure_sha256", "coordinates_sha256", "topology_sha256"])
@@ -732,16 +897,86 @@ def test_worker_rejects_snapshot_tampering_before_input_use(tmp_path: Path) -> N
     assert getattr(error.value, "code", None) == "MD_INPUT_SNAPSHOT_MISMATCH"
 
 
-def test_all_md_execution_entrypoints_load_verified_config_before_engine_use() -> None:
+def test_worker_rejects_declared_topology_include_tampering(tmp_path: Path) -> None:
+    materialized = _materialize_prepared_topology(
+        tmp_path,
+        '#include "nested/atoms.itp"\n',
+        sidecars={"nested/atoms.itp": "[ atoms ]\n"},
+    )
+    config_path = Path(materialized["md_job_config"])
+    closure = materialized["md_job_spec"]["input"]["topology_closure"]
+    include_snapshot = Path(closure["root"]) / closure["files"][0]["path"]
+    include_snapshot.chmod(0o600)
+    include_snapshot.write_text("tampered include\n", encoding="utf-8")
+    contract_module = importlib.import_module("scripts.bms_md.contract")
+
+    with pytest.raises(Exception) as error:
+        contract_module.prepare_verified_worker_inputs(config_path, tmp_path / "worker")
+
+    assert getattr(error.value, "code", None) == "MD_INPUT_SNAPSHOT_MISMATCH"
+
+
+def test_worker_private_topology_closure_copies_only_manifest_files_and_survives_snapshot_replacement(
+    tmp_path: Path,
+) -> None:
+    materialized = _materialize_prepared_topology(
+        tmp_path,
+        '#include "nested/atoms.itp"\n',
+        sidecars={
+            "nested/atoms.itp": "[ atoms ]\n",
+            "undeclared.itp": "not declared\n",
+        },
+    )
+    contract_module = importlib.import_module("scripts.bms_md.contract")
+    rewritten = contract_module.prepare_verified_worker_inputs(
+        Path(materialized["md_job_config"]),
+        tmp_path / "worker",
+    )
+
+    private_topology = Path(rewritten["input"]["topology"])
+    private_root = Path(rewritten["input"]["topology_closure"]["root"])
+    private_include = private_root / "nested" / "atoms.itp"
+    assert private_topology.parent == private_root
+    assert private_include.read_text(encoding="utf-8") == "[ atoms ]\n"
+    assert not (private_root / "undeclared.itp").exists()
+    original_private = private_include.read_bytes()
+    snapshot_include = Path(materialized["md_job_spec"]["input"]["topology_closure"]["root"]) / "nested/atoms.itp"
+    snapshot_include.chmod(0o600)
+    snapshot_include.write_bytes(b"replacement after preparation\n")
+
+    assert private_include.read_bytes() == original_private
+    assert private_include.stat().st_mode & 0o222 == 0
+
+
+def test_worker_private_structure_copy_survives_snapshot_replacement(tmp_path: Path) -> None:
+    profile = _catalog().get_profile("gmx_amber99sb_ildn_tip3p_smoke_v1")
+    assert profile is not None
+    materialized = _materialize_structure(tmp_path, _spec(profile))
+    contract_module = importlib.import_module("scripts.bms_md.contract")
+    rewritten = contract_module.prepare_verified_worker_inputs(
+        Path(materialized["md_job_config"]),
+        tmp_path / "worker",
+    )
+    private_structure = Path(rewritten["input"]["structure"])
+    snapshot = Path(materialized["md_job_spec"]["input"]["structure"])
+    snapshot.chmod(0o600)
+    snapshot.write_text("replacement after preparation\n", encoding="utf-8")
+
+    assert private_structure.read_bytes() == ONE_AKI_FIXTURE.read_bytes()
+    assert private_structure.stat().st_mode & 0o222 == 0
+
+
+def test_all_md_execution_entrypoints_prepare_private_verified_inputs_before_engine_use() -> None:
     entrypoint_expectations = {
-        REPO_ROOT / "scripts" / "bms_md" / "engine_adapters.py": "adapter = get_engine_adapter",
+        REPO_ROOT / "scripts" / "bms_md" / "adapters" / "gromacs.py": "allocation = assert_single_cuda_device",
+        REPO_ROOT / "scripts" / "bms_md" / "adapters" / "openmm.py": "assert_single_cuda_device(config)",
         REPO_ROOT / "scripts" / "bms_md" / "gromacs_pipeline.py": "version_output = _run_command",
         REPO_ROOT / "scripts" / "bms_md" / "openmm_pipeline.py": "allocation = assert_single_cuda_device",
     }
 
     for path, first_engine_use in entrypoint_expectations.items():
         source = path.read_text(encoding="utf-8")
-        assert source.index("config = load_verified_job_config(config_path)") < source.index(first_engine_use)
+        assert source.index("prepare_verified_worker_inputs") < source.index(first_engine_use)
 
 
 def test_prepared_v1_rejects_any_attached_profile_claim(tmp_path: Path) -> None:
@@ -842,7 +1077,7 @@ def test_json_schema_rejects_every_mixed_input_shape(mixed_input: dict[str, str]
 
 def test_json_schema_requires_at_least_one_minute_checkpoint_interval() -> None:
     schema = json.loads(MD_JOB_SCHEMA_PATH.read_text(encoding="utf-8"))
-    contract = _prepared_spec(engine="gromacs")
+    contract = _prepared_spec(engine="openmm")
     contract["stages"]["production"]["checkpoint_interval_minutes"] = 0.999
 
     with pytest.raises(ValidationError):

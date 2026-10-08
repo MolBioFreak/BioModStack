@@ -69,7 +69,6 @@ STABLE_FRONTEND_PORT = DEFAULT_WEB_HOST_PORT
 WORKFLOW_ADAPTER_PORT = 8001
 CPU_POWER_PORT = 8797
 HOST_AGENT_PORT = 8798
-ANALYTICAL_DB_PORT = 55432
 API_HEALTH_URL = f"http://127.0.0.1:{API_PORT}/api/health"
 FRONTEND_URL = f"http://127.0.0.1:{STABLE_FRONTEND_PORT}/bms/"
 WORKFLOW_ADAPTER_HEALTH_URL = f"http://127.0.0.1:{WORKFLOW_ADAPTER_PORT}/api/workflow-adapter/health"
@@ -512,7 +511,6 @@ def _runtime_listener_specs(
         {"id": "frontend", "port": runtime_frontend_port(mode, project_root=root), "owner_kind": "frontend"},
         {"id": "cpu-power", "port": CPU_POWER_PORT, "owner_kind": "cpu-power"},
         {"id": "host-agent", "port": HOST_AGENT_PORT, "owner_kind": "host-agent"},
-        {"id": "analytical-db", "port": ANALYTICAL_DB_PORT, "owner_kind": "analytical-db"},
     )
 
 
@@ -524,10 +522,6 @@ def _listener_matches_expected_owner(
     if owner_kind in {"api", "frontend", "cpu-power", "host-agent"}:
         if pid_is_biomodstack_runtime_container(pid, owner_kind, project_root):
             return True, f"managed-container-{owner_kind}", []
-        return False, "foreign", []
-    if owner_kind == "analytical-db":
-        if docker_service_publishes_port("bms-db", ANALYTICAL_DB_PORT, project_root):
-            return True, "managed-container-analytical-db", []
         return False, "foreign", []
     if owner_kind == "workflow-adapter":
         chain = matching_process_chain(pid, is_biomodstack_workflow_adapter_process, project_root)
@@ -547,7 +541,6 @@ def _managed_compose_service_for_owner_kind(owner_kind: str) -> str | None:
         "frontend": "bms-web",
         "cpu-power": "bms-cpu-power",
         "host-agent": "bms-host-agent",
-        "analytical-db": "bms-db",
     }.get(owner_kind)
 
 
