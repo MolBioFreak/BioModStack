@@ -48,7 +48,7 @@ def run_af2_backprop(
         from colabdesign import mk_afdesign_model
     except ImportError:
         print("ERROR: ColabDesign not installed.")
-        print("Install with: pip install git+https://github.com/sokrypton/ColabDesign.git@v1.1.1")
+        print("Install with: uv pip install git+https://github.com/sokrypton/ColabDesign.git@v1.1.1")
         sys.exit(1)
     
     print(f"=== AF2 Backprop CDR Refinement ===")
