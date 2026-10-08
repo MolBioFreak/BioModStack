@@ -281,6 +281,19 @@ async def test_revision_apis_are_exact_and_historical_receipts_are_explicit(
             assert detail["revision_id"] == first_revision_id
             assert detail["snapshot"]["sequence"] == "ATGC"
             assert detail["is_current"] is False
+            # Historical exact GET must survive loss of the mutable projection;
+            # current-head edit and receipt issuance requirements stay separate.
+            class ProjectionAbsent:
+                async def get(self, model, identity):
+                    if model is NucleotideSequence:
+                        raise AssertionError("immutable GET consulted the mutable sequence")
+                    return await molbio_session.get(model, identity)
+            historical = await get_sequence_revision(sequence_id, first_revision_id, ProjectionAbsent())
+            assert historical["snapshot"] == detail["snapshot"]
+            assert historical["topology"] == "linear"
+            with pytest.raises(HTTPException) as foreign:
+                await get_sequence_revision("other-document", first_revision_id, ProjectionAbsent())
+            assert foreign.value.status_code == 404
 
             monkeypatch.setattr(
                 "services.molbio_ngs_receipts.get_inputs_dir",

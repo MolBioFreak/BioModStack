@@ -8,6 +8,8 @@ const ngsApiMocks = vi.hoisted(() => ({
     fetchFullJob: vi.fn(),
     fetchJobStages: vi.fn(),
     fetchJobs: vi.fn(),
+    fetchOntSignalViewerSession: vi.fn(),
+    fetchMolBioNgsNativeMemberReopen: vi.fn(),
 }));
 const alignmentMocks = vi.hoisted(() => ({
     bindAlignmentSessionsToResultAuthority: vi.fn((sessions: unknown[]) => sessions),
@@ -43,7 +45,8 @@ vi.mock('../../src/components/useThemeColors', () => ({
     useThemeColors: () => new Proxy({}, { get: () => '#000000' }),
     useThemePlotlyLayout: () => ({}),
 }));
-vi.mock('../../src/lib/ngsAlignmentSession', () => ({
+vi.mock('../../src/lib/ngsAlignmentSession', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../../src/lib/ngsAlignmentSession')>()),
     ...alignmentMocks,
 }));
 
@@ -105,6 +108,8 @@ beforeEach(() => {
     ngsApiMocks.fetchFullJob.mockReset();
     ngsApiMocks.fetchJobStages.mockReset();
     ngsApiMocks.fetchJobs.mockReset();
+    ngsApiMocks.fetchOntSignalViewerSession.mockReset();
+    ngsApiMocks.fetchMolBioNgsNativeMemberReopen.mockReset();
     contextMocks.updateQueryParams.mockReset();
     alignmentMocks.fetchAlignmentSessions.mockReset();
     alignmentMocks.fetchAlignmentSessions.mockResolvedValue([]);
@@ -134,6 +139,26 @@ afterEach(async () => {
 });
 
 describe('completed NGS result routing', () => {
+    it('does not let discovery select a default while an explicit no-job saved view resolves or fails', async () => {
+        let rejectViewer!: (reason: Error) => void;
+        ngsApiMocks.fetchOntSignalViewerSession.mockReturnValue(new Promise((_resolve, reject) => { rejectViewer = reject; }));
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [{
+            id: 'wrong-default', name: 'First discovered job', model_id: 'nanopore', mode: 'ont_basecall_dna',
+            status: 'completed', created_at: '2026-08-10T00:00:00Z', params: {},
+        }], total: 1 } });
+        await act(async () => root.render(<QueryClientProvider client={client}>
+            <MemoryRouter initialEntries={['/ngs?view=workbench&viewer_session_id=explicit-view']}><NGSToolkit /></MemoryRouter>
+        </QueryClientProvider>));
+        await waitUntil(() => expect(ngsApiMocks.fetchJobs).toHaveBeenCalledWith(expect.objectContaining({ ngs_only: true, summary: true, limit: 100 })));
+        await waitUntil(() => expect(ngsApiMocks.fetchOntSignalViewerSession).toHaveBeenCalled());
+        await flush();
+        expect(contextMocks.updateQueryParams).not.toHaveBeenCalled();
+        await act(async () => { rejectViewer(new Error('Saved view unavailable')); });
+        await flush();
+        expect(contextMocks.updateQueryParams).not.toHaveBeenCalled();
+        expect(ngsApiMocks.fetchFullJob).not.toHaveBeenCalled();
+    });
+
     it('keeps a clean NGS landing URL on the workflow launcher after jobs load', async () => {
         const completedJob = {
             id: 'job-123',
@@ -472,4 +497,43 @@ describe('completed NGS result routing', () => {
         await waitUntil(() => expect(container.textContent).toContain('post-rotation session failed'));
         expect(client.getQueryState(['sequence-qc-manifest', 'job-123'])?.isInvalidated).toBe(false);
     });
+});
+
+it('lets a delayed validated saved view supply the missing job instead of a newer discovery default', async () => {
+    let resolveView!: (value: unknown) => void;
+    ngsApiMocks.fetchOntSignalViewerSession.mockReturnValue(new Promise((resolve) => { resolveView = resolve; }));
+    ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [{ id: 'newer', model_id: 'nanopore', status: 'completed' }], total: 1 } });
+    ngsApiMocks.fetchFullJob.mockReturnValue(new Promise(() => undefined));
+    await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/ngs?viewer_session_id=saved']}><NGSToolkit /></MemoryRouter></QueryClientProvider>));
+    await waitUntil(() => expect(ngsApiMocks.fetchJobs).toHaveBeenCalled());
+    expect(ngsApiMocks.fetchFullJob).not.toHaveBeenCalled();
+    expect(contextMocks.updateQueryParams).not.toHaveBeenCalled();
+    await act(async () => resolveView({ viewer_session_id: 'saved', alignment_job_id: 'historical' }));
+    await waitUntil(() => expect(ngsApiMocks.fetchFullJob).toHaveBeenCalledWith('historical'));
+    expect(contextMocks.updateQueryParams.mock.calls.every(([update]) => update.job_id === 'historical')).toBe(true);
+});
+
+it('reopens an exact Project native receipt before native discovery and preserves the receipt binding in the URL', async () => {
+    let resolveMember!: (value: unknown) => void;
+    ngsApiMocks.fetchMolBioNgsNativeMemberReopen.mockReturnValue(new Promise((resolve) => { resolveMember = resolve; }));
+    ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [], total: 0 } });
+    ngsApiMocks.fetchFullJob.mockReturnValue(new Promise(() => undefined));
+    await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/ngs?domain_experiment_id=D&native_member_receipt_id=M&member_receipt_sha256=exact&section=analyses']}>
+        <NgsDestination /><NGSToolkit />
+    </MemoryRouter></QueryClientProvider>));
+    expect(ngsApiMocks.fetchJobs).not.toHaveBeenCalled();
+    await act(async () => resolveMember({ member_receipt_id: 'M', receipt_sha256: 'exact', job_id: 'historical' }));
+    await waitUntil(() => expect(ngsApiMocks.fetchFullJob).toHaveBeenCalledWith('historical'));
+    const destination = container.querySelector('[data-testid="ngs-destination"]')!.textContent!;
+    expect(destination).toContain('native_member_receipt_id=M');
+    expect(destination).toContain('member_receipt_sha256=exact');
+    expect(destination).not.toContain('section=analyses');
+});
+
+it('does not render another job when a Project receipt conflicts with the supplied job', async () => {
+    ngsApiMocks.fetchMolBioNgsNativeMemberReopen.mockResolvedValue({ member_receipt_id: 'M', receipt_sha256: 'exact', job_id: 'attached' });
+    await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/ngs?domain_experiment_id=D&native_member_receipt_id=M&job_id=foreign']}><NGSToolkit /></MemoryRouter></QueryClientProvider>));
+    await waitUntil(() => expect(container.textContent).toContain('supplied job conflicts'));
+    expect(ngsApiMocks.fetchFullJob).not.toHaveBeenCalled();
+    expect(ngsApiMocks.fetchJobs).not.toHaveBeenCalled();
 });
