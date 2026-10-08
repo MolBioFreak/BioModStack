@@ -191,6 +191,29 @@ def load_schema(schema_key: str) -> dict[str, Any]:
     return schema
 
 
+def project_summary_artifact(instance: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and return the immutable artifact within a persisted summary."""
+
+    if not isinstance(instance, Mapping):
+        raise ContractValidationError("persisted FrustraMPNN summary must be an object")
+    identity = (instance.get("schema_name"), instance.get("schema_version"))
+    if identity == ("frustrampnn_summary", 1):
+        schema_key = "frustrampnn_summary_v1"
+    elif identity == ("frustrampnn_summary", 2):
+        schema_key = "frustrampnn_summary_v2"
+    else:
+        raise ContractValidationError(
+            f"unsupported persisted FrustraMPNN summary identity: {identity!r}"
+        )
+    schema = load_schema(schema_key)
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        raise ContractValidationError(f"{schema_key} has no property map")
+    artifact = {key: instance[key] for key in properties if key in instance}
+    validate_schema(schema_key, artifact)
+    return artifact
+
+
 def _schema_validate(schema_key: str, instance: Any) -> None:
     _check_canonical_value(instance)
     errors = sorted(
@@ -936,7 +959,7 @@ def validate_schema(schema_key: str, instance: Any) -> None:
 
 __all__ = [
     "AA_ORDER", "AUTHORITY_ARTIFACT_PATH", "ContractValidationError",
-    "canonical_json_bytes",
+    "canonical_json_bytes", "project_summary_artifact",
     "canonical_json_loads", "canonical_sha256", "load_schema", "request_sha256",
     "validate_relative_path", "validate_schema",
 ]

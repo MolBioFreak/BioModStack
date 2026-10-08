@@ -1779,7 +1779,7 @@ async def _ensure_schema(conn):
 
 async def _backfill_frustrampnn_summary_projections(conn):
     """Repair shared Design analytics from validated immutable summaries."""
-    from services.frustrampnn.contracts import validate_schema
+    from services.frustrampnn.contracts import project_summary_artifact
 
     result = await conn.execute(text(
         "SELECT d.id AS design_id, r.invocation_id, r.summary_json "
@@ -1797,7 +1797,7 @@ async def _backfill_frustrampnn_summary_projections(conn):
         summary = row["summary_json"]
         if isinstance(summary, str):
             summary = json.loads(summary)
-        validate_schema("frustrampnn_summary_v1", summary)
+        summary = project_summary_artifact(summary)
         await conn.execute(
             text(
                 "UPDATE designs SET frustration_high_count = :high_count, "

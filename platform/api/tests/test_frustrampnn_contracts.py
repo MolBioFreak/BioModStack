@@ -304,3 +304,154 @@ def test_structure_landscape_and_summary_semantics_reject_status_class_hash_frac
         mutate(hostile)
         with pytest.raises(contracts.ContractValidationError):
             contracts.validate_schema("frustrampnn_summary_v1", hostile)
+
+
+def test_persisted_summary_projection_validates_immutable_v1_artifact() -> None:
+    contracts = _contracts()
+    from test_frustrampnn_analysis import _map, _raw
+    from services.frustrampnn.analysis import finalize_landscape, summarize_landscape
+    import tempfile
+
+    structure_map = _map()
+    with tempfile.TemporaryDirectory() as directory:
+        raw = Path(directory) / "raw.csv"
+        raw.write_text(_raw(), encoding="utf-8")
+        landscape = finalize_landscape(
+            raw,
+            structure_map,
+            expected_normalized_pdb_sha256=structure_map["normalized_pdb_sha256"],
+            expected_model_ready_sequence_sha256=structure_map["model_ready_sequence_sha256"],
+        )
+    summary = summarize_landscape(landscape, structure_map)
+    persisted = {
+        **summary,
+        "effective_settings_sha256": "1" * 64,
+        "execution_configuration_id": "configuration-1",
+        "execution_configuration_sha256": "2" * 64,
+        "normalized_pdb_sha256": "3" * 64,
+        "requested_settings_sha256": "4" * 64,
+        "runtime_identity_sha256": "5" * 64,
+        "source_artifact_sha256": "6" * 64,
+        "structure_map_sha256": "7" * 64,
+        "threshold_policy_id": "frustrampnn_class_v1",
+    }
+
+    assert contracts.project_summary_artifact(persisted) == summary
+
+    malformed = copy.deepcopy(persisted)
+    malformed["native_slot_counts"]["high"] += 1
+    with pytest.raises(contracts.ContractValidationError, match="native slot counts"):
+        contracts.project_summary_artifact(malformed)
+
+    unsupported = copy.deepcopy(persisted)
+    unsupported["schema_version"] = 99
+    with pytest.raises(contracts.ContractValidationError, match="unsupported.*identity"):
+        contracts.project_summary_artifact(unsupported)
+
+
+def _summary_v2() -> dict:
+    contracts = _contracts()
+    from test_frustrampnn_phase3_contracts import _effective, _raw
+    from services.frustrampnn.analysis import finalize_landscape_v2
+    from services.frustrampnn.configuration import execution_configuration
+
+    effective = _effective()
+    configuration = execution_configuration(effective)
+    _, landscape = finalize_landscape_v2(
+        (_raw(),),
+        effective,
+        execution_configuration=configuration,
+        target_id="target-1",
+        parent_job_id="job-1",
+        candidate_id="candidate-1",
+        source_artifact_sha256=effective.resolution_identity.source_artifact_sha256,
+    )
+    classes = [slot["class"] for slot in landscape["residues"][0]["slots"]]
+    counts = {name: classes.count(name) for name in ("high", "neutral", "minimal")}
+    native_class = landscape["residues"][0]["slots"][5]["class"]
+    summary = {
+        "schema_name": "frustrampnn_summary",
+        "schema_version": 2,
+        **{
+            key: landscape[key]
+            for key in (
+                "execution_configuration_id", "execution_configuration_sha256",
+                "requested_settings_sha256", "effective_settings_sha256",
+                "runtime_identity_sha256", "target_id", "parent_job_id",
+                "candidate_id", "source_artifact_sha256", "structure_map_sha256",
+                "normalized_pdb_sha256", "threshold_policy_id", "threshold_policy",
+                "threshold_policy_sha256",
+            )
+        },
+        "landscape_sha256": contracts.canonical_sha256(landscape),
+        "residue_support": {
+            "expected": 1, "mapped": 1, "scoreable": 1,
+            "excluded": 0, "ambiguous": 0,
+        },
+        "slot_support": {"expected": 20, "observed": 20, "scoreable": 20},
+        "missingness_by_reason": {},
+        "native_slot_counts": {
+            name: int(native_class == name) for name in ("high", "neutral", "minimal")
+        },
+        "native_slot_fractions": {
+            name: float(native_class == name) for name in ("high", "neutral", "minimal")
+        },
+        "complete_landscape_counts": counts,
+        "complete_landscape_fractions": {name: counts[name] / 20 for name in counts},
+        "support_by_entity_chain": [{
+            "entity_instance_id": "entity-A", "auth_asym_id": "X",
+            "expected_residues": 1, "mapped_residues": 1, "scoreable_residues": 1,
+            "expected_slots": 20, "observed_slots": 20, "scoreable_slots": 20,
+        }],
+    }
+
+    return summary
+
+
+def test_persisted_summary_projection_validates_v2_artifact() -> None:
+    contracts = _contracts()
+    summary = _summary_v2()
+    assert contracts.project_summary_artifact(summary) == summary
+
+
+@pytest.mark.asyncio
+async def test_backfill_projects_v2_summary_metrics() -> None:
+    from sqlalchemy.ext.asyncio import create_async_engine
+    import database
+
+    summary = _summary_v2()
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as connection:
+            await connection.exec_driver_sql(
+                "CREATE TABLE designs ("
+                "id TEXT PRIMARY KEY, frustrampnn_status TEXT, "
+                "frustration_high_count INTEGER, frustration_min_count INTEGER, "
+                "frustration_pct_high FLOAT)"
+            )
+            await connection.exec_driver_sql(
+                "CREATE TABLE frustrampnn_results ("
+                "invocation_id TEXT PRIMARY KEY, design_id TEXT, summary_json JSON, "
+                "created_at TEXT)"
+            )
+            await connection.exec_driver_sql(
+                "INSERT INTO designs VALUES ('design-v2', 'succeeded', NULL, NULL, NULL)"
+            )
+            await connection.exec_driver_sql(
+                "INSERT INTO frustrampnn_results VALUES (?, ?, ?, ?)",
+                ("invocation-v2", "design-v2", json.dumps(summary), "2026-08-12T00:00:00Z"),
+            )
+            await database._backfill_frustrampnn_summary_projections(connection)
+            row = (
+                await connection.exec_driver_sql(
+                    "SELECT frustration_high_count, frustration_min_count, "
+                    "frustration_pct_high FROM designs WHERE id = 'design-v2'"
+                )
+            ).one()
+        assert tuple(row) == (
+            summary["native_slot_counts"]["high"],
+            summary["native_slot_counts"]["minimal"],
+            summary["native_slot_fractions"]["high"] * 100.0,
+        )
+    finally:
+        await engine.dispose()
