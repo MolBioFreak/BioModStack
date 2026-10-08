@@ -15,6 +15,12 @@ from biomodstack_local_resources import configured_local_policy
 SCHEMA_VERSION = "bms.install.v1"
 # Deliberately bounded v1 surface. Other legacy settings require a future schema.
 PATH_FIELDS = tuple(k for k in profiles._PATH_FIELDS if not k.endswith("project_root"))
+# Cross-lane isolation concerns mutable state, not intentionally shared runtime
+# images, weights or reference databases (container_dir/weights_root/colabfold_db).
+MUTABLE_PATH_FIELDS = (
+    "data_root", "inputs_dir", "results_dir", "db_path", "work_dir",
+    "analysis_cache_dir", "msa_cache_dir", "sabdab_cache_dir",
+)
 PORT_FIELDS = profiles._INT_FIELDS
 FEATURE_FIELDS = tuple(profiles._FEATURE_DEFAULTS)
 PROFILE_FIELDS = set(PATH_FIELDS + PORT_FIELDS + (
@@ -128,13 +134,24 @@ def configuration_preview(raw: object, *, project_root: Path) -> dict:
     # Include derived Development state and export destinations, not just input keys.
     storage = {k: v for k, v in resolved.items() if k in PATH_FIELDS or
                (k.startswith("dev_") and isinstance(v, str))}
+    canonical = {}
     for key, value in {**storage, **destinations}.items():
         path = _path(value, key, file=key.endswith("db_path") or key in destinations)
         if path.is_relative_to(root) or root.is_relative_to(path):
             raise ValueError(f"{key} overlaps source checkout")
-    prod, dev = Path(str(resolved["data_root"])), Path(str(resolved["dev_data_root"]))
-    if prod.is_relative_to(dev) or dev.is_relative_to(prod):
-        raise ValueError("Production and Development data roots must not overlap")
+        canonical[key] = path
+    # Compare every effective mutable path, not just matching fields or roots:
+    # overrides may live outside their lane root, and derived children may be
+    # symlinks. Canonicalize those children before comparing either direction.
+    # Same-lane nesting is normal; immutable assets are deliberately excluded.
+    for prod_key in MUTABLE_PATH_FIELDS:
+        for dev_field in MUTABLE_PATH_FIELDS:
+            dev_key = f"dev_{dev_field}"
+            prod, dev = canonical[prod_key], canonical[dev_key]
+            if prod.is_relative_to(dev) or dev.is_relative_to(prod):
+                raise ValueError(
+                    f"Production {prod_key} and Development {dev_key} mutable paths must not overlap"
+                )
     existing = profiles.get_install_profile_path()
     return {"schema_version": "bms.configuration-preview.v1", "action": "configure-preview",
             "status": "preview", "valid": True, "ready": False, "read_only": True,

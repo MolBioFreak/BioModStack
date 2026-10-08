@@ -179,6 +179,126 @@ def test_symlink_loop_and_exponent_overflow(isolated):
         assert report['blockers'][0]['code'] == 'install_document_invalid'
 
 
+def run_storage_preview(isolated, profile, *, valid, shell=False):
+    path = isolated / 'install.json'
+    path.write_text(json.dumps(document(profile)))
+    before = snapshot(isolated)
+    command = ([str(ROOT / 'start_ui.sh')] if shell else
+               [sys.executable, '-B', str(ROOT / 'scripts/manage_desktop_services.py')])
+    result = subprocess.run(command + ['configure-preview', '--json', '--document', str(path)],
+                            capture_output=True, text=True)
+    assert result.returncode == (0 if valid else 2), result.stderr
+    report = json.loads(result.stdout)
+    assert report['valid'] is valid
+    assert report['read_only'] is True
+    assert report['ready'] is report['apply_available'] is False
+    if not valid:
+        assert report['blockers'][0]['code'] == 'install_document_invalid'
+        assert 'mutable paths must not overlap' in report['blockers'][0]['message']
+    assert snapshot(isolated) == before
+    return report
+
+
+# Independent of the validator's list: protect every mutable runtime destination.
+MUTABLE_LEAVES = [
+    ('inputs_dir', 'inputs'), ('results_dir', 'bms_results'),
+    ('db_path', 'biomodstack.db'), ('work_dir', 'work'),
+    ('analysis_cache_dir', 'analysis_cache'), ('msa_cache_dir', 'msa_cache'),
+    ('sabdab_cache_dir', 'sabdab_cache'),
+]
+
+
+@pytest.mark.parametrize('shell', [False, True])
+@pytest.mark.parametrize('key,leaf', MUTABLE_LEAVES)
+def test_cli_explicit_path_overlaps_derived_development(isolated, key, leaf, shell):
+    run_storage_preview(isolated, {
+        'data_root': str(isolated / 'prod'), 'dev_data_root': str(isolated / 'dev'),
+        key: str(isolated / 'dev' / leaf),
+    }, valid=False, shell=shell)
+
+
+@pytest.mark.parametrize('shell', [False, True])
+@pytest.mark.parametrize('relation', ['equal', 'prod-ancestor', 'dev-ancestor'])
+@pytest.mark.parametrize('key', ['results_dir', 'work_dir', 'analysis_cache_dir',
+                                 'inputs_dir', 'msa_cache_dir', 'sabdab_cache_dir', 'db_path'])
+def test_cli_external_mutable_paths_overlap(isolated, key, relation, shell):
+    prod = dev = isolated / 'shared'
+    if relation == 'prod-ancestor':
+        dev = dev / 'child'
+    elif relation == 'dev-ancestor':
+        prod = prod / 'child'
+    # Absent destinations must be checked too, including file-path containment.
+    run_storage_preview(isolated, {
+        'data_root': str(isolated / 'prod'), 'dev_data_root': str(isolated / 'dev'),
+        key: str(prod), 'dev_results_dir': str(dev),
+    }, valid=False, shell=shell)
+
+
+@pytest.mark.parametrize('lane', ['prod', 'dev'])
+@pytest.mark.parametrize('key,leaf', MUTABLE_LEAVES)
+def test_cli_canonical_derived_child_symlink_overlap(isolated, lane, key, leaf):
+    prod, dev = isolated / 'prod', isolated / 'dev'
+    prod.mkdir()
+    dev.mkdir()
+    shared = isolated / 'external'
+    if key == 'db_path':
+        shared.mkdir()
+        shared = shared / 'biomodstack.db'
+        shared.write_text('existing database fixture')
+    else:
+        shared.mkdir()
+    profile = {'data_root': str(prod), 'dev_data_root': str(dev)}
+    if lane == 'dev':
+        (dev / leaf).symlink_to(shared, target_is_directory=key != 'db_path')
+        profile[key] = str(shared)
+    else:
+        (prod / leaf).symlink_to(shared, target_is_directory=key != 'db_path')
+        # Development results contain the canonical production destination,
+        # which lives outside both lexical lane roots.
+        profile['dev_results_dir'] = str(shared.parent if key == 'db_path' else shared)
+    run_storage_preview(isolated, profile, valid=False)
+
+
+@pytest.mark.parametrize('relation', ['equal', 'prod-ancestor', 'dev-ancestor'])
+def test_cli_symlink_aliases_external_overrides(isolated, relation):
+    shared, alias = isolated / 'shared', isolated / 'alias'
+    shared.mkdir()
+    alias.symlink_to(shared, target_is_directory=True)
+    prod, dev = shared, alias
+    if relation == 'prod-ancestor':
+        dev = alias / 'missing-child'
+    elif relation == 'dev-ancestor':
+        prod = shared / 'missing-child'
+    run_storage_preview(isolated, {
+        'data_root': str(isolated / 'prod'), 'dev_data_root': str(isolated / 'dev'),
+        'results_dir': str(prod), 'dev_results_dir': str(dev),
+    }, valid=False)
+
+
+@pytest.mark.parametrize('shell', [False, True])
+def test_cli_same_lane_nesting_and_shared_immutable_assets(isolated, shell):
+    prod, dev, assets = isolated / 'prod', isolated / 'prod-dev', isolated / 'assets'
+    prod.mkdir()
+    dev.mkdir()
+    assets.mkdir()
+    # Development shares the same immutable weights/reference data by symlink;
+    # production runtime images may also live in the development tree.
+    (dev / 'weights').symlink_to(assets, target_is_directory=True)
+    (dev / 'colabfold_db').symlink_to(assets, target_is_directory=True)
+    (prod / 'biomodstack.db').write_text('existing production database')
+    (dev / 'biomodstack.db').write_text('existing development database')
+    report = run_storage_preview(isolated, {
+        'data_root': str(prod), 'dev_data_root': str(dev),
+        'results_dir': str(prod / 'nested'), 'work_dir': str(prod / 'nested/work'),
+        'analysis_cache_dir': str(prod / 'nested/work/cache'),
+        'dev_results_dir': str(dev / 'work/results'),
+        'weights_root': str(assets), 'colabfold_db': str(assets),
+        'container_dir': str(dev / 'runtime-images'),
+    }, valid=True, shell=shell)
+    assert Path(report['resolved']['dev_weights_root']).resolve() == assets
+    assert report['resolved']['dev_analysis_cache_dir'] == str(dev / 'analysis_cache')
+
+
 def test_schema_surface_matches_validator():
     schema = json.loads((ROOT / 'config/schemas/install-document.v1.schema.json').read_text())
     assert set(schema['properties']['profile']['properties']) == install.PROFILE_FIELDS
