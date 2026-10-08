@@ -470,7 +470,8 @@ def test_active_registry_and_inventory_select_v2_without_geometry_authority() ->
     assert capability["parameter_schema_id"] == "bms.operation-parameters.molbio.restriction_digest.v2"
     assert capability["parameter_schema_sha256"] == v2_row["schema_sha256"]
     assert capability["native_mapping"]["source"] == "POST /api/molbio/restriction/digests"
-    assert capability["exposure_state"] == "disabled"
+    assert capability["exposure_state"] == "internal"
+    assert capability["submission_owner"] == "routers.molbio_restriction.save_restriction_digest"
     forbidden = {"site", "cut_index", "chemistry"}
     assert forbidden.isdisjoint(capability["observed_parameter_keys"])
     assert forbidden.isdisjoint(capability["classified_parameter_keys"])

@@ -56,8 +56,8 @@ from services.molbio_sequence_import import (
 from services.assembly.common import fragment_provenance_payload
 from services.assembly.gibson import simulate_gibson
 from services.assembly.golden_gate import (
-    TYPE_IIS_ENZYMES,
     get_type_iis_enzyme,
+    golden_gate_options as catalog_golden_gate_options,
     simulate_golden_gate,
 )
 from services.assembly.ligation import simulate_ligation
@@ -71,13 +71,7 @@ from services.assembly.types import (
     FragmentEnd,
     GibsonDesignResult,
 )
-from services.molbio_ops import (
-    DigestEnzyme,
-    digest_sequence,
-    pcr_product,
-    apply_mutations,
-    reverse_complement,
-)
+from services.molbio_ops import pcr_product, apply_mutations, reverse_complement
 from services.primer_qc import evaluate_primer_pair_qc, evaluate_primer_qc
 from services.nucleotide_validation import canonicalize_nucleotide_sequence
 from services.annotation_sources import (
@@ -614,18 +608,6 @@ class SequenceInput(BaseModel):
     is_circular: bool = False
 
 
-class EnzymeSchema(BaseModel):
-    name: str
-    site: str
-    cut_index: Optional[int] = None
-
-
-class DigestRequest(SequenceInput):
-    enzymes: List[EnzymeSchema]
-    save: bool = False
-    new_name: Optional[str] = None
-
-
 class PCRRequest(SequenceInput):
     primer_fwd: str
     primer_rev: str
@@ -749,15 +731,6 @@ class GibsonRequest(BaseModel):
     new_name: Optional[str] = None
 
 
-class GoldenGateRequest(BaseModel):
-    fragments: List[str]
-    enzymes: List[EnzymeSchema]
-    circular: bool = True
-    parent_id: Optional[str] = None
-    save: bool = True
-    new_name: Optional[str] = None
-
-
 class NucleotideSequenceResponse(BaseModel):
     id: str
     name: str
@@ -782,14 +755,6 @@ class NucleotideSequenceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class DigestFragmentResponse(BaseModel):
-    sequence: str
-    start: int
-    end: int
-    length: int
-    wraps_origin: bool
-
-
 class PCRProductResponse(BaseModel):
     sequence: str
     start: int
@@ -800,7 +765,6 @@ class PCRProductResponse(BaseModel):
 
 class MolbioOperationResponse(BaseModel):
     sequence: Optional[NucleotideSequenceResponse] = None
-    fragments: Optional[List[DigestFragmentResponse]] = None
     product: Optional[PCRProductResponse] = None
     message: str
     experiment_id: Optional[str] = None
@@ -1045,7 +1009,7 @@ class GibsonDesignResponse(BaseModel):
 class GoldenGateAssemblyRequest(BaseModel):
     fragments: List[AssemblyFragmentSchema]
     circular: bool = True
-    enzyme_name: str = "BsaI"
+    enzyme_id: str = "BsaI"
     new_name: Optional[str] = None
     save_description: Optional[str] = None
 
@@ -1681,74 +1645,6 @@ async def persist_assembly_product(
     await session.commit()
     await session.refresh(sequence_row)
     return sequence_row
-
-
-@router.post("/digest", response_model=MolbioOperationResponse)
-async def digest(
-    request: DigestRequest, session: AsyncSession = Depends(get_molbio_session)
-):
-    parent = await resolve_sequence(request, session)
-    enzymes = [
-        DigestEnzyme(name=e.name, site=e.site, cut_index=e.cut_index)
-        for e in request.enzymes
-    ]
-    fragments = digest_sequence(parent.sequence, enzymes, circular=parent.is_circular)
-    fragment_payload = [
-        DigestFragmentResponse(
-            sequence=f.sequence,
-            start=f.start,
-            end=f.end,
-            length=len(f.sequence),
-            wraps_origin=f.start >= f.end,
-        )
-        for f in fragments
-    ]
-
-    if not request.save:
-        return MolbioOperationResponse(
-            fragments=fragment_payload,
-            message=f"Digest produced {len(fragment_payload)} fragments",
-        )
-
-    new_name = request.new_name or f"{parent.name}_digest"
-    seq_obj = create_child_sequence(
-        parent=parent if request.sequence_id else None,
-        sequence="".join(f.sequence for f in fragments),
-        name=new_name,
-        circular=False,
-        operation="digest",
-        operation_params={"enzymes": [e.model_dump() for e in request.enzymes]},
-    )
-    await record_generated_sequence(
-        session,
-        seq_obj,
-        parent=parent if request.sequence_id else None,
-        operation_kind="digest",
-        implementation="services.molbio_ops.digest_sequence",
-        parameters={"enzymes": [e.model_dump() for e in request.enzymes]},
-        provenance={"source": "api"},
-        inline_inputs=(
-            [
-                (
-                    parent,
-                    "template",
-                    {
-                        "request_source": "inline",
-                        "declared_name": request.name,
-                        "declared_sequence_type": request.sequence_type,
-                        "declared_circular": request.is_circular,
-                    },
-                )
-            ]
-            if request.sequence_id is None
-            else []
-        ),
-    )
-    await session.commit()
-    await session.refresh(seq_obj)
-    return MolbioOperationResponse(
-        sequence=seq_obj, fragments=fragment_payload, message="Digest complete"
-    )
 
 
 @router.post("/pcr", response_model=MolbioOperationResponse)
@@ -2799,15 +2695,28 @@ async def save_gibson_assembly(
 
 @router.get("/assembly/golden-gate/options")
 async def golden_gate_options():
+    try:
+        enzymes = catalog_golden_gate_options()
+    except AssemblyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    first = enzymes[0] if enzymes else None
     return {
+        "catalog": (
+            {
+                "catalog_id": first.catalog_id,
+                "catalog_sha256": first.catalog_sha256,
+            }
+            if first is not None
+            else None
+        ),
         "enzymes": [
             {
-                "name": enzyme.name,
-                "site": enzyme.site,
+                "enzyme_id": enzyme.enzyme_id,
+                "canonical_name": enzyme.canonical_name,
                 "overhang_length": enzyme.overhang_length,
             }
-            for enzyme in TYPE_IIS_ENZYMES.values()
-        ]
+            for enzyme in enzymes
+        ],
     }
 
 
@@ -2816,13 +2725,13 @@ async def simulate_golden_gate_assembly(request: GoldenGateAssemblyRequest):
     try:
         product = simulate_golden_gate(
             [build_assembly_fragment(fragment) for fragment in request.fragments],
-            enzyme_name=request.enzyme_name,
+            enzyme_id=request.enzyme_id,
             circular=request.circular,
         )
     except AssemblyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    enzyme = get_type_iis_enzyme(request.enzyme_name)
+    enzyme = get_type_iis_enzyme(request.enzyme_id)
     return AssemblyOperationResponse(
         product=assembly_product_to_response(product),
         message=f"Validated {enzyme.name} Golden Gate assembly across {len(product.fragments)} fragments",
@@ -2837,7 +2746,7 @@ async def save_golden_gate_assembly(
     try:
         product = simulate_golden_gate(
             [build_assembly_fragment(fragment) for fragment in request.fragments],
-            enzyme_name=request.enzyme_name,
+            enzyme_id=request.enzyme_id,
             circular=request.circular,
         )
     except AssemblyError as exc:
@@ -2878,19 +2787,6 @@ async def gibson(
         detail=(
             "The legacy /gibson route is deprecated because it does not carry validated overlap contracts. "
             "Use /api/molbio/assembly/gibson/simulate or /save."
-        ),
-    )
-
-
-@router.post("/golden-gate", response_model=MolbioOperationResponse)
-async def golden_gate(
-    request: GoldenGateRequest, session: AsyncSession = Depends(get_molbio_session)
-):
-    raise HTTPException(
-        status_code=400,
-        detail=(
-            "The legacy /golden-gate route is deprecated because it does not carry explicit post-digestion fragment metadata. "
-            "Use /api/molbio/assembly/golden-gate/simulate or /save."
         ),
     )
 

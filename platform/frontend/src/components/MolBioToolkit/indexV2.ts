@@ -24,9 +24,6 @@ export type {
     SelectionInfo,
     NucleotideSequenceResponse,
     NucleotideSequenceListItem,
-    EnzymeInfo,
-    EnzymeFilter,
-    DigestFragment,
     PCRProduct,
     ActivePanel,
     HighlightedRegion

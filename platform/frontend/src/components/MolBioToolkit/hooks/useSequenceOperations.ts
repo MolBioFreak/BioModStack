@@ -9,7 +9,6 @@ import { isAxiosError } from 'axios';
 import type {
     NucleotideSequenceResponse,
     NucleotideSequenceListItem,
-    DigestFragment,
     PCRProduct,
 } from '../types';
 import {
@@ -158,30 +157,6 @@ export function useMolBioOperations() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    // Restriction digest
-    const digest = useCallback(async (params: {
-        sequence?: string;
-        sequence_id?: string;
-        enzymes: { name: string; site?: string }[];
-        is_circular?: boolean;
-    }): Promise<{ fragments: DigestFragment[] } | null> => {
-        setLoading(true);
-        setError(null);
-        try {
-            const res = await fetch('/api/molbio/digest', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(params)
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return await res.json();
-        } catch (e) {
-            setError(e instanceof Error ? e.message : 'Unknown error');
-            return null;
-        } finally {
-            setLoading(false);
-        }
-    }, []);
 
     // PCR
     const pcr = useCallback(async (params: {
@@ -233,7 +208,6 @@ export function useMolBioOperations() {
     return {
         loading,
         error,
-        digest,
         pcr,
         ligate
     };

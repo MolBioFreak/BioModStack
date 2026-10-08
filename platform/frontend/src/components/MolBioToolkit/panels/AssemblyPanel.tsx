@@ -389,7 +389,7 @@ export function AssemblyPanel({
                 if (!cancelled) {
                     setGoldenGateOptions(response.data);
                     if (response.data.enzymes.length > 0) {
-                        setGoldenGateEnzyme((current) => current || response.data.enzymes[0].name);
+                        setGoldenGateEnzyme((current) => current || response.data.enzymes[0].enzyme_id);
                     }
                 }
             } catch (loadError) {
@@ -623,7 +623,7 @@ export function AssemblyPanel({
                 const payload = {
                     fragments,
                     circular: sequenceData.circular,
-                    enzyme_name: goldenGateEnzyme,
+                    enzyme_id: goldenGateEnzyme,
                     new_name: saveName || undefined,
                     save_description: saveDescription || undefined,
                 };
@@ -840,8 +840,8 @@ export function AssemblyPanel({
                             className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5"
                         >
                             {(goldenGateOptions?.enzymes || []).map((enzyme) => (
-                                <option key={enzyme.name} value={enzyme.name}>
-                                    {enzyme.name} • {enzyme.site} • {enzyme.overhang_length} nt overhang
+                                <option key={enzyme.enzyme_id} value={enzyme.enzyme_id}>
+                                    {enzyme.canonical_name} • {enzyme.overhang_length} nt overhang
                                 </option>
                             ))}
                         </select>

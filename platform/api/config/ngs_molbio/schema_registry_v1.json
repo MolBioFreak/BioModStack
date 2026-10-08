@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_source_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "d65471b5f8b1556e9972e66747de84b6d170cd707f1c79a0382f20e95c74aaa8",
+  "content_sha256": "eace8f07094433ed527c57b27543872145665ae8ff2934e93202dee55046ea37",
   "entries": [
     {
       "path": "schemas/ngs_molbio/adapter-registry-v1.schema.json",
@@ -173,9 +173,9 @@
     },
     {
       "path": "schemas/ngs_molbio/molbio-assembly-golden_gate-v1.schema.json",
-      "schema_canonical_sha256": "db8258c7e033d371d0da72fbfaa277e2f5f0ad1818a5a5bf4572d93ee2b39526",
+      "schema_canonical_sha256": "45fcb553c009a6e429520237eb9d547e2dec4763ffecbc46c6166db821b0d4dc",
       "schema_id": "bms.operation-parameters.molbio.assembly.golden_gate.v1",
-      "schema_sha256": "fdd0a72f8b7757d0c6f767f3bc5a438299426859deaa2d3482af0b7c5df5dda8"
+      "schema_sha256": "f50bfb3014113a110c641a90ec107b0267dfc8e86efa3945d3bab3fd5a0cd61d"
     },
     {
       "path": "schemas/ngs_molbio/molbio-assembly-ligation-v1.schema.json",
