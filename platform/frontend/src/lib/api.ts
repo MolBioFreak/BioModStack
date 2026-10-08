@@ -60,6 +60,8 @@ export interface Job {
     awaiting_stage?: string | null;
     awaiting_payload?: Record<string, UntypedApiValue> | null;
     decision_history?: Array<Record<string, UntypedApiValue>> | null;
+    frustrampnn_result_count?: number;
+    frustrampnn_reopen_destination?: Record<string, UntypedApiValue> | null;
     selected_cdr_loops?: string[] | null;
 }
 
@@ -4420,7 +4422,7 @@ export interface PcrOperationRequest {
 }
 
 export interface PcrOperationResponse {
-    sequence: NucleotideSequenceResponse | null;
+    sequence: NucleotideSequence | null;
     product: {
         sequence: string;
         start: number;
