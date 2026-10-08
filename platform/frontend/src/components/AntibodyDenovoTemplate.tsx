@@ -888,10 +888,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 mode: 'antibody_denovo_pipeline', // Matches main.nf logic
                 pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
                 params: {
-                    target_pdb: pdbPath,
-                    pdb_source: 'upload',
-                    epitope_residues: epitopeString,
-                    antigen_chains: selectedChain || undefined, // Send selected chain
+                    target_pdb: isRefinementMode ? undefined : pdbPath,
+                    pdb_source: isRefinementMode ? undefined : 'upload',
+                    epitope_residues: isRefinementMode ? undefined : epitopeString,
+                    antigen_chains: isRefinementMode ? undefined : selectedChain || undefined, // Send selected chain
                     pinned_gpus: pinnedGpus.length > 0 ? pinnedGpus : undefined,
                     lock_gpus: lockGpus && pinnedGpus.length > 0, // GPU locking
                     // Framework configuration

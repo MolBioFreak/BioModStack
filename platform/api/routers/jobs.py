@@ -823,7 +823,7 @@ def _build_cdr_indel_iteration_job(
         if action == "ui_refinement":
             for key in ("epitope_residues", "target_pdb"):
                 value = cleaned_overrides.get(key)
-                if value is None or (isinstance(value, str) and not value.strip()):
+                if value is None or (isinstance(value, str) and (not value.strip() or value.strip() == "refinement_mode")):
                     cleaned_overrides.pop(key, None)
             if not cleaned_overrides.get("selected_residues"):
                 cleaned_overrides.pop("selected_residues", None)
