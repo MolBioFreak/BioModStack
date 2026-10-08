@@ -22,7 +22,7 @@ export function writeBinderNativeSources(jobId: string, sources: NativeCandidate
     try { sessionStorage.setItem(`bms:selected-designs:${jobId}:native`, JSON.stringify(sources)); } catch { /* storage unavailable */ }
 }
 
-export type BinderOperation = 'refine' | 'caliby' | 'frustrampnn' | 'fampnn' | 'proteinmpnn' | 'predict_boltz2' | 'predict_protenix';
+export type BinderOperation = 'refine' | 'caliby' | 'frustrampnn' | 'fampnn' | 'proteinmpnn' | 'protonpottsmpnn' | 'predict_boltz2' | 'predict_protenix';
 export interface BinderSelectedRequest {
     source_job_id: string;
     design_ids: string[];
@@ -42,8 +42,13 @@ export interface BinderSelectedResponse {
     launched_jobs: Job[];
 }
 export async function submitBinderSelected(request: BinderSelectedRequest): Promise<BinderSelectedResponse> {
+    return submitPreparedSelectedMutation(() => api.post<BinderSelectedResponse>('/api/binder-continuation/selected', request).then(response => response.data));
+}
+
+/** One remote prepared-review owner for selected model operations. */
+export async function submitPreparedSelectedMutation<T extends { launched_jobs: Job[] }>(mutation: () => Promise<T>): Promise<T> {
     try {
-        return (await api.post<BinderSelectedResponse>('/api/binder-continuation/selected', request)).data;
+        return await mutation();
     } catch (error) {
         if (!isAxiosError(error) || error.response?.status !== 409) throw error;
         const detail = error.response.data?.detail;

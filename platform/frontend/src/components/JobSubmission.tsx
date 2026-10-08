@@ -7,6 +7,7 @@ import { lazy, Suspense, useState, useEffect, useRef, useMemo, useCallback } fro
 import { foldCpTopologyMeaning, foldCpConfidenceCaveat } from './FoldCpTopologyControl';
 import { ParamField, compactUiCopy } from './ModelParameterField';
 const CalibyNativeForm = lazy(() => import('./CalibyNativeForm').then(m => ({ default: m.CalibyNativeForm })));
+const ProtonPottsSettings = lazy(() => import('./ProtonPottsSettings').then(m => ({ default: m.ProtonPottsSettings })));
 const LigandMPNNDesignForm = lazy(() => import('./LigandMPNNDesignForm').then(m => ({ default: m.LigandMPNNDesignForm })));
 const NativeBinderGeneration = lazy(() => import('./NativeBinderGeneration').then(m => ({ default: m.NativeBinderGeneration })));
 const BinderRoundSettings = lazy(() => import('./BinderRoundSettings').then(m => ({ default: m.BinderRoundSettings })));
@@ -320,10 +321,15 @@ export function JobSubmission() {
         setClonedValues(projectSetup.settings as Record<string, UntypedApiValue>);
         setProjectDraftValues(projectSetup.settings as Record<string, UntypedApiValue>);
         const draft = projectSetup.settings as Record<string, UntypedApiValue>;
+        if (draft.model_id === 'protonpottsmpnn' && Object.hasOwn(draft, 'execution_target_id')) {
+            if (draft.execution_target_id) sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, draft.execution_target_id);
+            else sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
+            window.dispatchEvent(new Event('bms:execution-target-change'));
+        }
         if (draft.sequence_continuation) appliedContinuation.current = continuationKey;
         binderNativeDrafts.current = { ...draft.binder_native_drafts };
         if (draft.binder_workflow_draft) binderDraftRef.current = draft.binder_workflow_draft;
-        if ((['ppiflow', 'boltzgen', 'proteinmpnn', 'fampnn'].includes(String(draft.model_id))
+        if ((['protonpottsmpnn', 'ppiflow', 'boltzgen', 'proteinmpnn', 'fampnn'].includes(String(draft.model_id))
             || (draft.model_id === 'caliby_experimental' && ['ensemble_design', 'sidechain_pack'].includes(draft.mode))
             || (draft.model_id === 'ligandmpnn' && ['ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'].includes(draft.mode))) && typeof draft.mode === 'string') {
             setWizardMode('manual'); setSelectedTemplateId(null);
@@ -947,7 +953,8 @@ export function JobSubmission() {
     useEffect(() => {
         if (projectSetup.active && wizardMode === 'manual'
             && ((selectedModelId === 'caliby_experimental' && ['ensemble_design', 'sidechain_pack'].includes(selectedModeId || ''))
-                || (selectedModelId === 'ligandmpnn' && ['ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'].includes(selectedModeId || '')))
+                || (selectedModelId === 'ligandmpnn' && ['ligand_aware', 'ntp_aware', 'metal_aware', 'dna_aware'].includes(selectedModeId || ''))
+                || selectedModelId === 'protonpottsmpnn')
             && clonedValues && initializedModelParams.current?.clone === clonedValues) {
             setProjectDraftValues({ ...params, job_name: jobName, model_id: selectedModelId, mode: selectedModeId });
         }
@@ -1355,7 +1362,7 @@ export function JobSubmission() {
                 (nativeGenerationInventory?.parameters.flatMap(parameter => [parameter.name, ...(parameter.aliases || [])]) || selectedMode.params).forEach((paramName: string) => {
                     // Empty native sequence settings (e.g. omit_AAs or a
                     // cleared optional target chain) are values, not defaults.
-                    const preserveNativeEmpty = isCalibyNative || isLigandNative || ['fampnn', 'proteinmpnn', 'boltzgen', 'ppiflow'].includes(selectedModelId);
+                    const preserveNativeEmpty = isCalibyNative || isLigandNative || ['protonpottsmpnn', 'fampnn', 'proteinmpnn', 'boltzgen', 'ppiflow'].includes(selectedModelId);
                     if (params[paramName] !== undefined && (params[paramName] !== '' || preserveNativeEmpty)) {
                         filteredParams[paramName] = params[paramName];
                     }
@@ -1574,7 +1581,7 @@ export function JobSubmission() {
             {isSequenceContinuation && (sequencePreparationError || continuationQuery.error) && <p role="alert">{sequencePreparationError || String(continuationQuery.error)}</p>}
             {projectSetup.setup && <><ProjectWorkflowSetupBanner setup={projectSetup.setup}/><section className="mx-auto mb-4 mt-4 flex max-w-[104rem] flex-wrap items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-950/20 p-3"><button type="button" className="rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-200" disabled={projectActionBusy} onClick={async () => {
                 setProjectActionBusy(true); setProjectActionError(null);
-                try { await projectSetup.saveDraft((isSequenceContinuation ? sequenceDraft() : projectDraftValues) as JsonObject); }
+                try { await projectSetup.saveDraft((isSequenceContinuation ? sequenceDraft() : selectedModelId === 'protonpottsmpnn' ? { ...projectDraftValues, execution_target_id: sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) || null } : projectDraftValues) as JsonObject); }
                 catch (error) { setProjectActionError(error instanceof Error ? error.message : String(error)); }
                 finally { setProjectActionBusy(false); }
             }}>Save draft</button>{selectedTemplateId === 'antibody_denovo'
@@ -1582,7 +1589,7 @@ export function JobSubmission() {
                 : <button type="button" className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-semibold text-white" disabled={projectActionBusy || (isNativeBinderGeneration && !isReady)} onClick={async () => {
                     if (isNativeBinderGeneration) { handleSubmit(); return; }
                     setProjectActionBusy(true); setProjectActionError(null);
-                    try { await projectSetup.startRun((isSequenceContinuation ? sequenceDraft() : projectDraftValues) as JsonObject); }
+                    try { await projectSetup.startRun((isSequenceContinuation ? sequenceDraft() : selectedModelId === 'protonpottsmpnn' ? { ...projectDraftValues, execution_target_id: sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) || null } : projectDraftValues) as JsonObject); }
                     catch (error) { setProjectActionError(error instanceof Error ? error.message : String(error)); }
                     finally { setProjectActionBusy(false); }
                 }}>Start run</button>}{projectActionError && <p role="alert">{projectActionError}</p>}<ProjectTechnicalDetails setup={projectSetup.setup}/></section></>}
@@ -1966,7 +1973,7 @@ export function JobSubmission() {
                             />
 
                             <div className="space-y-6">
-                                {(isCalibyNative || isLigandNative || ['proteinmpnn', 'fampnn', 'boltz_cp_experimental'].includes(selectedModelId ?? '')) && <label className="block text-sm text-slate-300">
+                                {(isCalibyNative || isLigandNative || ['protonpottsmpnn', 'proteinmpnn', 'fampnn', 'boltz_cp_experimental'].includes(selectedModelId ?? '')) && <label className="block text-sm text-slate-300">
                                     Job name
                                     <input aria-label={selectedModelId === 'boltz_cp_experimental' ? 'Fold-CP job name' : 'Sequence job name'} className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 p-3" value={jobName} onChange={event => setJobName(event.target.value)} />
                                 </label>}
@@ -2039,13 +2046,14 @@ export function JobSubmission() {
                                         })} />
                                 </>}
                                 {isCalibyNative && <CalibyNativeForm mode={selectedModeId!} parameters={visibleParams} values={params} onChange={updateParam} renderScalar={renderSequenceScalar} />}
+                                {selectedModelId === 'protonpottsmpnn' && <ProtonPottsSettings parameters={visibleParams} values={params} onChange={updateParam} renderScalar={renderSequenceScalar} />}
                                 {isLigandNative && <LigandMPNNDesignForm parameters={visibleParams} values={params} onChange={updateParam} renderScalar={renderSequenceScalar} />}
                                 {selectedModelId === 'boltz_cp_experimental' && <aside className="text-xs text-slate-400">
                                     <p>{foldCpTopologyMeaning}</p>
                                     {(params.cp_topology ?? params.bcp_cp_topology) === '1d' && <p role="note" className="mt-2 text-amber-200">{foldCpConfidenceCaveat}</p>}
                                 </aside>}
                                 {/* Other models, including interface_context, retain their existing editor. */}
-                                {!isNativeBinderGeneration && !isCalibyNative && !isLigandNative && selectedMode && Object.keys(groupedParams).length > 0 && (
+                                {!isNativeBinderGeneration && !isCalibyNative && !isLigandNative && selectedModelId !== 'protonpottsmpnn' && selectedMode && Object.keys(groupedParams).length > 0 && (
                                     <div className="space-y-6 pt-6 border-t border-slate-700/50">
                                         {/* Render groups in preferred order */}
                                         {['Inputs', 'Docking Settings', 'General'].filter(g => groupedParams[g]).map(groupName => (
