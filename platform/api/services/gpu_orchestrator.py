@@ -15,6 +15,7 @@ Key Features:
 import asyncio
 import logging
 import math
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -848,8 +849,41 @@ class GPUOrchestrator:
             )
             pending_jobs = result.scalars().all()
             
+            
             if not pending_jobs:
                 return  # Nothing to do
+            
+            # ═══════════════════════════════════════════════════════════════════════
+            # CPU-ONLY FAST PATH: Launch vram_estimate_mb == 0 jobs directly
+            # These jobs (e.g. FASTQ-only nanopore) don't need GPU allocation.
+            # ═══════════════════════════════════════════════════════════════════════
+            cpu_only_jobs = [j for j in pending_jobs if (j.vram_estimate_mb or 0) == 0]
+            gpu_jobs = [j for j in pending_jobs if (j.vram_estimate_mb or 0) > 0]
+            
+            for job in cpu_only_jobs:
+                try:
+                    await self.launch_nextflow_job(
+                        job_id=job.id,
+                        model_id=job.model_id,
+                        mode=job.mode,
+                        params={**job.params},  # No gpu_id injected
+                        output_dir=job.output_dir
+                    )
+                    job.queue_status = "running"
+                    job.assigned_gpu = None
+                    job.started_at = datetime.utcnow()
+                    logger.info(f"[LAUNCH CPU] {job.name} (no GPU, vram_estimate=0)")
+                except Exception as e:
+                    logger.error(f"[LAUNCH CPU FAILED] {job.name}: {e}")
+                    job.queue_status = "failed"
+                    job.error_message = str(e)
+            
+            if cpu_only_jobs:
+                await session.commit()
+            
+            pending_jobs = gpu_jobs
+            if not pending_jobs:
+                return  # Only CPU jobs were queued
             
             # Concurrency limits applied later after GPU stats are available
             
@@ -1099,6 +1133,15 @@ class GPUOrchestrator:
                             gpu_id = int(gpu_match.group(1))
                             gpu_has_activity[gpu_id] = gpu_has_activity.get(gpu_id, 0) + 1
                 
+                stale_fail_after_seconds = 300
+                try:
+                    stale_fail_after_seconds = max(
+                        60,
+                        int(os.getenv("BMS_STALE_RECONCILE_FAIL_SECONDS", "300")),
+                    )
+                except Exception:
+                    stale_fail_after_seconds = 300
+
                 reconciled = 0
                 for job in running_jobs:
                     job_is_running = False
@@ -1176,7 +1219,7 @@ class GPUOrchestrator:
                                     f"[COMPLETION] {job.name} reconciled as failed "
                                     f"(no process found, age: {age_seconds:.0f}s): {failure_reason}"
                                 )
-                            else:
+                            elif history_outcome == "completed":
                                 job.queue_status = "completed"
                                 if job.status == "running":
                                     job.status = "completed"
@@ -1217,6 +1260,28 @@ class GPUOrchestrator:
                                         f"[COMPLETION] {job.name} completed "
                                         f"(no process found, age: {age_seconds:.0f}s)"
                                     )
+                            else:
+                                if age_seconds >= stale_fail_after_seconds:
+                                    unresolved_reason = (
+                                        "Reconciled as failed: no active process and no terminal "
+                                        ".nextflow/history status (expected OK/ERR)"
+                                    )
+                                    if job.status == "running":
+                                        job.status = "failed"
+                                    job.queue_status = "failed"
+                                    job.error_message = unresolved_reason
+                                    job.completed_at = datetime.utcnow()
+                                    logger.warning(
+                                        f"[COMPLETION] {job.name} reconciled as failed "
+                                        f"(no process found, age: {age_seconds:.0f}s): {unresolved_reason}"
+                                    )
+                                else:
+                                    logger.info(
+                                        f"[COMPLETION] {job.name} remains running while waiting "
+                                        f"for terminal .nextflow/history state "
+                                        f"(age: {age_seconds:.0f}s, threshold: {stale_fail_after_seconds}s)"
+                                    )
+                                    continue
 
                             reconciled += 1
                 
