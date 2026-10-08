@@ -53,8 +53,10 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
     });
     const finalStructures = (artifacts.data?.data.artifacts ?? []).filter((item) => item.semantic_role === 'representative_structure');
     const finalStructure = finalStructures.find((item) => item.replica === selectedReplica) ?? finalStructures[0];
+    const playbackCapability = summary.data?.data.trajectory_playback;
+    const activeReplica = selectedReplica ?? finalStructure?.replica ?? (playbackCapability?.supported ? playbackCapability.replicas[0]?.replica : null) ?? null;
     const frameMapArtifact = (artifacts.data?.data.artifacts ?? []).find((item) => (
-        item.replica === finalStructure?.replica && item.semantic_role === 'trajectory_frame_map'
+        item.replica === activeReplica && item.semantic_role === 'trajectory_frame_map'
     ));
     const frameMap = useQuery({
         queryKey: ['md-trajectory-frame-map', jobId, frameMapArtifact?.id],
@@ -67,18 +69,17 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
     });
     const reports = analysis.data?.data.reports ?? [];
     const molecularDynamics = useMemo<MDSceneState | undefined>(() => {
-        if (!finalStructure || !summary.data) return undefined;
-        const topology = (artifacts.data?.data.artifacts ?? []).find((item) => item.replica === finalStructure.replica && item.semantic_role === 'analysis_topology');
-        const trajectory = (artifacts.data?.data.artifacts ?? []).find((item) => item.replica === finalStructure.replica && item.semantic_role === 'analysis_trajectory');
+        if (activeReplica == null || !summary.data || !playbackCapability) return undefined;
+        const topology = (artifacts.data?.data.artifacts ?? []).find((item) => item.replica === activeReplica && item.semantic_role === 'analysis_topology');
+        const trajectory = (artifacts.data?.data.artifacts ?? []).find((item) => item.replica === activeReplica && item.semantic_role === 'analysis_trajectory');
         if (!topology || !trajectory || trajectory.format !== 'xtc' || !topology.atom_order_identity || topology.atom_order_identity !== trajectory.atom_order_identity) return undefined;
-        const playbackCapability = summary.data.data.trajectory_playback;
-        const selectedFrame = selectedPoint && selectedPoint.replica === finalStructure.replica
+        const selectedFrame = selectedPoint && selectedPoint.replica === activeReplica
             ? frameMap.data?.frames.find((frame) => frame.source_frame === selectedPoint.source_frame)
             : undefined;
         return {
-            activeReplica: finalStructure.replica,
+            activeReplica,
             replicas: [{
-                replica: finalStructure.replica,
+                replica: activeReplica,
                 topologyArtifactId: topology.id,
                 trajectoryArtifactId: trajectory.id,
                 atomOrderIdentity: topology.atom_order_identity,
@@ -90,7 +91,7 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
             playback: {
                 state: playbackCapability.supported ? 'stopped' : 'unsupported',
                 selectedFrame: playbackCapability.supported && selectedFrame ? {
-                    replica: finalStructure.replica,
+                    replica: activeReplica,
                     displayFrame: selectedFrame.display_frame,
                     sourceFrame: selectedFrame.source_frame,
                     timePs: selectedFrame.time_ps,
@@ -99,7 +100,7 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
                 framesPerSecond: 0,
             },
         };
-    }, [artifacts.data?.data.artifacts, finalStructure, frameMap.data, selectedPoint, summary.data]);
+    }, [activeReplica, artifacts.data?.data.artifacts, frameMap.data, playbackCapability, selectedPoint, summary.data]);
     const traces = useMemo<Data[]>(() => reports
         .filter((report) => report.status === 'completed' && report.replica != null && report.points?.length)
         .map((report) => ({
