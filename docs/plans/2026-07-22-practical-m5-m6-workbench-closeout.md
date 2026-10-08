@@ -1,111 +1,183 @@
-# Practical Structure Workbench Closeout
+# Structure Workbench Closeout
 
-**Goal:** Make the existing direct Mol* workbench useful and trustworthy for the small BioModStack team.
+**Goal:** Finish the six practical workbench capabilities for BioModStack’s small professional team.
 
-**Approach:** Keep one BMS-owned Mol* canvas and one controller. Persist only the information needed to reopen a view. Use real supplied structure, map, label, and MD artifacts. Do not build enterprise-scale tenancy, a compute cluster, or browser-side scientific analysis.
+**Scope:** One direct BMS-owned Mol* lifecycle, real job-owned artifacts, focused tests, one live acceptance path. The work is not done until all six stages below pass.
 
-## Product boundary
+## Current audited state
 
-This is a small-team local deployment behind the existing trusted local proxy. It needs a narrow safety boundary, not enterprise identity machinery:
+Audit target: `test` at `a2eebd7b63a081cd92ef493778202bd561c78032`.
 
-- The local proxy identifies the trusted local team boundary; ordinary browser code never receives its proxy secret.
-- Saved state records artifact IDs and SHA-256 hashes, never local paths or signed URLs.
-- A restore refuses changed or missing source data rather than silently loading something else.
-- The browser renders supplied data. It does not invent density, segmentation, registration, RMSD, PCA, clustering, or dynamics.
-- One direct Mol* plugin remains the only viewer owner.
+| Stage | Status | Reality |
+|---|---|---|
+| 1. Snapshot persistence | Partial | Save/restart/restore works, but the deployed database has a table created by SQLAlchemy rather than recorded migration versions 9–11. |
+| 2. Useful exports | Partial | Snapshot JSON, PNG, selected mmCIF, CSV/JSON paths, and manifests exist. A populated CSV/JSON export has not yet been live-proven. |
+| 3. Volumes and segmentation | Partial | One unrelated EMD-5778 scalar map was loaded live. No matching fixture job, label map, registration, or complete operator controls exist. |
+| 4. GRO+XTC playback | Missing | A small test fixture exists, but no materialized MD job/frame map and the direct adapter deliberately refuses playback. |
+| 5. Accepted WebM | Missing | The browser encoder exists but has no reachable authoritative frame stepper or VP9/ffprobe acceptance proof. |
+| 6. Integrated release | Missing | It follows the preceding stages. |
 
-That is enough to keep a small-team workflow reproducible and scientifically honest.
+## 1. Deploy snapshot persistence correctly
 
-## Already working
+### Required change
 
-Published `test` revision: `64002396c5961c34dfa4166253867793ec949f91`.
+The API currently starts through Uvicorn and `Base.metadata.create_all()`. It does not run the numbered migration runner. The live `schema_migrations` ledger stops at version 8 even though the `viewer_snapshots` table exists.
 
-- Snapshot persistence is deployed. A real 1UBQ view was saved, the API was restarted, and the snapshot restored.
-- PNG, selected mmCIF, snapshot JSON, and export-manifest downloads work on a real structure.
-- CSV/JSON table export is available when a real visible metric table is present; it stays disabled when there are no rows rather than exporting fake data.
-- A real EMDB EMD-5778 CCP4 density map has been loaded through the governed artifact route, hash-checked, rendered, and snapshotted.
-- The managed API and the Vite development proxy run the published revision.
+Files:
+- `platform/api/migrations/runner.py`
+- `platform/api/migrations/add_viewer_snapshots.py`
+- `platform/api/tests/test_viewer_snapshot_migration.py`
+- `docker/api.Dockerfile` or the managed API startup entrypoint
+- `compose.core-runtime.yml` only if the entrypoint needs a compose change
 
-## Remaining work
+### Acceptance
 
-### 1. Dedicated structure/map fixture
+1. Fix `run_all(db_path=...)` so every migration receives the supplied database path.
+2. Run migrations before Uvicorn against the mounted application database.
+3. Verify `schema_migrations` records versions through 11.
+4. Prove existing snapshots remain readable.
+5. Save a snapshot, recreate the API, and restore it from the browser.
 
-The current density proof uses a real map and makes no false registration claim. Replace the temporary proof fixture with one dedicated completed fixture job that contains a matching structure and map.
+## 2. Finish useful exports
+
+The implementation already derives export rows from real metric layers. Do not invent CSV content.
+
+Files likely involved:
+- `platform/frontend/src/structureViewer/StructureViewerHost.tsx`
+- `platform/frontend/src/structureViewer/extensions/m6/M6WorkbenchPanel.tsx`
+- `platform/frontend/tests/structureViewerM6Contracts.test.ts`
+
+### Acceptance
+
+1. Select one real result that exposes non-empty metric layers.
+2. Download populated CSV and JSON plus their manifests.
+3. Verify Snapshot JSON, PNG, selected mmCIF, CSV, and JSON output names, MIME types, and SHA-256 manifest fields.
+4. Add one narrow integration/component test for the non-empty table path if it is not already covered.
+
+## 3. Prove volumes, segmentation, and registration
+
+The existing scalar map proof is not a complete fixture: its manifest explicitly says it is unregistered to the unrelated 1UBQ structure. It cannot satisfy this stage.
 
 Files:
 - `platform/api/services/viewer_resources.py`
 - `platform/api/tests/test_viewer_resources.py`
-- a small fixture materializer under `scripts/` or `platform/api/scripts/`
-
-Acceptance:
-1. Fixture job owns its own `viewer/volumes.json`, structure, and map.
-2. Opening that job shows one structure and one density map.
-3. Contour, slice, opacity, and remove/reload work.
-4. A snapshot restores the same map presentation after API restart.
-
-### 2. Supplied segmentation and supplied registration
-
-Only add this after obtaining a matching label map and a known supplied transform. Do not create either in the browser.
-
-Files already provide the seam:
 - `platform/frontend/src/structureViewer/contracts/spatialVolumes.ts`
 - `platform/frontend/src/structureViewer/runtime/StructureSceneController.ts`
 - `platform/frontend/src/structureViewer/adapters/MolstarDirectAdapter.ts`
-- `platform/api/services/viewer_resources.py`
+- `platform/frontend/src/structureViewer/extensions/m6/M6WorkbenchPanel.tsx`
+- one small fixture materializer under `platform/api/scripts/` or `scripts/`
 
-Acceptance:
-1. Load one integer label map with two or three meaningful labels.
-2. Toggle a label and verify its supplied color/name.
-3. Apply one supplied transform from the fixture manifest.
-4. Snapshot and restore the result.
+### Required fixture
 
-If no matching supplied label/transform exists, leave those controls unavailable. Do not manufacture a scientific relationship merely to demonstrate UI.
+One completed job with:
 
-### 3. GRO + XTC playback
+- a matching structure and valid scalar CCP4/MRC map;
+- one supplied integer-label map with two or three meaningful labels;
+- one supplied 4×4 registration transform for that exact structure/map pair;
+- exact artifact hashes, dimensions, axis order, transforms, units, and provenance in `viewer/volumes.json`.
 
-Do this only when one BMS MD result actually has a topology, XTC, exact atom-order identity, and a frame/time map.
+No browser-generated labels, transform, density, or scientific relationship.
 
-Use the Mol* 4.5 substrate already installed:
-- GRO topology to model
-- XTC coordinates
-- `TrajectoryFromModelAndCoordinates`
-- one active replica and source-frame selection
+### Required UI completion
+
+Expose only the controls asked for:
+
+- contour value;
+- X/Y/Z slice selection;
+- color;
+- opacity;
+- show/hide;
+- individual supplied-label show/hide;
+- remove/reload.
+
+### Acceptance
+
+1. Load scalar map and exercise contour, slice, color, opacity, show/hide, remove, and reload.
+2. Load labels, toggle at least two supplied labels, and show their supplied names/colors.
+3. Apply the supplied registration.
+4. Save, restart API, restore, and verify the same volume/label/presentation state.
+
+## 4. Connect one real GRO+XTC trajectory
+
+A bounded GRO+XTC fixture exists under `platform/api/tests/fixtures/bms_md_analysis/gromacs_1u19_format_smoke/`, but it has no browser playback frame map and is not materialized as a completed MD job.
 
 Files:
+- `platform/api/services/md/results.py`
 - `platform/api/routers/md_results.py`
+- `platform/api/schemas/` for the frame-map artifact contract
 - `platform/frontend/src/lib/api.ts`
+- `platform/frontend/src/components/MDResultsPane.tsx`
 - `platform/frontend/src/structureViewer/contracts/mdTrajectory.ts`
 - `platform/frontend/src/structureViewer/runtime/MolstarEngineAdapter.ts`
+- `platform/frontend/src/structureViewer/runtime/MolstarDirectSceneEngineAdapter.ts`
 - `platform/frontend/src/structureViewer/adapters/MolstarDirectAdapter.ts`
 - `platform/frontend/src/structureViewer/runtime/StructureSceneController.ts`
 
-Acceptance:
-1. Select one real replica.
-2. Seek known frame 0, middle, and final frame.
-3. Play and pause without replacing the Mol* owner.
-4. Show source frame and time from the supplied frame map.
+### Required work
 
-No multi-replica dashboard, inferred frame timing, or independent-model playback is needed.
+1. Materialize one completed MD fixture job with GRO, XTC, a representative structure, exact hashes, and one frame map: display frame → source frame/time/step.
+2. Expose the frame map and artifacts through the existing job-owned MD route.
+3. Build the Mol* GRO topology + XTC coordinates path in the existing direct adapter.
+4. Replace the current explicit unsupported stubs with source-frame seek and play/pause/loop for one active replica.
+5. Wire the MD results viewer controls to the controller.
 
-### 4. WebM after playback works
+### Acceptance
 
-Use the existing canvas and current bounded encoder only after the real trajectory lane exists.
+1. Seek frame 0, a middle frame, and the final frame.
+2. Display the exact supplied source-frame and time values.
+3. Play, pause, and loop one active replica.
+4. Keep one direct Mol* owner. No multi-replica player.
 
-Acceptance:
-1. Capture a short 5-10 second trajectory clip.
-2. Cancel one capture without leaving a recorder or track running.
-3. Check the output with `ffprobe`.
-4. Keep morph output visually labeled; never call it physical dynamics.
+## 5. Produce one accepted WebM
 
-## Everyday acceptance checklist
+Files:
+- `platform/frontend/src/structureViewer/runtime/browserMovieExport.ts`
+- `platform/frontend/src/structureViewer/extensions/m6/M6WorkbenchPanel.tsx`
+- `platform/frontend/src/structureViewer/StructureViewerHost.tsx`
+- `platform/frontend/src/components/MDResultsPane.tsx`
 
-Before calling a viewer change done, use one real job and confirm:
+### Required work
 
-1. Structure opens in one Mol* canvas with native controls visible.
-2. Console has no new errors.
-3. Save and restore works across API restart when changed.
-4. PNG and selected mmCIF download.
-5. The real map loads, changes display, removes, and restores from snapshot.
-6. Focused frontend/backend checks and one production build pass.
+1. Build the WebM frame stepper from the real trajectory in stage 4.
+2. Pass `jobId` and that stepper through the MD viewer to the M6 panel.
+3. Run a real browser capture from the existing Mol* canvas.
+4. Validate the downloaded 5–10 second VP9 WebM with `ffprobe` and SHA-256.
+5. Exercise cancellation and verify the recorder/tracks are cleaned up.
+6. Only then set `VITE_BMS_WEBM_VP9_CAPABILITY_PROVEN=true` for the accepted runtime.
 
-That is the complete standard. Do not add load testing, tenant abstractions, broad capability matrices, generalized import workflows, or speculative edge-case suites unless a real user workflow breaks.
+## 6. Integrated acceptance and release
+
+Run only the focused checks needed for these changes:
+
+- snapshot/resource/migration backend tests;
+- MD result/fixture tests;
+- frontend TypeScript and focused structure/MD tests;
+- isolated production frontend build;
+- one browser checklist covering stages 1–5.
+
+Then:
+
+1. Inspect the exact diff and protect unrelated work.
+2. Commit coherent tranches normally.
+3. Push the accepted commit to `test` without rewriting history.
+4. Rebuild/restart the API and frontend from that same commit.
+5. Verify API and frontend diagnostics report that exact revision.
+
+## Explicitly excluded
+
+- giant collection pagination;
+- linked dual-viewer comparisons;
+- PDB+DCD playback;
+- multi-replica playback;
+- multi-volume compositing;
+- browser scientific calculations;
+- complex segmentation authoring;
+- MP4;
+- exhaustive malformed-file or codec matrices;
+- broad M0–M4 audits;
+- speculative lifecycle or edge-case suites;
+- Conformational Mapping Phase 13.
+
+## Definition of done
+
+All six stages have real evidence. In particular, the accepted build can save/reopen a view, export meaningful artifacts, restore a matching density/label/registration scene, play a real GRO+XTC source, and produce one verified WebM from that source.
