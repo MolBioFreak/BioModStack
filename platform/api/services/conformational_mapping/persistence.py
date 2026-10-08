@@ -39,7 +39,7 @@ RETRYABLE_STATES = frozenset({"failed", "cancelled"})
 _RECORD_TYPES = frozenset(
     {
         "ensemble", "native_manifest", "structure_map", "landscape", "analysis",
-        "handoff", "resampling", "lineage", "support", "missingness",
+        "state_landscape_analysis", "handoff", "resampling", "lineage", "support", "missingness",
         "failure_receipt",
     }
 )
@@ -224,6 +224,7 @@ async def persist_derived_record(
         "structure_map": "cm_structure_map_v1",
         "landscape": "cm_frustration_landscape_v1",
         "analysis": "cm_analysis_v1",
+        "state_landscape_analysis": "cm_state_landscape_analysis_v1",
         "handoff": "cm_mutagenesis_handoff_v1",
     }
     schema = schema_by_type.get(record_type)
@@ -301,7 +302,7 @@ async def ingest_result_bundle(
         allowed_extensions = {
             "cm_structure_maps", "cm_frustration_landscapes", "cm_mutagenesis_handoffs",
             "cm_resampling_v1", "cm_lineage", "cm_support", "cm_missingness",
-            "cm_derived_files",
+            "cm_state_landscape_analyses", "cm_derived_files",
         }
         unknown = set(bundle) - set(core_bundle) - allowed_extensions
         if unknown:
@@ -371,14 +372,15 @@ async def ingest_result_bundle(
     await _replace_record(session, record.request_id, "native_manifest", "primary", native)
     optional_records = {
         "cm_structure_maps": "structure_map", "cm_frustration_landscapes": "landscape",
-        "cm_analysis_v1": "analysis", "cm_mutagenesis_handoffs": "handoff",
-        "cm_resampling_v1": "resampling", "cm_lineage": "lineage",
+        "cm_analysis_v1": "analysis", "cm_state_landscape_analyses": "state_landscape_analysis",
+        "cm_mutagenesis_handoffs": "handoff", "cm_resampling_v1": "resampling", "cm_lineage": "lineage",
         "cm_support": "support", "cm_missingness": "missingness",
     }
     optional_schema = {
         "structure_map": "cm_structure_map_v1",
         "landscape": "cm_frustration_landscape_v1",
         "analysis": "cm_analysis_v1",
+        "state_landscape_analysis": "cm_state_landscape_analysis_v1",
         "handoff": "cm_mutagenesis_handoff_v1",
     }
     ensemble_candidate_ids = {item["candidate_id"] for item in ensemble["candidates"]}

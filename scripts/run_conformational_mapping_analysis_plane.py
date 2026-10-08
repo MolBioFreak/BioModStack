@@ -21,6 +21,9 @@ from services.conformational_mapping.clash import build_clash_rows  # noqa: E402
 from services.conformational_mapping.contracts import canonical_json_bytes, canonical_sha256  # noqa: E402
 from services.conformational_mapping.frustration import finalize_landscape  # noqa: E402
 from services.conformational_mapping.resampling import pair_terminal_manifests  # noqa: E402
+from services.conformational_mapping.state_landscape_analysis import (  # noqa: E402
+    derive_state_landscape_analysis,
+)
 from services.conformational_mapping.structure_normalizer import (  # noqa: E402
     bind_candidate_complex_snapshot,
     normalize_conformational_mapping_structure,
@@ -240,6 +243,7 @@ def main() -> None:
         ])
 
     comparisons: list[dict[str, object]] = []
+    state_pairs: list[dict[str, str]] = []
     resampling_manifest: dict[str, object] | None = None
     pair_request_path = args.request.parent / "cm_resampling_pair_request_v1.json"
     if pair_request_path.is_file() and len(request["targets"]) == 2:
@@ -249,6 +253,23 @@ def main() -> None:
         candidates_b = [item for item in ensemble["candidates"] if item["backend_coordinates"]["target_id"] == target_b]
         ids_a = {item["candidate_id"] for item in candidates_a}
         ids_b = {item["candidate_id"] for item in candidates_b}
+        coordinates_a = {
+            (str(item["backend_coordinates"]["ordered_seed"]), str(item["backend_coordinates"]["sample_index"])): item["candidate_id"]
+            for item in candidates_a
+        }
+        coordinates_b = {
+            (str(item["backend_coordinates"]["ordered_seed"]), str(item["backend_coordinates"]["sample_index"])): item["candidate_id"]
+            for item in candidates_b
+        }
+        if set(coordinates_a) != set(coordinates_b):
+            raise RuntimeError("state-conditioned comparison has unmatched candidate coordinates")
+        state_pairs = [
+            {
+                "pair_id": f"{pair_request['pair_id']}:{canonical_sha256(list(coordinate))[:16]}",
+                "candidate_a_id": coordinates_a[coordinate], "candidate_b_id": coordinates_b[coordinate],
+            }
+            for coordinate in sorted(coordinates_a)
+        ]
         mutation = pair_request["substitution"]
         residue = next(
             row for candidate_id in ids_a for row in landscapes[candidate_id]["residues"]
@@ -288,6 +309,15 @@ def main() -> None:
     analysis_path = derived / "cm_analysis_v1.json"
     analysis_path.write_bytes(canonical_json_bytes(analysis))
     records.append(_record(args.out, analysis_path, "analysis", None))
+    state_landscape_analysis: dict[str, object] | None = None
+    if state_pairs:
+        state_landscape_analysis = derive_state_landscape_analysis(
+            ensemble, [landscapes[key] for key in sorted(landscapes)], maps,
+            comparison={"mode": "pairwise", "pairs": state_pairs},
+        )
+        state_path = derived / "cm_state_landscape_analysis_v1.json"
+        state_path.write_bytes(canonical_json_bytes(state_landscape_analysis))
+        records.append(_record(args.out, state_path, "state_landscape_analysis", None))
     support = {
         "schema_name": "cm_support", "schema_version": 1,
         "request_id": request["request_id"], "analysis_id": analysis["analysis_id"],
@@ -337,6 +367,7 @@ def main() -> None:
         "structure_maps": maps,
         "landscapes": [landscapes[key] for key in sorted(landscapes)],
         "analysis": analysis,
+        "state_landscape_analyses": [] if state_landscape_analysis is None else [state_landscape_analysis],
         "lineage": lineage,
         "support": support,
         "missingness": missingness,
