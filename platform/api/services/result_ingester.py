@@ -366,12 +366,158 @@ async def ingest_job_results(
         print(f"[Ingester] No designs found in CSV or CSV missing. Trying loose files...")
         designs_created = await ingest_loose_files(job_id, output_path, session)
 
-    # Post-ingestion: Check for FrustraMPNN results and attach to designs
+    # Post-ingestion: Attach supplementary metrics from pipeline stages
     if designs_created > 0:
+        await ingest_screening_data(job_id, output_path, session)
         await ingest_frustration_data(job_id, output_path, session)
         await ingest_maturation_data(job_id, output_path, session)
 
     return designs_created
+
+
+async def ingest_screening_data(
+    job_id: str,
+    output_path: Path,
+    session: AsyncSession,
+) -> int:
+    """
+    Backfill contact-distance metrics onto existing Design rows.
+
+    Reads the ``rfantibody_screening_summary.csv`` produced by
+    ``screen_rfantibody_backbones.py``.  Because the CSV design names
+    correspond to the *original* RFA output filenames (e.g.
+    ``001_<uuid>``) while the ingester stores designs under their
+    *collected* names (e.g. ``job0_rfantibody_child_0``), exact name
+    matching is tried first, then ordinal matching (sorted CSV rows →
+    sorted designs that have no contact data yet).
+    """
+    from database import Job
+
+    # ── Build lineage-aware job-ID set ───────────────────────────────────
+    job_info = await session.execute(select(Job).where(Job.id == job_id))
+    current_job = job_info.scalar_one_or_none()
+
+    design_job_ids = [job_id]
+    if current_job:
+        if current_job.parent_job_id:
+            design_job_ids.append(current_job.parent_job_id)
+        if current_job.batch_id:
+            batch_res = await session.execute(
+                select(Job.id).where(Job.batch_id == current_job.batch_id)
+            )
+            design_job_ids.extend([row[0] for row in batch_res.all()])
+        child_result = await session.execute(
+            select(Job.id).where(Job.parent_job_id == job_id)
+        )
+        design_job_ids.extend([row[0] for row in child_result.all()])
+        params_dict = _parse_job_params(current_job.params)
+        if params_dict.get("iteration_source_job_id"):
+            design_job_ids.append(params_dict["iteration_source_job_id"])
+        if params_dict.get("iteration_source_root_job_id"):
+            design_job_ids.append(params_dict["iteration_source_root_job_id"])
+    design_job_ids = list(set(design_job_ids))
+
+    # ── Locate screening CSV ─────────────────────────────────────────────
+    search_dirs = [
+        output_path / "collected" / "rfantibody_filtered",
+        output_path / "run" / "rfantibody_screen",
+        output_path,
+    ]
+    csv_path: Optional[Path] = None
+    for d in search_dirs:
+        candidate = d / "rfantibody_screening_summary.csv"
+        if candidate.exists():
+            csv_path = candidate
+            break
+
+    if csv_path is None:
+        return 0
+
+    print(f"[Ingester] Found RFA screening CSV at {csv_path}")
+
+    # ── Load CSV rows ────────────────────────────────────────────────────
+    csv_rows: list[dict] = []
+    try:
+        with open(csv_path, "r") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                ecc = safe_int(row.get("epitope_contact_count"))
+                emd = safe_float(row.get("epitope_min_distance"))
+                if ecc is not None or emd is not None:
+                    csv_rows.append(row)
+    except Exception as e:
+        print(f"[Ingester] Error reading screening CSV {csv_path}: {e}")
+        return 0
+
+    if not csv_rows:
+        return 0
+
+    # ── Phase 1: exact name match ────────────────────────────────────────
+    updated_count = 0
+    unmatched_rows: list[dict] = []
+    for row in csv_rows:
+        design_name = row.get("design_name", "").strip()
+        if not design_name:
+            unmatched_rows.append(row)
+            continue
+        result = await session.execute(
+            select(Design).where(
+                Design.job_id.in_(design_job_ids),
+                Design.name == design_name,
+            )
+        )
+        design = result.scalars().first()
+        if design:
+            changed = _apply_screening_row(design, row)
+            if changed:
+                updated_count += 1
+        else:
+            unmatched_rows.append(row)
+
+    # ── Phase 2: ordinal fallback for unmatched rows ─────────────────────
+    if unmatched_rows:
+        # Fetch ALL designs without contact data, sorted by name for
+        # deterministic ordinal alignment with the CSV row order.
+        result = await session.execute(
+            select(Design).where(
+                Design.job_id.in_(design_job_ids),
+                Design.epitope_min_distance.is_(None),
+            ).order_by(Design.name)
+        )
+        orphan_designs = result.scalars().all()
+
+        if orphan_designs:
+            print(f"[Ingester] Phase-2 ordinal match: {len(unmatched_rows)} CSV rows → {len(orphan_designs)} designs without contacts")
+            for idx, row in enumerate(unmatched_rows):
+                if idx >= len(orphan_designs):
+                    break
+                design = orphan_designs[idx]
+                changed = _apply_screening_row(design, row)
+                if changed:
+                    updated_count += 1
+                    print(f"[Ingester]   ordinal [{idx}] CSV '{row.get('design_name','')}' → DB '{design.name}': "
+                          f"contacts={safe_int(row.get('epitope_contact_count'))}, "
+                          f"min_dist={safe_float(row.get('epitope_min_distance'))}")
+
+    if updated_count > 0:
+        await session.commit()
+        print(f"[Ingester] Updated {updated_count} designs with screening contact metrics")
+
+    return updated_count
+
+
+def _apply_screening_row(design: "Design", row: dict) -> bool:
+    """Apply screening CSV fields to a Design. Returns True if anything changed."""
+    changed = False
+    ecc = safe_int(row.get("epitope_contact_count"))
+    emd = safe_float(row.get("epitope_min_distance"))
+    if ecc is not None and design.epitope_contact_count is None:
+        design.epitope_contact_count = ecc
+        changed = True
+    if emd is not None and design.epitope_min_distance is None:
+        design.epitope_min_distance = emd
+        changed = True
+    return changed
 
 
 async def ingest_maturation_data(
