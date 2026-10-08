@@ -81,6 +81,46 @@ def _worker_attempt(tmp_path: Path, command: list[str]) -> Path:
     return attempt_dir
 
 
+@pytest.mark.parametrize("mutation", ["replace", "append", "undeclared", "symlink"])
+def test_native_staging_reverification_rejects_input_generation_changes(tmp_path, mutation):
+    attempt = _worker_attempt(tmp_path, ["true"])
+    envelope = worker.load_json(attempt / worker.ENVELOPE_FILE)
+    inputs = attempt / "bundle" / "inputs"
+    inputs.mkdir()
+    source = inputs / "reads.fastq"
+    source.write_bytes(b"reads")
+    record = {"relative_path": "inputs/reads.fastq", "size_bytes": 5,
+              "sha256": _sha256(source), "role": "input", "mode": source.stat().st_mode & 0o777,
+              "link_target": None}
+    envelope["files"].append(record)
+    envelope["native_execution_authority"] = {"input_files": [record]}
+    worker.atomic_json(attempt / worker.ENVELOPE_FILE, envelope)
+    worker.verify_bundle(attempt)
+    if mutation == "replace":
+        source.unlink()
+        source.write_bytes(b"other")
+    elif mutation == "append":
+        with source.open("ab") as stream:
+            stream.write(b"extra")
+    elif mutation == "undeclared":
+        (inputs / "unexpected.fastq").write_bytes(b"extra")
+    else:
+        (inputs / "unexpected.fastq").symlink_to(source)
+    with pytest.raises(RuntimeError, match="hash mismatch|undeclared|symlink"):
+        worker.verify_bundle(attempt)
+
+
+def test_native_manifest_echoes_exact_staging_authority(tmp_path):
+    attempt = _worker_attempt(tmp_path, ["true"])
+    envelope = worker.load_json(attempt / worker.ENVELOPE_FILE)
+    authority = {"schema": "bms.ngs.remote-execution-authority.v1", "input_files": [], "setting": "α"}
+    envelope["native_execution_authority"] = authority
+    worker.atomic_json(attempt / worker.ENVELOPE_FILE, envelope)
+    manifest = worker.build_result_manifest(attempt, envelope, 0)
+    assert manifest["native_execution_authority_sha256"] == hashlib.sha256(worker.canonical_bytes(authority)).hexdigest()
+    assert manifest["execution_envelope_sha256"] == _sha256(attempt / worker.ENVELOPE_FILE)
+
+
 def _wait_terminal(attempt_dir: Path, timeout: float = 10.0) -> dict[str, object]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

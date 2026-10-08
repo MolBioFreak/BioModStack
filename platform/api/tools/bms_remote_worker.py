@@ -157,6 +157,23 @@ def verify_bundle(attempt_dir: Path) -> dict[str, Any]:
         expected_sha = str(record.get("sha256") or "")
         if path.stat().st_size != expected_size or sha256_file(path) != expected_sha:
             raise RuntimeError(f"bundle file hash mismatch: {relative}")
+    native_authority = envelope.get("native_execution_authority")
+    if native_authority is not None:
+        inputs = [record for record in envelope.get("files", []) if record.get("role") == "input"]
+        if not isinstance(native_authority, dict) or native_authority.get("input_files") != inputs:
+            raise RuntimeError("native input authority differs from staged files")
+        input_root = bundle_root / "inputs"
+        if input_root.is_symlink():
+            raise RuntimeError("native input root is a symlink")
+        observed = set()
+        if input_root.exists():
+            for path in input_root.rglob("*"):
+                if path.is_symlink():
+                    raise RuntimeError("native input namespace contains a symlink")
+                if path.is_file():
+                    observed.add(path.relative_to(bundle_root).as_posix())
+        if observed != {record["relative_path"] for record in inputs}:
+            raise RuntimeError("native staged input namespace has missing or undeclared files")
     source_archives = [
         record
         for record in envelope.get("files", [])
@@ -272,11 +289,17 @@ def build_result_manifest(attempt_dir: Path, envelope: dict[str, Any], exit_code
         "source_revision": str(envelope["source_revision"]),
         "source_tree": str(envelope["source_tree"]),
         "execution_envelope_sha256": sha256_file(envelope_path(attempt_dir)),
+        "native_execution_authority_sha256": (
+            hashlib.sha256(canonical_bytes(envelope["native_execution_authority"])).hexdigest()
+            if envelope.get("native_execution_authority") is not None else None
+        ),
     }
 
 
 def supervise(attempt_dir: Path) -> int:
     envelope = load_json(envelope_path(attempt_dir))
+    if envelope.get("native_execution_authority") is not None:
+        envelope = verify_bundle(attempt_dir)
     current = load_json(status_path(attempt_dir))
     if current.get("state") not in {"prepared", "cancelling"}:
         raise RuntimeError("remote attempt is not prepared for launch")
@@ -368,6 +391,13 @@ def supervise(attempt_dir: Path) -> int:
         supervisor_log = attempt_dir / "supervisor.log"
         if supervisor_log.is_file():
             shutil.copy2(supervisor_log, remote_logs / "supervisor.log")
+        # The returned binding cannot attest to a different staged input or
+        # runtime generation than the one verified immediately before spawn.
+        # This is a producer boundary check, not a native descriptor substitute.
+        if envelope.get("native_execution_authority") is not None:
+            verified = verify_bundle(attempt_dir)
+            if canonical_bytes(verified) != canonical_bytes(envelope):
+                raise RuntimeError("execution envelope changed during native execution")
         manifest = build_result_manifest(attempt_dir, envelope, exit_code)
         output_manifest = Path(str(envelope["output_directory"])) / RESULT_MANIFEST_FILE
         atomic_json(output_manifest, manifest)

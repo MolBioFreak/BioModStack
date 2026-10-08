@@ -309,6 +309,7 @@ def _remote_receipt(
         "source_archive_sha256": bundle.envelope.source_archive_sha256,
         "execution_envelope_sha256": bundle.envelope_sha256,
         "runtime_identity_sha256": bundle.runtime_identity_sha256,
+        "native_execution_authority": getattr(bundle.envelope, "native_execution_authority", None),
         "expected_result_contract_sha256": hashlib.sha256(
             json.dumps(
                 bundle.envelope.expected_result_contract,
@@ -670,6 +671,23 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _validate_native_execution_binding(job: Job, manifest: RemoteResultManifest) -> None:
+    if str(getattr(job, "model_id", "") or "").lower() != "nanopore":
+        return
+    receipt = (job.provenance or {}).get("remote_execution_receipt", {})
+    authority = receipt.get("native_execution_authority")
+    if not isinstance(authority, dict) or authority.get("schema") != "bms.ngs.remote-execution-authority.v1":
+        raise RemoteExecutionError("Remote native staging/settings authority is missing")
+    payload = json.dumps(authority, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    if hashlib.sha256(payload).hexdigest() != manifest.native_execution_authority_sha256:
+        raise RemoteExecutionError("Remote native staging/settings binding does not match returned evidence")
+    from services.ont_ngs_native_settings import accepted_native_settings
+    try:
+        accepted_native_settings(job.params, authority)
+    except ValueError as exc:
+        raise RemoteExecutionError("Remote native effective settings changed after staging") from exc
+
+
 def _verify_result_package(
     incoming: Path,
     job: Job,
@@ -709,6 +727,7 @@ def _verify_result_package(
             actual.add(path.relative_to(incoming).as_posix())
     if actual != declared:
         raise RemoteExecutionError("Remote result package contains undeclared or missing files")
+    _validate_native_execution_binding(job, manifest)
     return manifest
 
 
@@ -751,6 +770,7 @@ async def _fetch_result_manifest(
         raise RemoteExecutionError("Remote result manifest identity does not match the BMS Job")
     if len(manifest.artifacts) > MAX_RESULT_ARTIFACTS:
         raise RemoteExecutionError("Remote result manifest exceeds the artifact-count limit")
+    _validate_native_execution_binding(job, manifest)
     # Parsing is bounded; disk admission belongs to the global resource owner,
     # on the receiving API target, before a single incoming file is written.
     return manifest, manifest_bytes

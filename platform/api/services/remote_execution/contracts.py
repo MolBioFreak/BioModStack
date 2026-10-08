@@ -133,6 +133,7 @@ class RemoteExecutionEnvelope(StrictModel):
     environment: dict[str, str] = Field(default_factory=dict)
     output_directory: str
     expected_result_contract: dict[str, Any]
+    native_execution_authority: dict[str, Any] | None = None
     path_map: dict[str, str]
     files: list[RemoteFileRecord]
     created_at: datetime
@@ -170,6 +171,7 @@ class RemoteResultManifest(StrictModel):
     source_revision: str
     source_tree: str
     execution_envelope_sha256: str = Field(pattern=SHA256_PATTERN)
+    native_execution_authority_sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
 
     @model_validator(mode="after")
     def validate_unique_artifacts(self) -> "RemoteResultManifest":

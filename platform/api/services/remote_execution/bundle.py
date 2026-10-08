@@ -649,6 +649,15 @@ def prepare_remote_bundle(
             effective_environment[key] = str(value)
 
     records = [*source_records, *runtime_records, *input_records]
+    native_authority = None
+    if str(job.model_id).lower() == "nanopore":
+        from services.ont_ngs_native_settings import seal_native_settings
+        native_authority = {
+            "schema": "bms.ngs.remote-execution-authority.v1",
+            **seal_native_settings(job.params),
+            "input_files": [record.model_dump(mode="json") for record in input_records],
+            "input_path_map": input_path_map,
+        }
     envelope = RemoteExecutionEnvelope(
         job_id=str(job.id),
         root_job_id=root_job_id,
@@ -663,6 +672,7 @@ def prepare_remote_bundle(
         environment=effective_environment,
         output_directory=remote_results,
         expected_result_contract=result_contract,
+        native_execution_authority=native_authority,
         path_map=path_map,
         files=records,
         created_at=datetime.now(timezone.utc),

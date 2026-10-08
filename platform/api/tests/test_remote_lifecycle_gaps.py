@@ -42,6 +42,32 @@ def test_invalid_readiness_does_not_publish_policy(delivery_resources, field, va
     assert db.execute("SELECT * FROM resource_admission_policy WHERE policy_id='execution-target:cloud'").fetchone() is None
 
 
+@pytest.mark.parametrize("workflow", ["ont_basecall_dna", "ont_basecall_rna", "ont_plasmid_qc",
+    "ont_construct_screening", "ont_methylation_analysis", "ont_fastq_qc",
+    "ont_pooled_reference_assignment", "wf_clone_validation", "external_signal_alignment"])
+def test_remote_native_binding_rejects_settings_and_input_identity_drift(workflow):
+    import hashlib
+    import json
+    from copy import deepcopy
+    from services.ont_ngs_native_settings import seal_native_settings
+    params = {"workflow_id": workflow, "sample_alias": "exact-sample"}
+    authority = {"schema": "bms.ngs.remote-execution-authority.v1", **seal_native_settings(params),
+                 "input_files": [{"relative_path": "inputs/reads", "sha256": "a" * 64}],
+                 "input_path_map": {"/source/reads": "/remote/attempt/bundle/inputs/reads"}}
+    digest = hashlib.sha256(json.dumps(authority, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+    job = SimpleNamespace(model_id="nanopore", params=deepcopy(params),
+                          provenance={"remote_execution_receipt": {"native_execution_authority": authority}})
+    manifest = SimpleNamespace(native_execution_authority_sha256=digest)
+    ex._validate_native_execution_binding(job, manifest)
+    job.params["sample_alias"] = "different"
+    with pytest.raises(ex.RemoteExecutionError, match="effective settings"):
+        ex._validate_native_execution_binding(job, manifest)
+    job.params = params
+    authority["input_files"][0]["sha256"] = "b" * 64
+    with pytest.raises(ex.RemoteExecutionError, match="returned evidence"):
+        ex._validate_native_execution_binding(job, manifest)
+
+
 def test_ngs_remote_callback_is_optional_not_another_target():
     from services.remote_execution.bundle import _remote_api_environment, RemoteBundleError
     assert _remote_api_environment("nanopore", "") == {"API_BASE_URL": ""}
@@ -150,6 +176,42 @@ def test_publication_admits_and_retains_both_generations(delivery_resources, tmp
     assert db.execute("SELECT SUM(disk_bytes) FROM derived_resource_reservations WHERE state!='released'").fetchone()[0] == 8
     assert resources.remove_quiescent_storage(quarantine, owner="remote-quarantine:job:attempt")
     assert (published / "science").read_bytes() == b"new"
+
+
+def test_publication_capacity_refusal_preserves_both_namespaces(delivery_resources, tmp_path):
+    resources, db = delivery_resources
+    incoming, output = tmp_path / "incoming", tmp_path / "output"
+    incoming.mkdir()
+    output.mkdir()
+    (incoming / "result-manifest.json").write_bytes(b"{}")
+    (incoming / "science").write_bytes(b"new")
+    (output / "science").write_bytes(b"old")
+    db.execute("UPDATE resource_admission_policy SET disk_byte_limit=6")
+    db.commit()
+    job = SimpleNamespace(id="job", remote_attempt_id="attempt", output_dir=str(output), child_output_dir=None)
+    with pytest.raises(resources.ResourceCapacityUnavailable):
+        ex._publish_result_generation(job, incoming)
+    assert (output / "science").read_bytes() == b"old"
+    assert (incoming / "science").read_bytes() == b"new"
+    assert not (tmp_path / ".bms-remote-quarantine").exists()
+    assert db.execute("SELECT SUM(disk_bytes) FROM derived_resource_reservations WHERE state!='released'").fetchone()[0] == 5
+
+
+def test_previous_quarantine_is_never_silently_replaced(delivery_resources, tmp_path):
+    incoming, output = tmp_path / "incoming", tmp_path / "output"
+    incoming.mkdir()
+    output.mkdir()
+    (incoming / "science").write_bytes(b"new")
+    (output / "science").write_bytes(b"old")
+    previous = tmp_path / ".bms-remote-quarantine" / "job" / "attempt" / "previous"
+    previous.mkdir(parents=True)
+    (previous / "science").write_bytes(b"older")
+    job = SimpleNamespace(id="job", remote_attempt_id="attempt", output_dir=str(output), child_output_dir=None)
+    with pytest.raises(ex.RemoteExecutionError, match="explicit cleanup"):
+        ex._publish_result_generation(job, incoming)
+    assert (previous / "science").read_bytes() == b"older"
+    assert (output / "science").read_bytes() == b"old"
+    assert (incoming / "science").read_bytes() == b"new"
 
 
 @pytest.mark.asyncio
