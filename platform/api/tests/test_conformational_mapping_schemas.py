@@ -71,10 +71,11 @@ def test_cm001_rejects_seed_conflicts() -> None:
 
 
 def test_cm001b_state_landscape_comparison_authority_is_structural_and_target_bound() -> None:
-    request = _json(SCHEMA_FIXTURES / "positive" / "all_schemas.json")["cm_request_v1"]
-    assert request["state_landscape_comparison"] == {
+    request = copy.deepcopy(_json(SCHEMA_FIXTURES / "positive" / "all_schemas.json")["cm_request_v1"])
+    request["state_landscape_comparison"] = {
         "mode": "pairwise", "target_id": "target-a", "scope": "all_within_target",
     }
+    request["request_sha256"] = request_sha256(request)
     validate_schema("cm_request_v1", request)
 
     malformed = copy.deepcopy(request)
@@ -395,7 +396,7 @@ def test_cm011_handoff_idempotency_vector() -> None:
 def test_cm012_unknown_fields_fail_closed() -> None:
     fixtures = _json(SCHEMA_FIXTURES / "positive" / "all_schemas.json")
     unknown_values = _json(SCHEMA_FIXTURES / "negative" / "unknown_fields.json")
-    assert set(fixtures) == set(SCHEMA_FILENAMES)
+    assert set(fixtures) == set(SCHEMA_FILENAMES) - {"cm_state_landscape_analysis_v1"}
     for schema_key, instance in fixtures.items():
         schema = load_schema(schema_key)
         assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"

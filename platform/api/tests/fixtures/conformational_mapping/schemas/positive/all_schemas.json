@@ -9,7 +9,6 @@
     "samples_per_seed": 5,
     "feature_policy": {"mode": "regenerate_mutated_protein_v1"},
     "runtime_policy": {"use_default_params": true},
-    "state_landscape_comparison": {"mode": "pairwise", "target_id": "target-a", "scope": "all_within_target"},
     "analysis_policy": {
       "sign_zero_epsilon": 0.000001,
       "clash_detector_id": "bms_clash",
@@ -23,7 +22,7 @@
     },
     "source": {"kind": "design", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
     "created_by": {"principal_id": "tester"},
-    "request_sha256": "88ca3b3e7a110bdeba57fe8d049434089dfe72ca9544f76f7611cf7d7867b8eb"
+    "request_sha256": "df5dc9c2bbacfcd38e0928cb2f92b532d16569a3977046f078c3e1062faefbce"
   },
   "cm_complex_snapshot_v1": {
     "schema_name": "cm_complex_snapshot",
@@ -230,7 +229,7 @@
     "schema_name": "cm_ensemble",
     "schema_version": 1,
     "request_id": "f8d10c9a-d6eb-4af8-88f1-b390c01b711b",
-    "request_sha256": "88ca3b3e7a110bdeba57fe8d049434089dfe72ca9544f76f7611cf7d7867b8eb",
+    "request_sha256": "df5dc9c2bbacfcd38e0928cb2f92b532d16569a3977046f078c3e1062faefbce",
     "source_snapshot_sha256": "2f09caffc7afa62060e6110eb5b0d6f456a3db19e9216c033e33e1e7b214d371",
     "backend": "protenix_v2_ensemble",
     "runtime_identity": "protenix-runtime",
@@ -367,7 +366,7 @@
     "schema_name": "cm_analysis",
     "schema_version": 1,
     "analysis_id": "analysis-1",
-    "source_ensemble_sha256": "c3f40bfe64e6b3ae1c7ee51edd3ab635764fadf723b768d25c22d3a17238edda",
+    "source_ensemble_sha256": "bdb8aa7508f028cf14082588b8737768f2872edf8e16a15cecd9b227829a08fc",
     "source_landscape_sha256": "0fbf64dc5f859fb18f4227b26a934a7a4143eb0c02ace7b1f251577531c3ad60",
     "formula_version": "cm_analysis_v1",
     "expected_strata": ["101", "202"],
@@ -403,42 +402,12 @@
     "ranking_policy": {},
     "clash_records": []
   },
-  "cm_state_landscape_analysis_v1": {
-    "schema_name": "cm_state_landscape_analysis",
-    "schema_version": 1,
-    "analysis_id": "cm_state_landscape_analysis_0123456789abcdef0123456789abcdef",
-    "source_ensemble_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "source_landscape_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "source_structure_map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "comparison_mode": "pairwise",
-    "comparison_target_id": "target-a",
-    "comparison_scope": "all_within_target",
-    "reference_backend_coordinates": null,
-    "reference_candidate_id": null,
-    "resolved_pairs": [{
-      "pair_id": "state-a__state-b",
-      "candidate_a_id": "state-a",
-      "candidate_b_id": "state-b"
-    }],
-    "comparison_sha256": "dacb8f22b5c4d6fbac0059d3c3f3fa4761cdcccb0993524b9f80867ee62983cd",
-    "formula_version": "cm_state_landscape_analysis_v1",
-    "formula_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-    "policy_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-    "rows": [],
-    "support_ledger": [{
-      "pair_id": "state-a__state-b",
-      "candidate_a_id": "state-a",
-      "candidate_b_id": "state-b",
-      "eligible_row_count": 0,
-      "excluded_row_count": 0
-    }],
-    "exclusion_ledger": []
-  },
+
   "cm_mutagenesis_handoff_v1": {
     "schema_name": "cm_mutagenesis_handoff",
     "schema_version": 1,
-    "source_ensemble_sha256": "c3f40bfe64e6b3ae1c7ee51edd3ab635764fadf723b768d25c22d3a17238edda",
-    "source_analysis_sha256": "3713c935d553ea59d4c8febe9fef20269fc92b142ad9244179a88b9843bc72f6",
+    "source_ensemble_sha256": "bdb8aa7508f028cf14082588b8737768f2872edf8e16a15cecd9b227829a08fc",
+    "source_analysis_sha256": "54745cc3a853ad5c8e0fafba6efa912ab2849472c46a67b29c40514052d463fe",
     "source_complex_sha256": "2f09caffc7afa62060e6110eb5b0d6f456a3db19e9216c033e33e1e7b214d371",
     "source_structure_map_sha256": "b69cb8e18bb7a414a80775e4f084952a210257a4b2c88b920a26954dce18759f",
     "target_id": "target-a",

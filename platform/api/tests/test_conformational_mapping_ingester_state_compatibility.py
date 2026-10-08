@@ -12,7 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base, ConformationalMappingRecord, Job
-from services.conformational_mapping.contracts import canonical_sha256, candidate_id
+from services.conformational_mapping.contracts import (
+    canonical_sha256,
+    candidate_id,
+    request_sha256,
+    validate_schema,
+)
 from services.conformational_mapping.persistence import (
     ConformationalPersistenceError,
     ingest_result_bundle,
@@ -20,6 +25,7 @@ from services.conformational_mapping.persistence import (
 )
 from services.conformational_mapping.state_landscape_analysis import (
     derive_state_landscape_analysis_for_request,
+    validate_state_landscape_analysis_binding,
 )
 from services.result_ingester import ingest_job_results
 
@@ -34,10 +40,9 @@ async def _session(tmp_path: Path) -> tuple[AsyncSession, object]:
     return sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)(), engine
 
 
-def _no_authority_bundle(root: Path) -> tuple[dict, dict, dict]:
+def _no_authority_bundle(root: Path) -> tuple[dict, dict]:
     fixture = copy.deepcopy(json.loads(FIXTURE.read_text()))
     request = fixture["cm_request_v1"]
-    request.pop("state_landscape_comparison")
     ensemble = fixture["cm_ensemble_v1"]
     native = fixture["cm_native_artifacts_v1"]
     for index, item in enumerate(native["files"], start=1):
@@ -60,80 +65,17 @@ def _no_authority_bundle(root: Path) -> tuple[dict, dict, dict]:
         "cm_frustration_landscapes": [fixture["cm_frustration_landscape_v1"]],
         "cm_analysis_v1": fixture["cm_analysis_v1"],
     }
-    return request, bundle, fixture["cm_state_landscape_analysis_v1"]
+    return request, bundle
 
 
-async def _register(session: AsyncSession, request: dict, bundle: dict) -> object:
-    return await register_prepared_request(
-        session,
-        job=Job(
-            id=request["request_id"], name="legacy-state", model_id="conformational_mapping",
-            mode="map", status="queued", params={}, created_at=datetime.utcnow(),
-        ),
-        principal_id="alice",
-        request=request,
-        coordinate_plan={
-            "coordinate_plan_sha256": "b" * 64,
-            "expected_cardinality": bundle["cm_ensemble_v1"]["expected_cardinality"],
-            "coordinates": bundle["cm_ensemble_v1"]["expected_coordinates"],
-        },
-        resume_key="0" * 64,
-        capability_sha256="c" * 64,
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("state_value", [None, []])
-async def test_cm_ingest_bundle_treats_missing_or_empty_state_analysis_as_legacy_absence(
-    tmp_path: Path, state_value: object
-) -> None:
-    root = tmp_path / "result"
-    root.mkdir()
-    request, bundle, _artifact = _no_authority_bundle(root)
-    if state_value is not None:
-        bundle["cm_state_landscape_analyses"] = state_value
-    session, engine = await _session(tmp_path)
-    try:
-        record = await _register(session, request, bundle)
-        await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
-        assert await session.scalar(
-            select(ConformationalMappingRecord).where(
-                ConformationalMappingRecord.record_type == "state_landscape_analysis"
-            )
-        ) is None
-    finally:
-        await session.close()
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_cm_ingest_bundle_rejects_state_artifact_without_comparison_authority(tmp_path: Path) -> None:
-    root = tmp_path / "result"
-    root.mkdir()
-    request, bundle, artifact = _no_authority_bundle(root)
-    bundle["cm_state_landscape_analyses"] = [artifact]
-    session, engine = await _session(tmp_path)
-    try:
-        record = await _register(session, request, bundle)
-        with pytest.raises(
-            ConformationalPersistenceError,
-            match="state landscape analysis is not authorized without comparison authority",
-        ):
-            await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
-    finally:
-        await session.close()
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_cm_ingest_bundle_is_the_accepted_state_artifact_persistence_path(tmp_path: Path) -> None:
-    root = tmp_path / "result"
-    root.mkdir()
-    request, bundle, _artifact = _no_authority_bundle(root)
+def _coherent_state_bundle(root: Path) -> tuple[dict, dict, dict]:
+    request, bundle = _no_authority_bundle(root)
     request["state_landscape_comparison"] = {
         "mode": "pairwise", "target_id": "target-a", "scope": "all_within_target",
     }
+    request["request_sha256"] = request_sha256(request)
     ensemble = bundle["cm_ensemble_v1"]
+    ensemble["request_sha256"] = request["request_sha256"]
     second_candidate = copy.deepcopy(ensemble["candidates"][0])
     second_candidate["backend_coordinates"] = {
         "backend": "protenix_v2_ensemble", "target_id": "target-a",
@@ -182,6 +124,88 @@ async def test_cm_ingest_bundle_is_the_accepted_state_artifact_persistence_path(
         bundle["cm_structure_maps"],
     )
     assert artifact is not None
+    return request, bundle, artifact
+
+
+async def _register(session: AsyncSession, request: dict, bundle: dict) -> object:
+    return await register_prepared_request(
+        session,
+        job=Job(
+            id=request["request_id"], name="legacy-state", model_id="conformational_mapping",
+            mode="map", status="queued", params={}, created_at=datetime.utcnow(),
+        ),
+        principal_id="alice",
+        request=request,
+        coordinate_plan={
+            "coordinate_plan_sha256": "b" * 64,
+            "expected_cardinality": bundle["cm_ensemble_v1"]["expected_cardinality"],
+            "coordinates": bundle["cm_ensemble_v1"]["expected_coordinates"],
+        },
+        resume_key="0" * 64,
+        capability_sha256="c" * 64,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state_value", [None, []])
+async def test_cm_ingest_bundle_treats_missing_or_empty_state_analysis_as_legacy_absence(
+    tmp_path: Path, state_value: object
+) -> None:
+    root = tmp_path / "result"
+    root.mkdir()
+    request, bundle = _no_authority_bundle(root)
+    if state_value is not None:
+        bundle["cm_state_landscape_analyses"] = state_value
+    session, engine = await _session(tmp_path)
+    try:
+        record = await _register(session, request, bundle)
+        await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
+        assert await session.scalar(
+            select(ConformationalMappingRecord).where(
+                ConformationalMappingRecord.record_type == "state_landscape_analysis"
+            )
+        ) is None
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cm_ingest_bundle_rejects_state_artifact_without_comparison_authority(tmp_path: Path) -> None:
+    root = tmp_path / "result"
+    root.mkdir()
+    request, bundle, artifact = _coherent_state_bundle(root)
+    request.pop("state_landscape_comparison")
+    request["request_sha256"] = request_sha256(request)
+    bundle["cm_ensemble_v1"]["request_sha256"] = request["request_sha256"]
+    bundle["cm_analysis_v1"]["source_ensemble_sha256"] = canonical_sha256(bundle["cm_ensemble_v1"])
+    bundle["cm_state_landscape_analyses"] = [artifact]
+    session, engine = await _session(tmp_path)
+    try:
+        record = await _register(session, request, bundle)
+        with pytest.raises(
+            ConformationalPersistenceError,
+            match="state landscape analysis is not authorized without comparison authority",
+        ):
+            await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cm_ingest_bundle_is_the_accepted_state_artifact_persistence_path(tmp_path: Path) -> None:
+    root = tmp_path / "result"
+    root.mkdir()
+    request, bundle, artifact = _coherent_state_bundle(root)
+    validate_schema("cm_request_v1", request)
+    validate_state_landscape_analysis_binding(
+        request,
+        bundle["cm_ensemble_v1"],
+        bundle["cm_frustration_landscapes"],
+        bundle["cm_structure_maps"],
+        artifact,
+    )
     bundle["cm_state_landscape_analyses"] = [artifact]
     session, engine = await _session(tmp_path)
     try:
@@ -203,7 +227,7 @@ async def test_cm_result_ingester_accepts_legacy_derived_index_that_omits_state_
     output = tmp_path / "job-output"
     result_root = output / "canonical_protenix"
     result_root.mkdir(parents=True)
-    request, bundle, _artifact = _no_authority_bundle(result_root)
+    request, bundle = _no_authority_bundle(result_root)
     (result_root / "cm_ensemble_v1.json").write_text(json.dumps(bundle["cm_ensemble_v1"]))
     (result_root / "cm_native_artifacts_v1.json").write_text(json.dumps(bundle["cm_native_artifacts_v1"]))
     index_without_hash = {
