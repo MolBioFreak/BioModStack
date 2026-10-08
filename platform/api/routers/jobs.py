@@ -5646,6 +5646,14 @@ def normalize_job_request(job_data: JobCreate, *, registry=None, md_input_resolv
     md_input_resolver = md_input_resolver or _resolve_md_input_path_for_runtime
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if (normalized_model_id, normalized_mode) == ('conformational_mapping', 'map') and native_entrypoint is not None:
+        # The materialized CM document owns all scientific normalization. Generic
+        # structure/Frustra defaults are not part of that sealed native contract.
+        errors = registry.validate_job_params(job_data.model_id, job_data.mode,
+            job_data.params, native_entrypoint=native_entrypoint)
+        if errors:
+            raise HTTPException(status_code=422, detail={"validation_errors": errors})
+        return job_data
     if (normalized_model_id, normalized_mode) == ('antibody_denovo', 'nanobody_binder'):
         from services.boltzgen_request_compatibility import compile_boltzgen_settings
         try:
