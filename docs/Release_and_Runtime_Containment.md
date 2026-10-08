@@ -29,7 +29,7 @@ The deploy transaction:
 6. restarts the existing container-runtime lifecycle boundary;
 7. validates API readiness, the API build SHA, and browser HTTP health; and
 8. atomically records the accepted manifest under
-   `~/.local/state/biomodstack/releases/current.json`.
+   `~/.local/state/biomodstack/releases/known-good.json`.
 
 A failed build, install, restart, or validation restores the snapshotted image
 IDs and unit files, reloads/restarts the existing lifecycle, and validates the
@@ -62,10 +62,10 @@ Electron persistent diagnostics carry that tuple as well.
 
 | Unit | MemoryHigh | MemoryMax | TasksMax | LimitNOFILE |
 |---|---:|---:|---:|---:|
-| API | 8G | 16G | 2048 | 131072 |
+| API | 12G | 16G | 2048 | 131072 |
 | Frontend | 2G | 4G | 1024 | 65536 |
-| Workflow adapter | 32G | 64G | 8192 | 262144 |
-| Core-runtime supervisor | 4G | 8G | 2048 | 131072 |
+| Workflow adapter | 48G | 64G | 8192 | 262144 |
+| Core-runtime supervisor | 4G | 8G | 1024 | 131072 |
 
 Every value can be overridden before rendering units with:
 

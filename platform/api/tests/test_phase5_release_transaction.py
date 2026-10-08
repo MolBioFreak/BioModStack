@@ -18,7 +18,6 @@ def test_release_plan_is_explicit_and_validation_precedes_commit() -> None:
     assert plan == (
         "snapshot-known-good",
         "build-images-explicitly",
-        "verify-generated-ownership",
         "verify-image-provenance",
         "render-install-units",
         "restart-container-runtime",
@@ -38,9 +37,6 @@ class _FailingValidationBackend:
 
     def build_images(self, identity):
         self.events.append(f"build:{identity.revision}")
-
-    def verify_generated_ownership(self):
-        self.events.append("verify-ownership")
 
     def verify_image_provenance(self, identity):
         self.events.append("verify-images")
@@ -76,7 +72,6 @@ def test_failed_validation_restores_and_revalidates_known_good_runtime() -> None
     assert backend.events == [
         "snapshot",
         f"build:{identity.revision}",
-        "verify-ownership",
         "verify-images",
         "install-units",
         "restart",

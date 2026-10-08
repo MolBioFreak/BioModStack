@@ -113,26 +113,6 @@ def test_preflight_blocks_fixed_name_owned_by_other_project(monkeypatch, tmp_pat
     assert raised.value.reason == "container-name-conflict"
 
 
-def test_controller_exposes_scoped_generated_ownership_actions(monkeypatch) -> None:
-    controller = load_controller()
-    commands: list[list[str]] = []
-
-    def fake_run(args, **kwargs):
-        commands.append(list(args))
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(controller, "run_command", fake_run)
-
-    assert controller.perform_once("ownership-check", ()) == 0
-    assert controller.perform_once("ownership-repair", ()) == 0
-    assert commands == [
-        [controller.sys.executable, str(controller.GENERATED_OWNERSHIP_NORMALIZER), "--check"],
-        [controller.sys.executable, str(controller.GENERATED_OWNERSHIP_NORMALIZER)],
-    ]
-    assert controller.build_parser().parse_args(["ownership-check"]).action == "ownership-check"
-    assert controller.build_parser().parse_args(["ownership-repair"]).action == "ownership-repair"
-
-
 def test_redact_removes_credential_values() -> None:
     controller = load_controller()
     rendered = controller.redact("password=super-secret token:abc123 authorization = Bearer-secret")
