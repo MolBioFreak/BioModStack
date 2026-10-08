@@ -6,6 +6,7 @@ import test from 'node:test';
 import { clearFeatureAnnotations } from '../src/components/MolBioToolkit/utils/annotations.js';
 import {
     assertAnnotationTopology,
+    resolveAnnotationAlignmentPolicy,
     resolveAnnotationSequenceAlignment,
     transformFeatureForAlignment,
 } from '../src/components/MolBioToolkit/utils/annotationTransfer.js';
@@ -82,6 +83,83 @@ test('annotation transfer rejects topology mismatch, sequence mismatch, and ambi
     );
 });
 
+test('annotation transfer only permits reverse-complement matching for explicit dsDNA', () => {
+    assert.deepEqual(
+        resolveAnnotationAlignmentPolicy(
+            { sequenceType: 'dna', moleculeStrandedness: 'double' },
+            { sequenceType: 'dna', moleculeStrandedness: 'double' },
+        ),
+        { sequenceType: 'dna', allowReverseComplement: true },
+    );
+    assert.deepEqual(
+        resolveAnnotationAlignmentPolicy(
+            { sequenceType: 'dna', moleculeStrandedness: 'single' },
+            { sequenceType: 'dna', moleculeStrandedness: 'single' },
+        ),
+        { sequenceType: 'dna', allowReverseComplement: false },
+    );
+    assert.deepEqual(
+        resolveAnnotationAlignmentPolicy(
+            { sequenceType: 'dna', moleculeStrandedness: 'double', strandednessExplicit: false },
+            { sequenceType: 'dna', moleculeStrandedness: 'double' },
+        ),
+        { sequenceType: 'dna', allowReverseComplement: false },
+    );
+    assert.deepEqual(
+        resolveAnnotationAlignmentPolicy(
+            { sequenceType: 'rna', moleculeStrandedness: 'single' },
+            { sequenceType: 'rna', moleculeStrandedness: 'single' },
+        ),
+        { sequenceType: 'rna', allowReverseComplement: false },
+    );
+    assert.throws(
+        () => resolveAnnotationAlignmentPolicy(
+            { sequenceType: 'dna', moleculeStrandedness: 'double' },
+            { sequenceType: 'dna', moleculeStrandedness: 'single' },
+        ),
+        /strandedness/i,
+    );
+});
+
+test('authoritative alignment is literal, alphabet-strict, and jointly orientation-unique', () => {
+    assert.throws(
+        () => resolveAnnotationSequenceAlignment(
+            'AAAAC',
+            'GTTTT',
+            false,
+            { sequenceType: 'dna', allowReverseComplement: false },
+        ),
+        /does not match/i,
+    );
+    assert.throws(
+        () => resolveAnnotationSequenceAlignment(
+            'AUTG',
+            'AUTG',
+            false,
+            { sequenceType: 'dna', allowReverseComplement: false },
+        ),
+        /unsupported.*DNA/i,
+    );
+    assert.throws(
+        () => resolveAnnotationSequenceAlignment(
+            'ATUG',
+            'ATUG',
+            false,
+            { sequenceType: 'rna', allowReverseComplement: false },
+        ),
+        /unsupported.*RNA/i,
+    );
+    assert.throws(
+        () => resolveAnnotationSequenceAlignment(
+            'ATGCAT',
+            'TGCATA',
+            true,
+            { sequenceType: 'dna', allowReverseComplement: true },
+        ),
+        /ambiguous/i,
+    );
+});
+
 test('annotation dialog exposes clear and authoritative annotated-file transfer actions', () => {
     const panel = readFileSync(resolve(process.cwd(), 'src/components/MolBioToolkit/AutoAnnotatePanel.tsx'), 'utf8');
     const toolkit = readFileSync(resolve(process.cwd(), 'src/components/MolBioToolkit/MolBioToolkitV2.tsx'), 'utf8');
@@ -92,4 +170,9 @@ test('annotation dialog exposes clear and authoritative annotated-file transfer 
     assert.match(toolkit, /Clear .* feature annotations/);
     assert.match(toolkit, /annotation_import/);
     assert.match(toolkit, /Import .* annotations from/);
+    assert.match(toolkit, /anyToJson\(file,\s*\{/);
+    assert.match(toolkit, /user_provided_origin_unknown/);
+    assert.match(toolkit, /crypto\.subtle\.digest\('SHA-256'/);
+    assert.match(toolkit, /parser_messages/);
+    assert.match(toolkit, /existing feature annotations.*clear/i);
 });
