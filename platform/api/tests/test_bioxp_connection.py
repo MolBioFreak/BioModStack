@@ -597,6 +597,52 @@ def test_stale_observation_is_explicit(tmp_path: Path) -> None:
     assert snapshot.last_observed_reachable is True
 
 
+@pytest.mark.parametrize('observation', ['aged', 'failed'])
+@pytest.mark.parametrize('route,path_params', [
+    ('invoke_operator_action_v2', {'action_id': 'oem.deck.move_to_location'}),
+    ('submit_operator_method_v1', None),
+])
+def test_v2_enqueue_forwards_despite_status_but_not_wrong_or_disconnected_generation(
+    tmp_path: Path, observation: str, route: str, path_params: dict[str, str] | None,
+) -> None:
+    _, BioXpProfile, _, _ = _load()
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    clients: list[FakeRobotClient] = []
+    service = _service(tmp_path, clients, clock=lambda: now)
+
+    async def scenario():
+        nonlocal now
+        await service.save_profile(BioXpProfile(api_url='http://robot:8123'))
+        generation = (await service.connect()).generation
+        if observation == 'aged':
+            now += timedelta(days=1)
+            assert service.snapshot().observation_fresh is False
+        else:
+            service._record_probe_failure(RuntimeError('status probe failed'))
+            assert service.snapshot().reachable is False
+        body = {'idempotency_key': 'one-attempt', 'inputs': {}}
+        try:
+            result = await service.request_active_v2_enqueue(route, expected_generation=generation,
+                                                              json_data=body, path_params=path_params)
+            assert result['kwargs']['json_data'] == body
+            assert result['kwargs'].get('path_params') == path_params
+            with pytest.raises(ConnectionStateError):
+                await service.request_active_v2_enqueue(route, expected_generation=generation + 1,
+                                                        json_data=body, path_params=path_params)
+            assert len(clients[0].request_calls) == 1
+            await service.disconnect()
+            with pytest.raises(ConnectionStateError):
+                await service.request_active_v2_enqueue(route,
+                    expected_generation=service.snapshot().generation,
+                    json_data=body, path_params=path_params)
+            assert len(clients[0].request_calls) == 1
+        finally:
+            await service.close()
+
+    from services.bioxp.errors import ConnectionStateError
+    asyncio.run(scenario())
+
+
 def test_stale_hardware_cache_does_not_relabel_live_runtime_probe_as_stale(tmp_path: Path) -> None:
     _, BioXpProfile, _, _ = _load()
     now = datetime(2026, 7, 18, tzinfo=timezone.utc)

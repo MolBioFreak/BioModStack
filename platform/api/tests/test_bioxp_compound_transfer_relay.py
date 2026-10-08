@@ -16,11 +16,9 @@ def test_compound_intent_relay_and_custody_readback(monkeypatch, kind, params, s
     document = {'protocol_id': 'bms-deck-compound', 'version': 1, 'stages': [{
         'stage_id': 'deck', 'actions': [{'stage_id': 'deck',
             'action_id': 'inspect-covers' if kind == 'inspect' else 'transfer', 'kind': kind, 'params': params}]}]}
-    # Explicit offline operator fixture. Production UI only forwards a selected
-    # operator-verified contract, never inventing these reference/console facts.
-    contract = {'operator_id': 'offline-test-operator', 'physical_console_verified': True,
-                'live_execution_ack': True, 'deck_manifest': {'fixture': 'offline'},
-                'preflight': {'reference_snapshot': {'rows': {}}, 'artifact_refs': ['offline-fixture']}}
+    # The browser sends only the selected OEM intent and click acknowledgement.
+    # Source custody and physical references remain robot-owned observations.
+    contract = {'live_execution_ack': True}
     payload = bundle(status)
     payload['protocol']['document'] = document
     payload['command']['terminal'] = status != 'dispatched'
@@ -40,7 +38,7 @@ def test_compound_intent_relay_and_custody_readback(monkeypatch, kind, params, s
     assert kwargs['json_data']['document'] == document
     assert kwargs['json_data']['live_execution'] == contract
     assert 'source_location' not in params
-    assert runtime.connection.active_request_calls[0]['require_fresh'] is True
+    assert runtime.connection.active_request_calls[0]['require_fresh'] is False
     readback = client.get(BASE + f'/jobs/{JOB}', params={'expected_connection_generation': 77})
     assert readback.status_code == 200, readback.text
     assert readback.json() == payload

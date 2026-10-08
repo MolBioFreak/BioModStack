@@ -28,11 +28,9 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled }
     const jobs = useBioXpWorkflowJobs(generation, connected);
     const [selection, setSelection] = useState<{ name: string; input: BioXpWorkflowInput } | null>(null);
     const [selectionError, setSelectionError] = useState<string | null>(null);
-    const [acknowledged, setAcknowledged] = useState(false);
     const [selectedJob, setSelectedJob] = useState<{ generation: number; id: string } | null>(null);
     const [attempt, setAttempt] = useState<{ generation: number; key: string; jobId: string } | null>(null);
     const [acceptedJob, setAcceptedJob] = useState<{ generation: number; job: BioXpWorkflowJob } | null>(null);
-    const [abortConfirmed, setAbortConfirmed] = useState(false);
     const [reviewer, setReviewer] = useState('');
     const [note, setNote] = useState('');
     const [localError, setLocalError] = useState<string | null>(null);
@@ -64,7 +62,7 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled }
     const wakeReached = workflow?.gate === 'deferred_pause' && workflow.requested_control === null
         && workflow.reached_control_id != null && workflow.reached_control_id !== workflow.gate_id
         && workflow.reached_control_id === workflow.last_control_id;
-    const maySubmit = connected && controlsEnabled && !busy && acknowledged && selection !== null
+    const maySubmit = connected && controlsEnabled && !busy && selection !== null
         && !jobs.isError && !jobs.isLoading && !listedActive && (!currentAttempt || settled && jobId === currentAttempt.jobId);
 
     async function submitSelected() {
@@ -81,9 +79,8 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled }
             if (currentGeneration.current !== submittedGeneration) return;
             setAttempt({ generation, key, jobId: id });
             setSelectedJob({ generation, id });
-            setAcknowledged(false);
             setLocalError(null);
-            const result = await submit.mutateAsync({ ...input, dry_run: false, idempotency_key: key, expected_connection_generation: generation });
+            const result = await submit.mutateAsync({ ...input, live_execution_ack: true, dry_run: false, idempotency_key: key, expected_connection_generation: generation });
             if (currentGeneration.current === submittedGeneration) {
                 setAcceptedJob({ generation, job: result });
                 setSelectedJob({ generation, id: result.job_id });
@@ -97,7 +94,6 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled }
         if (!mutable || !command || !jobId || busyRef.current) return;
         busyRef.current = true;
         setLocalError(null);
-        setAbortConfirmed(false);
         try {
             await control.mutateAsync({ jobId, request: { ...action, command_id: command.command_id,
                 expected_ownership_generation: command.ownership_generation,
@@ -127,12 +123,12 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled }
     const gateId = workflow?.gate_id;
     return <section aria-label="Prepared workflow" className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/70 p-4">
         <h2 className="text-lg font-semibold">Prepared workflow</h2>
-        <p className="text-sm text-slate-400">Select an existing robot request with its prepared input, manifest and preflight. No recipe generation. Thermal and selected vision dependencies remain subject to robot support checks.</p>
+        <p className="text-sm text-slate-400">Select a prepared robot request. The robot checks support at submission.</p>
         <label className="block text-sm">Prepared request file
             <input type="file" accept=".json,application/json" disabled={busy || !!currentAttempt && !settled} onChange={async event => {
                 const file = event.currentTarget.files?.[0];
                 const version = ++selectionVersion.current;
-                setSelection(null); setSelectionError(null); setAcknowledged(false);
+                setSelection(null); setSelectionError(null);
                 if (!file) return;
                 try {
                     const input = selectedInput(await file.text());
@@ -142,11 +138,10 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled }
         </label>
         {selection && <p className="text-sm">Selected: {selection.name} · {selection.input.source_type}</p>}
         {selectionError && <p role="alert">{selectionError}</p>}
-        <label className="block text-sm"><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} /> I intend to submit this prepared request for physical execution.</label>
         <button type="button" className={buttonClass} disabled={!maySubmit} onClick={() => void submitSelected()}>Submit prepared workflow</button>
         {currentAttempt && <p className="break-all text-xs">Original submission key: {currentAttempt.key}</p>}
         {jobs.data && jobs.data.length > 0 && <label className="block text-sm">Robot workflow
-            <select value={jobId ?? ''} onChange={event => { setSelectedJob({ generation, id: event.target.value }); setAbortConfirmed(false); }}>
+            <select value={jobId ?? ''} onChange={event => setSelectedJob({ generation, id: event.target.value })}>
                 <option value="" disabled>Select a robot workflow</option>
                 {currentAttempt && !jobs.data.some(item => item.job_id === currentAttempt.jobId) && <option value={currentAttempt.jobId}>{currentAttempt.jobId}</option>}
                 {jobs.data.map(item => <option key={item.job_id} value={item.job_id}>{item.job_id} · {item.command?.status ?? item.status}</option>)}
@@ -162,7 +157,7 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled }
             {workflow.held_reason && <p className="text-amber-200">Held reason: {workflow.held_reason}</p>}
             {workflow.requested_control && <p>Requested control: {workflow.requested_control.action} — acceptance is not a reached boundary.</p>}
             {workflow.reached_control_id && <p className="text-xs">Reached control: {workflow.reached_control_id}</p>}
-            <p className="text-xs">Pause does not establish physical quiescence. Cooperative Abort is not addressed motor Stop. Native evidence remains in the existing receipt history.</p>
+            <p className="text-xs">Pause is not physical quiescence. Cooperative Abort cancels software work; it does not send addressed motor Stops.</p>
             <div className="flex flex-wrap gap-2">
                 <button className={buttonClass} disabled={!mutable || pendingControl || workflow.phase !== 'executing'} onClick={() => void send({ action: 'pause', mode: 'ordinary' })}>Pause workflow</button>
                 <button className={buttonClass} disabled={!mutable || pendingControl || workflow.phase !== 'executing'} onClick={() => void send({ action: 'pause', mode: 'deferred' })}>Request deferred pause</button>
@@ -170,8 +165,7 @@ export function BioXpWorkflowControls({ generation, connected, controlsEnabled }
                 {(gate === 'ordinary_pause' || gate === 'deferred_pause' || gate === 'delaypoint') && gateId && <button className={buttonClass} disabled={!mutable || pendingControl || workflow.phase !== 'waiting' || gate === 'deferred_pause' && !wakeReached} onClick={() => void send({ action: 'continue', gate, gate_id: gateId })}>{gate === 'delaypoint' ? 'Start now' : 'Continue workflow'}</button>}
                 <button className={buttonClass} disabled={!mutable} onClick={() => void send({ action: 'safe_stop' })}>Request safe-state stop</button>
             </div>
-            <label className="block text-sm"><input type="checkbox" checked={abortConfirmed} onChange={event => setAbortConfirmed(event.target.checked)} /> Confirm cooperative job Abort</label>
-            <button className={buttonClass} disabled={!mutable || !abortConfirmed} onClick={() => void send({ action: 'abort' })}>Abort workflow</button>
+            <button className={buttonClass} disabled={!mutable} onClick={() => void send({ action: 'abort' })}>Abort workflow</button>
             {gate === 'review' && <div className="space-y-2">
                 <label className="block">Reviewer <input value={reviewer} maxLength={120} onChange={event => setReviewer(event.target.value)} /></label>
                 <label className="block">Review note <input value={note} maxLength={4000} onChange={event => setNote(event.target.value)} /></label>

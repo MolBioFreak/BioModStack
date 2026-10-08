@@ -242,7 +242,7 @@ describe('mounted BioXP operator critical and exhaustive controls', () => {
         expect(container.querySelectorAll('[role="tab"]')).toHaveLength(3);
     });
 
-    it('lets exact X/Z actions use robot admission when catalog-wide source authority is unavailable', async () => {
+    it('uses robot admission for every action even when catalog-wide source authority is unavailable', async () => {
         state.catalog.data.source_authority_verified = false;
         await act(async () => {
             root.render(<BioXpOperatorControlTabs generation={2637337272774657} connected />);
@@ -260,6 +260,25 @@ describe('mounted BioXP operator critical and exhaustive controls', () => {
         const unrelatedAction = container.querySelector('[data-action-id="route.filler_0"]') as HTMLButtonElement;
         await act(async () => unrelatedAction.click());
         run = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Run exactly this action') as HTMLButtonElement;
-        expect(run.disabled).toBe(true);
+        expect(run.disabled).toBe(false);
+        await act(async () => run.click());
+        expect(state.invokeCalls[1]).toMatchObject({ actionId: 'route.filler_0', inputs: {} });
+    });
+    it('does not require a confirmation checkbox but preserves real boolean action inputs', async () => {
+        state.catalog.data.actions = [{ ...action('oem.camera.offset', 'Camera offset', 'camera', '/camera/offset'),
+            requires_confirmation: true,
+            inputs: [{ name: 'enabled', label: 'Enabled', value_type: 'boolean', required: true,
+                default: false, minimum: null, maximum: null, exclusive_minimum: null, exclusive_maximum: null,
+                description: null, unit: null }] }];
+        await act(async () => root.render(<BioXpOperatorControlTabs generation={1} connected />));
+        const boxes = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+        expect(boxes).toHaveLength(1);
+        expect(boxes[0].closest('label')?.textContent).toContain('Enabled');
+        await act(async () => boxes[0].click());
+        const run = [...container.querySelectorAll('button')].find(button => button.textContent === 'Run exactly this action')!;
+        expect(run.disabled).toBe(false);
+        await act(async () => run.click());
+        expect(state.invokeCalls).toEqual([{ actionId: 'oem.camera.offset', connectionGeneration: 1,
+            ownershipGeneration: 2, inputs: { enabled: true } }]);
     });
 });

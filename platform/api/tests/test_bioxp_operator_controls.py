@@ -920,6 +920,39 @@ def test_completed_successive_move_receipt_preserves_queue_timestamps():
     assert parsed.dispatched_at == 1787188153.41
 
 
+@pytest.mark.parametrize("epochs", [{}, {"4": 19}, None])
+def test_completed_gripper_receipt_retains_robot_board_epochs_on_submit_and_readback(monkeypatch, epochs):
+    client, runtime = make_client(monkeypatch)
+    action_id = "route.motion_gripper_open_wide_motion_gripper_open_wide_post.77fa7dee"
+    completed = receipt(action_id=action_id, key="open-wide-12345678", command_id="gripper-open-wide-1")
+    completed.update({
+        "kind": "primitive", "status": "completed",
+        "completion_ambiguous": False, "completion_verified": False, "delivery_verified": False,
+        "hardware_postcondition_verified": False, "hardware_precondition_verified": False,
+        "reconciliation_required": False, "retry_forbidden": False,
+        "source_identity": {
+            "evidence_lock_identity_verified": True, "evidence_lock_sha256": "a" * 64,
+            "registry_sha256": "b" * 64, "release_id": "offline-test",
+            "release_verified": True, "robot_identity": "serial206",
+            "source_aggregate_sha256": "c" * 64, "source_manifest_sha256": "d" * 64,
+        },
+    })
+    if epochs is not None:
+        completed["expected_board_epoch_by_board"] = epochs
+    runtime.connection.client.responses["invoke_operator_action"] = completed
+    runtime.connection.client.responses["operator_action_receipt"] = completed
+    response = client.post(f"/api/bioxp/operator-controls/actions/{action_id}", json={
+        "expected_connection_generation": 77, "expected_ownership_generation": 7,
+        "idempotency_key": "open-wide-12345678", "inputs": {},
+    })
+    assert response.status_code == 200, response.text
+    assert response.json().get("expected_board_epoch_by_board") == epochs
+    readback = client.get("/api/bioxp/operator-controls/receipts/gripper-open-wide-1")
+    assert readback.status_code == 200, readback.text
+    assert readback.json()["status"] == "completed"
+    assert readback.json().get("expected_board_epoch_by_board") == epochs
+
+
 def test_cleared_successive_move_receipt_parses():
     cleared = receipt(action_id="oem.x.move_steps", command_id="operator-x-cleared-1")
     cleared.update({

@@ -42,7 +42,6 @@ function button(label: string) {
     return result;
 }
 async function click(label: string) { await act(async () => button(label).click()); await tick(); }
-async function check(index: number) { await act(async () => host.querySelectorAll<HTMLInputElement>('input[type=checkbox]')[index].click()); }
 async function pick(value: unknown) {
     const input = host.querySelector<HTMLInputElement>('input[type=file]')!;
     Object.defineProperty(input, 'files', { configurable: true, value: [{ name: 'prepared.json', text: async () => JSON.stringify(value) }] });
@@ -174,17 +173,18 @@ describe('canonical prepared workflow controls', () => {
             command_id: 'job-one', expected_connection_generation: 9, expected_ownership_generation: 42,
         }));
     });
-    it('requires confirmation for cooperative Abort and leaves error holds without Continue', async () => {
+    it('sends cooperative software Abort directly and leaves error holds without Continue', async () => {
         job = jobFixture({ phase: 'waiting', gate: 'error_hold', gate_id: 'error-1', held_reason: 'source_error' }); rows = [job]; await render();
-        expect(button('Abort workflow').disabled).toBe(true); expect(host.textContent).not.toContain('Continue workflow');
-        await check(1); await click('Abort workflow');
+        expect(button('Abort workflow').disabled).toBe(false); expect(host.textContent).not.toContain('Continue workflow');
+        expect(host.textContent).toContain('Cooperative Abort cancels software work; it does not send addressed motor Stops');
+        expect(host.querySelector('input[type=checkbox]')).toBeNull();
+        await click('Abort workflow');
         expect(api.post).toHaveBeenCalledWith('/api/bioxp/protocols/jobs/job-one/control', expect.objectContaining({ action: 'abort' }));
-        expect(button('Abort workflow').disabled).toBe(true);
     });
     it.each(['epilogue', 'cleanup'] as const)('retains cooperative Abort admission during %s without exposing ordinary pause', async phase => {
         job = jobFixture({ phase }); rows = [job]; await render();
         expect(button('Pause workflow').disabled).toBe(true);
-        await check(1); expect(button('Abort workflow').disabled).toBe(false);
+        expect(button('Abort workflow').disabled).toBe(false);
         await click('Abort workflow');
         expect(api.post).toHaveBeenCalledWith('/api/bioxp/protocols/jobs/job-one/control', expect.objectContaining({ action: 'abort' }));
     });
@@ -193,11 +193,11 @@ describe('canonical prepared workflow controls', () => {
         job.command!.terminal = true; job.command!.status = 'ambiguous'; rows = [job]; await render();
         expect(host.textContent).toContain('Robot status: ambiguous');
         expect(button('Pause workflow').disabled).toBe(true); expect(button('Request safe-state stop').disabled).toBe(true);
-        await pick(prepared); await check(0); expect(button('Submit prepared workflow').disabled).toBe(true);
+        await pick(prepared); expect(button('Submit prepared workflow').disabled).toBe(true);
         expect(api.post).not.toHaveBeenCalled();
     });
     it('submits captured selected input once, retaining identity and GET reconciliation after response loss', async () => {
-        rows = []; await render(); await pick(prepared); await check(0);
+        rows = []; await render(); await pick(prepared);
         vi.mocked(api.post).mockRejectedValue(new Error('response lost'));
         expect(button('Submit prepared workflow').disabled, host.textContent ?? '').toBe(false);
         await click('Submit prepared workflow');
@@ -213,6 +213,22 @@ describe('canonical prepared workflow controls', () => {
         expect(button('Submit prepared workflow').disabled).toBe(true);
         await tick(6100); expect(api.post).toHaveBeenCalledTimes(1);
         expect(api.get.mock.calls.some(([url]) => String(url).startsWith('/api/bioxp/protocols/jobs/protocol-live-'))).toBe(true);
+    });
+    it('click expresses live intent without inventing console verification or operator identity', async () => {
+        rows = []; await render();
+        const minimal = { source_type: prepared.source_type, document: prepared.document };
+        await pick(minimal);
+        expect(host.querySelector('input[type=checkbox]')).toBeNull();
+        expect(button('Submit prepared workflow').disabled).toBe(false);
+        vi.mocked(api.post).mockRejectedValue(new Error('response lost'));
+        await click('Submit prepared workflow');
+        for (let i = 0; i < 30 && api.post.mock.calls.length === 0; i++) await act(async () => { await new Promise(resolve => realTimeout(resolve, 5)); });
+        expect(api.post).toHaveBeenCalledWith('/api/bioxp/protocols/submit', expect.objectContaining({
+            ...minimal, live_execution_ack: true, dry_run: false, expected_connection_generation: 9,
+        }));
+        const request = vi.mocked(api.post).mock.calls[0][1] as Record<string, unknown>;
+        expect(request).not.toHaveProperty('physical_console_verified');
+        expect(request).not.toHaveProperty('operator_id');
     });
     it('rejects authoring/delivery escape fields without a submit or compile request', async () => {
         rows = []; await render(); await pick({ ...prepared, parent_command_id: 'forged', idempotency_key: 'forged' });

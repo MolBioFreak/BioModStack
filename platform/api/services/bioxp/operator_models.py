@@ -4299,6 +4299,12 @@ class OperatorActionReceiptFields(BaseModel, Generic[ReceiptStatusT]):
     idempotency_key: str = Field(min_length=8, max_length=128)
     idempotency_replay_enabled: StrictBool = True
     ownership_generation: StrictInt = Field(ge=0)
+    # Current robot v1 receipts carry the command's board-epoch snapshot.
+    # Older receipts omit it; never synthesize a board fence on readback.
+    expected_board_epoch_by_board: dict[
+        Annotated[str, Field(pattern=r"^(0|[1-9][0-9]*)$")],
+        Annotated[StrictInt, Field(ge=0)],
+    ] | None = Field(default=None, exclude_if=lambda value: value is None)
     started_at: str = Field(min_length=1, max_length=80)
     finished_at: str | None = Field(default=None, max_length=80)
     duration_ms: StrictInt | StrictFloat | None = Field(default=None, ge=0)
