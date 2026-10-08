@@ -217,10 +217,22 @@ def execute_parent_fanout(
         from lib.component_adapter import runtime_from_environment
         runtime = runtime_from_environment()
         sources = {}
-        # Bind children to the same source snapshot used by the grouping plan.
-        for metadata, (_name, raw, _media_type), source in dataset:
+        # Nextflow task work is not retained custody. Publish the exact snapshot
+        # used by the grouping plan before any child can consume its reference.
+        retained_root = runtime.artifact_root / "frustrampnn/child_inputs" / hashlib.sha256(
+            parent_job_id.encode("utf-8")).hexdigest()
+        for metadata, (name, raw, _media_type), _source in dataset:
+            retained = retained_root / metadata["candidate_id"] / name
+            for directory in retained.parents:
+                if directory == runtime.artifact_root:
+                    break
+                if directory.is_symlink():
+                    raise ValueError("FrustraMPNN retained input directory is unsafe")
+            retained.resolve().relative_to(runtime.artifact_root.resolve())
+            immutable_write(retained.parent / "metadata.json", _canonical_bytes(metadata))
+            immutable_write(retained, raw)
             sources[metadata["candidate_id"]] = {"metadata": metadata,
-                "source_relative_path": source.resolve().relative_to(runtime.artifact_root.resolve()).as_posix(),
+                "source_relative_path": retained.relative_to(runtime.artifact_root).as_posix(),
                 "source_sha256": hashlib.sha256(raw).hexdigest(), "source_size_bytes": len(raw)}
         children = []
         for ordinal, group in enumerate(plan.groups):
