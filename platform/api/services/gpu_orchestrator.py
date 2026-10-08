@@ -565,7 +565,8 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
     a concurrent operator decision.
     """
     from sqlalchemy import inspect, update
-    from database import Job
+    from database import Job, MdRun
+    from services.md.state import TERMINAL_PHASES
 
     pending: list[tuple[str, dict[str, Any]]] = []
     for candidate in list(session.dirty):
@@ -575,12 +576,14 @@ async def _commit_reconciled_job_mutations(session: Any) -> int:
             candidate.model_id == "molecular_dynamics"
             and candidate.mode == "molecular_dynamics"
         ):
-            # The durable MD state machine owns top-level parent projection. Its
-            # historical coordinator may already be terminal while a retry child
-            # is actively running, so generic Nextflow recovery must not publish
-            # that stale coordinator result over the lifecycle parent.
-            session.expunge(candidate)
-            continue
+            # The durable MD state machine owns top-level parent projection while
+            # active. Once its phase is terminal, generic scheduler reconciliation
+            # may publish the matching terminal status onto Job.
+            with session.no_autoflush:
+                md_run = await session.get(MdRun, str(candidate.id))
+            if md_run is not None and md_run.phase not in TERMINAL_PHASES:
+                session.expunge(candidate)
+                continue
         state = inspect(candidate)
         values = {
             attribute.key: attribute.value

@@ -16,7 +16,7 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
-from database import Base, Job
+from database import Base, Job, MdRun
 from services.gpu_orchestrator import (
     _commit_reconciled_job_mutations,
     _has_terminal_nextflow_history,
@@ -223,6 +223,11 @@ async def test_generic_completion_does_not_publish_over_active_md_parent(tmp_pat
             id="md-parent", name="md-parent", model_id="molecular_dynamics",
             mode="molecular_dynamics", params={}, status="running", queue_status="running",
             awaiting_input=False, awaiting_payload={}, retry_count=0, max_retries=0,
+        ))
+        seed.add(MdRun(
+            job_id="md-parent", normalized_request={}, request_sha256="a" * 64,
+            phase="replicas_running", state_version=1, chemistry_profile_id="test",
+            chemistry_profile_sha256="b" * 64, chemistry_assurance="test",
         ))
         await seed.commit()
 
