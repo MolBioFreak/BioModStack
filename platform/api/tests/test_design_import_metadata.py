@@ -93,3 +93,50 @@ def test_design_response_leaves_native_validation_rows_unflagged() -> None:
     assert response.import_source is None
     assert response.import_method is None
     assert response.import_label is None
+
+
+def test_design_response_backfills_sequence_result_set_from_stage_contract() -> None:
+    design = Design(
+        id="fampnn-design-1",
+        job_id="sequence-stage-job-1",
+        name="fampnn_seq_001",
+        stage_family="fampnn",
+        stage_mode="post_fampnn",
+        is_favorite=False,
+        created_at=datetime(2026, 4, 14, 18, 0, 0),
+    )
+
+    response = _design_to_response(design)
+
+    assert response.artifact_class == "sequence_designed_complex"
+    assert response.artifact_schema_version == 1
+    assert response.result_set == "sequence_designs"
+    assert response.result_set_label == "Sequence designs"
+
+
+def test_design_response_separates_ppiflow_pass_and_reject_result_sets() -> None:
+    passed = Design(
+        id="ppiflow-design-pass",
+        job_id="ppiflow-job-1",
+        name="fampnn_seq_001_ppiflow_sample0",
+        stage_family="ppiflow",
+        stage_mode="maturation",
+        ppiflow_filter_passed=True,
+        is_favorite=False,
+        created_at=datetime(2026, 4, 14, 18, 0, 0),
+    )
+    rejected = Design(
+        id="ppiflow-design-reject",
+        job_id="ppiflow-job-1",
+        name="fampnn_seq_001_ppiflow_sample1",
+        stage_family="ppiflow",
+        stage_mode="maturation",
+        ppiflow_filter_passed=False,
+        is_favorite=False,
+        created_at=datetime(2026, 4, 14, 18, 0, 0),
+    )
+
+    assert _design_to_response(passed).result_set == "ppiflow_passed"
+    assert _design_to_response(passed).result_set_label == "PPIFlow passed"
+    assert _design_to_response(rejected).result_set == "ppiflow_rejected"
+    assert _design_to_response(rejected).result_set_label == "PPIFlow rejected"

@@ -820,6 +820,8 @@ export interface Design {
     source_design_name?: string | null;
     artifact_class?: string | null;
     artifact_schema_version?: number | null;
+    result_set?: string | null;
+    result_set_label?: string | null;
     lineage_root_job_id?: string | null;
     parent_design_id?: string | null;
     origin_design_id?: string | null;

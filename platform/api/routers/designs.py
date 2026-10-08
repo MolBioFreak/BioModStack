@@ -23,6 +23,7 @@ from services.analysis_runs import get_matching_design_analysis_run, load_analys
 from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
 from services.stage_review import REVIEWABLE_STAGES, ensure_stage_review_rows, load_review_gate_snapshot
 from services.structure_utils import get_per_chain_fampnn_psce
+from antibody_pipeline_contract import infer_antibody_artifact_class_from_stage, normalize_antibody_artifact_class
 
 
 router = APIRouter()
@@ -261,6 +262,8 @@ class DesignResponse(BaseModel):
     source_design_name: Optional[str] = None
     artifact_class: Optional[str] = None
     artifact_schema_version: Optional[int] = None
+    result_set: Optional[str] = None
+    result_set_label: Optional[str] = None
     selected_loop_scope: Optional[Dict[str, Any]] = None
     provenance: Optional[Dict[str, Any]] = None
     is_imported: bool = False
@@ -573,6 +576,7 @@ DESIGN_LIST_LOAD_ONLY_COLUMNS = (
     Design.rmsd_binder,
     Design.rmsd_target,
     Design.conf_score,
+    Design.confidence_metrics,
     Design.ptm,
     Design.ligand_iptm,
     Design.affinity_score,
@@ -633,6 +637,8 @@ DESIGN_LIST_LOAD_ONLY_COLUMNS = (
     Design.screening_reason,
     Design.source_stage,
     Design.artifact_group,
+    Design.artifact_class,
+    Design.artifact_schema_version,
     Design.rfa_hotspot_covered_count,
     Design.rfa_hotspot_min_distance,
     Design.rfa_hotspot_avg_min_distance,
@@ -1299,6 +1305,58 @@ def _text_record_value(record: Optional[Dict[str, Any]], *keys: str) -> Optional
     return None
 
 
+def _normalize_stage_token(value: Any) -> Optional[str]:
+    text = str(value or "").strip().lower()
+    return text or None
+
+
+def _infer_design_result_set(
+    *,
+    stage_family: Any,
+    stage_mode: Any,
+    artifact_class: Any,
+    ppiflow_filter_passed: Any,
+    passed_screen: Any,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Return durable selector metadata for model-call result layers.
+
+    Derived from stage/artifact/pass fields instead of filenames so old rows can
+    be backfilled in API responses before every row has been reingested.
+    """
+    family = _normalize_stage_token(stage_family)
+    mode = _normalize_stage_token(stage_mode)
+    normalized_artifact = normalize_antibody_artifact_class(artifact_class)
+    if normalized_artifact is None:
+        normalized_artifact = normalize_antibody_artifact_class(
+            infer_antibody_artifact_class_from_stage(family, mode)
+        )
+
+    if family == "rfantibody" or normalized_artifact == "backbone_complex":
+        return normalized_artifact, "rfantibody_backbones", "RFA/backbone"
+
+    if family in {"boltzgen", "fampnn", "proteinmpnn", "antifold", "frustrampnn", "caliby"}:
+        return normalized_artifact, "sequence_designs", "Sequence designs"
+
+    if family == "ppiflow" or (mode and ("ppiflow" in mode or "maturation" in mode)):
+        passed = ppiflow_filter_passed
+        if passed is None:
+            passed = passed_screen
+        if passed is True:
+            return normalized_artifact, "ppiflow_passed", "PPIFlow passed"
+        if passed is False:
+            return normalized_artifact, "ppiflow_rejected", "PPIFlow rejected"
+        return normalized_artifact, "ppiflow_candidates", "PPIFlow candidates"
+
+    if normalized_artifact == "sequence_designed_complex":
+        return normalized_artifact, "sequence_designs", "Sequence designs"
+    if normalized_artifact == "validated_complex":
+        return normalized_artifact, "validated", "Validated"
+    if normalized_artifact == "post_validation_refined_complex":
+        return normalized_artifact, "post_validation_refined", "Post-validation refined"
+
+    return normalized_artifact, None, None
+
+
 def _fampnn_payload_records(design: Design) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     try:
@@ -1701,7 +1759,7 @@ def _design_to_response(
         include_structure_fallback=include_fampnn_structure_fallback,
     )
     data.update(fampnn_metrics)
-    confidence_metrics = design.confidence_metrics if isinstance(design.confidence_metrics, dict) else {}
+    confidence_metrics = data.get("confidence_metrics") if isinstance(data.get("confidence_metrics"), dict) else {}
     nested_rfa_metrics = confidence_metrics.get("rfantibody") if isinstance(confidence_metrics.get("rfantibody"), dict) else None
     flat_scope = confidence_metrics.get("confidence_scope") if isinstance(confidence_metrics.get("confidence_scope"), dict) else None
     looks_like_flat_rfa = (
@@ -1754,6 +1812,19 @@ def _design_to_response(
         design,
         binder_sequence=binder_sequence,
     )
+    artifact_class, result_set, result_set_label = _infer_design_result_set(
+        stage_family=data.get("stage_family"),
+        stage_mode=data.get("stage_mode"),
+        artifact_class=data.get("artifact_class"),
+        ppiflow_filter_passed=data.get("ppiflow_filter_passed"),
+        passed_screen=data.get("passed_screen"),
+    )
+    if not data.get("artifact_class") and artifact_class:
+        data["artifact_class"] = artifact_class
+    if artifact_class and data.get("artifact_schema_version") is None:
+        data["artifact_schema_version"] = 1
+    data["result_set"] = result_set
+    data["result_set_label"] = result_set_label
     data.update(_compute_import_metadata(design))
     return DesignResponse.model_validate(data)
 

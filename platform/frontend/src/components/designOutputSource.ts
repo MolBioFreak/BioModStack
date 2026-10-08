@@ -1,5 +1,6 @@
 export type OutputSourceFilter = 'all' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'caliby' | 'ppiflow' | 'confornets' | 'esmfold2' | 'validation' | 'imported';
 export type AnalysisLens = 'validation' | 'rfantibody' | 'boltzgen' | 'fampnn' | 'caliby' | 'ppiflow' | 'frustrampnn' | 'protenix';
+export type ResultSetFilter = 'all' | 'rfantibody_backbones' | 'sequence_designs' | 'ppiflow_candidates' | 'ppiflow_passed' | 'ppiflow_rejected';
 
 type OutputSourceDesign = {
     name?: string | null;
@@ -17,6 +18,10 @@ type OutputSourceDesign = {
     stage_mode?: string | null;
     source_stage_family?: string | null;
     source_stage_mode?: string | null;
+    result_set?: string | null;
+    result_set_label?: string | null;
+    ppiflow_filter_passed?: boolean | null;
+    passed_screen?: boolean | null;
 };
 
 type AnalysisLensDesign = OutputSourceDesign & Record<string, unknown>;
@@ -74,6 +79,33 @@ const asRecord = (value: unknown): Record<string, unknown> | null => (
 
 const normalizeArtifactClass = (value: unknown): string => String(value || '').trim().toLowerCase();
 const isValidatedArtifactClass = (artifactClass: string): boolean => artifactClass === 'validated_complex';
+
+export const inferDesignResultSet = (design: OutputSourceDesign): ResultSetFilter | null => {
+    const direct = String(design.result_set || '').trim().toLowerCase();
+    if (direct === 'rfantibody_backbones' || direct === 'sequence_designs' || direct === 'ppiflow_candidates' || direct === 'ppiflow_passed' || direct === 'ppiflow_rejected') {
+        return direct;
+    }
+
+    const artifactClass = normalizeArtifactClass(design.artifact_class);
+    const stageFamily = String(design.stage_family || '').trim().toLowerCase();
+    const stageMode = String(design.stage_mode || '').trim().toLowerCase();
+    if (stageFamily === 'rfantibody' || artifactClass === 'backbone_complex') {
+        return 'rfantibody_backbones';
+    }
+    if (stageFamily === 'ppiflow' || stageMode.includes('ppiflow') || stageMode.includes('maturation')) {
+        const passed = design.ppiflow_filter_passed ?? design.passed_screen;
+        if (passed === true) return 'ppiflow_passed';
+        if (passed === false) return 'ppiflow_rejected';
+        return 'ppiflow_candidates';
+    }
+    if (
+        artifactClass === 'sequence_designed_complex' ||
+        ['boltzgen', 'fampnn', 'proteinmpnn', 'antifold', 'frustrampnn', 'caliby'].includes(stageFamily)
+    ) {
+        return 'sequence_designs';
+    }
+    return null;
+};
 const isBoltzValidationModelId = (modelId: string): boolean => (
     modelId === 'boltz2' || modelId === 'boltz_cp_experimental'
 );
