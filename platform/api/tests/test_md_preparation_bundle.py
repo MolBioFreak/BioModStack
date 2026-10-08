@@ -176,3 +176,42 @@ def test_preparation_validation_supplies_restraint_reference_coordinates() -> No
     assert command[command.index("-r") + 1] == "system.gro"
     assert command[command.index("-c") + 1] == "system.gro"
     assert command[command.index("-maxwarn") + 1] == "0"
+
+
+def test_gromacs_runner_stages_position_restraint_include_from_bundle(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from scripts.bms_md.chemistry import prepare as preparation_module
+    from scripts.bms_md.gromacs_pipeline import _consume_preparation_bundle
+
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    for name in ("system.gro", "system.top", "posre.itp"):
+        (bundle / name).write_text(name + "\n", encoding="utf-8")
+    monkeypatch.setattr(
+        preparation_module,
+        "verify_preparation_bundle",
+        lambda *args, **kwargs: {"bundle_sha256": "b" * 64},
+    )
+
+    class Ledger:
+        def is_complete(self, stage, required):
+            return False
+
+        def mark_running(self, stage, command):
+            pass
+
+        def mark_completed(self, stage, required, **kwargs):
+            self.required = required
+
+    ledger = Ledger()
+    output = tmp_path / "replica"
+    _consume_preparation_bundle(
+        {"chemistry": {"profile_id": "fixture", "profile_sha256": "a" * 64}},
+        bundle,
+        output,
+        ledger,
+    )
+
+    assert (output / "system" / "posre.itp").read_text(encoding="utf-8") == "posre.itp\n"
+    assert output / "system" / "posre.itp" in ledger.required
