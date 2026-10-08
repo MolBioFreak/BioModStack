@@ -624,13 +624,38 @@ export function MolBioToolkitV2() {
                 notes: `Detected by pLannotate (${f.identity_pct.toFixed(1)}% identity)${f.is_fragment ? ' [fragment]' : ''}`
             }));
 
+            // Deduplicate: filter out features that already exist
+            // A feature is considered duplicate if it has same name and overlapping position (>80% overlap)
+            const existingFeatures = sequenceData.features;
+            const uniqueNewFeatures = newFeatures.filter(newF => {
+                return !existingFeatures.some(existingF => {
+                    // Same name check (case-insensitive)
+                    const sameName = existingF.name.toLowerCase() === newF.name.toLowerCase();
+                    if (!sameName) return false;
+
+                    // Calculate position overlap
+                    const overlapStart = Math.max(existingF.start, newF.start);
+                    const overlapEnd = Math.min(existingF.end, newF.end);
+                    const overlapLength = Math.max(0, overlapEnd - overlapStart);
+                    const newLength = newF.end - newF.start;
+                    const existingLength = existingF.end - existingF.start;
+                    const minLength = Math.min(newLength, existingLength);
+
+                    // If >80% overlap, consider it duplicate
+                    return minLength > 0 && (overlapLength / minLength) > 0.8;
+                });
+            });
+
+            const skippedCount = newFeatures.length - uniqueNewFeatures.length;
+
             // Merge with existing features
             setSequenceData({
                 ...sequenceData,
-                features: [...sequenceData.features, ...newFeatures]
+                features: [...sequenceData.features, ...uniqueNewFeatures]
             });
 
-            alert(`Detected ${filteredFeatures.length} features! ${message}`);
+            const skippedMsg = skippedCount > 0 ? ` (${skippedCount} duplicates skipped)` : '';
+            alert(`Added ${uniqueNewFeatures.length} new features!${skippedMsg} ${message}`);
         } catch (error) {
             console.error('Auto-annotation failed:', error);
             alert(`Auto-annotation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
