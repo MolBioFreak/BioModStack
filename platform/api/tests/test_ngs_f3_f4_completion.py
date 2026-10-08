@@ -209,10 +209,8 @@ def test_preview_producer_persists_admission_population(tmp_path, monkeypatch, n
     catalog.mkdir(); preview.mkdir()
     allocation = SimpleNamespace(dram_bytes=64 * 1024 * 1024, disk_bytes=256 * 1024 * 1024)
     from services import ngs_alignment_sessions as storage
-    from contextlib import ExitStack
-    with ExitStack() as stack:
-        source = stack.enter_context(storage.open_verified_artifact_snapshot(
-            bam, expected_sha256=sha(bam.read_bytes()), expected_size=bam.stat().st_size))
+    with storage.open_verified_artifact_snapshot(
+            bam, expected_sha256=sha(bam.read_bytes()), expected_size=bam.stat().st_size) as source:
         builder._catalog_tables(catalog, source, lambda: None, allocation)
     policy = {**builder.resolved_preview_policy(), "target_reads": target, "max_records": max_records}
     monkeypatch.setattr(builder, "resolved_preview_policy", lambda: policy)
