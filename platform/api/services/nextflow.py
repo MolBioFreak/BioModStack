@@ -2475,30 +2475,40 @@ async def launch_nextflow_job(
                                     elif isinstance(hotspots, list):
                                         epitope_residues = hotspots
 
-                            from services.result_state_integrity import finalize_successful_job
-
                             result_output_dir = job.child_output_dir or output_dir
-                            finalization = await finalize_successful_job(
-                                job,
-                                result_output_dir,
-                                session,
-                                epitope_residues=epitope_residues,
+                            is_md_parent = (
+                                job.model_id == "molecular_dynamics" and job.mode == "simulate"
                             )
-                            if finalization.completed:
-                                logger.info(
-                                    f"Ingested and validated {finalization.design_count} designs for job {job_id}"
-                                )
-                                from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
+                            if is_md_parent:
+                                from services.md.completion import validate_and_finalize_md_job
 
-                                schedule_viewer_minimum_analyses_for_job(str(job.id))
-                                # BATCH-STAGE-GATE: Check if all sibling variants complete, trigger batch FrustraMPNN
-                                await maybe_trigger_batch_frustrampnn(job, session)
-                                await maybe_trigger_mutation_seed_refinement(job, session)
+                                validate_and_finalize_md_job(job)
+                                logger.info("Validated the immutable MD completion generation for job %s", job_id)
                             else:
-                                logger.warning(
-                                    f"Result ingestion failed integrity validation for job {job_id}; "
-                                    f"preserving explicit {finalization.integrity_state} state"
+                                from services.result_state_integrity import finalize_successful_job
+
+                                finalization = await finalize_successful_job(
+                                    job,
+                                    result_output_dir,
+                                    session,
+                                    epitope_residues=epitope_residues,
                                 )
+                                if finalization.completed:
+                                    logger.info(
+                                        f"Ingested and validated {finalization.design_count} designs for job {job_id}"
+                                    )
+                                    from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
+
+                                    schedule_viewer_minimum_analyses_for_job(str(job.id))
+                                    # BATCH-STAGE-GATE: Check if all sibling variants complete, trigger batch FrustraMPNN
+                                    await maybe_trigger_batch_frustrampnn(job, session)
+                                    await maybe_trigger_mutation_seed_refinement(job, session)
+                                else:
+                                    logger.warning(
+                                        f"Result ingestion failed integrity validation for job {job_id}; "
+                                        f"preserving explicit {finalization.integrity_state} state"
+                                    )
+
                             
                     # Check for cancellation exit codes (SIGTERM=15/-15/143, SIGKILL=9/-9/137)
                     elif exit_code in (-15, -9, 143, 137):
@@ -2557,7 +2567,11 @@ async def launch_nextflow_job(
                         # Log last few lines
                         if job.status == JobStatus.FAILED.value:
                             logger.error(f"Tail of log:\n{''.join(full_log.tail(20))}")
-                
+                md_analysis_parent_id = (
+                    str(job.parent_job_id)
+                    if job.model_id == "molecular_dynamics" and job.mode == "analyze" and job.parent_job_id
+                    else None
+                )
                 job.completed_at = datetime.utcnow()
                 changes = {
                     attribute.key: attribute.value
@@ -2583,6 +2597,16 @@ async def launch_nextflow_job(
                     await session.commit()
                     if not published.rowcount:
                         logger.info("Skipped stale Nextflow terminal publication for job %s", job_id)
+                    if md_analysis_parent_id:
+                        # Reconcile only after the guarded child publication.  The
+                        # worker ORM snapshot has been expunged, so an operator's
+                        # concurrent cancellation remains authoritative even when
+                        # the terminal CAS loses its race.
+                        from services.md.lifecycle import reconcile_md_analysis_parent
+
+                        session.expire_all()
+                        await reconcile_md_analysis_parent(md_analysis_parent_id, session)
+                        await session.commit()
                 _running_processes.pop(job_id, None)
                 
         except Exception as e:
@@ -2623,6 +2647,11 @@ async def launch_nextflow_job(
                         await session.commit()
                         if not published.rowcount:
                             logger.info("Skipped stale Nextflow exception publication for job %s", job_id)
+                        elif job.model_id == "molecular_dynamics" and job.mode == "analyze" and job.parent_job_id:
+                            from services.md.lifecycle import reconcile_md_analysis_parent
+
+                            await reconcile_md_analysis_parent(str(job.parent_job_id), session)
+                            await session.commit()
 
 
 def launch_nextflow_job_detached(
@@ -2762,6 +2791,9 @@ def build_nextflow_command(
 
     normalized_model_id = str(model_id or "").strip().lower()
     normalized_mode = str(mode or "").strip().lower()
+    if normalized_model_id == "molecular_dynamics" and normalized_mode == "analyze":
+        if params.get("gpu_id") not in (None, "") or params.get("pinned_gpus") not in (None, "", []):
+            raise ValueError("Molecular-dynamics analysis is CPU-only and rejects GPU assignment")
     if normalized_model_id == "bind" + "craft":
         raise ValueError("This retired workflow has been permanently removed")
     if str(model_id or "").strip().lower() == "caliby_experimental":

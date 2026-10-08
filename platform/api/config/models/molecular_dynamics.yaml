@@ -42,6 +42,12 @@ modes:
       - md_job_config
       - md_replica_index
       - md_engine
+  - id: analyze
+    name: Durable CPU analysis child
+    description: Internal singleton analysis attempt bound to one completed immutable replica manifest.
+    params:
+      - md_analysis_work_item
+      - md_analysis_sif_sha256
 
 params:
   - name: md_job_spec
@@ -60,6 +66,15 @@ params:
   - name: md_engine
     type: string
     description: Internal explicit engine copied from the validated parent contract.
+    required: false
+  - name: md_analysis_work_item
+    type: file
+    description: Internal parent-owned singleton bms.md.analysis-work-item.v1 document.
+    required: false
+    file_type: json
+  - name: md_analysis_sif_sha256
+    type: string
+    description: SHA-256 identity of the qualified CPU analysis runtime.
     required: false
 
 inputs:

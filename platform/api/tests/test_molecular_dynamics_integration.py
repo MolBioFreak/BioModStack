@@ -42,12 +42,14 @@ def test_registry_exposes_engine_neutral_molecular_dynamics_job(monkeypatch: pyt
         "count_per_replica": 1,
     }
     assert "amber_system_xml" not in model.capabilities["input_formats"]
-    assert [mode.id for mode in model.modes] == ["simulate", "replica"]
+    assert [mode.id for mode in model.modes] == ["simulate", "replica", "analyze"]
     params = {parameter.name: parameter for parameter in model.params}
     assert params["md_job_spec"].required is True
     assert params["md_job_spec"].type == "object"
     assert params["md_job_config"].required is False
     assert params["md_job_config"].file_type == "json"
+    assert params["md_analysis_work_item"].required is False
+    assert params["md_analysis_work_item"].file_type == "json"
 
 
 def test_api_routes_md_job_to_bounded_experimental_workflow() -> None:
@@ -66,6 +68,30 @@ def test_api_routes_md_job_to_bounded_experimental_workflow() -> None:
     assert _flag_value(command, "--md_input_root") == "/tmp"
     assert _flag_value(command, "--gpu_id") == "2"
     assert _flag_value(command, "--job_id") == "job-md-1"
+
+    analysis = build_nextflow_command(
+        model_id="molecular_dynamics",
+        mode="analyze",
+        params={
+            "md_analysis_work_item": "/tmp/parent/orchestration/analysis_work_items/replica_0.json",
+            "md_analysis_sif_sha256": "3a74031e20dbd5012b7e532134f81816d596521dde47c4439fd1d6ae54fa5c68",
+        },
+        output_dir="/tmp/analysis-child",
+        job_id="job-md-analysis-1",
+    )
+    assert analysis[analysis.index("run") + 1] == "workflows/experimental/molecular_dynamics/analyze.nf"
+    assert _flag_value(analysis, "-profile") == "molecular_dynamics_analysis,workstation_ryzen7960x"
+    assert _flag_value(analysis, "--md_analysis_work_item").endswith("replica_0.json")
+    assert "--gpu_id" not in analysis
+
+    with pytest.raises(ValueError, match="CPU-only"):
+        build_nextflow_command(
+            model_id="molecular_dynamics",
+            mode="analyze",
+            params={"md_analysis_work_item": "/tmp/item.json", "gpu_id": 0},
+            output_dir="/tmp/analysis-child",
+            job_id="job-md-analysis-invalid",
+        )
 
 
 def test_md_workflow_uses_bounded_singleton_entrypoints() -> None:
@@ -92,6 +118,26 @@ def test_md_workflow_uses_bounded_singleton_entrypoints() -> None:
     assert "scripts.bms_md.aggregate_children" in orchestrator
     assert "MD_ASSERT_REPLICA_OUTCOME" in orchestrator
     assert "MD_GROMACS_REPLICA" not in orchestrator
+    assert "MD_ANALYZE_REPLICA" not in orchestrator
+    ordered_tokens = [
+        "scripts.bms_md.spawn_replicas",
+        "--stage md_replica",
+        "scripts.bms_md.aggregate_children",
+        "MD_ASSERT_REPLICA_OUTCOME",
+        "scripts.bms_md.spawn_analysis",
+        "--stage md_analysis",
+        "scripts.bms_md.collect_analysis",
+        "MD_ASSERT_ANALYSIS_OUTCOME",
+        "MD_COMPLETION_BARRIER",
+    ]
+    offsets = [orchestrator.index(token) for token in ordered_tokens]
+    assert offsets == sorted(offsets)
+
+    analyze_entrypoint = (workflow_root / "analyze.nf").read_text(encoding="utf-8")
+    assert "params.md_analysis_work_item" in analyze_entrypoint
+    assert "Channel.fromPath(params.md_analysis_work_item" in analyze_entrypoint
+    assert ".flatMap" not in analyze_entrypoint
+    assert "params.gpu_id" not in analyze_entrypoint
 
     finalize_entrypoint = (workflow_root / "finalize.nf").read_text(encoding="utf-8")
     assert "MD_FINALIZE_RESULTS" in finalize_entrypoint

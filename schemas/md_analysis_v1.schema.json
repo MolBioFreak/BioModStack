@@ -4,13 +4,14 @@
   "title": "BioModStack MD Analysis Report v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "status", "method", "created_at", "inputs", "tool"],
+  "required": ["schema", "status", "method", "created_at", "analysis_identity_sha256", "inputs", "tool"],
   "properties": {
     "schema": {"const": "bms.md.analysis.v1"},
     "status": {"enum": ["completed", "failed"]},
     "method": {"const": "md_backbone_rmsd_v1"},
     "job_id": {"type": "string", "minLength": 1},
     "created_at": {"type": "string", "format": "date-time"},
+    "analysis_identity_sha256": {"$ref": "#/$defs/sha256"},
     "inputs": {
       "type": "object",
       "additionalProperties": false,
@@ -19,7 +20,8 @@
         "manifest_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
         "topology_sha256": {"$ref": "#/$defs/sha256"},
         "trajectory_sha256": {"$ref": "#/$defs/sha256"},
-        "atom_order_identity": {"type": "string", "minLength": 1}
+        "atom_order_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "atom_order_identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       }
     },
     "tool": {
@@ -29,7 +31,8 @@
       "properties": {
         "name": {"const": "MDAnalysis"},
         "version": {"type": "string", "minLength": 1},
-        "implementation_sha256": {"$ref": "#/$defs/sha256"}
+        "implementation_sha256": {"$ref": "#/$defs/sha256"},
+        "runtime_sif_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
     "replica": {"type": "integer", "minimum": 0},
@@ -38,13 +41,28 @@
     "policy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["pbc", "alignment", "exclusions", "stride", "max_points"],
+      "required": ["pbc", "alignment", "exclusions", "requested_stride", "effective_stride", "max_points"],
       "properties": {
         "pbc": {"const": "nojump_then_center_protein"},
         "alignment": {"const": "mass_weighted_backbone_fit"},
         "exclusions": {"const": "non_protein_and_non_backbone"},
-        "stride": {"type": "integer", "minimum": 1},
+        "requested_stride": {"type": "integer", "minimum": 1},
+        "effective_stride": {"type": "integer", "minimum": 1},
         "max_points": {"type": "integer", "minimum": 1, "maximum": 10000}
+      }
+    },
+    "policy_sha256": {"$ref": "#/$defs/sha256"},
+    "frame_admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_frame_count", "admitted_frame_count", "first_source_frame", "last_source_frame", "first_time_ps", "last_time_ps"],
+      "properties": {
+        "source_frame_count": {"type": "integer", "minimum": 1},
+        "admitted_frame_count": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "first_source_frame": {"type": "integer", "minimum": 0},
+        "last_source_frame": {"type": "integer", "minimum": 0},
+        "first_time_ps": {"type": "number"},
+        "last_time_ps": {"type": "number"}
       }
     },
     "units": {
@@ -71,6 +89,7 @@
     },
     "residue_metrics": {
       "type": "array",
+      "maxItems": 10000,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -159,7 +178,16 @@
     }
   },
   "allOf": [
-    {"if": {"properties": {"status": {"const": "completed"}}}, "then": {"required": ["job_id", "replica", "selection", "reference", "policy", "units", "points", "summary", "residue_metrics", "block_statistics", "evidence", "observables", "specialized_analyzers", "derived_artifacts"]}},
+    {
+      "if": {"properties": {"status": {"const": "completed"}}},
+      "then": {
+        "required": ["job_id", "replica", "selection", "reference", "policy", "policy_sha256", "frame_admission", "units", "points", "summary", "residue_metrics", "block_statistics", "evidence", "observables", "specialized_analyzers", "derived_artifacts"],
+        "properties": {
+          "tool": {"required": ["runtime_sif_sha256"]},
+          "inputs": {"required": ["topology_sha256", "trajectory_sha256", "atom_order_manifest_sha256", "atom_order_identity"]}
+        }
+      }
+    },
     {"if": {"properties": {"status": {"const": "failed"}}}, "then": {"required": ["failure"]}}
   ],
   "$defs": {

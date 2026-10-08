@@ -11,7 +11,15 @@ test('MD results route before Design-centric fetching and charts', () => {
     const source = readFileSync(path.resolve(process.cwd(), 'src/components/ResultsViewer.tsx'), 'utf8');
     assert.match(source, /activeJob\.model_id === 'molecular_dynamics' \? \(/);
     assert.match(source, /activeJob\.model_id !== 'molecular_dynamics'/);
-    assert.match(source, /<MDResultsPane jobId=\{activeJob\.id\}/);
+    assert.match(source, /<MDResultsPane key=\{activeJob\.id\} jobId=\{activeJob\.id\}/);
+});
+
+test('completed MD summary lifecycle spelling matches the backend contract', () => {
+    const frontend = readFileSync(path.resolve(process.cwd(), 'src/lib/api.ts'), 'utf8');
+    const backend = readFileSync(path.resolve(process.cwd(), '../api/services/md/results.py'), 'utf8');
+    assert.match(frontend, /result_state: 'partial' \| 'completed' \| null/);
+    assert.match(backend, /"result_state": "completed"/);
+    assert.doesNotMatch(frontend, /result_state: 'partial' \| 'complete' \| null/);
 });
 
 test('governed MD metadata remains fail-closed without binary playback proof', () => {
@@ -75,10 +83,30 @@ test('controller keeps unsupported playback fail-closed without invoking the ada
     await controller.dispose();
 });
 
+test('MD pane exposes analysis retry and labels the checksum-bound terminal structure honestly', () => {
+    const source = readFileSync(path.resolve(process.cwd(), 'src/components/MDResultsPane.tsx'), 'utf8');
+    const api = readFileSync(path.resolve(process.cwd(), 'src/lib/api.ts'), 'utf8');
+    assert.match(api, /retryMDAnalysis/);
+    assert.match(api, /md\/analysis\/retry/);
+    assert.match(source, /analysisData\.retry\.eligible/);
+    assert.match(source, /Replica final structure/);
+    assert.doesNotMatch(source, /Representative structure/);
+    assert.match(source, /source_frame/);
+    assert.match(source, /time_ps/);
+    assert.match(source, /source_trajectory_sha256/);
+    assert.match(source, /useEffect\(\(\) =>/);
+});
+
 test('MD pane consumes server-produced point identity and advertises no recomputation', () => {
     const source = readFileSync(path.resolve(process.cwd(), 'src/components/MDResultsPane.tsx'), 'utf8');
     assert.match(source, /source_frame/);
     assert.match(source, /Server-produced bounded points/);
     assert.doesNotMatch(source, /from ['"]MDAnalysis|superposition|calculateRmsd/i);
     assert.match(source, /playback unavailable/i);
+});
+
+test('all MD Plotly arrays are bounded by the authoritative report schema', () => {
+    const schema = JSON.parse(readFileSync(path.resolve(process.cwd(), '../../schemas/md_analysis_v1.schema.json'), 'utf8'));
+    assert.equal(schema.properties.points.maxItems, 10_000);
+    assert.equal(schema.properties.residue_metrics.maxItems, 10_000);
 });

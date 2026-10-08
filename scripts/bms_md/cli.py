@@ -43,6 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--stride", type=int, default=1)
     analyze.add_argument("--max-points", type=int, default=2000)
     analyze.add_argument(
+        "--runtime-sha256",
+        help="qualified MDAnalysis SIF SHA-256; defaults to BMS_MD_ANALYSIS_SIF_SHA256",
+    )
+    analyze.add_argument(
         "--report-failure-as-output",
         action="store_true",
         help="emit a typed failed report without failing the workflow task",
@@ -92,7 +96,11 @@ def main() -> None:
         return
     if args.command == "analyze":
         output, success = write_analysis_report(
-            args.manifest, args.output, stride=args.stride, max_points=args.max_points
+            args.manifest,
+            args.output,
+            stride=args.stride,
+            max_points=args.max_points,
+            runtime_sha256=args.runtime_sha256,
         )
         print(output)
         if not success and not args.report_failure_as_output:
