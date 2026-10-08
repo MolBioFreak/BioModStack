@@ -12,6 +12,7 @@ surface so this index can act as the single starting point.
 - [Experimental Protein CAD Workflow](Experimental_Protein_CAD_Workflow.md)
 - [Lab Automation, Mol Bio, and Sequencing](Lab_Automation_MolBio_and_Sequencing.md)
 - [Results and Analysis](Results_and_Analysis.md)
+- [Desktop Runtime and Shell Architecture](Desktop_Runtime_and_Shell_Architecture.md)
 - [Documentation Harmonization Strategy](Documentation_Harmonization_Strategy.md)
 
 ## Platform Docs

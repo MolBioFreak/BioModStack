@@ -80,34 +80,44 @@ Primary frontend client:
 Primary backend router:
 - [platform/api/routers/bioxp.py](../platform/api/routers/bioxp.py)
 
-This is a workstation-linked remote hardware cockpit, not a generic cloud API.
+This is a BMS-linked cockpit for a robot-local BioXP runtime, not a generic
+cloud API and not a shell-based daemon supervisor.
 
 Current capabilities include:
 
-- remote daemon linkage and disconnect
-- daemon start/stop/status over SSH
+- runtime linkage and disconnect
+- linked-runtime reachability/status via the BioXP proxy
 - proxied hardware status
-- axis status and motion actions
+- manual axis status and motion actions for `x`, `y`, `z`, `g`, and `door`
 - motion power and interlock preparation
 - camera device/control/stream handling
 - thermal and chiller control flows
 - latch and LED actions
+- protocol/operator surface integration through the BioXP cockpit
 
 Runtime dependencies:
 
-- a reachable remote BioXP daemon
-- working SSH from the BMS workstation to the robot host
-- `BIOXP_*` environment variables where custom host/user/port/repo paths are
-  needed
+- network reachability from BMS to the robot-local BioXP runtime URL
+- a robot-local BioXP runtime supervised outside BMS (for example
+  `bioxp-api.service`)
+- `BIOXP_*` environment variables only when overriding default linkage or
+  persistence behavior
 
 Important env vars:
 
-- `BIOXP_SSH_USER`
-- `BIOXP_SSH_HOST`
-- `BIOXP_DAEMON_PORT`
-- `BIOXP_REPO_DIR`
 - `BIOXP_SERVER_URL`
+  optional seed/default linkage URL loaded by BMS on startup
 - `BIOXP_LINKAGE_STATE_PATH`
+  file path where BMS persists the operator-selected linkage URL
+- `BIOXP_SSH_HOST`
+  legacy variable name used only to derive the recommended default host in the
+  cockpit linkage UI
+- `BIOXP_DAEMON_PORT`
+  port used when constructing the recommended runtime URL (default `8123`)
+
+Normal operation does not use BMS to start or stop the robot daemon. The
+compatibility maintenance endpoints remain disabled and return a conflict if
+called; use the robot-local service/runbook instead.
 
 ## Workstation / System Operations
 

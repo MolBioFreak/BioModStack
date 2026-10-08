@@ -1,21 +1,30 @@
-import asyncio
 import os
+import socket
 from pathlib import Path
 from typing import Optional, Dict, Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
+from paths import get_data_root
+
 router = APIRouter()
 
-# Remote daemon host. SSH key auth must be pre-configured.
-ROBOT_SSH_USER = os.getenv("BIOXP_SSH_USER", "molbiofreak")
+
+def _default_linkage_state_path() -> Path:
+    override = os.getenv("BIOXP_LINKAGE_STATE_PATH")
+    if override:
+        return Path(override).expanduser().resolve()
+    return get_data_root() / "bioxp_linkage_url"
+
+
+# BioXP runtime host defaults. The robot should own the runtime locally; BMS only links to it.
 ROBOT_SSH_HOST = os.getenv("BIOXP_SSH_HOST", "robot")
 ROBOT_DAEMON_PORT = int(os.getenv("BIOXP_DAEMON_PORT", "8123"))
-ROBOT_REPO_DIR = os.getenv("BIOXP_REPO_DIR", "~/bioxp_re")
-LINKAGE_STATE_PATH = Path(os.getenv("BIOXP_LINKAGE_STATE_PATH", str(Path.home() / ".biomodstack" / "bioxp_linkage_url")))
+LINKAGE_STATE_PATH = _default_linkage_state_path()
 
 class LinkageRequest(BaseModel):
     url: str
@@ -32,15 +41,119 @@ def _normalize_url(url: Optional[str]) -> Optional[str]:
     return normalized.rstrip("/")
 
 
+def _format_linkage_host(host: str) -> str:
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]"
+    return host
+
+
+def _build_linkage_url(
+    host: str,
+    *,
+    scheme: str = "http",
+    port: Optional[int] = None,
+    path: str = "",
+    query: str = "",
+    fragment: str = "",
+) -> str:
+    netloc_host = _format_linkage_host(host)
+    effective_port = ROBOT_DAEMON_PORT if port is None else port
+    netloc = netloc_host if effective_port is None else f"{netloc_host}:{effective_port}"
+    return urlunsplit((scheme or "http", netloc, path, query, fragment)).rstrip("/")
+
+
+def _configured_default_linkage_url() -> Optional[str]:
+    configured = _normalize_url(os.getenv("BIOXP_SERVER_URL"))
+    if not configured:
+        return None
+    parsed = urlsplit(configured)
+    host = parsed.hostname
+    if not host:
+        return configured
+    if host == ROBOT_SSH_HOST:
+        host = _resolve_host_for_linkage(host)
+    return _build_linkage_url(
+        host,
+        scheme=parsed.scheme,
+        port=parsed.port,
+        path=parsed.path,
+        query=parsed.query,
+        fragment=parsed.fragment,
+    )
+
+
 def _recommended_linkage_url() -> str:
-    return f"http://{ROBOT_SSH_HOST}:{ROBOT_DAEMON_PORT}"
+    configured = _configured_default_linkage_url()
+    if configured:
+        return configured
+    host = _preferred_runtime_host()
+    return _build_linkage_url(host)
+
+
+def _preferred_runtime_host() -> str:
+    override = os.getenv("BIOXP_LINKAGE_HOST") or os.getenv("BIOXP_RUNTIME_HOST")
+    if override:
+        return override.strip()
+    return _resolve_host_for_linkage(ROBOT_SSH_HOST)
+
+
+def _resolve_host_for_linkage(host: str) -> str:
+    try:
+        records = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except Exception:
+        return host
+    for family, _, _, _, sockaddr in records:
+        address = sockaddr[0]
+        if family == socket.AF_INET and address:
+            return address
+    for _, _, _, _, sockaddr in records:
+        address = sockaddr[0]
+        if address:
+            return address
+    return host
+
+
+def _canonicalize_linkage_url(url: Optional[str]) -> Optional[str]:
+    normalized = _normalize_url(url)
+    if not normalized:
+        return None
+    parsed = urlsplit(normalized)
+    if parsed.hostname != ROBOT_SSH_HOST:
+        return normalized
+    configured_default = _configured_default_linkage_url()
+    if configured_default:
+        configured = urlsplit(configured_default)
+        host = configured.hostname or _preferred_runtime_host()
+        return _build_linkage_url(
+            host,
+            scheme=parsed.scheme,
+            port=parsed.port if parsed.port is not None else configured.port,
+            path=parsed.path,
+            query=parsed.query,
+            fragment=parsed.fragment,
+        )
+    preferred_host = _preferred_runtime_host()
+    return _build_linkage_url(
+        preferred_host,
+        scheme=parsed.scheme,
+        port=parsed.port,
+        path=parsed.path,
+        query=parsed.query,
+        fragment=parsed.fragment,
+    )
 
 
 def _read_persisted_linkage() -> Optional[str]:
     try:
         if LINKAGE_STATE_PATH.exists():
-            value = LINKAGE_STATE_PATH.read_text(encoding="utf-8").strip()
-            return _normalize_url(value)
+            raw_value = LINKAGE_STATE_PATH.read_text(encoding="utf-8").strip()
+            canonical = _canonicalize_linkage_url(raw_value)
+            if canonical and canonical != _normalize_url(raw_value):
+                try:
+                    LINKAGE_STATE_PATH.write_text(canonical, encoding="utf-8")
+                except Exception:
+                    pass
+            return canonical
     except Exception:
         return None
     return None
@@ -57,7 +170,7 @@ def _persist_linkage(url: Optional[str]) -> None:
 # In-memory Linkage State. Falls back to persisted file, then env var, otherwise remains unset.
 _GLOBAL_LINKAGE_URL: Optional[str] = (
     _read_persisted_linkage()
-    or _normalize_url(os.getenv("BIOXP_SERVER_URL"))
+    or _configured_default_linkage_url()
 )
 
 
@@ -70,49 +183,39 @@ def get_current_url() -> str:
     return _GLOBAL_LINKAGE_URL
 
 
-async def _daemon_probe() -> dict:
-    probe_cmd = (
-        f"if curl -fsS --max-time 3 http://127.0.0.1:{ROBOT_DAEMON_PORT}/status >/dev/null; then "
-        f"echo '__HEALTHY__'; else echo '__UNHEALTHY__'; fi; "
-        f"pgrep -af '[u]vicorn.*bioxp.api' || echo '__NO_PIDS__'"
+def _maintenance_disabled_detail() -> str:
+    return (
+        "Robot-local BioXP runtime supervision is outside the normal BMS cockpit path. "
+        "Use the robot-local bioxp-api.service or a maintenance runbook instead of starting/stopping uvicorn from BMS."
     )
-    result = await _ssh_exec(probe_cmd, timeout_s=8.0)
-    healthy = "__HEALTHY__" in result["stdout"]
-    lines = []
-    for line in result["stdout"].splitlines():
-        stripped = line.strip()
-        if not stripped or stripped in {"__HEALTHY__", "__UNHEALTHY__", "__NO_PIDS__"}:
-            continue
-        lines.append(stripped)
+
+
+def _runtime_status_payload(
+    *,
+    linkage_configured: bool,
+    linked_runtime_reachable: bool,
+    hardware_connected: bool,
+    detail: str,
+    proxy_error: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    runtime_url = _GLOBAL_LINKAGE_URL if linkage_configured else None
     return {
-        "healthy": healthy,
-        "detail": "\n".join(lines) if lines else None,
+        "running": linked_runtime_reachable,
+        "healthy": linked_runtime_reachable,
+        "stale_process": False,
+        "host": ROBOT_SSH_HOST,
+        "port": ROBOT_DAEMON_PORT,
+        "runtime_url": runtime_url,
+        "linkage_configured": linkage_configured,
+        "linked_runtime_reachable": linked_runtime_reachable,
+        "hardware_connected": hardware_connected,
+        "admin_control_available": False,
+        "maintenance_mode": "robot-local",
+        "recommended_url": _recommended_linkage_url(),
+        "detail": detail,
+        "proxy_error": proxy_error,
+        "inferred_via_proxy": False,
     }
-
-
-async def _ssh_exec(cmd: str, timeout_s: float = 10.0) -> dict:
-    """Run a command on the robot via SSH. Returns stdout, stderr, and return code."""
-    ssh_cmd = [
-        "ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=no",
-        f"{ROBOT_SSH_USER}@{ROBOT_SSH_HOST}", cmd
-    ]
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *ssh_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
-        return {
-            "stdout": stdout.decode().strip(),
-            "stderr": stderr.decode().strip(),
-            "returncode": proc.returncode,
-        }
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="SSH command timed out")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"SSH execution failed: {str(e)}")
 
 
 # ── Linkage Endpoints ──────────────────────────────────────────────────
@@ -128,7 +231,7 @@ async def get_linkage():
 @router.post("/linkage")
 async def set_linkage(req: LinkageRequest):
     global _GLOBAL_LINKAGE_URL
-    url = _normalize_url(req.url)
+    url = _canonicalize_linkage_url(req.url)
     _GLOBAL_LINKAGE_URL = url
     _persist_linkage(_GLOBAL_LINKAGE_URL)
     return {
@@ -151,87 +254,61 @@ async def disconnect_linkage():
     }
 
 
-# ── Remote Daemon Control ──────────────────────────────────────────────
+# ── Runtime Status / Deprecated Maintenance Compatibility ───────────────
 
 @router.get("/daemon/status")
+@router.get("/runtime/status")
 async def daemon_status():
-    """Check if the uvicorn process is actually healthy on the remote host."""
+    """Report linked BioXP runtime reachability without SSH/process inspection."""
+    if not _GLOBAL_LINKAGE_URL:
+        return _runtime_status_payload(
+            linkage_configured=False,
+            linked_runtime_reachable=False,
+            hardware_connected=False,
+            detail="No BioXP linkage is configured yet. Connect BMS to the robot-local runtime URL first.",
+        )
+
     try:
-        probe = await _daemon_probe()
-        return {
-            "running": probe["healthy"],
-            "healthy": probe["healthy"],
-            "stale_process": bool(probe["detail"]) and not probe["healthy"],
-            "host": ROBOT_SSH_HOST,
-            "port": ROBOT_DAEMON_PORT,
-            "detail": probe["detail"],
-            "inferred_via_proxy": False,
-            "probe_error": None,
-        }
+        payload = await proxy_request("GET", "/status", timeout=10.0)
+        if not isinstance(payload, dict):
+            payload = {"status": "error", "raw_payload": payload}
+        hardware_connected = bool(payload.get("hardware_connected"))
+        detail = payload.get("status_error") or payload.get("startup_error")
+        if not detail:
+            detail = (
+                "Linked BioXP runtime responded to /status and reported hardware connectivity."
+                if hardware_connected
+                else "Linked BioXP runtime responded to /status, but hardware is not yet connected."
+            )
+        return _runtime_status_payload(
+            linkage_configured=True,
+            linked_runtime_reachable=True,
+            hardware_connected=hardware_connected,
+            detail=str(detail),
+        )
     except HTTPException as exc:
-        try:
-            payload = await proxy_request("GET", "/status", timeout=10.0)
-            if isinstance(payload, dict) and payload.get("hardware_connected"):
-                detail = "SSH daemon probe unavailable; inferred running from live BioXP proxy status."
-                if exc.detail:
-                    detail = f"{detail} Probe error: {exc.detail}"
-                return {
-                    "running": True,
-                    "healthy": True,
-                    "stale_process": False,
-                    "host": ROBOT_SSH_HOST,
-                    "port": ROBOT_DAEMON_PORT,
-                    "detail": detail,
-                    "inferred_via_proxy": True,
-                    "probe_error": {
-                        "status_code": exc.status_code,
-                        "detail": exc.detail,
-                    },
-                }
-        except HTTPException:
-            pass
-        raise
+        return _runtime_status_payload(
+            linkage_configured=True,
+            linked_runtime_reachable=False,
+            hardware_connected=False,
+            detail=str(exc.detail),
+            proxy_error={
+                "status_code": exc.status_code,
+                "detail": exc.detail,
+            },
+        )
+
 
 @router.post("/daemon/start")
 async def daemon_start():
-    """Start the BioXP API daemon on the remote host via SSH."""
-    probe = await _daemon_probe()
-    if probe["healthy"]:
-        return {"status": "already_running", "detail": probe["detail"]}
+    """Deprecated: robot-local runtime lifecycle must not be controlled from BMS."""
+    raise HTTPException(status_code=409, detail=_maintenance_disabled_detail())
 
-    if probe["detail"]:
-        await _ssh_exec("pkill -f '[u]vicorn.*bioxp.api' || true", timeout_s=10.0)
-        await asyncio.sleep(1.0)
-
-    # Start daemon in a detached screen/nohup so it survives SSH disconnect
-    start_cmd = (
-        f"cd {ROBOT_REPO_DIR} && "
-        f"source .venv/bin/activate && "
-        f"nohup env PYTHONPATH=src uvicorn bioxp.api:app --host 0.0.0.0 --port {ROBOT_DAEMON_PORT} "
-        f"> /tmp/bioxp-api.log 2>&1 & "
-        f"echo $!"
-    )
-    result = await _ssh_exec(start_cmd, timeout_s=15.0)
-    pid = result["stdout"].strip().split("\n")[-1]
-
-    # Brief wait then verify
-    await asyncio.sleep(2.0)
-    verify = await _daemon_probe()
-
-    return {
-        "status": "started" if verify["healthy"] else "failed",
-        "pid": pid,
-        "detail": verify["detail"],
-    }
 
 @router.post("/daemon/stop")
 async def daemon_stop():
-    """Stop the BioXP API daemon on the remote host."""
-    result = await _ssh_exec("pkill -f '[u]vicorn.*bioxp.api' && echo 'STOPPED' || echo 'NOT_RUNNING'")
-    return {
-        "status": "stopped" if "STOPPED" in result["stdout"] else "not_running",
-        "detail": result["stdout"],
-    }
+    """Deprecated: robot-local runtime lifecycle must not be controlled from BMS."""
+    raise HTTPException(status_code=409, detail=_maintenance_disabled_detail())
 
 
 async def proxy_request(
@@ -260,7 +337,7 @@ async def proxy_request(
     except httpx.ConnectError:
         raise HTTPException(
             status_code=503,
-            detail=f"Cannot connect to BioXP hardware node at {base_url}. Is the bioxp-api.service running?"
+            detail=f"Cannot connect to BioXP hardware node at {base_url}. Is the robot-local bioxp.api runtime reachable?"
         )
     except httpx.ReadTimeout:
         raise HTTPException(
@@ -290,7 +367,7 @@ async def proxy_stream(path: str, request: Request, params: Optional[Dict[str, A
         await client.aclose()
         raise HTTPException(
             status_code=503,
-            detail=f"Cannot connect to BioXP hardware node at {base_url}. Is the bioxp-api.service running?"
+            detail=f"Cannot connect to BioXP hardware node at {base_url}. Is the robot-local bioxp.api runtime reachable?"
         )
     except httpx.HTTPStatusError as exc:
         body = await exc.response.aread()
@@ -349,7 +426,7 @@ async def get_status():
             "startup_error": None,
             "proxy_error": {
                 "status_code": 400,
-                "detail": "Hardware Node URL is not configured. Enter the daemon URL and press Connect.",
+                "detail": "Hardware Node URL is not configured. Enter the robot runtime URL and press Connect.",
             },
         }
 

@@ -3,7 +3,7 @@
 
 id: boltz2
 name: Boltz-2
-version: "2.0.0"
+version: "2.9.5"
 category: structure_prediction
 description: >
   Diffusion-based structure prediction from sequences. Predicts protein
@@ -30,6 +30,7 @@ modes:
       - sequence_name
       - boltz_recycling_steps
       - boltz_diffusion_samples
+      - boltz_max_parallel_samples
       - boltz_sampling_steps
       - boltz_use_msa
       - boltz_method
@@ -43,6 +44,7 @@ modes:
       - sequence_name
       - boltz_recycling_steps
       - boltz_diffusion_samples
+      - boltz_max_parallel_samples
       - boltz_sampling_steps
       - boltz_use_potentials
       - boltz_use_msa
@@ -74,6 +76,14 @@ params:
   - name: boltz_diffusion_samples
     type: integer
     description: Number of diffusion samples for structure generation
+    required: false
+    default: 1
+    minimum: 1
+    maximum: 32
+
+  - name: boltz_max_parallel_samples
+    type: integer
+    description: Maximum number of Boltz samples to predict in parallel within a job (lower reduces VRAM spikes)
     required: false
     default: 1
     minimum: 1

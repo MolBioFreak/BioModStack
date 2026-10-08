@@ -656,6 +656,10 @@ export interface Design {
     origin_job_id?: string | null;
     origin_backbone_design_id?: string | null;
     provenance?: Record<string, unknown> | null;
+    is_imported?: boolean;
+    import_source?: string | null;
+    import_method?: string | null;
+    import_label?: string | null;
     rfa_loop_metrics?: RfLoopMetrics | null;
     rfa_hotspot_metrics?: Record<string, unknown> | null;
     rfa_hotspot_covered_count?: number | null;
@@ -1321,6 +1325,7 @@ export interface QueuedJob {
     paused: boolean;
     pinned_gpu: number | null;
     assigned_gpu: number | null;
+    display_gpu_ids: number[] | null;
     priority: number;
     vram_estimate_mb: number | null;
     live_vram_mb: number | null;

@@ -32,7 +32,8 @@ Optional but relevant depending on subsystem usage:
 
 - GTK4 / Libadwaita for the desktop control panel
 - CoolerControl or `nvidia-settings` for workstation fan integration
-- SSH access to a BioXP host for robotics
+- network reachability to the robot-local BioXP runtime for robotics; optional
+  SSH only for break-glass maintenance on the robot itself
 
 ## Recommended Data Layout
 
@@ -98,6 +99,22 @@ From the repo root:
 ./start_ui.sh stop
 ```
 
+The same entrypoint can now manage the containerized core runtime too:
+
+```bash
+./start_ui.sh start --runtime container
+./start_ui.sh status --runtime container
+./start_ui.sh stop --runtime container
+```
+
+You can also drive Docker directly through the repo-native wrapper:
+
+```bash
+./scripts/run_biomodstack_core_runtime.sh up
+./scripts/run_biomodstack_core_runtime.sh ps
+./scripts/run_biomodstack_core_runtime.sh down
+```
+
 Optional GTK control panel:
 
 ```bash
@@ -112,7 +129,7 @@ Default local URLs:
 
 ## What `start_ui.sh` Actually Does
 
-The launcher:
+In dev mode the launcher:
 
 - loads `~/.biomodstack/env.sh` if present
 - ensures `uv` is on `PATH`
@@ -121,6 +138,10 @@ The launcher:
 - defaults `BMS_FAN_CONTROL_BACKEND` to `coolercontrol` unless overridden
 - keeps runtime-generated inputs out of the watched API source tree by setting
   `BMS_INPUTS`
+
+In container mode (`--runtime container`) the launcher instead installs/starts
+`biomodstack-core-runtime.service`, which calls `scripts/run_biomodstack_core_runtime.sh`
+and brings up `compose.core-runtime.yml`.
 
 ## Containers and Models
 
@@ -153,14 +174,26 @@ POD5/BAM/FASTQ/reference data.
 
 ### BioXP robotics
 
-Requires working SSH and/or proxy linkage to the remote BioXP daemon. Relevant
-env vars include:
+Requires network reachability from BMS to the robot-local BioXP runtime. In
+normal operation BMS stores a linkage URL and proxies the robot API over HTTP;
+it does not supervise `uvicorn` or restart the robot daemon from the cockpit.
 
-- `BIOXP_SSH_USER`
-- `BIOXP_SSH_HOST`
-- `BIOXP_DAEMON_PORT`
-- `BIOXP_REPO_DIR`
+Relevant env vars include:
+
 - `BIOXP_SERVER_URL`
+  optional seed/default linkage URL that BMS loads on startup if no persisted
+  linkage has been chosen yet
+- `BIOXP_LINKAGE_STATE_PATH`
+  file path where BMS persists the selected linkage URL
+- `BIOXP_SSH_HOST`
+  legacy variable name used only when deriving the recommended default robot
+  host for the linkage UI
+- `BIOXP_DAEMON_PORT`
+  port used when constructing the recommended default runtime URL (default
+  `8123`)
+
+If you still keep SSH access to the robot, treat it as a maintenance channel
+for service install/debug/runbooks rather than the normal operator path.
 
 ## Database and Data Roots
 

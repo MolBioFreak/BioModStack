@@ -154,11 +154,44 @@ From the repo root:
 ./start_ui.sh
 ```
 
+`start_ui.sh` is the service-control entrypoint. It installs and manages dedicated
+`systemd --user` units. In dev mode it uses `biomodstack-api.service` and
+`biomodstack-frontend.service`. For the new containerized core runtime, use:
+
+```bash
+./start_ui.sh start --runtime container
+./start_ui.sh status --runtime container
+./start_ui.sh stop --runtime container
+```
+
+That container mode launches `biomodstack-core-runtime.service`, which in turn runs the
+repo-native compose stack from `compose.core-runtime.yml`.
+
+To manually raise a UI surface after starting services, use the launcher entrypoints:
+
+```bash
+python3 scripts/launch_biomodstack_ui.py --surface browser --runtime container
+./start_ui_electron.sh --runtime container
+```
+
+`start_ui_electron.sh` is an additive opt-in wrapper around
+`python3 scripts/launch_biomodstack_ui.py --surface electron ...`. It keeps
+`start_ui.sh` service-control-only while making the Electron shell discoverable.
+
+Important current Phase 1 boundary:
+- container mode is the portable web/control-plane runtime
+- workflow execution and GPU/process truth still remain host-native
+- until a real host workflow adapter exists, do not treat container mode as the honest owner of Nextflow launches
+- `BMS_CORE_RUNTIME_MODE=1` is the explicit guard that disables launch/resume/resubmit and GPU scheduler ownership inside the core-runtime container stack
+
 Optional local desktop launcher:
 
 ```bash
 ./start_ui_gui.sh
 ```
+
+The GTK panel / tray are control surfaces only. They should start, stop, and restart
+services through `systemctl --user`, not own the backend process lifetime.
 
 Default local URLs:
 
@@ -200,6 +233,7 @@ Canonical docs:
 - [Structure Design and Refinement](docs/Structure_Design_and_Refinement.md)
 - [Lab Automation, Mol Bio, and Sequencing](docs/Lab_Automation_MolBio_and_Sequencing.md)
 - [Results and Analysis](docs/Results_and_Analysis.md)
+- [Desktop Runtime and Shell Architecture](docs/Desktop_Runtime_and_Shell_Architecture.md)
 - [Documentation Harmonization Strategy](docs/Documentation_Harmonization_Strategy.md)
 
 Platform-specific docs:

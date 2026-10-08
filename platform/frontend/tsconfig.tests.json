@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "./node_modules/.tmp/frontend-tests",
+    "rootDir": ".",
+    "types": ["node"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": false
+  },
+  "include": [
+    "src/components/designOutputSource.ts",
+    "src/components/structureViewerLayout.ts",
+    "src/components/MolBioToolkit/utils/alignmentLabels.ts",
+    "src/components/MolBioToolkit/utils/seqVizTouch.ts",
+    "src/components/MolBioToolkit/utils/viewerLayout.ts",
+    "src/runtime/navigation.ts",
+    "tests/**/*.ts"
+  ]
+}

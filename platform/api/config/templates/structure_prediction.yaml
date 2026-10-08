@@ -88,6 +88,17 @@ user_params:
       param: pred_method
       values: [boltz, both]
 
+  - name: boltz_max_parallel_samples
+    label: "[Boltz-2] Max Parallel Samples"
+    type: integer
+    default: 1
+    minimum: 1
+    maximum: 32
+    description: "Cap concurrent Boltz samples per job. Use 1 for safest VRAM behavior."
+    condition:
+      param: pred_method
+      values: [boltz, both]
+
   - name: boltz_method
     label: "[Boltz-2] Conditioning Method"
     type: enum

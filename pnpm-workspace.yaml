@@ -1,6 +1,10 @@
 packages:
   - packages/*
   - platform/frontend
+  - platform/desktop-electron
+
+onlyBuiltDependencies:
+  - electron
 
 ignoredBuiltDependencies:
   - esbuild

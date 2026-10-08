@@ -10,6 +10,7 @@ import os
 import signal
 import json
 import csv
+import yaml
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple, Set
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 CPU_RESERVED_THREADS = 4
 MIN_DYNAMIC_GPU_CPUS = 2
+DEFAULT_BOLTZ_CP_COMPAT_CONTAINER = "boltz2-pre-community-20260417-211613.sif"
 
 # Track running processes
 _running_processes: Dict[str, asyncio.subprocess.Process] = {}
@@ -41,6 +43,13 @@ from antibody_pipeline_contract import (
 )
 from .boltzgen_scaffolding import prepare_boltzgen_params_for_launch
 from .gpu_config import read_scheduler_config
+from .workflow_adapter import (
+    cancel_via_workflow_adapter,
+    get_adapter_running_jobs,
+    launch_via_workflow_adapter,
+    workflow_adapter_enabled,
+)
+from runtime_policy import assert_workflow_launch_allowed
 
 # Project root (parent of platform directory)
 PROJECT_ROOT = get_code_root()
@@ -420,6 +429,164 @@ def _write_sequence_batch_payloads(
         _write_sequence_batch_name_map(output_dir=out_root, entries=batch_entries)
 
     return sequence_batch_json_path, complex_batch_dir, complex_components
+
+
+def _parse_boltz_cp_gpu_ids(value: object) -> List[int]:
+    raw_values = value if isinstance(value, list) else str(value or "").split(",")
+    seen: Set[int] = set()
+    parsed: List[int] = []
+    for raw_value in raw_values:
+        try:
+            gpu_id = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if gpu_id < 0 or gpu_id in seen:
+            continue
+        seen.add(gpu_id)
+        parsed.append(gpu_id)
+    return parsed
+
+
+def _largest_square_divisor(gpu_count: int, requested_size_cp: object) -> int:
+    if gpu_count < 1:
+        return 1
+    requested = _coerce_int(requested_size_cp, gpu_count)
+    if requested < 1:
+        requested = gpu_count
+    best = 1
+    for candidate in range(1, gpu_count + 1):
+        if gpu_count % candidate != 0:
+            continue
+        root = int(candidate ** 0.5)
+        if root * root != candidate or candidate > requested:
+            continue
+        best = candidate
+    return best
+
+
+def _derive_boltz_cp_gpu_launch_settings(
+    *,
+    pinned_gpus: object,
+    requested_size_cp: object,
+    fallback_gpu_ids: object,
+) -> Tuple[str, int]:
+    parsed_gpu_ids = _parse_boltz_cp_gpu_ids(
+        pinned_gpus if isinstance(pinned_gpus, list) and pinned_gpus else fallback_gpu_ids
+    )
+    return ",".join(str(gpu_id) for gpu_id in parsed_gpu_ids), _largest_square_divisor(len(parsed_gpu_ids), requested_size_cp)
+
+
+def _normalize_boltz_cp_component_id(value: object, fallback: str) -> List[str]:
+    component_id = str(value or fallback).strip() or fallback
+    return [component_id]
+
+
+def _normalize_boltz_cp_sequence(value: object) -> str:
+    return str(value or "").strip().upper()
+
+
+def _build_boltz_cp_sequence_entry(
+    component: Dict[str, Any],
+    index: int,
+    *,
+    use_msa: bool = False,
+) -> Dict[str, Any]:
+    component_type = str(component.get("type") or "protein").strip().lower()
+    if component_type == "ion":
+        component_type = "ligand"
+    fallback_id = chr(ord("A") + (index % 26))
+    component_id = _normalize_boltz_cp_component_id(component.get("id"), fallback_id)
+
+    if component_type in {"protein", "peptide"}:
+        sequence = _normalize_boltz_cp_sequence(component.get("sequence"))
+        if not sequence:
+            raise ValueError(f"Boltz-CP protein component {component_id[0]!r} is missing a sequence")
+        protein_payload: Dict[str, Any] = {
+            "id": component_id,
+            "sequence": sequence,
+        }
+        if not use_msa:
+            protein_payload["msa"] = "empty"
+        return {"protein": protein_payload}
+
+    if component_type == "dna":
+        sequence = _normalize_boltz_cp_sequence(component.get("sequence"))
+        if not sequence:
+            raise ValueError(f"Boltz-CP DNA component {component_id[0]!r} is missing a sequence")
+        return {
+            "dna": {
+                "id": component_id,
+                "sequence": sequence,
+            }
+        }
+
+    if component_type == "rna":
+        sequence = _normalize_boltz_cp_sequence(component.get("sequence"))
+        if not sequence:
+            raise ValueError(f"Boltz-CP RNA component {component_id[0]!r} is missing a sequence")
+        return {
+            "rna": {
+                "id": component_id,
+                "sequence": sequence,
+            }
+        }
+
+    if component_type in {"ligand", "small_molecule"}:
+        ligand_payload: Dict[str, Any] = {"id": component_id}
+        for field_name in ("smiles", "ccd", "path", "name"):
+            field_value = component.get(field_name)
+            if field_value not in (None, ""):
+                ligand_payload[field_name] = field_value
+        if not any(field in ligand_payload for field in ("smiles", "ccd", "path")):
+            raise ValueError(
+                f"Boltz-CP ligand component {component_id[0]!r} requires one of smiles, ccd, or path"
+            )
+        return {"ligand": ligand_payload}
+
+    raise ValueError(f"Unsupported Boltz-CP component type: {component_type!r}")
+
+
+def _write_boltz_cp_input_yaml(
+    *,
+    output_dir: str,
+    params: Dict[str, Any],
+    complex_components: Optional[List[Dict[str, Any]]],
+) -> Optional[Path]:
+    if params.get("bcp_input_path") or params.get("input_path"):
+        return None
+
+    use_msa = _coerce_bool(params.get("boltz_use_msa"), default=False)
+
+    if complex_components:
+        sequences = [
+            _build_boltz_cp_sequence_entry(component, index, use_msa=use_msa)
+            for index, component in enumerate(complex_components)
+        ]
+    else:
+        sequence = _normalize_boltz_cp_sequence(params.get("sequence") or params.get("sequence_input"))
+        if not sequence:
+            return None
+        primary_chain_id = str(
+            params.get("primary_chain_id")
+            or params.get("target_chains")
+            or "A"
+        ).split(",")[0].strip() or "A"
+        protein_payload: Dict[str, Any] = {
+            "id": [primary_chain_id],
+            "sequence": sequence,
+        }
+        if not use_msa:
+            protein_payload["msa"] = "empty"
+        sequences = [{"protein": protein_payload}]
+
+    out_root = Path(output_dir)
+    out_root.mkdir(parents=True, exist_ok=True)
+    yaml_path = out_root / "boltz_cp_input.yaml"
+    yaml_path.write_text(
+        yaml.safe_dump({"version": 1, "sequences": sequences}, sort_keys=False),
+        encoding="utf-8",
+    )
+    return yaml_path
 
 
 def _coerce_bool(value: object, default: bool = False) -> bool:
@@ -1340,13 +1507,15 @@ async def launch_nextflow_job(
     model_id: str,
     mode: str,
     params: Dict[str, Any],
-    output_dir: str
+    output_dir: str,
+    allow_running_job: bool = False,
 ) -> None:
     """
     Launch a Nextflow pipeline job.
     
     This runs in a background task and updates the database with status.
     """
+    assert_workflow_launch_allowed("launch workflow jobs")
     from database import async_session, Job
     from sqlalchemy import select
     from schemas import JobStatus
@@ -1402,18 +1571,24 @@ async def launch_nextflow_job(
             logger.error(f"Job {job_id} not found in database")
             return
 
-        if job.status == JobStatus.RUNNING.value and job.started_at is not None:
+        if job.status == JobStatus.RUNNING.value and job.started_at is not None and not allow_running_job:
             logger.warning(f"Job {job_id} is already marked running; skipping duplicate launcher entry")
             return
+        if job.status == JobStatus.RUNNING.value and job.started_at is not None and allow_running_job:
+            logger.info(
+                "Job %s is already marked running in the shared state store; continuing because this launch was explicitly handed off.",
+                job_id,
+            )
         
         # Check if job was cancelled while queued
         if job.status == JobStatus.CANCELLED.value:
             logger.info(f"Job {job_id} was cancelled before starting, aborting launch")
             return
         
-        job.status = JobStatus.RUNNING.value
-        job.started_at = datetime.utcnow()
-        await session.commit()
+        if job.status != JobStatus.RUNNING.value or job.started_at is None:
+            job.status = JobStatus.RUNNING.value
+            job.started_at = datetime.utcnow()
+            await session.commit()
         
         # Re-check cancellation status right before spawning (minimize race window)
         await session.refresh(job)
@@ -1431,6 +1606,33 @@ async def launch_nextflow_job(
             )
 
         try:
+            if workflow_adapter_enabled():
+                adapter_response = launch_via_workflow_adapter(
+                    job_id=job_id,
+                    model_id=model_id,
+                    mode=mode,
+                    params=launch_params,
+                    output_dir=output_dir,
+                )
+                if adapter_response.get("accepted") is False:
+                    raise RuntimeError(
+                        f"Workflow adapter rejected launch for job {job_id}: {adapter_response!r}"
+                    )
+                adapter_run_id = (
+                    adapter_response.get("nextflow_run_id")
+                    or adapter_response.get("run_id")
+                    or adapter_response.get("job_id")
+                    or job_id
+                )
+                job.nextflow_run_id = str(adapter_run_id)
+                await session.commit()
+                logger.info(
+                    "[WORKFLOW-ADAPTER] Job %s delegated to host adapter with run id %s",
+                    job_id,
+                    job.nextflow_run_id,
+                )
+                return
+
             # ═══════════════════════════════════════════════════════════════
             # GPU ASSIGNMENT: Set CUDA_VISIBLE_DEVICES from orchestrator
             # ═══════════════════════════════════════════════════════════════
@@ -1939,6 +2141,7 @@ def launch_nextflow_job_detached(
     mode: str,
     params: Dict[str, Any],
     output_dir: str,
+    allow_running_job: bool = False,
 ) -> asyncio.Task:
     """
     Schedule a Nextflow launch in the background while marking the job as
@@ -1947,6 +2150,15 @@ def launch_nextflow_job_detached(
     This closes the race where the orchestrator marks a job running before the
     launcher has created the subprocess or registered it in _running_processes.
     """
+    assert_workflow_launch_allowed("launch workflow jobs from the scheduler")
+    if job_id in _launching_jobs:
+        logger.warning("Job %s is already queued for detached launch in this process; skipping duplicate scheduling", job_id)
+
+        async def _noop() -> None:
+            return None
+
+        return asyncio.create_task(_noop())
+
     _launching_jobs.add(job_id)
 
     async def _runner() -> None:
@@ -1957,6 +2169,7 @@ def launch_nextflow_job_detached(
                 mode=mode,
                 params=params,
                 output_dir=output_dir,
+                allow_running_job=allow_running_job,
             )
         finally:
             _launching_jobs.discard(job_id)
@@ -1985,16 +2198,26 @@ def build_nextflow_command(
         logger.info(f"complex_components found with {len(params['complex_components'])} items")
     else:
         logger.warning("complex_components NOT in params - ligands will not be used!")
-    
+
+    def resolve_structure_prediction_profile(pred_method: object) -> str:
+        normalized = str(pred_method or 'boltz').strip().lower()
+        if normalized == 'protenix':
+            return 'protenix'
+        if normalized == 'rf3':
+            return 'rf3'
+        return 'boltz'
+
+    structure_prediction_profile = resolve_structure_prediction_profile(params.get('pred_method'))
+
     # Mode to profile mapping for modes that need translation
     mode_to_profile = {
         # structure_validation and structure_prediction use pred_method
-        'structure_validation': params.get('pred_method', 'boltz'),
-        'structure_prediction': params.get('pred_method', 'boltz'),
+        'structure_validation': structure_prediction_profile,
+        'structure_prediction': structure_prediction_profile,
         # DNA polymerase template
         'dna_polymerase': 'fampnn_predict',
     }
-    
+
     # Model + mode to profile mapping (for API-driven jobs)
     model_mode_to_profile = {
         ('boltz2', 'predict'): 'boltz',
@@ -2026,6 +2249,7 @@ def build_nextflow_command(
         ('protein_cad_experimental', 'design'): 'protein_cad_experimental',
         ('caliby_experimental', 'design'): 'caliby_experimental',
         ('protein_hunter_experimental', 'design'): 'protein_hunter_experimental',
+        ('boltz_cp_experimental', 'design'): 'boltz_cp_experimental',
         # Nanopore basecalling + methylation analysis
         ('nanopore', 'methylation_analysis'): 'nanopore_methylation',
         # Protenix structure prediction
@@ -2090,6 +2314,8 @@ def build_nextflow_command(
         profile = "boltzgen,workstation_ryzen7960x"
 
     # Resolve runtime roots explicitly so Nextflow doesn't fall back to stale defaults.
+    workflow_entrypoint = "ngs.nf" if effective_profile == "nanopore_methylation" else "main.nf"
+
     explicit_data_root = params.get("data_root")
     if not explicit_data_root:
         env_data_root = os.getenv("BMS_DATA")
@@ -2125,7 +2351,7 @@ def build_nextflow_command(
     if resume_work_dir:
         logger.info(f"Resuming job using work dir: {resume_work_dir}")
         cmd = [
-            "nextflow", "run", "main.nf",
+            "nextflow", "run", workflow_entrypoint,
             "-profile", profile,
             "-w", resume_work_dir,
             "-resume",
@@ -2136,7 +2362,7 @@ def build_nextflow_command(
             logger.info(f"Resume cache source: {params['resume_source_dir']}")
     else:
         cmd = [
-            "nextflow", "run", "main.nf",
+            "nextflow", "run", workflow_entrypoint,
             "-profile", profile,
             "--out_dir", output_dir,
         ]
@@ -2317,6 +2543,7 @@ def build_nextflow_command(
         'boltz_sampling_steps': 'boltz_sampling_steps',
         'boltz_num_samples': 'boltz_num_samples',
         'boltz_diffusion_samples': 'boltz_diffusion_samples',  # Alias for boltz_num_samples
+        'boltz_max_parallel_samples': 'boltz_max_parallel_samples',
         'boltz_use_msa': 'boltz_use_msa',
         'boltz_method': 'boltz_method',
         'boltz_use_potentials': 'boltz_use_potentials',
@@ -2619,6 +2846,73 @@ def build_nextflow_command(
             params['rfd_num_designs'] = params['ph_num_designs']
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'protein_hunter_experimental'
+    elif model_id == 'boltz_cp_experimental':
+        boltz_cp_mappings = {
+            'input_path': 'bcp_input_path',
+            'gpu_ids': 'bcp_gpu_ids',
+            'size_cp': 'bcp_size_cp',
+            'input_format': 'bcp_input_format',
+            'output_format': 'bcp_output_format',
+            'write_full_pae': 'bcp_write_full_pae',
+            'recycling_steps': 'bcp_recycling_steps',
+            'sampling_steps': 'bcp_sampling_steps',
+            'diffusion_samples': 'bcp_diffusion_samples',
+            'seed': 'bcp_seed',
+            'repo_path': 'bcp_repo_path',
+        }
+        for src_key, dest_key in boltz_cp_mappings.items():
+            if src_key == dest_key:
+                continue
+            if src_key in params:
+                if dest_key not in params:
+                    params[dest_key] = params[src_key]
+                params.pop(src_key, None)
+
+        if 'bcp_recycling_steps' not in params and params.get('boltz_recycling_steps') not in (None, ''):
+            params['bcp_recycling_steps'] = params['boltz_recycling_steps']
+        if 'bcp_sampling_steps' not in params and params.get('boltz_sampling_steps') not in (None, ''):
+            params['bcp_sampling_steps'] = params['boltz_sampling_steps']
+        if 'bcp_diffusion_samples' not in params:
+            if params.get('boltz_num_samples') not in (None, ''):
+                params['bcp_diffusion_samples'] = params['boltz_num_samples']
+            elif params.get('boltz_diffusion_samples') not in (None, ''):
+                params['bcp_diffusion_samples'] = params['boltz_diffusion_samples']
+
+        derived_gpu_ids, derived_size_cp = _derive_boltz_cp_gpu_launch_settings(
+            pinned_gpus=params.get('pinned_gpus'),
+            requested_size_cp=params.get('bcp_size_cp'),
+            fallback_gpu_ids=params.get('bcp_gpu_ids') or '0,1,2,3',
+        )
+        if derived_gpu_ids and not params.get('bcp_gpu_ids'):
+            params['bcp_gpu_ids'] = derived_gpu_ids
+        if not params.get('bcp_size_cp'):
+            params['bcp_size_cp'] = derived_size_cp
+
+        params.setdefault('bcp_input_format', 'config_files')
+        params.setdefault('bcp_output_format', 'mmcif')
+        params.setdefault('bcp_write_full_pae', False)
+        params.setdefault(
+            'bcp_container_path',
+            str(Path(explicit_container_dir) / DEFAULT_BOLTZ_CP_COMPAT_CONTAINER),
+        )
+
+        if not params.get('bcp_input_path'):
+            staged_bcp_input = _write_boltz_cp_input_yaml(
+                output_dir=output_dir,
+                params=params,
+                complex_components=complex_components,
+            )
+            if staged_bcp_input is not None:
+                params['bcp_input_path'] = str(staged_bcp_input)
+                complex_components = None
+                params.pop('sequence', None)
+                params.pop('sequence_input', None)
+                params.pop('primary_chain_id', None)
+                params.pop('target_chains', None)
+                params.pop('binder_chains', None)
+
+        if not params.get('rfd_mode'):
+            params['rfd_mode'] = 'boltz_cp_experimental'
     elif model_id == 'bindcraft':
         # BindCraft YAML schema uses unprefixed keys, but Nextflow expects bindcraft_*.
         bindcraft_mappings = {
@@ -2733,6 +3027,13 @@ def _pid_is_alive(pid: int) -> bool:
 
 async def cancel_nextflow_job(nextflow_run_id: str, graceful_timeout_seconds: float = 5.0) -> bool:
     """Cancel a running Nextflow job, escalating to SIGKILL if it ignores SIGTERM."""
+    if workflow_adapter_enabled():
+        try:
+            return cancel_via_workflow_adapter(str(nextflow_run_id))
+        except Exception as exc:
+            logger.warning("Workflow adapter cancellation failed for %r: %s", nextflow_run_id, exc)
+            return False
+
     try:
         pid = int(nextflow_run_id)
     except (TypeError, ValueError) as exc:
@@ -2800,6 +3101,12 @@ async def cancel_nextflow_job(nextflow_run_id: str, graceful_timeout_seconds: fl
 
 def get_running_jobs() -> Dict[str, int]:
     """Get currently running job IDs and their PIDs."""
+    if workflow_adapter_enabled():
+        running = get_adapter_running_jobs()
+        for job_id in _launching_jobs:
+            running.setdefault(job_id, 0)
+        return running
+
     running = {
         job_id: proc.pid 
         for job_id, proc in _running_processes.items() 

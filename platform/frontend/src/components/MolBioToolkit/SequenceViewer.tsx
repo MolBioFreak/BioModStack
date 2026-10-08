@@ -5,8 +5,13 @@
  */
 
 import { SeqViz } from "seqviz";
-import { useMemo, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from "react";
 import type { PrimerTmSettings } from '../../lib/api';
+import {
+    getSeqVizTouchRotationWheelDelta,
+    installSeqVizTouchBridge,
+    shouldEnableSeqVizTouchBridge,
+} from './utils/seqVizTouch';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR PALETTES
@@ -332,19 +337,86 @@ export function SequenceViewer({
         return sequenceData.sequence;
     }, [sequenceData.sequence, sequenceData.sequenceType]);
 
+    const viewerRef = useRef<HTMLDivElement | null>(null);
+    const touchBridgeEnabled = useMemo(() => {
+        if (typeof navigator === 'undefined') {
+            return false;
+        }
+
+        const coarsePointer = typeof window !== 'undefined'
+            && typeof window.matchMedia === 'function'
+            && window.matchMedia('(pointer: coarse)').matches;
+
+        return shouldEnableSeqVizTouchBridge({
+            maxTouchPoints: navigator.maxTouchPoints,
+            coarsePointer,
+        });
+    }, []);
+
+    const resolvedViewerMode = viewMode || (sequenceData.circular ? 'both' : 'linear');
+    const showTouchRotationControls = touchBridgeEnabled
+        && sequenceData.circular
+        && resolvedViewerMode !== 'linear';
+
+    useEffect(() => {
+        if (!touchBridgeEnabled || !viewerRef.current) {
+            return undefined;
+        }
+
+        return installSeqVizTouchBridge(viewerRef.current);
+    }, [touchBridgeEnabled]);
+
+    const handleRotatePlasmid = (direction: 'left' | 'right') => {
+        const circularViewer = viewerRef.current?.querySelector<HTMLElement>('.la-vz-viewer-circular');
+        if (!circularViewer) {
+            return;
+        }
+
+        circularViewer.dispatchEvent(new WheelEvent('wheel', {
+            bubbles: true,
+            cancelable: true,
+            deltaY: getSeqVizTouchRotationWheelDelta(direction),
+        }));
+    };
+
     return (
         <div
+            ref={viewerRef}
             className={`sequence-viewer ${className || ''}`}
             style={{ height: '100%', width: '100%', position: 'relative' }}
             onContextMenu={onContextMenu}
         >
+            {showTouchRotationControls && (
+                <div className="pointer-events-none absolute right-3 top-3 z-20 flex items-center gap-2">
+                    <button
+                        type="button"
+                        data-seqviz-touch-control="true"
+                        onClick={() => handleRotatePlasmid('left')}
+                        className="pointer-events-auto rounded-full border border-slate-600 bg-slate-900/85 px-3 py-1.5 text-sm font-medium text-slate-100 shadow-lg transition-colors hover:bg-slate-800"
+                        aria-label="Rotate plasmid left"
+                        title="Rotate plasmid left"
+                    >
+                        ↺
+                    </button>
+                    <button
+                        type="button"
+                        data-seqviz-touch-control="true"
+                        onClick={() => handleRotatePlasmid('right')}
+                        className="pointer-events-auto rounded-full border border-slate-600 bg-slate-900/85 px-3 py-1.5 text-sm font-medium text-slate-100 shadow-lg transition-colors hover:bg-slate-800"
+                        aria-label="Rotate plasmid right"
+                        title="Rotate plasmid right"
+                    >
+                        ↻
+                    </button>
+                </div>
+            )}
             <SeqViz
                 name={sequenceData.name}
                 seq={displaySequence}
                 annotations={annotations}
                 translations={translations}
                 enzymes={visibility.cutsites ? selectedEnzymes : []}
-                viewer={viewMode || (sequenceData.circular ? "both" : "linear")}
+                viewer={resolvedViewerMode}
                 showComplement={visibility.reverseComplement}
                 rotateOnScroll
                 disableExternalFonts
