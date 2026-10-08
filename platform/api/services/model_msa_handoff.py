@@ -23,7 +23,8 @@ def generated_msa_service_supported(service) -> bool:
             and bool({'modules/antibody_batch.nf:BatchProtenixValidation',
                       'modules/protenix.nf:ProtenixFromComplex',
                       'modules/confornets_experimental.nf:RunConforNets',
-                      'modules/conformational_mapping_confornets.nf:RunCanonicalConforNets'}
+                      'modules/conformational_mapping_confornets.nf:RunCanonicalConforNets',
+                      'modules/conformational_mapping_protenix.nf:CanonicalProtenixEnsemble'}
                      .intersection((get('authority') or '').split('; '))))
 
 

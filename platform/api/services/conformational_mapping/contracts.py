@@ -1356,6 +1356,16 @@ def switch_score(coordinate_support_fraction: Any, context_transition_rate: Any,
     return support * transition * abs(mean)
 
 
+def protenix_msa_settings(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Reuse the global hosted policy; CM does not define provider science."""
+    from services.msa_policy import POLICY, apply_msa_policy
+    allowed = {'msa_provider', *POLICY['colabfold_settings'], *POLICY['neurosnap_settings']}
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ValueError('Unknown CM hosted MSA settings: ' + ', '.join(unknown))
+    return apply_msa_policy('protenix', value)
+
+
 class FeaturePolicy(_StrictModel):
     mode: Literal[
         "regenerate_mutated_protein_v1",
@@ -1368,10 +1378,13 @@ class FeaturePolicy(_StrictModel):
     protein_msa_enabled: bool | None = None
     templates_enabled: bool | None = None
     rna_msa_enabled: bool | None = None
+    msa_settings: dict[str, Any] | None = None
 
     @model_validator(mode="before")
     @classmethod
     def reject_explicit_null_entity_hashes(cls, value: Any) -> Any:
+        if isinstance(value, Mapping) and 'msa_settings' in value and value['msa_settings'] is None:
+            raise ValueError('msa_settings must be an object when present')
         if (
             isinstance(value, Mapping)
             and "per_entity_hashes" in value
@@ -1382,6 +1395,8 @@ class FeaturePolicy(_StrictModel):
 
     @model_validator(mode="after")
     def validate_disabled_control(self) -> "FeaturePolicy":
+        if self.msa_settings is not None:
+            protenix_msa_settings(self.msa_settings)  # validate, never rewrite requested bytes
         if self.mode == "features_disabled_control_v1" and any(
             value is True for value in (
                 self.protein_msa_enabled, self.templates_enabled, self.rna_msa_enabled
