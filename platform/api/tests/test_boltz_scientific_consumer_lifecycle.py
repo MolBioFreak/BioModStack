@@ -74,7 +74,15 @@ async def test_actual_worker_persists_pae_and_rejects_stale_cache(tmp_path, monk
             queued = await trigger_design_analysis(row.id, analysis_type, AnalysisRunRequest(params={}), session)
             run_id = queued.run_id
             assert queued.status == 'queued'
+        from services import boltz_scientific_consumer as consumer
+        original_verify = consumer._verified_publication
+        verifications = []
+        def counted_verify(*args, **kwargs):
+            verifications.append(kwargs.get('document'))
+            return original_verify(*args, **kwargs)
+        monkeypatch.setattr(consumer, '_verified_publication', counted_verify)
         assert await worker._run_analysis(run_id) == 0
+        assert len(verifications) == 1  # signature and projection share this snapshot
         async with factory() as session:
             row = (await session.execute(select(Design))).scalar_one()
             run = await session.get(AnalysisRun, run_id)
