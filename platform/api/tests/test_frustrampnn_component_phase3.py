@@ -1138,7 +1138,7 @@ def test_nextflow_stub_smoke_preserves_candidate_identity(tmp_path: Path) -> Non
         encoding="utf-8",
     )
     env = os.environ.copy()
-    env["NXF_HOME"] = str(Path.home() / ".nextflow")
+    env["NXF_HOME"] = os.environ.get("BMS_NEXTFLOW_TEST_HOME", str(Path.home() / ".nextflow"))
     env["NXF_OFFLINE"] = "true"
     env.pop("SSL_CERT_FILE", None)
     env.pop("CURL_CA_BUNDLE", None)
@@ -1264,3 +1264,135 @@ def test_component_regular_reader_detects_growth_without_allocating_limit_plus_o
         component._read_regular(path, label="component request", max_bytes=4)
 
     assert max(requested) <= 4
+
+
+def _batch_raw(path: Path, *, pdb_stem: str = "0000_candidate") -> bytes:
+    import csv
+
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["frustration_pred", "position", "wildtype", "mutation", "chain", "pdb"],
+            lineterminator="\n",
+        )
+        writer.writeheader()
+        for mutation in AA_ORDER:
+            writer.writerow({"frustration_pred": 0.0, "position": 0, "wildtype": "G", "mutation": mutation, "chain": "A", "pdb": pdb_stem})
+    return path.read_bytes()
+
+
+def test_v3_batch_finalizer_builds_closed_bundle_from_real_predict_batch_rows_without_inference(tmp_path: Path) -> None:
+    from services.frustrampnn.manifests import validate_result_manifest
+
+    component = _component()
+    request, normalized, structure_map, _ = _v2_inputs(tmp_path, residues=[("A", 1)], selected=[("A", 0)], request_generation=3)
+    request_path = tmp_path / "workflow_component_request_v3.json"
+    request_path.write_bytes(canonical_json_bytes(request))
+    raw = tmp_path / "0000_candidate.csv"
+    raw_payload = _batch_raw(raw)
+    stdout = tmp_path / "batch.stdout"; stdout.write_bytes(b"one predict_batch call\n")
+    stderr = tmp_path / "batch.stderr"; stderr.write_bytes(b"")
+    terminal = {
+        "ordinal": 0, "candidate_id": request["candidate_id"], "invocation_id": request["invocation_id"],
+        "pdb_stem": "0000_candidate", "source_sha256": hashlib.sha256(normalized.read_bytes()).hexdigest(),
+        "started_at": "2026-08-27T12:00:00Z", "terminal_at": "2026-08-27T12:00:02Z", "status": "succeeded",
+        "failure_code": None, "diagnostic": None, "row_count": 20, "output_csv": raw.name,
+        "output_sha256": hashlib.sha256(raw_payload).hexdigest(),
+    }
+    output = tmp_path / "candidate_bundle"
+    batch_argv = (
+        "apptainer", "exec", "--containall", "--writable-tmpfs", "--nv",
+        "--env", "CUDA_DEVICE_ORDER=PCI_BUS_ID", "--env", "CUDA_VISIBLE_DEVICES=3",
+        "--bind", f"{tmp_path}/batch.json:/bms/batch/input.json:ro",
+        "--bind", f"{tmp_path}/adapter.py:/bms/adapter/run_frustrampnn_predict_batch.py:ro",
+        "--bind", f"{tmp_path}/a.pdb:{tmp_path}/a.pdb:ro",
+        "--bind", f"{tmp_path}/b.pdb:{tmp_path}/b.pdb:ro",
+        "--bind", f"{tmp_path}/batch-output:/bms/output:rw",
+        "/proc/self/fd/9", "/opt/venv/bin/python", "/bms/adapter/run_frustrampnn_predict_batch.py",
+        "--manifest", "/bms/batch/input.json", "--output-dir", "/bms/output",
+    )
+    component.finalize_batched_component(
+        request_path=request_path, source_structure=normalized, structure_map=structure_map, raw_csv=raw,
+        terminal_evidence=terminal, batch_argv=batch_argv,
+        batch_argv_sha256=canonical_sha256(list(batch_argv)), stdout_log=stdout, stderr_log=stderr, output_dir=output, physical_gpu_id=3,
+    )
+    manifest = json.loads((output / "frustrampnn_result_manifest_v3.json").read_text())
+    validate_result_manifest(output, manifest)
+    receipt = json.loads((output / "frustrampnn_execution_receipt_v3.json").read_text())
+    assert receipt["command_count"] == 1
+    assert receipt["commands"][0]["argv"] == list(batch_argv)
+    assert receipt["commands"][0]["shard_sha256"] == hashlib.sha256(raw_payload).hexdigest()
+    assert json.loads((output / "workflow_component_result_v3.json").read_text())["status"] == "succeeded"
+
+
+def test_v3_batch_finalizer_publishes_classified_terminal_failure_without_fake_manifest(tmp_path: Path) -> None:
+    component = _component()
+    request, normalized, structure_map, _ = _v2_inputs(tmp_path, residues=[("A", 1)], selected=[("A", 0)], request_generation=3)
+    request_path = tmp_path / "workflow_component_request_v3.json"
+    request_path.write_bytes(canonical_json_bytes(request))
+    stdout = tmp_path / "batch.stdout"; stdout.write_bytes(b"")
+    stderr = tmp_path / "batch.stderr"; stderr.write_bytes(b"upstream omitted one structure\n")
+    output = tmp_path / "grouped_results" / "candidate-v2"
+    output.parent.mkdir()
+    component.finalize_batched_component(
+        request_path=request_path, source_structure=normalized, structure_map=structure_map, raw_csv=None,
+        terminal_evidence={
+            "ordinal": 0, "candidate_id": request["candidate_id"], "invocation_id": request["invocation_id"],
+            "pdb_stem": "0000_candidate", "source_sha256": hashlib.sha256(normalized.read_bytes()).hexdigest(),
+            "started_at": "2026-08-27T12:00:00Z", "terminal_at": "2026-08-27T12:00:02Z", "status": "failed",
+            "failure_code": "upstream_output_omitted", "diagnostic": "upstream predict_batch returned no rows for this staged PDB",
+            "row_count": None, "output_csv": None, "output_sha256": None,
+        },
+        batch_argv=("apptainer", "exec", "frustrampnn.sif", "predict_batch"), batch_argv_sha256="b" * 64,
+        stdout_log=stdout, stderr_log=stderr, output_dir=output, physical_gpu_id=3,
+    )
+    result = json.loads((output / "workflow_component_result_v3.json").read_text())
+    assert result["status"] == "failed"
+    assert result["failure_class"] == "upstream_output_omitted"
+    assert result["result_manifest"] is None
+    assert result["result_payload"] is None
+    assert not list(output.glob("frustrampnn_result_manifest_*.json"))
+    assert not (output / "frustrampnn_execution_receipt_v3.json").exists()
+
+    publisher = importlib.import_module("scripts.publish_frustrampnn_grouped_results")
+    unsafe_root = tmp_path / "unsafe-job"; unsafe_root.mkdir()
+    outside = tmp_path / "outside"; outside.mkdir()
+    (unsafe_root / "frustrampnn").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        publisher.publish_group(
+            grouped_root=output.parent, job_root=unsafe_root, marker_root=tmp_path,
+        )
+
+    job_root = tmp_path / "job-root"; (job_root / "inputs").mkdir(parents=True)
+    shutil.copyfile(tmp_path / "source.pdb", job_root / "inputs" / "original.pdb")
+    marker_root = tmp_path / "markers"; marker_root.mkdir()
+    markers = publisher.publish_group(
+        grouped_root=output.parent, job_root=job_root, marker_root=marker_root,
+    )
+    assert len(markers) == 1
+    validator = importlib.import_module("scripts.validate_frustrampnn_publication_markers")
+    assert validator._validate_closed_marker(job_root=job_root, marker=markers[0]) == (
+        "frustrampnn/results/candidate-v2/workflow_component_result_v3.json",
+        "inputs/original.pdb",
+    )
+
+
+def test_v3_single_structure_producer_emits_predict_execution_method(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.frustrampnn.manifests import validate_result_manifest
+
+    component = _component()
+    request, normalized, structure_map, _ = _v2_inputs(
+        tmp_path, residues=[("A", 1)], selected=[("A", 0)], request_generation=3,
+    )
+    _mock_v2_runtime(component, monkeypatch, tmp_path)
+    output = tmp_path / "single_v3_bundle"
+    component.run_component(
+        request=request, request_payload=canonical_json_bytes(request),
+        source_structure=normalized, structure_map=structure_map,
+        output_dir=output, container=tmp_path / "mock.sif", physical_gpu_id=3,
+    )
+    receipt = json.loads((output / "frustrampnn_execution_receipt_v3.json").read_text())
+    assert receipt["execution_method"] == "predict"
+    validate_result_manifest(
+        output, json.loads((output / "frustrampnn_result_manifest_v3.json").read_text())
+    )

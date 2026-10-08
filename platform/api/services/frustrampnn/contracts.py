@@ -70,6 +70,8 @@ FAILURE_CLASSES = frozenset({
     "inference_timeout", "raw_output_missing", "raw_output_invalid",
     "position_mapping_failed", "wildtype_mismatch", "landscape_incomplete",
     "manifest_invalid", "publication_failed", "ingestion_failed",
+    "upstream_output_omitted", "source_verification_failed", "model_load_failed",
+    "batch_call_failed", "upstream_output_invalid", "csv_publication_failed",
 })
 SCHEMA_FILENAMES = {
     "workflow_component_request_v1": "workflow_component_request_v1.schema.json",
@@ -740,13 +742,20 @@ def _validate_execution_receipt_v2(instance: Mapping[str, Any]) -> None:
     plan = instance["command_plan"]
     entries = plan["entries"]
     commands = instance["commands"]
+    is_predict_batch = (
+        instance.get("schema_version") == 3
+        and instance.get("execution_method") == "predict_batch"
+    )
     if [entry["ordinal"] for entry in entries] != list(range(len(entries))):
         raise ContractValidationError("command plan ordinals are not contiguous and ordered")
     for entry in entries:
         _validate_typed_selection(entry, label="command-plan selection")
     if plan["plan_sha256"] != canonical_sha256({"entries": entries}):
         raise ContractValidationError("command plan SHA-256 does not match canonical plan")
-    if instance["command_count"] != len(entries) or len(commands) != len(entries):
+    if is_predict_batch:
+        if instance["command_count"] != 1 or len(commands) != 1:
+            raise ContractValidationError("predict_batch receipt must bind exactly one shared command")
+    elif instance["command_count"] != len(entries) or len(commands) != len(entries):
         raise ContractValidationError("command count does not match the command plan")
 
     modes = {
@@ -773,13 +782,21 @@ def _validate_execution_receipt_v2(instance: Mapping[str, Any]) -> None:
                 )
             seen_position_groups.add(position_group)
 
-    for entry, command in zip(entries, commands, strict=True):
+    paired_commands = (
+        [(None, commands[0])]
+        if is_predict_batch
+        else list(zip(entries, commands, strict=True))
+    )
+    for entry, command in paired_commands:
         _validate_typed_selection(command, label="command selection")
-        for field in ("ordinal", "chains", "positions", "shard_relative_path"):
-            if command[field] != entry[field]:
-                raise ContractValidationError(
-                    "command selection does not match its command-plan entry"
-                )
+        if entry is not None:
+            for field in ("ordinal", "chains", "positions", "shard_relative_path"):
+                if command[field] != entry[field]:
+                    raise ContractValidationError(
+                        "command selection does not match its command-plan entry"
+                    )
+        elif command["chains"] is not None or command["positions"] is not None:
+            raise ContractValidationError("predict_batch command must record unrestricted upstream selection")
         argv = command["argv"]
         if command["argv_sha256"] != canonical_sha256(argv):
             raise ContractValidationError("command argv SHA-256 does not match exact argv")

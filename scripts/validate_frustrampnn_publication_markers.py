@@ -10,7 +10,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "platform" / "api"))
 
-from services.frustrampnn.contracts import canonical_json_loads  # noqa: E402
+from services.frustrampnn.contracts import canonical_json_loads, validate_schema  # noqa: E402
 from services.frustrampnn.manifests import (  # noqa: E402
     V2_MANIFEST_PATH,
     V3_MANIFEST_PATH,
@@ -38,6 +38,13 @@ def _relative_path(value: Any, field: str) -> PurePosixPath:
 
 
 def validate_marker(payload: Any) -> dict[str, PurePosixPath]:
+    if isinstance(payload, dict) and set(payload) == {"result", "source"}:
+        paths = {field: _relative_path(payload[field], field) for field in payload}
+        if paths["result"].name != "workflow_component_result_v3.json":
+            raise ValueError("classified failure result has the wrong artifact name")
+        if paths["source"].suffix.lower() not in _SOURCE_SUFFIXES:
+            raise ValueError("source has an unsupported structure artifact name")
+        return paths
     if not isinstance(payload, dict) or "manifest" not in payload:
         raise ValueError("marker fields are not exact")
     manifest = _relative_path(payload["manifest"], "manifest")
@@ -70,6 +77,23 @@ def _validate_closed_marker(
     marker_root = marker.parent if marker.parent != Path(".") else Path.cwd()
     marker_payload = canonical_json_loads(_read_regular(marker_root, marker.name))
     paths = validate_marker(marker_payload)
+    if "manifest" not in paths:
+        bundle_root = job_root.joinpath(*paths["result"].parent.parts)
+        terminal = canonical_json_loads(
+            _read_regular(bundle_root, "workflow_component_result_v3.json")
+        )
+        validate_schema("workflow_component_result_v3", terminal)
+        if terminal["status"] != "failed" or terminal["result_manifest"] is not None:
+            raise ValueError("terminal-only marker does not reference a classified v3 failure")
+        request = canonical_json_loads(
+            _read_regular(bundle_root, "workflow_component_request_v3.json")
+        )
+        validate_schema("workflow_component_request_v3", request)
+        if paths["source"].as_posix() != request["source_artifact"]["relative_path"]:
+            raise ValueError("classified failure source does not match request authority")
+        if hashlib.sha256(_read_regular(job_root, paths["source"].as_posix())).hexdigest() != request["source_artifact"]["sha256"]:
+            raise ValueError("classified failure source bytes contradict request authority")
+        return (paths["result"].as_posix(), paths["source"].as_posix())
     bundle_root = job_root.joinpath(*paths["manifest"].parent.parts)
     manifest = load_result_manifest(bundle_root)
     generation = manifest.get("schema_version")

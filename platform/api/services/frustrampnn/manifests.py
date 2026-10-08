@@ -1899,7 +1899,47 @@ def summarize_landscape_v3(landscape: Mapping[str, Any], effective: Any) -> dict
     return summary
 
 
+def _validate_receipt_argv_predict_batch(receipt: Mapping[str, Any]) -> None:
+    command = receipt["commands"][0]
+    argv = command["argv"]
+    if len(argv) < 26 or argv[:9] != [
+        argv[0], "exec", "--containall", "--writable-tmpfs", "--nv",
+        "--env", "CUDA_DEVICE_ORDER=PCI_BUS_ID",
+        "--env", f"CUDA_VISIBLE_DEVICES={receipt['assigned_physical_gpu_id']}",
+    ]:
+        raise ManifestValidationError("v3 predict_batch launcher prefix is invalid")
+    if not argv[0] or argv[0].split("/")[-1] != "apptainer":
+        raise ManifestValidationError("v3 predict_batch launcher executable must be Apptainer")
+    cursor = 9
+    binds: list[str] = []
+    while cursor + 1 < len(argv) and argv[cursor] == "--bind":
+        binds.append(argv[cursor + 1])
+        cursor += 2
+    if len(binds) < 4:
+        raise ManifestValidationError("v3 predict_batch bind policy is incomplete")
+    sif_path = argv[cursor]
+    if not sif_path.startswith("/proc/self/fd/") or not sif_path[14:].isdigit():
+        raise ManifestValidationError("v3 predict_batch SIF path is not descriptor pinned")
+    expected_tail = [
+        sif_path, "/opt/venv/bin/python", "/bms/adapter/run_frustrampnn_predict_batch.py",
+        "--manifest", "/bms/batch/input.json", "--output-dir", "/bms/output",
+    ]
+    if argv[cursor:] != expected_tail:
+        raise ManifestValidationError("v3 predict_batch argv is outside the exact hardened grammar")
+    if not binds[0].endswith(":/bms/batch/input.json:ro") or not binds[1].endswith(
+        ":/bms/adapter/run_frustrampnn_predict_batch.py:ro"
+    ) or not binds[-1].endswith(":/bms/output:rw"):
+        raise ManifestValidationError("v3 predict_batch fixed binds are invalid")
+    for value in binds[2:-1]:
+        parts = value.split(":")
+        if len(parts) != 3 or parts[0] != parts[1] or parts[2] != "ro" or not parts[0].startswith("/"):
+            raise ManifestValidationError("v3 predict_batch staged PDB bind is invalid")
+
+
 def _validate_receipt_argv_v2(receipt: Mapping[str, Any], configuration: Any) -> None:
+    if receipt.get("schema_version") == 3 and receipt.get("execution_method") == "predict_batch":
+        _validate_receipt_argv_predict_batch(receipt)
+        return
     runtime = configuration.runtime
     for command in receipt["commands"]:
         argv = command["argv"]

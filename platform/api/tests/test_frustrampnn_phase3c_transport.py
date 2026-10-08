@@ -384,7 +384,8 @@ def test_standalone_workflow_uses_exact_v3_three_file_tuple_and_terminal_names()
     assert "batch.schema_version != 3" in workflow
     assert "batch.expected_cardinality != batch.records.size()" in workflow
     assert "workflow_component_request_v3\\.json" in workflow
-    assert "BMS-DEV-29" in workflow
+    assert "BMS-DEV-29" not in workflow
+    assert "RunPersistedFrustraMPNNGroupedBatch(manifestPath.toString())" in workflow
     assert "batching_enabled && batch.records.size() > 1" in workflow
     assert "record.launch_authority" not in workflow
     assert "workflow_component_request_v1.json" not in workflow
@@ -565,3 +566,61 @@ def test_standalone_v3_nextflow_preview_compiles_exact_persisted_wiring(
     )
     assert "/run/parse-repo/workflows/frustrampnn_analysis.nf" in parser_log
     assert "/run/parse-repo/modules/frustrampnn.nf" in parser_log
+
+
+@pytest.mark.runtime_integration
+def test_grouped_v3_nextflow_preview_invokes_one_grouped_gpu_process(tmp_path: Path) -> None:
+    if not _docker_available():
+        pytest.skip(f"missing pinned Nextflow image {NEXTFLOW_IMAGE}")
+    record, request, source, structure_map = _v3_packet(tmp_path)
+    job_root = tmp_path / "grouped-job"
+    records = []
+    for ordinal in range(2):
+        item = dict(record)
+        item.update({
+            "ordinal": ordinal,
+            "candidate_id": f"grouped-candidate-{ordinal}",
+            "invocation_id": f"grouped-invocation-{ordinal}",
+            "request_relative_path": f"inputs/requests/{ordinal:04d}/workflow_component_request_v3.json",
+            "source_relative_path": f"inputs/sources/{ordinal:04d}/canonical_source.pdb",
+            "structure_map_relative_path": f"inputs/maps/{ordinal:04d}/frustrampnn_structure_map_v1.json",
+        })
+        for relative, payload in (
+            (item["request_relative_path"], request.read_bytes()),
+            (item["source_relative_path"], source.read_bytes()),
+            (item["structure_map_relative_path"], structure_map.read_bytes()),
+        ):
+            target = job_root / str(relative)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+        records.append(item)
+    manifest = job_root / "inputs" / "frustrampnn_scheduler_batch_v3.json"
+    manifest.write_bytes(canonical_json_bytes({
+        "schema_name": "bms_frustrampnn_scheduler_batch", "schema_version": 3,
+        "execution_owner_job_id": "grouped-job", "batching_enabled": True,
+        "structures_per_job": 2,
+        "settings_sha256": json.loads(request.read_text())["requested_settings_sha256"],
+        "expected_cardinality": 2, "records": records,
+    }))
+    parse_root = tmp_path / "parse-repo"
+    (parse_root / "workflows").mkdir(parents=True)
+    (parse_root / "modules").mkdir()
+    (parse_root / "workflows" / WORKFLOW_PATH.name).write_bytes(WORKFLOW_PATH.read_bytes())
+    (parse_root / "modules" / MODULE_PATH.name).write_bytes(MODULE_PATH.read_bytes())
+    completed = subprocess.run([
+        "docker", "run", "--rm", "--network", "none", "-e", "NXF_OFFLINE=true",
+        "-e", "NXF_DISABLE_CHECK_LATEST=true", "-v", f"{REPO_ROOT}:/workspace:ro",
+        "-v", f"{tmp_path}:/run:rw", "-w", "/run/parse-repo", NEXTFLOW_IMAGE,
+        "nextflow", "-log", "/run/grouped-nextflow.log", "run", "workflows/frustrampnn_analysis.nf",
+        "-ansi-log", "false", "-preview", "-offline", "--job_id", "grouped-job",
+        "--frustrampnn_batch_manifest_path", "/run/grouped-job/inputs/frustrampnn_scheduler_batch_v3.json",
+        "--frustrampnn_physical_gpu_id", "2", "--out_dir", "/run/grouped-job",
+        "--api_python", "/usr/bin/python3", "--code_root", "/workspace",
+        "--container_dir", "/run", "-work-dir", "/run/grouped-preview-work",
+    ], env=_subprocess_env(), text=True, capture_output=True, check=False)
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    parser_log = (tmp_path / "grouped-nextflow.log").read_text()
+    assert "Creating process 'RunPersistedFrustraMPNNGroupedBatch'" in parser_log
+    assert "Creating process 'PublishPersistedFrustraMPNNGroupedBundles'" in parser_log
+    assert "Creating process 'CanonicalFrustraMPNNV2Task'" not in parser_log
