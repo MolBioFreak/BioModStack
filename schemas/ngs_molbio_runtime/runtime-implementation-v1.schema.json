@@ -21,10 +21,10 @@
       "pattern": "^[0-9a-f]{40}$"
     },
     "n0_package_fingerprint": {
-      "const": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8"
+      "const": "d7321a13d420c5c8f9f6a4c94edd084d7a89206319e9f677d113bedaa265abd3"
     },
     "n0_receipt_content_sha256": {
-      "const": "d72f90a03f632b884612c761b6712a70f5b62311f9e6b26d40fd17bbdf3a1cd4"
+      "const": "9ae7d1de53a8f1969e577a3a2f6c06e0181b9d170bcdc2cdcfdb567a7d898d13"
     },
     "implementation_state": {
       "const": "implemented_unverified"
