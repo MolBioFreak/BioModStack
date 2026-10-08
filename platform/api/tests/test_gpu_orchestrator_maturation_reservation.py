@@ -28,18 +28,27 @@ def _maturation_job(idx: int) -> JobInfo:
         pinned_gpus=[0],
         created_at=datetime(2026, 1, 1, 0, 0, idx),
         batch_id="batch-1",
-        scheduler_reservation_mb=18725,
+        scheduler_reservation_mb=None,
     )
 
 
-def test_maturation_child_reserves_peak_vram_not_startup_sliver() -> None:
+def test_maturation_child_reserves_formulaic_fraction_not_startup_sliver() -> None:
     job = _maturation_job(1)
 
-    assert _pending_job_reservation_mb(job, {}) == job.vram_estimate_mb
+    assert _pending_job_reservation_mb(job, {}) == 14044
 
 
 def test_maturation_child_pack_does_not_fit_four_x8_children_on_one_5090() -> None:
     jobs = [_maturation_job(i) for i in range(1, 5)]
+    jobs = [
+        job.__class__(
+            **{
+                **job.__dict__,
+                "scheduler_reservation_mb": _pending_job_reservation_mb(job, {}),
+            }
+        )
+        for job in jobs
+    ]
     gpu0 = GPUState(
         index=0,
         name="RTX 5090",
@@ -79,5 +88,5 @@ def test_maturation_child_pack_does_not_fit_four_x8_children_on_one_5090() -> No
         gpu_last_launch_at={},
     )
 
-    assert len(assignments) == 1
-    assert assignments[0][1] == 0
+    assert len(assignments) == 2
+    assert [gpu for _job, gpu in assignments] == [0, 0]
