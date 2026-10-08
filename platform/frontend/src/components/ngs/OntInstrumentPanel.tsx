@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import {
     fetchOntDeviceStatus,
     fetchOntProtocolOptions,
+    beginOntHardwareCheck,
     refreshOntPosition,
     startOntInstrumentRun,
     stopOntInstrumentRun,
@@ -74,6 +75,7 @@ function statusTone(status?: string): string {
 export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanelProps) {
     const [selectedPosition, setSelectedPosition] = useState<string>('');
     const [lastRun, setLastRun] = useState<OntInstrumentRun | null>(null);
+    const [hardwareCheckMessage, setHardwareCheckMessage] = useState<string>('');
     const [testModeEnabled, setTestModeEnabled] = useState<boolean>(false);
     const [sampleId, setSampleId] = useState<string>('plasmid-qc-test');
     const [experimentGroup, setExperimentGroup] = useState<string>('bms_plasmid_verification');
@@ -112,6 +114,25 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
             return response.data;
         },
         onSuccess: () => void refetch(),
+    });
+
+    const beginHardwareCheck = useMutation({
+        mutationFn: async () => {
+            if (!selectedDevice?.position || selectedDevice.fake_or_demo_device) {
+                throw new Error('No real ONT position selected for hardware check');
+            }
+            const ok = window.confirm('Start a MinKNOW hardware check on this position? This is diagnostic, not sequencing, but it will start a MinKNOW check protocol.');
+            if (!ok) {
+                throw new Error('Hardware check cancelled');
+            }
+            const response = await beginOntHardwareCheck(selectedDevice.position);
+            return response.data;
+        },
+        onSuccess: (payload) => {
+            setHardwareCheckMessage(`${payload.detail}${payload.hardware_check_run_id ? ` · run ${payload.hardware_check_run_id}` : ''}`);
+            void refetch();
+        },
+        onError: (error) => setHardwareCheckMessage(error instanceof Error ? error.message : String(error)),
     });
 
     const startRun = useMutation({
@@ -290,9 +311,21 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                             <div>Flow-cell present: {selectedDevice.flow_cell?.present ? 'yes' : 'no'}</div>
                             <div>Configuration test cell flag: {selectedDevice.flow_cell?.is_ctc ? 'yes' : 'no/unknown'}</div>
                             <div>Acquisition: {String(selectedDevice.acquisition_status?.status ?? 'unknown')}</div>
+                            <div>Current protocol: {selectedDevice.current_protocol ? JSON.stringify(selectedDevice.current_protocol) : 'none reported'}</div>
+                            <div>Hardware checks in API history: {selectedDevice.hardware_check_runs?.length ?? 0}</div>
+                            <div>Protocol runs in API history: {selectedDevice.protocol_runs?.length ?? 0}</div>
                             <div>Output reads dir: {selectedOutputDirs.reads || 'not reported'}</div>
+                            {hardwareCheckMessage ? <div className="text-cyan-100">Hardware check: {hardwareCheckMessage}</div> : null}
                             {blockers.length ? <div className="text-amber-100">Preflight blockers: {blockers.join(', ')}</div> : null}
                             <div className="flex flex-wrap gap-2 pt-1">
+                                <button
+                                    type="button"
+                                    disabled={!selectedPositionForQuery || beginHardwareCheck.isPending}
+                                    onClick={() => beginHardwareCheck.mutate()}
+                                    className="rounded border border-emerald-500/40 px-2 py-1 text-emerald-100 disabled:opacity-50"
+                                >
+                                    Run hardware check
+                                </button>
                                 <button
                                     type="button"
                                     disabled={!selectedPositionForQuery || refreshPosition.isPending}

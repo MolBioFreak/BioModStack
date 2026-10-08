@@ -65,6 +65,15 @@ def build_start_preflight(
 
 
 
+
+def begin_position_hardware_check(position: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if not bool(payload.get("confirm_hardware_check")):
+        raise ValueError("confirm_hardware_check=true is required before starting a MinKNOW hardware check")
+    host_payload = request_host_agent("POST", f"/ont/positions/{position}/hardware-check", payload)
+    if not isinstance(host_payload, dict):
+        raise RuntimeError(f"host-agent returned non-object hardware-check payload: {host_payload!r}")
+    return host_payload
+
 def refresh_position_state(position: str) -> dict[str, Any]:
     host_payload = request_host_agent("POST", f"/ont/positions/{position}/refresh", {"confirm_refresh": True})
     if not isinstance(host_payload, dict):

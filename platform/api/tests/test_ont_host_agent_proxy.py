@@ -186,3 +186,32 @@ def test_host_agent_position_refresh_and_restart_routes_are_explicit(monkeypatch
             "fake_or_demo_devices": False,
         },
     )
+
+
+
+def test_host_agent_hardware_check_route_is_guarded(monkeypatch) -> None:
+    import bms_host_agent  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        bms_host_agent,
+        "begin_ont_hardware_check",
+        lambda position, payload: (
+            202,
+            {
+                "action": "begin_hardware_check",
+                "position": position,
+                "hardware_check_run_id": "HC-001",
+                "fake_or_demo_devices": False,
+            },
+        ),
+    )
+
+    assert bms_host_agent.ont_post_route_payload("/ont/positions/MD-105428/hardware-check", {"confirm_hardware_check": True}) == (
+        202,
+        {
+            "action": "begin_hardware_check",
+            "position": "MD-105428",
+            "hardware_check_run_id": "HC-001",
+            "fake_or_demo_devices": False,
+        },
+    )

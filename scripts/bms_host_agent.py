@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from lib.ont_minknow_host import discover_status as discover_ont_status
 from lib.ont_minknow_host import protocol_options as discover_ont_protocol_options
+from lib.ont_minknow_host import begin_hardware_check as begin_ont_hardware_check
 from lib.ont_minknow_host import refresh_position as refresh_ont_position
 from lib.ont_minknow_host import restart_position as restart_ont_position
 from lib.ont_minknow_host import start_protocol as start_ont_protocol
@@ -375,6 +376,9 @@ def ont_route_payload(path: str) -> dict[str, Any] | None:
 
 def ont_post_route_payload(path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]] | None:
     route_path = urlparse(path).path.rstrip("/") or "/"
+    if route_path.startswith("/ont/positions/") and route_path.endswith("/hardware-check"):
+        position = unquote(route_path.removeprefix("/ont/positions/").removesuffix("/hardware-check")).strip().rstrip("/")
+        return begin_ont_hardware_check(position, payload)
     if route_path.startswith("/ont/positions/") and route_path.endswith("/refresh"):
         position = unquote(route_path.removeprefix("/ont/positions/").removesuffix("/refresh")).strip().rstrip("/")
         return refresh_ont_position(position)

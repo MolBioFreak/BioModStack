@@ -2765,6 +2765,9 @@ export interface OntLiveDevice {
     output_directories?: Record<string, string>;
     acquisition_status?: Record<string, string | number | boolean | null | undefined>;
     current_protocol?: Record<string, unknown> | null;
+    protocol_runs?: Array<Record<string, unknown>>;
+    acquisition_runs?: Array<Record<string, unknown>>;
+    hardware_check_runs?: Array<Record<string, unknown>>;
     connection_error?: string | null;
     fake_or_demo_device?: boolean;
 }
@@ -2801,6 +2804,9 @@ export const fetchOntDeviceStatus = () =>
 
 export const fetchOntProtocolOptions = (position: string, kit?: string) =>
     api.get<OntProtocolOptions>(`/api/ont/positions/${encodeURIComponent(position)}/protocol-options`, { params: { kit } });
+
+export const beginOntHardwareCheck = (position: string) =>
+    api.post<{ action: string; detail: string; position: string; hardware_check_run_id?: string | null; fake_or_demo_devices: false }>(`/api/ont/positions/${encodeURIComponent(position)}/hardware-check`, { confirm_hardware_check: true });
 
 export const refreshOntPosition = (position: string) =>
     api.post<{ action: string; detail: string; position: OntLiveDevice; fake_or_demo_devices: false }>(`/api/ont/positions/${encodeURIComponent(position)}/refresh`, { confirm_refresh: true });

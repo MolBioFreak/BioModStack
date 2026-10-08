@@ -323,3 +323,31 @@ def test_build_plasmid_qc_handoff_blocks_missing_reference() -> None:
         assert "missing" in str(exc)
     else:  # pragma: no cover - assertion guard
         raise AssertionError("unknown run should not hand off")
+
+
+
+def test_begin_position_hardware_check_requires_confirmation_and_proxies_host_agent(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict | None]] = []
+
+    def fake_request(method, path, payload=None, *, query=None):
+        calls.append((method, path, payload))
+        return {
+            "action": "begin_hardware_check",
+            "position": "MD-105428",
+            "hardware_check_run_id": "HC-001",
+            "fake_or_demo_devices": False,
+        }
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", fake_request)
+
+    try:
+        ont_run_control.begin_position_hardware_check("MD-105428", {"confirm_hardware_check": False})
+    except ValueError as exc:
+        assert "confirm_hardware_check" in str(exc)
+    else:  # pragma: no cover - assertion guard
+        raise AssertionError("hardware check should require explicit confirmation")
+
+    payload = ont_run_control.begin_position_hardware_check("MD-105428", {"confirm_hardware_check": True})
+
+    assert payload["action"] == "begin_hardware_check"
+    assert calls == [("POST", "/ont/positions/MD-105428/hardware-check", {"confirm_hardware_check": True})]
