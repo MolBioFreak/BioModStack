@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -74,12 +75,24 @@ async def test_completion_ingests_validated_playback_inventory_idempotently(
     )
     run.phase = "completed"
     replica.state, replica.active = "completed", False
-    segment.state, segment.end_step, segment.end_time_ps = "completed", 10_000, 20.0
+    segment.state = "completed"
+    segment.start_step = segment.end_step = None
+    segment.start_time_ps = segment.end_time_ps = None
     root = tmp_path / "results"
+    trajectory_content = b"trajectory-bytes"
+    trajectory_sha = hashlib.sha256(trajectory_content).hexdigest()
+    frame_map_content = json.dumps({
+        "schema": "bms.md.trajectory-frame-map.v1",
+        "trajectory_sha256": trajectory_sha,
+        "frames": [
+            {"display_frame": 0, "source_frame": 0, "time_ps": 0.0, "step": 0},
+            {"display_frame": 1, "source_frame": 10, "time_ps": 20.0, "step": 10_000},
+        ],
+    }, sort_keys=True).encode()
     files = {
         "replicas/replica_0/system/prepared.gro": b"topology-bytes",
-        "replicas/replica_0/production/production.xtc": b"trajectory-bytes",
-        "replicas/replica_0/analysis/trajectory-frame-map.json": b"frame-map-bytes",
+        "replicas/replica_0/production/production.xtc": trajectory_content,
+        "replicas/replica_0/analysis/trajectory-frame-map.json": frame_map_content,
     }
     roles = {
         "replicas/replica_0/system/prepared.gro": "analysis_topology",
@@ -107,6 +120,9 @@ async def test_completion_ingests_validated_playback_inventory_idempotently(
 
     rows = list((await session.scalars(select(JobArtifact))).all())
     assert len(rows) == 3
+    assert (segment.start_step, segment.start_time_ps, segment.end_step, segment.end_time_ps) == (
+        0, 0.0, 10_000, 20.0,
+    )
     snapshot = await md_run_snapshot(session, parent.id)
     assert snapshot is not None
     assert snapshot["artifact_provenance"]["status"] == "bound"
