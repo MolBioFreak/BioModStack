@@ -306,7 +306,7 @@ include { ANARCII } from '../modules/utils/anarci'
 include { PredictTargetComplex } from '../modules/predict_target_complex'
 include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm'
 include { FrustrampnnQC ; AggregateFrustrationReports } from '../modules/frustrampnn'
-include { BatchBoltzValidation ; BatchProtenixValidation } from '../modules/antibody_batch'
+include { BatchBoltzValidation ; BatchProtenixValidation ; BatchESMFold2Validation } from '../modules/antibody_batch'
 
 
 process SpawnRFantibodyJobs {
@@ -1884,469 +1884,486 @@ EOF
 
 
 workflow ANTIBODY_DENOVO {
-    take:
-    target_pdb_ch // Channel: [meta, target_pdb]
-    epitope_residues // Value: epitope residues string (e.g., "A45,A46,A52")
-    framework_pdb_ch // Channel: [meta, framework_pdb] (optional)
+take:
+target_pdb_ch // Channel: [meta, target_pdb]
+epitope_residues // Value: epitope residues string (e.g., "A45,A46,A52")
+framework_pdb_ch // Channel: [meta, framework_pdb] (optional)
 
-    main:
-    def workflowContext = initializeAntibodyDenovoParams(params)
-    def ppiflowBackboneLoopScope = workflowContext.ppiflowBackboneLoopScope
-    def ppiflowMaturationLoopScope = workflowContext.ppiflowMaturationLoopScope
-    def ppiflowBackboneRegionMode = workflowContext.ppiflowBackboneRegionMode
-    def ppiflowMaturationRegionMode = workflowContext.ppiflowMaturationRegionMode
-    def selectedInputDir = workflowContext.selectedInputDir
-    def selectedInputIsSequenceConditioned = workflowContext.selectedInputIsSequenceConditioned
+main:
+def workflowContext = initializeAntibodyDenovoParams(params)
+def ppiflowBackboneLoopScope = workflowContext.ppiflowBackboneLoopScope
+def ppiflowMaturationLoopScope = workflowContext.ppiflowMaturationLoopScope
+def ppiflowBackboneRegionMode = workflowContext.ppiflowBackboneRegionMode
+def ppiflowMaturationRegionMode = workflowContext.ppiflowMaturationRegionMode
+def selectedInputDir = workflowContext.selectedInputDir
+def selectedInputIsSequenceConditioned = workflowContext.selectedInputIsSequenceConditioned
 
 
-    log.info("Step 1: Generating CDR backbones with RFantibody...")
+log.info("Step 1: Generating CDR backbones with RFantibody...")
 
-    def framework_path = params.framework_pdb ? file(params.framework_pdb) : file("${params.code_root}/lib/NO_FRAMEWORK")
-    framework_for_rfantibody = framework_pdb_ch
-        .map { meta, pdb -> pdb }
-        .ifEmpty(framework_path)
+def framework_path = params.framework_pdb ? file(params.framework_pdb) : file("${params.code_root}/lib/NO_FRAMEWORK")
+framework_for_rfantibody = framework_pdb_ch
+    .map { meta, pdb -> pdb }
+    .ifEmpty(framework_path)
 
-    if (params.framework_type == 'nanobody' &&
-        (!params.antibody_chains || params.antibody_chains.toString().trim() == 'H,L')) {
-        params.antibody_chains = 'H'
-        log.info("  Nanobody mode detected; defaulting antibody_chains to H for maturation/design stages")
-    }
-    
-    def available_gpus = []
-    if (params.pinned_gpus) {
-        available_gpus = params.pinned_gpus.toString().split(',').collect { it.trim().toInteger() }
-    } else if (params.gpu_id != null) {
-        available_gpus = [params.gpu_id.toInteger()]
-    } else {
-        available_gpus = [0] // Default to GPU 0
-    }
-    
-    def total_designs = params.rfantibody_num_designs ?: 10
-    def num_gpus = available_gpus.size()
-    def designs_per_gpu = (total_designs / num_gpus).intValue()
-    def remainder = total_designs % num_gpus
-    def designs_per_job = params.designs_per_job ?: 5
-    def planned_child_jobs = Math.ceil(total_designs / designs_per_job.toDouble()).intValue()
-    def orchestrator_batch_name = params.batch_name
-        ?: (params.job_id
-            ? "${params.job_name ?: 'antibody_batch'}_${params.job_id}"
-            : "${params.job_name ?: 'antibody_batch'}_${workflow.runName}")
-    
-    def skip_rfantibody = params.skip_rfantibody == true || selectedInputDir != null
-    def skip_rfantibody_input_dir = selectedInputDir
+if (params.framework_type == 'nanobody' &&
+    (!params.antibody_chains || params.antibody_chains.toString().trim() == 'H,L')) {
+    params.antibody_chains = 'H'
+    log.info("  Nanobody mode detected; defaulting antibody_chains to H for maturation/design stages")
+}
 
-    if (skip_rfantibody && skip_rfantibody_input_dir) {
-        log.info("  SKIP: Loading pre-existing backbone PDBs from ${skip_rfantibody_input_dir}")
-        
-        backbone_designs = Channel.fromPath("${skip_rfantibody_input_dir}/*.pdb")
-            .collect()
-            .map { pdbs ->
-                log.info("  Loaded ${pdbs.size()} backbone PDBs")
-                def meta = [id: params.name ?: "antibody"]
-                [meta, pdbs]
-            }
-    } else if (skip_rfantibody) {
-        error("skip_rfantibody=true but no selected_input_dir-compatible directory was provided")
-    } else {
-        def use_orchestrator = params.parallel_mode == 'full_orchestrator'
-    
-    if (use_orchestrator) {
-        log.info("  Orchestrator mode: Spawning ${planned_child_jobs} child job(s)")
-        
-        SpawnRFantibodyJobs(
-            target_pdb_ch.map { meta, pdb -> pdb }.first(),
-            epitope_residues ?: "",
-            params.framework_type ?: "standard-fv",
-            total_designs,
-            designs_per_job,
-            params.job_id ?: "unknown",
-            orchestrator_batch_name
-        )
-        
-        wait_trigger = SpawnRFantibodyJobs.out.result.map { it -> params.job_id ?: "unknown" }
-        batch_name = orchestrator_batch_name
-        WaitForChildren(
-            wait_trigger,
-            "rfantibody",
-            30,  // poll_interval_seconds
-            batch_name
-        )
-        
-        CollectChildOutputs(
-            WaitForChildren.out.child_outputs,
-            "rfantibody"
-        )
+def available_gpus = []
+if (params.pinned_gpus) {
+    available_gpus = params.pinned_gpus.toString().split(',').collect { it.trim().toInteger() }
+} else if (params.gpu_id != null) {
+    available_gpus = [params.gpu_id.toInteger()]
+} else {
+    available_gpus = [0] // Default to GPU 0
+}
 
-        CollectChildOutputs.out.pdbs.subscribe { pdbs ->
-            try {
-                def file_list = pdbs instanceof List ? pdbs : [pdbs]
-                def count = file_list.size()
-                log.info("  RFantibody via orchestrator: Collected ${count} PDBs from child jobs")
-                def report_files = count > 50 ? file_list[0..49] : file_list
-                def args = [params.job_id, "rfantibody", "complete"] + report_files.collect { it.toString() }
-                def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-                proc.waitFor()
-            } catch (Exception e) {
-                println "Warning: Failed to report stage rfantibody: ${e.message}"
-            }
-        }
-        
-        backbone_designs = CollectChildOutputs.out.pdbs
-            .flatten()
-            .collect()
-            .map { pdbs ->
+def total_designs = params.rfantibody_num_designs ?: 10
+def num_gpus = available_gpus.size()
+def designs_per_gpu = (total_designs / num_gpus).intValue()
+def remainder = total_designs % num_gpus
+def designs_per_job = params.designs_per_job ?: 5
+def planned_child_jobs = Math.ceil(total_designs / designs_per_job.toDouble()).intValue()
+def orchestrator_batch_name = params.batch_name
+    ?: (params.job_id
+        ? "${params.job_name ?: 'antibody_batch'}_${params.job_id}"
+        : "${params.job_name ?: 'antibody_batch'}_${workflow.runName}")
+
+def skip_rfantibody = params.skip_rfantibody == true || selectedInputDir != null
+def skip_rfantibody_input_dir = selectedInputDir
+
+if (skip_rfantibody && skip_rfantibody_input_dir) {
+    log.info("  SKIP: Loading pre-existing backbone PDBs from ${skip_rfantibody_input_dir}")
+
+    backbone_designs = Channel.fromPath("${skip_rfantibody_input_dir}/*.pdb")
+        .collect()
+        .map { pdbs ->
+            log.info("  Loaded ${pdbs.size()} backbone PDBs")
             def meta = [id: params.name ?: "antibody"]
             [meta, pdbs]
         }
-        
-    } else {
-        log.info("  Multi-GPU mode: Splitting ${total_designs} designs across ${num_gpus} GPU(s): ${available_gpus}")
-        
-        rfantibody_parallel_inputs = Channel.from(available_gpus).map { gpu_id ->
-            def idx = available_gpus.indexOf(gpu_id)
-            def designs_for_this_gpu = designs_per_gpu + (idx < remainder ? 1 : 0)
-            log.info("    GPU ${gpu_id}: ${designs_for_this_gpu} designs")
-            [gpu_id, designs_for_this_gpu]
-        }
-        
-        rfantibody_input = target_pdb_ch.combine(rfantibody_parallel_inputs).map { meta, pdb, gpu_id, designs_count ->
-            def hotspots = epitope_residues ?: ""
-            def split_meta = [id: "${meta.id}_gpu${gpu_id}"]
-            [split_meta, pdb, hotspots, gpu_id, designs_count]
-        }
+} else if (skip_rfantibody) {
+    error("skip_rfantibody=true but no selected_input_dir-compatible directory was provided")
+} else {
+    def use_orchestrator = params.parallel_mode == 'full_orchestrator'
 
-        RFANTIBODY(rfantibody_input, framework_for_rfantibody)
-        
-        RFANTIBODY.out.designs.subscribe { meta, files ->
-            try {
-                def file_list = files instanceof List ? files : [files]
-                def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
-                def args = [params.job_id, "rfantibody", "complete"] + report_files.collect { it.toString() }
-                def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-                proc.waitFor()
-            } catch (Exception e) {
-                println "Warning: Failed to report stage rfantibody: ${e.message}"
-            }
-        }
+if (use_orchestrator) {
+    log.info("  Orchestrator mode: Spawning ${planned_child_jobs} child job(s)")
 
-        backbone_designs = RFANTIBODY.out.designs.map { meta, files ->
-            def base_id = meta.id.replaceAll(/_gpu\d+$/, '')
-            def unified_meta = [id: base_id]
-            [unified_meta, files]
-        }
-    } // End of else block (standard mode)
-    } // End of skip_rfantibody else block
-
-    def interactiveGateEnabled = params.interactive_gating == true || params.interactive_swa == true
-    def rfantibodyRawDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_raw" : null
-    def rfantibodyFilteredDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_filtered" : null
-    def rfantibodyScreenEnabled = params.enable_rfantibody_filter == true
-    def shouldPauseAfterRFantibody = !params.skip_rfantibody && interactiveGateEnabled &&
-        (params.interactive_gate_stage ?: 'post_fampnn') == 'post_rfantibody' &&
-        params.interactive_gate_continue != true
-    def shouldScreenRFantibody = !selectedInputIsSequenceConditioned && (
-        shouldPauseAfterRFantibody ||
-        rfantibodyScreenEnabled ||
-        params.rfantibody_min_epitope_contacts != null ||
-        params.rfantibody_max_epitope_distance != null ||
-        params.rfantibody_min_target_contacts != null ||
-        params.rfantibody_max_target_distance != null ||
-        params.rfantibody_max_epitope_centroid_distance != null
+    SpawnRFantibodyJobs(
+        target_pdb_ch.map { meta, pdb -> pdb }.first(),
+        epitope_residues ?: "",
+        params.framework_type ?: "standard-fv",
+        total_designs,
+        designs_per_job,
+        params.job_id ?: "unknown",
+        orchestrator_batch_name
     )
 
-    staged_rfantibody_pdbs = backbone_designs
-        .map { meta, files -> files }
-        .flatten()
-        .collect()
+    wait_trigger = SpawnRFantibodyJobs.out.result.map { it -> params.job_id ?: "unknown" }
+    batch_name = orchestrator_batch_name
+    WaitForChildren(
+        wait_trigger,
+        "rfantibody",
+        30,  // poll_interval_seconds
+        batch_name
+    )
 
-    StageRFantibodyBackbones(staged_rfantibody_pdbs)
+    CollectChildOutputs(
+        WaitForChildren.out.child_outputs,
+        "rfantibody"
+    )
 
-    if (shouldScreenRFantibody) {
-        ScreenRFantibodyBackbones(
-            StageRFantibodyBackbones.out.dir,
-            epitope_residues ?: "",
-            params.antibody_chains ?: "",
-            params.antigen_chains ?: "",
-            target_pdb_ch.map { meta, pdb -> pdb }.first()
-        )
-        rfantibody_ready_dir = ScreenRFantibodyBackbones.out.dir
-        rfantibody_candidate_count = ScreenRFantibodyBackbones.out.summary.map { summary_file ->
-            def data = new groovy.json.JsonSlurper().parse(summary_file)
-            (data.passed_designs ?: 0) as Integer
+    CollectChildOutputs.out.pdbs.subscribe { pdbs ->
+        try {
+            def file_list = pdbs instanceof List ? pdbs : [pdbs]
+            def count = file_list.size()
+            log.info("  RFantibody via orchestrator: Collected ${count} PDBs from child jobs")
+            def report_files = count > 50 ? file_list[0..49] : file_list
+            def args = [params.job_id, "rfantibody", "complete"] + report_files.collect { it.toString() }
+            def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
+            proc.waitFor()
+        } catch (Exception e) {
+            println "Warning: Failed to report stage rfantibody: ${e.message}"
         }
-        rfantibodyCandidateDir = rfantibodyFilteredDir ?: rfantibodyRawDir
-    } else {
-        rfantibody_ready_dir = StageRFantibodyBackbones.out.dir
-        rfantibody_candidate_count = StageRFantibodyBackbones.out.summary.map { summary_file ->
-            def data = new groovy.json.JsonSlurper().parse(summary_file)
-            (data.total_designs ?: 0) as Integer
-        }
-        rfantibodyCandidateDir = rfantibodyRawDir
     }
 
-    reviewed_backbone_designs = rfantibody_ready_dir.map { dir ->
-        def pdbs = dir.toFile().listFiles()?.findAll { it.name.toLowerCase().endsWith('.pdb') }?.sort { it.name }?.collect { file(it.toString()) } ?: []
+    backbone_designs = CollectChildOutputs.out.pdbs
+        .flatten()
+        .collect()
+        .map { pdbs ->
         def meta = [id: params.name ?: "antibody"]
         [meta, pdbs]
     }
 
-    if (shouldPauseAfterRFantibody) {
-        log.info("Interactive SWA gate: pausing after RFantibody backbone generation at ${rfantibodyCandidateDir}")
-        OpenInteractiveGate(
-            params.job_id ?: "unknown",
-            "post_rfantibody",
-            rfantibody_candidate_count,
-            rfantibodyCandidateDir,
-            rfantibodyRawDir ?: "",
-            shouldScreenRFantibody ? (rfantibodyFilteredDir ?: "") : "",
-            params.framework_type ?: "standard-fv",
-            params.antibody_chains ?: "",
-            params.structure_validator ?: "boltz2"
-        )
-        final_designs = Channel.empty()
-        immunogenicity_scores = Channel.empty()
-        stability_scores_early = Channel.empty()
-        mutations = Channel.empty()
+} else {
+    log.info("  Multi-GPU mode: Splitting ${total_designs} designs across ${num_gpus} GPU(s): ${available_gpus}")
+
+    rfantibody_parallel_inputs = Channel.from(available_gpus).map { gpu_id ->
+        def idx = available_gpus.indexOf(gpu_id)
+        def designs_for_this_gpu = designs_per_gpu + (idx < remainder ? 1 : 0)
+        log.info("    GPU ${gpu_id}: ${designs_for_this_gpu} designs")
+        [gpu_id, designs_for_this_gpu]
+    }
+
+    rfantibody_input = target_pdb_ch.combine(rfantibody_parallel_inputs).map { meta, pdb, gpu_id, designs_count ->
+        def hotspots = epitope_residues ?: ""
+        def split_meta = [id: "${meta.id}_gpu${gpu_id}"]
+        [split_meta, pdb, hotspots, gpu_id, designs_count]
+    }
+
+    RFANTIBODY(rfantibody_input, framework_for_rfantibody)
+
+    RFANTIBODY.out.designs.subscribe { meta, files ->
+        try {
+            def file_list = files instanceof List ? files : [files]
+            def report_files = file_list.size() > 50 ? file_list[0..49] : file_list
+            def args = [params.job_id, "rfantibody", "complete"] + report_files.collect { it.toString() }
+            def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
+            proc.waitFor()
+        } catch (Exception e) {
+            println "Warning: Failed to report stage rfantibody: ${e.message}"
+        }
+    }
+
+    backbone_designs = RFANTIBODY.out.designs.map { meta, files ->
+        def base_id = meta.id.replaceAll(/_gpu\d+$/, '')
+        def unified_meta = [id: base_id]
+        [unified_meta, files]
+    }
+} // End of else block (standard mode)
+} // End of skip_rfantibody else block
+
+def interactiveGateEnabled = params.interactive_gating == true || params.interactive_swa == true
+def rfantibodyRawDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_raw" : null
+def rfantibodyFilteredDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_filtered" : null
+def rfantibodyScreenEnabled = params.enable_rfantibody_filter == true
+def shouldPauseAfterRFantibody = !params.skip_rfantibody && interactiveGateEnabled &&
+    (params.interactive_gate_stage ?: 'post_fampnn') == 'post_rfantibody' &&
+    params.interactive_gate_continue != true
+def shouldScreenRFantibody = !selectedInputIsSequenceConditioned && (
+    shouldPauseAfterRFantibody ||
+    rfantibodyScreenEnabled ||
+    params.rfantibody_min_epitope_contacts != null ||
+    params.rfantibody_max_epitope_distance != null ||
+    params.rfantibody_min_target_contacts != null ||
+    params.rfantibody_max_target_distance != null ||
+    params.rfantibody_max_epitope_centroid_distance != null
+)
+
+staged_rfantibody_pdbs = backbone_designs
+    .map { meta, files -> files }
+    .flatten()
+    .collect()
+
+StageRFantibodyBackbones(staged_rfantibody_pdbs)
+
+if (shouldScreenRFantibody) {
+    ScreenRFantibodyBackbones(
+        StageRFantibodyBackbones.out.dir,
+        epitope_residues ?: "",
+        params.antibody_chains ?: "",
+        params.antigen_chains ?: "",
+        target_pdb_ch.map { meta, pdb -> pdb }.first()
+    )
+    rfantibody_ready_dir = ScreenRFantibodyBackbones.out.dir
+    rfantibody_candidate_count = ScreenRFantibodyBackbones.out.summary.map { summary_file ->
+        def data = new groovy.json.JsonSlurper().parse(summary_file)
+        (data.passed_designs ?: 0) as Integer
+    }
+    rfantibodyCandidateDir = rfantibodyFilteredDir ?: rfantibodyRawDir
+} else {
+    rfantibody_ready_dir = StageRFantibodyBackbones.out.dir
+    rfantibody_candidate_count = StageRFantibodyBackbones.out.summary.map { summary_file ->
+        def data = new groovy.json.JsonSlurper().parse(summary_file)
+        (data.total_designs ?: 0) as Integer
+    }
+    rfantibodyCandidateDir = rfantibodyRawDir
+}
+
+reviewed_backbone_designs = rfantibody_ready_dir.map { dir ->
+    def pdbs = dir.toFile().listFiles()?.findAll { it.name.toLowerCase().endsWith('.pdb') }?.sort { it.name }?.collect { file(it.toString()) } ?: []
+    def meta = [id: params.name ?: "antibody"]
+    [meta, pdbs]
+}
+
+if (shouldPauseAfterRFantibody) {
+    log.info("Interactive SWA gate: pausing after RFantibody backbone generation at ${rfantibodyCandidateDir}")
+    OpenInteractiveGate(
+        params.job_id ?: "unknown",
+        "post_rfantibody",
+        rfantibody_candidate_count,
+        rfantibodyCandidateDir,
+        rfantibodyRawDir ?: "",
+        shouldScreenRFantibody ? (rfantibodyFilteredDir ?: "") : "",
+        params.framework_type ?: "standard-fv",
+        params.antibody_chains ?: "",
+        params.structure_validator ?: "boltz2"
+    )
+    final_designs = Channel.empty()
+    immunogenicity_scores = Channel.empty()
+    stability_scores_early = Channel.empty()
+    mutations = Channel.empty()
+    backbone_designs = reviewed_backbone_designs
+} else {
+    if (params.skip_rfantibody && !shouldScreenRFantibody) {
         backbone_designs = reviewed_backbone_designs
     } else {
-        if (params.skip_rfantibody && !shouldScreenRFantibody) {
-            backbone_designs = reviewed_backbone_designs
-        } else {
-            CheckRFantibodyYield(rfantibody_candidate_count)
-            backbone_designs = reviewed_backbone_designs
-                .combine(CheckRFantibodyYield.out.ok)
-                .map { meta, pdbs, _guard -> [meta, pdbs] }
+        CheckRFantibodyYield(rfantibody_candidate_count)
+        backbone_designs = reviewed_backbone_designs
+            .combine(CheckRFantibodyYield.out.ok)
+            .map { meta, pdbs, _guard -> [meta, pdbs] }
+    }
+
+    def run_ppiflow_backbone_refine = (params.run_ppiflow_backbone_refine == true) ||
+        (params.ppiflow_stage != null && params.ppiflow_stage.toString().toLowerCase() in ['post_rfantibody', 'backbone_refine', 'ppiflow_backbone_refine'])
+
+    if (run_ppiflow_backbone_refine) {
+        log.info("Step 1.5: Running PPIFlow backbone refinement on RFantibody outputs...")
+        log.info("  Spawning backbone-refine child jobs (${params.maturation_designs_per_job ?: 4} PDBs per job)")
+        def backboneRefineRegionMode = ppiflowBackboneRegionMode
+        def backboneRefineSelectedLoops = backboneRefineRegionMode == 'selected_cdrs' ? ppiflowBackboneLoopScope : null
+        log.info("  Backbone refinement region mode: ${backboneRefineRegionMode}")
+        if (backboneRefineSelectedLoops) {
+            log.info("  Backbone refinement loop scope: ${backboneRefineSelectedLoops}")
         }
 
-        def run_ppiflow_backbone_refine = (params.run_ppiflow_backbone_refine == true) ||
-            (params.ppiflow_stage != null && params.ppiflow_stage.toString().toLowerCase() in ['post_rfantibody', 'backbone_refine', 'ppiflow_backbone_refine'])
+        backbone_refine_inputs = backbone_designs
+            .map { meta, pdbs -> pdbs }
+            .flatten()
+            .collect()
 
-        if (run_ppiflow_backbone_refine) {
-            log.info("Step 1.5: Running PPIFlow backbone refinement on RFantibody outputs...")
-            log.info("  Spawning backbone-refine child jobs (${params.maturation_designs_per_job ?: 4} PDBs per job)")
-            def backboneRefineRegionMode = ppiflowBackboneRegionMode
-            def backboneRefineSelectedLoops = backboneRefineRegionMode == 'selected_cdrs' ? ppiflowBackboneLoopScope : null
-            log.info("  Backbone refinement region mode: ${backboneRefineRegionMode}")
-            if (backboneRefineSelectedLoops) {
-                log.info("  Backbone refinement loop scope: ${backboneRefineSelectedLoops}")
-            }
+        StageMaturationInputs(backbone_refine_inputs)
 
-            backbone_refine_inputs = backbone_designs
-                .map { meta, pdbs -> pdbs }
-                .flatten()
-                .collect()
+        SpawnMaturationJobs(
+            StageMaturationInputs.out.pdb_dir,
+            params.maturation_designs_per_job ?: 4,
+            params.job_id ?: "unknown",
+            orchestrator_batch_name,
+            "backbone_refine",
+            backboneRefineRegionMode,
+            backboneRefineSelectedLoops ?: ""
+        )
 
-            StageMaturationInputs(backbone_refine_inputs)
+        backbone_refine_wait_trigger = SpawnMaturationJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }
+        backbone_refine_batch_name = orchestrator_batch_name
 
-            SpawnMaturationJobs(
-                StageMaturationInputs.out.pdb_dir,
-                params.maturation_designs_per_job ?: 4,
-                params.job_id ?: "unknown",
-                orchestrator_batch_name,
-                "backbone_refine",
-                backboneRefineRegionMode,
-                backboneRefineSelectedLoops ?: ""
-            )
+        WaitForMaturationChildren(
+            backbone_refine_wait_trigger,
+            "backbone_refine",
+            30,
+            backbone_refine_batch_name
+        )
 
-            backbone_refine_wait_trigger = SpawnMaturationJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }
-            backbone_refine_batch_name = orchestrator_batch_name
+        CollectMaturationOutputs(
+            WaitForMaturationChildren.out.child_outputs,
+            "backbone_refine"
+        )
 
-            WaitForMaturationChildren(
-                backbone_refine_wait_trigger,
-                "backbone_refine",
-                30,
-                backbone_refine_batch_name
-            )
-
-            CollectMaturationOutputs(
-                WaitForMaturationChildren.out.child_outputs,
-                "backbone_refine"
-            )
-
-            CollectMaturationOutputs.out.pdbs.subscribe { pdbs ->
-                try {
-                    def file_list = pdbs instanceof List ? pdbs : [pdbs]
-                    def count = file_list.size()
-                    log.info("  PPIFlow backbone refinement: Collected ${count} PDBs from child jobs")
-                    def report_files = count > 50 ? file_list[0..49] : file_list
-                    def args = [params.job_id, "backbone_refine", "complete"] + report_files.collect { it.toString() }
-                    def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-                    proc.waitFor()
-                } catch (Exception e) {
-                    println "Warning: Failed to report stage backbone_refine: ${e.message}"
-                }
-            }
-
-            ppiflow_backbone_candidate_count = CollectMaturationOutputs.out.manifest.map { manifest_json ->
-                try {
-                    def parsed = new groovy.json.JsonSlurper().parse(new File(manifest_json.toString()))
-                    return (parsed.count_pdbs ?: parsed.count ?: 0) as int
-                } catch (Exception e) {
-                    return 0
-                }
-            }
-            CheckPPIFlowYield(ppiflow_backbone_candidate_count, "backbone_refine")
-
-            backbone_designs = CollectMaturationOutputs.out.pdbs
-                .map { pdbs ->
-                def meta = [id: "ppiflow_backbone_refine"]
-                [meta, pdbs]
+        CollectMaturationOutputs.out.pdbs.subscribe { pdbs ->
+            try {
+                def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                def count = file_list.size()
+                log.info("  PPIFlow backbone refinement: Collected ${count} PDBs from child jobs")
+                def report_files = count > 50 ? file_list[0..49] : file_list
+                def args = [params.job_id, "backbone_refine", "complete"] + report_files.collect { it.toString() }
+                def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
+                proc.waitFor()
+            } catch (Exception e) {
+                println "Warning: Failed to report stage backbone_refine: ${e.message}"
             }
         }
 
-        log.info("Step 2: Designing CDR sequences...")
-
-        def run_fampnn = (params.seq_design_fampnn != null) ? params.seq_design_fampnn : true
-        def run_antifold = (params.seq_design_antifold != null) ? params.seq_design_antifold : true
-        def run_proteinmpnn = (params.seq_design_proteinmpnn != null) ? params.seq_design_proteinmpnn : true
-        def run_caliby = params.seq_design_caliby == true
-        def selectedInputStageFamily = (params.selected_input_stage_family ?: params.source_stage_family ?: '').toString().trim().toLowerCase()
-        def sequenceDesignResumeSource = params.interactive_gate_continue == true || params.resume_job_id != null
-        def fampnnUsesPreCollectedInputs = sequenceDesignResumeSource &&
-            selectedInputIsSequenceConditioned &&
-            selectedInputDir &&
-            (!selectedInputStageFamily || selectedInputStageFamily == 'fampnn')
-        def calibyUsesPreCollectedInputs = sequenceDesignResumeSource &&
-            selectedInputIsSequenceConditioned &&
-            selectedInputDir &&
-            selectedInputStageFamily == 'caliby'
-
-        fampnn_seqs = Channel.empty()
-        caliby_seqs = Channel.empty()
-        antifold_seqs = Channel.empty()
-        proteinmpnn_seqs = Channel.empty()
-        def fampnnRawDir = params.out_dir ? "${params.out_dir}/collected/fampnn" : null
-        def fampnnFilteredDir = params.out_dir ? "${params.out_dir}/collected/fampnn_filtered" : null
-        def fampnnCandidateDir = (fampnnUsesPreCollectedInputs && selectedInputDir) ? selectedInputDir.toString() : null
-        def calibyRawDir = params.out_dir ? "${params.out_dir}/collected/caliby_raw" : null
-        def calibyFilteredDir = params.out_dir ? "${params.out_dir}/collected/caliby" : null
-        def calibyCandidateDir = (selectedInputIsSequenceConditioned && selectedInputDir && selectedInputStageFamily == 'caliby') ? selectedInputDir.toString() : null
-
-        if (!run_fampnn && selectedInputIsSequenceConditioned && selectedInputDir && (!selectedInputStageFamily || selectedInputStageFamily == 'fampnn')) {
-            log.info("  Sequence design skipped: Using pre-collected PDBs from ${selectedInputDir}")
-
-            pre_collected_pdbs = Channel.fromPath("${selectedInputDir}/*.pdb")
-                .collect()
-
-            pre_collected_pdbs.subscribe { pdbs ->
-                log.info("  Sequence design skipped: Loaded ${pdbs.size()} input PDBs")
+        ppiflow_backbone_candidate_count = CollectMaturationOutputs.out.manifest.map { manifest_json ->
+            try {
+                def parsed = new groovy.json.JsonSlurper().parse(new File(manifest_json.toString()))
+                return (parsed.count_pdbs ?: parsed.count ?: 0) as int
+            } catch (Exception e) {
+                return 0
             }
+        }
+        CheckPPIFlowYield(ppiflow_backbone_candidate_count, "backbone_refine")
 
-            fampnn_seqs = pre_collected_pdbs.map { pdbs ->
-                def meta = [id: "selected_designs"]
-                [meta, pdbs]
-            }
-            fampnnCandidateDir = selectedInputDir.toString()
+        backbone_designs = CollectMaturationOutputs.out.pdbs
+            .map { pdbs ->
+            def meta = [id: "ppiflow_backbone_refine"]
+            [meta, pdbs]
+        }
+    }
+
+    log.info("Step 2: Designing CDR sequences...")
+
+    def run_fampnn = (params.seq_design_fampnn != null) ? params.seq_design_fampnn : true
+    def run_antifold = (params.seq_design_antifold != null) ? params.seq_design_antifold : true
+    def run_proteinmpnn = (params.seq_design_proteinmpnn != null) ? params.seq_design_proteinmpnn : true
+    def run_caliby = params.seq_design_caliby == true
+    def selectedInputStageFamily = (params.selected_input_stage_family ?: params.source_stage_family ?: '').toString().trim().toLowerCase()
+    def sequenceDesignResumeSource = params.interactive_gate_continue == true || params.resume_job_id != null
+    def fampnnUsesPreCollectedInputs = sequenceDesignResumeSource &&
+        selectedInputIsSequenceConditioned &&
+        selectedInputDir &&
+        (!selectedInputStageFamily || selectedInputStageFamily == 'fampnn')
+    def calibyUsesPreCollectedInputs = sequenceDesignResumeSource &&
+        selectedInputIsSequenceConditioned &&
+        selectedInputDir &&
+        selectedInputStageFamily == 'caliby'
+
+    fampnn_seqs = Channel.empty()
+    caliby_seqs = Channel.empty()
+    antifold_seqs = Channel.empty()
+    proteinmpnn_seqs = Channel.empty()
+    def fampnnRawDir = params.out_dir ? "${params.out_dir}/collected/fampnn" : null
+    def fampnnFilteredDir = params.out_dir ? "${params.out_dir}/collected/fampnn_filtered" : null
+    def fampnnCandidateDir = (fampnnUsesPreCollectedInputs && selectedInputDir) ? selectedInputDir.toString() : null
+    def calibyRawDir = params.out_dir ? "${params.out_dir}/collected/caliby_raw" : null
+    def calibyFilteredDir = params.out_dir ? "${params.out_dir}/collected/caliby" : null
+    def calibyCandidateDir = (selectedInputIsSequenceConditioned && selectedInputDir && selectedInputStageFamily == 'caliby') ? selectedInputDir.toString() : null
+
+    if (!run_fampnn && selectedInputIsSequenceConditioned && selectedInputDir && (!selectedInputStageFamily || selectedInputStageFamily == 'fampnn')) {
+        log.info("  Sequence design skipped: Using pre-collected PDBs from ${selectedInputDir}")
+
+        pre_collected_pdbs = Channel.fromPath("${selectedInputDir}/*.pdb")
+            .collect()
+
+        pre_collected_pdbs.subscribe { pdbs ->
+            log.info("  Sequence design skipped: Loaded ${pdbs.size()} input PDBs")
         }
 
-        if (run_fampnn) {
-        if (fampnnUsesPreCollectedInputs && selectedInputDir) {
-            log.info("  FAMPNN: Using pre-collected PDBs from ${selectedInputDir}")
-            
-            pre_collected_pdbs = Channel.fromPath("${selectedInputDir}/*.pdb")
-                .collect()
-            
-            pre_collected_pdbs.subscribe { pdbs ->
-                log.info("  FAMPNN: Loaded ${pdbs.size()} pre-collected PDBs")
+        fampnn_seqs = pre_collected_pdbs.map { pdbs ->
+            def meta = [id: "selected_designs"]
+            [meta, pdbs]
+        }
+        fampnnCandidateDir = selectedInputDir.toString()
+    }
+
+    if (run_fampnn) {
+    if (fampnnUsesPreCollectedInputs && selectedInputDir) {
+        log.info("  FAMPNN: Using pre-collected PDBs from ${selectedInputDir}")
+
+        pre_collected_pdbs = Channel.fromPath("${selectedInputDir}/*.pdb")
+            .collect()
+
+        pre_collected_pdbs.subscribe { pdbs ->
+            log.info("  FAMPNN: Loaded ${pdbs.size()} pre-collected PDBs")
+        }
+
+        fampnn_seqs = pre_collected_pdbs.map { pdbs ->
+            def meta = [id: "fampnn_designs"]
+            [meta, pdbs]
+        }
+        fampnnCandidateDir = selectedInputDir.toString()
+
+
+    } else {
+        log.info("  Running FAMPNN via GPU Orchestrator...")
+        log.info("  Spawning child jobs (${params.pdbs_per_job ?: 5} PDBs per job, ${params.seqs_per_design ?: 20} seqs/design)")
+
+        all_backbone_pdbs = backbone_designs
+            .map { meta, files -> files }
+            .flatten()
+            .collect()
+
+        fampnn_prep_input = all_backbone_pdbs.map { pdbs ->
+            [pdbs, file("${params.code_root}/lib/empty-meta.jsonl")]
+        }
+        PrepFAMPNN(fampnn_prep_input)
+
+        fampnn_pdb_dir = PrepFAMPNN.out.pdbs.collect().map { files ->
+            files[0].parent.toString()
+        }
+
+        SpawnFAMPNNJobs(
+            fampnn_pdb_dir,
+            params.seqs_per_design ?: 20,
+            params.pdbs_per_job ?: 5,
+            params.job_id ?: "unknown",
+            orchestrator_batch_name
+        )
+
+        fampnn_wait_trigger = SpawnFAMPNNJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }
+        fampnn_batch_name = orchestrator_batch_name
+
+        WaitForFAMPNNChildren(
+            fampnn_wait_trigger,
+            "fampnn",
+            30,  // poll_interval
+            fampnn_batch_name
+        )
+
+        CollectFAMPNNOutputs(
+            WaitForFAMPNNChildren.out.child_outputs,
+            "fampnn"
+        )
+
+        CollectFAMPNNOutputs.out.outputs.subscribe { items ->
+            try {
+                def (pdbs, jsons) = items
+                def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                def count = file_list.size()
+                log.info("  FAMPNN via orchestrator: Collected ${count} PDBs from child jobs")
+                def report_files = count > 50 ? file_list[0..49] : file_list
+                def args = [params.job_id, "fampnn", "complete"] + report_files.collect { it.toString() }
+                def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
+                proc.waitFor()
+            } catch (Exception e) {
+                println "Warning: Failed to report stage fampnn: ${e.message}"
             }
-            
-            fampnn_seqs = pre_collected_pdbs.map { pdbs ->
+        }
+
+        def filterEnabled = params.enable_fampnn_filter != false &&
+                           (params.fampnn_max_psce != null || params.fampnn_max_residue_psce != null)
+
+        if (filterEnabled) {
+            def filterDesc = []
+            if (params.fampnn_max_psce != null) filterDesc << "max avg PSCE: ${params.fampnn_max_psce}"
+            if (params.fampnn_max_residue_psce != null) filterDesc << "max residue PSCE: ${params.fampnn_max_residue_psce}"
+            log.info("  Filtering FAMPNN designs (${filterDesc.join(', ')})...")
+
+            FilterFAMPNN(CollectFAMPNNOutputs.out.outputs)
+
+            FilterFAMPNN.out.pdbs.subscribe { pdbs ->
+                def count = pdbs instanceof List ? pdbs.size() : 1
+                log.info("  FilterFAMPNN: ${count} designs passed filter")
+            }
+
+            fampnn_seqs = FilterFAMPNN.out.pdbs.map { pdbs ->
                 def meta = [id: "fampnn_designs"]
                 [meta, pdbs]
             }
-            fampnnCandidateDir = selectedInputDir.toString()
-            
-            
+            fampnnCandidateDir = fampnnFilteredDir ?: fampnnRawDir
         } else {
-            log.info("  Running FAMPNN via GPU Orchestrator...")
-            log.info("  Spawning child jobs (${params.pdbs_per_job ?: 5} PDBs per job, ${params.seqs_per_design ?: 20} seqs/design)")
-            
-            all_backbone_pdbs = backbone_designs
-                .map { meta, files -> files }
-                .flatten()
-                .collect()
-            
-            fampnn_prep_input = all_backbone_pdbs.map { pdbs ->
-                [pdbs, file("${params.code_root}/lib/empty-meta.jsonl")]
+            log.info("  FAMPNN filtering disabled (enable with fampnn_max_psce or fampnn_max_residue_psce)")
+            fampnn_seqs = CollectFAMPNNOutputs.out.outputs.map { pdbs, jsons ->
+                def meta = [id: "fampnn_designs"]
+                [meta, pdbs]
             }
-            PrepFAMPNN(fampnn_prep_input)
-            
-            fampnn_pdb_dir = PrepFAMPNN.out.pdbs.collect().map { files ->
-                files[0].parent.toString()
-            }
-            
-            SpawnFAMPNNJobs(
-                fampnn_pdb_dir,
-                params.seqs_per_design ?: 20,
-                params.pdbs_per_job ?: 5,
-                params.job_id ?: "unknown",
-                orchestrator_batch_name
-            )
-            
-            fampnn_wait_trigger = SpawnFAMPNNJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }
-            fampnn_batch_name = orchestrator_batch_name
-            
-            WaitForFAMPNNChildren(
-                fampnn_wait_trigger,
-                "fampnn",
-                30,  // poll_interval
-                fampnn_batch_name
-            )
-            
-            CollectFAMPNNOutputs(
-                WaitForFAMPNNChildren.out.child_outputs,
-                "fampnn"
-            )
-            
-            CollectFAMPNNOutputs.out.outputs.subscribe { items ->
-                try {
-                    def (pdbs, jsons) = items
-                    def file_list = pdbs instanceof List ? pdbs : [pdbs]
-                    def count = file_list.size()
-                    log.info("  FAMPNN via orchestrator: Collected ${count} PDBs from child jobs")
-                    def report_files = count > 50 ? file_list[0..49] : file_list
-                    def args = [params.job_id, "fampnn", "complete"] + report_files.collect { it.toString() }
-                    def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-                    proc.waitFor()
-                } catch (Exception e) {
-                    println "Warning: Failed to report stage fampnn: ${e.message}"
-                }
-            }
-            
-            def filterEnabled = params.enable_fampnn_filter != false && 
-                               (params.fampnn_max_psce != null || params.fampnn_max_residue_psce != null)
-            
-            if (filterEnabled) {
-                def filterDesc = []
-                if (params.fampnn_max_psce != null) filterDesc << "max avg PSCE: ${params.fampnn_max_psce}"
-                if (params.fampnn_max_residue_psce != null) filterDesc << "max residue PSCE: ${params.fampnn_max_residue_psce}"
-                log.info("  Filtering FAMPNN designs (${filterDesc.join(', ')})...")
-                
-                FilterFAMPNN(CollectFAMPNNOutputs.out.outputs)
-                
-                FilterFAMPNN.out.pdbs.subscribe { pdbs ->
-                    def count = pdbs instanceof List ? pdbs.size() : 1
-                    log.info("  FilterFAMPNN: ${count} designs passed filter")
-                }
-                
-                fampnn_seqs = FilterFAMPNN.out.pdbs.map { pdbs ->
-                    def meta = [id: "fampnn_designs"]
-                    [meta, pdbs]
-                }
-                fampnnCandidateDir = fampnnFilteredDir ?: fampnnRawDir
-            } else {
-                log.info("  FAMPNN filtering disabled (enable with fampnn_max_psce or fampnn_max_residue_psce)")
-                fampnn_seqs = CollectFAMPNNOutputs.out.outputs.map { pdbs, jsons ->
-                    def meta = [id: "fampnn_designs"]
-                    [meta, pdbs]
-                }
-                fampnnCandidateDir = fampnnRawDir
-            }
-        } // End of else block (standard FAMPNN mode)
+            fampnnCandidateDir = fampnnRawDir
+        }
+    } // End of else block (standard FAMPNN mode)
+}
+
+    if (!run_caliby && selectedInputIsSequenceConditioned && selectedInputDir && selectedInputStageFamily == 'caliby') {
+        log.info("  Caliby sequence design skipped: Using pre-collected PDBs from ${selectedInputDir}")
+
+        pre_collected_caliby_pdbs = Channel.fromPath("${selectedInputDir}/*.pdb")
+            .collect()
+
+        pre_collected_caliby_pdbs.subscribe { pdbs ->
+            log.info("  Caliby: Loaded ${pdbs.size()} pre-collected PDBs")
+        }
+
+        caliby_seqs = pre_collected_caliby_pdbs.map { pdbs ->
+            def meta = [id: "caliby_designs"]
+            [meta, pdbs]
+        }
     }
 
-        if (!run_caliby && selectedInputIsSequenceConditioned && selectedInputDir && selectedInputStageFamily == 'caliby') {
-            log.info("  Caliby sequence design skipped: Using pre-collected PDBs from ${selectedInputDir}")
+    if (run_caliby) {
+        if (calibyUsesPreCollectedInputs && selectedInputDir) {
+            log.info("  Caliby: Using pre-collected PDBs from ${selectedInputDir}")
 
             pre_collected_caliby_pdbs = Channel.fromPath("${selectedInputDir}/*.pdb")
                 .collect()
@@ -2359,131 +2376,114 @@ workflow ANTIBODY_DENOVO {
                 def meta = [id: "caliby_designs"]
                 [meta, pdbs]
             }
-        }
+            calibyCandidateDir = selectedInputDir.toString()
+        } else {
+            log.info("  Running Caliby experimental sequence design...")
+            RunCaliby(backbone_designs)
+            RunCaliby.out.pdbs_jsons.subscribe { items ->
+                try {
+                    def (pdbs, jsons) = items
+                    def file_list = pdbs instanceof List ? pdbs : [pdbs]
+                    def count = file_list.size()
+                    log.info("  Caliby: Produced ${count} designed structures")
+                    def report_files = count > 50 ? file_list[0..49] : file_list
+                    def args = [params.job_id, "caliby", "complete"] + report_files.collect { it.toString() }
+                    def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
+                    proc.waitFor()
+                } catch (Exception e) {
+                    println "Warning: Failed to report stage caliby: ${e.message}"
+                }
+            }
 
-        if (run_caliby) {
-            if (calibyUsesPreCollectedInputs && selectedInputDir) {
-                log.info("  Caliby: Using pre-collected PDBs from ${selectedInputDir}")
+            def calibyFilterEnabled = params.enable_caliby_filter != false &&
+                (params.caliby_max_potts_energy != null || params.caliby_min_sc_plddt != null || params.caliby_max_sc_rmsd != null)
 
-                pre_collected_caliby_pdbs = Channel.fromPath("${selectedInputDir}/*.pdb")
-                    .collect()
+            if (calibyFilterEnabled) {
+                def filterDesc = []
+                if (params.caliby_max_potts_energy != null) filterDesc << "max Potts energy: ${params.caliby_max_potts_energy}"
+                if (params.caliby_min_sc_plddt != null) filterDesc << "min self-consistency pLDDT: ${params.caliby_min_sc_plddt}"
+                if (params.caliby_max_sc_rmsd != null) filterDesc << "max self-consistency RMSD: ${params.caliby_max_sc_rmsd}"
+                log.info("  Filtering Caliby designs (${filterDesc.join(', ')})...")
 
-                pre_collected_caliby_pdbs.subscribe { pdbs ->
-                    log.info("  Caliby: Loaded ${pdbs.size()} pre-collected PDBs")
+                FilterCaliby(RunCaliby.out.pdbs_jsons)
+
+                FilterCaliby.out.pdbs.subscribe { pdbs ->
+                    def count = pdbs instanceof List ? pdbs.size() : 1
+                    log.info("  FilterCaliby: ${count} designs passed filter")
                 }
 
-                caliby_seqs = pre_collected_caliby_pdbs.map { pdbs ->
+                caliby_seqs = FilterCaliby.out.pdbs.map { pdbs ->
                     def meta = [id: "caliby_designs"]
                     [meta, pdbs]
                 }
-                calibyCandidateDir = selectedInputDir.toString()
+                calibyCandidateDir = calibyFilteredDir ?: calibyRawDir
             } else {
-                log.info("  Running Caliby experimental sequence design...")
-                RunCaliby(backbone_designs)
-                RunCaliby.out.pdbs_jsons.subscribe { items ->
-                    try {
-                        def (pdbs, jsons) = items
-                        def file_list = pdbs instanceof List ? pdbs : [pdbs]
-                        def count = file_list.size()
-                        log.info("  Caliby: Produced ${count} designed structures")
-                        def report_files = count > 50 ? file_list[0..49] : file_list
-                        def args = [params.job_id, "caliby", "complete"] + report_files.collect { it.toString() }
-                        def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-                        proc.waitFor()
-                    } catch (Exception e) {
-                        println "Warning: Failed to report stage caliby: ${e.message}"
-                    }
+                log.info("  Caliby filtering disabled (enable with caliby_max_potts_energy, caliby_min_sc_plddt, or caliby_max_sc_rmsd)")
+                caliby_seqs = RunCaliby.out.pdbs_jsons.map { pdbs, jsons ->
+                    def meta = [id: "caliby_designs"]
+                    [meta, pdbs]
                 }
-
-                def calibyFilterEnabled = params.enable_caliby_filter != false &&
-                    (params.caliby_max_potts_energy != null || params.caliby_min_sc_plddt != null || params.caliby_max_sc_rmsd != null)
-
-                if (calibyFilterEnabled) {
-                    def filterDesc = []
-                    if (params.caliby_max_potts_energy != null) filterDesc << "max Potts energy: ${params.caliby_max_potts_energy}"
-                    if (params.caliby_min_sc_plddt != null) filterDesc << "min self-consistency pLDDT: ${params.caliby_min_sc_plddt}"
-                    if (params.caliby_max_sc_rmsd != null) filterDesc << "max self-consistency RMSD: ${params.caliby_max_sc_rmsd}"
-                    log.info("  Filtering Caliby designs (${filterDesc.join(', ')})...")
-
-                    FilterCaliby(RunCaliby.out.pdbs_jsons)
-
-                    FilterCaliby.out.pdbs.subscribe { pdbs ->
-                        def count = pdbs instanceof List ? pdbs.size() : 1
-                        log.info("  FilterCaliby: ${count} designs passed filter")
-                    }
-
-                    caliby_seqs = FilterCaliby.out.pdbs.map { pdbs ->
-                        def meta = [id: "caliby_designs"]
-                        [meta, pdbs]
-                    }
-                    calibyCandidateDir = calibyFilteredDir ?: calibyRawDir
-                } else {
-                    log.info("  Caliby filtering disabled (enable with caliby_max_potts_energy, caliby_min_sc_plddt, or caliby_max_sc_rmsd)")
-                    caliby_seqs = RunCaliby.out.pdbs_jsons.map { pdbs, jsons ->
-                        def meta = [id: "caliby_designs"]
-                        [meta, pdbs]
-                    }
-                    calibyCandidateDir = calibyRawDir
-                }
+                calibyCandidateDir = calibyRawDir
             }
         }
-
-    def shouldPauseAfterFampnn = interactiveGateEnabled &&
-        (params.interactive_gate_stage ?: 'post_fampnn') == 'post_fampnn' &&
-        params.interactive_gate_continue != true &&
-        run_fampnn &&
-        fampnnCandidateDir
-    def shouldPauseAfterCaliby = interactiveGateEnabled &&
-        (params.interactive_gate_stage ?: 'post_fampnn') == 'post_caliby' &&
-        params.interactive_gate_continue != true &&
-        run_caliby &&
-        calibyCandidateDir
-    def fampnn_gate_trigger = fampnn_seqs.map { meta, pdbs ->
-        (pdbs instanceof Collection ? pdbs.size() : 1) as Integer
     }
-    def caliby_gate_trigger = caliby_seqs.map { meta, pdbs ->
-        (pdbs instanceof Collection ? pdbs.size() : 1) as Integer
-    }
-    def usingExistingCalibySequenceSource = !run_fampnn && !run_caliby && !run_antifold && !run_proteinmpnn &&
-        selectedInputIsSequenceConditioned && selectedInputDir && selectedInputStageFamily == 'caliby'
-    def primarySequenceDesigns = (run_caliby || usingExistingCalibySequenceSource) ? caliby_seqs : fampnn_seqs
-    def primarySequenceCandidateDir = (run_caliby || usingExistingCalibySequenceSource) ? calibyCandidateDir : fampnnCandidateDir
-    def primarySequenceDesignerLabel = (run_caliby || usingExistingCalibySequenceSource) ? 'Caliby' : 'FAMPNN'
 
-    if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
-        def gateStageName = shouldPauseAfterCaliby ? "post_caliby" : "post_fampnn"
-        def gateTrigger = shouldPauseAfterCaliby ? caliby_gate_trigger : fampnn_gate_trigger
-        def gateCandidateDir = shouldPauseAfterCaliby ? calibyCandidateDir : fampnnCandidateDir
-        def gateRawDir = shouldPauseAfterCaliby ? calibyRawDir : fampnnRawDir
-        def gateFilteredDir = shouldPauseAfterCaliby ? (calibyFilteredDir ?: "") : (fampnnFilteredDir ?: "")
-        log.info("Interactive SWA gate: pausing after ${shouldPauseAfterCaliby ? 'Caliby' : 'FAMPNN'} candidate collection at ${gateCandidateDir}")
-        OpenInteractiveGate(
-            params.job_id ?: "unknown",
-            gateStageName,
-            gateTrigger,
-            gateCandidateDir,
-            gateRawDir ?: "",
-            gateFilteredDir,
-            params.framework_type ?: "standard-fv",
-            params.antibody_chains ?: "",
-            params.structure_validator ?: "boltz2"
-        )
-        validated_structures = Channel.empty()
-        stability_scores_early = Channel.empty()
-    } else {
-        maturation_seqs = Channel.empty()
-        def run_ppiflow_maturation = params.run_ppiflow_maturation != null ? params.run_ppiflow_maturation : params.run_maturation
-        if (run_ppiflow_maturation == true) {
-            def hasPrimarySequenceInputs = primarySequenceCandidateDir != null
-            if (!hasPrimarySequenceInputs) {
-                log.warn("PPIFlow maturation requested but no sequence-designed inputs are available; skipping maturation.")
-                maturation_seqs = primarySequenceDesigns
-            } else {
-                log.info("Step 2.4: Running PPIFlow maturation on ${primarySequenceDesignerLabel} outputs...")
-                log.info("  Spawning maturation child jobs (${params.maturation_designs_per_job ?: 4} PDBs per job)")
-                def maturationRegionMode = ppiflowMaturationRegionMode
-                def maturationSelectedLoops = maturationRegionMode == 'selected_cdrs' ? ppiflowMaturationLoopScope : null
-                log.info("  PPIFlow maturation region mode: ${maturationRegionMode}")
+def shouldPauseAfterFampnn = interactiveGateEnabled &&
+    (params.interactive_gate_stage ?: 'post_fampnn') == 'post_fampnn' &&
+    params.interactive_gate_continue != true &&
+    run_fampnn &&
+    fampnnCandidateDir
+def shouldPauseAfterCaliby = interactiveGateEnabled &&
+    (params.interactive_gate_stage ?: 'post_fampnn') == 'post_caliby' &&
+    params.interactive_gate_continue != true &&
+    run_caliby &&
+    calibyCandidateDir
+def fampnn_gate_trigger = fampnn_seqs.map { meta, pdbs ->
+    (pdbs instanceof Collection ? pdbs.size() : 1) as Integer
+}
+def caliby_gate_trigger = caliby_seqs.map { meta, pdbs ->
+    (pdbs instanceof Collection ? pdbs.size() : 1) as Integer
+}
+def usingExistingCalibySequenceSource = !run_fampnn && !run_caliby && !run_antifold && !run_proteinmpnn &&
+    selectedInputIsSequenceConditioned && selectedInputDir && selectedInputStageFamily == 'caliby'
+def primarySequenceDesigns = (run_caliby || usingExistingCalibySequenceSource) ? caliby_seqs : fampnn_seqs
+def primarySequenceCandidateDir = (run_caliby || usingExistingCalibySequenceSource) ? calibyCandidateDir : fampnnCandidateDir
+def primarySequenceDesignerLabel = (run_caliby || usingExistingCalibySequenceSource) ? 'Caliby' : 'FAMPNN'
+
+if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
+    def gateStageName = shouldPauseAfterCaliby ? "post_caliby" : "post_fampnn"
+    def gateTrigger = shouldPauseAfterCaliby ? caliby_gate_trigger : fampnn_gate_trigger
+    def gateCandidateDir = shouldPauseAfterCaliby ? calibyCandidateDir : fampnnCandidateDir
+    def gateRawDir = shouldPauseAfterCaliby ? calibyRawDir : fampnnRawDir
+    def gateFilteredDir = shouldPauseAfterCaliby ? (calibyFilteredDir ?: "") : (fampnnFilteredDir ?: "")
+    log.info("Interactive SWA gate: pausing after ${shouldPauseAfterCaliby ? 'Caliby' : 'FAMPNN'} candidate collection at ${gateCandidateDir}")
+    OpenInteractiveGate(
+        params.job_id ?: "unknown",
+        gateStageName,
+        gateTrigger,
+        gateCandidateDir,
+        gateRawDir ?: "",
+        gateFilteredDir,
+        params.framework_type ?: "standard-fv",
+        params.antibody_chains ?: "",
+        params.structure_validator ?: "boltz2"
+    )
+    validated_structures = Channel.empty()
+    stability_scores_early = Channel.empty()
+} else {
+    maturation_seqs = Channel.empty()
+    def run_ppiflow_maturation = params.run_ppiflow_maturation != null ? params.run_ppiflow_maturation : params.run_maturation
+    if (run_ppiflow_maturation == true) {
+        def hasPrimarySequenceInputs = primarySequenceCandidateDir != null
+        if (!hasPrimarySequenceInputs) {
+            log.warn("PPIFlow maturation requested but no sequence-designed inputs are available; skipping maturation.")
+            maturation_seqs = primarySequenceDesigns
+        } else {
+            log.info("Step 2.4: Running PPIFlow maturation on ${primarySequenceDesignerLabel} outputs...")
+            log.info("  Spawning maturation child jobs (${params.maturation_designs_per_job ?: 4} PDBs per job)")
+            def maturationRegionMode = ppiflowMaturationRegionMode
+            def maturationSelectedLoops = maturationRegionMode == 'selected_cdrs' ? ppiflowMaturationLoopScope : null
+            log.info("  PPIFlow maturation region mode: ${maturationRegionMode}")
                 if (maturationSelectedLoops) {
                     log.info("  PPIFlow maturation loop scope: ${maturationSelectedLoops}")
                 }
@@ -2694,12 +2694,12 @@ workflow ANTIBODY_DENOVO {
         }
 
         def structure_validator = (params.structure_validator ?: 'boltz2').toString().toLowerCase()
-        if (!(structure_validator in ['boltz2', 'protenix'])) {
+        if (!(structure_validator in ['boltz2', 'protenix', 'esmfold2'])) {
             log.warn("Unknown structure_validator '${structure_validator}', defaulting to boltz2")
             structure_validator = 'boltz2'
         }
         def validation_stage_name = "structure_validation"
-        def validation_label = structure_validator == 'protenix' ? 'Protenix' : 'Boltz2'
+        def validation_label = structure_validator == 'protenix' ? 'Protenix' : (structure_validator == 'esmfold2' ? 'ESMFold2' : 'Boltz2')
 
         log.info("Step 3: Validating structures with ${validation_label}...")
 
@@ -2733,6 +2733,8 @@ workflow ANTIBODY_DENOVO {
             def msa_file_ch = Channel.value(file("${params.code_root}/lib/NO_MSA"))
             if (structure_validator == 'protenix') {
                 log.info("Protenix validation uses its built-in MSA/update pipeline; skipping parent GenerateLocalMSA step.")
+            } else if (structure_validator == 'esmfold2') {
+                log.info("ESMFold2 validation is MSA-free; skipping parent GenerateLocalMSA step.")
             } else {
                 log.info("Boltz validation is running without a shared representative MSA so each candidate is validated without cross-sequence MSA contamination.")
             }
@@ -2923,6 +2925,36 @@ workflow ANTIBODY_DENOVO {
                                 cifs: cifs,
                                 scores: scores,
                                 aligned_error: aligned_error,
+                            ])
+                        }
+                        .filter { manifest_json ->
+                            def data = new groovy.json.JsonSlurper().parseText(manifest_json)
+                            (data.pdbs ?: []).size() > 0
+                        }
+
+                    sequential_validation_manifest_file = sequential_validation_manifest
+                        .collectFile(name: 'validation_artifacts.json', newLine: false) { manifest_json -> manifest_json }
+
+                    FinalizeSequentialValidationOutputs(sequential_validation_manifest_file)
+                } else if (structure_validator == 'esmfold2') {
+                    esmfold2_validation_pdbs = pdb_design_sequences
+                        .map { sequence, name, pdb -> pdb }
+                        .buffer(size: effectiveValidationBatchSize, remainder: true)
+
+                    BatchESMFold2Validation(
+                        esmfold2_validation_pdbs,
+                        msa_file_ch
+                    )
+
+                    sequential_validation_manifest = BatchESMFold2Validation.out.pdbs.collect()
+                        .combine(BatchESMFold2Validation.out.cifs.collect().ifEmpty([]))
+                        .combine(BatchESMFold2Validation.out.metrics.collect().ifEmpty([]))
+                        .map { pdbs, cifs, scores ->
+                            buildValidationArtifactManifestJson([
+                                pdbs: pdbs,
+                                cifs: cifs,
+                                scores: scores,
+                                aligned_error: [],
                             ])
                         }
                         .filter { manifest_json ->

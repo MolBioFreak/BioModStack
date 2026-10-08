@@ -208,7 +208,7 @@ process BatchProtenixValidation {
     path "protenix_batch.log"
 
     script:
-    def model_name = params.protenix_model_weights ?: 'protenix_base_20250630_v1.0.0'
+    def model_name = params.protenix_model_weights ?: 'protenix-v2'
     def seeds = params.protenix_seeds ?: '42'
     def n_sample = params.protenix_n_sample ?: 5
     def n_step = params.protenix_n_step ?: 200
@@ -240,14 +240,10 @@ process BatchProtenixValidation {
     def msa_cpu_only_flag = (params.msa_use_gpu == false || params.msa_use_gpu == 'false') ? '--cpu-only' : ''
     def msa_allow_cpu_fallback_flag = msa_allow_cpu_fallback ? '--allow-cpu-fallback' : ''
     def msa_cache_only_flag = (params.msa_cache_only == true || params.msa_cache_only == 'true') ? '--cache-only' : ''
-    def model_aliases = [
-        'protenix_esm_20241211_v0.2.1': 'protenix_mini_esm_v0.5.0',
-        'protenix_base_20241211_v0.2.1': 'protenix_base_default_v1.0.0'
-    ]
-    def effective_model = model_aliases.get(model_name, model_name)
-    if (!use_msa && !(effective_model.contains('esm') || effective_model.contains('ism'))) {
-        effective_model = 'protenix_mini_esm_v0.5.0'
+    if (model_name != 'protenix-v2') {
+        throw new IllegalArgumentException("Protenix is pinned to V2 weights; received ${model_name}")
     }
+    def effective_model = 'protenix-v2'
 
     """
     #!/bin/bash
@@ -421,6 +417,67 @@ PY
         echo "[BatchProtenixValidation] ERROR: alignment produced no usable PDB/JSON outputs" >&2
         exit 1
     fi
+    """
+}
+
+process BatchESMFold2Validation {
+    label 'ESMFold2'
+    container "${params.container_dir}/esmfold2.sif"
+    publishDir "${params.out_dir}/structure_validation/esmfold2", mode: 'copy', overwrite: true
+
+    input:
+    path pdbs
+    path msa_files
+
+    output:
+    path "predictions/*_esmfold2.pdb", emit: pdbs
+    path "predictions/*_esmfold2.cif", emit: cifs
+    path "predictions/*_esmfold2.metrics.json", emit: metrics
+    path "predictions/esmfold2_validation_summary.json", emit: summary
+    path "esmfold2_batch.log", emit: log
+
+    script:
+    def variant = params.esmfold2_validation_variant ?: params.esmf_model_variant ?: 'fast'
+    def modelId = params.esmf_model_id_or_path ?: ''
+    def modelArg = modelId ? "--model-id-or-path '${modelId}'" : ''
+    def loops = params.esmfold2_validation_num_loops ?: params.esmf_num_loops ?: 1
+    def steps = params.esmfold2_validation_num_sampling_steps ?: params.esmf_num_sampling_steps ?: 25
+    def samples = params.esmfold2_validation_num_diffusion_samples ?: params.esmf_num_diffusion_samples ?: 1
+    def codeRoot = params.code_root ?: workflow.projectDir
+    """
+    set -euo pipefail
+    mkdir -p validation_designs raw_predictions predictions
+    cp ${pdbs} validation_designs/
+    : > esmfold2_batch.log
+
+    for design_pdb in validation_designs/*.pdb; do
+        design_name=\$(basename "\$design_pdb" .pdb)
+        echo "[BatchESMFold2Validation] folding \$design_name" | tee -a esmfold2_batch.log
+        python3 ${codeRoot}/scripts/run_esmfold2_inference.py \\
+            --pdb-sequence-path "\$design_pdb" \\
+            --pdb-chain-ids "" \\
+            --sequence-name "\$design_name" \\
+            --model-variant "${variant}" \\
+            ${modelArg} \\
+            --output-dir "raw_predictions/\$design_name" \\
+            --num-loops ${loops} \\
+            --num-sampling-steps ${steps} \\
+            --num-diffusion-samples ${samples} \\
+            --device cuda \\
+            --local-files-only true \\
+            2>&1 | tee -a esmfold2_batch.log
+    done
+
+    python3 ${codeRoot}/scripts/normalize_esmfold2_validation.py \\
+        --design-dir validation_designs \\
+        --raw-root raw_predictions \\
+        --output-dir predictions \\
+        2>&1 | tee -a esmfold2_batch.log
+
+    test -n "\$(find predictions -maxdepth 1 -name '*_esmfold2.pdb' -print -quit)" || {
+        echo "[BatchESMFold2Validation] ERROR: no normalized PDB predictions produced" >&2
+        exit 1
+    }
     """
 }
 

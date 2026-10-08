@@ -12,92 +12,71 @@ def boolString(value) {
 }
 
 
-process RunESMFold2Experimental {
+// Internal channel-driven ESMFold2 predictor. The historical filename is retained
+// only because active parent workflows import this implementation path.
+process ESMFold2Predict {
+    tag "${sequence_name}"
     label 'ESMFold2'
     label 'gpu'
 
-    publishDir "${params.out_dir}/final/esmfold2", mode: 'copy', pattern: 'esmfold2_results/**/*', saveAs: { filename -> filename.replace('esmfold2_results/', '') }
-    publishDir "${params.out_dir}/run/esmfold2", mode: 'copy', pattern: '*.log'
-    publishDir "${params.out_dir}/run/telemetry", mode: 'copy', pattern: 'bms_run_telemetry_*.json'
+    publishDir "${params.out_dir}/final/esmfold2", mode: 'copy', pattern: 'esmfold2_results/*.cif'
+    publishDir "${params.out_dir}/final/esmfold2", mode: 'copy', pattern: 'esmfold2_results/*.json'
+    publishDir "${params.out_dir}/final/esmfold2", mode: 'copy', pattern: 'esmfold2_results/*.tsv'
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: 'esmfold2_results/*.cif'
+
+    input:
+    tuple val(sequence), val(sequence_name)
 
     output:
-    path 'esmfold2_results', emit: results_dir
-    path 'esmfold2_results/*.cif', emit: cifs, optional: true
-    path 'esmfold2_results/*.json', emit: jsons, optional: true
-    path 'bms_run_telemetry_*.json', emit: telemetry, optional: true
-    path '*.log'
+    path 'esmfold2_results/*.cif', emit: cifs
+    path "esmfold2_results/*.metrics.json", emit: metrics
+    path "esmfold2_results/*.telemetry.json", emit: telemetry
+    path "esmfold2_results/manifest.json", emit: manifest
+    path "esmfold2_results/summary.tsv", emit: summary
 
     script:
-    def sequence = shellQuote(params.get('esmf_sequence', params.get('sequence_input', '')))
-    def sequenceName = shellQuote(params.get('esmf_sequence_name', params.get('sequence_name', 'esmfold2_candidate')))
-    def chainId = shellQuote(params.get('esmf_chain_id', 'A'))
-    def complexComponentsJson = shellQuote(params.get('esmf_complex_components_json', ''))
-    def complexComponentsFile = shellQuote(params.get('esmf_complex_components_file', ''))
-    def pdbSequencePath = shellQuote(params.get('esmf_pdb_sequence_path', ''))
-    def pdbChainIds = shellQuote(params.get('esmf_pdb_chain_ids', ''))
-    def pdbIncludeDnaRna = shellQuote(boolString(params.get('esmf_pdb_include_dna_rna', true)))
-    def msaPath = shellQuote(params.get('esmf_msa_path', ''))
-    def msaFormat = shellQuote(params.get('esmf_msa_format', 'auto'))
-    def msaMaxSequencesValue = params.get('esmf_msa_max_sequences', '')
-    def msaMaxSequencesArg = msaMaxSequencesValue == null || msaMaxSequencesValue.toString().trim() == '' ? '' : "--msa-max-sequences ${msaMaxSequencesValue}"
-    def msaRemoveInsertions = shellQuote(boolString(params.get('esmf_msa_remove_insertions', true)))
-    def dnaSequence = shellQuote(params.get('esmf_dna_sequence', ''))
-    def dnaChainId = shellQuote(params.get('esmf_dna_chain_id', 'C'))
-    def rnaSequence = shellQuote(params.get('esmf_rna_sequence', ''))
-    def rnaChainId = shellQuote(params.get('esmf_rna_chain_id', 'D'))
-    def ligandSmiles = shellQuote(params.get('esmf_ligand_smiles', ''))
-    def ligandCcd = shellQuote(params.get('esmf_ligand_ccd', ''))
-    def ligandChainId = shellQuote(params.get('esmf_ligand_chain_id', 'L'))
-    def modelVariant = shellQuote(params.get('esmf_model_variant', 'fast'))
-    def modelIdOrPath = shellQuote(params.get('esmf_model_id_or_path', ''))
-    def localFilesOnly = shellQuote(boolString(params.get('esmf_local_files_only', true)))
-    def numLoops = params.get('esmf_num_loops', 3)
-    def numSamplingSteps = params.get('esmf_num_sampling_steps', 50)
-    def numDiffusionSamples = params.get('esmf_num_diffusion_samples', 1)
-    def seedValue = params.get('esmf_seed', '')
-    def seedArg = seedValue == null || seedValue.toString().trim() == '' ? '' : "--seed ${seedValue}"
-    def device = shellQuote(params.get('esmf_device', 'auto'))
-    def outDir = shellQuote(params.out_dir)
+    def boolString = { value, fallback ->
+        def normalized = value == null ? fallback : value
+        def enabled = normalized instanceof Boolean ? normalized : normalized.toString().trim().toBoolean()
+        return enabled ? 'true' : 'false'
+    }
+    def shellQuote = { value ->
+        return "'" + (value == null ? '' : value.toString()).replace("'", "'\"'\"'") + "'"
+    }
+    def modelVariant = params.esmf_model_variant ?: params.model_variant ?: 'fast'
+    def modelIdOrPath = params.esmf_model_id_or_path ?: params.model_id_or_path ?: ''
+    def localFilesOnly = boolString(params.esmf_local_files_only ?: params.local_files_only, true)
+    def numLoops = params.esmf_num_loops ?: params.num_loops ?: 1
+    def numSamplingSteps = params.esmf_num_sampling_steps ?: params.sampling_steps ?: 5
+    def numDiffusionSamples = params.esmf_num_diffusion_samples ?: params.num_diffusion_samples ?: 1
+    def seed = params.esmf_seed ?: params.seed
+    def device = params.esmf_device ?: params.device ?: 'cuda'
+    def complexComponents = params.esmf_complex_components ?: params.complex_components ?: []
+    def normalizedName = (sequence_name ?: 'esmfold2_prediction').toString().replaceAll(/[^A-Za-z0-9._-]+/, '_')
+    def sequenceArg = shellQuote(sequence?.toString()?.trim() ?: '')
+    def complexArg = complexComponents instanceof Collection && !complexComponents.isEmpty() ? shellQuote(groovy.json.JsonOutput.toJson(complexComponents)) : "''"
+    def seedArg = seed == null || seed.toString().trim().isEmpty() ? '' : "--seed ${seed}"
+    def telemetryPath = shellQuote("esmfold2_results/${normalizedName}.telemetry.json")
+
     """
     set -euo pipefail
     python3 /scripts/bms_gpu_run_telemetry.py \
-        --label RunESMFold2Experimental \
-        --output-json bms_run_telemetry_RunESMFold2Experimental.json \
+        --label ESMFold2Predict \
+        --output-json ${telemetryPath} \
         -- python3 /scripts/run_esmfold2_inference.py \
-        --sequence ${sequence} \
-        --sequence-name ${sequenceName} \
-        --chain-id ${chainId} \
-        --complex-components-json ${complexComponentsJson} \
-        --complex-components-file ${complexComponentsFile} \
-        --pdb-sequence-path ${pdbSequencePath} \
-        --pdb-chain-ids ${pdbChainIds} \
-        --pdb-include-dna-rna ${pdbIncludeDnaRna} \
-        --msa-path ${msaPath} \
-        --msa-format ${msaFormat} \
-        ${msaMaxSequencesArg} \
-        --msa-remove-insertions ${msaRemoveInsertions} \
-        --dna-sequence ${dnaSequence} \
-        --dna-chain-id ${dnaChainId} \
-        --rna-sequence ${rnaSequence} \
-        --rna-chain-id ${rnaChainId} \
-        --ligand-smiles ${ligandSmiles} \
-        --ligand-ccd ${ligandCcd} \
-        --ligand-chain-id ${ligandChainId} \
-        --model-variant ${modelVariant} \
-        --model-id-or-path ${modelIdOrPath} \
+        --sequence ${sequenceArg} \
+        --sequence-name ${shellQuote(normalizedName)} \
+        --chain-id 'A' \
+        --complex-components-json ${complexArg} \
+        --model-variant ${shellQuote(modelVariant)} \
+        --model-id-or-path ${shellQuote(modelIdOrPath)} \
         --local-files-only ${localFilesOnly} \
         --num-loops ${numLoops} \
         --num-sampling-steps ${numSamplingSteps} \
         --num-diffusion-samples ${numDiffusionSamples} \
         ${seedArg} \
-        --device ${device} \
+        --device ${shellQuote(device)} \
         --output-dir esmfold2_results \
         2>&1 | tee run_esmfold2.log
-    mkdir -p ${outDir}/final/esmfold2 ${outDir}/pdb_files
-    cp -R esmfold2_results/. ${outDir}/final/esmfold2/
-    for artifact in esmfold2_results/*.cif esmfold2_results/*.json; do
-        [ -e "\$artifact" ] || continue
-        cp "\$artifact" ${outDir}/pdb_files/
-    done
     """
 }

@@ -17,16 +17,15 @@ CONTAINER_DIR="../containers"
 # Assuming user built them in ./apptainer or moved them. 
 # We'll rely on Nextflow finding them via config params or defaults.
 
-# 1. Test BoltzGen Standalone
-echo -e "\n${GREEN}[TEST 1] BoltzGen Standalone Mode${NC}"
-echo "Generating 1 design for dATP binder..."
+# 1. Test BoltzGen through the enclosing protein-design workflow
+echo -e "\n${GREEN}[TEST 1] BoltzGen Protein-Design Integration${NC}"
+echo "Generating 1 dATP-binder design and continuing through parent workflow stages..."
 
 rm -rf test_boltzgen_verify
 
 nextflow run main.nf \
     -profile workstation_ryzen7960x,test,monomer_denovo \
     --diffusion_method boltzgen \
-    --run_boltzgen_only true \
     --boltzgen_ntp_type dATP \
     --boltzgen_num_designs 1 \
     --out_dir test_boltzgen_verify \

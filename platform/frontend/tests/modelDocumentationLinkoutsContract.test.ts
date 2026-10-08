@@ -12,6 +12,7 @@ import {
   UNIQUE_WORKFLOW_MODEL_TOPICS,
   WORKFLOW_MODEL_INVENTORY,
   getUniqueWorkflowModelInventory,
+  getWorkflowModelTopics,
 } from '../src/components/workflowModelInventory.js';
 
 const readSource = (...parts: string[]) => readFileSync(join(process.cwd(), ...parts), 'utf8');
@@ -34,13 +35,12 @@ const sourceBlock = (source: string, startNeedle: string, endNeedle: string): st
 
 const expectedUniqueTopics: ModelDocumentationTopic[] = [
   'alphafold2',
-  'bindcraft',
   'boltz2',
   'boltzgen',
   'caliby',
   'chai1',
   'confornets',
-  'diffdock',
+
   'disco',
   'esmfold2',
   'fampnn',
@@ -55,7 +55,7 @@ const expectedUniqueTopics: ModelDocumentationTopic[] = [
   'rfantibody',
   'rfdiffusion',
   'rfdpoly',
-  'unidock',
+
 ];
 
 test('model documentation linkout registry exposes compact shared DOI/GitHub/preprint contracts', () => {
@@ -97,8 +97,6 @@ test('model documentation linkout registry exposes compact shared DOI/GitHub/pre
     'https://arxiv.org/abs/2210.01776',
     'https://github.com/dptech-corp/Uni-Dock',
     'https://doi.org/10.1021/acs.jctc.2c01145',
-    'https://github.com/martinpacesa/BindCraft',
-    'https://doi.org/10.1101/2024.09.30.615802',
     'https://github.com/RosettaCommons/RFDpoly',
     'https://doi.org/10.1101/2025.10.01.679929',
     'https://github.com/NVIDIA-Digital-Bio/la-proteina',
@@ -140,13 +138,14 @@ test('workflow model inventory is source-grounded and exposes the total unique m
   }
 
   const workflowsById = new Map(WORKFLOW_MODEL_INVENTORY.map((entry) => [entry.workflowId, entry]));
-  assert.deepEqual(workflowsById.get('mutagenesis')?.modelTopics, ['boltz2', 'rf3']);
-  assert.deepEqual(workflowsById.get('structure_prediction')?.modelTopics, ['boltz2', 'rf3', 'protenix']);
-  assert.deepEqual(workflowsById.get('antibody_denovo')?.modelTopics, ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2']);
+  assert.deepEqual(workflowsById.get('mutagenesis')?.modelTopics, ['boltz2', 'rf3', 'esmfold2']);
+  assert.deepEqual(workflowsById.get('structure_prediction')?.modelTopics, ['boltz2', 'rf3', 'protenix', 'esmfold2']);
+  assert.deepEqual(workflowsById.get('antibody_denovo')?.modelTopics, ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2']);
   assert.deepEqual(workflowsById.get('protein_local_redesign')?.modelTopics, ['rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2']);
   assert.deepEqual(workflowsById.get('protein_cad_experimental')?.modelTopics, ['laproteina', 'disco']);
   assert.deepEqual(workflowsById.get('protein_hunter_experimental')?.modelTopics, ['protein_hunter', 'boltz2', 'chai1']);
-  assert.deepEqual(workflowsById.get('esmfold2_experimental')?.modelTopics, ['esmfold2']);
+  assert.equal(workflowsById.has('esmfold2'), false);
+  assert.deepEqual(getWorkflowModelTopics('esmfold2_experimental'), ['boltz2', 'rf3', 'protenix', 'esmfold2']);
 
   for (const workflow of WORKFLOW_MODEL_INVENTORY) {
     assert.ok(workflow.sourceFiles.length > 0, `${workflow.workflowId} should name source files`);
@@ -175,14 +174,14 @@ test('JobSubmission keeps workflow cards concise, hides Advanced Models, and rou
   requireSnippet(source, "return ['confornets'];");
   requireSnippet(source, "return ['esmfold2'];");
   requireSnippet(source, "return ['rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2'];");
-  requireSnippet(source, "return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2'];");
-  requireSnippet(source, "return ['boltz2', 'rf3', 'protenix'];");
+  requireSnippet(source, "return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2'];");
+  requireSnippet(source, "return ['boltz2', 'rf3', 'protenix', 'esmfold2'];");
 
   requireSnippet(source, "return 'Experimental Fold-CP path for large Boltz-2 folds.';");
   requireSnippet(source, "return 'Experimental conformational mapping; ConforNets backend first.';");
-  requireSnippet(source, "return 'Standalone ESMFold2 protein/complex fold.';");
-  requireSnippet(source, "'esmfold2_experimental'].includes(model.id)");
-  requireSnippet(source, "if (template.id === 'esmfold2_experimental') return 'EF';");
+  rejectSnippet(source, "return 'Standalone ESMFold2 protein/complex fold.';");
+
+  rejectSnippet(source, "if (template.id === 'esmfold2' || template.id === 'esmfold2_experimental') return 'EF';");
   requireSnippet(source, "return 'Backbone generation and local redesign.';");
   requireSnippet(source, "return 'Structure and complex prediction validator.';");
   requireSnippet(source, 'getModelDocumentationLinks(docTopics)');
@@ -250,7 +249,7 @@ test('dedicated model launchers expose compact documentation linkouts instead of
   rejectSnippet(structureSource, 'This workflow stays on single-fold Boltz mode and reuses the standard structure input flow.');
 
   requireSnippet(antibodySource, "import { ModelDocumentationLinks } from './ModelDocumentationLinks';");
-  requireSnippet(antibodySource, "topics={['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2']}");
+  requireSnippet(antibodySource, "topics={['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2']}");
   requireSnippet(antibodySource, 'Generator and validator background is linked out; this launcher keeps controls and review gates up front.');
   requireSnippet(antibodySource, 'Generator-only first pass. Shortlist outputs');
   requireSnippet(antibodySource, 'Optional coarse contact screen before expensive downstream stages.');
