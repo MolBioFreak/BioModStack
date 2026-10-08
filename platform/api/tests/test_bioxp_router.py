@@ -231,10 +231,15 @@ async def test_bioxp_capabilities_reports_robot_local_route_parity(monkeypatch: 
     assert response['robot_local_expected_routes']['/liquid/aspirate'] is True
     assert response['robot_local_expected_routes']['/motion/axes/current'] is True
     assert response['default_operator_routes']['/oem/runtime/status'] is True
-    assert response['default_operator_routes']['/motion/axis/relative'] is True
-    assert response['default_operator_routes']['/motion/axis/absolute'] is True
+    assert response['default_operator_routes']['/liquid/status'] is True
+    assert '/motion/axis/relative' not in response['default_operator_routes']
+    assert '/motion/axis/absolute' not in response['default_operator_routes']
+    assert '/liquid/aspirate' not in response['default_operator_routes']
+    assert '/liquid/dispense' not in response['default_operator_routes']
     assert response['manual_motion_routes']['/motion/axis/relative'] is True
     assert response['commissioning_only_routes']['/motion/interlock/prepare'] is True
+    assert response['commissioning_only_routes']['/motion/axis/relative'] is True
+    assert response['commissioning_only_routes']['/liquid/aspirate'] is True
     assert response['disabled_routes']['/daemon/start'] is True
     assert any('disabled by design' in note for note in response['notes'])
 

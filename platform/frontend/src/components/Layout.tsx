@@ -418,9 +418,9 @@ export function Layout({ children }: LayoutProps) {
                                         backgroundColor: isActive('/bioxp') ? 'color-mix(in srgb, var(--warning) 20%, transparent)' : 'transparent',
                                         color: isActive('/bioxp') ? 'var(--warning)' : 'var(--text-secondary)'
                                     }}
-                                    title="BioXP Control Surface"
+                                    title="BioXP Handler Controls"
                                 >
-                                    BioXP Cockpit
+                                    BioXP Handler
                                 </Link>
                             </>
                         </DragScrollRail>

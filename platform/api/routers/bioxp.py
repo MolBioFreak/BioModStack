@@ -244,12 +244,21 @@ MANUAL_MOTION_ROUTES: Dict[str, bool] = {
     "/motion/axis/absolute": True,
     "/motion/axis/home": True,
 }
+DIRECT_LIQUID_COMMAND_ROUTES: Dict[str, bool] = {
+    "/liquid/init": True,
+    "/liquid/tip": True,
+    "/liquid/aspirate": True,
+    "/liquid/dispense": True,
+    "/liquid/mix": True,
+}
 BMS_PROXIED_ROUTES: Dict[str, bool] = {
     **ROBOT_LOCAL_EXPECTED_ROUTES,
     **MANUAL_MOTION_ROUTES,
 }
 COMMISSIONING_ONLY_ROUTES: Dict[str, bool] = {
     "/motion/interlock/prepare": True,
+    **MANUAL_MOTION_ROUTES,
+    **DIRECT_LIQUID_COMMAND_ROUTES,
 }
 DISABLED_ROUTES: Dict[str, bool] = {
     "/daemon/start": True,
@@ -540,13 +549,15 @@ async def bioxp_capabilities():
             path: enabled
             for path, enabled in BMS_PROXIED_ROUTES.items()
             if not path.startswith("/motion/interlock/")
+            and path not in MANUAL_MOTION_ROUTES
+            and path not in DIRECT_LIQUID_COMMAND_ROUTES
         }.items())),
         "manual_motion_routes": dict(sorted(MANUAL_MOTION_ROUTES.items())),
         "commissioning_only_routes": dict(sorted(COMMISSIONING_ONLY_ROUTES.items())),
         "disabled_routes": dict(sorted(DISABLED_ROUTES.items())),
         "notes": [
             "BMS links to the robot-local BioXP runtime and exposes only the routes listed as proxied.",
-            "Default operator UI is OEM-first and includes supervised manual movement buttons through BMS proxy routes; raw power/interlock/lock-clear recovery remains commissioning-only.",
+            "Default operator UI is OEM-first: startup/runtime, protocol, liquid readback, range/switch readback, thermal, chiller, camera, and vision. Raw axis movement and direct pipette commands are commissioning-only.",
             "Daemon lifecycle routes are disabled by design because BMS must not own the robot-local service process.",
             "Route parity is a control-plane capability statement; hardware readiness still comes from runtime status/preflight responses.",
             "The robot is treated as functional under OEM control; BMS should not present unresolved Linux parity work as a bad-component verdict.",
