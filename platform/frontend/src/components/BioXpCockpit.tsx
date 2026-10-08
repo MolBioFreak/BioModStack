@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useIsMutating } from '@tanstack/react-query';
 import {
     getCameraStreamUrl,
     useSetCameraControl,
     useAxisStatus,
+    useAxisStatusBatch,
     useBioXpStatus,
     useCameraAutoRecover,
     useCameraControls,
@@ -14,6 +15,9 @@ import {
     useCameraStreamHealth,
     useChillerBaseline,
     useChillerHardReset,
+    useSetChillerFan,
+    useSetChillerPwm,
+    useSetChillerRates,
     useChillerSnapshot,
     useClearLock,
     useDaemonStart,
@@ -36,6 +40,9 @@ import {
     useMoveRelative,
     usePrepareInterlock,
     useReconnectRuntime,
+    useSetThermalFan,
+    useSetThermalPwm,
+    useSetThermalRates,
     useSetChillerTemp,
     useSetLinkage,
     useSetThermalTemp,
@@ -44,7 +51,7 @@ import {
     useThermalHardReset,
     useThermalSnapshot
 } from '../lib/bioxpClient';
-import type { AxisName, CameraControlRow, ChillerBankName, MotionPowerStatus, ThermalBankName } from '../lib/bioxpClient';
+import type { AxisName, AxisStatus, CameraControlRow, ChillerBankName, MotionPowerStatus, ThermalBankName } from '../lib/bioxpClient';
 
 const getErrorMessage = (error: unknown) => {
     if (error instanceof Error) {
@@ -84,6 +91,15 @@ const CAMERA_STREAM_MODES = [
     { key: '1280x720', label: '1280x720 / 30 FPS', width: 1280, height: 720, maxFps: 30 },
     { key: '1920x1080', label: '1920x1080 / 15 FPS', width: 1920, height: 1080, maxFps: 15 },
 ] as const;
+const CAMERA_HOLD_JOG_REPEAT_DELAY_MS = 120;
+const CAMERA_HOLD_JOG_WAIT_TIMEOUT_S = 8.0;
+const CAMERA_HOLD_JOG_AXES = ['x', 'y', 'z'] as const;
+const CAMERA_HOLD_JOG_PROFILE = {
+    speed: 100,
+    acc: 50,
+    xy_step: 40,
+    z_step: 24,
+} as const;
 const V4L2_CTRL_TYPE_INTEGER = 1;
 const V4L2_CTRL_TYPE_BOOLEAN = 2;
 const V4L2_CTRL_TYPE_MENU = 3;
@@ -216,6 +232,31 @@ const getBoardAckSummary = (boardStatus: MotionPowerStatus['board_status']) => {
         })
         .join('  ');
 };
+
+const getAxisDirectionState = (axisData: AxisStatus | undefined, steps: number) => {
+    const leftActive = axisData?.switch_activity?.left_active === true;
+    const rightActive = axisData?.switch_activity?.right_active === true;
+    const leftMasked = axisData?.preset?.disable_left === true;
+    const rightMasked = axisData?.preset?.disable_right === true;
+    const conflictingSwitches = leftActive && rightActive;
+    const blocked =
+        !conflictingSwitches && (
+            (steps < 0 && leftActive && !leftMasked) ||
+            (steps > 0 && rightActive && !rightMasked)
+        );
+
+    return {
+        blocked,
+        conflictingSwitches,
+        leftActive,
+        rightActive,
+        leftMasked,
+        rightMasked,
+    };
+};
+
+const hasMutationKeyPrefix = (mutationKey: unknown, prefix: readonly string[]) =>
+    Array.isArray(mutationKey) && prefix.every((part, index) => mutationKey[index] === part);
 
 const AxisControls = ({
     axis,
@@ -445,7 +486,7 @@ const AxisControls = ({
 const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; label: string; enabled: boolean }) => {
     const moveRelative = useMoveRelative();
     const homeAxis = useHomeAxis();
-    const [steps, setSteps] = useState(axis === 'z' ? 50 : 100);
+    const [steps, setSteps] = useState(axis === 'z' ? 35 : axis === 'g' ? 30 : 60);
     const [commandStartPosition, setCommandStartPosition] = useState<number | null>(null);
     const [commandLabel, setCommandLabel] = useState<string | null>(null);
     const localMotionBusy = moveRelative.isPending || homeAxis.isPending;
@@ -543,6 +584,279 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
             {(moveRelative.isError || homeAxis.isError || isError) && (
                 <div className="text-[10px] text-error">
                     {getErrorMessage(moveRelative.error) || getErrorMessage(homeAxis.error) || getErrorMessage(error)}
+                </div>
+            )}
+        </div>
+    );
+};
+
+type CameraHoldJogCommand = {
+    axis: 'x' | 'y' | 'z';
+    steps: number;
+    label: string;
+};
+
+const CameraHoldJogPad = ({ enabled }: { enabled: boolean }) => {
+    const moveRelative = useMoveRelative();
+    const [holdCommand, setHoldCommand] = useState<CameraHoldJogCommand | null>(null);
+    const [lastAction, setLastAction] = useState<string | null>(null);
+    const statusPollIntervalMs = holdCommand || moveRelative.isPending ? 500 : 2500;
+    const axisBatchStatus = useAxisStatusBatch([...CAMERA_HOLD_JOG_AXES], enabled, statusPollIntervalMs);
+    const axisRows = axisBatchStatus.data?.rows ?? {};
+
+    const axisDataMap: Record<'x' | 'y' | 'z', AxisStatus | undefined> = {
+        x: axisRows.x,
+        y: axisRows.y,
+        z: axisRows.z,
+    };
+    const xAxis = axisDataMap.x;
+    const yAxis = axisDataMap.y;
+    const zAxis = axisDataMap.z;
+
+    const stopHold = () => setHoldCommand(null);
+
+    const isBlocked = (command: CameraHoldJogCommand) =>
+        getAxisDirectionState(axisDataMap[command.axis], command.steps).blocked;
+
+    const issueJog = (command: CameraHoldJogCommand) => {
+        moveRelative.mutate(
+            {
+                axis: command.axis,
+                steps: command.steps,
+                wait_timeout_s: CAMERA_HOLD_JOG_WAIT_TIMEOUT_S,
+            },
+            {
+                onSuccess: (data) => {
+                    const delta = typeof data?.position_delta === 'number' ? data.position_delta : command.steps;
+                    setLastAction(`${command.label} | Δ ${delta}`);
+                },
+                onError: (error) => {
+                    setLastAction(getErrorMessage(error) ?? `${command.label} failed`);
+                    setHoldCommand(null);
+                },
+            },
+        );
+    };
+
+    const startHold = (command: CameraHoldJogCommand) => (event: ReactPointerEvent<HTMLButtonElement>) => {
+        event.preventDefault();
+        if (!enabled || moveRelative.isPending || isBlocked(command)) {
+            return;
+        }
+        try {
+            event.currentTarget.setPointerCapture(event.pointerId);
+        } catch {
+            // Pointer capture is not required for the hold loop.
+        }
+        setHoldCommand(command);
+        setLastAction(`${command.label} | hold to repeat`);
+        issueJog(command);
+    };
+
+    useEffect(() => {
+        if (!holdCommand) {
+            return;
+        }
+        const handleStop = () => setHoldCommand(null);
+        const handleVisibility = () => {
+            if (document.hidden) {
+                setHoldCommand(null);
+            }
+        };
+        window.addEventListener('pointerup', handleStop);
+        window.addEventListener('pointercancel', handleStop);
+        window.addEventListener('blur', handleStop);
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => {
+            window.removeEventListener('pointerup', handleStop);
+            window.removeEventListener('pointercancel', handleStop);
+            window.removeEventListener('blur', handleStop);
+            document.removeEventListener('visibilitychange', handleVisibility);
+        };
+    }, [holdCommand]);
+
+    useEffect(() => {
+        if (!holdCommand || !enabled || moveRelative.isPending) {
+            return;
+        }
+        if (isBlocked(holdCommand)) {
+            setLastAction(`${holdCommand.label} | limit reached`);
+            setHoldCommand(null);
+            return;
+        }
+        const timer = window.setTimeout(() => issueJog(holdCommand), CAMERA_HOLD_JOG_REPEAT_DELAY_MS);
+        return () => window.clearTimeout(timer);
+    }, [enabled, holdCommand, moveRelative.isPending, axisBatchStatus.data]);
+
+    const xNegative = getAxisDirectionState(xAxis, -1);
+    const xPositive = getAxisDirectionState(xAxis, 1);
+    const yNegative = getAxisDirectionState(yAxis, -1);
+    const yPositive = getAxisDirectionState(yAxis, 1);
+    const zNegative = getAxisDirectionState(zAxis, -1);
+    const zPositive = getAxisDirectionState(zAxis, 1);
+
+    const warnings = [
+        xNegative.blocked ? 'X- blocked by active left limit.' : null,
+        xPositive.blocked ? 'X+ blocked by active right limit.' : null,
+        yNegative.blocked ? 'Y- blocked by active left limit.' : null,
+        yPositive.blocked ? 'Y+ blocked by active right limit.' : null,
+        zNegative.blocked ? 'Z- blocked by active left limit.' : null,
+        zPositive.blocked ? 'Z+ blocked by active right limit.' : null,
+    ].filter(Boolean);
+
+    const conflicts = [
+        xNegative.conflictingSwitches ? 'X reports both limit switches active.' : null,
+        yNegative.conflictingSwitches ? 'Y reports both limit switches active.' : null,
+        zNegative.conflictingSwitches ? 'Z reports both limit switches active.' : null,
+    ].filter(Boolean);
+
+    const renderButton = (
+        command: CameraHoldJogCommand,
+        text: string,
+        helper: string,
+        blocked: boolean,
+        active: boolean,
+    ) => (
+        <button
+            type="button"
+            onPointerDown={startHold(command)}
+            onPointerUp={stopHold}
+            onPointerCancel={stopHold}
+            onContextMenu={(event) => event.preventDefault()}
+            disabled={!enabled || blocked}
+            className={`touch-none select-none rounded-xl border px-2 py-2 text-center transition-colors ${
+                active
+                    ? 'border-accent/50 bg-accent/20 text-accent'
+                    : blocked
+                        ? 'border-error/40 bg-error/10 text-error'
+                        : 'border-white/10 bg-white/10 text-content hover:bg-white/15'
+            } disabled:opacity-50`}
+        >
+            <div className="text-lg leading-none">{text}</div>
+            <div className="mt-1 text-[10px] font-mono">{helper}</div>
+        </button>
+    );
+
+    const axisStatusCell = (label: string, value: number | null | undefined, left: boolean | undefined, right: boolean | undefined) => (
+        <div className="rounded-lg border border-white/10 bg-white/5 px-2 py-2">
+            <div className="text-[9px] uppercase tracking-[0.12em] text-content-muted">{label}</div>
+            <div className="mt-1 text-[11px] font-mono text-content">{value ?? 'n/a'}</div>
+            <div className="mt-1 text-[9px] font-mono text-content-muted">
+                L {left === true ? '1' : left === false ? '0' : '?'} / R {right === true ? '1' : right === false ? '0' : '?'}
+            </div>
+        </div>
+    );
+
+    return (
+        <div className="rounded-xl border border-white/10 bg-[rgba(8,16,29,0.35)] backdrop-blur-sm p-3 space-y-3 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
+            <div className="space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-content">Hold To Jog</div>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                        holdCommand ? 'bg-accent/20 text-accent border-accent/30' : moveRelative.isPending ? 'bg-white/10 text-content border-white/15' : 'bg-white/5 text-content-muted border-white/10'
+                    }`}>
+                        {holdCommand ? 'HOLD' : moveRelative.isPending ? 'STEP' : 'READY'}
+                    </span>
+                </div>
+                <div className="text-[10px] text-content-muted">
+                    Hold an arrow to repeat guarded jog moves while you watch the live feed. Conservative jog profile: speed {CAMERA_HOLD_JOG_PROFILE.speed}, acc {CAMERA_HOLD_JOG_PROFILE.acc}.
+                </div>
+            </div>
+
+            <div className="grid grid-cols-[minmax(0,1fr)_5.5rem] gap-3 items-start">
+                <div className="grid grid-cols-3 gap-2 items-center justify-items-center">
+                    <div />
+                    {renderButton(
+                        { axis: 'y', steps: -CAMERA_HOLD_JOG_PROFILE.xy_step, label: 'Y-' },
+                        '▲',
+                        'Y-',
+                        yNegative.blocked,
+                        holdCommand?.axis === 'y' && holdCommand?.steps < 0,
+                    )}
+                    <div />
+                    {renderButton(
+                        { axis: 'x', steps: -CAMERA_HOLD_JOG_PROFILE.xy_step, label: 'X-' },
+                        '◀',
+                        'X-',
+                        xNegative.blocked,
+                        holdCommand?.axis === 'x' && holdCommand?.steps < 0,
+                    )}
+                    <div className="w-full rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-center">
+                        <div className="text-[9px] uppercase tracking-[0.12em] text-content-muted">XY</div>
+                        <div className="mt-1 text-[11px] font-mono text-content">{CAMERA_HOLD_JOG_PROFILE.xy_step} st</div>
+                    </div>
+                    {renderButton(
+                        { axis: 'x', steps: CAMERA_HOLD_JOG_PROFILE.xy_step, label: 'X+' },
+                        '▶',
+                        'X+',
+                        xPositive.blocked,
+                        holdCommand?.axis === 'x' && holdCommand?.steps > 0,
+                    )}
+                    <div />
+                    {renderButton(
+                        { axis: 'y', steps: CAMERA_HOLD_JOG_PROFILE.xy_step, label: 'Y+' },
+                        '▼',
+                        'Y+',
+                        yPositive.blocked,
+                        holdCommand?.axis === 'y' && holdCommand?.steps > 0,
+                    )}
+                    <div />
+                </div>
+
+                <div className="space-y-2">
+                    {renderButton(
+                        { axis: 'z', steps: CAMERA_HOLD_JOG_PROFILE.z_step, label: 'Z+' },
+                        '▲',
+                        'Z+',
+                        zPositive.blocked,
+                        holdCommand?.axis === 'z' && holdCommand?.steps > 0,
+                    )}
+                    <div className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-center">
+                        <div className="text-[9px] uppercase tracking-[0.12em] text-content-muted">Z</div>
+                        <div className="mt-1 text-[11px] font-mono text-content">{CAMERA_HOLD_JOG_PROFILE.z_step} st</div>
+                        <div className="mt-1 text-[9px] text-content-muted">pipettor</div>
+                    </div>
+                    {renderButton(
+                        { axis: 'z', steps: -CAMERA_HOLD_JOG_PROFILE.z_step, label: 'Z-' },
+                        '▼',
+                        'Z-',
+                        zNegative.blocked,
+                        holdCommand?.axis === 'z' && holdCommand?.steps < 0,
+                    )}
+                </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+                {axisStatusCell('X', axisRows.x?.status?.position?.position, xNegative.leftActive, xPositive.rightActive)}
+                {axisStatusCell('Y', axisRows.y?.status?.position?.position, yNegative.leftActive, yPositive.rightActive)}
+                {axisStatusCell('Z', axisRows.z?.status?.position?.position, zNegative.leftActive, zPositive.rightActive)}
+            </div>
+
+            {lastAction && (
+                <div className="text-[10px] font-mono text-content-muted">
+                    {lastAction}
+                </div>
+            )}
+
+            {warnings.length > 0 && (
+                <div className="text-[10px] text-warning space-y-1">
+                    {warnings.map((warning) => (
+                        <div key={warning}>{warning}</div>
+                    ))}
+                </div>
+            )}
+
+            {conflicts.length > 0 && (
+                <div className="text-[10px] text-content-muted space-y-1">
+                    {conflicts.map((warning) => (
+                        <div key={warning}>{warning}</div>
+                    ))}
+                </div>
+            )}
+
+            {(moveRelative.isError || axisBatchStatus.isError) && (
+                <div className="text-[10px] text-error">
+                    {getErrorMessage(moveRelative.error) || getErrorMessage(axisBatchStatus.error)}
                 </div>
             )}
         </div>
@@ -659,11 +973,31 @@ const CameraSettingControl = ({
 
 const ThermalControlCard = ({ bank, label, enabled }: { bank: ThermalBankName; label: string; enabled: boolean }) => {
     const setTemp = useSetThermalTemp();
+    const setFan = useSetThermalFan();
+    const setPwm = useSetThermalPwm();
+    const setRates = useSetThermalRates();
     const [temp, setTempState] = useState(37);
+    const [fanSpeed, setFanSpeed] = useState(128);
+    const [pwm, setPwmState] = useState(35);
+    const [coolRate, setCoolRate] = useState(-0.4);
+    const [heatRate, setHeatRate] = useState(0.4);
+    const supportsPerBankTuning = bank !== 'pedestal';
+    const writeError =
+        getErrorMessage(setTemp.error) ||
+        getErrorMessage(setFan.error) ||
+        getErrorMessage(setPwm.error) ||
+        getErrorMessage(setRates.error);
 
     return (
         <div className="p-3 bg-surface-tertiary rounded-lg border border-accent/20 space-y-3">
-            <div className="text-xs text-accent font-semibold">{label}</div>
+            <div className="space-y-1">
+                <div className="text-xs text-accent font-semibold">{label}</div>
+                <div className="text-[10px] text-content-muted">
+                    {supportsPerBankTuning
+                        ? 'Setpoint, shared fan, bank PWM, and rate tuning are available from the upstream runtime.'
+                        : 'Pedestal currently supports setpoint only; PWM and rate controls are only defined for nest and lid.'}
+                </div>
+            </div>
             <div className="flex gap-2 items-center">
                 <input
                     type="number"
@@ -680,18 +1014,103 @@ const ThermalControlCard = ({ bank, label, enabled }: { bank: ThermalBankName; l
                     Set Target
                 </button>
             </div>
-            {setTemp.isError && <div className="text-[10px] text-error">{getErrorMessage(setTemp.error)}</div>}
+            <div className="flex gap-2 items-center">
+                <input
+                    type="number"
+                    min={0}
+                    max={255}
+                    step={1}
+                    value={fanSpeed}
+                    onChange={(e) => setFanSpeed(Math.max(0, Math.min(255, Number(e.target.value))))}
+                    className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm w-28"
+                />
+                <button
+                    onClick={() => setFan.mutate({ speed: fanSpeed })}
+                    disabled={!enabled || setFan.isPending}
+                    className="px-4 py-1.5 bg-white/10 hover:bg-white/15 text-content text-xs rounded-lg transition-colors border border-white/10"
+                >
+                    Set Fan
+                </button>
+            </div>
+            {supportsPerBankTuning && (
+                <>
+                    <div className="flex gap-2 items-center">
+                        <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step={1}
+                            value={pwm}
+                            onChange={(e) => setPwmState(Math.max(0, Math.min(100, Number(e.target.value))))}
+                            className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm w-28"
+                        />
+                        <button
+                            onClick={() => setPwm.mutate({ bank, pwm })}
+                            disabled={!enabled || setPwm.isPending}
+                            className="px-4 py-1.5 bg-white/10 hover:bg-white/15 text-content text-xs rounded-lg transition-colors border border-white/10"
+                        >
+                            Set PWM
+                        </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                        <input
+                            type="number"
+                            min={-2}
+                            max={0}
+                            step={0.1}
+                            value={coolRate}
+                            onChange={(e) => setCoolRate(Math.max(-2, Math.min(0, Number(e.target.value))))}
+                            className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm"
+                            aria-label={`${label} cool rate`}
+                        />
+                        <input
+                            type="number"
+                            min={0}
+                            max={2}
+                            step={0.1}
+                            value={heatRate}
+                            onChange={(e) => setHeatRate(Math.max(0, Math.min(2, Number(e.target.value))))}
+                            className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm"
+                            aria-label={`${label} heat rate`}
+                        />
+                        <button
+                            onClick={() => setRates.mutate({ bank, cool_rate_c_s: coolRate, heat_rate_c_s: heatRate })}
+                            disabled={!enabled || setRates.isPending}
+                            className="px-4 py-1.5 bg-white/10 hover:bg-white/15 text-content text-xs rounded-lg transition-colors border border-white/10"
+                        >
+                            Set Rates
+                        </button>
+                    </div>
+                    <div className="text-[10px] text-content-muted">Cool rate in C/s (negative), heat rate in C/s (positive).</div>
+                </>
+            )}
+            {writeError && <div className="text-[10px] text-error">{writeError}</div>}
         </div>
     );
 };
 
 const ChillerControlCard = ({ bank, label, enabled }: { bank: ChillerBankName; label: string; enabled: boolean }) => {
     const setTemp = useSetChillerTemp();
+    const setFan = useSetChillerFan();
+    const setPwm = useSetChillerPwm();
+    const setRates = useSetChillerRates();
     const [temp, setTempState] = useState(4);
+    const [fanSpeed, setFanSpeed] = useState(128);
+    const [pwm, setPwmState] = useState(35);
+    const [coolRate, setCoolRate] = useState(-0.4);
+    const [heatRate, setHeatRate] = useState(0.4);
+    const writeError =
+        getErrorMessage(setTemp.error) ||
+        getErrorMessage(setFan.error) ||
+        getErrorMessage(setPwm.error) ||
+        getErrorMessage(setRates.error);
 
     return (
         <div className="p-3 bg-surface-tertiary rounded-lg border border-accent/20 space-y-3">
-            <div className="text-xs text-accent font-semibold">{label}</div>
+            <div className="space-y-1">
+                <div className="text-xs text-accent font-semibold">{label}</div>
+                <div className="text-[10px] text-content-muted">Each bank supports setpoint, fan, PWM, and rate tuning in the upstream runtime.</div>
+            </div>
             <div className="flex gap-2 items-center">
                 <input
                     type="number"
@@ -708,7 +1127,73 @@ const ChillerControlCard = ({ bank, label, enabled }: { bank: ChillerBankName; l
                     Set Target
                 </button>
             </div>
-            {setTemp.isError && <div className="text-[10px] text-error">{getErrorMessage(setTemp.error)}</div>}
+            <div className="flex gap-2 items-center">
+                <input
+                    type="number"
+                    min={0}
+                    max={255}
+                    step={1}
+                    value={fanSpeed}
+                    onChange={(e) => setFanSpeed(Math.max(0, Math.min(255, Number(e.target.value))))}
+                    className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm w-28"
+                />
+                <button
+                    onClick={() => setFan.mutate({ bank, speed: fanSpeed })}
+                    disabled={!enabled || setFan.isPending}
+                    className="px-4 py-1.5 bg-white/10 hover:bg-white/15 text-content text-xs rounded-lg transition-colors border border-white/10"
+                >
+                    Set Fan
+                </button>
+            </div>
+            <div className="flex gap-2 items-center">
+                <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={pwm}
+                    onChange={(e) => setPwmState(Math.max(0, Math.min(100, Number(e.target.value))))}
+                    className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm w-28"
+                />
+                <button
+                    onClick={() => setPwm.mutate({ bank, pwm })}
+                    disabled={!enabled || setPwm.isPending}
+                    className="px-4 py-1.5 bg-white/10 hover:bg-white/15 text-content text-xs rounded-lg transition-colors border border-white/10"
+                >
+                    Set PWM
+                </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                <input
+                    type="number"
+                    min={-2}
+                    max={0}
+                    step={0.1}
+                    value={coolRate}
+                    onChange={(e) => setCoolRate(Math.max(-2, Math.min(0, Number(e.target.value))))}
+                    className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm"
+                    aria-label={`${label} cool rate`}
+                />
+                <input
+                    type="number"
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    value={heatRate}
+                    onChange={(e) => setHeatRate(Math.max(0, Math.min(2, Number(e.target.value))))}
+                    className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm"
+                    aria-label={`${label} heat rate`}
+                />
+                <button
+                    onClick={() => setRates.mutate({ bank, cool_rate_c_s: coolRate, heat_rate_c_s: heatRate })}
+                    disabled={!enabled || setRates.isPending}
+                    className="px-4 py-1.5 bg-white/10 hover:bg-white/15 text-content text-xs rounded-lg transition-colors border border-white/10"
+                >
+                    Set Rates
+                </button>
+            </div>
+            <div className="text-[10px] text-content-muted">Cool rate in C/s (negative), heat rate in C/s (positive).</div>
+            {writeError && <div className="text-[10px] text-error">{writeError}</div>}
         </div>
     );
 };
@@ -734,10 +1219,16 @@ export const BioXpCockpit = () => {
     const [motionHardResetRounds, setMotionHardResetRounds] = useState(2);
     const cameraViewerRef = useRef<HTMLDivElement | null>(null);
 
-    const motionMutationCount = useIsMutating({ mutationKey: ['bioxp', 'motion'] });
+    const hardwareMutationCount = useIsMutating({
+        predicate: (mutation) => hasMutationKeyPrefix(mutation.options.mutationKey, ['bioxp', 'hardware']),
+    });
+    const motionMutationCount = useIsMutating({
+        predicate: (mutation) => hasMutationKeyPrefix(mutation.options.mutationKey, ['bioxp', 'hardware', 'motion']),
+    });
+    const hardwareBusy = hardwareMutationCount > 0;
     const motionBusy = motionMutationCount > 0;
     const { data: linkage, isLoading: linkageLoading } = useGetLinkage();
-    const { data: status, isLoading: statusLoading, isError: statusIsError, error: statusError } = useBioXpStatus(true, motionBusy ? false : 5000);
+    const { data: status, isLoading: statusLoading, isError: statusIsError, error: statusError } = useBioXpStatus(true, hardwareBusy ? false : 5000);
     const setLinkage = useSetLinkage();
     const disconnectLinkage = useDisconnectLinkage();
 
@@ -755,8 +1246,8 @@ export const BioXpCockpit = () => {
     const hasRecentHardwareContact =
         lastHealthyAt != null &&
         (Date.now() - lastHealthyAt) < CONNECTION_STICKY_WINDOW_MS;
-    const connectionPollingEnabled = hardwareReachable && activeTab === 'connection';
-    const controlsPollingEnabled = hardwareReachable && activeTab === 'controls' && !motionBusy;
+    const connectionPollingEnabled = hardwareReachable && activeTab === 'connection' && !hardwareBusy;
+    const controlsPollingEnabled = hardwareReachable && activeTab === 'controls' && !hardwareBusy;
     const cameraDiscoveryEnabled = hardwareReachable && activeTab === 'camera' && !pollCamera && !motionBusy;
     const motionPowerStatus = useMotionPowerStatus(controlsPollingEnabled, motionBusy ? false : 8000);
 
@@ -1242,14 +1733,12 @@ export const BioXpCockpit = () => {
         </div>
     );
     const cameraMotionPanel = (
-        <div className="space-y-2">
+        <div className="space-y-3">
             <div className="space-y-1 pb-1">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-content">Quick Motion</div>
-                <div className="text-[10px] text-content-muted">Guarded jog and home controls for live calibration.</div>
+                <div className="text-[10px] text-content-muted">Guarded jog controls for live calibration inside the viewer. Hold an arrow to keep nudging while limits and runtime guardrails stay active.</div>
             </div>
-            <CameraAxisQuickControls axis="x" label="X Axis" enabled={isConnected} />
-            <CameraAxisQuickControls axis="y" label="Y Axis" enabled={isConnected} />
-            <CameraAxisQuickControls axis="z" label="Z Axis" enabled={isConnected} />
+            <CameraHoldJogPad enabled={isConnected} />
             <CameraAxisQuickControls axis="g" label="Gripper" enabled={isConnected} />
         </div>
     );
@@ -1688,7 +2177,7 @@ export const BioXpCockpit = () => {
                         <div className="space-y-6">
                             <SectionCard
                                 title="Thermal Cycler"
-                                subtitle="Setpoint control plus baseline, fast-profile, and hard-reset recovery."
+                                subtitle="Setpoint, fan, PWM, and rate control plus baseline, fast-profile, and hard-reset recovery."
                             >
                                 <div className="grid grid-cols-1 gap-3">
                                     <ThermalControlCard bank="nest" label="Nest" enabled={isConnected} />
@@ -1728,7 +2217,7 @@ export const BioXpCockpit = () => {
 
                             <SectionCard
                                 title="Chiller System"
-                                subtitle="The upstream chiller surface is now available in BMS for both RC and OC banks."
+                                subtitle="Setpoint, fan, PWM, and rate control are now available in BMS for both RC and OC banks."
                             >
                                 <div className="grid grid-cols-1 gap-3">
                                     <ChillerControlCard bank="rc" label="RC Bank" enabled={isConnected} />
