@@ -451,6 +451,38 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
     return [(path, relative) for relative, path in sorted(assets.items())]
 
 
+def verify_approved_native_inputs(job: Any, runtime_references: dict[str, dict[str, Any]],
+                                  input_hashes: dict[str, tuple[str, int]] | None = None) -> None:
+    """Carry reviewed static byte/membership authority through shared dispatch.
+
+    Prepared/generated additions retain their existing compiler/service authority;
+    they cannot change the original operator-reviewed input closure.
+    """
+    approval = (getattr(job, 'provenance', None) or {}).get('execution_plan_approval')
+    if approval is None:
+        return  # Existing internal component/source authority is not a public preview.
+    request = approval.get('input_request')
+    expected = approval.get('input_identities')
+    if not isinstance(request, dict) or not isinstance(expected, list):
+        raise RemoteBundleError('Remote input approval lacks retained byte authority; re-preview the job')
+    from scripts.lib.portable_inputs import discover_native_input_references
+    import yaml
+    try:
+        current = discover_native_input_references(request['model_id'], request['mode'],
+            request['params'], (), output_dir=Path(request['output_dir']),
+            allowed_roots=(get_data_root(), get_inputs_dir(), get_results_dir()),
+            yaml_loader=yaml.safe_load, runtime_references=runtime_references)
+    except (KeyError, OSError, ValueError) as exc:
+        raise RemoteBundleError('Approved native input closure is no longer available') from exc
+    if _canonical_bytes(current) != _canonical_bytes(expected):
+        raise RemoteBundleError('Approved native input bytes or membership changed before dispatch')
+    if input_hashes is not None:
+        for record in expected:
+            actual = input_hashes.get(record['source_path'])
+            if actual is not None and actual != (record['sha256'], record['size_bytes']):
+                raise RemoteBundleError('Approved native input changed during bundle inventory')
+
+
 def _input_assets(
     params: dict[str, Any],
     *,
@@ -1024,6 +1056,7 @@ def prepare_remote_bundle(
         # is provenance, not a second live acquisition/transfer of the FASTQ.
         input_discovery_params = dict(effective_params, ont_input_provenance={
             key: value for key, value in custody.items() if key != 'submitted_path'})
+    verify_approved_native_inputs(job, runtime_references)
     input_assets = _input_assets(
         input_discovery_params,
         native_invocation=native_invocation,
@@ -1058,6 +1091,7 @@ def prepare_remote_bundle(
         input_transfers.append(TransferPlan(path, remote_destination))
         input_path_map[str(path.resolve())] = remote_destination
 
+    verify_approved_native_inputs(job, runtime_references, input_hashes)
     verify_selected_preparation_inputs(native_invocation.execution_plan, input_hashes)
     source_records = _records_for_source(source_root, "source", "source")
     remote_results = f"{remote_attempt}/results"

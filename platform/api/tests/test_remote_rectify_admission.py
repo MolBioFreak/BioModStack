@@ -311,6 +311,26 @@ def qualify_root_bundle(job, tmp_path, monkeypatch):
     assert {p.name: p.read_bytes() for p in remote_selection.glob('*.pdb')} == {
         p.name: p.read_bytes() for p in original.glob('*.pdb')}
     assert all(not p.is_symlink() and p.stat().st_nlink == 1 for p in remote_selection.glob('*.pdb'))
+    # A post-POST source replacement must fail the actual dispatch boundary,
+    # not merely be repackaged under a fresh transport digest.
+    candidate = next(original.glob('*.pdb'))
+    saved = candidate.read_bytes()
+    candidate.write_bytes(saved + b'REMARK changed after approved POST\n')
+    try:
+        with pytest.raises(bundle.RemoteBundleError, match='Approved native input'):
+            bundle.prepare_remote_bundle(job=job,
+                target=SimpleNamespace(id=job.execution_target_id, remote_root=str(tmp_path / 'remote')),
+                command=list(invocation.command), native_invocation=invocation)
+    finally:
+        candidate.write_bytes(saved)
+    additional = original / 'unreviewed-member.pdb'
+    additional.write_bytes(saved)
+    try:
+        with pytest.raises(bundle.RemoteBundleError, match='membership changed'):
+            bundle.verify_approved_native_inputs(job, {})
+    finally:
+        additional.unlink()
+    bundle.verify_approved_native_inputs(job, {})
     # Tampering with received native biological input fails actual worker custody.
     next(remote_selection.glob('*.pdb')).write_bytes(b'changed')
     with pytest.raises(Exception):
