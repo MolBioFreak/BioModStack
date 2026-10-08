@@ -1712,6 +1712,29 @@ def test_host_listener_closure_rejects_same_pid_socket_substitution(monkeypatch)
         tailnet._host_listener_closure(5173)
 
 
+def test_host_listener_closure_emits_exact_stable_listener_pids(monkeypatch) -> None:
+    monkeypatch.setattr(tailnet, "_host_listener_inodes", lambda port: [51731])
+    monkeypatch.setattr(tailnet, "_host_listener_inode_owners", lambda inodes: {51731: [201]})
+    monkeypatch.setattr(tailnet, "_listener_bind_addresses", lambda port: {"127.0.0.1"})
+    monkeypatch.setattr(
+        tailnet,
+        "_pid_report_for_pids",
+        lambda pids: [{"pid": 201, "executable": "/usr/bin/node"}],
+    )
+
+    closure = tailnet._host_listener_closure(5173)
+
+    assert closure["listener_pids"] == [201]
+    assert closure["listener_pids"] == [
+        report["pid"] for report in closure["listener_reports"]
+    ]
+    assert closure["listener_pids"] == sorted({
+        pid
+        for owners in closure["listener_inode_owners"].values()
+        for pid in owners
+    })
+
+
 def test_managed_api_rejects_coherent_extra_container_process(monkeypatch) -> None:
     container_id = "a" * 64
     cgroup = f"0::/system.slice/docker-{container_id}.scope\n"

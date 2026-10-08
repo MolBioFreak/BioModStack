@@ -1095,6 +1095,7 @@ def _host_listener_closure(port: int) -> dict[str, object]:
                 "bind_addresses": after_addresses,
                 "listener_inodes": after_inodes,
                 "listener_inode_owners": after_owners,
+                "listener_pids": report_pids,
                 "listener_reports": after_reports,
             }
     raise TailnetEnvironmentError(f"listener ownership closure is unstable for port {port}")

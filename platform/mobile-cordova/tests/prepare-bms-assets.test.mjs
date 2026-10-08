@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import * as prepareAssets from '../scripts/prepare-bms-assets.mjs';
 
@@ -835,6 +837,95 @@ test('selection response contract accepts exact development and production recei
       malformed, 'development', 'https://compute-node.taileb3a90.ts.net',
     ));
   }
+});
+
+test('real Python listener closure survives JSON and the exact Cordova consumer', () => {
+  const repositoryRoot = fileURLToPath(new URL('../../../', import.meta.url));
+  const python = String.raw`
+import json
+import biomodstack_tailnet as t
+
+runtime_revision = "6" * 40
+project_root = "/srv/selector"
+current_port = 8001
+
+def report_for(port):
+    if port == 8001:
+        argv = [
+            f"{project_root}/platform/api/.venv/bin/python",
+            f"{project_root}/platform/api/.venv/bin/uvicorn",
+            "workflow_adapter_app:app", "--port", "8001", "--host", "127.0.0.1",
+            "--no-proxy-headers", "--no-access-log",
+        ]
+        return {
+            "pid": 301, "cwd": f"{project_root}/platform/api",
+            "executable": f"{project_root}/platform/api/.venv/bin/python",
+            "argv": argv, "cmdline": " ".join(argv),
+            "cgroup": "0::/user.slice/user-1000.slice/user@1000.service/app.slice/biomodstack-workflow-adapter.service",
+            "build_revision": runtime_revision,
+        }
+    frontend_root = f"{project_root}/platform/frontend"
+    argv = ["/usr/bin/node", f"{frontend_root}/node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "5173"]
+    return {
+        "pid": 201, "cwd": frontend_root, "executable": "/usr/bin/node",
+        "argv": argv, "cmdline": " ".join(argv),
+        "cgroup": "0::/user.slice/user-1000.slice/user@1000.service/app.slice/biomodstack-frontend.service",
+        "build_revision": "a" * 40,
+    }
+
+t._host_listener_inodes = lambda port: [port * 10 + 1]
+t._host_listener_inode_owners = lambda inodes: {inodes[0]: [301 if current_port == 8001 else 201]}
+t._listener_bind_addresses = lambda port: {"127.0.0.1"}
+t._pid_report_for_pids = lambda pids: [report_for(current_port)]
+closures = {}
+for current_port in (8001, 5173):
+    closures[str(current_port)] = t._host_listener_closure(current_port)
+print(json.dumps(closures, sort_keys=True))
+`;
+  const closures = JSON.parse(execFileSync('python3', ['-c', python], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+  }));
+
+  const production = exactSelectionReceipt('production');
+  production.workflow_adapter_listener = {
+    ...closures['8001'],
+    systemd_service: 'biomodstack-workflow-adapter.service',
+    source_root: '/srv/selector',
+    source_revision: 'a'.repeat(40),
+  };
+  assert.deepEqual(
+    production.workflow_adapter_listener,
+    exactSelectionReceipt('production').workflow_adapter_listener,
+  );
+  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+    JSON.parse(JSON.stringify(production)),
+    'production',
+    'https://compute-node.taileb3a90.ts.net',
+  ));
+
+  const development = exactSelectionReceipt('development');
+  development.workflow_adapter_listener = structuredClone(production.workflow_adapter_listener);
+  development.development_frontend_listener = {
+    ...closures['5173'],
+    systemd_service: 'biomodstack-frontend.service',
+    source_root: '/srv/selector/platform/frontend',
+    source_revision: 'a'.repeat(40),
+  };
+  development.frontend_listeners = development.development_frontend_listener.listener_reports;
+  assert.deepEqual(
+    development.development_frontend_listener,
+    exactSelectionReceipt('development').development_frontend_listener,
+  );
+  assert.deepEqual(
+    development,
+    exactSelectionReceipt('development'),
+  );
+  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+    development,
+    'development',
+    'https://compute-node.taileb3a90.ts.net',
+  ));
 });
 
 test('buildPreflight assets expose endpoint, manual update, and rollback controls with persistent override flow', () => {
