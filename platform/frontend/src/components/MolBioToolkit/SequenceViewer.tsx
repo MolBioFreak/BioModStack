@@ -9,6 +9,8 @@ import {
     useEffect,
     useMemo,
     useRef,
+    useState,
+    type KeyboardEvent as ReactKeyboardEvent,
     type MouseEvent as ReactMouseEvent,
 } from "react";
 import type { NucleotideMoleculeOrientation, NucleotideMoleculeStrandedness, PrimerTmSettings } from '../../lib/api';
@@ -21,10 +23,16 @@ import { COLOR_PALETTES } from './sequenceViewerConstants';
 import {
     displayStrandForMoleculeOrientation,
     sequenceForDisplayStrand,
+    shouldReverseComplementForDisplay,
     transformDirectionForDisplayStrand,
     transformRangeForDisplayStrand,
     type NucleotideDisplayStrand,
 } from './utils/nucleotides';
+import {
+    getPrimerRenderableSites,
+    getSelectionRanges,
+    mapSeqVizSelectionToSource,
+} from './utils/selectionActions';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR PALETTES
@@ -167,7 +175,9 @@ interface SequenceViewerProps {
     selection?: SelectionInfo | null;
     onSelection?: (sel: SelectionInfo) => void;
     onSearch?: (results: { start: number; end: number }[]) => void;
-    onContextMenu?: (event: ReactMouseEvent<HTMLDivElement>) => void;
+    onContextMenu?: (
+        event: ReactMouseEvent<HTMLDivElement> | ReactKeyboardEvent<HTMLDivElement>
+    ) => void;
     highlightedRegions?: { start: number; end: number; color: string }[];
     className?: string;
     viewMode?: 'linear' | 'circular' | 'both' | 'both_flip';
@@ -263,10 +273,10 @@ export function SequenceViewer({
         }
 
         if (visibility.primers && sequenceData.primers) {
-            result.push(...sequenceData.primers.map(p => {
+            result.push(...sequenceData.primers.flatMap(p => getPrimerRenderableSites(p).map((site) => {
                 const displayRange = transformRangeForDisplayStrand(
-                    p.start,
-                    p.end,
+                    site.start,
+                    site.end,
                     sequenceLength,
                     sourceDisplayStrand,
                     resolvedDisplayStrand,
@@ -278,11 +288,11 @@ export function SequenceViewer({
                         : p.name,
                     start: displayRange.start,
                     end: displayRange.end,
-                    direction: transformDirectionForDisplayStrand(p.strand, sourceDisplayStrand, resolvedDisplayStrand),
-                    color: getTmColor(p.tm),
+                    direction: transformDirectionForDisplayStrand(site.strand, sourceDisplayStrand, resolvedDisplayStrand),
+                    color: getTmColor(site.tm ?? p.tm),
                     type: "primer"
                 };
-            }));
+            })));
         }
 
         return result;
@@ -361,32 +371,10 @@ export function SequenceViewer({
     }, [nucleotideSequenceType, resolvedDisplayStrand, sequenceData.sequence, sequenceData.sequenceType, sourceDisplayStrand]);
 
     const viewerRef = useRef<HTMLDivElement | null>(null);
+    const previousSelectionRef = useRef<SelectionInfo | null | undefined>(selection);
+    const selectionPointerButtonRef = useRef<number | null>(null);
+    const [selectionResetVersion, setSelectionResetVersion] = useState(0);
     const activePaletteColors = COLOR_PALETTES[colorPalette].colors as Record<string, string>;
-
-    const seqVizSelection = useMemo(() => {
-        if (!selection) {
-            return undefined;
-        }
-
-        const displaySelectionRange = transformRangeForDisplayStrand(
-            selection.start,
-            selection.end,
-            sequenceLength,
-            sourceDisplayStrand,
-            resolvedDisplayStrand,
-        );
-
-        return {
-            start: displaySelectionRange.start,
-            end: displaySelectionRange.end,
-            clockwise: selection.clockwise ?? true,
-            // SeqViz treats externally controlled selections without a type as
-            // programmatic and scrolls the linear viewer on every update. Keeping
-            // a SEQ marker makes mouse-drag selection behave like native SeqViz
-            // user selection instead of fighting the drag gesture.
-            type: selection.type || 'SEQ',
-        } as unknown as { start: number; end: number; clockwise?: boolean };
-    }, [resolvedDisplayStrand, selection, sequenceLength, sourceDisplayStrand]);
 
     const displayHighlightedRegions = useMemo(() => {
         if (!highlightedRegions || highlightedRegions.length === 0) {
@@ -408,6 +396,28 @@ export function SequenceViewer({
             };
         });
     }, [highlightedRegions, resolvedDisplayStrand, sequenceLength, sourceDisplayStrand]);
+
+    const durableSelectionHighlights = useMemo(() => (
+        getSelectionRanges(selection, sequenceLength, sequenceData.circular).map((range) => {
+            const displayRange = transformRangeForDisplayStrand(
+                range.start,
+                range.end,
+                sequenceLength,
+                sourceDisplayStrand,
+                resolvedDisplayStrand,
+            );
+            return {
+                start: displayRange.start,
+                end: displayRange.end,
+                color: '#22d3ee',
+            };
+        })
+    ), [resolvedDisplayStrand, selection, sequenceData.circular, sequenceLength, sourceDisplayStrand]);
+
+    const mergedHighlightedRegions = useMemo(
+        () => [...(displayHighlightedRegions || []), ...durableSelectionHighlights],
+        [displayHighlightedRegions, durableSelectionHighlights],
+    );
 
     const touchBridgeEnabled = useMemo(() => {
         if (typeof navigator === 'undefined') {
@@ -445,6 +455,16 @@ export function SequenceViewer({
         return installSeqVizTouchBridge(viewerRef.current);
     }, [touchBridgeEnabled]);
 
+    useEffect(() => {
+        if (previousSelectionRef.current && !selection) {
+            // SeqViz has no clear-selection imperative API. It remains uncontrolled
+            // for reliable dragging, so remount only when the operator explicitly
+            // clears the durable selection.
+            setSelectionResetVersion((current) => current + 1);
+        }
+        previousSelectionRef.current = selection;
+    }, [selection]);
+
     const handleRotatePlasmid = (direction: 'left' | 'right') => {
         const circularViewer = viewerRef.current?.querySelector<HTMLElement>('.la-vz-viewer-circular');
         if (!circularViewer) {
@@ -463,7 +483,25 @@ export function SequenceViewer({
             ref={viewerRef}
             className={`sequence-viewer ${className || ''}`}
             style={{ height: '100%', width: '100%', position: 'relative' }}
+            tabIndex={0}
+            aria-label="Molecular sequence viewer. Use Shift+F10 or the Menu key for selection actions."
             onContextMenu={onContextMenu}
+            onKeyDown={(event) => {
+                if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
+                    onContextMenu?.(event);
+                }
+            }}
+            onPointerDownCapture={(event) => {
+                selectionPointerButtonRef.current = event.button;
+            }}
+            onPointerUpCapture={() => {
+                window.setTimeout(() => {
+                    selectionPointerButtonRef.current = null;
+                }, 0);
+            }}
+            onPointerCancelCapture={() => {
+                selectionPointerButtonRef.current = null;
+            }}
         >
             {showTouchRotationControls && (
                 <div className="pointer-events-none absolute right-3 top-3 z-20 flex items-center gap-2">
@@ -490,7 +528,7 @@ export function SequenceViewer({
                 </div>
             )}
             <SeqViz
-                key={viewerSequenceKey}
+                key={`${viewerSequenceKey}:selection-reset-${selectionResetVersion}`}
                 name={sequenceData.name}
                 seq={displaySequence}
                 seqType={seqVizSeqType}
@@ -506,26 +544,26 @@ export function SequenceViewer({
                 // Base pair colors from selected palette
                 bpColors={activePaletteColors}
 
-                selection={seqVizSelection}
-
                 // Selection handling with type info
                 onSelection={(sel) => {
                     if (onSelection && sel && typeof sel.start === 'number' && typeof sel.end === 'number') {
-                        const sourceRange = transformRangeForDisplayStrand(
-                            sel.start,
-                            sel.end,
+                        const sourceSelection = mapSeqVizSelectionToSource(
+                            {
+                                start: sel.start,
+                                end: sel.end,
+                                clockwise: sel.clockwise,
+                                type: sel.type,
+                                name: sel.name,
+                                annotationId: 'id' in sel ? String((sel as { id?: string }).id || '') || undefined : undefined,
+                            },
                             sequenceLength,
-                            resolvedDisplayStrand,
-                            sourceDisplayStrand,
+                            sequenceData.circular,
+                            shouldReverseComplementForDisplay(sourceDisplayStrand, resolvedDisplayStrand),
+                            selectionPointerButtonRef.current,
                         );
-                        onSelection({
-                            start: sourceRange.start,
-                            end: sourceRange.end,
-                            clockwise: sel.clockwise,
-                            type: sel.type,
-                            name: sel.name,
-                            annotationId: 'id' in sel ? String((sel as { id?: string }).id || '') || undefined : undefined,
-                        });
+                        if (sourceSelection) {
+                            onSelection(sourceSelection);
+                        }
                     }
                 }}
 
@@ -533,7 +571,7 @@ export function SequenceViewer({
                 search={searchQuery ? { query: searchQuery, mismatch: 0 } : undefined}
                 onSearch={onSearch}
 
-                highlights={displayHighlightedRegions}
+                highlights={mergedHighlightedRegions}
 
                 // Styling - seqviz needs explicit height
                 style={{ height: "100%", width: "100%" }}
