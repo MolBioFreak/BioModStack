@@ -87,7 +87,6 @@ export function AssayAnalytics() {
                     <StatsToolsControlPanel
                         embeddedContext="stats-toolkit-debug"
                         title="Stats Tools"
-                        subtitle="Actions + logs."
                     />
                 </div>
             </AssayPanel>

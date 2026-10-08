@@ -34,7 +34,7 @@ test('stats-tools lifecycle controls live in shared control panel and Stats Tool
   assert.match(controlSource, /\/api\/system\/stats-tools/);
   assert.match(controlSource, /\/api\/system\/stats-tools\/\$\{action\}/);
   assert.match(controlSource, /Stats Tools/);
-  assert.match(controlSource, /Actions \+ logs\./);
+  assert.doesNotMatch(controlSource, /Actions \+ logs\./);
   assert.match(controlSource, />Start<\/button>/);
   assert.match(controlSource, />Stop<\/button>/);
   assert.match(controlSource, />Restart<\/button>/);

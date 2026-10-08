@@ -40,7 +40,7 @@ interface StatsToolsControlPanelProps {
 export function StatsToolsControlPanel({
     embeddedContext = 'stats-toolkit-debug',
     title = 'Stats Tools',
-    subtitle = 'Actions + logs.',
+    subtitle = '',
     className = '',
     autoRefresh = true,
 }: StatsToolsControlPanelProps) {
@@ -125,7 +125,7 @@ export function StatsToolsControlPanel({
             <div className="flex items-start justify-between gap-3 border-b border-slate-700 pb-2">
                 <div>
                     <p className="text-xs font-semibold text-slate-200 uppercase tracking-wider">{title}</p>
-                    <p className="text-[11px] text-slate-400">{subtitle}</p>
+                    {subtitle && <p className="text-[11px] text-slate-400">{subtitle}</p>}
                 </div>
                 <div className="flex items-center gap-2">
                     <span className={`h-2.5 w-2.5 rounded-full ${indicatorClass}`} title={`${state} / ${health}`} />
@@ -200,7 +200,6 @@ export function StatsToolsMenu() {
                         <StatsToolsControlPanel
                             embeddedContext="topbar-control-panel"
                             title="Stats Tools"
-                            subtitle="Actions + logs."
                             autoRefresh={isOpen}
                         />
                     </div>
