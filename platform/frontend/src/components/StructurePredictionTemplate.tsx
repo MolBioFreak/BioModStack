@@ -2121,6 +2121,48 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                     </div>
                                 )}
 
+                                {msaProvider === 'local' && (
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5">
+                                        <div>
+                                            <label className="text-xs text-[var(--text-secondary)] block mb-1">EnvDB Target Sharding</label>
+                                            <select
+                                                value={msaTargetShardMode}
+                                                onChange={(e) => setMsaTargetShardMode(normalizeMsaTargetShardMode(e.target.value))}
+                                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                            >
+                                                <option value="auto">Auto for balanced/maximum</option>
+                                                <option value="required">Required (fail if unavailable)</option>
+                                                <option value="off">Off / unsharded fallback</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-[var(--text-secondary)] block mb-1">Target Shards</label>
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                step={1}
+                                                value={msaTargetShards}
+                                                onChange={(e) => setMsaTargetShards(normalizeMsaTargetShards(e.target.value))}
+                                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-[var(--text-secondary)] block mb-1">Min DB Size (GB)</label>
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                step={0.1}
+                                                value={msaTargetShardMinSizeGb}
+                                                onChange={(e) => setMsaTargetShardMinSizeGb(normalizeMsaTargetShardMinSizeGb(e.target.value))}
+                                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
+                                            />
+                                        </div>
+                                        <p className="md:col-span-3 text-xs text-emerald-200/80">
+                                            Keeps the total MSA CPU budget fixed while splitting EnvDB target search for high-quality balanced/maximum runs. Fast remains a screening preset; use Off for rollback/debug.
+                                        </p>
+                                    </div>
+                                )}
+
                                 {/* MSA Quality Preset - Primary Setting */}
                                 <div>
                                     <label className="text-sm font-medium text-[var(--text-primary)] block mb-2">MSA Quality Preset</label>
