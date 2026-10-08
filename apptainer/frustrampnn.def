@@ -41,6 +41,7 @@ From: nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     curl --fail --location \
         "https://raw.githubusercontent.com/schoederlab/frustraMPNN/$FRUSTRAMPNN_SOURCE_COMMIT/weights/megascale_train_weights.ckpt" \
         -o /opt/frustrampnn_weights/megascale.ckpt
+    echo "eaee71adb7eec366fc672d2aadef87f2c51243042a4518cd897634784dc2da3b  /opt/frustrampnn_weights/megascale.ckpt" | sha256sum --check -
     
     # Also get vanilla_model_weights (required for ProteinMPNN base)
     test "$(git -C /opt/frustrampnn rev-parse HEAD)" = "$FRUSTRAMPNN_SOURCE_COMMIT"

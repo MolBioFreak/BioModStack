@@ -78,6 +78,10 @@ def test_apptainer_build_uses_one_verified_runtime_source_commit_for_install_and
     assert "uv pip install --compile /opt/frustrampnn" in definition
     assert "cp -r /opt/frustrampnn/weights/vanilla_model_weights" in definition
     assert "frustraMPNN/$FRUSTRAMPNN_SOURCE_COMMIT/weights/megascale_train_weights.ckpt" in definition
+    assert (
+        "-o /opt/frustrampnn_weights/megascale.ckpt\n"
+        f"    echo \"{CHECKPOINT_SHA256}  /opt/frustrampnn_weights/megascale.ckpt\" | sha256sum --check -"
+    ) in definition
     assert "git+https://github.com/schoederlab/frustraMPNN.git" not in definition
     assert "raw/main/weights" not in definition
 
