@@ -65,6 +65,34 @@ process ValidateMappedBam {
         echo "Provide --reference_fasta so the workflow can align BAM input before modkit/wf-clone-validation." >&2
         exit 1
     fi
+
+    cp "${bam}" aligned.bam
+    cp "${bai}" aligned.bam.bai
+    """
+}
+process BamToFastqForQC {
+    label 'dorado_cpu'
+    publishDir "${params.out_dir}/fastq_qc", mode: 'copy'
+    tag "bam_to_fastq_for_qc"
+
+    input:
+    tuple path(bam), path(bai)
+
+    output:
+    path "reads_for_qc.fastq", emit: fastq
+    path "bam_to_fastq_for_qc.log", emit: log
+
+    script:
+    """
+    set -euo pipefail
+
+    samtools fastq -@ ${task.cpus} "${bam}" > reads_for_qc.fastq 2> bam_to_fastq_for_qc.log
+    read_count=\$(awk 'NR % 4 == 1 {c++} END {print c + 0}' reads_for_qc.fastq)
+    echo "reads_written=\${read_count}" >> bam_to_fastq_for_qc.log
+    if [[ "\${read_count}" -eq 0 ]]; then
+        echo "ERROR: BAM-to-FASTQ conversion produced zero reads." >&2
+        exit 1
+    fi
     """
 }
 process PrepareReferenceForIGV {
