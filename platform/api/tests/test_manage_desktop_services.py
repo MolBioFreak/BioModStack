@@ -29,3 +29,18 @@ def test_start_target_action_invokes_dev_prod_both_service_abstraction(monkeypat
 
     assert module.main() == 0
     assert started == ["both"]
+
+
+def test_start_target_legacy_contract_remains_separate_from_tailnet_selection(monkeypatch) -> None:
+    module = load_module()
+    started: list[str] = []
+    monkeypatch.setattr(sys, "argv", ["manage_desktop_services.py", "start-target", "--target", "dev"])
+    monkeypatch.setattr(module, "start_runtime_target", lambda target=None: started.append(target or "missing"))
+    monkeypatch.setattr(
+        module,
+        "select_tailnet_environment",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("tailnet selector must remain opt-in")),
+    )
+
+    assert module.main() == 0
+    assert started == ["dev"]

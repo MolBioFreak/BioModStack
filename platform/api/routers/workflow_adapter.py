@@ -5,9 +5,9 @@ from contextlib import asynccontextmanager
 import subprocess
 import threading
 import time
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 import sqlalchemy
 
@@ -28,6 +28,12 @@ from biomodstack_services import (
     stop_all,
     stop_api,
 )
+from biomodstack_tailnet import (
+    TailnetEnvironmentError,
+    current_tailnet_environment,
+    select_tailnet_environment,
+)
+from mobile_apk_auth import require_tailnet_environment_tailscale_identity
 from services import nextflow
 from services.md.feature_gate import require_molecular_dynamics_feature
 
@@ -72,6 +78,10 @@ class WorkflowAdapterRuntimeStartTargetRequest(BaseModel):
 
 class WorkflowAdapterRuntimeActionRequest(BaseModel):
     runtime: str | None = None
+
+
+class WorkflowAdapterTailnetEnvironmentRequest(BaseModel):
+    environment: Literal["development", "production"]
 
 
 LOCAL_ADAPTER_HOSTS = {None, "127.0.0.1", "::1", "localhost", "testclient"}
@@ -187,6 +197,35 @@ async def workflow_adapter_runtime_state(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     payload["control_mode"] = "host-adapter"
     return payload
+
+
+@router.get(
+    "/tailnet-environment/status",
+    dependencies=[Depends(require_tailnet_environment_tailscale_identity)],
+)
+async def workflow_adapter_tailnet_environment_status(request: Request) -> dict[str, object]:
+    _require_local_adapter_request(request)
+    try:
+        return await asyncio.to_thread(current_tailnet_environment)
+    except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post(
+    "/tailnet-environment/select",
+    dependencies=[Depends(require_tailnet_environment_tailscale_identity)],
+)
+async def workflow_adapter_select_tailnet_environment(
+    request: Request,
+    payload: WorkflowAdapterTailnetEnvironmentRequest,
+) -> dict[str, object]:
+    _require_local_adapter_request(request)
+    try:
+        return await asyncio.to_thread(select_tailnet_environment, payload.environment)
+    except TailnetEnvironmentError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/runtime/{action_name}")

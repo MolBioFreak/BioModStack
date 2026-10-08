@@ -6,8 +6,18 @@ CONFIG_PATH="${1:-$PROJECT_DIR/cordova.runtime.json}"
 ANDROID_PLATFORM_VERSION="${ANDROID_PLATFORM_VERSION:-13.0.0}"
 LOCAL_UI_BUNDLE_PLUGIN_DIR="$PROJECT_DIR/local-plugins/cordova-plugin-bms-ui-bundle"
 LOCAL_UI_BUNDLE_PLUGIN_ID="cordova-plugin-bms-ui-bundle"
+UPDATER_ANDROID_TEST_SOURCE="$PROJECT_DIR/local-plugins/cordova-plugin-bms-apk-updater/src/androidTest/BmsPackageManagerIntegrationTest.kt"
 
 cd "$PROJECT_DIR"
+
+# Keep Cordova/configstore and the internal updater's existing Android signer
+# in a user-private durable location. The signer is required for in-place
+# upgrades from prior internal builds; production release signing remains
+# separately fail-closed below.
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.local/share/biomodstack/cordova-build-config}"
+export XDG_CONFIG_HOME
+mkdir -p "$XDG_CONFIG_HOME"
+chmod 700 "$XDG_CONFIG_HOME"
 
 if ! command -v npm >/dev/null 2>&1; then
   echo "npm is required" >&2
@@ -182,18 +192,44 @@ if [[ -d "$LOCAL_UI_BUNDLE_PLUGIN_DIR" ]]; then
   fi
 fi
 
+npx cordova prepare android
+UPDATER_ANDROID_TEST_PACKAGE_DIR="$PROJECT_DIR/platforms/android/app/src/androidTest/java/org/biomodstack/mobile/apkupdate"
+UPDATER_ANDROID_TEST_TARGET="$UPDATER_ANDROID_TEST_PACKAGE_DIR/BmsPackageManagerIntegrationTest.kt"
+if [[ -f "$UPDATER_ANDROID_TEST_SOURCE" ]]; then
+  # Cordova does not refresh androidTest sources from an already-installed
+  # local plugin. Replace the generated package so stale, unversioned
+  # acceptance probes cannot silently join the authoritative suite.
+  rm -rf "$UPDATER_ANDROID_TEST_PACKAGE_DIR"
+  install -D -m 0644 "$UPDATER_ANDROID_TEST_SOURCE" "$UPDATER_ANDROID_TEST_TARGET"
+fi
 node ./scripts/patch-android-main-activity.mjs
 if ! npx cordova requirements android; then
   echo "cordova requirements reported issues; attempting build anyway because the Android platform ships a Gradle wrapper." >&2
 fi
 CORDOVA_ANDROID_GRADLE_ARGS="${CORDOVA_ANDROID_GRADLE_ARGS:---no-daemon --max-workers=1}"
 echo "Using Cordova Gradle args: $CORDOVA_ANDROID_GRADLE_ARGS"
-npx cordova build android --debug -- --gradleArg="$CORDOVA_ANDROID_GRADLE_ARGS"
+BUILD_VARIANT="${BMS_ANDROID_BUILD_VARIANT:-debug}"
+case "$BUILD_VARIANT" in
+  debug)
+    npx cordova build android --debug -- --gradleArg="$CORDOVA_ANDROID_GRADLE_ARGS"
+    APK_PATH="$PROJECT_DIR/platforms/android/app/build/outputs/apk/debug/app-debug.apk"
+    ;;
+  internal-update)
+    (
+      cd "$PROJECT_DIR/platforms/android"
+      gradle assembleBmsInternalUpdate --no-daemon --max-workers=1
+    )
+    APK_PATH="$PROJECT_DIR/platforms/android/app/build/outputs/apk/bmsInternalUpdate/app-bmsInternalUpdate.apk"
+    ;;
+  *)
+    echo "BMS_ANDROID_BUILD_VARIANT must be debug or internal-update" >&2
+    exit 1
+    ;;
+esac
 
-APK_PATH="$PROJECT_DIR/platforms/android/app/build/outputs/apk/debug/app-debug.apk"
 if [[ ! -f "$APK_PATH" ]]; then
   echo "Build completed but APK was not found at $APK_PATH" >&2
   exit 1
 fi
 
-echo "Debug APK: $APK_PATH"
+echo "APK ($BUILD_VARIANT): $APK_PATH"

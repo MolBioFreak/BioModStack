@@ -142,4 +142,4 @@ uv sync --locked
 provision_cm_api_runtime
 export BMS_CM_API_RUNTIME_DIR
 export BMS_API_PYTHON="$CM_API_RUNTIME_DIR/current/venv/bin/python"
-exec uv run --no-sync uvicorn workflow_adapter_app:app --port 8001 --host "$BMS_WORKFLOW_ADAPTER_BIND_HOST" --no-access-log
+exec uv run --no-sync uvicorn workflow_adapter_app:app --port 8001 --host "$BMS_WORKFLOW_ADAPTER_BIND_HOST" --no-proxy-headers --no-access-log

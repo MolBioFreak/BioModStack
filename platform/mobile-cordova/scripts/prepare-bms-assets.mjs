@@ -522,6 +522,116 @@ export function buildBundleDescriptor(html, options = {}) {
   };
 }
 
+export function validateTailnetSelectionPayload(payload, environment, trustedOrigin) {
+  const expected = environment === 'development'
+    ? {
+      frontendTarget: 'http://127.0.0.1:5173',
+      serveRootProxy: 'http://127.0.0.1:5173',
+      runtimeMode: 'dev',
+      runtimeTarget: 'dev',
+    }
+    : environment === 'production'
+      ? {
+        frontendTarget: 'http://127.0.0.1:18080/bms/',
+        serveRootProxy: 'http://127.0.0.1:18081',
+        runtimeMode: 'container',
+        runtimeTarget: 'prod',
+      }
+      : null;
+  const reject = () => {
+    throw new Error('Environment selection returned a mismatched runtime identity.');
+  };
+  const revisionPattern = /^[0-9a-f]{40}$/;
+  const digestPattern = /^sha256:[0-9a-f]{64}$/;
+  const containerIdPattern = /^[0-9a-f]{64}$/;
+  const nonEmptyBounded = (value, limit = 512) => (
+    typeof value === 'string' && value.length > 0 && value.length <= limit
+  );
+  const validContainerSet = (runtime, requiredNames, revision) => {
+    if (
+      !runtime
+      || runtime.validated_revision !== revision
+      || !nonEmptyBounded(runtime.validated_compose_root)
+      || !runtime.validated_compose_root.startsWith('/')
+      || !Array.isArray(runtime.containers)
+      || runtime.containers.length !== requiredNames.length
+    ) return false;
+    const byName = new Map(runtime.containers.map((container) => [container?.name, container]));
+    if (byName.size !== requiredNames.length) return false;
+    return requiredNames.every((name) => {
+      const container = byName.get(name);
+      return container
+        && containerIdPattern.test(String(container.container_id || ''))
+        && digestPattern.test(String(container.image_id || ''))
+        && container.revision === revision
+        && container.compose_working_dir === runtime.validated_compose_root
+        && Number.isInteger(container.pid) && container.pid > 0
+        && nonEmptyBounded(container.cgroup, 4096)
+        && container.cgroup.includes(container.container_id.slice(0, 12))
+        && nonEmptyBounded(container.cmdline, 4096)
+        && nonEmptyBounded(container.cwd, 4096);
+    });
+  };
+  if (!expected || !payload || typeof payload !== 'object') reject();
+  if (
+    payload.selected_environment !== environment
+    || payload.frontend_target !== expected.frontendTarget
+    || payload.api_health_target !== 'http://127.0.0.1:8000/api/health'
+    || payload.serve_root_proxy !== expected.serveRootProxy
+    || payload.runtime_mode !== expected.runtimeMode
+    || payload.runtime_target !== expected.runtimeTarget
+    || payload.tailnet_origin !== trustedOrigin
+    || !revisionPattern.test(String(payload.project_revision || ''))
+    || payload.serve_handlers?.['/']?.Proxy !== expected.serveRootProxy
+    || payload.serve_handlers?.['/api/tailnet-environment']?.Proxy !== 'http://127.0.0.1:8001'
+  ) reject();
+
+  const health = payload.health;
+  const localBuild = health?.local_api?.payload?.build;
+  const tailnetBuild = health?.tailnet_api?.payload?.build;
+  if (
+    health?.local_frontend?.status !== 200
+    || health?.tailnet_frontend?.status !== 200
+    || health?.local_api?.status !== 200
+    || health?.tailnet_api?.status !== 200
+    || !localBuild
+    || !tailnetBuild
+    || !revisionPattern.test(String(localBuild.revision || ''))
+    || !nonEmptyBounded(localBuild.build_id, 256)
+    || !nonEmptyBounded(localBuild.build_time, 256)
+    || !/^\d{4}-\d{2}-\d{2}T/.test(localBuild.build_time)
+    || localBuild.revision !== tailnetBuild.revision
+    || localBuild.build_id !== tailnetBuild.build_id
+    || localBuild.build_time !== tailnetBuild.build_time
+    || !validContainerSet(payload.managed_api_runtime, ['biomodstack-api'], localBuild.revision)
+  ) reject();
+
+  if (environment === 'development') {
+    if (payload.container_runtime !== undefined || payload.tailnet_production_proxy !== undefined) reject();
+  } else {
+    const proxy = payload.tailnet_production_proxy;
+    if (
+      !validContainerSet(payload.container_runtime, ['biomodstack-api', 'biomodstack-web'], localBuild.revision)
+      || !proxy
+      || !containerIdPattern.test(String(proxy.container_id || ''))
+      || proxy.image !== 'nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10'
+      || proxy.image_id !== 'sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea'
+      || !nonEmptyBounded(proxy.config_path, 4096)
+      || !proxy.config_path.endsWith('/docker/tailnet-production-proxy.conf')
+      || proxy.config_sha256 !== '2c5943ce3ae5fa2ca35cd0a094a90c42b8e38b71c85c1fae58d2afe392082b62'
+      || proxy.listener_port !== 18081
+      || !Number.isInteger(proxy.pid) || proxy.pid <= 0
+      || !Array.isArray(proxy.listener_pids) || proxy.listener_pids.length === 0
+      || proxy.listener_pids.some((pid) => !Number.isInteger(pid) || pid <= 0)
+      || !nonEmptyBounded(proxy.cgroup, 4096)
+      || !proxy.cgroup.includes(proxy.container_id.slice(0, 12))
+      || proxy.cmdline !== '/docker-entrypoint.sh nginx -g daemon off;'
+      || proxy.cwd !== '/'
+    ) reject();
+  }
+  return payload;
+}
+
 export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled', shellApiVersion: 1, entryCss: [], entryJs: [] }) {
   const normalizedBundledDescriptor = {
     version: String(bundledDescriptor.version || 'bundled').trim() || 'bundled',
@@ -534,6 +644,8 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
   const bundleStateStorageKey = 'bms.cordova.uiBundleState';
   const downloadedBasePath = '/__bms_ui__/active/';
   const bundledDescriptor = ${JSON.stringify(normalizedBundledDescriptor, null, 2)};
+  const validateTailnetSelectionPayload = ${validateTailnetSelectionPayload.toString()};
+  const runtime = window.__BMS_CORDOVA_RUNTIME__ || {};
   const bootStatus = window.__BMS_CORDOVA_UI_BOOT_STATUS__ = window.__BMS_CORDOVA_UI_BOOT_STATUS__ || {
     source: 'idle',
     ready: false,
@@ -657,12 +769,18 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
     const runtime = window.__BMS_CORDOVA_RUNTIME__ || {};
     const remoteUiUrl = String(runtime.remoteUiUrl || '').trim();
     if (remoteUiUrl) {
-      return bootRemoteUi(remoteUiUrl);
+      bootStatus.source = 'preflight';
+      bootStatus.ready = false;
+      bootStatus.descriptor = { version: remoteUiUrl, shellApiVersion: bundledDescriptor.shellApiVersion, entryCss: [], entryJs: [] };
+      bootStatus.basePath = remoteUiUrl;
+      bootStatus.error = null;
+      bootStatus.detail = { mode: 'awaiting-environment-selection' };
+      return bootStatus;
     }
     return bootDescriptor(bundledDescriptor, { source: 'bundled', basePath: './' });
   }
 
-  function bootRemoteUi(remoteUiUrl) {
+  function mountVerifiedRemoteUi(remoteUiUrl) {
     bootStatus.source = 'remote';
     bootStatus.ready = false;
     bootStatus.descriptor = { version: remoteUiUrl, shellApiVersion: bundledDescriptor.shellApiVersion, entryCss: [], entryJs: [] };
@@ -675,16 +793,8 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
       frame = document.createElement('iframe');
       frame.id = 'bms-cordova-remote-ui';
       frame.title = 'BioModStack live UI';
-      frame.src = remoteUiUrl;
       frame.setAttribute('allow', 'clipboard-read; clipboard-write; fullscreen');
       frame.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;border:0;background:#020617;z-index:0;';
-      frame.addEventListener('load', () => {
-        bootStatus.ready = true;
-        bootStatus.detail = { mode: 'remote', url: remoteUiUrl };
-      }, { once: true });
-      frame.addEventListener('error', () => {
-        bootStatus.error = 'The live BioModStack UI could not be loaded.';
-      }, { once: true });
       const mountFrame = () => {
         if (document.body && !frame.isConnected) {
           document.body.appendChild(frame);
@@ -696,7 +806,46 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
         document.addEventListener('DOMContentLoaded', mountFrame, { once: true });
       }
     }
+    frame.addEventListener('load', () => {
+      bootStatus.ready = true;
+      bootStatus.detail = { mode: 'remote', url: remoteUiUrl };
+    }, { once: true });
+    frame.addEventListener('error', () => {
+      bootStatus.error = 'The live BioModStack UI could not be loaded.';
+    }, { once: true });
+    frame.src = remoteUiUrl;
     return bootStatus;
+  }
+
+  async function selectAndBootRemoteUi(apiBaseUrl, environment) {
+    if (environment !== 'development' && environment !== 'production') {
+      throw new Error('Choose Development or Production before launching.');
+    }
+    const configured = new URL(String(apiBaseUrl || ''));
+    const trustedDefault = new URL(String(runtime.apiBaseUrl || ''));
+    if (configured.protocol !== 'https:' || !configured.hostname.endsWith('.ts.net') || configured.origin !== trustedDefault.origin) {
+      throw new Error('Environment selection is restricted to the APK build Tailnet origin.');
+    }
+    const response = await fetch(configured.origin + '/api/tailnet-environment/select', {
+      method: 'POST',
+      credentials: 'omit',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ environment }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      const detail = payload && payload.detail ? String(payload.detail) : 'HTTP ' + response.status;
+      throw new Error('Environment selection failed: ' + detail);
+    }
+    validateTailnetSelectionPayload(payload, environment, configured.origin);
+    const remoteUiUrl = new URL(String(runtime.remoteUiUrl || configured.origin + '/'));
+    if (remoteUiUrl.origin !== configured.origin) {
+      throw new Error('Remote UI origin does not match the authenticated Tailnet control origin.');
+    }
+    remoteUiUrl.searchParams.set('bms_environment', environment);
+    remoteUiUrl.searchParams.set('bms_switch', String(Date.now()));
+    mountVerifiedRemoteUi(remoteUiUrl.toString());
+    return payload;
   }
 
   function armReadyTimeout(source) {
@@ -759,10 +908,17 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
     return bootStatus;
   };
 
-  window.__BMS_CORDOVA_BOOT_UI__ = bootDescriptor;
+  const remoteLiveMode = Boolean(String(runtime.remoteUiUrl || '').trim());
+  window.__BMS_CORDOVA_BOOT_UI__ = remoteLiveMode ? bootBundledUi : bootDescriptor;
+  window.__BMS_CORDOVA_SELECT_AND_BOOT_REMOTE_UI__ = selectAndBootRemoteUi;
 
   const storedBundleState = readStoredBundleState();
-  if (
+  if (remoteLiveMode) {
+    if (storedBundleState && storedBundleState.descriptor) {
+      clearStoredBundleState();
+    }
+    bootBundledUi();
+  } else if (
     storedBundleState
     && storedBundleState.descriptor
     && Number.parseInt(storedBundleState.descriptor.shellApiVersion ?? 0, 10) === bundledDescriptor.shellApiVersion
@@ -1239,6 +1395,33 @@ export function buildPreflightScript() {
     }
   }
 
+  function resolveTailnetControlBase(apiBaseUrl) {
+    const normalizedApiBaseUrl = normalizeApiBaseUrl(apiBaseUrl, defaults.apiBaseUrl);
+    const configured = new URL(normalizedApiBaseUrl);
+    const trustedDefault = new URL(normalizeApiBaseUrl(defaults.apiBaseUrl, ''));
+    if (configured.protocol !== 'https:' || !configured.hostname.endsWith('.ts.net')) {
+      throw new Error('Environment selection requires the private HTTPS Tailnet origin.');
+    }
+    if (configured.origin !== trustedDefault.origin) {
+      throw new Error('Environment selection is restricted to the APK build Tailnet origin.');
+    }
+    return configured.origin;
+  }
+
+  async function selectTailnetEnvironment(panel, apiBaseUrl, environment) {
+    if (environment !== 'development' && environment !== 'production') {
+      throw new Error('Choose Development or Production before launching.');
+    }
+    const controlBase = resolveTailnetControlBase(apiBaseUrl);
+    setStatus(panel, 'Starting and verifying ' + environment + '…', 'pending');
+    if (typeof window.__BMS_CORDOVA_SELECT_AND_BOOT_REMOTE_UI__ !== 'function') {
+      throw new Error('The trusted local shell cannot select and launch the remote UI.');
+    }
+    const payload = await window.__BMS_CORDOVA_SELECT_AND_BOOT_REMOTE_UI__(controlBase, environment);
+    setStatus(panel, 'Verified ' + environment + '. Launching the mirrored Tailnet UI…', 'success');
+    return payload;
+  }
+
   async function refreshActiveUiFromPlugin(panel) {
     try {
       const result = await callUiBundlePlugin('getStatus');
@@ -1348,7 +1531,16 @@ export function buildPreflightScript() {
       '<section class="bms-cordova-preflight__panel" role="dialog" aria-modal="true" aria-labelledby="bms-cordova-preflight-title">',
       '  <div class="bms-cordova-preflight__eyebrow">BioModStack APK control surface</div>',
       '  <h1 id="bms-cordova-preflight-title" class="bms-cordova-preflight__title">Pre-flight settings</h1>',
-      '  <p class="bms-cordova-preflight__copy">Tune the API endpoint, phone density, and manual UI update flow before entering the app.</p>',
+      '  <p class="bms-cordova-preflight__copy">Choose the canonical environment that Tailnet must mirror, then launch only after its frontend, API, listener ownership, and Serve route verify.</p>',
+      '  <label class="bms-cordova-preflight__field">',
+      '    <span>Environment <strong>(required before launch)</strong></span>',
+      '    <select data-role="tailnet-environment">',
+      '      <option value="">Choose an environment…</option>',
+      '      <option value="development">Development</option>',
+      '      <option value="production">Production</option>',
+      '    </select>',
+      '  </label>',
+      '  <div class="bms-cordova-preflight__hint">Tailnet is a private routing layer only. It mirrors the selected canonical environment and never serves a third checkout.</div>',
       '  <label class="bms-cordova-preflight__field">',
       '    <span>API base URL</span>',
       '    <input data-role="api-base-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" value="' + escapeAttribute(draft.apiBaseUrl) + '" />',
@@ -1382,9 +1574,9 @@ export function buildPreflightScript() {
       '    <button type="button" data-action="install-apk-update">Install native APK</button>',
       '    <button type="button" data-action="reset">Reset defaults</button>',
       '    <button type="button" data-action="save-reload" data-variant="primary">Save + reload</button>',
-      '    <button type="button" data-action="launch">Launch app</button>',
+      '    <button type="button" data-action="launch" data-variant="primary" disabled>Verify environment + launch</button>',
       '  </div>',
-      '  <div class="bms-cordova-preflight__footnote">Tip: endpoint, UI update channel, scale, and active downloaded bundle selection all persist locally on-device. The APK never points at Vite dev automatically.</div>',
+      '  <div class="bms-cordova-preflight__footnote">The environment choice is intentionally not persisted: Development or Production must be selected explicitly before each launch.</div>',
       '</section>',
     ].join('');
     document.body.appendChild(panel);
@@ -1404,10 +1596,16 @@ export function buildPreflightScript() {
     }
 
     const apiBaseUrlInput = panel.querySelector('[data-role="api-base-url"]');
+    const tailnetEnvironmentInput = panel.querySelector('[data-role="tailnet-environment"]');
     const uiUpdateChannelInput = panel.querySelector('[data-role="ui-update-channel"]');
     const scaleInput = panel.querySelector('[data-role="mobile-scale"]');
     const scaleValue = panel.querySelector('[data-role="scale-value"]');
     const compactModeInput = panel.querySelector('[data-role="compact-mode"]');
+    const launchButton = panel.querySelector('button[data-action="launch"]');
+
+    tailnetEnvironmentInput.addEventListener('change', () => {
+      launchButton.disabled = !['development', 'production'].includes(tailnetEnvironmentInput.value);
+    });
 
     scaleInput.addEventListener('input', () => {
       scaleValue.textContent = clampNumber(scaleInput.value, 0.55, 1.0, draft.mobileInitialScale).toFixed(2);
@@ -1482,7 +1680,16 @@ export function buildPreflightScript() {
       }
 
       if (button.dataset.action === 'launch') {
-        hidePanel();
+        button.disabled = true;
+        try {
+          await selectTailnetEnvironment(panel, currentDraft.apiBaseUrl, tailnetEnvironmentInput.value);
+          hidePanel();
+        } catch (error) {
+          const detail = error && error.message ? error.message : String(error);
+          setStatus(panel, detail, 'error');
+        } finally {
+          button.disabled = !['development', 'production'].includes(tailnetEnvironmentInput.value);
+        }
       }
     });
 
@@ -1527,9 +1734,12 @@ export function buildPreflightCss() {
   inset: 0;
   z-index: 9999;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  box-sizing: border-box;
   padding: 1rem;
+  padding-top: max(3.5rem, calc(1rem + env(safe-area-inset-top)));
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
 }
 
 .bms-cordova-preflight__scrim {
@@ -1542,6 +1752,9 @@ export function buildPreflightCss() {
 .bms-cordova-preflight__panel {
   position: relative;
   width: min(100%, 32rem);
+  max-height: calc(100dvh - 4.5rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-radius: 1.25rem;
   border: 1px solid rgba(148, 163, 184, 0.2);
   background: rgba(15, 23, 42, 0.98);
@@ -1581,7 +1794,8 @@ export function buildPreflightCss() {
 }
 
 .bms-cordova-preflight__field input[type='url'],
-.bms-cordova-preflight__field input[type='text'] {
+.bms-cordova-preflight__field input[type='text'],
+.bms-cordova-preflight__field select {
   width: 100%;
   border-radius: 0.85rem;
   border: 1px solid rgba(71, 85, 105, 0.8);
@@ -1667,8 +1881,13 @@ export function buildPreflightCss() {
 
 .bms-cordova-preflight__actions button[data-variant='primary'] {
   background: linear-gradient(135deg, #0891b2, #2563eb);
-  border-color: rgba(103, 232, 249, 0.55);
+  border-color: rgba(103, 232, 249, 0.45);
   color: white;
+}
+
+.bms-cordova-preflight__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .bms-cordova-preflight-toggle {
@@ -1789,29 +2008,42 @@ export async function main(argv = process.argv.slice(2)) {
   const outDir = path.join(projectRoot, '.cache', 'bms-frontend-dist');
   const wwwDir = path.join(projectRoot, 'www');
   const indexPath = path.join(wwwDir, 'index.html');
-
-  if (!(await exists(packageJsonPath))) {
-    throw new Error(`Missing ${packageJsonPath}`);
-  }
-  if (!(await exists(nodeModulesPath))) {
-    throw new Error(`Expected ${nodeModulesPath}. Bootstrap the source checkout once with pnpm install --frozen-lockfile before running this wrapper.`);
-  }
-
-  console.log(`Using BioModStack frontend at: ${frontendDir}`);
-  console.log(`Building Vite assets into: ${outDir}`);
-  run('pnpm', ['exec', 'vite', 'build', '--base', './', '--outDir', outDir, '--emptyOutDir'], {
-    cwd: frontendDir,
-    env: process.env,
-  });
+  let bundledDescriptor;
 
   await fs.rm(wwwDir, { recursive: true, force: true });
   await fs.mkdir(wwwDir, { recursive: true });
-  await fs.cp(outDir, wwwDir, { recursive: true });
 
-  const bundledDescriptor = buildBundleDescriptor(await fs.readFile(indexPath, 'utf8'), {
-    version: runtimeConfig.bundledUiVersion,
-    shellApiVersion: runtimeConfig.shellApiVersion,
-  });
+  if (runtimeConfig.remoteUiUrl) {
+    console.log(`Preparing trusted remote-live Cordova shell for: ${runtimeConfig.remoteUiUrl}`);
+    await fs.writeFile(
+      indexPath,
+      '<!doctype html>\n<html><head><meta charset="UTF-8"><title>BioModStack</title></head><body><div id="root"></div></body></html>\n',
+      'utf8',
+    );
+    bundledDescriptor = buildBundleDescriptor(await fs.readFile(indexPath, 'utf8'), {
+      version: runtimeConfig.bundledUiVersion,
+      shellApiVersion: runtimeConfig.shellApiVersion,
+    });
+  } else {
+    if (!(await exists(packageJsonPath))) {
+      throw new Error(`Missing ${packageJsonPath}`);
+    }
+    if (!(await exists(nodeModulesPath))) {
+      throw new Error(`Expected ${nodeModulesPath}. Bootstrap the source checkout once with pnpm install --frozen-lockfile before running this wrapper.`);
+    }
+
+    console.log(`Using BioModStack frontend at: ${frontendDir}`);
+    console.log(`Building Vite assets into: ${outDir}`);
+    run('pnpm', ['exec', 'vite', 'build', '--base', './', '--outDir', outDir, '--emptyOutDir'], {
+      cwd: frontendDir,
+      env: process.env,
+    });
+    await fs.cp(outDir, wwwDir, { recursive: true });
+    bundledDescriptor = buildBundleDescriptor(await fs.readFile(indexPath, 'utf8'), {
+      version: runtimeConfig.bundledUiVersion,
+      shellApiVersion: runtimeConfig.shellApiVersion,
+    });
+  }
 
   await fs.writeFile(path.join(wwwDir, 'bms-runtime-config.js'), buildRuntimeConfigScript(runtimeConfig), 'utf8');
   await fs.writeFile(path.join(wwwDir, 'bms-cordova-shim.js'), buildShimScript(), 'utf8');
