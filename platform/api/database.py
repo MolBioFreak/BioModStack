@@ -1252,6 +1252,8 @@ class Design(Base):
     id = Column(String(36), primary_key=True)
     job_id = Column(String(36), ForeignKey("jobs.id"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
+    # Native producer authority, independent of offloaded provenance and workflow stages.
+    producer_model_id = Column(String(64), nullable=True)
     pdb_path = Column(String(500), nullable=False)
     json_path = Column(String(500), nullable=True)
     lineage_root_job_id = Column(String(36), nullable=True, index=True)
