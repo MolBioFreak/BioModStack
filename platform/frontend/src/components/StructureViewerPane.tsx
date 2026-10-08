@@ -629,19 +629,6 @@ export default function StructureViewerPane({
         </div>
     );
 
-    // Shared MolstarViewer component (single instance prevents WebGL context loss)
-    const SharedViewer = (
-        <MolstarViewer
-            key={selectedDesignId + '_' + colorMode}
-            structureUrl={selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined}
-            format={structureFormat}
-            alphafoldView={colorMode === 'plddt'}
-            selections={colorMode === 'cdr' ? antibodySelections : undefined}
-            height="100%"
-            backgroundColor={themeColors.bgPrimary}
-        />
-    );
-
     // Shared toolbar for design/color selection
     const ViewerToolbar = ({ isCompact = false }: { isCompact?: boolean }) => (
         <div className={`flex items-center gap-2 ${isCompact ? 'flex-wrap' : 'mb-3 flex-wrap'}`}>
@@ -701,40 +688,43 @@ export default function StructureViewerPane({
             ref={containerRef}
             className={`${isFullscreen ? 'fixed inset-0 z-50 bg-slate-950' : 'p-4'}`}
         >
-            {isFullscreen ? (
-                /* FULLSCREEN LAYOUT */
-                <>
-                    {/* Main Viewer (bottom layer) - uses native fullscreen API so same element */}
-                    <div className="absolute inset-0">
-                        {SharedViewer}
+            {/* Main layout container - always present */}
+            <div className={isFullscreen ? 'h-full w-full relative' : 'flex gap-4'}>
+                {/* Left Column / Fullscreen: Viewer Area */}
+                <div className={isFullscreen ? 'absolute inset-0' : 'flex-[2] min-w-0'}>
+                    {/* Toolbar - positioned differently based on mode */}
+                    <div className={isFullscreen ? 'absolute top-3 left-3 z-40' : ''}>
+                        <ViewerToolbar isCompact={isFullscreen} />
                     </div>
 
-                    {/* Toolbar (top-left, z-40) */}
-                    <div className="absolute top-3 left-3 z-40">
-                        <ViewerToolbar isCompact />
+                    {/* Main Viewer - ALWAYS at this exact tree position */}
+                    <div
+                        className={isFullscreen
+                            ? 'absolute inset-0'
+                            : 'relative rounded-lg overflow-hidden border border-slate-700'
+                        }
+                        style={isFullscreen ? undefined : { height: 450 }}
+                    >
+                        <MolstarViewer
+                            key={selectedDesignId + '_' + colorMode}
+                            structureUrl={selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined}
+                            format={structureFormat}
+                            alphafoldView={colorMode === 'plddt'}
+                            selections={colorMode === 'cdr' ? antibodySelections : undefined}
+                            height="100%"
+                            backgroundColor={themeColors.bgPrimary}
+                        />
                     </div>
+                </div>
 
-                    {/* Toggleable Analytics Panel (bottom-right, z-40) */}
-                    <div className="absolute bottom-4 right-4 z-40">
-                        <FullscreenOverlay />
-                    </div>
-                </>
-            ) : (
-                /* NORMAL LAYOUT - YouTube-style grid */
-                <div className="flex gap-4">
-                    {/* Left Column: Viewer */}
-                    <div className="flex-[2] min-w-0">
-                        {/* Toolbar */}
-                        <ViewerToolbar />
+                {/* Right Column: Analytics Sidebar - hidden in fullscreen */}
+                {!isFullscreen && <AnalyticsSidebar />}
+            </div>
 
-                        {/* Main Viewer */}
-                        <div className="relative rounded-lg overflow-hidden border border-slate-700" style={{ height: 450 }}>
-                            {SharedViewer}
-                        </div>
-                    </div>
-
-                    {/* Right Column: Analytics Sidebar */}
-                    <AnalyticsSidebar />
+            {/* Fullscreen overlay panel - only in fullscreen mode */}
+            {isFullscreen && (
+                <div className="absolute bottom-4 right-4 z-40">
+                    <FullscreenOverlay />
                 </div>
             )}
         </div>
