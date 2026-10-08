@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -21,7 +22,12 @@ from routers.jobs import (
     _ensure_job_resume_identity,
     _reconcile_child_jobs_from_history,
 )
-from services.stage_review import nextflow_history_status_for_run_dir
+from services.stage_review import (
+    _compute_antibody_ca_rog,
+    _rfantibody_cdr_refresh_required,
+    _rfantibody_rog_refresh_required,
+    nextflow_history_status_for_run_dir,
+)
 from child_job_utils import (
     apply_child_resume_params,
     child_status_kind,
@@ -295,3 +301,47 @@ def test_reconcile_child_jobs_ignores_stale_err_for_previous_attempt() -> None:
         assert child.status == "running"
         assert child.queue_status == "running"
         assert child.completed_at is None
+
+
+def test_rfantibody_cdr_refresh_required_when_pdb_labels_exist() -> None:
+    with TemporaryDirectory() as tmpdir:
+        pdb_path = Path(tmpdir) / "rfantibody_child_0.pdb"
+        pdb_path.write_text(
+            "\n".join(
+                [
+                    "ATOM      1  N   VAL H   1      -1.827  23.530  13.673  1.00  1.00",
+                    "REMARK PDBinfo-LABEL:   25 H1",
+                    "REMARK PDBinfo-LABEL:   26 H1",
+                    "REMARK PDBinfo-LABEL:   63 H2",
+                    "REMARK PDBinfo-LABEL:  118 H3",
+                ]
+            )
+        )
+
+        assert _rfantibody_cdr_refresh_required(str(pdb_path)) is True
+        assert _rfantibody_cdr_refresh_required(None) is False
+
+
+def test_compute_antibody_ca_rog_uses_antibody_chain_subset() -> None:
+    with TemporaryDirectory() as tmpdir:
+        pdb_path = Path(tmpdir) / "rfantibody_child_0.pdb"
+        pdb_path.write_text(
+            "\n".join(
+                [
+                    "ATOM      1  CA  GLY H   1       0.000   0.000   0.000  1.00  1.00           C",
+                    "ATOM      2  CA  GLY H   2       2.000   0.000   0.000  1.00  1.00           C",
+                    "ATOM      3  CA  GLY H   3       4.000   0.000   0.000  1.00  1.00           C",
+                    "ATOM      4  CA  GLY T   1      50.000   0.000   0.000  1.00  1.00           C",
+                    "ATOM      5  CA  GLY T   2      52.000   0.000   0.000  1.00  1.00           C",
+                    "TER",
+                    "END",
+                ]
+            )
+        )
+
+        rog = _compute_antibody_ca_rog(pdb_path, "H")
+
+        assert rog is not None
+        assert math.isclose(rog, math.sqrt(8.0 / 3.0), rel_tol=1e-6)
+        assert _rfantibody_rog_refresh_required(str(pdb_path), "H") is True
+        assert _rfantibody_rog_refresh_required(None, "H") is False

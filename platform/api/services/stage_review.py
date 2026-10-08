@@ -12,9 +12,11 @@ import csv
 import re
 import uuid
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple
 
+import numpy as np
 from sqlalchemy import delete, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +31,7 @@ from services.result_ingester import (
 )
 from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
 from services.rfantibody_metadata import load_rfantibody_trb_summary
+from services.structure_utils import load_structure
 
 REVIEWABLE_STAGES = {"post_rfantibody", "post_fampnn"}
 STRUCTURE_PATTERNS = ("*.pdb", "*.cif")
@@ -559,6 +562,104 @@ def _infer_binder_metrics(structure_path: Path) -> tuple[Optional[int], Optional
     return None, None
 
 
+def _normalize_chain_ids(chain_hint: Any) -> list[str]:
+    if chain_hint is None:
+        return []
+    if isinstance(chain_hint, str):
+        parts = [part.strip() for part in chain_hint.split(",") if part.strip()]
+    elif isinstance(chain_hint, (list, tuple, set)):
+        parts = [str(part).strip() for part in chain_hint if str(part).strip()]
+    else:
+        parts = [str(chain_hint).strip()] if str(chain_hint).strip() else []
+    return [chain_id for chain_id in dict.fromkeys(parts)]
+
+
+def _infer_antibody_chain_ids(structure_path: Path, antibody_chain_hint: Any = None) -> list[str]:
+    hinted_chain_ids = _normalize_chain_ids(antibody_chain_hint)
+    if hinted_chain_ids:
+        return hinted_chain_ids
+
+    try:
+        sequences = extract_sequence_from_pdb(str(structure_path))
+        if not sequences:
+            return []
+
+        binder_chains = identify_binder_chains(sequences, str(structure_path))
+        if binder_chains:
+            return [chain_id for chain_id in dict.fromkeys(binder_chains.values()) if chain_id in sequences]
+
+        fallback_chain_ids: list[str] = []
+        if "H" in sequences:
+            fallback_chain_ids.append("H")
+        if "L" in sequences:
+            fallback_chain_ids.append("L")
+        if fallback_chain_ids:
+            return fallback_chain_ids
+
+        if len(sequences) == 1:
+            return [next(iter(sequences.keys()))]
+    except Exception:
+        return []
+
+    return []
+
+
+@lru_cache(maxsize=16384)
+def _compute_antibody_ca_rog_cached(
+    structure_path_str: str,
+    antibody_chain_hint_key: tuple[str, ...],
+) -> Optional[float]:
+    structure_path = Path(structure_path_str)
+    chain_ids = list(antibody_chain_hint_key) or _infer_antibody_chain_ids(structure_path)
+    if not chain_ids:
+        return None
+
+    try:
+        structure = load_structure(str(structure_path))
+        antibody_ca = structure[(structure.atom_name == "CA") & np.isin(structure.chain_id, chain_ids)]
+        if len(antibody_ca) == 0:
+            return None
+
+        coords = antibody_ca.coord
+        centroid = np.mean(coords, axis=0)
+        squared_distances = np.sum((coords - centroid) ** 2, axis=1)
+        return float(np.sqrt(np.mean(squared_distances)))
+    except Exception:
+        return None
+
+
+def _compute_antibody_ca_rog(structure_path: Path, antibody_chain_hint: Any = None) -> Optional[float]:
+    return _compute_antibody_ca_rog_cached(
+        str(structure_path.expanduser().resolve()),
+        tuple(_normalize_chain_ids(antibody_chain_hint)),
+    )
+
+
+def _rfantibody_cdr_refresh_required(sample_pdb_path: str | None) -> bool:
+    """Detect stale review rows by checking whether a missing-annotation PDB still carries RF loop labels."""
+    if not sample_pdb_path:
+        return False
+
+    try:
+        return bool(_parse_hlt_cdr_lengths(Path(sample_pdb_path)))
+    except Exception:
+        return False
+
+
+def _rfantibody_rog_refresh_required(
+    sample_pdb_path: str | None,
+    antibody_chain_hint: Any = None,
+) -> bool:
+    """Detect stale review rows by checking whether a missing-RoG PDB can yield antibody-only CA RoG."""
+    if not sample_pdb_path:
+        return False
+
+    try:
+        return _compute_antibody_ca_rog(Path(sample_pdb_path), antibody_chain_hint) is not None
+    except Exception:
+        return False
+
+
 async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool = False) -> int:
     stage = str(job.awaiting_stage or "").strip().lower()
     if stage not in REVIEWABLE_STAGES:
@@ -633,7 +734,41 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 )
             )
         ).scalar() or 0
-        if populated_binder_lengths == existing_count:
+        if stage == "post_rfantibody":
+            missing_cdr_sample = (
+                await session.execute(
+                    select(Design.pdb_path).where(
+                        Design.job_id == job.id,
+                        Design.source_stage == stage,
+                        Design.cdr_h1_length.is_(None),
+                        Design.cdr_h2_length.is_(None),
+                        Design.cdr_h3_length.is_(None),
+                        Design.cdr_l1_length.is_(None),
+                        Design.cdr_l2_length.is_(None),
+                        Design.cdr_l3_length.is_(None),
+                    ).limit(1)
+                )
+            ).scalar_one_or_none()
+            if _rfantibody_cdr_refresh_required(missing_cdr_sample):
+                force = True
+
+            if not force:
+                missing_rog_sample = (
+                    await session.execute(
+                        select(Design.pdb_path, Design.detected_antibody_chains).where(
+                            Design.job_id == job.id,
+                            Design.source_stage == stage,
+                            Design.rog.is_(None),
+                        ).limit(1)
+                    )
+                ).first()
+                if missing_rog_sample and _rfantibody_rog_refresh_required(
+                    missing_rog_sample[0],
+                    missing_rog_sample[1],
+                ):
+                    force = True
+
+        if populated_binder_lengths == existing_count and not force:
             return existing_count
 
     await session.execute(
@@ -666,6 +801,14 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
         screening = screening_by_name.get(design_name)
         if screening is None and backbone_id is not None:
             screening = screening_by_backbone.get(backbone_id)
+        antibody_ca_rog = None
+        if stage == "post_rfantibody":
+            antibody_ca_rog = safe_float((screening or {}).get("antibody_ca_rog"))
+            if antibody_ca_rog is None:
+                antibody_ca_rog = _compute_antibody_ca_rog(
+                    structure_path,
+                    (screening or {}).get("detected_antibody_chains"),
+                )
 
         json_path: Optional[Path] = None
         fampnn_psce = None
@@ -690,6 +833,7 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 pdb_path=str(structure_path),
                 json_path=str(json_path) if json_path else None,
                 plddt_overall=avg_plddt,
+                rog=antibody_ca_rog,
                 residue_plddt=residue_plddt,
                 mpnn_score=mpnn_score,
                 fampnn_psce=fampnn_psce,

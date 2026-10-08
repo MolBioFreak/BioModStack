@@ -704,7 +704,9 @@ export interface BackboneSummary {
 }
 
 export const fetchDesigns = (filters: DesignFilters = {}) =>
-    api.get<DesignListResponse>('/api/designs', { params: filters });
+    filters.design_ids?.length
+        ? api.post<DesignListResponse>('/api/designs/query', filters)
+        : api.get<DesignListResponse>('/api/designs', { params: filters });
 
 export const fetchBackboneSummary = (jobId: string, artifactGroup?: string) =>
     api.get<BackboneSummary>(`/api/designs/by-job/${jobId}/backbone-summary`, {
