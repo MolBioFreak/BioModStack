@@ -725,11 +725,13 @@ export const BioXpCockpit = () => {
     const [streamReady, setStreamReady] = useState(false);
     const [streamError, setStreamError] = useState<string | null>(null);
     const [latestCameraAction, setLatestCameraAction] = useState<{ action: string; data: any } | null>(null);
+    const [latestMotionInfraAction, setLatestMotionInfraAction] = useState<{ action: string; data: any } | null>(null);
     const [ledRgbState, setLedRgbState] = useState({ r: 32, g: 128, b: 255 });
     const [ledPctState, setLedPctState] = useState(35);
     const [lastHealthyAt, setLastHealthyAt] = useState<number | null>(null);
     const [viewerFullscreen, setViewerFullscreen] = useState(false);
     const [pendingCameraControlCid, setPendingCameraControlCid] = useState<number | null>(null);
+    const [motionHardResetRounds, setMotionHardResetRounds] = useState(2);
     const cameraViewerRef = useRef<HTMLDivElement | null>(null);
 
     const motionMutationCount = useIsMutating({ mutationKey: ['bioxp', 'motion'] });
@@ -743,6 +745,9 @@ export const BioXpCockpit = () => {
     const daemonStart = useDaemonStart();
     const daemonStop = useDaemonStop();
     const reconnectRuntime = useReconnectRuntime();
+    const motionPowerEnable = useMotionPowerEnable();
+    const motionPowerDiag = useMotionPowerDiag();
+    const motionHardReset = useMotionHardReset();
     const prepareInterlock = usePrepareInterlock();
     const clearLock = useClearLock();
 
@@ -753,6 +758,7 @@ export const BioXpCockpit = () => {
     const connectionPollingEnabled = hardwareReachable && activeTab === 'connection';
     const controlsPollingEnabled = hardwareReachable && activeTab === 'controls' && !motionBusy;
     const cameraDiscoveryEnabled = hardwareReachable && activeTab === 'camera' && !pollCamera && !motionBusy;
+    const motionPowerStatus = useMotionPowerStatus(controlsPollingEnabled, motionBusy ? false : 8000);
 
     const latchStatus = useLatchStatus(connectionPollingEnabled);
     const latchLock = useLatchLock();
