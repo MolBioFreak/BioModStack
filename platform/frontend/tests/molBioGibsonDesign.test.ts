@@ -29,3 +29,12 @@ test('API client uses the typed design and design-save routes', () => {
     assert.match(api, /\/api\/molbio\/assembly\/gibson\/design'/);
     assert.match(api, /\/api\/molbio\/assembly\/gibson\/design\/save'/);
 });
+
+test('saved Gibson constructs expose persisted design evidence in the Assembly tab', () => {
+    assert.match(panel, /Saved Gibson workup/);
+    assert.match(panel, /Server-selected candidate checksum/);
+    assert.match(panel, /Source fragments/);
+    assert.match(panel, /Validated junctions/);
+    assert.match(panel, /Generated primers/);
+    assert.match(panel, /operationParams\.candidate_checksum/);
+});

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from inspect import signature
 from typing import Callable, List
 import sqlite3
 
@@ -24,7 +25,7 @@ from run_migration import migrate as migrate_stage_tracking
 class Migration:
     version: int
     name: str
-    fn: Callable[[], None]
+    fn: Callable[..., None]
 
 
 MIGRATIONS: List[Migration] = [
@@ -67,6 +68,14 @@ def _get_applied_versions(conn: sqlite3.Connection) -> set[int]:
     return {row[0] for row in rows}
 
 
+def _run_migration(migration: Migration, db_path: str) -> None:
+    """Use an explicit database for migrations that support it; preserve legacy no-argument migrations."""
+    if "db_path" in signature(migration.fn).parameters:
+        migration.fn(db_path)
+    else:
+        migration.fn()
+
+
 def run_all(db_path: str | None = None) -> None:
     db_path = db_path or str(get_db_path())
     conn = _connect(db_path)
@@ -77,7 +86,7 @@ def run_all(db_path: str | None = None) -> None:
         for mig in MIGRATIONS:
             if mig.version in applied:
                 continue
-            mig.fn()
+            _run_migration(mig, db_path)
             conn.execute(
                 "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
                 (mig.version, mig.name, datetime.utcnow().isoformat()),

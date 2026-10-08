@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
 import sqlite3
 
 from migrations.add_viewer_snapshots import migrate
+from migrations import runner
 
 
 def _legacy_database(path: str) -> None:
@@ -31,3 +33,26 @@ def test_viewer_snapshot_migration_is_idempotent_and_preserves_existing_jobs(tmp
         indexes = {row[1] for row in connection.execute("PRAGMA index_list(viewer_snapshots)")}
         assert "ix_viewer_snapshots_job_id" in indexes
         assert "ix_viewer_snapshots_snapshot_sha256" in indexes
+
+
+def test_runner_passes_requested_database_to_path_aware_migration(tmp_path, monkeypatch):
+    database = tmp_path / "runner.db"
+    observed: list[str] = []
+
+    def migration(db_path: str | None = None) -> None:
+        observed.append(str(db_path))
+
+    monkeypatch.setattr(runner, "MIGRATIONS", [runner.Migration(1, "probe", migration)])
+
+    runner.run_all(str(database))
+
+    assert observed == [str(database)]
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT version, name FROM schema_migrations").fetchall() == [(1, "probe")]
+
+
+def test_api_image_runs_migrations_before_starting_uvicorn():
+    dockerfile = (Path(__file__).resolve().parents[3] / "docker" / "api.Dockerfile").read_text(encoding="utf-8")
+    command = next(line for line in dockerfile.splitlines() if line.startswith("CMD "))
+    assert "run_migrations.py" in command
+    assert command.index("run_migrations.py") < command.index("uvicorn")

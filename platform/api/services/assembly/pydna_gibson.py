@@ -29,6 +29,7 @@ ENGINE = "pydna"
 ENGINE_VERSION = version("pydna")
 MAX_CANDIDATES = 10
 MAX_TOTAL_NT = 2_000_000
+MAX_FRAGMENTS = 50
 
 
 def _sha256(sequence: str) -> str:
@@ -88,8 +89,10 @@ def _validate_request(
     min_anneal: int,
     max_candidates: int,
 ) -> None:
-    if not 2 <= len(fragments) <= 12:
-        raise AssemblyError("pydna Gibson design requires 2 to 12 ordered fragments")
+    if not 2 <= len(fragments) <= MAX_FRAGMENTS:
+        raise AssemblyError(
+            f"pydna Gibson design requires 2 to {MAX_FRAGMENTS} ordered fragments"
+        )
     if len(preparations) != len(fragments):
         raise AssemblyError("Each Gibson fragment requires one preparation value")
     invalid_preparations = sorted(set(preparations) - {"pcr", "ready_linear"})
