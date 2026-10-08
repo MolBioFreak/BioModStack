@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import math
 import os
+import re
+import sys
+from pathlib import Path, PurePosixPath
 from dataclasses import dataclass
 from functools import lru_cache
 from collections.abc import Mapping
@@ -20,8 +23,93 @@ class LocalCapacity:
     memory_bytes: int
 
 
+def _read_capacity_file(path: str | Path) -> str:
+    try:
+        return Path(path).read_text().strip()
+    except (OSError, UnicodeError):
+        return ""
+
+
+def _cgroup_directories():
+    """Resolve this process's controllers, including bind/cgroup namespace roots.
+
+    Only visible ancestors can be inspected; never escape a controller mount.
+    mountinfo paths use octal escapes, unlike /proc/self/cgroup paths.
+    """
+    memberships = {}
+    for line in _read_capacity_file("/proc/self/cgroup").splitlines():
+        fields = line.split(":", 2)
+        if len(fields) == 3:
+            for controller in fields[1].split(","):
+                memberships[controller] = fields[2]
+    for line in _read_capacity_file("/proc/self/mountinfo").splitlines():
+        before, sep, after = line.partition(" - ")
+        fields, filesystem = before.split(), after.split()
+        if not sep or len(fields) < 6 or len(filesystem) < 3:
+            continue
+        if filesystem[0] not in {"cgroup", "cgroup2"}:
+            continue
+        controllers = {""} if filesystem[0] == "cgroup2" else set(filesystem[2].split(","))
+        for controller in controllers & memberships.keys():
+            def unescape(value):
+                return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), value)
+            root = PurePosixPath(unescape(fields[3]))
+            mount = Path(unescape(fields[4]))
+            member = PurePosixPath(memberships[controller])
+            if not member.is_absolute() or ".." in member.parts:
+                continue
+            try:
+                relative = member.relative_to(root)
+            except ValueError:
+                # A cgroup namespace reports membership relative to its root,
+                # while an inherited mount may still expose a host-relative root.
+                relative = member.relative_to("/")
+            current = mount / relative
+            while True:
+                yield controller, current
+                if current == mount:
+                    break
+                current = current.parent
+
+
+def _linux_capacity_bounds(threads: int, total: int) -> tuple[int, int]:
+    try:
+        affinity = len(os.sched_getaffinity(0))
+        if affinity:
+            threads = min(threads, affinity)
+    except (AttributeError, OSError):
+        pass
+    for controller, directory in _cgroup_directories():
+        if controller in {"", "cpu"}:
+            if controller == "":
+                quota = _read_capacity_file(directory / "cpu.max").split()
+            else:
+                quota = [_read_capacity_file(directory / name) for name in
+                         ("cpu.cfs_quota_us", "cpu.cfs_period_us")]
+            try:
+                amount, period = map(int, quota)
+                if amount > 0 and period > 0:
+                    threads = min(threads, max(1, amount // period))
+            except ValueError:
+                pass  # Missing, malformed, or unlimited (v2 max / v1 -1).
+        if controller in {"", "memory"}:
+            name = "memory.max" if controller == "" else "memory.limit_in_bytes"
+            try:
+                limit = int(_read_capacity_file(directory / name))
+                if limit >= 0:
+                    # v1's page-rounded LONG_MAX sentinel is above physical RAM;
+                    # min also handles it without architecture-specific constants.
+                    total = min(total, limit)
+            except ValueError:
+                pass
+    return threads, total
+
+
 def detect_local_capacity() -> LocalCapacity:
-    """Use total OS-usable RAM, never fluctuating available/free RAM."""
+    """Total usable capacity bounded by Linux affinity and cgroup hard limits.
+
+    Never use fluctuating free RAM, memory.current, or soft memory.high limits.
+    """
     try:
         threads = os.cpu_count()
         total = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
@@ -29,6 +117,10 @@ def detect_local_capacity() -> LocalCapacity:
         raise ValueError("Cannot detect local CPU/RAM capacity") from exc
     if not threads or total <= 0:
         raise ValueError("Cannot detect local CPU/RAM capacity")
+    if sys.platform == "linux":
+        threads, total = _linux_capacity_bounds(threads, total)
+        if total <= 0:
+            raise ValueError("No usable local RAM capacity within cgroup limit")
     return LocalCapacity(threads, total)
 
 
