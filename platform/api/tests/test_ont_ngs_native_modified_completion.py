@@ -11,8 +11,11 @@ import json
 
 import pysam
 import pytest
+from ngs_resource_fixture import ngs_resources
 
-from test_dorado_summary_emitter import emit_receipt
+pytestmark = [pytest.mark.native_http, pytest.mark.usefixtures("ngs_resources", "native_http")]
+
+from ngs_producer_fixtures import emit_receipt, producer_receipt
 from test_ont_ngs_native_completion import _fixture, _sha, _validate, isolated_result_root
 from services import ont_ngs_completion as completion
 from services.ont_ngs_contract import DORADO_LOCK_PATH
@@ -197,7 +200,8 @@ def test_modified_summary_reference_matrix_and_pure_preparation(tmp_path, monkey
     def forbidden(*args, **kwargs):
         raise AssertionError('native modified completion must not use derived readiness')
     monkeypatch.setattr(ngs_alignment_sessions, 'build_alignment_sessions', forbidden)
-    monkeypatch.setattr(ngs_alignment_sessions, 'open_verified_artifact_snapshot', forbidden)
+    # Snapshot leases are native byte verification, not derived readiness.
+    monkeypatch.setattr(ngs_alignment_sessions, 'build_alignment_presentation', forbidden)
     job, root = modified_fixture(tmp_path, modification, requested=requested, supported=supported)
     if reference:
         attach_modified_reference(job, root, tmp_path)

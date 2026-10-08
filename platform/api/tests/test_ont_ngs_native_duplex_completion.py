@@ -9,8 +9,11 @@ import json
 
 import pysam
 import pytest
+from ngs_resource_fixture import ngs_resources
 
-from test_dorado_summary_emitter import emit_receipt
+pytestmark = [pytest.mark.native_http, pytest.mark.usefixtures("ngs_resources", "native_http")]
+
+from ngs_producer_fixtures import emit_receipt, producer_receipt
 from test_ont_ngs_native_completion import _fixture, _sha, _validate, isolated_result_root
 from services import ont_ngs_completion as completion
 from services.ont_ngs_contract import DORADO_LOCK_PATH
@@ -88,7 +91,8 @@ def test_native_duplex_accepts_source_outcomes(tmp_path, monkeypatch, classes, r
     def forbidden(*args, **kwargs):
         raise AssertionError('duplex completion must not use derived stores')
     monkeypatch.setattr(ngs_alignment_sessions, 'build_alignment_sessions', forbidden)
-    monkeypatch.setattr(ngs_alignment_sessions, 'open_verified_artifact_snapshot', forbidden)
+    # Snapshot leases are native byte verification, not derived readiness.
+    monkeypatch.setattr(ngs_alignment_sessions, 'build_alignment_presentation', forbidden)
     job, root = duplex_fixture(tmp_path, classes, requested)
     result = _validate(job)
     assert result['read_count'] == len(classes)
@@ -216,7 +220,8 @@ def attach_reference(job, root, tmp_path, outcome='mapped'):
                'reference_sequence_sha256': job.params['reference_sequence_sha256'], 'reference_immutable': 'true',
                'bam_min_mapq': str(job.params['bam_min_mapq']), 'input_records': str(len(reads)),
                'output_records': '0' if outcome == 'filtered' else str(len(reads))}
-    (align / 'align.log').write_text(''.join(f'{key}={value}\n' for key, value in receipt.items()))
+    (align / 'align.log').write_text(''.join(f'{key}={value}\n' for key, value in receipt.items())
+        + producer_receipt(align / 'fixture-align', ('modules/ngs/dorado_align.nf',), ('dorado', 'samtools')))
     job.provenance['stage_terminal_states']['dorado_align'] = {'status': 'complete', 'outputs': [str(align / name) for name in ('aligned.bam', 'aligned.bam.bai', 'reference.fasta', 'reference.fasta.fai', 'align.log')]}
 
 

@@ -11,11 +11,14 @@ import sys
 
 import pysam
 import pytest
+from ngs_resource_fixture import ngs_resources
+
+pytestmark = [pytest.mark.native_http, pytest.mark.usefixtures("ngs_resources", "native_http")]
 
 from services import ont_ngs_completion as completion
 from services.ont_ngs_native_completion import validate_native_basecall
 from test_ont_ngs_native_completion import _fixture, _sha, _validate, isolated_result_root
-from test_dorado_summary_emitter import emit_receipt
+from ngs_producer_fixtures import emit_receipt, producer_receipt
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -79,7 +82,10 @@ def emit_demux(root, empty_bin=False, nested=False, label='unclassified', partit
     for key, path in [('bam', root / 'basecall/calls.bam'), ('preflight_json', root / 'basecall/dorado_preflight.json')]:
         script = script.replace('${doradoShellQuote(' + key + ')}', shlex.quote(str(path)))
     script = script.replace('\\$', '$')
-    return subprocess.run(['bash', '-c', script], cwd=task, capture_output=True, text=True,
+    script = script.replace('${params.code_root ?: projectDir}', str(ROOT))
+    command = task / '.command.sh'
+    command.write_text(script)
+    return subprocess.run(['bash', str(command.resolve())], cwd=task, capture_output=True, text=True,
                           env={**os.environ, 'PATH': str(tools) + ':' + os.environ['PATH']})
 
 
