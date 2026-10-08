@@ -21,6 +21,10 @@ if str(API_ROOT) not in sys.path:
 
 from database import Base, ExecutionTarget, Job, MdRun
 import services.gpu_orchestrator as gpu_module
+import services.remote_execution.executor as remote_executor
+from services.remote_execution.bundle import RemoteBundleError
+from services.remote_execution.contracts import RemoteAttemptStatus
+from services.remote_execution.executor import RemoteExecutionError
 from services.gpu_orchestrator import (
     GPUOrchestrator,
     _claim_job_for_gpu,
@@ -31,6 +35,241 @@ from services.gpu_orchestrator import (
     _recover_rfantibody_parent_after_child_wait,
     _reconcile_terminal_history_without_process,
 )
+
+
+@pytest.mark.asyncio
+async def test_remote_bundle_failure_is_terminal_and_never_reclaimed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'remote-failure.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    target_id = "vast:123"
+    async with factory() as seed:
+        target = ExecutionTarget(
+            id=target_id,
+            provider="vast",
+            provider_instance_id="123",
+            state="ready",
+            active=True,
+            host="203.0.113.10",
+            port=22,
+            username="root",
+            remote_root="/opt/biomodstack",
+        )
+        job = Job(
+            id="remote-bundle-failure",
+            name="remote-bundle-failure",
+            status="queued",
+            queue_status="queued",
+            paused=False,
+            model_id="protenix",
+            mode="predict",
+            params={},
+            output_dir=str(tmp_path / "output"),
+            execution_target_id=target_id,
+        )
+        seed.add_all([target, job])
+        await seed.commit()
+
+    async with factory() as launcher:
+        job = await launcher.get(Job, "remote-bundle-failure")
+        assert job is not None
+        claimed = await _claim_remote_job(
+            launcher,
+            job,
+            gpu_id=0,
+            gpu_ids=[0],
+            vram_estimate_mb=4096,
+        )
+        assert claimed is not None
+        assert (job.status, job.queue_status, job.remote_state) == (
+            "queued", "preparing", "preparing"
+        )
+
+        async def ready_target(*_args: object, **_kwargs: object) -> ExecutionTarget:
+            target = await launcher.get(ExecutionTarget, target_id)
+            assert target is not None
+            return target
+
+        async def verified(*_args: object, **_kwargs: object) -> dict[str, str]:
+            return {}
+
+        def reject_bundle(**_kwargs: object) -> None:
+            raise RemoteBundleError("host path must not be exposed")
+
+        monkeypatch.setattr(remote_executor, "get_ready_target", ready_target)
+        monkeypatch.setattr(remote_executor, "_verify_remote_runner", verified)
+        monkeypatch.setattr(remote_executor, "prepare_remote_bundle", reject_bundle)
+        monkeypatch.setattr(remote_executor, "get_data_root", lambda: tmp_path)
+
+        with pytest.raises(RemoteExecutionError, match="bundle validation failed"):
+            await remote_executor.launch_remote_job(
+                launcher,
+                job,
+                command=["nextflow", "run", "/host/source/main.nf"],
+            )
+
+    async with factory() as verify:
+        failed = await verify.get(Job, "remote-bundle-failure")
+        target = await verify.get(ExecutionTarget, target_id)
+        assert failed is not None and target is not None
+        assert failed.status == "failed"
+        assert failed.queue_status == "failed"
+        assert failed.remote_state == "launch_failed"
+        assert failed.error_message == "Remote launch preparation failed: bundle validation failed"
+        assert failed.completed_at is not None
+        assert failed.assigned_gpu is None
+        assert "_scheduler_gpu_assignment" not in failed.params
+        assert target.leased_job_id is None
+        assert await remote_executor.reconcile_remote_job(verify, failed) is False
+        assert await remote_executor.reconcile_remote_job(verify, failed) is False
+        assert await _claim_remote_job(
+            verify,
+            failed,
+            gpu_id=0,
+            gpu_ids=[0],
+            vram_estimate_mb=4096,
+        ) is None
+
+    relaunches: list[str] = []
+
+    async def launch_again(**kwargs: Any) -> None:
+        relaunches.append(str(kwargs["job_id"]))
+
+    orchestrator = GPUOrchestrator(factory, lambda: [], launch_again)
+    await orchestrator._process_cycle()
+    await orchestrator._process_cycle()
+    assert relaunches == []
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reconciler_publishes_running_only_from_valid_remote_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'remote-receipt.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    attempt_id = "11111111-1111-4111-8111-111111111111"
+    async with factory() as seed:
+        seed.add(Job(
+            id="remote-receipt",
+            name="remote-receipt",
+            status="queued",
+            queue_status="preparing",
+            paused=False,
+            model_id="protenix",
+            mode="predict",
+            params={},
+            output_dir=str(tmp_path / "output"),
+            execution_target_id="vast:receipt",
+            nextflow_run_id=f"remote:{attempt_id}",
+            remote_attempt_id=attempt_id,
+            remote_state="launch_uncertain",
+        ))
+        await seed.commit()
+
+    async def running_status(*_args: object, **_kwargs: object) -> RemoteAttemptStatus:
+        return RemoteAttemptStatus(
+            attempt_id=attempt_id,
+            job_id="remote-receipt",
+            state="running",
+            started_at=datetime.utcnow(),
+        )
+
+    monkeypatch.setattr(remote_executor, "remote_status", running_status)
+    async with factory() as reconcile_session:
+        job = await reconcile_session.get(Job, "remote-receipt")
+        assert job is not None
+        assert await remote_executor.reconcile_remote_job(reconcile_session, job) is True
+
+    async with factory() as verify:
+        job = await verify.get(Job, "remote-receipt")
+        assert job is not None
+        assert (job.status, job.queue_status, job.remote_state) == (
+            "running", "running", "running"
+        )
+        assert job.started_at is not None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_remote_pre_start_failure_loses_to_separate_session_cancellation(
+    tmp_path: Path,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'remote-cancel-race.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    target_id = "vast:cancel-race"
+    job_id = "remote-cancel-race"
+    async with factory() as seed:
+        seed.add_all([
+            ExecutionTarget(
+                id=target_id,
+                provider="vast",
+                provider_instance_id="cancel-race",
+                state="ready",
+                active=True,
+                leased_job_id=job_id,
+            ),
+            Job(
+                id=job_id,
+                name=job_id,
+                status="queued",
+                queue_status="preparing",
+                paused=False,
+                model_id="protenix",
+                mode="predict",
+                params={"gpu_id": 0},
+                assigned_gpu=0,
+                output_dir=str(tmp_path / "output"),
+                execution_target_id=target_id,
+                remote_state="preparing",
+            ),
+        ])
+        await seed.commit()
+
+    async with factory() as stale_launcher:
+        stale = await stale_launcher.get(Job, job_id)
+        assert stale is not None
+        async with factory() as operator:
+            current = await operator.get(Job, job_id)
+            target = await operator.get(ExecutionTarget, target_id)
+            assert current is not None and target is not None
+            current.status = "cancelled"
+            current.queue_status = "cancelled"
+            current.remote_state = "cancelled"
+            current.error_message = "Cancelled by user"
+            current.completed_at = datetime.utcnow()
+            current.assigned_gpu = None
+            target.leased_job_id = None
+            target.lease_acquired_at = None
+            await operator.commit()
+
+        assert await remote_executor.terminalize_remote_launch_failure(
+            stale_launcher,
+            job_id=job_id,
+            error_message="Remote launch preparation failed: bundle validation failed",
+        ) is False
+
+    async with factory() as verify:
+        current = await verify.get(Job, job_id)
+        target = await verify.get(ExecutionTarget, target_id)
+        assert current is not None and target is not None
+        assert (current.status, current.queue_status, current.remote_state) == (
+            "cancelled", "cancelled", "cancelled"
+        )
+        assert current.error_message == "Cancelled by user"
+        assert current.assigned_gpu is None
+        assert target.leased_job_id is None
+    await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -81,7 +320,7 @@ async def test_remote_target_lease_allows_exactly_one_concurrent_claim(tmp_path:
         target = await verify.get(ExecutionTarget, target_id)
         jobs = [await verify.get(Job, job_id) for job_id in ("remote-a", "remote-b")]
         assert target is not None and target.leased_job_id in {"remote-a", "remote-b"}
-        assert sum(job is not None and job.queue_status == "running" for job in jobs) == 1
+        assert sum(job is not None and job.queue_status == "preparing" for job in jobs) == 1
     await engine.dispose()
 
 

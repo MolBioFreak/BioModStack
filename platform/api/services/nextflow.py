@@ -2144,7 +2144,10 @@ async def launch_nextflow_job(
             logger.info(f"Job {job_id} was cancelled before starting, aborting launch")
             return
         
-        needs_running_transition = job.status != JobStatus.RUNNING.value or job.started_at is None
+        needs_running_transition = (
+            not job.execution_target_id
+            and (job.status != JobStatus.RUNNING.value or job.started_at is None)
+        )
         if needs_running_transition:
             job.status = JobStatus.RUNNING.value
             job.started_at = datetime.utcnow()
@@ -3021,6 +3024,21 @@ async def launch_nextflow_job(
             if job:
                 # Don't overwrite if already cancelled
                 await session.refresh(job)
+                if job.execution_target_id and not job.started_at:
+                    from services.remote_execution.executor import (
+                        terminalize_remote_launch_failure,
+                    )
+
+                    message = str(e)
+                    if not message.startswith("Remote launch preparation failed:"):
+                        message = "Remote launch preparation failed: command validation failed"
+                    if await terminalize_remote_launch_failure(
+                        session,
+                        job_id=str(job.id),
+                        error_message=message,
+                    ):
+                        return
+                    await session.refresh(job)
                 if job.status == JobStatus.COMPLETED.value or (job.current_stage or "").lower() == "complete":
                     logger.warning(
                         f"Detached runner caught exception for already-completed job {job_id}; preserving completed status"

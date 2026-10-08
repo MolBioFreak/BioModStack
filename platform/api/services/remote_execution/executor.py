@@ -329,6 +329,58 @@ def _remote_receipt(
     }
 
 
+def _controlled_pre_start_error(exc: Exception) -> str:
+    if isinstance(exc, RemoteBundleError):
+        reason = "bundle validation failed"
+    elif isinstance(exc, ExecutionTargetError):
+        reason = "execution target validation failed"
+    elif isinstance(exc, RemoteTransportError):
+        reason = "remote readiness validation failed"
+    elif isinstance(exc, (TypeError, ValueError)):
+        reason = "command validation failed"
+    else:
+        reason = "launch preparation failed"
+    return f"Remote launch preparation failed: {reason}"
+
+
+async def terminalize_remote_launch_failure(
+    session: AsyncSession,
+    *,
+    job_id: str,
+    error_message: str,
+) -> bool:
+    """Publish one fail-closed pre-start terminal transition; cancellation wins."""
+    await session.rollback()
+    current = await session.get(Job, str(job_id))
+    if current is None:
+        return False
+    released_params = release_scheduler_gpu_assignment(current.params)
+    transition = await session.execute(
+        update(Job)
+        .where(
+            Job.id == str(job_id),
+            Job.status.in_((JobStatus.QUEUED.value, JobStatus.RUNNING.value)),
+            Job.queue_status.in_(("preparing", "running")),
+        )
+        .values(
+            status=JobStatus.FAILED.value,
+            queue_status="failed",
+            remote_state="launch_failed",
+            error_message=str(error_message)[:1500],
+            completed_at=datetime.utcnow(),
+            assigned_gpu=None,
+            params=released_params,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(transition.rowcount or 0) != 1:
+        await session.rollback()
+        return False
+    await _release_remote_target_lease(session, current)
+    await session.commit()
+    return True
+
+
 async def launch_remote_job(
     session: AsyncSession,
     job: Job,
@@ -392,8 +444,8 @@ async def launch_remote_job(
         current_job = await session.get(Job, job_id)
         if (
             current_job is None
-            or current_job.status != JobStatus.RUNNING.value
-            or current_job.queue_status != "running"
+            or current_job.status != JobStatus.QUEUED.value
+            or current_job.queue_status != "preparing"
             or current_job.nextflow_run_id != run_id
             or current_job.remote_attempt_id != bundle.attempt_id
         ):
@@ -435,6 +487,9 @@ async def launch_remote_job(
             raise RemoteExecutionError("Remote worker did not publish a valid attempt receipt")
 
         job.remote_state = status.state
+        job.status = JobStatus.RUNNING.value
+        job.queue_status = "running"
+        job.started_at = status.started_at or datetime.utcnow()
         provenance = dict(job.provenance or {})
         provenance["remote_execution_receipt"] = _remote_receipt(
             bundle,
@@ -495,16 +550,12 @@ async def launch_remote_job(
                 await session.commit()
                 return f"{REMOTE_RUN_PREFIX}{bundle.attempt_id}"
 
-            job.remote_state = "launch_failed"
-            provenance["remote_execution_receipt"] = _remote_receipt(
-                bundle,
-                target,
-                state="launch_failed",
-                error=str(exc),
+            controlled_error = _controlled_pre_start_error(exc)
+            await terminalize_remote_launch_failure(
+                session,
+                job_id=job_id,
+                error_message=controlled_error,
             )
-            job.provenance = provenance
-            await _release_remote_target_lease(session, job)
-            await session.commit()
             try:
                 await run_remote(
                     connection,
@@ -513,11 +564,14 @@ async def launch_remote_job(
                 )
             except Exception:
                 pass
-        if isinstance(exc, RemoteExecutionError):
-            raise
-        if isinstance(exc, (ExecutionTargetError, RemoteBundleError, RemoteTransportError)):
-            raise RemoteExecutionError(str(exc)) from exc
-        raise
+            raise RemoteExecutionError(controlled_error) from exc
+        controlled_error = _controlled_pre_start_error(exc)
+        await terminalize_remote_launch_failure(
+            session,
+            job_id=job_id,
+            error_message=controlled_error,
+        )
+        raise RemoteExecutionError(controlled_error) from exc
     finally:
         if bundle is not None:
             await asyncio.to_thread(_cleanup_local_bundle, bundle)
@@ -823,6 +877,12 @@ async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
     job_id = str(job.id)
     expected_run_id = str(job.nextflow_run_id or "")
     expected_attempt_id = str(job.remote_attempt_id or "")
+    if job.status in {
+        JobStatus.FAILED.value,
+        JobStatus.CANCELLED.value,
+        JobStatus.COMPLETED.value,
+    }:
+        return False
     if (
         str(job.remote_state or "") == "staging"
         and not expected_run_id
@@ -846,8 +906,13 @@ async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
             current_job is None
             or str(current_job.nextflow_run_id or "") != expected_run_id
             or str(current_job.remote_attempt_id or "") != expected_attempt_id
-            or current_job.status != JobStatus.RUNNING.value
-            or current_job.queue_status != "running"
+            or (
+                (current_job.status, current_job.queue_status)
+                not in {
+                    (JobStatus.QUEUED.value, "preparing"),
+                    (JobStatus.RUNNING.value, "running"),
+                }
+            )
         ):
             return False
         current_job.status = JobStatus.FAILED.value
@@ -915,8 +980,6 @@ async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
         job.params = params
         job.queue_status = "running"
         await session.commit()
-    if job.status != JobStatus.RUNNING.value or job.queue_status != "running":
-        return False
     if status.state == "prepared":
         target = await session.get(ExecutionTarget, str(job.execution_target_id))
         if target is None:
@@ -931,9 +994,19 @@ async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
         status = _parse_status(response.stdout)
         if status.job_id != str(job.id) or status.attempt_id != str(job.remote_attempt_id):
             raise RemoteExecutionError("Resumed remote attempt does not match the BMS Job")
+    if (
+        (job.status, job.queue_status) == (JobStatus.QUEUED.value, "preparing")
+        and status.state in {"running", *TERMINAL_REMOTE_STATES}
+    ):
+        job.status = JobStatus.RUNNING.value
+        job.queue_status = "running"
+        job.started_at = status.started_at or datetime.utcnow()
         job.remote_state = status.state
         await session.commit()
-        return True
+        if status.state == "running":
+            return True
+    if job.status != JobStatus.RUNNING.value or job.queue_status != "running":
+        return False
     if status.state not in TERMINAL_REMOTE_STATES:
         changed = job.remote_state != status.state
         job.remote_state = status.state

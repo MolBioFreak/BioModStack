@@ -269,6 +269,183 @@ def test_source_identity_rejects_dirty_tracked_checkout(tmp_path: Path) -> None:
         current_source_identity(tmp_path)
 
 
+def test_split_root_protenix_colabfold_api_bundle_is_remote_only_and_minimal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "home" / "dalab" / "biomodstack" / "source"
+    repository.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", repository], check=True)
+    subprocess.run(["git", "-C", repository, "config", "user.email", "test@example.invalid"], check=True)
+    subprocess.run(["git", "-C", repository, "config", "user.name", "Test"], check=True)
+    (repository / "main.nf").write_text("workflow { }\n", encoding="utf-8")
+    subprocess.run(["git", "-C", repository, "add", "main.nf"], check=True)
+    subprocess.run(["git", "-C", repository, "commit", "-qm", "fixture"], check=True)
+    revision, tree = current_source_identity(repository)
+
+    data_root = tmp_path / "home" / "dalab" / ".biomodstack-dev"
+    weights_root = tmp_path / "mnt" / "BioModStack" / "weights"
+    container_root = tmp_path / "mnt" / "BioModStack" / "apptainer"
+    msa_root = tmp_path / "mnt" / "BioModStack" / "colabfold_db"
+    runtime_root = data_root / "runtime" / "cm-api-python" / "current"
+    (runtime_root / "venv" / "bin").mkdir(parents=True)
+    (runtime_root / "venv" / "bin" / "python").write_bytes(b"python-runtime")
+    (runtime_root / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
+    container_root.mkdir(parents=True)
+    (container_root / "protenix.sif").write_bytes(b"protenix-container")
+    (container_root / "unrelated.sif").write_bytes(b"unrelated-container")
+    protenix_weights = weights_root / "protenix"
+    protenix_weights.mkdir(parents=True)
+    (protenix_weights / "model.pt").write_bytes(b"protenix-weights")
+    for unrelated in (
+        weights_root / "alphafold" / "params",
+        weights_root / "boltz",
+        weights_root / "RFantibody",
+        msa_root,
+    ):
+        unrelated.mkdir(parents=True)
+        (unrelated / "unrelated.bin").write_bytes(b"unrelated")
+    job_input = data_root / "inputs" / "sequence.fasta"
+    job_input.parent.mkdir(parents=True)
+    job_input.write_text(">A\nAAAA\n", encoding="utf-8")
+    output_dir = data_root / "bms_results" / "job-1"
+
+    monkeypatch.setattr(bundle_module, "get_code_root", lambda: repository)
+    monkeypatch.setattr(bundle_module, "get_data_root", lambda: data_root)
+    monkeypatch.setattr(bundle_module, "get_container_dir", lambda: container_root)
+    monkeypatch.setattr(bundle_module, "get_weights_root", lambda: weights_root)
+    monkeypatch.setenv("BMS_REMOTE_API_BASE_URL", "https://bms.example.invalid")
+    assert {path for path, _relative in bundle_module._runtime_assets(
+        "protenix",
+        "predict",
+        {
+            "protenix_msa_backend": "colabfold_api",
+            "unrelated_container_path": str(container_root / "unrelated.sif"),
+        },
+    )} == {
+        container_root / "protenix.sif",
+        protenix_weights,
+        runtime_root.resolve(),
+    }
+    job = SimpleNamespace(
+        id="job-1",
+        parent_job_id=None,
+        lineage_root_job_id=None,
+        execution_target_id="vast:123",
+        execution_source_revision=revision,
+        execution_source_tree=tree,
+        child_output_dir=None,
+        output_dir=str(output_dir),
+        model_id="protenix",
+        mode="predict",
+        params={
+            "input_path": str(job_input),
+            "protenix_msa_backend": "colabfold_api",
+        },
+        stage_family=None,
+        stage_mode=None,
+        selected_input_artifact_class=None,
+        provenance={"remote_execution_assignment": {"gpu_indices": [0]}},
+        assigned_gpu=0,
+    )
+    command = [
+        "nextflow", "run", str(repository / "main.nf"),
+        "-profile", "protenix,workstation_ryzen7960x",
+        "-w", str(data_root / "work"),
+        "--out_dir", str(output_dir),
+        "--code_root", str(repository),
+        "--data_root", str(data_root),
+        "--weights_root", str(weights_root),
+        "--container_dir", str(container_root),
+        "--rfd_models", str(weights_root / "RFantibody"),
+        "--af2_models", str(weights_root / "alphafold" / "params"),
+        "--boltz_models", str(weights_root / "boltz"),
+        "--alphafold_params", str(weights_root / "alphafold" / "params"),
+        "--msa_local_db", str(msa_root),
+        "--msa_cache_dir", str(data_root / "msa_cache"),
+        "--input_path", str(job_input),
+        "--protenix_msa_backend", "colabfold_api",
+    ]
+
+    bundle = prepare_remote_bundle(
+        job=job,
+        target=SimpleNamespace(id="vast:123", remote_root="/opt/biomodstack"),
+        command=command,
+        environment={"NXF_ANSI_LOG": "false"},
+    )
+    try:
+        assert {plan.source for plan in bundle.runtime_transfers} == {
+            container_root / "protenix.sif",
+            protenix_weights,
+            runtime_root.resolve(),
+        }
+        assert {plan.source for plan in bundle.input_transfers} == {job_input.resolve()}
+        serialized = json.dumps(
+            bundle.envelope.model_dump(mode="json", by_alias=True),
+            sort_keys=True,
+        )
+        for local_root in (repository, data_root, weights_root, container_root, msa_root):
+            assert str(local_root) not in serialized
+        assert "/home/dalab" not in serialized
+        assert "/mnt/BioModStack" not in serialized
+        command_text = " ".join(bundle.envelope.command)
+        for unrelated in ("RFantibody", "alphafold", "/boltz", "colabfold_db"):
+            assert unrelated not in command_text
+        assert set(bundle.envelope.path_map) == {
+            "source", "runtime_assets", "job_inputs", "attempt_work", "attempt_output"
+        }
+        assert all(value.startswith("/opt/biomodstack/") for value in bundle.envelope.path_map.values())
+    finally:
+        import shutil
+
+        shutil.rmtree(bundle.local_attempt_dir.parents[1], ignore_errors=True)
+
+
+def test_remote_envelope_path_guard_rejects_unmapped_host_paths() -> None:
+    with pytest.raises(RemoteBundleError, match="host-local path"):
+        bundle_module._assert_remote_only_paths(
+            remote_root="/opt/biomodstack",
+            command=["/opt/biomodstack/runner/nextflow", "--mystery", "/home/dalab/private"],
+            environment={"BMS_DATA": "/opt/biomodstack/attempts/a/data"},
+            path_map={"source": "/opt/biomodstack/revisions/source"},
+        )
+
+
+def test_input_asset_discovery_rejects_unknown_external_and_symlinked_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_root = tmp_path / "data"
+    repo_root = tmp_path / "repo"
+    output_dir = data_root / "results" / "job"
+    external = tmp_path / "external" / "input.fasta"
+    external.parent.mkdir()
+    external.write_text(">A\nAAAA\n", encoding="utf-8")
+    data_root.mkdir()
+    repo_root.mkdir()
+    monkeypatch.setattr(bundle_module, "get_data_root", lambda: data_root)
+
+    with pytest.raises(RemoteBundleError, match="outside BMS-managed storage"):
+        bundle_module._input_assets(
+            {"unknown_external": str(external)},
+            command=["nextflow"],
+            repo_root=repo_root,
+            runtime_paths=set(),
+            output_dir=output_dir,
+        )
+
+    symlink = data_root / "symlinked-input.fasta"
+    symlink.symlink_to(external)
+    with pytest.raises(RemoteBundleError, match="Input symlink is not allowed"):
+        bundle_module._input_assets(
+            {"input_path": str(symlink)},
+            command=["nextflow"],
+            repo_root=repo_root,
+            runtime_paths=set(),
+            output_dir=output_dir,
+        )
+
+
 def test_bundle_preserves_committed_source_and_relocates_managed_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

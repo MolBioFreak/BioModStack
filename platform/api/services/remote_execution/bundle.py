@@ -254,7 +254,13 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tu
         if explicit_bcp_repo:
             extra_paths.add(Path(explicit_bcp_repo).expanduser().resolve())
 
+    allow_explicit_runtime_paths = not (
+        normalized_model == "protenix"
+        and str(params.get("protenix_msa_backend") or "").strip().lower() == "colabfold_api"
+    )
     for key, value in params.items():
+        if not allow_explicit_runtime_paths:
+            continue
         normalized_key = str(key).lower()
         if not any(
             token in normalized_key
@@ -304,10 +310,12 @@ def _input_assets(
     repo_root: Path,
     runtime_paths: set[Path],
     output_dir: Path,
+    local_only_paths: set[Path] | None = None,
 ) -> list[tuple[Path, str]]:
     selected: dict[Path, str] = {}
     data_root = get_data_root().resolve()
     runtime_roots = [path for path in runtime_paths if path.is_dir()]
+    local_only = {path.resolve() for path in (local_only_paths or set())}
     candidates = [*_flatten_strings(params), *(str(value) for value in command[1:])]
     for raw in candidates:
         if not raw.startswith("/"):
@@ -317,6 +325,8 @@ def _input_assets(
             raise RemoteBundleError(f"Input symlink is not allowed: {candidate}")
         path = candidate.resolve()
         if not path.exists() or path == output_dir.resolve() or _under(path, repo_root):
+            continue
+        if path in local_only:
             continue
         if not _under(path, data_root):
             raise RemoteBundleError(
@@ -334,6 +344,91 @@ def _rewrite(value: str, path_map: dict[str, str]) -> str:
     for local, remote in sorted(path_map.items(), key=lambda item: len(item[0]), reverse=True):
         rewritten = rewritten.replace(local, remote)
     return rewritten
+
+
+_REMOTE_PATH_OPTIONS = {
+    "--code_root",
+    "--data_root",
+    "--weights_root",
+    "--container_dir",
+    "--rfd_models",
+    "--af2_models",
+    "--boltz_models",
+    "--alphafold_params",
+    "--msa_local_db",
+    "--msa_cache_dir",
+    "--out_dir",
+    "-w",
+}
+
+
+def _command_without_local_only_paths(
+    command: list[str],
+    *,
+    model_id: str,
+    params: dict[str, Any],
+) -> list[str]:
+    """Remove host-only model paths that the selected remote workflow cannot consume."""
+    ignored: set[str] = set()
+    if (
+        str(model_id or "").strip().lower() == "protenix"
+        and str(params.get("protenix_msa_backend") or "").strip().lower() == "colabfold_api"
+    ):
+        ignored = {
+            "--rfd_models",
+            "--af2_models",
+            "--boltz_models",
+            "--alphafold_params",
+            "--msa_local_db",
+        }
+    filtered: list[str] = []
+    index = 0
+    while index < len(command):
+        option = str(command[index])
+        if option in ignored:
+            if index + 1 >= len(command):
+                raise RemoteBundleError(f"Remote command option has no value: {option}")
+            index += 2
+            continue
+        filtered.append(option)
+        index += 1
+    return filtered
+
+
+def _command_input_values(command: list[str]) -> list[str]:
+    """Return only potential immutable-input values, not launch topology paths."""
+    selected: list[str] = []
+    skip_value = False
+    for value in command[1:]:
+        token = str(value)
+        if skip_value:
+            skip_value = False
+            continue
+        if token in _REMOTE_PATH_OPTIONS:
+            skip_value = True
+            continue
+        selected.append(token)
+    return selected
+
+
+def _assert_remote_only_paths(
+    *,
+    remote_root: str,
+    command: list[str],
+    environment: dict[str, str],
+    path_map: dict[str, str],
+) -> None:
+    root = PurePosixPath(remote_root)
+    values = [*command, *environment.values(), *path_map.values()]
+    for raw in values:
+        candidate = str(raw).split("=", 1)[-1]
+        if not candidate.startswith("/"):
+            continue
+        path = PurePosixPath(candidate)
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise RemoteBundleError("Remote execution envelope contains a host-local path") from exc
 
 
 def prepare_remote_bundle(
@@ -427,12 +522,24 @@ def prepare_remote_bundle(
         _canonical_bytes([record.model_dump(mode="json") for record in runtime_records])
     ).hexdigest()
 
+    command = _command_without_local_only_paths(
+        command,
+        model_id=str(job.model_id),
+        params=dict(job.params or {}),
+    )
+    local_only_paths = {
+        repo_root,
+        data_root,
+        container_root,
+        weights_root,
+    }
     input_assets = _input_assets(
         dict(job.params or {}),
-        command=command,
+        command=[command[0], *_command_input_values(command)] if command else [],
         repo_root=repo_root,
         runtime_paths=runtime_paths,
         output_dir=local_output,
+        local_only_paths=local_only_paths,
     )
     input_records: list[RemoteFileRecord] = []
     input_transfers: list[TransferPlan] = []
@@ -446,22 +553,27 @@ def prepare_remote_bundle(
 
     source_records = _records_for_source(source_root, "source", "source")
     remote_results = f"{remote_attempt}/results"
-    path_map: dict[str, str] = {
+    translation_map: dict[str, str] = {
         **runtime_path_map,
         **input_path_map,
         str(repo_root): remote_source,
         str(container_root): f"{remote_runtime}/containers",
         str(weights_root): f"{remote_runtime}/weights",
-        str(data_root): str(data_root),
+        str(local_output): remote_results,
+        str(data_root): f"{remote_attempt}/data",
     }
     nextflow_executable = str(command[0]) if command else ""
-    translated_command = [_rewrite(str(value), path_map) for value in command]
+    translated_command = [_rewrite(str(value), translation_map) for value in command]
+    for index, value in enumerate(translated_command[:-1]):
+        if value == "-w":
+            translated_command[index + 1] = f"{remote_attempt}/work"
+        elif value == "--out_dir":
+            translated_command[index + 1] = remote_results
     if translated_command and Path(nextflow_executable).name == "nextflow":
         translated_command[0] = f"{remote_root}/runner/nextflow"
     elif translated_command and Path(nextflow_executable).name in {"python", "python3"}:
-        translated_command[0] = str(
-            data_root / "runtime" / "cm-api-python" / "current" / "venv" / "bin" / "python"
-        )
+        local_python = data_root / "runtime" / "cm-api-python" / "current" / "venv" / "bin" / "python"
+        translated_command[0] = _rewrite(str(local_python), translation_map)
 
     result_contract = resolve_job_result_contract(job)
     assignment = (
@@ -477,11 +589,12 @@ def prepare_remote_bundle(
         assigned_gpu_indices = [] if job.assigned_gpu is None else [int(job.assigned_gpu)]
     effective_environment = {
         "BMS_HOME": remote_source,
-        "BMS_DATA": str(data_root),
-        "BMS_WEIGHTS": str(data_root / "weights"),
-        "BMS_CONTAINER_DIR": str(data_root / "apptainer"),
-        "BMS_API_PYTHON": str(
-            data_root / "runtime" / "cm-api-python" / "current" / "venv" / "bin" / "python"
+        "BMS_DATA": f"{remote_attempt}/data",
+        "BMS_WEIGHTS": f"{remote_runtime}/weights",
+        "BMS_CONTAINER_DIR": f"{remote_runtime}/containers",
+        "BMS_API_PYTHON": _rewrite(
+            str(data_root / "runtime" / "cm-api-python" / "current" / "venv" / "bin" / "python"),
+            translation_map,
         ),
         "BMS_WORK": f"{remote_attempt}/work",
         "NXF_CACHE_DIR": f"{remote_attempt}/.nextflow",
@@ -522,6 +635,19 @@ def prepare_remote_bundle(
         }:
             effective_environment[key] = str(value)
 
+    remote_paths = {
+        "source": remote_source,
+        "runtime_assets": remote_runtime,
+        "job_inputs": f"{remote_attempt}/bundle/inputs",
+        "attempt_work": f"{remote_attempt}/work",
+        "attempt_output": remote_results,
+    }
+    _assert_remote_only_paths(
+        remote_root=remote_root,
+        command=translated_command,
+        environment=effective_environment,
+        path_map=remote_paths,
+    )
     records = [*source_records, *runtime_records, *input_records]
     envelope = RemoteExecutionEnvelope(
         job_id=str(job.id),
@@ -537,7 +663,7 @@ def prepare_remote_bundle(
         environment=effective_environment,
         output_directory=remote_results,
         expected_result_contract=result_contract,
-        path_map=path_map,
+        path_map=remote_paths,
         files=records,
         created_at=datetime.now(timezone.utc),
     )
