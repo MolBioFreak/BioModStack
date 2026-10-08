@@ -51,6 +51,34 @@ def durable_write(path: Path, payload: bytes) -> None:
 
 
 @dataclass(frozen=True)
+class GeneratedInput:
+    """Compiler-produced bytes, materialized only by the execution owner."""
+    relative_path: str
+    payload: bytes
+
+    def __post_init__(self) -> None:
+        path = PurePosixPath(self.relative_path)
+        if (not self.relative_path or path.is_absolute() or '..' in path.parts
+                or '\\' in self.relative_path or path.as_posix() != self.relative_path
+                or self.relative_path == '.' or type(self.payload) is not bytes):
+            raise ValueError('generated input requires a contained path and immutable bytes')
+
+    @property
+    def reference(self) -> dict[str, Any]:
+        return {'relative_path': self.relative_path, 'size_bytes': len(self.payload),
+                'sha256': hashlib.sha256(self.payload).hexdigest(), 'role': 'input'}
+
+    def materialize(self, root: Path) -> None:
+        root = Path(root).absolute()
+        target = root / self.relative_path
+        # No symlink traversal through either an existing root or its children.
+        for path in (root, *root.parents, target, *target.parents):
+            if path.is_symlink():
+                raise ValueError('generated input materialization cannot traverse symlinks')
+        durable_write(target, self.payload)
+
+
+@dataclass(frozen=True)
 class NativeInvocation:
     """Immutable output of the existing scientific command compiler.
 
@@ -64,6 +92,7 @@ class NativeInvocation:
     requested_json: bytes
     effective_json: bytes
     native_parameters_json: bytes
+    generated_inputs: tuple[GeneratedInput, ...] = ()
 
     def __post_init__(self) -> None:
         if (type(self.model_id) is not str or not self.model_id
@@ -72,6 +101,11 @@ class NativeInvocation:
             raise ValueError('native invocation requires model, mode and command')
         if any(not isinstance(value, str) or '\x00' in value for value in self.command):
             raise ValueError('native invocation command must contain text arguments')
+        if type(self.generated_inputs) is not tuple or any(not isinstance(item, GeneratedInput) for item in self.generated_inputs):
+            raise ValueError('generated input roster must be immutable and typed')
+        paths = [item.relative_path for item in self.generated_inputs]
+        if len(paths) != len(set(paths)):
+            raise ValueError('generated input paths must be unique')
         for payload in (self.requested_json, self.effective_json, self.native_parameters_json):
             if type(payload) is not bytes:
                 raise ValueError('native invocation snapshots must be immutable bytes')
@@ -82,9 +116,11 @@ class NativeInvocation:
     @classmethod
     def capture(cls, *, model_id: str, mode: str, command: Sequence[str],
                 requested: Mapping[str, Any], effective: Mapping[str, Any],
-                native_parameters: Mapping[str, Any]) -> NativeInvocation:
+                native_parameters: Mapping[str, Any],
+                generated_inputs: Sequence[GeneratedInput] = ()) -> NativeInvocation:
         return cls(model_id, mode, tuple(command), canonical_bytes(dict(requested)),
-                   canonical_bytes(dict(effective)), canonical_bytes(dict(native_parameters)))
+                   canonical_bytes(dict(effective)), canonical_bytes(dict(native_parameters)),
+                   tuple(generated_inputs))
 
     @property
     def native_parameters(self) -> dict[str, Any]:
@@ -99,7 +135,12 @@ class NativeInvocation:
             'requested': json.loads(self.requested_json),
             'effective': json.loads(self.effective_json),
             'native_parameters': self.native_parameters,
+            'generated_inputs': [item.reference for item in self.generated_inputs],
         }
+
+    def materialize_inputs(self, root: Path) -> None:
+        for item in self.generated_inputs:
+            item.materialize(root)
 
     @property
     def invocation_sha256(self) -> str:

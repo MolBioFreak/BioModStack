@@ -842,12 +842,16 @@ def _write_sequence_batch_name_map(
     *,
     output_dir: Path,
     entries: List[Dict[str, Any]],
+    write_input=None,
 ) -> None:
     if not entries:
         return
 
     csv_path = output_dir / "sequence_batch_manifest.csv"
-    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+    from io import StringIO
+    from component_runtime import durable_write
+    write_input = write_input or durable_write
+    with StringIO(newline="") as handle:
         writer = csv.DictWriter(
             handle,
             fieldnames=[
@@ -873,6 +877,7 @@ def _write_sequence_batch_name_map(
                     "complex_json": entry.get("complex_json", ""),
                 }
             )
+        write_input(csv_path, handle.getvalue().encode('utf-8'))
 
 
 def _write_sequence_batch_payloads(
@@ -880,7 +885,10 @@ def _write_sequence_batch_payloads(
     output_dir: str,
     params: Dict[str, Any],
     complex_components: Optional[List[Dict[str, Any]]],
+    write_input=None,
 ) -> Tuple[Optional[Path], Optional[Path], Optional[List[Dict[str, Any]]]]:
+    from component_runtime import durable_write
+    write_input = write_input or durable_write
     batch_prefix = (
         str(
             params.get("sequence_batch_prefix")
@@ -898,7 +906,6 @@ def _write_sequence_batch_payloads(
         return None, None, complex_components
 
     out_root = Path(output_dir)
-    out_root.mkdir(parents=True, exist_ok=True)
 
     sequence_batch_json_path: Optional[Path] = None
     complex_batch_dir: Optional[Path] = None
@@ -957,7 +964,6 @@ def _write_sequence_batch_payloads(
             raise ValueError("Could not determine which complex protein component should be replaced by sequence_batch_entries")
 
         complex_batch_dir = out_root / "complex_batch_inputs"
-        complex_batch_dir.mkdir(parents=True, exist_ok=True)
         batch_manifest: List[Dict[str, Any]] = []
         for index, entry in enumerate(batch_entries, start=1):
             variant_name = sanitize_filename(f"{entry['name']}")
@@ -980,8 +986,7 @@ def _write_sequence_batch_payloads(
                 "components": variant_components,
             }
             variant_path = complex_batch_dir / f"{index:03d}_{variant_name}.json"
-            with variant_path.open("w", encoding="utf-8") as handle:
-                json.dump(variant_payload, handle, indent=2)
+            write_input(variant_path, json.dumps(variant_payload, indent=2).encode('utf-8'))
             batch_manifest.append(
                 {
                     "name": variant_name,
@@ -991,15 +996,13 @@ def _write_sequence_batch_payloads(
                 }
             )
         sequence_batch_json_path = out_root / "sequence_batch_manifest.json"
-        with sequence_batch_json_path.open("w", encoding="utf-8") as handle:
-            json.dump(batch_manifest, handle, indent=2)
-        _write_sequence_batch_name_map(output_dir=out_root, entries=batch_manifest)
+        write_input(sequence_batch_json_path, json.dumps(batch_manifest, indent=2).encode('utf-8'))
+        _write_sequence_batch_name_map(output_dir=out_root, entries=batch_manifest, write_input=write_input)
         complex_components = normalized_components
     else:
         sequence_batch_json_path = Path(output_dir) / "sequence_batch_manifest.json"
-        with sequence_batch_json_path.open("w", encoding="utf-8") as handle:
-            json.dump(batch_entries, handle, indent=2)
-        _write_sequence_batch_name_map(output_dir=out_root, entries=batch_entries)
+        write_input(sequence_batch_json_path, json.dumps(batch_entries, indent=2).encode('utf-8'))
+        _write_sequence_batch_name_map(output_dir=out_root, entries=batch_entries, write_input=write_input)
 
     return sequence_batch_json_path, complex_batch_dir, complex_components
 
@@ -1134,6 +1137,7 @@ def _write_boltz_cp_input_yaml(
     output_dir: str,
     params: Dict[str, Any],
     complex_components: Optional[List[Dict[str, Any]]],
+    write_input=None,
 ) -> Optional[Path]:
     if params.get("bcp_input_path") or params.get("input_path"):
         return None
@@ -1165,12 +1169,10 @@ def _write_boltz_cp_input_yaml(
         sequences = [{"protein": protein_payload}]
 
     out_root = Path(output_dir)
-    out_root.mkdir(parents=True, exist_ok=True)
     yaml_path = out_root / "boltz_cp_input.yaml"
-    yaml_path.write_text(
-        yaml.safe_dump({"version": 1, "sequences": sequences}, sort_keys=False),
-        encoding="utf-8",
-    )
+    from component_runtime import durable_write
+    (write_input or durable_write)(yaml_path,
+        yaml.safe_dump({"version": 1, "sequences": sequences}, sort_keys=False).encode('utf-8'))
     return yaml_path
 
 
@@ -3347,13 +3349,13 @@ def uses_native_parent_components(command: list[str]) -> bool:
                for value in command if value.endswith('.nf'))
 
 
-def build_job_nextflow_command(job, params, output_dir, *, compiled_parameters=None):
+def build_job_nextflow_command(job, params, output_dir, *, compiled_parameters=None, materialize_inputs=True):
     """All launch/rebuild paths join request origin from their owning persisted Job."""
     from services.core_protein_scientific_contract import workflow_params
     requested = (job.provenance or {}).get('core_protein_requested_params')
     command = build_nextflow_command(job.model_id, job.mode, workflow_params(job, params),
         output_dir, job_id=job.id, requested_params=requested,
-        compiled_parameters=compiled_parameters)
+        compiled_parameters=compiled_parameters, materialize_inputs=materialize_inputs)
     if uses_native_parent_components(command) and params.get('run_frustrampnn') is True:
         from paths import get_container_dir
         from services.remote_execution.images import resolve_image
@@ -3383,10 +3385,13 @@ def build_nextflow_command(
     *,
     requested_params: Optional[Dict[str, Any]] = None,
     compiled_parameters: Optional[Dict[str, Any]] = None,
+    materialize_inputs: bool = True,
 ) -> list:
     """Compatibility argv projection of the shared scientific compilation."""
     invocation = compile_nextflow_invocation(model_id, mode, params, output_dir,
         job_id=job_id, requested_params=requested_params)
+    if materialize_inputs:
+        invocation.materialize_inputs(Path(output_dir))
     if compiled_parameters is not None:
         compiled_parameters.clear()
         compiled_parameters.update(invocation.native_parameters)
@@ -3407,16 +3412,21 @@ def compile_nextflow_invocation(
     This is shared by preview, local/remote launch and saved-job prewarming;
     transport adapters must not reconstruct its settings from rendered argv.
     """
-    from component_runtime import NativeInvocation
+    from component_runtime import NativeInvocation, GeneratedInput
     from copy import deepcopy
     requested_snapshot = deepcopy(params if requested_params is None else requested_params)
     native_parameters: Dict[str, Any] = {}
+    generated_inputs = []
+
+    def plan_input(path: Path, payload: bytes) -> None:
+        relative = path.absolute().relative_to(Path(output_dir).absolute()).as_posix()
+        generated_inputs.append(GeneratedInput(relative, payload))
 
     def finish_command(command):
         return NativeInvocation.capture(model_id=model_id, mode=mode,
             command=[os.fspath(value) if isinstance(value, os.PathLike) else value for value in command],
             requested=requested_snapshot, effective=params,
-            native_parameters=native_parameters)
+            native_parameters=native_parameters, generated_inputs=generated_inputs)
 
     from services.msa_policy import apply_msa_policy
     params = apply_msa_policy(model_id, params)
@@ -4196,6 +4206,7 @@ def compile_nextflow_invocation(
         output_dir=output_dir,
         params=params,
         complex_components=complex_components,
+        write_input=plan_input,
     )
     
     # Model-specific param preprocessing: Route ntp_type and ligand_smiles to correct targets
@@ -4569,6 +4580,7 @@ def compile_nextflow_invocation(
                 output_dir=output_dir,
                 params=params,
                 complex_components=complex_components,
+                write_input=plan_input,
             )
             if staged_bcp_input is not None:
                 params['bcp_input_path'] = str(staged_bcp_input)
@@ -4689,9 +4701,8 @@ def compile_nextflow_invocation(
             params['esmf_model_id_or_path'] = default_model_id
         if complex_components:
             esmfold2_complex_path = Path(output_dir) / "esmfold2_complex_components.json"
-            esmfold2_complex_path.parent.mkdir(parents=True, exist_ok=True)
-            with esmfold2_complex_path.open("w", encoding="utf-8") as handle:
-                json.dump({"components": complex_components}, handle, indent=2)
+            plan_input(esmfold2_complex_path,
+                json.dumps({"components": complex_components}, indent=2).encode('utf-8'))
             params['esmf_complex_components_file'] = str(esmfold2_complex_path)
             # The canonical structure launcher includes the primary protein in complex_components.
             # Passing both --esmf_sequence and a components file would duplicate chain IDs in the
@@ -4721,11 +4732,9 @@ def compile_nextflow_invocation(
             params['rfd_mode'] = mode
     if complex_components:
         complex_json_path = Path(output_dir) / "complex_definition.json"
-        # Ensure output directory exists
-        complex_json_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(complex_json_path, 'w') as f:
-            json.dump({"components": complex_components}, f, indent=2)
-        logger.info(f"Wrote complex definition to {complex_json_path}")
+        plan_input(complex_json_path,
+            json.dumps({"components": complex_components}, indent=2).encode('utf-8'))
+        logger.info(f"Compiled complex definition for {complex_json_path}")
         cmd.extend(["--complex_json_path", str(complex_json_path)])
         native_parameters['complex_json_path'] = str(complex_json_path)
 
@@ -4768,8 +4777,7 @@ def compile_nextflow_invocation(
                 if key == 'fampnn_analysis_declaration':
                     declaration_bytes = json.dumps(value, allow_nan=False, sort_keys=True).encode('utf-8')
                     declaration_path = Path(output_dir) / '.fampnn-analysis-declaration.json'
-                    declaration_path.parent.mkdir(parents=True, exist_ok=True)
-                    declaration_path.write_bytes(declaration_bytes)
+                    plan_input(declaration_path, declaration_bytes)
                     cmd.extend(['--fampnn_analysis_declaration_path', str(declaration_path),
                                 '--fampnn_analysis_declaration_sha256', hashlib.sha256(declaration_bytes).hexdigest()])
                     native_parameters['fampnn_analysis_declaration_path'] = str(declaration_path)

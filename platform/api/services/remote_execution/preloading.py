@@ -64,7 +64,7 @@ def compile_recipe(job, *, compiled_parameters=None):
     if job.model_id == "msa_batch":
         return _build_msa_batch_command(deepcopy(job.params), output)
     return build_job_nextflow_command(job, deepcopy(job.params), output,
-        compiled_parameters=compiled_parameters)
+        compiled_parameters=compiled_parameters, materialize_inputs=False)
 
 
 def endpoint(target):
