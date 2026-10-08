@@ -666,6 +666,74 @@ def count_structure_files(output_dir: str) -> int:
         return 0
 
 
+def _positive_int(value: Any) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return number if number > 0 else 0
+
+
+def _terminal_closeout_design_count(output_path: Path) -> int:
+    counts: List[int] = []
+
+    final_designs_path = output_path / "final_designs.txt"
+    if final_designs_path.exists():
+        try:
+            counts.append(
+                sum(
+                    1
+                    for line in final_designs_path.read_text(errors="ignore").splitlines()
+                    if line.strip()
+                )
+            )
+        except Exception:
+            pass
+
+    report_path = output_path / "terminal_closeout_report.json"
+    if report_path.exists():
+        try:
+            report = json.loads(report_path.read_text(errors="ignore"))
+            status = str(report.get("status") or "").strip().lower()
+            report_count = _positive_int(
+                report.get("total_terminal_designs")
+                or report.get("final_design_count")
+                or report.get("design_count")
+            )
+            if status in {"complete", "completed"}:
+                counts.append(report_count or 1)
+        except Exception:
+            pass
+
+    for relative_dir in (
+        Path("run") / "rfantibody",
+        Path("collected") / "rfantibody_raw",
+        Path("results"),
+    ):
+        artifact_dir = output_path / relative_dir
+        if artifact_dir.exists():
+            try:
+                counts.append(len(list(artifact_dir.glob("*.pdb"))))
+            except Exception:
+                pass
+
+    return max(counts) if counts else 0
+
+
+def _has_terminal_closeout_completion(job: Job) -> bool:
+    """Return True when terminal artifacts prove a completed closeout despite history ERR.
+
+    Some RFantibody runs can finish artifact generation and then trip a terminal
+    closeout bookkeeping/self-copy error, leaving .nextflow/history as ERR. Do
+    not let response-time reconciliation demote a job once closeout artifacts
+    prove non-zero terminal designs were published.
+    """
+    output_path = resolve_output_dir(job.output_dir) if job.output_dir else None
+    if not output_path or not output_path.exists():
+        return False
+    return _terminal_closeout_design_count(output_path) > 0
+
+
 def _infer_gate_stage_from_files(job: Job) -> Optional[str]:
     output_path = resolve_output_dir(job.output_dir) if job.output_dir else None
     if not output_path:
@@ -750,6 +818,36 @@ def _repair_job_for_response(job: Job) -> bool:
         if inferred_stage:
             job.awaiting_stage = inferred_stage
             changed = True
+
+    if history_status == "ERR" and not gate_present and _has_terminal_closeout_completion(job):
+        if job.status != JobStatus.COMPLETED.value:
+            job.status = JobStatus.COMPLETED.value
+            changed = True
+        if job.queue_status != "completed":
+            job.queue_status = "completed"
+            changed = True
+        if job.current_stage != "Complete":
+            job.current_stage = "Complete"
+            changed = True
+        if job.stage_progress is not None:
+            job.stage_progress = None
+            changed = True
+        if job.awaiting_stage is not None:
+            job.awaiting_stage = None
+            changed = True
+        if job.awaiting_payload:
+            job.awaiting_payload = {}
+            changed = True
+        if job.awaiting_input:
+            job.awaiting_input = False
+            changed = True
+        if job.error_message:
+            job.error_message = None
+            changed = True
+        if not job.completed_at:
+            job.completed_at = datetime.utcnow()
+            changed = True
+        return changed
 
     if history_status == "OK" and not gate_present and not job.awaiting_input:
         if job.status != JobStatus.COMPLETED.value:
