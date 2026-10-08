@@ -48,17 +48,47 @@ function expandUser(value: string, homeDir: string): string {
   return value;
 }
 
+// Match pathlib.resolve(strict=False): canonicalize existing ancestors while
+// retaining a missing suffix. Do not resolve publication symlinks themselves.
+function canonicalPath(value: string, depth = 0): string {
+  if (depth > 40) throw new Error('Configuration path has too many symbolic links');
+  // Do not normalize '..' before following symlinks: pathlib resolves the
+  // components in order, so /alias/../config need not mean /config.
+  const absolute = path.isAbsolute(value) ? value : `${process.cwd()}${path.sep}${value}`;
+  const root = path.parse(absolute).root;
+  let current = root;
+  for (const part of absolute.slice(root.length).split(path.sep)) {
+    if (!part || part === '.') continue;
+    if (part === '..') { current = path.dirname(current); continue; }
+    const candidate = path.join(current, part);
+    try {
+      if (fs.lstatSync(candidate).isSymbolicLink()) {
+        const target = fs.readlinkSync(candidate);
+        current = canonicalPath(path.isAbsolute(target) ? target : `${current}${path.sep}${target}`, depth + 1);
+      } else current = candidate;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      current = candidate;
+    }
+  }
+  return current;
+}
+
+function homePath(options: ShellPathOptions): string {
+  return canonicalPath(options.homeDir ?? (options.env ?? process.env).HOME ?? os.homedir());
+}
+
 function resolveUserPath(value: string, homeDir: string): string {
-  return path.resolve(expandUser(value, homeDir));
+  return canonicalPath(expandUser(value, homeDir));
 }
 
 function resolveConfigDir(options: ShellPathOptions = {}): string {
-  const homeDir = options.homeDir ?? os.homedir();
+  const homeDir = homePath(options);
   const env = options.env ?? process.env;
   if (env.XDG_CONFIG_HOME?.trim()) {
     return path.join(resolveUserPath(env.XDG_CONFIG_HOME, homeDir), 'biomodstack');
   }
-  return path.join(homeDir, '.config', 'biomodstack');
+  return path.join(canonicalPath(path.join(homeDir, '.config')), 'biomodstack');
 }
 
 function loadInstallProfile(options: ShellPathOptions = {}): InstallProfile {
@@ -73,7 +103,7 @@ function loadInstallProfile(options: ShellPathOptions = {}): InstallProfile {
     const destinations = {
       profile: path.join(resolveConfigDir(options), 'install_profile.json'),
       core_runtime_env: path.join(resolveConfigDir(options), 'core-runtime.env'),
-      compat_env: path.join(options.homeDir ?? os.homedir(), '.biomodstack', 'env.sh'),
+      compat_env: path.join(homePath(options), '.biomodstack', 'env.sh'),
     };
     for (const [key, destination] of Object.entries(destinations)) {
       if (journal.context.destinations[key] !== destination) throw new Error('Configuration context changed');
@@ -84,24 +114,24 @@ function loadInstallProfile(options: ShellPathOptions = {}): InstallProfile {
     }
   }
   const installProfilePath = path.join(resolveConfigDir(options), 'install_profile.json');
-  if (!pathExists(installProfilePath)) {
-    return {};
-  }
+  let profile: InstallProfile = {};
   try {
-    const parsed = JSON.parse(readText(installProfilePath));
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return {};
+    if (pathExists(installProfilePath)) {
+      const parsed = JSON.parse(readText(installProfilePath));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) profile = parsed as InstallProfile;
     }
-    if (managed !== pathExists(transaction)) throw new Error("Configuration changed; retry");
-    return parsed as InstallProfile;
   } catch (error) {
-    if (managed || pathExists(transaction)) throw error;
-    return {};
+    if (managed) throw error;
+  } finally {
+    // Every exit, including missing/invalid JSON and shape errors, must reject
+    // a writer that became visible during this read. Never select legacy state.
+    if (managed !== pathExists(transaction)) throw new Error('Configuration changed; retry');
   }
+  return profile;
 }
 
 export function resolveProjectRoot(options: ShellPathOptions = {}): string {
-  const homeDir = options.homeDir ?? os.homedir();
+  const homeDir = homePath(options);
   const env = options.env ?? process.env;
 
   if (env.BMS_HOME?.trim()) {
@@ -114,12 +144,12 @@ export function resolveProjectRoot(options: ShellPathOptions = {}): string {
 }
 
 function resolveStateHome(options: ShellPathOptions): string {
-  const homeDir = options.homeDir ?? os.homedir();
+  const homeDir = homePath(options);
   const env = options.env ?? process.env;
   if (env.XDG_STATE_HOME?.trim()) {
     return resolveUserPath(env.XDG_STATE_HOME, homeDir);
   }
-  return path.join(homeDir, '.local', 'state');
+  return canonicalPath(path.join(homeDir, '.local', 'state'));
 }
 
 function candidateDataRoots(homeDir: string): string[] {
@@ -134,7 +164,18 @@ function looksLikeDataRoot(candidate: string, pathExists: (target: string) => bo
 }
 
 export function resolveDataRoot(options: ShellPathOptions = {}): string {
-  const homeDir = options.homeDir ?? os.homedir();
+  const pathExists = options.pathExists ?? fs.existsSync;
+  const transaction = path.join(resolveConfigDir(options), 'configuration-v1');
+  const managed = pathExists(transaction);
+  try {
+    return resolveDataRootSnapshot(options);
+  } finally {
+    if (managed !== pathExists(transaction)) throw new Error('Configuration changed; retry');
+  }
+}
+
+function resolveDataRootSnapshot(options: ShellPathOptions): string {
+  const homeDir = homePath(options);
   const env = options.env ?? process.env;
 
   const installProfile = loadInstallProfile(options);

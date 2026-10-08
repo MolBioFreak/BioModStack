@@ -14,6 +14,8 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
+import tempfile
 import uuid
 
 import biomodstack_runtime_profile as profiles
@@ -45,28 +47,58 @@ def _sync(path: Path) -> None:
 
 
 def _mkdir(path: Path) -> None:
-    if not path.exists():
-        _mkdir(path.parent)
+    # Canonical HOME/XDG aliases are resolved before reaching this boundary.
+    # Below those roots, never follow a pre-existing symlink or adopt a foreign
+    # directory. Root-owned ancestors (e.g. /tmp) are not write destinations.
+    for ancestor in reversed(path.parents):
+        if not os.path.lexists(ancestor):
+            continue
+        info = ancestor.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid not in {Path("/").stat().st_uid, os.geteuid()}:
+            raise ConfigurationBlocked(f"unsafe_directory: {ancestor}")
+    if not os.path.lexists(path):
+        if not os.path.lexists(path.parent):
+            _mkdir(path.parent)
         path.mkdir(mode=0o700)
         _sync(path.parent)
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+        raise ConfigurationBlocked(f"unsafe_directory: {path}")
 
 
-def _write(path: Path, data: str) -> None:
-    temporary = path.with_name(path.name + ".tmp")
-    with temporary.open("w", encoding="utf-8") as stream:
-        os.chmod(temporary, 0o600)
-        stream.write(data)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
-    _sync(path.parent)
+def _write(path: Path, data: str, *, replace: bool = False) -> None:
+    _mkdir(path.parent)
+    # mkstemp uses random names, O_CREAT|O_EXCL, and mode 0600. O_EXCL
+    # refuses existing symlinks (including dangling ones) without following.
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if replace:
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
+                raise ConfigurationBlocked(f"unsafe_file: {path}")
+            os.replace(temporary, path)
+        else:
+            os.link(temporary, path)  # exclusive publication; preserve existing entries
+            temporary.unlink()
+        _sync(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 @contextmanager
 def configuration_lock():
     root = profiles.get_biomodstack_config_dir()
     _mkdir(root)
-    with (root / "configuration.lock").open("a") as stream:
+    fd = os.open(root / "configuration.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    with os.fdopen(fd, "r+") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
+            raise ConfigurationBlocked("unsafe_lock: expected owned regular file")
         try:
             fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -158,14 +190,38 @@ def _checkpoint(name: str) -> None:
     """Test seam: tests monkeypatch this, never an environment-controlled backdoor."""
 
 
+def _check_first_install_state(resolved: dict, source: Path, *, owned_links: bool = False) -> None:
+    destinations = _destinations()
+    def owned(path: Path) -> bool:
+        return owned_links and any(
+            path == Path(target) and path.is_symlink()
+            and os.readlink(path) == str(transaction_dir() / "active" / key)
+            for key, target in destinations.items())
+
+    for target in [*destinations.values(), str(source / ".env.core-runtime.local")]:
+        path = Path(target)
+        if os.path.lexists(path) and not owned(path):
+            raise ConfigurationBlocked(f"existing_install_migration_unsupported: {path}")
+    for field in profiles.MUTABLE_RUNTIME_STORAGE_FIELDS:
+        for key in (field, "dev_" + field):
+            path = Path(str(resolved[key]))
+            if os.path.lexists(path) and (not path.is_dir() or path.is_symlink() or any(path.iterdir())):
+                raise ConfigurationBlocked(f"stale_storage: first-install state appeared at {path}")
+    for path in (Path.home().resolve() / ".biomodstack", Path.home().resolve() / ".biomodstack-dev"):
+        if os.path.lexists(path):
+            if path.is_symlink() or not path.is_dir() or any(not owned(entry) for entry in path.iterdir()):
+                raise ConfigurationBlocked(f"existing_state_migration_unsupported: {path}")
+
+
 def _finish(journal: dict) -> None:
     root = transaction_dir()
+    _mkdir(root)
     # Staging is restartable from the durable, validated journal. Never repair
     # changed existing files: corruption/tampering must not become success.
     _mkdir(root / "generation")
     for key, content in journal["files"].items():
         path = root / "generation" / key
-        if not path.exists():
+        if not os.path.lexists(path):
             _write(path, content)
         elif path.is_symlink() or path.read_text() != content:
             raise ConfigurationBlocked(f"staging_conflict: {key}")
@@ -173,17 +229,13 @@ def _finish(journal: dict) -> None:
     # Also sync on resume: a previous directory fsync may have failed after rename.
     _sync(root / "generation")
     _verify(journal, activated=False)
+    profile = json.loads(journal["files"]["profile"])
+    resolved = profiles.resolve_runtime_paths(Path(journal["context"]["source"]),
+                                              profile=profile, environ={})
     if not (root / "active").exists():
         # A resumed first-install must not adopt state that appeared while it
         # was interrupted. Once activated, normal runtime state is permitted.
-        profile = json.loads(journal["files"]["profile"])
-        resolved = profiles.resolve_runtime_paths(Path(journal["context"]["source"]),
-                                                  profile=profile, environ={})
-        for field in profiles.MUTABLE_RUNTIME_STORAGE_FIELDS:
-            for key in (field, "dev_" + field):
-                path = Path(str(resolved[key]))
-                if path.exists() and (path.is_file() or any(path.iterdir())):
-                    raise ConfigurationBlocked(f"stale_storage: first-install state appeared at {path}")
+        _check_first_install_state(resolved, Path(journal["context"]["source"]), owned_links=True)
     _checkpoint("validated")
     for key, target in journal["context"]["destinations"].items():
         path = Path(target)
@@ -199,13 +251,15 @@ def _finish(journal: dict) -> None:
         _checkpoint("publish:" + key)
     _checkpoint("before_activation")
     active = root / "active"
+    if not active.exists():
+        _check_first_install_state(resolved, Path(journal["context"]["source"]), owned_links=True)
     if not active.is_symlink():
         os.symlink("generation", active)
     _sync(root)
     _verify(journal, activated=True)
     _checkpoint("activated")
     journal["state"] = "committed"
-    _write(root / "journal.json", _json(journal))
+    _write(root / "journal.json", _json(journal), replace=True)
     _checkpoint("committed")
 
 
@@ -258,7 +312,17 @@ def configuration_report(action: str, *, project_root: Path, document: Path | No
                     raise ConfigurationBlocked("export_format_unsupported: paths must use shell/dotenv-safe characters")
         with configuration_lock():
             report["effects"]["writes"] = True  # lock/directory metadata, even on rejection
+            if os.path.lexists(pending):
+                _mkdir(pending)
+            if os.path.lexists(root):
+                _mkdir(root)
             if not root.exists() and (pending / "journal.json").is_file():
+                journal_path = pending / "journal.json"
+                if set(pending.iterdir()) != {journal_path}:
+                    raise ConfigurationBlocked("staging_conflict: unowned preparing entries")
+                info = journal_path.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
+                    raise ConfigurationBlocked("unsafe_file: preparing journal")
                 os.rename(pending, root)
                 _sync(root.parent)
             if root.exists():
@@ -284,17 +348,7 @@ def configuration_report(action: str, *, project_root: Path, document: Path | No
                     raise ConfigurationBlocked("operation_disappeared: retry configuration")
                 # Recheck after locking: do not accept candidate defaults over
                 # existing profiles, exports, legacy source config or user state.
-                for target in [*context["destinations"].values(), str(project_root / ".env.core-runtime.local")]:
-                    if os.path.lexists(target):
-                        raise ConfigurationBlocked(f"existing_install_migration_unsupported: {target}")
-                for key in profiles.MUTABLE_RUNTIME_STORAGE_FIELDS:
-                    for lane in (key, "dev_" + key):
-                        path = Path(preview["resolved"][lane])
-                        if path.exists() and (path.is_file() or any(path.iterdir())):
-                            raise ConfigurationBlocked(f"existing_state_migration_unsupported: {path}")
-                for path in (Path.home() / ".biomodstack", Path.home() / ".biomodstack-dev"):
-                    if path.exists() and any(path.iterdir()):
-                        raise ConfigurationBlocked(f"existing_state_migration_unsupported: {path}")
+                _check_first_install_state(preview["resolved"], project_root)
                 # Freeze effective local defaults so exports and runtime profile
                 # remain equal even if host capacity changes after recovery.
                 profile = dict(preview["profile"])
@@ -313,6 +367,8 @@ def configuration_report(action: str, *, project_root: Path, document: Path | No
                 # interruption can never expose an operation without its identity.
                 pending = root.with_name("configuration-v1-preparing")
                 _mkdir(pending)
+                if any(pending.iterdir()):
+                    raise ConfigurationBlocked("staging_conflict: unowned preparing entries")
                 _write(pending / "journal.json", _json(journal))
                 report["operation_id"] = journal["operation_id"]
                 _checkpoint("pending_journal")
