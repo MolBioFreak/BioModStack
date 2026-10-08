@@ -124,7 +124,7 @@ def build_ppiflow_local_objective_metric(
         metric_source="ppiflow_local_score_json",
         scoring_backend="biomodstack_local_pair_energy_geometry",
         artifact_path=artifact_path,
-        formula=f"BMS local maturation objective ({objective_mode or 'unspecified'}); not AF3Score/Rosetta/DockQ paper composite rank",
+        formula=f"BMS local maturation objective ({objective_mode or 'unspecified'}); not upstream PPIFlow paper composite rank",
         scope="design",
         region_scope="selected_regions",
         is_model_native=False,
@@ -137,7 +137,6 @@ def build_ppiflow_local_objective_metric(
             "objective_mode": objective_mode,
             "af3score_used": False,
             "rosetta_interface_score_used": False,
-            "dockq_used": False,
             "upstream_ppiflow_paper_rank_used": False,
         },
     )
@@ -192,7 +191,6 @@ def build_design_metric_completeness(subject: Any) -> Dict[str, Any]:
         _has_numeric(subject, "rosetta_interface_score")
         or confidence.get("rosetta_interface_score") is not None
     )
-    has_dockq = bool(_has_numeric(subject, "dockq", "dockq_mean") or confidence.get("dockq") is not None)
     paper_rank = bool(has_validator and has_rosetta)
 
     missing: List[str] = []
@@ -202,8 +200,6 @@ def build_design_metric_completeness(subject: Any) -> Dict[str, Any]:
         missing.append("ppiflow_validator_confidence")
     if has_local_ppiflow and not has_rosetta:
         missing.append("ppiflow_rosetta_interface_score")
-    if has_local_ppiflow and not has_dockq:
-        missing.append("ppiflow_dockq_or_template_free_refold")
     if has_local_ppiflow and not paper_rank:
         missing.append("ppiflow_paper_composite_rank")
 
@@ -220,7 +216,6 @@ def build_design_metric_completeness(subject: Any) -> Dict[str, Any]:
             "local_objective_available": has_local_ppiflow,
             "validator_confidence_available": has_validator,
             "rosetta_interface_score_available": has_rosetta,
-            "dockq_or_refold_available": has_dockq,
             "paper_rank_available": paper_rank,
         },
     }

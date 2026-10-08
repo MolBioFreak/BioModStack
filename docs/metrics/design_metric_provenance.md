@@ -15,7 +15,7 @@ BioModStack result rows must distinguish model-native outputs, BioModStack-deriv
 - `ppiflow_objective_score` is currently a BioModStack-local maturation objective from local interface/geometry scoring.
 - Direction: lower is better.
 - Use: local refinement triage.
-- Not use: upstream PPIFlow paper final rank unless validator confidence, Rosetta/interface score, DockQ/refold validation, and formula provenance are also present.
+- Not use: upstream PPIFlow paper final rank unless validator confidence, Rosetta/interface score, and formula provenance are also present.
 
 ## Required row-level reporting
 
@@ -37,6 +37,6 @@ Every design row that surfaces these metrics should carry:
 
 A candidate with pSCE but no FA-MPNN sequence probabilities is `partial`.
 
-A candidate with BMS-local PPIFlow objective but no validator/Rosetta/DockQ/composite rank is `partial`.
+A candidate with BMS-local PPIFlow objective but no validator/Rosetta/composite rank is `partial`.
 
 Only call a PPIFlow result paper-aligned when the final rank formula and source metrics are explicit.

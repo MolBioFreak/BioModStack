@@ -40,15 +40,12 @@ def _completeness(row: Dict[str, Any]) -> Dict[str, Any]:
     has_local = _bool_has(row.get("ppiflow_objective_score"))
     has_validator = _bool_has(row.get("validator_iptm"))
     has_rosetta = _bool_has(row.get("rosetta_interface_score"))
-    has_dockq = _bool_has(row.get("dockq")) or _bool_has(row.get("dockq_mean"))
     paper_rank = has_validator and has_rosetta
     missing: List[str] = []
     if has_local and not has_validator:
         missing.append("ppiflow_validator_confidence")
     if has_local and not has_rosetta:
         missing.append("ppiflow_rosetta_interface_score")
-    if has_local and not has_dockq:
-        missing.append("ppiflow_dockq_or_template_free_refold")
     if has_local and not paper_rank:
         missing.append("ppiflow_paper_composite_rank")
     return {
@@ -57,7 +54,6 @@ def _completeness(row: Dict[str, Any]) -> Dict[str, Any]:
         "local_objective_available": has_local,
         "validator_confidence_available": has_validator,
         "rosetta_interface_score_available": has_rosetta,
-        "dockq_or_refold_available": has_dockq,
         "paper_rank_available": paper_rank,
     }
 
@@ -71,8 +67,6 @@ def reconcile_row(raw: Dict[str, Any]) -> Dict[str, Any]:
         "iptm",
         "pair_iptm",
         "rosetta_interface_score",
-        "dockq",
-        "dockq_mean",
     ):
         if key in row:
             row[key] = _float(row.get(key))
