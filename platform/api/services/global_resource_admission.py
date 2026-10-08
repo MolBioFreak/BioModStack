@@ -103,6 +103,64 @@ def _owner_lock(identifier):
     return descriptor
 
 
+def _move_reason(journal):
+    return "storage_move:" + json.dumps(journal, sort_keys=True, separators=(",", ":"))
+
+
+def _move_journal(row):
+    reason = row["release_reason"] or ""
+    return json.loads(reason[len("storage_move:"):]) if reason.startswith("storage_move:") else None
+
+
+def _row_storage_path(row):
+    move = _move_journal(row)
+    if move and move["pending"]:
+        raise ResourceCapacityUnavailable("interrupted storage move requires explicit recovery")
+    return Path(move["destination"] if move else row["storage_path"])
+
+
+def _storage_rows(db, path):
+    rows = []
+    for row in db.execute("SELECT * FROM derived_resource_reservations WHERE state!='released' "
+                          "ORDER BY created_at,reservation_id"):
+        move = _move_journal(row)
+        if move and move["pending"]:
+            if str(path) in {move["source"], move["destination"], row["storage_path"]}:
+                raise ResourceCapacityUnavailable("interrupted storage move requires explicit recovery")
+        elif str(_row_storage_path(row)) == str(path):
+            rows.append(row)
+    return rows
+
+
+def recover_quiescent_storage_move(reservation_id):
+    """Explicit restart repair; retain the entire charge if location is ambiguous."""
+    target, _, machine = _target()
+    descriptor = _owner_lock(reservation_id)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        with _transaction() as db:
+            row = db.execute("SELECT * FROM derived_resource_reservations WHERE reservation_id=?",
+                             (reservation_id,)).fetchone()
+            if row is None or row["target_id"] != target or row["machine_id"] != machine:
+                return False
+            move = _move_journal(row)
+            if not move or not move["pending"] or row["state"] == "released":
+                return False
+            locations = [Path(move[key]) for key in ("source", "destination") if Path(move[key]).exists()]
+            if len(locations) != 1 or owned_storage_bytes(locations[0]) > row["disk_bytes"]:
+                return False
+            move.update(destination=str(locations[0]), pending=False)
+            db.execute("UPDATE derived_resource_reservations SET state='orphaned',cpu_threads=0,dram_bytes=0,"
+                       "release_reason=?,updated_at=? WHERE reservation_id=?",
+                       (_move_reason(move), _now(), reservation_id))
+        return True
+    finally:
+        os.close(descriptor)
+
+
 def _recover(db, target, machine):
     # Lock files are never unlinked: inode replacement must not split ownership.
     # No timestamp, PID reuse, heartbeat, or expired scientific lease releases
@@ -116,7 +174,8 @@ def _recover(db, target, machine):
             except BlockingIOError:
                 continue
             db.execute("UPDATE derived_resource_reservations SET state='orphaned', "
-                       "cpu_threads=0, dram_bytes=0, updated_at=?, release_reason=? "
+                       "cpu_threads=0, dram_bytes=0, updated_at=?, release_reason=CASE "
+                       "WHEN release_reason LIKE 'storage_move:%' THEN release_reason ELSE ? END "
                        "WHERE reservation_id=? AND state IN ('active','retained')",
                        (_now(), "resident_storage_owner_quiescent" if row["state"] == "retained" else
                         "owner_lock_quiescent; disk retained pending cleanup", row["reservation_id"]))
@@ -180,6 +239,7 @@ def _capacity(db, storage_root, *, resident_credit=0):
     # conservatively pending until the quiescent storage owner reconciles it.
     pending_disk = db.execute("SELECT COALESCE(SUM(disk_bytes),0) FROM derived_resource_reservations "
         "WHERE machine_id=? AND storage_device=? AND state NOT IN ('released','retained') "
+        "AND COALESCE(release_reason,'') NOT LIKE 'storage_move:%' "
         "AND COALESCE(release_reason,'') NOT IN ('resident_storage_owner_quiescent',"
         "'quiescent_owned_storage_reconciled')", (machine, device)).fetchone()[0]
     workflow_cpu = workflow_ram = 0
@@ -220,6 +280,33 @@ class Allocation:
         self.cpu_threads, self.dram_bytes, self.disk_bytes = 0, dram_bytes, disk_bytes
         self._resident = True
 
+    def move_storage(self, destination):
+        """Journal an owner-controlled same-filesystem rename before moving bytes.
+
+        Reservation identity is immutable. Its mutable lifecycle reason records
+        the physical location, so a crash never makes moved bytes look removed.
+        A pending move blocks cleanup/adoption until explicit recovery.
+        """
+        destination = Path(destination).resolve(strict=False)
+        if self._closed or not self._resident or destination.exists():
+            raise ResourceCapacityUnavailable("storage move requires resident exclusive ownership")
+        if str(destination.parent.stat().st_dev) != self.receipt["storage_device"]:
+            raise ResourceCapacityUnavailable("resource storage moved across devices")
+        with _transaction() as db:
+            row = db.execute("SELECT * FROM derived_resource_reservations WHERE reservation_id=? AND token=?",
+                             (self.reservation_id, self.token)).fetchone()
+            if row is None or row["state"] != "retained":
+                raise ResourceCapacityUnavailable("resource allocation ownership lost")
+            source = _row_storage_path(row)
+            journal = {"source": str(source), "destination": str(destination), "pending": True}
+            db.execute("UPDATE derived_resource_reservations SET release_reason=?,updated_at=? WHERE reservation_id=?",
+                (_move_reason(journal), _now(), self.reservation_id))
+        os.replace(source, destination)
+        journal["pending"] = False
+        with _transaction() as db:
+            db.execute("UPDATE derived_resource_reservations SET release_reason=?,updated_at=? WHERE reservation_id=? AND token=?",
+                       (_move_reason(journal), _now(), self.reservation_id, self.token))
+
     def release(self, *, storage_removed=False):
         """Call only after all threads/children/readers quiesce.
 
@@ -230,7 +317,8 @@ class Allocation:
             return
         with _transaction() as db:
             db.execute("UPDATE derived_resource_reservations SET state=?,cpu_threads=0,dram_bytes=0,"
-                       "disk_bytes=?,updated_at=?,release_reason=? WHERE reservation_id=? AND token=? "
+                       "disk_bytes=?,updated_at=?,release_reason=CASE WHEN release_reason LIKE 'storage_move:%' "
+                       "THEN release_reason ELSE ? END WHERE reservation_id=? AND token=? "
                        "AND state IN ('active','retained')",
                        ("released" if storage_removed or not self.disk_bytes else "orphaned",
                         0 if storage_removed else self.disk_bytes, _now(),
@@ -268,8 +356,7 @@ def reserve(*, owner, storage_root, cpu_threads=1, dram_bytes=None, disk_bytes=N
                 except ValueError as exc:
                     raise ResourceCapacityUnavailable("owned storage escapes allocation root") from exc
                 target_id, _, machine_id = _target()
-                rows = db.execute("SELECT * FROM derived_resource_reservations WHERE storage_path=? "
-                    "AND state!='released'", (str(owned),)).fetchall()
+                rows = _storage_rows(db, owned)
                 for row in rows:
                     if row["target_id"] != target_id or row["machine_id"] != machine_id:
                         raise ResourceCapacityUnavailable("storage accounting belongs to another execution target")
@@ -379,9 +466,9 @@ def reconcile_quiescent_storage(owned_path):
     descriptors = []
     try:
         with _transaction() as db:
-            rows = db.execute("SELECT * FROM derived_resource_reservations WHERE target_id=? AND machine_id=? "
-                              "AND storage_path=? AND state!='released' ORDER BY created_at,reservation_id",
-                              (target, machine, path)).fetchall()
+            rows = _storage_rows(db, path)
+            if any(row["target_id"] != target or row["machine_id"] != machine for row in rows):
+                return False
             for row in rows:
                 descriptor = _owner_lock(row["reservation_id"])
                 descriptors.append(descriptor)
@@ -397,7 +484,8 @@ def reconcile_quiescent_storage(owned_path):
                 charge = min(remaining, row["disk_bytes"])
                 remaining -= charge
                 db.execute("UPDATE derived_resource_reservations SET state=?,cpu_threads=0,dram_bytes=0,"
-                           "disk_bytes=?,updated_at=?,release_reason=? WHERE reservation_id=?",
+                           "disk_bytes=?,updated_at=?,release_reason=CASE WHEN release_reason LIKE 'storage_move:%' "
+                           "THEN release_reason ELSE ? END WHERE reservation_id=?",
                            ("orphaned" if charge else "released", charge, _now(),
                             "quiescent_owned_storage_reconciled", row["reservation_id"]))
         return True
@@ -413,8 +501,7 @@ def remove_quiescent_storage(owned_path, *, owner):
     descriptors = []
     try:
         with _transaction() as db:
-            rows = db.execute("SELECT * FROM derived_resource_reservations WHERE storage_path=? "
-                "AND state!='released'", (str(path),)).fetchall()
+            rows = _storage_rows(db, path)
             if not rows or any(row["owner"] != owner or row["target_id"] != target
                                or row["machine_id"] != machine for row in rows):
                 return False

@@ -20,6 +20,10 @@ from database import ExecutionTarget, Job, async_session
 from paths import get_data_root
 from schemas import JobStatus
 from services.execution_ownership import release_scheduler_gpu_assignment
+from services.global_resource_admission import (
+    ResourceCapacityUnavailable, owned_storage_bytes, reserve,
+    remove_quiescent_storage,
+)
 from services import stage_reporting
 
 from .bundle import (
@@ -43,8 +47,6 @@ REMOTE_RUN_PREFIX = "remote:"
 TERMINAL_REMOTE_STATES = frozenset({"cancelled", "succeeded", "failed", "lost"})
 MAX_RESULT_MANIFEST_BYTES = 4 * 1024 * 1024
 MAX_RESULT_ARTIFACTS = 100_000
-DEFAULT_MAX_RESULT_BYTES = 1024 * 1024 * 1024 * 1024
-RESULT_DISK_RESERVE_BYTES = 10 * 1024 * 1024 * 1024
 
 
 class RemoteExecutionError(RuntimeError):
@@ -708,7 +710,7 @@ async def _fetch_result_manifest(
     incoming: Path,
     job: Job,
     status: RemoteAttemptStatus,
-) -> RemoteResultManifest:
+) -> tuple[RemoteResultManifest, bytes]:
     manifest_path = f"{remote_results_dir.rstrip('/')}/result-manifest.json"
     reader = (
         "import pathlib,sys; "
@@ -741,14 +743,26 @@ async def _fetch_result_manifest(
         raise RemoteExecutionError("Remote result manifest identity does not match the BMS Job")
     if len(manifest.artifacts) > MAX_RESULT_ARTIFACTS:
         raise RemoteExecutionError("Remote result manifest exceeds the artifact-count limit")
-    total_bytes = sum(int(artifact.size_bytes) for artifact in manifest.artifacts)
-    configured_limit = int(os.environ.get("BMS_REMOTE_MAX_RETURN_BYTES", DEFAULT_MAX_RESULT_BYTES))
-    free_budget = max(0, shutil.disk_usage(incoming.parent).free - RESULT_DISK_RESERVE_BYTES)
-    if total_bytes > min(configured_limit, free_budget):
-        raise RemoteExecutionError("Remote result package exceeds the local return-byte budget")
-    incoming.mkdir(parents=True, exist_ok=False)
-    (incoming / "result-manifest.json").write_bytes(manifest_bytes)
-    return manifest
+    # Parsing is bounded; disk admission belongs to the global resource owner,
+    # on the receiving API target, before a single incoming file is written.
+    return manifest, manifest_bytes
+
+
+async def _quiescent_thread(function, *args, **kwargs):
+    """Cancellation cannot release a storage owner while its thread still runs."""
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        # Observe any failure before retiring the cancelled caller.
+        if not task.cancelled():
+            task.exception()
+        raise asyncio.CancelledError
+    return task.result()
 
 
 async def collect_remote_results(
@@ -765,63 +779,87 @@ async def collect_remote_results(
         raise RemoteExecutionError("Remote result destination traverses a symlink")
     local_output = local_output.resolve()
     incoming = local_output.parent / f".{local_output.name}.remote-incoming" / str(job.remote_attempt_id)
-    if incoming.exists():
-        shutil.rmtree(incoming)
     incoming.parent.mkdir(parents=True, exist_ok=True)
+    owner = f"remote-incoming:{job.id}:{job.remote_attempt_id}"
+    allocation = None
     remote_results_dir = f"{attempt_dir}/results"
     try:
-        manifest = await _fetch_result_manifest(
-            connection,
-            remote_results_dir,
-            incoming,
-            job,
-            status,
+        if incoming.exists() and not await _quiescent_thread(
+            remove_quiescent_storage, incoming, owner=owner
+        ):
+            raise ResourceCapacityUnavailable("incoming generation requires explicit quiescent recovery")
+        manifest, manifest_bytes = await _fetch_result_manifest(
+            connection, remote_results_dir, incoming, job, status,
         )
-        if manifest.artifacts:
+        total_bytes = len(manifest_bytes) + sum(artifact.size_bytes for artifact in manifest.artifacts)
+        allocation = reserve(owner=owner, storage_root=incoming.parent,
+            owned_path=incoming, cpu_threads=1,
+            dram_bytes=MAX_RESULT_MANIFEST_BYTES + 2 * 1024 * 1024, disk_bytes=total_bytes)
+        incoming.mkdir(exist_ok=False)
+        (incoming / "result-manifest.json").write_bytes(manifest_bytes)
+        # Bound each receive by its own declaration, not the largest sibling.
+        # rsync uses a private temporary then rename, so no previous generation
+        # shares this admitted namespace.
+        for artifact in manifest.artifacts:
             await rsync_selected_from_remote(
-                connection,
-                remote_results_dir,
-                incoming,
-                [artifact.relative_path for artifact in manifest.artifacts],
-                max_file_bytes=max(int(artifact.size_bytes) for artifact in manifest.artifacts),
+                connection, remote_results_dir, incoming, [artifact.relative_path],
+                max_file_bytes=artifact.size_bytes,
             )
-        manifest = await asyncio.to_thread(_verify_result_package, incoming, job, status)
-    except (RemoteTransportError, RemoteExecutionError, OSError, ValueError) as exc:
+        manifest = await _quiescent_thread(_verify_result_package, incoming, job, status)
+    except (RemoteTransportError, RemoteExecutionError, ResourceCapacityUnavailable, OSError, ValueError) as exc:
         job.remote_state = "remote_finished_results_waiting"
         job.error_message = f"Remote results are waiting for verified return: {str(exc)[:1500]}"
         await session.commit()
         raise RemoteCollectionPending(str(exc)) from exc
+    finally:
+        if allocation is not None:
+            try:
+                allocation.retain(disk_bytes=owned_storage_bytes(incoming))
+            finally:
+                allocation.release()
     return manifest, incoming
 
 
 def _publish_result_generation(job: Job, incoming: Path) -> tuple[Path, Path | None]:
-    """Atomically make one verified attempt the only visible result generation."""
-    manifest_path = incoming / "result-manifest.json"
-    manifest_path.unlink(missing_ok=False)
+    """Publish under the controller attempt fence; never discard quarantine.
+
+    Register both resident generations before rename. Global ownership follows
+    each move and remains charged after the short publication owner quiesces.
+    """
     local_output = Path(str(job.child_output_dir or job.output_dir)).expanduser().resolve()
     local_output.parent.mkdir(parents=True, exist_ok=True)
     if incoming.stat().st_dev != local_output.parent.stat().st_dev:
         raise RemoteExecutionError("Remote result staging and Job output are on different filesystems")
-    backup: Path | None = None
-    if local_output.exists():
-        backup = (
-            local_output.parent
-            / ".bms-remote-quarantine"
-            / str(job.id)
-            / str(job.remote_attempt_id)
-            / "previous"
-        )
-        if backup.exists():
-            shutil.rmtree(backup)
-        backup.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(local_output, backup)
+    backup = (local_output.parent / ".bms-remote-quarantine" / str(job.id)
+              / str(job.remote_attempt_id) / "previous") if local_output.exists() else None
+    if backup is not None and backup.exists():
+        raise RemoteExecutionError("previous quarantine requires explicit cleanup before publication")
+    incoming_allocation = reserve(owner=f"remote-incoming:{job.id}:{job.remote_attempt_id}",
+        storage_root=local_output.parent, owned_path=incoming, cpu_threads=0, dram_bytes=0,
+        disk_bytes=owned_storage_bytes(incoming), adopt_quiescent=True)
+    previous_allocation = None
     try:
-        os.replace(incoming, local_output)
-    except Exception:
-        if backup is not None and backup.exists() and not local_output.exists():
-            os.replace(backup, local_output)
-        raise
-    return local_output, backup
+        incoming_allocation.retain(disk_bytes=owned_storage_bytes(incoming))
+        if backup is not None:
+            previous_allocation = reserve(owner=f"remote-quarantine:{job.id}:{job.remote_attempt_id}",
+                storage_root=local_output.parent, owned_path=local_output, cpu_threads=0, dram_bytes=0,
+                disk_bytes=owned_storage_bytes(local_output), adopt_quiescent=True)
+            previous_allocation.retain(disk_bytes=owned_storage_bytes(local_output))
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            previous_allocation.move_storage(backup)
+        try:
+            incoming_allocation.move_storage(local_output)
+        except BaseException:
+            if previous_allocation is not None and backup is not None and backup.exists() and not local_output.exists():
+                previous_allocation.move_storage(local_output)
+            raise
+        # Keep result-manifest.json: the received envelope binding is durable
+        # evidence, not a transfer temporary to unlink before native acceptance.
+        return local_output, backup
+    finally:
+        incoming_allocation.release()
+        if previous_allocation is not None:
+            previous_allocation.release()
 
 
 async def _finish_remote_cancellation(session: AsyncSession, job: Job) -> bool:
@@ -1010,12 +1048,12 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job, *, pull_r
             await session.commit()
             return True
         try:
-            local_output, previous_generation = await asyncio.to_thread(
+            local_output, previous_generation = await _quiescent_thread(
                 _publish_result_generation,
                 job,
                 incoming,
             )
-        except (OSError, RemoteExecutionError) as exc:
+        except (OSError, RemoteExecutionError, ResourceCapacityUnavailable) as exc:
             job.remote_state = "remote_finished_results_waiting"
             job.error_message = f"Verified remote results could not be published: {str(exc)[:1500]}"
             await session.commit()

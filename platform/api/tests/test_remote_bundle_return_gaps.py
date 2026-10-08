@@ -6,6 +6,7 @@ import tempfile
 import pytest
 
 from services.remote_execution import executor, transport
+from tests.test_remote_lifecycle_gaps import delivery_resources
 
 
 @pytest.mark.asyncio
@@ -23,7 +24,7 @@ async def test_readiness_never_creates_controller_storage(tmp_path, monkeypatch)
 
 
 @pytest.mark.parametrize('fail_promotion', [False, True])
-def test_existing_generation_publication_and_rollback_on_results_filesystem(tmp_path, monkeypatch, fail_promotion):
+def test_existing_generation_publication_and_rollback_on_results_filesystem(tmp_path, monkeypatch, fail_promotion, delivery_resources):
     with tempfile.TemporaryDirectory(prefix='bms-publish-', dir='/dev/shm') as directory:
         root = Path(directory)
         assert root.stat().st_dev != tmp_path.stat().st_dev
@@ -58,11 +59,11 @@ def test_existing_generation_publication_and_rollback_on_results_filesystem(tmp_
 
 
 @pytest.mark.asyncio
-async def test_incoming_transfer_stages_on_results_filesystem(tmp_path, monkeypatch):
+async def test_incoming_transfer_stages_on_results_filesystem(tmp_path, monkeypatch, delivery_resources):
     with tempfile.TemporaryDirectory(prefix='bms-return-', dir='/dev/shm') as directory:
         output = Path(directory)/'results/job'
         output.parent.mkdir()
-        job = SimpleNamespace(execution_target_id='target', remote_attempt_id='attempt', output_dir=str(output), child_output_dir=None)
+        job = SimpleNamespace(id='job', execution_target_id='target', remote_attempt_id='attempt', output_dir=str(output), child_output_dir=None)
         class Session:
             async def get(self, *args, **kwargs):
                 return SimpleNamespace()
@@ -71,8 +72,8 @@ async def test_incoming_transfer_stages_on_results_filesystem(tmp_path, monkeypa
         async def fetch(connection, remote, incoming, job, status):
             assert incoming.parent.stat().st_dev == output.parent.stat().st_dev
             assert incoming.is_relative_to(output.parent)
-            incoming.mkdir()
-            return SimpleNamespace(artifacts=[])
+            assert not incoming.exists()
+            return SimpleNamespace(artifacts=[]), b'{}'
         monkeypatch.setattr(executor, '_fetch_result_manifest', fetch)
         monkeypatch.setattr(executor, '_verify_result_package', lambda *args: SimpleNamespace(artifacts=[]))
         _, incoming = await executor.collect_remote_results(Session(), job, None)

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from tests.test_remote_lifecycle_gaps import delivery_resources
 from pydantic import ValidationError
 
 from migrations.add_remote_execution import migrate
@@ -467,12 +468,13 @@ async def test_stage_bundle_never_uploads_existing_local_results(
 def test_verified_remote_generation_replaces_stale_output_atomically(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    delivery_resources,
 ) -> None:
     data_root = tmp_path / "data"
     output = data_root / "results" / "job-1"
     output.mkdir(parents=True)
     (output / "stale.txt").write_text("stale", encoding="utf-8")
-    incoming = data_root / "remote-execution" / "incoming" / "attempt-1"
+    incoming = output.parent / ".job-1.remote-incoming" / "attempt-1"
     incoming.mkdir(parents=True)
     (incoming / "result-manifest.json").write_text("{}", encoding="utf-8")
     (incoming / "fresh.txt").write_text("fresh", encoding="utf-8")
@@ -488,7 +490,7 @@ def test_verified_remote_generation_replaces_stale_output_atomically(
 
     assert published == output
     assert (output / "fresh.txt").read_text(encoding="utf-8") == "fresh"
-    assert not (output / "result-manifest.json").exists()
+    assert (output / "result-manifest.json").exists()
     assert not (output / "stale.txt").exists()
     assert previous is not None
     assert (previous / "stale.txt").read_text(encoding="utf-8") == "stale"

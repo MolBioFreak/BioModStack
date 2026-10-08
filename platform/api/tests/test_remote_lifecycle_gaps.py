@@ -11,6 +11,127 @@ from services.remote_execution import executor as ex
 from services.remote_execution.contracts import RemoteAttemptStatus
 
 
+@pytest.fixture
+def delivery_resources(tmp_path, monkeypatch):
+    """Use the production immutable-identity/transition triggers, offline only."""
+    import sqlite3
+    from contextlib import contextmanager
+    from migrations.global_derived_resource_schema import SQL
+    from services import global_resource_admission as resources
+
+    db = sqlite3.connect(tmp_path / "resources.sqlite", check_same_thread=False)
+    db.row_factory = sqlite3.Row
+    db.execute("CREATE TABLE resource_admission_policy (policy_id TEXT PRIMARY KEY, policy_version TEXT, "
+               "cpu_thread_limit INTEGER, dram_byte_limit INTEGER, lock_generation INTEGER, updated_at TEXT)")
+    db.executescript(SQL)
+    db.execute("INSERT INTO resource_admission_policy VALUES ('execution-target:receiver','v1',8,100000000,0,'',100000000)")
+    db.commit()
+
+    @contextmanager
+    def transaction():
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            yield db
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
+
+    monkeypatch.setattr(resources, "_transaction", transaction)
+    monkeypatch.setattr(resources, "_db_path", lambda: tmp_path / "resources.sqlite")
+    monkeypatch.setattr(resources, "_target", lambda: ("receiver", "execution-target:receiver", "machine"))
+    monkeypatch.setattr(resources, "_process_limits", lambda: (8, 100000000))
+    monkeypatch.setattr(resources.shutil, "disk_usage", lambda _: SimpleNamespace(total=100000000, free=90000000))
+    yield resources, db
+    db.close()
+
+
+def test_delivery_move_preserves_immutable_identity_and_retained_charge(delivery_resources, tmp_path):
+    resources, db = delivery_resources
+    source, destination = tmp_path / "incoming", tmp_path / "published"
+    source.mkdir()
+    (source / "science").write_bytes(b"native")
+    allocation = resources.reserve(owner="delivery", storage_root=tmp_path, owned_path=source,
+        cpu_threads=1, dram_bytes=10, disk_bytes=6, adopt_quiescent=True)
+    allocation.retain(disk_bytes=6)
+    allocation.move_storage(destination)
+    assert resources.remove_quiescent_storage(destination, owner="delivery") is False
+    allocation.release()
+    row = db.execute("SELECT * FROM derived_resource_reservations").fetchone()
+    assert row["storage_path"] == str(source)  # immutable provenance, not a rewritten receipt
+    assert row["disk_bytes"] == 6 and row["cpu_threads"] == row["dram_bytes"] == 0
+    assert resources.remove_quiescent_storage(source, owner="delivery") is False
+    assert (destination / "science").read_bytes() == b"native"
+    assert resources.remove_quiescent_storage(destination, owner="wrong") is False
+    assert resources.remove_quiescent_storage(destination, owner="delivery") is True
+    assert db.execute("SELECT disk_bytes FROM derived_resource_reservations").fetchone()[0] == 0
+
+
+def test_interrupted_move_never_unaccounts_missing_source(delivery_resources, tmp_path, monkeypatch):
+    resources, db = delivery_resources
+    source, destination = tmp_path / "incoming", tmp_path / "published"
+    source.mkdir()
+    (source / "science").write_bytes(b"native")
+    allocation = resources.reserve(owner="delivery", storage_root=tmp_path, owned_path=source,
+        cpu_threads=0, dram_bytes=0, disk_bytes=6, adopt_quiescent=True)
+    allocation.retain(disk_bytes=6)
+    original_replace = resources.os.replace
+
+    def interrupted(old, new):
+        original_replace(old, new)
+        raise OSError("crash after filesystem rename before journal completion")
+
+    monkeypatch.setattr(resources.os, "replace", interrupted)
+    with pytest.raises(OSError):
+        allocation.move_storage(destination)
+    assert resources.recover_quiescent_storage_move(allocation.reservation_id) is False
+    allocation.release()
+    with pytest.raises(resources.ResourceCapacityUnavailable, match="explicit recovery"):
+        resources.reconcile_quiescent_storage(source)
+    assert db.execute("SELECT disk_bytes FROM derived_resource_reservations").fetchone()[0] == 6
+    assert resources.recover_quiescent_storage_move(allocation.reservation_id) is True
+    assert resources.remove_quiescent_storage(destination, owner="delivery") is True
+
+
+def test_publication_admits_and_retains_both_generations(delivery_resources, tmp_path):
+    resources, db = delivery_resources
+    incoming, output = tmp_path / "incoming", tmp_path / "output"
+    incoming.mkdir()
+    output.mkdir()
+    (incoming / "result-manifest.json").write_bytes(b"{}")
+    (incoming / "science").write_bytes(b"new")
+    (output / "science").write_bytes(b"old")
+    job = SimpleNamespace(id="job", remote_attempt_id="attempt", output_dir=str(output), child_output_dir=None)
+    published, quarantine = ex._publish_result_generation(job, incoming)
+    assert (published / "science").read_bytes() == b"new"
+    assert (published / "result-manifest.json").is_file()
+    assert (quarantine / "science").read_bytes() == b"old"
+    assert db.execute("SELECT SUM(disk_bytes) FROM derived_resource_reservations WHERE state!='released'").fetchone()[0] == 8
+    assert resources.remove_quiescent_storage(quarantine, owner="remote-quarantine:job:attempt")
+    assert (published / "science").read_bytes() == b"new"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_publication_waits_for_storage_thread():
+    import asyncio
+    import threading
+    entered, finish = threading.Event(), threading.Event()
+
+    def worker():
+        entered.set()
+        finish.wait()
+
+    task = asyncio.create_task(ex._quiescent_thread(worker))
+    while not entered.is_set():
+        await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    finish.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
 @pytest_asyncio.fixture
 async def store(tmp_path, monkeypatch):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'state.sqlite'}")
