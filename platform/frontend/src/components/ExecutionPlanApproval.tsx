@@ -19,6 +19,10 @@ export interface ExecutionPlanPreview {
         };
     };
     deferred_preparation: string[];
+    declared_expansions?: Array<{ authority: string; child_model: string; child_mode: string;
+        max_children: number; selection_rule: string; root: { params: Record<string, unknown> };
+        child_static_params?: Record<string, unknown>;
+        trigger: { param_overrides: Record<string, unknown> } }>;
     blockers: Array<{ reason: string }>;
 }
 
@@ -49,6 +53,18 @@ export function ExecutionPlanApproval({ preview, finish }: {
             </p>)}
             {preview.deferred_preparation.length > 0 && <p>Input preparation remains required before execution: {preview.deferred_preparation.join(', ')}. This preview does not contact an MSA provider.</p>}
             {!preview.admissible && preview.blockers.length === 0 && <p role="alert">The selected execution plan is incomplete and cannot be submitted.</p>}
+            {(preview.declared_expansions ?? []).map(expansion => <section key={expansion.authority}>
+                <h4>Automatic follow-on included in this approval</h4>
+                <p>Up to {expansion.max_children} {expansion.child_model} / {expansion.child_mode} job: {expansion.selection_rule}.
+                    Seed structures and fixed positions are derived from those exact results. No additional launch approval will be requested.</p>
+                <details><summary>Review bound parent settings and follow-on overrides</summary>
+                    <HTMLTable striped compact><thead><tr><th>Setting</th><th>Value</th></tr></thead>
+                        <tbody>{settingsRows({ parent: expansion.root.params, overrides: expansion.trigger.param_overrides,
+                            child_static_settings: expansion.child_static_params })
+                            .map(([key, value]) => <tr key={key}><td>{key}</td><td>{value}</td></tr>)}</tbody>
+                    </HTMLTable>
+                </details>
+            </section>)}
             {preview.blockers.map((blocker, index) => <p role="alert" key={index}>{blocker.reason}</p>)}
             <h4>Compiled settings ({changed.length} additions or changes)</h4>
             <Button small onClick={() => setShowAll(!showAll)}>{showAll ? 'Show changes only' : 'Show all settings'}</Button>

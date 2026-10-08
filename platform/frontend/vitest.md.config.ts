@@ -5,6 +5,7 @@ export default defineConfig({
         environment: 'jsdom',
         setupFiles: ['./tests/vitest/setup.ts'],
         include: [
+            './tests/vitest/remoteCloseFollowonMounted.test.tsx',
             './tests/vitest/remoteAdmissionMounted.test.tsx',
             ...(process.env.BMS_BOLTZGEN_ANALYTICS_WIRES ? ['./tests/vitest/boltzgenAnalyticsMounted.test.tsx'] : []),
             ...(process.env.BMS_ESM_ANALYTICS_WIRE ? ['./tests/vitest/esmAnalyticsMounted.test.tsx'] : []),

@@ -3301,7 +3301,8 @@ class GPUOrchestrator:
             # completed historical jobs do not enter generic running finalization.
             async with self.db_session_factory() as recovery_session:
                 pending_batches = select(Job.batch_id).where(
-                    Job.job_phase == "msa_generation",
+                    (Job.job_phase == 'msa_generation') |
+                    Job.provenance['mutation_seed_expansion'].as_string().is_not(None),
                     Job.batch_id.is_not(None),
                     Job.params["mutation_seed_refinement_trigger"].as_string().is_not(None),
                     func.coalesce(Job.params["_mutation_seed_refinement_triggered"].as_boolean(), False).is_(False),
