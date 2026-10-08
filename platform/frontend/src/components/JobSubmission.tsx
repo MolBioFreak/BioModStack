@@ -1,7 +1,7 @@
 
 
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets } from '../lib/api';
 import { SequenceManagerModal } from './SequenceManagerModal';
@@ -263,8 +263,22 @@ function ParamField({
 export function JobSubmission() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [wizardMode, setWizardMode] = useState<'templates' | 'manual'>('templates');
-    const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+
+    // Read template from URL, allows page refresh and bookmarking
+    const urlTemplate = searchParams.get('template');
+    const [selectedTemplateId, setSelectedTemplateIdInternal] = useState<string | null>(urlTemplate);
+
+    // Wrapper to sync state with URL
+    const setSelectedTemplateId = (id: string | null) => {
+        setSelectedTemplateIdInternal(id);
+        if (id) {
+            setSearchParams({ template: id }, { replace: true });
+        } else {
+            setSearchParams({}, { replace: true });
+        }
+    };
     const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
     const [selectedModeId, setSelectedModeId] = useState<string | null>(null);
     const [jobName, setJobName] = useState('');
@@ -540,22 +554,29 @@ export function JobSubmission() {
         }
     };
 
+    // Dedicated templates that handle their own header/navigation
+    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltzgen_design', 'bindcraft', 'oligo_design'];
+    const showMainHeader = !selectedTemplateId || !dedicatedTemplates.includes(selectedTemplateId);
+
     return (
         <div className="min-h-screen bg-slate-950 p-6">
-            <header className="mb-8 flex items-center gap-4">
-                <Link
-                    to="/"
-                    className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"
-                >
-                    &lt; Back
-                </Link>
-                <div>
-                    <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
-                        New Experiment
-                    </h1>
-                    <p className="text-slate-400 text-sm">Configure and launch a new job</p>
-                </div>
-            </header>
+            {/* Main header - hidden when dedicated templates are active */}
+            {showMainHeader && (
+                <header className="mb-8 flex items-center gap-4">
+                    <Link
+                        to="/"
+                        className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"
+                    >
+                        &lt; Back
+                    </Link>
+                    <div>
+                        <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+                            New Experiment
+                        </h1>
+                        <p className="text-slate-400 text-sm">Configure and launch a new job</p>
+                    </div>
+                </header>
+            )}
 
             <main className="max-w-[104rem] mx-auto space-y-8">
 
@@ -679,8 +700,8 @@ export function JobSubmission() {
                                         {[
                                             // Dynamic templates from API - filter out hidden/removed templates
                                             ...(templatesData?.data ?? []).filter((t: any) =>
-                                                // Remove: boltzgen_ligand (using hardcoded), binder_design, structure_validation
-                                                !['boltzgen_ligand', 'binder_design', 'structure_validation'].includes(t.id) &&
+                                                // Remove: boltzgen_ligand (using hardcoded), binder_design, structure_validation, structure_prediction
+                                                !['boltzgen_ligand', 'binder_design', 'structure_validation', 'structure_prediction'].includes(t.id) &&
                                                 // Hide dna_polymerase unless debug mode
                                                 (t.id !== 'dna_polymerase' || (window as any).__DEBUG_MODE__)
                                             ),
@@ -694,6 +715,17 @@ export function JobSubmission() {
                                                 stages: [
                                                     { tool: 'Library Gen' },
                                                     { tool: 'Structure Prediction' }
+                                                ]
+                                            },
+                                            // Structure Prediction
+                                            {
+                                                id: 'structure_prediction',
+                                                name: 'Structure Prediction',
+                                                description: 'Predict 3D protein, RNA, DNA, or complex structures from sequences using Boltz-2 or RoseTTAFold3.',
+                                                icon: 'microscope',
+                                                color: '#F59E0B', // Amber
+                                                stages: [
+                                                    { tool: 'Boltz-2 / RF3' }
                                                 ]
                                             },
                                             // RFantibody+ (De Novo Antibody Design)
