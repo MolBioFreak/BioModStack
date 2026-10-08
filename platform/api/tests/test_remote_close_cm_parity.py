@@ -34,7 +34,8 @@ def test_actual_openapi_closed_inventory_discovery():
     ref = route['requestBody']['content']['application/json']['schema']['$ref']
     schema = document['components']['schemas'][ref.rsplit('/', 1)[-1]]['properties']['feature_policy']
     assert schema['additionalProperties'] is False
-    msa = next(v for v in schema['properties']['msa_settings']['anyOf'] if v.get('type') == 'object')
+    msa = schema['properties']['msa_settings']
+    assert msa['type'] == 'object' and 'default' not in msa  # Optional does not mean explicit null is valid.
     assert msa['additionalProperties'] is False
     assert msa['$id'] == 'urn:bms:hosted-msa-settings:v2'
     assert set(msa['properties']) == {'msa_provider', *POLICY['colabfold_settings'], *POLICY['neurosnap_settings']}
@@ -135,6 +136,43 @@ def test_inactive_consumer_preserves_saved_settings_but_selected_science_rejects
         validate_request_params(controls)
     with pytest.raises(ValueError, match='unsupported for Protenix A3M consumption'):
         canonical_msa_params(controls)
+
+
+@pytest.mark.parametrize('backend', ['protenix_v2_ensemble', 'confornets'])
+@pytest.mark.parametrize('invalid,message', [
+    ({'colabfold_use_templates': True}, 'template retrieval is not supported'),
+    ({'colabfold_pairing_mode': 'paired', 'colabfold_use_filter': False}, 'unfiltered paired search'),
+])
+def test_selected_provider_capability_is_pure_prequeue_not_deferred_to_worker(tmp_path, monkeypatch, backend, invalid, message):
+    import biomodstack_msa_api as msa_api
+    from services.conformational_mapping.request_builder import validate_request_params
+    original_validate = msa_api.validate_settings
+    calls = []
+    def observed(provider, values):
+        calls.append((provider, values))
+        return original_validate(provider, values)
+    monkeypatch.setattr(msa_api, 'validate_settings', observed)
+    spec = importlib.util.spec_from_file_location('cm_capability_fixture', Path(__file__).with_name('test_conformational_mapping_routing.py'))
+    assert spec and spec.loader
+    fixture = importlib.util.module_from_spec(spec); spec.loader.exec_module(fixture)
+    controls = fixture._request_params(backend)
+    controls['feature_policy']['msa_settings'] = {**settings('colabfold_api'), **invalid}
+    if backend == 'protenix_v2_ensemble':
+        controls['feature_policy'].update(protein_msa_enabled=True, rna_msa_enabled=False)
+    else:
+        controls['confornets']['skip_msa'] = False
+    before = copy.deepcopy(controls)
+    with pytest.raises(ValueError, match=message):
+        validate_request_params(controls)
+    with pytest.raises(ValueError, match=message):
+        canonical_msa_params(controls)
+    assert controls == before and calls
+    # The same unsupported inactive provider choice must not overwrite or block
+    # an explicitly selected different provider.
+    controls['feature_policy']['msa_settings']['msa_provider'] = 'neurosnap_api'
+    validate_request_params(controls)
+    assert canonical_msa_params(controls)['msa_provider'] == 'neurosnap_api'
+    assert controls['feature_policy']['msa_settings']['colabfold_use_filter'] is False
 
 
 @pytest.mark.asyncio
