@@ -31,18 +31,45 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
         --index-url https://download.pytorch.org/whl/cu128
 
     # ──────────────────────────────────────────────────────────────────────────
-    # DGL — graph neural network library required by RFDpoly's SE3Transformer
-    # Must match CUDA version. Install from DGL's cu128 channel.
+    # Force numpy <2.0 BEFORE other deps — PyTorch pulls numpy 2.x which
+    # breaks RFDpoly's internal array handling
     # ──────────────────────────────────────────────────────────────────────────
-    uv pip install --compile --no-cache-dir \
-        dgl -f https://data.dgl.ai/wheels/torch-2.6/cu128/repo.html
+    uv pip install --compile --no-cache-dir "numpy>=1.23,<2.0"
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # DGL — graph neural network library required by RFDpoly's SE3Transformer
+    # DGL 2.2.1 from PyPI — its graphbolt C++ lib is compiled for PyTorch ≤2.5
+    # but RFDpoly only uses core graph ops (DGLGraph, edge_softmax, AvgPooling)
+    # Patches: (1) stub torchdata.datapipes  (2) gut graphbolt/__init__.py
+    # ──────────────────────────────────────────────────────────────────────────
+    uv pip install --compile --no-cache-dir dgl
+
+    # Locate DGL package dir WITHOUT importing it (import itself triggers the failure)
+    DGL_DIR=$(python3 -c "import importlib.util; print(importlib.util.find_spec('dgl').submodule_search_locations[0])")
+
+    # (1) Create torchdata.datapipes stub — DGL's dataloader imports IterDataPipe from it
+    SITE_DIR=$(python3 -c "import site; print(site.getsitepackages()[0])")
+    mkdir -p "$SITE_DIR/torchdata/datapipes/iter"
+    cat > "$SITE_DIR/torchdata/__init__.py" << 'EOF'
+"""Stub torchdata for DGL compatibility with PyTorch 2.10+"""
+EOF
+    cat > "$SITE_DIR/torchdata/datapipes/__init__.py" << 'EOF'
+"""Stub datapipes"""
+EOF
+    cat > "$SITE_DIR/torchdata/datapipes/iter/__init__.py" << 'EOF'
+"""Stub iter datapipes"""
+from torch.utils.data import IterableDataset as IterDataPipe
+EOF
+
+    # (2) Gut graphbolt/__init__.py — prevents C++ lib load mismatch
+    cat > "$DGL_DIR/graphbolt/__init__.py" << 'EOF'
+"""Patched: skips C++ graphbolt lib load for PyTorch 2.10+ compatibility."""
+EOF
 
     # ──────────────────────────────────────────────────────────────────────────
     # RFDpoly dependencies (from original SE3nv container package list)
-    # numpy <2.0 required for compatibility with RFDpoly's internal routines
     # ──────────────────────────────────────────────────────────────────────────
     uv pip install --compile --no-cache-dir \
-        "numpy>=1.23,<2.0" \
         "scipy>=1.10,<1.14" \
         hydra-core==1.3.2 \
         omegaconf \
