@@ -652,17 +652,20 @@ process SpawnMaturationJobs {
     val parent_job_id
     val batch_name
     val stage_name
+    val ppiflow_region_mode_input
+    val ppiflow_selected_loops_input
 
     output:
     path "spawn_maturation_result.json", emit: result
 
     script:
-    def selectedLoopsList = params.ppiflow_selected_loops
-        ? params.ppiflow_selected_loops.toString().split(',').collect { it.toString().trim().toUpperCase() }.findAll { it }
+    def stageRegionMode = ppiflow_region_mode_input ?: 'selected_cdrs'
+    def selectedLoopsList = ppiflow_selected_loops_input
+        ? ppiflow_selected_loops_input.toString().split(',').collect { it.toString().trim().toUpperCase() }.findAll { it }
         : null
     def selectedLoopScope = [
-        region_mode: params.ppiflow_region_mode ?: 'selected_cdrs',
-        ppiflow_region_mode: params.ppiflow_region_mode ?: 'selected_cdrs',
+        region_mode: stageRegionMode,
+        ppiflow_region_mode: stageRegionMode,
         ppiflow_backbone_region_mode: params.ppiflow_backbone_region_mode,
         ppiflow_maturation_region_mode: params.ppiflow_maturation_region_mode,
     ]
@@ -683,11 +686,14 @@ process SpawnMaturationJobs {
         ppiflow_checkpoint: params.ppiflow_checkpoint,
         ppiflow_checkpoint_path: params.ppiflow_checkpoint_path,
         ppiflow_weights_dir: params.ppiflow_weights_dir,
+        ppiflow_rotamer_enrichment_enabled: params.ppiflow_rotamer_enrichment_enabled != null ? params.ppiflow_rotamer_enrichment_enabled : true,
+        ppiflow_require_anchors: params.ppiflow_require_anchors != null ? params.ppiflow_require_anchors : true,
+        ppiflow_rotamer_shell_cutoff: params.ppiflow_rotamer_shell_cutoff ?: 20.0,
         ppiflow_antigen_chain: params.ppiflow_antigen_chain,
         ppiflow_heavy_chain: params.ppiflow_heavy_chain,
         ppiflow_light_chain: params.ppiflow_light_chain,
         maturation_anchor_threshold: params.maturation_anchor_threshold ?: -5.0,
-        maturation_anchor_distance_cutoff: params.maturation_anchor_distance_cutoff ?: 8.0,
+        maturation_anchor_distance_cutoff: params.maturation_anchor_distance_cutoff ?: 12.0,
         maturation_min_improvement: params.maturation_min_improvement ?: -1.0,
         maturation_filter_percentile: params.maturation_filter_percentile,
         maturation_redesign_temp: params.maturation_redesign_temp,
@@ -695,10 +701,10 @@ process SpawnMaturationJobs {
         maturation_design_mode: params.maturation_design_mode,
         maturation_redesign_enabled: params.maturation_redesign_enabled,
         maturation_redesign_top_n: params.maturation_redesign_top_n,
-        ppiflow_region_mode: params.ppiflow_region_mode ?: 'selected_cdrs',
+        ppiflow_region_mode: stageRegionMode,
         ppiflow_backbone_region_mode: params.ppiflow_backbone_region_mode,
         ppiflow_maturation_region_mode: params.ppiflow_maturation_region_mode,
-        ppiflow_selected_loops: params.ppiflow_selected_loops,
+        ppiflow_selected_loops: ppiflow_selected_loops_input,
         selected_loop_scope: selectedLoopScope,
         cdr_positions_by_loop: params.get('cdr_positions_by_loop'),
         manual_cdr_definitions: params.get('manual_cdr_definitions'),
@@ -826,17 +832,20 @@ process SpawnValidatedMaturationJobs {
     val parent_job_id
     val batch_name
     val stage_name
+    val ppiflow_region_mode_input
+    val ppiflow_selected_loops_input
 
     output:
     path "spawn_validated_maturation_result.json", emit: result
 
     script:
-    def selectedLoopsList = params.ppiflow_selected_loops
-        ? params.ppiflow_selected_loops.toString().split(',').collect { it.toString().trim().toUpperCase() }.findAll { it }
+    def stageRegionMode = ppiflow_region_mode_input ?: 'selected_cdrs'
+    def selectedLoopsList = ppiflow_selected_loops_input
+        ? ppiflow_selected_loops_input.toString().split(',').collect { it.toString().trim().toUpperCase() }.findAll { it }
         : null
     def selectedLoopScope = [
-        region_mode: params.ppiflow_region_mode ?: 'selected_cdrs',
-        ppiflow_region_mode: params.ppiflow_region_mode ?: 'selected_cdrs',
+        region_mode: stageRegionMode,
+        ppiflow_region_mode: stageRegionMode,
         ppiflow_backbone_region_mode: params.ppiflow_backbone_region_mode,
         ppiflow_maturation_region_mode: params.ppiflow_maturation_region_mode,
     ]
@@ -857,11 +866,14 @@ process SpawnValidatedMaturationJobs {
         ppiflow_checkpoint: params.ppiflow_checkpoint,
         ppiflow_checkpoint_path: params.ppiflow_checkpoint_path,
         ppiflow_weights_dir: params.ppiflow_weights_dir,
+        ppiflow_rotamer_enrichment_enabled: params.ppiflow_rotamer_enrichment_enabled != null ? params.ppiflow_rotamer_enrichment_enabled : true,
+        ppiflow_require_anchors: params.ppiflow_require_anchors != null ? params.ppiflow_require_anchors : true,
+        ppiflow_rotamer_shell_cutoff: params.ppiflow_rotamer_shell_cutoff ?: 20.0,
         ppiflow_antigen_chain: params.ppiflow_antigen_chain,
         ppiflow_heavy_chain: params.ppiflow_heavy_chain,
         ppiflow_light_chain: params.ppiflow_light_chain,
         maturation_anchor_threshold: params.maturation_anchor_threshold ?: -5.0,
-        maturation_anchor_distance_cutoff: params.maturation_anchor_distance_cutoff ?: 8.0,
+        maturation_anchor_distance_cutoff: params.maturation_anchor_distance_cutoff ?: 12.0,
         maturation_min_improvement: params.maturation_min_improvement ?: -1.0,
         maturation_filter_percentile: params.maturation_filter_percentile,
         maturation_redesign_temp: params.maturation_redesign_temp,
@@ -869,10 +881,10 @@ process SpawnValidatedMaturationJobs {
         maturation_design_mode: params.maturation_design_mode,
         maturation_redesign_enabled: params.maturation_redesign_enabled,
         maturation_redesign_top_n: params.maturation_redesign_top_n,
-        ppiflow_region_mode: params.ppiflow_region_mode ?: 'selected_cdrs',
+        ppiflow_region_mode: stageRegionMode,
         ppiflow_backbone_region_mode: params.ppiflow_backbone_region_mode,
         ppiflow_maturation_region_mode: params.ppiflow_maturation_region_mode,
-        ppiflow_selected_loops: params.ppiflow_selected_loops,
+        ppiflow_selected_loops: ppiflow_selected_loops_input,
         selected_loop_scope: selectedLoopScope,
         cdr_positions_by_loop: params.get('cdr_positions_by_loop'),
         manual_cdr_definitions: params.get('manual_cdr_definitions'),
@@ -1011,7 +1023,7 @@ EOF
         copy_if_present "\$src_dir/\${stem}_full_data.json"
         copy_if_present "\$src_dir/full_data_\${stem}.json"
 
-        if [[ "\$stem" =~ ^(.+)_sample_([0-9]+)$ ]]; then
+        if [[ "\$stem" =~ ^(.+)_sample_([0-9]+)\$ ]]; then
             prefix="\${BASH_REMATCH[1]}"
             sample_rank="\${BASH_REMATCH[2]}"
             copy_if_present "\$src_dir/\${prefix}_summary_confidence_sample_\${sample_rank}.json"
@@ -1815,11 +1827,11 @@ workflow ANTIBODY_DENOVO {
         if (run_ppiflow_backbone_refine) {
             log.info("Step 1.5: Running PPIFlow backbone refinement on RFantibody outputs...")
             log.info("  Spawning backbone-refine child jobs (${params.maturation_designs_per_job ?: 4} PDBs per job)")
-            params.ppiflow_region_mode = params.ppiflow_backbone_region_mode
-            params.ppiflow_selected_loops = params.ppiflow_region_mode == 'selected_cdrs' ? ppiflowBackboneLoopScope : null
-            log.info("  Backbone refinement region mode: ${params.ppiflow_region_mode}")
-            if (params.ppiflow_selected_loops) {
-                log.info("  Backbone refinement loop scope: ${params.ppiflow_selected_loops}")
+            def backboneRefineRegionMode = params.ppiflow_backbone_region_mode
+            def backboneRefineSelectedLoops = backboneRefineRegionMode == 'selected_cdrs' ? ppiflowBackboneLoopScope : null
+            log.info("  Backbone refinement region mode: ${backboneRefineRegionMode}")
+            if (backboneRefineSelectedLoops) {
+                log.info("  Backbone refinement loop scope: ${backboneRefineSelectedLoops}")
             }
 
             backbone_refine_inputs = backbone_designs
@@ -1834,7 +1846,9 @@ workflow ANTIBODY_DENOVO {
                 params.maturation_designs_per_job ?: 4,
                 params.job_id ?: "unknown",
                 orchestrator_batch_name,
-                "backbone_refine"
+                "backbone_refine",
+                backboneRefineRegionMode,
+                backboneRefineSelectedLoops
             )
 
             backbone_refine_wait_trigger = SpawnMaturationJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }
@@ -2081,11 +2095,11 @@ workflow ANTIBODY_DENOVO {
             } else {
                 log.info("Step 2.4: Running PPIFlow maturation on FAMPNN outputs...")
                 log.info("  Spawning maturation child jobs (${params.maturation_designs_per_job ?: 4} PDBs per job)")
-                params.ppiflow_region_mode = params.ppiflow_maturation_region_mode
-                params.ppiflow_selected_loops = params.ppiflow_region_mode == 'selected_cdrs' ? ppiflowMaturationLoopScope : null
-                log.info("  PPIFlow maturation region mode: ${params.ppiflow_region_mode}")
-                if (params.ppiflow_selected_loops) {
-                    log.info("  PPIFlow maturation loop scope: ${params.ppiflow_selected_loops}")
+                def maturationRegionMode = params.ppiflow_maturation_region_mode
+                def maturationSelectedLoops = maturationRegionMode == 'selected_cdrs' ? ppiflowMaturationLoopScope : null
+                log.info("  PPIFlow maturation region mode: ${maturationRegionMode}")
+                if (maturationSelectedLoops) {
+                    log.info("  PPIFlow maturation loop scope: ${maturationSelectedLoops}")
                 }
 
                 maturation_inputs = fampnn_seqs
@@ -2100,7 +2114,9 @@ workflow ANTIBODY_DENOVO {
                     params.maturation_designs_per_job ?: 4,
                     params.job_id ?: "unknown",
                     orchestrator_batch_name,
-                    "maturation"
+                    "maturation",
+                    maturationRegionMode,
+                    maturationSelectedLoops
                 )
 
                 maturation_wait_trigger = SpawnMaturationJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }
@@ -2579,6 +2595,12 @@ workflow ANTIBODY_DENOVO {
         } else if (params.run_post_validation_maturation == true) {
             log.info("Step 3.25: Running PPIFlow maturation on ${validation_label}-validated structures...")
             log.info("  Spawning post-validation maturation child jobs (${params.maturation_designs_per_job ?: 4} PDBs per job)")
+            def postValidationRegionMode = params.ppiflow_maturation_region_mode
+            def postValidationSelectedLoops = postValidationRegionMode == 'selected_cdrs' ? ppiflowMaturationLoopScope : null
+            log.info("  Post-validation maturation region mode: ${postValidationRegionMode}")
+            if (postValidationSelectedLoops) {
+                log.info("  Post-validation maturation loop scope: ${postValidationSelectedLoops}")
+            }
 
             validated_maturation_inputs = validated_structures
                 .map { meta, pdb -> pdb }
@@ -2592,7 +2614,9 @@ workflow ANTIBODY_DENOVO {
                 params.maturation_designs_per_job ?: 4,
                 params.job_id ?: "unknown",
                 "${orchestrator_batch_name}_post_validation",
-                "maturation_post_validation"
+                "maturation_post_validation",
+                postValidationRegionMode,
+                postValidationSelectedLoops
             )
 
             validated_maturation_wait_trigger = SpawnValidatedMaturationJobs.out.result.map { _spawn_result -> params.job_id ?: "unknown" }

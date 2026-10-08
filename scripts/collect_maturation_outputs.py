@@ -95,7 +95,7 @@ def main():
 
     txts = collect_files(
         output_dirs,
-        patterns=["*_cdr_positions.txt", "fixed_positions.txt"],
+        patterns=["*_cdr_positions.txt", "*_ppiflow_positions.txt", "fixed_positions.txt"],
         subdirs=search_subdirs,
     )
 

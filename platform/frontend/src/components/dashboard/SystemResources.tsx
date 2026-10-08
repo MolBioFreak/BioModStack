@@ -674,6 +674,8 @@ interface SchedulerConfig {
         busy_threshold: number;
         cooldown_ms: number;
         cpu_threads_per_job: number;
+        auto_cpu_threads: boolean;
+        auto_cpu_thread_job_threshold: number;
         enabled: boolean;
         target_vram_fill: number;
         capacity_weight: number;
@@ -698,7 +700,9 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
     const [localThreshold, setLocalThreshold] = useState(75);
     const [localBusyThreshold, setLocalBusyThreshold] = useState(50);
     const [localCooldown, setLocalCooldown] = useState(10);
-    const [localCpuThreadsPerJob, setLocalCpuThreadsPerJob] = useState(11);
+    const [localCpuThreadsPerJob, setLocalCpuThreadsPerJob] = useState(24);
+    const [localAutoCpuThreads, setLocalAutoCpuThreads] = useState(true);
+    const [localAutoCpuThreadJobThreshold, setLocalAutoCpuThreadJobThreshold] = useState(2);
     const [localCapacityWeight, setLocalCapacityWeight] = useState(3.0);
     const [localEmptinessWeight, setLocalEmptinessWeight] = useState(5.0);
     const [localMaxLaunchesPerCycle, setLocalMaxLaunchesPerCycle] = useState(3);
@@ -729,7 +733,9 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                 setLocalThreshold(Math.round((data.global?.target_vram_fill ?? 0.75) * 100));
                 setLocalBusyThreshold(Math.round((data.global?.busy_threshold ?? 0.5) * 100));
                 setLocalCooldown(Math.round((data.global?.cooldown_ms ?? 10000) / 1000));
-                setLocalCpuThreadsPerJob(data.global?.cpu_threads_per_job ?? 11);
+                setLocalCpuThreadsPerJob(data.global?.cpu_threads_per_job ?? 24);
+                setLocalAutoCpuThreads(data.global?.auto_cpu_threads ?? true);
+                setLocalAutoCpuThreadJobThreshold(data.global?.auto_cpu_thread_job_threshold ?? 2);
                 setLocalCapacityWeight(data.global?.capacity_weight ?? 3.0);
                 setLocalEmptinessWeight(data.global?.emptiness_weight ?? 5.0);
                 setLocalMaxLaunchesPerCycle(data.global?.max_launches_per_cycle ?? 3);
@@ -884,6 +890,8 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                     busy_threshold: localBusyThreshold / 100,
                     cooldown_ms: localCooldown * 1000,
                     cpu_threads_per_job: localCpuThreadsPerJob,
+                    auto_cpu_threads: localAutoCpuThreads,
+                    auto_cpu_thread_job_threshold: localAutoCpuThreadJobThreshold,
                     enabled: config?.global?.enabled ?? true,
                     target_vram_fill: localThreshold / 100,
                     capacity_weight: localCapacityWeight,
@@ -963,7 +971,9 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
         localThreshold !== Math.round((config.global.target_vram_fill ?? 0.75) * 100) ||
         localBusyThreshold !== Math.round((config.global.busy_threshold ?? 0.5) * 100) ||
         localCooldown !== Math.round(config.global.cooldown_ms / 1000) ||
-        localCpuThreadsPerJob !== (config.global.cpu_threads_per_job ?? 11) ||
+        localCpuThreadsPerJob !== (config.global.cpu_threads_per_job ?? 24) ||
+        localAutoCpuThreads !== (config.global.auto_cpu_threads ?? true) ||
+        localAutoCpuThreadJobThreshold !== (config.global.auto_cpu_thread_job_threshold ?? 2) ||
         localCapacityWeight !== (config.global.capacity_weight ?? 3.0) ||
         localEmptinessWeight !== (config.global.emptiness_weight ?? 5.0) ||
         localMaxLaunchesPerCycle !== (config.global.max_launches_per_cycle ?? 3);
@@ -1050,7 +1060,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
 
                             <div>
                                 <div className="flex justify-between text-xs text-slate-400 mb-1">
-                                    <span>CPU Threads / GPU Job</span>
+                                    <span>{localAutoCpuThreads ? 'Max CPU Threads / GPU Job' : 'Fixed CPU Threads / GPU Job'}</span>
                                     <span className="text-sky-400 font-medium">{localCpuThreadsPerJob}</span>
                                 </div>
                                 <input
@@ -1065,6 +1075,40 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                                 <div className="flex justify-between text-xs text-slate-500 mt-1">
                                     <span>1</span>
                                     <span>24</span>
+                                </div>
+                                <label className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-slate-700/80 bg-slate-900/40 px-3 py-2 text-xs text-slate-300">
+                                    <span className="min-w-0">
+                                        <span className="block font-medium text-slate-200">Auto CPU allotment</span>
+                                        <span className="block text-[11px] text-slate-500">
+                                            Use the max above until concurrent GPU jobs exceed the threshold, then downshift automatically.
+                                        </span>
+                                    </span>
+                                    <input
+                                        type="checkbox"
+                                        checked={localAutoCpuThreads}
+                                        onChange={(e) => setLocalAutoCpuThreads(e.target.checked)}
+                                        className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500"
+                                    />
+                                </label>
+                                <div className={`mt-3 transition-opacity ${localAutoCpuThreads ? 'opacity-100' : 'opacity-50'}`}>
+                                    <div className="flex justify-between text-xs text-slate-400 mb-1">
+                                        <span>Auto Downshift After Jobs</span>
+                                        <span className="text-cyan-400 font-medium">{localAutoCpuThreadJobThreshold}</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="1"
+                                        max="16"
+                                        step="1"
+                                        value={localAutoCpuThreadJobThreshold}
+                                        onChange={(e) => setLocalAutoCpuThreadJobThreshold(parseInt(e.target.value, 10) || 1)}
+                                        disabled={!localAutoCpuThreads}
+                                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                    />
+                                    <div className="flex justify-between text-xs text-slate-500 mt-1">
+                                        <span>1</span>
+                                        <span>16</span>
+                                    </div>
                                 </div>
                             </div>
 

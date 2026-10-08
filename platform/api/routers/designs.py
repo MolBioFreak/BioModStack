@@ -118,6 +118,26 @@ async def _hydrate_review_job(session: AsyncSession, job: Optional[Job]) -> Opti
     return review_stage if review_stage in REVIEWABLE_STAGES else None
 
 
+def _structure_file_response(path: Path, filename_root: str):
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Structure file not found on disk")
+
+    if path.suffix.lower() == ".pdb":
+        normalized_pdb = _normalize_pdb_for_viewer(path.read_text(errors="ignore"))
+        filename = f"{filename_root}{path.suffix or '.pdb'}"
+        return Response(
+            content=normalized_pdb,
+            media_type="text/plain",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        )
+
+    return FileResponse(
+        path=path,
+        filename=f"{filename_root}{path.suffix or '.pdb'}",
+        media_type="text/plain",
+    )
+
+
 # --- Pydantic Schemas ---
 
 
@@ -261,6 +281,8 @@ class DesignResponse(BaseModel):
     rfa_plddt_initial: Optional[float] = None
     rfa_plddt_final: Optional[float] = None
     rfa_plddt_delta: Optional[float] = None
+    rfa_plddt_selected: Optional[float] = None
+    rfa_plddt_nonselected: Optional[float] = None
     rfa_design_loops: Optional[List[str]] = None
     rfa_hotspots: Optional[List[str]] = None
     
@@ -276,6 +298,10 @@ class DesignResponse(BaseModel):
     maturation_delta_interface: Optional[float] = None
     maturation_interface_score: Optional[float] = None
     maturation_rmsd: Optional[float] = None
+    maturation_selected_delta_interface: Optional[float] = None
+    maturation_selected_interface_score: Optional[float] = None
+    maturation_selected_rmsd: Optional[float] = None
+    maturation_nonselected_rmsd: Optional[float] = None
     
     created_at: datetime
     
@@ -396,12 +422,18 @@ ANALYTICS_LOAD_ONLY_COLUMNS = (
     Design.rfa_plddt_initial,
     Design.rfa_plddt_final,
     Design.rfa_plddt_delta,
+    Design.rfa_plddt_selected,
+    Design.rfa_plddt_nonselected,
     Design.frustration_high_count,
     Design.frustration_min_count,
     Design.frustration_pct_high,
     Design.maturation_delta_interface,
     Design.maturation_interface_score,
     Design.maturation_rmsd,
+    Design.maturation_selected_delta_interface,
+    Design.maturation_selected_interface_score,
+    Design.maturation_selected_rmsd,
+    Design.maturation_nonselected_rmsd,
     Design.lineage_root_job_id,
     Design.parent_design_id,
     Design.origin_design_id,
@@ -508,6 +540,8 @@ DESIGN_LIST_LOAD_ONLY_COLUMNS = (
     Design.rfa_plddt_initial,
     Design.rfa_plddt_final,
     Design.rfa_plddt_delta,
+    Design.rfa_plddt_selected,
+    Design.rfa_plddt_nonselected,
     Design.fr2_contacts,
     Design.de_loop,
     Design.fr3_contacts,
@@ -518,6 +552,10 @@ DESIGN_LIST_LOAD_ONLY_COLUMNS = (
     Design.maturation_delta_interface,
     Design.maturation_interface_score,
     Design.maturation_rmsd,
+    Design.maturation_selected_delta_interface,
+    Design.maturation_selected_interface_score,
+    Design.maturation_selected_rmsd,
+    Design.maturation_nonselected_rmsd,
     Design.lineage_root_job_id,
     Design.parent_design_id,
     Design.origin_design_id,
@@ -648,12 +686,18 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
         "rfa_plddt_initial": design.rfa_plddt_initial,
         "rfa_plddt_final": design.rfa_plddt_final,
         "rfa_plddt_delta": design.rfa_plddt_delta,
+        "rfa_plddt_selected": design.rfa_plddt_selected,
+        "rfa_plddt_nonselected": design.rfa_plddt_nonselected,
         "frustration_high_count": design.frustration_high_count,
         "frustration_min_count": design.frustration_min_count,
         "frustration_pct_high": design.frustration_pct_high,
         "maturation_delta_interface": design.maturation_delta_interface,
         "maturation_interface_score": design.maturation_interface_score,
         "maturation_rmsd": design.maturation_rmsd,
+        "maturation_selected_delta_interface": design.maturation_selected_delta_interface,
+        "maturation_selected_interface_score": design.maturation_selected_interface_score,
+        "maturation_selected_rmsd": design.maturation_selected_rmsd,
+        "maturation_nonselected_rmsd": design.maturation_nonselected_rmsd,
     }
     _inject_metric(metrics, "screening_reason_present", 1.0 if design.screening_reason else None)
     for key, value in base_metrics.items():
@@ -663,6 +707,51 @@ def _build_plotly_metrics(design: Design) -> Dict[str, float]:
 
     raw_conf = design.confidence_metrics if isinstance(design.confidence_metrics, dict) else {}
     for key, value in raw_conf.items():
+        _inject_metric(metrics, key, value)
+
+    provenance = design.provenance if isinstance(design.provenance, dict) else {}
+    ppiflow = provenance.get("ppiflow") if isinstance(provenance.get("ppiflow"), dict) else {}
+    ppiflow_score = (
+        ppiflow.get("maturation_score") if isinstance(ppiflow.get("maturation_score"), dict)
+        else ppiflow.get("partial_flow_score") if isinstance(ppiflow.get("partial_flow_score"), dict)
+        else None
+    ) or {}
+    ppiflow_filter = ppiflow.get("maturation_filter") if isinstance(ppiflow.get("maturation_filter"), dict) else {}
+    ppiflow_anchors = ppiflow.get("anchors") if isinstance(ppiflow.get("anchors"), dict) else {}
+    ppiflow_interface = ppiflow.get("interface_score") if isinstance(ppiflow.get("interface_score"), dict) else {}
+
+    ppiflow_sample_index = ppiflow.get("sample_index")
+    if ppiflow_sample_index is None and isinstance(design.name, str):
+        import re
+        sample_match = re.search(r"_ppiflow_sample(\d+)$", design.name, re.IGNORECASE)
+        if sample_match:
+            try:
+                ppiflow_sample_index = int(sample_match.group(1))
+            except ValueError:
+                ppiflow_sample_index = None
+
+    ppiflow_metrics = {
+        "ppiflow_sample_index": ppiflow_sample_index,
+        "ppiflow_interface_score_original": ppiflow_score.get("interface_score_original"),
+        "ppiflow_interface_score_matured": ppiflow_score.get("interface_score_matured"),
+        "ppiflow_selected_interface_score_original": ppiflow_score.get("selected_interface_score_original"),
+        "ppiflow_selected_interface_score_matured": ppiflow_score.get("selected_interface_score_matured"),
+        "ppiflow_selected_delta_interface_score": ppiflow_score.get("selected_delta_interface_score"),
+        "ppiflow_selected_rmsd_backbone": ppiflow_score.get("selected_rmsd_backbone"),
+        "ppiflow_nonselected_rmsd_backbone": ppiflow_score.get("nonselected_rmsd_backbone"),
+        "ppiflow_sequence_identity": ppiflow_score.get("sequence_identity"),
+        "ppiflow_clash_count_ca": ppiflow_score.get("clash_count_ca"),
+        "ppiflow_interface_residue_count_original": ppiflow_score.get("interface_residue_count_original"),
+        "ppiflow_interface_residue_count_matured": ppiflow_score.get("interface_residue_count_matured"),
+        "ppiflow_selected_interface_residue_count_original": ppiflow_score.get("selected_interface_residue_count_original"),
+        "ppiflow_selected_interface_residue_count_matured": ppiflow_score.get("selected_interface_residue_count_matured"),
+        "ppiflow_filter_threshold": ppiflow_filter.get("threshold"),
+        "ppiflow_anchor_count": ppiflow_anchors.get("anchor_count"),
+        "ppiflow_anchor_interface_residue_count": ppiflow_anchors.get("interface_residue_count"),
+        "ppiflow_source_interface_score": ppiflow_interface.get("interface_score"),
+        "ppiflow_source_interface_residue_count": ppiflow_interface.get("interface_residue_count"),
+    }
+    for key, value in ppiflow_metrics.items():
         _inject_metric(metrics, key, value)
 
     return metrics
@@ -972,11 +1061,17 @@ async def list_designs(
         'rfa_hotspot_avg_min_distance': Design.rfa_hotspot_avg_min_distance,
         'rfa_runtime_seconds': Design.rfa_runtime_seconds,
         'rfa_plddt_final': Design.rfa_plddt_final,
+        'rfa_plddt_selected': Design.rfa_plddt_selected,
         'rfa_plddt_delta': Design.rfa_plddt_delta,
         'frustration_high_count': Design.frustration_high_count,
         'frustration_pct_high': Design.frustration_pct_high,
         'maturation_delta_interface': Design.maturation_delta_interface,
+        'maturation_interface_score': Design.maturation_interface_score,
         'maturation_rmsd': Design.maturation_rmsd,
+        'maturation_selected_delta_interface': Design.maturation_selected_delta_interface,
+        'maturation_selected_interface_score': Design.maturation_selected_interface_score,
+        'maturation_selected_rmsd': Design.maturation_selected_rmsd,
+        'maturation_nonselected_rmsd': Design.maturation_nonselected_rmsd,
         'fr2_contacts': Design.fr2_contacts,
         'is_favorite': Design.is_favorite,
         'binding_tier': func.coalesce(Design.iptm, 0.0) + case(
@@ -1306,23 +1401,30 @@ async def get_design_pdb(
         raise HTTPException(status_code=404, detail="No PDB file for this design")
     
     pdb_path = Path(design.pdb_path)
-    if not pdb_path.exists():
-        raise HTTPException(status_code=404, detail="PDB file not found on disk")
+    return _structure_file_response(pdb_path, design.name)
 
-    if pdb_path.suffix.lower() == ".pdb":
-        normalized_pdb = _normalize_pdb_for_viewer(pdb_path.read_text(errors="ignore"))
-        filename = f"{design.name}{pdb_path.suffix or '.pdb'}"
-        return Response(
-            content=normalized_pdb,
-            media_type="text/plain",
-            headers={"Content-Disposition": f'inline; filename="{filename}"'},
-        )
 
-    return FileResponse(
-        path=pdb_path,
-        filename=f"{design.name}{pdb_path.suffix or '.pdb'}",
-        media_type="text/plain"  # Changed from chemical/x-pdb for Mol* compatibility
-    )
+@router.get("/{design_id}/source-pdb")
+async def get_design_source_pdb(
+    design_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """Serve the source structure recorded in a design provenance payload."""
+    result = await session.execute(select(Design).where(Design.id == design_id))
+    design = result.scalar_one_or_none()
+
+    if not design:
+        raise HTTPException(status_code=404, detail="Design not found")
+
+    provenance = design.provenance if isinstance(design.provenance, dict) else {}
+    ppiflow = provenance.get("ppiflow") if isinstance(provenance.get("ppiflow"), dict) else {}
+    source_pdb_path = ppiflow.get("source_pdb_path")
+    source_design_name = str(ppiflow.get("source_design_name") or "").strip() or f"{design.name}_source"
+
+    if not isinstance(source_pdb_path, str) or not source_pdb_path.strip():
+        raise HTTPException(status_code=404, detail="No source structure recorded for this design")
+
+    return _structure_file_response(Path(source_pdb_path.strip()), source_design_name)
 
 
 class ResidueMetrics(BaseModel):

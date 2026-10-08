@@ -64,7 +64,7 @@ const FAMILY_META: Record<AnalysisLens, { title: string; description: string; ac
     },
     ppiflow: {
         title: 'PPIFlow Maturation',
-        description: 'Post-validation maturation deltas, interface score shifts, and structural drift.',
+        description: 'Refinement deltas, interface score shifts, contact geometry, and structural drift for PPIFlow outputs.',
         accent: 'border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-200',
     },
     frustrampnn: {
@@ -130,12 +130,25 @@ const CORE_METRICS: MetricOption[] = [
     { key: 'rfa_hotspot_min_distance', label: 'Hotspot Min Distance', color: '#84cc16', family: 'rfantibody' },
     { key: 'rfa_hotspot_avg_min_distance', label: 'Hotspot Avg Min Distance', color: '#65a30d', family: 'rfantibody' },
     { key: 'rfa_runtime_seconds', label: 'RFA Runtime', color: '#94a3b8', family: 'rfantibody' },
-    { key: 'rfa_plddt_final', label: 'RFA Final pLDDT', color: '#7c3aed', family: 'rfantibody' },
+    { key: 'rfa_plddt_final', label: 'RFA Global pLDDT', color: '#7c3aed', family: 'rfantibody' },
+    { key: 'rfa_plddt_selected', label: 'RFA Selected pLDDT', color: '#8b5cf6', family: 'rfantibody' },
     { key: 'rfa_plddt_delta', label: 'RFA pLDDT Delta', color: '#8b5cf6', family: 'rfantibody' },
     { key: 'fampnn_psce', label: 'FAMPNN PSCE', color: '#22c55e', family: 'fampnn' },
-    { key: 'maturation_delta_interface', label: 'Delta Interface', color: '#e879f9', family: 'ppiflow' },
-    { key: 'maturation_interface_score', label: 'Matured Interface Score', color: '#d946ef', family: 'ppiflow' },
-    { key: 'maturation_rmsd', label: 'Maturation RMSD', color: '#f472b6', family: 'ppiflow' },
+    { key: 'maturation_delta_interface', label: 'Global Delta Interface', color: '#e879f9', family: 'ppiflow' },
+    { key: 'maturation_selected_delta_interface', label: 'Selected Delta Interface', color: '#f0abfc', family: 'ppiflow' },
+    { key: 'maturation_interface_score', label: 'Global Interface Score', color: '#d946ef', family: 'ppiflow' },
+    { key: 'maturation_selected_interface_score', label: 'Selected Interface Score', color: '#c026d3', family: 'ppiflow' },
+    { key: 'maturation_rmsd', label: 'Global Maturation RMSD', color: '#f472b6', family: 'ppiflow' },
+    { key: 'maturation_selected_rmsd', label: 'Selected Maturation RMSD', color: '#f9a8d4', family: 'ppiflow' },
+    { key: 'maturation_nonselected_rmsd', label: 'Nonselected RMSD', color: '#fdba74', family: 'ppiflow' },
+    { key: 'ppiflow_interface_score_original', label: 'Source Interface Score', color: '#a21caf', family: 'ppiflow' },
+    { key: 'ppiflow_interface_score_matured', label: 'Refined Interface Score', color: '#d946ef', family: 'ppiflow' },
+    { key: 'ppiflow_sequence_identity', label: 'PPIFlow Sequence Identity', color: '#f0abfc', family: 'ppiflow' },
+    { key: 'ppiflow_clash_count_ca', label: 'PPIFlow CA Clash Count', color: '#fb7185', family: 'ppiflow' },
+    { key: 'ppiflow_interface_residue_count_original', label: 'Source Interface Residues', color: '#c084fc', family: 'ppiflow' },
+    { key: 'ppiflow_interface_residue_count_matured', label: 'Refined Interface Residues', color: '#e879f9', family: 'ppiflow' },
+    { key: 'ppiflow_anchor_count', label: 'PPIFlow Anchor Count', color: '#f59e0b', family: 'ppiflow' },
+    { key: 'ppiflow_sample_index', label: 'PPIFlow Sample', color: '#f9a8d4', family: 'ppiflow' },
     { key: 'frustration_high_count', label: 'High Frustration Count', color: '#f59e0b', family: 'frustrampnn' },
     { key: 'frustration_min_count', label: 'Minimal Frustration Count', color: '#f97316', family: 'frustrampnn' },
     { key: 'frustration_pct_high', label: 'High Frustration Percent', color: '#fb923c', family: 'frustrampnn' },
@@ -172,16 +185,16 @@ const LENS_DEFAULT_METRICS: Record<AnalysisLens, {
         custom3d: ['plddt_overall', 'iptm', 'pae_overall', 'conf_score'],
     },
     rfantibody: {
-        custom2d: ['epitope_contact_count', 'epitope_min_distance', 'target_contact_count'],
-        custom3d: ['epitope_contact_count', 'target_contact_count', 'epitope_min_distance', 'backbone_id'],
+        custom2d: ['epitope_contact_count', 'rfa_plddt_selected', 'target_contact_count'],
+        custom3d: ['epitope_contact_count', 'target_contact_count', 'rfa_plddt_selected', 'backbone_id'],
     },
     fampnn: {
         custom2d: ['fampnn_psce', 'plddt_overall', 'iptm'],
         custom3d: ['fampnn_psce', 'plddt_overall', 'iptm', 'conf_score'],
     },
     ppiflow: {
-        custom2d: ['maturation_delta_interface', 'maturation_rmsd', 'maturation_interface_score'],
-        custom3d: ['maturation_delta_interface', 'maturation_rmsd', 'maturation_interface_score', 'plddt_overall'],
+        custom2d: ['maturation_selected_delta_interface', 'maturation_selected_rmsd', 'maturation_selected_interface_score'],
+        custom3d: ['maturation_selected_delta_interface', 'maturation_selected_rmsd', 'maturation_selected_interface_score', 'maturation_nonselected_rmsd'],
     },
     frustrampnn: {
         custom2d: ['frustration_pct_high', 'frustration_high_count', 'plddt_overall'],
@@ -471,6 +484,40 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
         return null;
     };
 
+    const getPpiflowScopeLabel = (design: Design): string => {
+        const provenance = design.provenance && typeof design.provenance === 'object' && !Array.isArray(design.provenance)
+            ? design.provenance as Record<string, unknown>
+            : {};
+        const ppiflow = provenance.ppiflow && typeof provenance.ppiflow === 'object' && !Array.isArray(provenance.ppiflow)
+            ? provenance.ppiflow as Record<string, unknown>
+            : {};
+        const scope = (ppiflow.selected_loop_scope && typeof ppiflow.selected_loop_scope === 'object' && !Array.isArray(ppiflow.selected_loop_scope)
+            ? ppiflow.selected_loop_scope
+            : provenance.selected_loop_scope && typeof provenance.selected_loop_scope === 'object' && !Array.isArray(provenance.selected_loop_scope)
+                ? provenance.selected_loop_scope
+                : {}) as Record<string, unknown>;
+        const regionMode = String(
+            scope.region_mode
+            ?? scope.ppiflow_region_mode
+            ?? scope.ppiflow_backbone_region_mode
+            ?? scope.ppiflow_maturation_region_mode
+            ?? ''
+        ).trim().toLowerCase();
+        const loopValues = Array.isArray(scope.selected_loops)
+            ? scope.selected_loops
+            : Array.isArray(scope.ppiflow_selected_loops)
+                ? scope.ppiflow_selected_loops
+                : typeof scope.ppiflow_selected_loops === 'string'
+                    ? String(scope.ppiflow_selected_loops).split(/[\s,;|]+/)
+                    : [];
+        const loops = loopValues.map((value) => String(value).trim().toUpperCase()).filter(Boolean);
+        if (regionMode === 'selected_cdrs') return loops.length ? loops.join(', ') : 'Selected CDRs';
+        if (regionMode === 'all_cdrs') return 'All CDRs';
+        if (regionMode === 'framework_only') return 'Framework Only';
+        if (regionMode === 'all_antibody') return 'Whole Antibody';
+        return loops.length ? loops.join(', ') : 'Unspecified Scope';
+    };
+
     const metricCounts = useMemo(() => {
         const counts = new Map<string, number>();
         for (const option of metricOptions) {
@@ -754,7 +801,14 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
             return firstAvailableKey('fampnn_psce', 'mpnn_score');
         }
         if (resolvedAnalysisLens === 'ppiflow') {
-            return firstAvailableKey('maturation_delta_interface', 'maturation_interface_score', 'maturation_rmsd');
+            return firstAvailableKey(
+                'maturation_selected_delta_interface',
+                'maturation_selected_interface_score',
+                'maturation_selected_rmsd',
+                'maturation_delta_interface',
+                'maturation_interface_score',
+                'maturation_rmsd',
+            );
         }
         if (resolvedAnalysisLens === 'frustrampnn') {
             return firstAvailableKey('frustration_pct_high', 'frustration_high_count', 'frustration_min_count');
@@ -870,6 +924,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
     const histogramCache = new Map<string, Data[]>();
     const correlationCache = new Map<string, { labels: string[]; matrix: number[][] } | null>();
     const scatter3dCache = new Map<string, Data[]>();
+    const ppiflowScopeBoxCache = new Map<string, Data[]>();
 
     const buildScatter = (xKey: string, yKey: string, colorKey?: string | null): Data[] => {
         const cacheKey = `${xKey}::${yKey}::${colorKey || ''}::${resolvedColorScale}::${pointSize}`;
@@ -1099,6 +1154,51 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
             },
         } as Data];
         scatter3dCache.set(cacheKey, result);
+        return result;
+    };
+
+    const buildPpiflowScopeBoxPlot = (yKey: string): Data[] => {
+        const cacheKey = `${yKey}::scope-box`;
+        const cached = ppiflowScopeBoxCache.get(cacheKey);
+        if (cached) return cached;
+
+        const buckets = new Map<string, Array<{ value: number; name: string }>>();
+        for (const design of designs) {
+            if (designLensById.get(design.id) !== 'ppiflow') continue;
+            const value = getMetricValue(design, yKey);
+            if (value == null) continue;
+            const scopeLabel = getPpiflowScopeLabel(design);
+            const existing = buckets.get(scopeLabel) ?? [];
+            existing.push({ value, name: design.name });
+            buckets.set(scopeLabel, existing);
+        }
+
+        const result = Array.from(buckets.entries()).map(([scopeLabel, points]) => ({
+            type: 'box',
+            name: scopeLabel,
+            y: points.map((point) => point.value),
+            text: points.map((point) => point.name),
+            boxpoints: 'all',
+            jitter: 0.35,
+            pointpos: 0,
+            marker: {
+                color: metricLookup.get(yKey)?.color || '#d946ef',
+                opacity: 0.75,
+                size: Math.max(5, pointSize),
+            },
+            line: {
+                color: metricLookup.get(yKey)?.color || '#d946ef',
+                width: 1.4,
+            },
+            hovertemplate: [
+                '<b>%{text}</b>',
+                `Scope: ${scopeLabel}`,
+                `${getMetricLabel(yKey)}: %{y:.3f}`,
+                '<extra></extra>',
+            ].join('<br>'),
+        } as Data));
+
+        ppiflowScopeBoxCache.set(cacheKey, result);
         return result;
     };
 
@@ -1831,45 +1931,98 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                     />
                     <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
                         <PlotCard
-                            title="Delta Interface vs Maturation RMSD"
-                            description="Shows whether interface improvement is coming with structural drift."
-                            hasData={buildScatter('maturation_delta_interface', 'maturation_rmsd', 'maturation_interface_score').length > 0}
+                            title="Refined Epitope Contacts vs Distance"
+                            description="The same engagement geometry used in RF review, now plotted on the refined outputs."
+                            hasData={buildScatter('epitope_contact_count', firstAvailableKey('epitope_min_atom_distance', 'epitope_min_distance') || 'epitope_min_distance', 'target_contact_count').length > 0}
                         >
                             <Plot
-                                data={buildScatter('maturation_delta_interface', 'maturation_rmsd', 'maturation_interface_score')}
-                                layout={make2DLayout('maturation_delta_interface', 'maturation_rmsd')}
+                                data={buildScatter('epitope_contact_count', firstAvailableKey('epitope_min_atom_distance', 'epitope_min_distance') || 'epitope_min_distance', 'target_contact_count')}
+                                layout={make2DLayout('epitope_contact_count', firstAvailableKey('epitope_min_atom_distance', 'epitope_min_distance') || 'epitope_min_distance')}
                                 config={DEFAULT_PLOT_CONFIG}
                                 style={{ width: '100%', height: '300px' }}
                             />
                         </PlotCard>
 
                         <PlotCard
-                            title="Matured Interface vs Validation Confidence"
-                            description="Cross-links the PPIFlow repair step with the downstream validator view."
-                            hasData={buildScatter('maturation_interface_score', firstAvailableKey('iptm', 'protein_iptm', 'conf_score') || 'conf_score', 'plddt_overall').length > 0}
+                            title="Any-Target Contacts vs Selected ΔIface"
+                            description="Shows whether refined engagement geometry agrees with the selected-region interface score shift."
+                            hasData={buildScatter('target_contact_count', 'maturation_selected_delta_interface', 'epitope_min_distance').length > 0}
                         >
                             <Plot
-                                data={buildScatter('maturation_interface_score', firstAvailableKey('iptm', 'protein_iptm', 'conf_score') || 'conf_score', 'plddt_overall')}
-                                layout={make2DLayout('maturation_interface_score', firstAvailableKey('iptm', 'protein_iptm', 'conf_score') || 'conf_score')}
+                                data={buildScatter('target_contact_count', 'maturation_selected_delta_interface', 'epitope_min_distance')}
+                                layout={make2DLayout('target_contact_count', 'maturation_selected_delta_interface')}
                                 config={DEFAULT_PLOT_CONFIG}
                                 style={{ width: '100%', height: '300px' }}
                             />
                         </PlotCard>
 
                         <PlotCard
-                            title="Delta Interface Distribution"
-                            description="Quick read on whether the maturation stage is moving the interface score in the desired direction."
-                            hasData={buildHistogram('maturation_delta_interface').length > 0}
+                            title="Selected ΔIface vs Selected RMSD"
+                            description="Shows whether local interface improvement is coming with local backbone movement."
+                            hasData={buildScatter('maturation_selected_delta_interface', 'maturation_selected_rmsd', 'maturation_selected_interface_score').length > 0}
                         >
                             <Plot
-                                data={buildHistogram('maturation_delta_interface')}
-                                layout={make2DLayout('maturation_delta_interface', 'count', {
-                                    yaxis: {
-                                        title: { text: 'Count', font: { color: AXIS_COLOR } },
-                                        gridcolor: GRID_COLOR,
+                                data={buildScatter('maturation_selected_delta_interface', 'maturation_selected_rmsd', 'maturation_selected_interface_score')}
+                                layout={make2DLayout('maturation_selected_delta_interface', 'maturation_selected_rmsd')}
+                                config={DEFAULT_PLOT_CONFIG}
+                                style={{ width: '100%', height: '300px' }}
+                            />
+                        </PlotCard>
+
+                        <PlotCard
+                            title="Source vs Refined Selected Interface Score"
+                            description="Direct pre/post compare for the residues PPIFlow was actually allowed to iterate."
+                            hasData={buildScatter('ppiflow_selected_interface_score_original', 'ppiflow_selected_interface_score_matured', 'maturation_selected_rmsd').length > 0}
+                        >
+                            <Plot
+                                data={buildScatter('ppiflow_selected_interface_score_original', 'ppiflow_selected_interface_score_matured', 'maturation_selected_rmsd')}
+                                layout={make2DLayout('ppiflow_selected_interface_score_original', 'ppiflow_selected_interface_score_matured')}
+                                config={DEFAULT_PLOT_CONFIG}
+                                style={{ width: '100%', height: '300px' }}
+                            />
+                        </PlotCard>
+
+                        <PlotCard
+                            title="Source vs Refined Interface Residues"
+                            description="Checks whether the refined backbone expands or contracts the interface footprint."
+                            hasData={buildScatter('ppiflow_interface_residue_count_original', 'ppiflow_interface_residue_count_matured', 'ppiflow_sequence_identity').length > 0}
+                        >
+                            <Plot
+                                data={buildScatter('ppiflow_interface_residue_count_original', 'ppiflow_interface_residue_count_matured', 'ppiflow_sequence_identity')}
+                                layout={make2DLayout('ppiflow_interface_residue_count_original', 'ppiflow_interface_residue_count_matured')}
+                                config={DEFAULT_PLOT_CONFIG}
+                                style={{ width: '100%', height: '300px' }}
+                            />
+                        </PlotCard>
+
+                        <PlotCard
+                            title="Selected ΔIface by Modified Loop Scope"
+                            description="Groups local refinement outcomes by the CDR or region scope that was allowed to move."
+                            hasData={buildPpiflowScopeBoxPlot('maturation_selected_delta_interface').length > 0}
+                            emptyMessage="Loop scope labels are not persisted for these designs yet."
+                        >
+                            <Plot
+                                data={buildPpiflowScopeBoxPlot('maturation_selected_delta_interface')}
+                                layout={make2DLayout('ppiflow_scope', 'maturation_selected_delta_interface', {
+                                    xaxis: {
+                                        title: { text: 'Modified Loop Scope', font: { color: AXIS_COLOR } },
                                         color: AXIS_COLOR,
+                                        tickangle: -20,
                                     },
                                 })}
+                                config={DEFAULT_PLOT_CONFIG}
+                                style={{ width: '100%', height: '300px' }}
+                            />
+                        </PlotCard>
+
+                        <PlotCard
+                            title="Sample Index vs Selected ΔIface"
+                            description="Helps determine whether retained local-refinement quality depends on sample order or if the sampler is well mixed."
+                            hasData={buildScatter('ppiflow_sample_index', 'maturation_selected_delta_interface', 'maturation_selected_rmsd').length > 0}
+                        >
+                            <Plot
+                                data={buildScatter('ppiflow_sample_index', 'maturation_selected_delta_interface', 'maturation_selected_rmsd')}
+                                layout={make2DLayout('ppiflow_sample_index', 'maturation_selected_delta_interface')}
                                 config={DEFAULT_PLOT_CONFIG}
                                 style={{ width: '100%', height: '300px' }}
                             />

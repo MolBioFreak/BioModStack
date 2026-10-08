@@ -16,6 +16,35 @@ def parse_chain_list(value):
     return [c.strip() for c in value.split(",") if c.strip()]
 
 
+def parse_position_spec(value):
+    residues = set()
+    for token in (value or "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        chain_id = token[0]
+        raw = token[1:]
+        if "-" in raw:
+            start_text, end_text = raw.split("-", 1)
+            try:
+                start = int(start_text)
+                end = int(end_text)
+            except ValueError:
+                continue
+            for resnum in range(min(start, end), max(start, end) + 1):
+                residues.add((chain_id, int(resnum)))
+            continue
+        number = ""
+        for char in raw:
+            if char.isdigit() or (char == "-" and not number):
+                number += char
+            else:
+                break
+        if number:
+            residues.add((chain_id, int(number)))
+    return residues
+
+
 def get_pdb_key(pose, resi):
     pdb_info = pose.pdb_info()
     return (
@@ -92,9 +121,74 @@ def detect_interface_residues(pose, ab_chains, ag_chains, distance_cutoff):
     return sorted(list(interface_ab | interface_ag))
 
 
-def interface_score(pose, interface_residues):
-    energies = pose.energies()
-    return sum(energies.residue_total_energy(resi) for resi in interface_residues)
+def interface_pairs_within_distance(pose, ab_chains, ag_chains, distance_cutoff):
+    pdb_info = pose.pdb_info()
+    ab_residues = []
+    ag_residues = []
+    for i in range(1, pose.total_residue() + 1):
+        chain = pdb_info.chain(i)
+        if chain in ab_chains:
+            ab_residues.append(i)
+        elif chain in ag_chains:
+            ag_residues.append(i)
+
+    pairs = []
+    interface_ab = set()
+    interface_ag = set()
+    for i in ab_residues:
+        res_i = pose.residue(i)
+        xyz_i = res_i.nbr_atom_xyz()
+        for j in ag_residues:
+            res_j = pose.residue(j)
+            xyz_j = res_j.nbr_atom_xyz()
+            if xyz_i.distance(xyz_j) <= distance_cutoff:
+                pairs.append((i, j))
+                interface_ab.add(i)
+                interface_ag.add(j)
+    return pairs, sorted(list(interface_ab | interface_ag))
+
+
+def pair_energy_total(scorefxn, pose, resi_a, resi_b):
+    if not hasattr(scorefxn, "eval_ci_2b") or not hasattr(scorefxn, "eval_cd_2b"):
+        raise RuntimeError("ScoreFunction does not expose eval_ci_2b/eval_cd_2b; cannot compute strict pair energies")
+    emap = pyrosetta.rosetta.core.scoring.EMapVector()
+    scorefxn.eval_ci_2b(pose.residue(resi_a), pose.residue(resi_b), pose, emap)
+    scorefxn.eval_cd_2b(pose.residue(resi_a), pose.residue(resi_b), pose, emap)
+    return float(emap.dot(scorefxn.weights()))
+
+
+def interface_score(pose, ab_chains, ag_chains, distance_cutoff, selected_positions=None, binder_chain_remap=None):
+    scorefxn = pyrosetta.get_fa_scorefxn()
+    scorefxn(pose)
+    interface_pairs, interface_residues = interface_pairs_within_distance(pose, ab_chains, ag_chains, distance_cutoff)
+    total = 0.0
+    negative_pair_count = 0
+    selected_total = 0.0
+    selected_negative_pair_count = 0
+    selected_interface_residues = set()
+    for resi_a, resi_b in interface_pairs:
+        pair_score = pair_energy_total(scorefxn, pose, resi_a, resi_b)
+        binder_key = get_pdb_key(pose, resi_a)
+        binder_position = (
+            binder_chain_remap.get(binder_key[0], binder_key[0]) if binder_chain_remap else binder_key[0],
+            binder_key[1],
+        )
+        if pair_score < 0:
+            total += pair_score
+            negative_pair_count += 1
+            if selected_positions and binder_position in selected_positions:
+                selected_total += pair_score
+                selected_negative_pair_count += 1
+                selected_interface_residues.add(resi_a)
+                selected_interface_residues.add(resi_b)
+    return {
+        "global_score": total,
+        "global_interface_residues": interface_residues,
+        "global_negative_pair_count": negative_pair_count,
+        "selected_score": selected_total if selected_positions else None,
+        "selected_interface_residues": sorted(selected_interface_residues) if selected_positions else None,
+        "selected_negative_pair_count": selected_negative_pair_count if selected_positions else None,
+    }
 
 
 def extract_chain_coords(pose, chain_ids, chain_remap=None):
@@ -111,6 +205,19 @@ def extract_chain_coords(pose, chain_ids, chain_remap=None):
             key = (chain_remap[key[0]], key[1], key[2])
         coords[key] = pose.residue(resi).atom("CA").xyz()
     return coords
+
+
+def filter_coords_by_position_set(coords, position_set, invert=False):
+    if not position_set:
+        return dict(coords) if invert else {}
+    filtered = {}
+    for key, value in coords.items():
+        membership = (key[0], key[1]) in position_set
+        if invert:
+            membership = not membership
+        if membership:
+            filtered[key] = value
+    return filtered
 
 
 def extract_chain_coords_by_order(pose, chain_ids, chain_remap=None):
@@ -226,11 +333,14 @@ def main():
                         help="Comma-separated antigen chain IDs")
     parser.add_argument("--distance_cutoff", type=float, default=8.0,
                         help="Interface distance cutoff (A)")
+    parser.add_argument("--selected_positions", default="",
+                        help="Comma-separated antibody positions iterated by PPIFlow (e.g. H27-38,H56-65)")
     parser.add_argument("--output", required=True, help="Output JSON file")
     args = parser.parse_args()
 
     antibody_chains = parse_chain_list(args.antibody_chains)
     antigen_chains = parse_chain_list(args.antigen_chains)
+    selected_positions = parse_position_spec(args.selected_positions)
 
     pyrosetta.init("-out:levels all:error -ignore_unrecognized_res 1")
     pose_original = pyrosetta.pose_from_pdb(args.original_pdb)
@@ -256,16 +366,25 @@ def main():
         for original_chain, matured_chain in zip(antibody_chains_original, antibody_chains_matured)
     }
 
-    interface_res_orig = detect_interface_residues(
-        pose_original, antibody_chains_original, antigen_chains_original, args.distance_cutoff
+    interface_score_orig = interface_score(
+        pose_original,
+        antibody_chains_original,
+        antigen_chains_original,
+        args.distance_cutoff,
+        selected_positions=selected_positions,
     )
-    interface_res_matured = detect_interface_residues(
-        pose_matured, antibody_chains_matured, antigen_chains_matured, args.distance_cutoff
+    interface_score_matured = interface_score(
+        pose_matured,
+        antibody_chains_matured,
+        antigen_chains_matured,
+        args.distance_cutoff,
+        selected_positions=selected_positions,
+        binder_chain_remap=matured_to_original_chain_map,
     )
-
-    interface_score_orig = interface_score(pose_original, interface_res_orig)
-    interface_score_matured = interface_score(pose_matured, interface_res_matured)
-    delta_interface = interface_score_matured - interface_score_orig
+    delta_interface = interface_score_matured["global_score"] - interface_score_orig["global_score"]
+    selected_delta_interface = None
+    if interface_score_orig["selected_score"] is not None and interface_score_matured["selected_score"] is not None:
+        selected_delta_interface = interface_score_matured["selected_score"] - interface_score_orig["selected_score"]
 
     coords_orig = extract_chain_coords(pose_original, antibody_chains_original)
     coords_orig_ordered = extract_chain_coords_by_order(pose_original, antibody_chains_original)
@@ -285,6 +404,12 @@ def main():
         ordered_a=coords_orig_ordered,
         ordered_b=coords_matured_ordered,
     )
+    selected_coords_orig = filter_coords_by_position_set(coords_orig, selected_positions)
+    selected_coords_matured = filter_coords_by_position_set(coords_matured, selected_positions)
+    selected_rmsd_val = rmsd(selected_coords_orig, selected_coords_matured)
+    nonselected_coords_orig = filter_coords_by_position_set(coords_orig, selected_positions, invert=True)
+    nonselected_coords_matured = filter_coords_by_position_set(coords_matured, selected_positions, invert=True)
+    nonselected_rmsd_val = rmsd(nonselected_coords_orig, nonselected_coords_matured)
     seq_id = sequence_identity(
         pose_original,
         pose_matured,
@@ -295,10 +420,15 @@ def main():
     clash_count = count_ca_clashes(pose_matured, cutoff=2.0)
 
     payload = {
-        "interface_score_original": float(interface_score_orig),
-        "interface_score_matured": float(interface_score_matured),
+        "interface_score_original": float(interface_score_orig["global_score"]),
+        "interface_score_matured": float(interface_score_matured["global_score"]),
         "delta_interface_score": float(delta_interface),
+        "selected_interface_score_original": None if interface_score_orig["selected_score"] is None else float(interface_score_orig["selected_score"]),
+        "selected_interface_score_matured": None if interface_score_matured["selected_score"] is None else float(interface_score_matured["selected_score"]),
+        "selected_delta_interface_score": None if selected_delta_interface is None else float(selected_delta_interface),
         "rmsd_backbone": None if rmsd_val is None else float(rmsd_val),
+        "selected_rmsd_backbone": None if selected_rmsd_val is None else float(selected_rmsd_val),
+        "nonselected_rmsd_backbone": None if nonselected_rmsd_val is None else float(nonselected_rmsd_val),
         "sequence_identity": None if seq_id is None else float(seq_id),
         "clash_count_ca": int(clash_count),
         "antibody_chains_requested": antibody_chains,
@@ -310,8 +440,21 @@ def main():
         "detected_chains_original": original_detected_chains,
         "detected_chains_matured": matured_detected_chains,
         "matured_to_original_chain_map": matured_to_original_chain_map,
-        "interface_residue_count_original": len(interface_res_orig),
-        "interface_residue_count_matured": len(interface_res_matured),
+        "interface_residue_count_original": len(interface_score_orig["global_interface_residues"]),
+        "interface_residue_count_matured": len(interface_score_matured["global_interface_residues"]),
+        "negative_pair_count_original": int(interface_score_orig["global_negative_pair_count"]),
+        "negative_pair_count_matured": int(interface_score_matured["global_negative_pair_count"]),
+        "selected_interface_residue_count_original": (
+            len(interface_score_orig["selected_interface_residues"]) if interface_score_orig["selected_interface_residues"] is not None else None
+        ),
+        "selected_interface_residue_count_matured": (
+            len(interface_score_matured["selected_interface_residues"]) if interface_score_matured["selected_interface_residues"] is not None else None
+        ),
+        "selected_negative_pair_count_original": interface_score_orig["selected_negative_pair_count"],
+        "selected_negative_pair_count_matured": interface_score_matured["selected_negative_pair_count"],
+        "selected_position_count": len(selected_positions) if selected_positions else 0,
+        "selected_positions": sorted(f"{chain}{resnum}" for chain, resnum in selected_positions) if selected_positions else [],
+        "interface_energy_method": "negative_interchain_pair_energy_sum",
         "distance_cutoff": float(args.distance_cutoff),
     }
 

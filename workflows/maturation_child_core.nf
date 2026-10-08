@@ -9,6 +9,29 @@ workflow MATURATION_CHILD_CORE {
     pdb_list
 
     main:
+    def coercePathList = { raw ->
+        if (raw == null) {
+            return []
+        }
+        if (raw instanceof java.nio.file.Path || raw instanceof File) {
+            return [raw]
+        }
+        if (raw instanceof Collection) {
+            return raw.toList()
+        }
+        if (raw instanceof Iterable) {
+            return raw.collect { it }
+        }
+        try {
+            def asList = raw.toList()
+            if (asList instanceof List) {
+                return asList
+            }
+        }
+        catch (Throwable ignored) {
+        }
+        return [raw]
+    }
     def normalizeLoopSpec = { raw ->
         if (raw == null) {
             return null
@@ -23,6 +46,20 @@ workflow MATURATION_CHILD_CORE {
         if (value in ['framework', 'framework_only']) return 'framework_only'
         if (value in ['all_antibody', 'whole_antibody', 'full_antibody']) return 'all_antibody'
         return 'selected_cdrs'
+    }
+    def parseBackboneManifest = { manifestFile ->
+        if (manifestFile == null) {
+            return []
+        }
+        def parsed = new groovy.json.JsonSlurper().parse(new File(manifestFile.toString()))
+        if (!(parsed instanceof List)) {
+            return []
+        }
+        return parsed
+            .findAll { it instanceof Map && it.path }
+            .collect { entry ->
+                [file(entry.path.toString()), entry]
+            }
     }
     def selectedLoopsSpec = normalizeLoopSpec(params.ppiflow_selected_loops ?: params.maturation_selected_loops ?: params.selected_cdr_loops)
     def ppiflowRegionMode = normalizeRegionMode(params.ppiflow_region_mode ?: params.ppiflow_maturation_region_mode ?: params.ppiflow_backbone_region_mode)
@@ -46,29 +83,33 @@ workflow MATURATION_CHILD_CORE {
     IdentifyAnchorResidues(anchor_inputs)
     RunPartialFlow(IdentifyAnchorResidues.out.anchor_inputs)
 
-    def anchor_lookup = IdentifyAnchorResidues.out.anchor_inputs.map { meta, original_pdb, anchors_json, ppiflow_positions, cdr_positions ->
-        tuple(meta, original_pdb, anchors_json, ppiflow_positions, cdr_positions)
+    def anchor_lookup = IdentifyAnchorResidues.out.anchor_inputs.map { meta, original_pdb, enriched_pdb, anchors_json, ppiflow_positions, cdr_positions ->
+        tuple(meta, original_pdb, enriched_pdb, anchors_json, ppiflow_positions, cdr_positions)
     }
-    def anchor_original_lookup = anchor_lookup.map { meta, original_pdb, _anchors_json, _ppiflow_positions, _cdr_positions -> tuple(meta.id, original_pdb) }
-    def anchor_redesign_lookup = anchor_lookup.map { meta, _original_pdb, anchors_json, _ppiflow_positions, cdr_positions -> tuple(meta.id, anchors_json, cdr_positions) }
+    def anchor_original_lookup = anchor_lookup.map { meta, original_pdb, _enriched_pdb, _anchors_json, _ppiflow_positions, _cdr_positions -> tuple(meta.id, original_pdb) }
+    def anchor_redesign_lookup = anchor_lookup.map { meta, _original_pdb, _enriched_pdb, anchors_json, _ppiflow_positions, cdr_positions -> tuple(meta.id, anchors_json, cdr_positions) }
 
     // Fan out multi-sample PPIFlow outputs so downstream tasks operate on one
-    // matured backbone at a time instead of a space-joined file list.
-    def partial_backbones = RunPartialFlow.out.backbones.flatMap { meta, backbone_pdbs ->
-        def pdbList = backbone_pdbs instanceof Collection ? backbone_pdbs : [backbone_pdbs]
-        pdbList.collect { backbone_pdb ->
+    // matured backbone at a time using the explicit manifest emitted by
+    // RunPartialFlow, rather than relying on grouped glob semantics.
+    def partial_backbones = RunPartialFlow.out.backbones.flatMap { meta, _backbone_dir, manifest_json ->
+        def pdbList = parseBackboneManifest(manifest_json)
+        pdbList.collect { backbone_pdb, manifestEntry ->
             def sampleMeta = new LinkedHashMap(meta)
             sampleMeta.parent_id = meta.id
             sampleMeta.id = backbone_pdb.baseName
+            sampleMeta.sample_index = manifestEntry.sample_index
             tuple(sampleMeta, backbone_pdb)
         }
     }
 
     def partial_score_inputs = partial_backbones
         .map { meta, backbone_pdb -> tuple(meta.parent_id ?: meta.id, meta, backbone_pdb) }
-        .join(anchor_original_lookup)
-        .map { _parentId, meta, backbone_pdb, original_pdb ->
-            tuple(meta, original_pdb, backbone_pdb)
+        .join(anchor_lookup.map { meta, original_pdb, _enriched_pdb, _anchors_json, ppiflow_positions, _cdr_positions ->
+            tuple(meta.id, original_pdb, ppiflow_positions)
+        })
+        .map { _parentId, meta, backbone_pdb, original_pdb, ppiflow_positions ->
+            tuple(meta, original_pdb, backbone_pdb, ppiflow_positions)
         }
 
     ScorePartialFlowImprovement(partial_score_inputs)
@@ -99,7 +140,11 @@ workflow MATURATION_CHILD_CORE {
         .map { meta, score_json, backbone_pdb ->
             def score = 0.0
             try {
-                score = new groovy.json.JsonSlurper().parse(score_json).delta_interface_score ?: 0.0
+                def parsed = new groovy.json.JsonSlurper().parse(score_json)
+                score = parsed.selected_delta_interface_score
+                if (score == null) {
+                    score = parsed.delta_interface_score ?: 0.0
+                }
             }
             catch (Exception e) {
                 score = 0.0
@@ -107,18 +152,27 @@ workflow MATURATION_CHILD_CORE {
             tuple(meta, backbone_pdb, score_json, score)
         }
 
+    def redesign_enabled = params.maturation_redesign_enabled != false
     def redesign_top_n = params.maturation_redesign_top_n ?: 0
     def partial_selected = partial_scored
-    if (redesign_top_n > 0) {
+    if (redesign_enabled && runRedesign && redesign_top_n > 0) {
         partial_selected = partial_scored
             .collect()
             .flatMap { items ->
-                def sorted = items.sort { a, b -> a[3] <=> b[3] }
+                def normalizedItems
+                if (items instanceof List && items && items[0] instanceof List) {
+                    normalizedItems = items
+                } else if (items instanceof List && items.size() >= 4 && items[0] instanceof Map) {
+                    normalizedItems = [items]
+                } else if (items instanceof Collection) {
+                    normalizedItems = items.toList()
+                } else {
+                    normalizedItems = [items]
+                }
+                def sorted = normalizedItems.sort { a, b -> a[3] <=> b[3] }
                 sorted.take(redesign_top_n)
             }
     }
-
-    def redesign_enabled = params.maturation_redesign_enabled != false
 
     def final_matured
     def final_scores
@@ -144,9 +198,11 @@ workflow MATURATION_CHILD_CORE {
 
         def score_inputs = RunMaturationFAMPNN.out.redesigned
             .map { meta, matured_pdb, _matured_json -> tuple(meta.parent_id ?: meta.id, meta, matured_pdb) }
-            .join(anchor_original_lookup)
-            .map { _parentId, meta, matured_pdb, original_pdb ->
-                tuple(meta, original_pdb, matured_pdb)
+            .join(anchor_lookup.map { meta, original_pdb, _enriched_pdb, _anchors_json, ppiflow_positions, _cdr_positions ->
+                tuple(meta.id, original_pdb, ppiflow_positions)
+            })
+            .map { _parentId, meta, matured_pdb, original_pdb, ppiflow_positions ->
+                tuple(meta, original_pdb, matured_pdb, ppiflow_positions)
             }
 
         ScoreMaturationImprovement(score_inputs)
@@ -159,7 +215,12 @@ workflow MATURATION_CHILD_CORE {
 
     def filter_inputs = final_scores.join(final_matured)
         .map { meta, score_json, matured_pdb ->
-            tuple(meta, matured_pdb, score_json)
+            tuple(meta.parent_id ?: meta.id, meta, matured_pdb, score_json)
+        }
+        .groupTuple(by: 0)
+        .map { _parentId, metaList, maturedPdbList, scoreJsonList ->
+            def representativeMeta = (metaList instanceof List && !metaList.isEmpty()) ? metaList[0] : metaList
+            tuple(representativeMeta, maturedPdbList, scoreJsonList)
         }
 
     FilterByMaturation(filter_inputs)

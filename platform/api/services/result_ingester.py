@@ -24,7 +24,7 @@ from paths import get_data_root
 from services.rfantibody_metadata import load_rfantibody_trb_summary
 from .aligned_error_utils import detect_aligned_error_artifact, load_aligned_error_artifact
 from .ipsae import compute_ipsae_interface
-from .structure_utils import calculate_epitope_contacts
+from .structure_utils import calculate_epitope_contacts, compute_contact_geometry_metrics
 
 
 def _is_native_frustration_row(row: Dict[str, Any]) -> bool:
@@ -657,6 +657,42 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
     }
 
 
+async def _resolve_job_param_from_lineage(
+    session: AsyncSession,
+    job: Optional[Job],
+    params: Dict[str, Any],
+    *keys: str,
+) -> Any:
+    for key in keys:
+        value = params.get(key)
+        if value not in (None, "", [], {}):
+            return value
+
+    related_job_ids: List[str] = []
+    if job:
+        for candidate in (
+            getattr(job, "parent_job_id", None),
+            params.get("selection_source_job_id"),
+            params.get("iteration_source_job_id"),
+            params.get("iteration_source_root_job_id"),
+            params.get("resume_root_job_id"),
+            params.get("lineage_root_job_id"),
+        ):
+            candidate_id = str(candidate).strip() if candidate else ""
+            if candidate_id and candidate_id not in related_job_ids and candidate_id != getattr(job, "id", None):
+                related_job_ids.append(candidate_id)
+
+    for job_id in related_job_ids:
+        result = await session.execute(select(Job.params).where(Job.id == job_id))
+        row = result.one_or_none()
+        lineage_params = _parse_job_params(row[0] if row else None)
+        for key in keys:
+            value = lineage_params.get(key)
+            if value not in (None, "", [], {}):
+                return value
+    return None
+
+
 async def _resolve_parent_design_lineage(
     session: AsyncSession,
     context: Dict[str, Any],
@@ -693,6 +729,12 @@ async def _resolve_parent_design_lineage(
                         Design.origin_backbone_design_id,
                         Design.stage_family,
                         Design.stage_mode,
+                        Design.cdr_h1_length,
+                        Design.cdr_h2_length,
+                        Design.cdr_h3_length,
+                        Design.cdr_l1_length,
+                        Design.cdr_l2_length,
+                        Design.cdr_l3_length,
                     )
                 ).where(Design.id == parent_design_id)
             )
@@ -713,6 +755,12 @@ async def _resolve_parent_design_lineage(
                         Design.stage_mode,
                         Design.pdb_path,
                         Design.name,
+                        Design.cdr_h1_length,
+                        Design.cdr_h2_length,
+                        Design.cdr_h3_length,
+                        Design.cdr_l1_length,
+                        Design.cdr_l2_length,
+                        Design.cdr_l3_length,
                     )
                 ).where(Design.pdb_path == source_pdb_path)
             )
@@ -732,6 +780,12 @@ async def _resolve_parent_design_lineage(
                             Design.stage_family,
                             Design.stage_mode,
                             Design.name,
+                            Design.cdr_h1_length,
+                            Design.cdr_h2_length,
+                            Design.cdr_h3_length,
+                            Design.cdr_l1_length,
+                            Design.cdr_l2_length,
+                            Design.cdr_l3_length,
                         )
                     ).where(Design.name == source_design_name)
                 )
@@ -757,6 +811,7 @@ async def _resolve_parent_design_lineage(
         "origin_design_id": origin_design_id,
         "origin_backbone_design_id": origin_backbone_design_id,
         "origin_job_id": origin_job_id,
+        "source_cdr_lengths": _extract_design_cdr_lengths(parent_design),
         "selection_manifest_item": manifest_item,
         "source_pdb_path": source_pdb_path,
         "source_design_name": source_design_name,
@@ -792,6 +847,58 @@ def _parse_hlt_cdr_lengths(structure_path: Optional[Path]) -> Dict[str, int]:
         return {}
 
     return counts
+
+
+def _extract_design_cdr_lengths(design: Optional[Design]) -> Dict[str, int]:
+    if design is None:
+        return {}
+    return {
+        "H1": getattr(design, "cdr_h1_length", None),
+        "H2": getattr(design, "cdr_h2_length", None),
+        "H3": getattr(design, "cdr_h3_length", None),
+        "L1": getattr(design, "cdr_l1_length", None),
+        "L2": getattr(design, "cdr_l2_length", None),
+        "L3": getattr(design, "cdr_l3_length", None),
+    }
+
+
+def _coalesce_cdr_lengths(*sources: Optional[Dict[str, Any]]) -> Dict[str, int]:
+    merged: Dict[str, int] = {}
+    for loop_id in ("H1", "H2", "H3", "L1", "L2", "L3"):
+        for source in sources:
+            if not source:
+                continue
+            value = source.get(loop_id)
+            if value in (None, "", 0):
+                continue
+            try:
+                merged[loop_id] = int(value)
+                break
+            except (TypeError, ValueError):
+                continue
+    return merged
+
+
+def _parse_source_cdr_lengths(source_pdb_path: Optional[str]) -> Dict[str, int]:
+    raw_path = str(source_pdb_path or "").strip()
+    if not raw_path:
+        return {}
+    try:
+        return _parse_hlt_cdr_lengths(Path(raw_path).expanduser())
+    except Exception:
+        return {}
+
+
+def _parse_ppiflow_sample_index(name: Optional[str]) -> Optional[int]:
+    if not name:
+        return None
+    match = re.search(r"_ppiflow_sample(\d+)$", str(name), re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return None
 
 
 async def ingest_job_results(
@@ -963,6 +1070,8 @@ async def ingest_job_results(
                         design.rfa_plddt_initial = safe_float(rfa_trb.get("rfa_plddt_initial"))
                         design.rfa_plddt_final = safe_float(rfa_trb.get("rfa_plddt_final"))
                         design.rfa_plddt_delta = safe_float(rfa_trb.get("rfa_plddt_delta"))
+                        design.rfa_plddt_selected = safe_float(rfa_trb.get("rfa_plddt_selected"))
+                        design.rfa_plddt_nonselected = safe_float(rfa_trb.get("rfa_plddt_nonselected"))
                         design.rfa_design_loops = rfa_trb.get("rfa_design_loops")
                         design.rfa_hotspots = rfa_trb.get("rfa_hotspots")
                         design_provenance["rfantibody"] = rfa_trb
@@ -1256,6 +1365,44 @@ def _apply_screening_row(design: "Design", row: dict) -> bool:
     return changed
 
 
+def _apply_geometry_metrics(design: "Design", metrics: Dict[str, Any], *, overwrite: bool = True) -> bool:
+    changed = False
+    metric_fields = (
+        "epitope_contact_count",
+        "epitope_min_distance",
+        "epitope_min_atom_distance",
+        "epitope_nearest_antibody_residue",
+        "epitope_nearest_target_residue",
+        "epitope_nearest_antibody_atom",
+        "epitope_nearest_target_atom",
+        "epitope_mapping_mode",
+        "epitope_centroid_distance",
+        "target_contact_count",
+        "target_min_distance",
+        "target_min_atom_distance",
+        "target_nearest_antibody_residue",
+        "target_nearest_target_residue",
+        "target_nearest_antibody_atom",
+        "target_nearest_target_atom",
+        "target_centroid_distance",
+        "detected_antibody_chains",
+        "detected_target_chain",
+        "antibody_residue_count",
+        "target_residue_count",
+        "epitope_residue_count",
+    )
+    for field_name in metric_fields:
+        if field_name not in metrics:
+            continue
+        new_value = metrics.get(field_name)
+        if not overwrite and getattr(design, field_name, None) is not None:
+            continue
+        if getattr(design, field_name, None) != new_value:
+            setattr(design, field_name, new_value)
+            changed = True
+    return changed
+
+
 async def ingest_maturation_data(
     job_id: str,
     output_path: Path,
@@ -1303,6 +1450,39 @@ async def ingest_maturation_data(
     current_job = job_result.scalar_one_or_none()
     job_context = _job_stage_context(current_job)
     lineage_cache: Dict[str, Optional[Design]] = {}
+    geometry_applied_design_ids: set[str] = set()
+    context_params = job_context.get("params") or {}
+    epitope_residues = _parse_epitope_residues(
+        context_params.get("epitope_residues") or context_params.get("selected_residues")
+    )
+    antibody_chain_hint = context_params.get("antibody_chains") or context_params.get("binder_chains")
+    target_chain_hint = (
+        context_params.get("antigen_chains")
+        or context_params.get("target_chains")
+        or context_params.get("target_chain")
+    )
+    reference_target_pdb = await _resolve_job_param_from_lineage(
+        session,
+        current_job,
+        context_params,
+        "target_pdb",
+    )
+    resolved_epitope_contact_threshold = await _resolve_job_param_from_lineage(
+        session,
+        current_job,
+        context_params,
+        "rfantibody_contact_distance_threshold",
+        "contact_distance_threshold",
+    )
+    resolved_target_contact_threshold = await _resolve_job_param_from_lineage(
+        session,
+        current_job,
+        context_params,
+        "rfantibody_target_contact_distance_threshold",
+        "target_contact_distance_threshold",
+    )
+    epitope_contact_distance_threshold = float(resolved_epitope_contact_threshold or 8.0)
+    target_contact_distance_threshold = float(resolved_target_contact_threshold or 12.0)
     
     for json_path in score_files:
         stem = json_path.stem
@@ -1381,6 +1561,10 @@ async def ingest_maturation_data(
         delta = score_data.get("delta_interface_score")
         matured = score_data.get("interface_score_matured") or score_data.get("interface_score_refined")
         rmsd_bb = score_data.get("rmsd_backbone")
+        selected_delta = score_data.get("selected_delta_interface_score")
+        selected_matured = score_data.get("selected_interface_score_matured")
+        selected_rmsd = score_data.get("selected_rmsd_backbone")
+        nonselected_rmsd = score_data.get("nonselected_rmsd_backbone")
         
         if delta is not None:
             design.maturation_delta_interface = float(delta)
@@ -1388,6 +1572,30 @@ async def ingest_maturation_data(
             design.maturation_interface_score = float(matured)
         if rmsd_bb is not None:
             design.maturation_rmsd = float(rmsd_bb)
+        if selected_delta is not None:
+            design.maturation_selected_delta_interface = float(selected_delta)
+        if selected_matured is not None:
+            design.maturation_selected_interface_score = float(selected_matured)
+        if selected_rmsd is not None:
+            design.maturation_selected_rmsd = float(selected_rmsd)
+        if nonselected_rmsd is not None:
+            design.maturation_nonselected_rmsd = float(nonselected_rmsd)
+
+        if epitope_residues and design.id not in geometry_applied_design_ids:
+            try:
+                geometry_metrics = compute_contact_geometry_metrics(
+                    pdb_path=Path(design.pdb_path),
+                    epitope_residues=epitope_residues,
+                    antibody_chain=design.detected_antibody_chains or antibody_chain_hint,
+                    target_chain=design.detected_target_chain or target_chain_hint,
+                    epitope_contact_distance_threshold=epitope_contact_distance_threshold,
+                    target_contact_distance_threshold=target_contact_distance_threshold,
+                    reference_target_pdb=reference_target_pdb,
+                )
+                _apply_geometry_metrics(design, geometry_metrics, overwrite=True)
+            except Exception as exc:
+                print(f"[Ingester] Failed PPIFlow contact-geometry scoring for {design.name}: {exc}")
+            geometry_applied_design_ids.add(design.id)
 
         fam_json_path = _find_fampnn_sidecar_path(Path(design.pdb_path), output_path)
         fam_payload = _load_json_payload(fam_json_path)
@@ -1414,6 +1622,28 @@ async def ingest_maturation_data(
             design.name,
             cache=lineage_cache,
         )
+        provenance_ppiflow = (
+            (design.provenance or {}).get("ppiflow")
+            if isinstance(design.provenance, dict)
+            else None
+        )
+        structure_cdr_lengths = _coalesce_cdr_lengths(
+            _parse_hlt_cdr_lengths(Path(design.pdb_path) if design.pdb_path else None),
+            _parse_source_cdr_lengths(
+                provenance_ppiflow.get("source_pdb_path") if isinstance(provenance_ppiflow, dict) else None
+            ),
+            _extract_design_cdr_lengths(design),
+            _parse_source_cdr_lengths(lineage.get("source_pdb_path")),
+            lineage.get("source_cdr_lengths"),
+        )
+        design.cdr_h1_length = structure_cdr_lengths.get("H1")
+        design.cdr_h2_length = structure_cdr_lengths.get("H2")
+        design.cdr_h3_length = structure_cdr_lengths.get("H3")
+        design.cdr_l1_length = structure_cdr_lengths.get("L1")
+        design.cdr_l2_length = structure_cdr_lengths.get("L2")
+        design.cdr_l3_length = structure_cdr_lengths.get("L3")
+        design.plddt_overall = None
+        design.residue_plddt = None
         provenance = copy.deepcopy(design.provenance or {})
         provenance.setdefault("job", job_context.get("provenance"))
         provenance["ppiflow"] = copy.deepcopy(provenance.get("ppiflow") or {})
@@ -1465,6 +1695,24 @@ async def ingest_maturation_data(
             if interface_payload:
                 provenance["ppiflow"]["interface_score"] = interface_payload
                 provenance["ppiflow"]["interface_score_json"] = str(interface_json)
+                break
+        for candidate_name in sidecar_candidates:
+            rotamer_json = json_path.with_name(f"{candidate_name}_rotamer_enrichment.json")
+            rotamer_payload = _load_json_payload(rotamer_json)
+            if rotamer_payload:
+                provenance["ppiflow"]["rotamer_enrichment"] = rotamer_payload
+                provenance["ppiflow"]["rotamer_enrichment_json"] = str(rotamer_json)
+                break
+        for candidate_name in sidecar_candidates:
+            enriched_pdb = json_path.with_name(f"{candidate_name}_enriched_complex.pdb")
+            if enriched_pdb.exists():
+                provenance["ppiflow"]["enriched_complex_pdb"] = str(enriched_pdb)
+                break
+        for candidate_name in sidecar_candidates:
+            ppiflow_positions_path = json_path.with_name(f"{candidate_name}_ppiflow_positions.txt")
+            if ppiflow_positions_path.exists():
+                provenance["ppiflow"]["ppiflow_positions"] = ppiflow_positions_path.read_text().strip()
+                provenance["ppiflow"]["ppiflow_positions_txt"] = str(ppiflow_positions_path)
                 break
         for candidate_name in sidecar_candidates:
             cdr_positions_path = json_path.with_name(f"{candidate_name}_cdr_positions.txt")
@@ -1552,23 +1800,24 @@ async def ingest_published_maturation_structures(
         fam_json_path = _find_fampnn_sidecar_path(structure_path, output_path)
         fam_payload = _load_json_payload(fam_json_path)
         fam_metrics = _extract_fampnn_metrics(fam_payload)
-        plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
-        if fam_payload:
-            if plddt is not None and plddt <= 0:
-                plddt = None
-            if isinstance(residue_plddt, list) and not any((safe_float(value) or 0.0) > 0 for value in residue_plddt):
-                residue_plddt = None
-        structure_cdr_lengths = _parse_hlt_cdr_lengths(structure_path)
         lineage = await _resolve_parent_design_lineage(
             session,
             job_context,
             design_name,
             cache=lineage_cache,
         )
+        structure_cdr_lengths = _coalesce_cdr_lengths(
+            _parse_hlt_cdr_lengths(structure_path),
+            _parse_source_cdr_lengths(lineage.get("source_pdb_path")),
+            lineage.get("source_cdr_lengths"),
+        )
+        sample_index = _parse_ppiflow_sample_index(design_name)
         ppiflow_provenance = {
             "source": "published_maturation_structures",
             "structure_path": str(structure_path),
         }
+        if sample_index is not None:
+            ppiflow_provenance["sample_index"] = sample_index
         if lineage.get("source_design_name"):
             ppiflow_provenance["source_design_name"] = lineage["source_design_name"]
         if lineage.get("source_pdb_path"):
@@ -1578,6 +1827,22 @@ async def ingest_published_maturation_structures(
         if filter_payload:
             ppiflow_provenance["maturation_filter"] = filter_payload
             ppiflow_provenance["maturation_filter_json"] = str(filter_json)
+        rotamer_json = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_rotamer_enrichment.json")
+        rotamer_payload = _load_json_payload(rotamer_json)
+        if rotamer_payload:
+            ppiflow_provenance["rotamer_enrichment"] = rotamer_payload
+            ppiflow_provenance["rotamer_enrichment_json"] = str(rotamer_json)
+        enriched_pdb = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_enriched_complex.pdb")
+        if enriched_pdb.exists():
+            ppiflow_provenance["enriched_complex_pdb"] = str(enriched_pdb)
+        ppiflow_positions_path = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_ppiflow_positions.txt")
+        if ppiflow_positions_path.exists():
+            ppiflow_provenance["ppiflow_positions"] = ppiflow_positions_path.read_text().strip()
+            ppiflow_provenance["ppiflow_positions_txt"] = str(ppiflow_positions_path)
+        cdr_positions_path = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_cdr_positions.txt")
+        if cdr_positions_path.exists():
+            ppiflow_provenance["cdr_positions"] = cdr_positions_path.read_text().strip()
+            ppiflow_provenance["cdr_positions_txt"] = str(cdr_positions_path)
         confidence_metrics: Dict[str, Any] = {}
         if fam_payload:
             ppiflow_provenance["fampnn"] = fam_payload
@@ -1603,8 +1868,8 @@ async def ingest_published_maturation_structures(
                 "artifact_group": "ppiflow",
                 "ppiflow": ppiflow_provenance,
             },
-            plddt_overall=plddt,
-            residue_plddt=residue_plddt,
+            plddt_overall=None,
+            residue_plddt=None,
             mpnn_score=fam_metrics.get("mpnn_score"),
             fampnn_psce=fam_metrics.get("avg_psce"),
             binder_length=fam_metrics.get("binder_length"),
@@ -2600,6 +2865,8 @@ async def ingest_loose_files(
                     rfa_plddt_initial=safe_float(rfa_trb.get("rfa_plddt_initial")),
                     rfa_plddt_final=safe_float(rfa_trb.get("rfa_plddt_final")),
                     rfa_plddt_delta=safe_float(rfa_trb.get("rfa_plddt_delta")),
+                    rfa_plddt_selected=safe_float(rfa_trb.get("rfa_plddt_selected")),
+                    rfa_plddt_nonselected=safe_float(rfa_trb.get("rfa_plddt_nonselected")),
                     rfa_design_loops=rfa_trb.get("rfa_design_loops"),
                     rfa_hotspots=rfa_trb.get("rfa_hotspots"),
                     confidence_metrics=combined_confidence or None,

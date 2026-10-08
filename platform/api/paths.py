@@ -140,6 +140,7 @@ def get_allowed_roots() -> dict[str, Path]:
     roots = {
         "bms_results": get_results_dir(),
         "analysis_cache": get_analysis_cache_dir(),
+        "work": get_work_dir(),
         "benchmarkdata": code_root / "benchmarkdata",
         "lib": code_root / "lib",
         "rcsb": code_root / "rcsb",

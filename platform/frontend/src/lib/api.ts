@@ -600,6 +600,8 @@ export interface Design {
     rfa_plddt_initial?: number | null;
     rfa_plddt_final?: number | null;
     rfa_plddt_delta?: number | null;
+    rfa_plddt_selected?: number | null;
+    rfa_plddt_nonselected?: number | null;
     rfa_design_loops?: string[] | null;
     rfa_hotspots?: string[] | null;
     // Antibody annotation
@@ -633,6 +635,10 @@ export interface Design {
     maturation_delta_interface: number | null;
     maturation_interface_score: number | null;
     maturation_rmsd: number | null;
+    maturation_selected_delta_interface?: number | null;
+    maturation_selected_interface_score?: number | null;
+    maturation_selected_rmsd?: number | null;
+    maturation_nonselected_rmsd?: number | null;
     is_favorite: boolean;
     notes: string | null;
     created_at: string;
@@ -714,11 +720,17 @@ export type DesignSortField =
     | 'rfa_hotspot_avg_min_distance'
     | 'rfa_runtime_seconds'
     | 'rfa_plddt_final'
+    | 'rfa_plddt_selected'
     | 'rfa_plddt_delta'
     | 'frustration_high_count'
     | 'frustration_pct_high'
     | 'maturation_delta_interface'
+    | 'maturation_interface_score'
     | 'maturation_rmsd'
+    | 'maturation_selected_delta_interface'
+    | 'maturation_selected_interface_score'
+    | 'maturation_selected_rmsd'
+    | 'maturation_nonselected_rmsd'
     | 'fr2_contacts'
     | 'binding_tier'
     | 'is_favorite';

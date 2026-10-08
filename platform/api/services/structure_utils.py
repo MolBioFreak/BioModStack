@@ -16,7 +16,7 @@ import logging
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-from typing import Optional, Tuple, List, Union
+from typing import Optional, Tuple, List, Union, Dict, Any
 import numpy as np
 
 # Biotite imports
@@ -353,142 +353,330 @@ def get_per_chain_metrics(path: Union[str, Path]) -> dict:
         return {}
 
 
+def _parse_residue_specs(epitope_residues: List[str]) -> List[Tuple[Optional[str], int]]:
+    specs: List[Tuple[Optional[str], int]] = []
+    for res_spec in epitope_residues:
+        raw = str(res_spec or "").strip()
+        if not raw:
+            continue
+        chain_id = raw[0] if raw[0].isalpha() else None
+        num_str = "".join(char for char in raw if char.isdigit() or char == "-")
+        if not num_str:
+            continue
+        try:
+            specs.append((chain_id, int(num_str)))
+        except ValueError:
+            continue
+    return specs
+
+
+def _unique_residue_ids(ca_atoms) -> List[int]:
+    seen: List[int] = []
+    for res_id in ca_atoms.res_id.tolist():
+        value = int(res_id)
+        if not seen or seen[-1] != value:
+            seen.append(value)
+    return seen
+
+
+def _format_residue_label(atom) -> str:
+    chain_id = str(getattr(atom, "chain_id", "") or "")
+    res_id = int(getattr(atom, "res_id", 0))
+    res_name = str(getattr(atom, "res_name", "") or "").strip()
+    if res_name:
+        return f"{chain_id}{res_id}:{res_name}"
+    return f"{chain_id}{res_id}"
+
+
+def _format_atom_label(atom) -> str:
+    residue_label = _format_residue_label(atom)
+    atom_name = str(getattr(atom, "atom_name", "") or "").strip()
+    return f"{residue_label}:{atom_name}" if atom_name else residue_label
+
+
+def _nearest_pair_details(query_atoms, target_atoms) -> Dict[str, Any]:
+    if len(query_atoms) == 0 or len(target_atoms) == 0:
+        return {
+            "distance": None,
+            "query_residue": None,
+            "target_residue": None,
+            "query_atom": None,
+            "target_atom": None,
+        }
+
+    pairwise_distances = np.linalg.norm(
+        query_atoms.coord[:, None, :] - target_atoms.coord[None, :, :],
+        axis=2,
+    )
+    query_idx, target_idx = np.unravel_index(np.argmin(pairwise_distances), pairwise_distances.shape)
+    query_atom = query_atoms[query_idx]
+    target_atom = target_atoms[target_idx]
+    return {
+        "distance": float(pairwise_distances[query_idx, target_idx]),
+        "query_residue": _format_residue_label(query_atom),
+        "target_residue": _format_residue_label(target_atom),
+        "query_atom": _format_atom_label(query_atom),
+        "target_atom": _format_atom_label(target_atom),
+    }
+
+
+def _calculate_centroid_distance(query_ca, target_ca) -> Optional[float]:
+    if len(query_ca) == 0 or len(target_ca) == 0:
+        return None
+    return float(np.linalg.norm(np.mean(query_ca.coord, axis=0) - np.mean(target_ca.coord, axis=0)))
+
+
+def _parse_chain_hints(raw: Union[str, List[str], Tuple[str, ...], None]) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        values = [str(item).strip() for item in raw if str(item).strip()]
+    else:
+        values = [token.strip() for token in str(raw).replace(";", ",").replace("|", ",").split(",") if token.strip()]
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _infer_antibody_chains(all_chains: List[str], antibody_chain_hint: Union[str, List[str], Tuple[str, ...], None]) -> List[str]:
+    antibody_chains: List[str] = []
+    for chain_id in ["H", "L"]:
+        if chain_id in all_chains and chain_id not in antibody_chains:
+            antibody_chains.append(chain_id)
+
+    if not antibody_chains:
+        for chain_id in _parse_chain_hints(antibody_chain_hint) + ["A"]:
+            if chain_id in all_chains and chain_id not in antibody_chains:
+                antibody_chains.append(chain_id)
+
+    return antibody_chains
+
+
+def _infer_target_chain(
+    all_chains: List[str],
+    antibody_chain_ids: List[str],
+    target_chain_hint: Union[str, List[str], Tuple[str, ...], None],
+    epitope_residues: List[str],
+) -> Optional[str]:
+    for hinted_chain in _parse_chain_hints(target_chain_hint):
+        if hinted_chain in all_chains and hinted_chain not in antibody_chain_ids:
+            return hinted_chain
+
+    for chain_id, _resnum in _parse_residue_specs(epitope_residues):
+        if chain_id and chain_id in all_chains and chain_id not in antibody_chain_ids:
+            return chain_id
+
+    non_antibody_chains = [chain_id for chain_id in all_chains if chain_id not in antibody_chain_ids]
+    for preferred_chain in ["B", "T"]:
+        if preferred_chain in non_antibody_chains:
+            return preferred_chain
+    return non_antibody_chains[0] if non_antibody_chains else None
+
+
+def _map_epitope_residue_numbers(
+    epitope_residues: List[str],
+    design_target_ca,
+    target_chain_id: str,
+    reference_target_pdb: Optional[Union[str, Path]],
+    reference_target_chain: Optional[str],
+) -> Tuple[set[int], str]:
+    direct_numbers = {
+        resnum
+        for chain_id, resnum in _parse_residue_specs(epitope_residues)
+        if chain_id in (None, target_chain_id)
+    }
+    if direct_numbers and np.isin(design_target_ca.res_id, list(direct_numbers)).any():
+        return direct_numbers, "direct"
+
+    if not reference_target_pdb:
+        return direct_numbers, "missing_reference"
+
+    reference_target_path = Path(reference_target_pdb)
+    if not reference_target_path.exists():
+        return direct_numbers, "missing_reference"
+
+    reference_structure = load_structure(reference_target_path)
+    reference_chains = [str(chain_id) for chain_id in np.unique(reference_structure.chain_id)]
+    reference_specs = _parse_residue_specs(epitope_residues)
+    reference_chain = reference_target_chain if reference_target_chain in reference_chains else None
+    if reference_chain is None:
+        for chain_id, _resnum in reference_specs:
+            if chain_id and chain_id in reference_chains:
+                reference_chain = chain_id
+                break
+    if reference_chain is None and len(reference_chains) == 1:
+        reference_chain = reference_chains[0]
+    if reference_chain is None:
+        return direct_numbers, "reference_chain_unresolved"
+
+    reference_target_ca = reference_structure[
+        (reference_structure.chain_id == reference_chain) & (reference_structure.atom_name == "CA")
+    ]
+    if len(reference_target_ca) == 0:
+        return direct_numbers, "reference_target_missing"
+
+    reference_order = _unique_residue_ids(reference_target_ca)
+    design_order = _unique_residue_ids(design_target_ca)
+    if not reference_order or not design_order:
+        return direct_numbers, "reference_or_design_empty"
+
+    ordinal_map = {res_id: idx for idx, res_id in enumerate(reference_order)}
+    mapped_numbers: set[int] = set()
+    for chain_id, resnum in reference_specs:
+        if chain_id not in (None, reference_chain):
+            continue
+        idx = ordinal_map.get(resnum)
+        if idx is None or idx >= len(design_order):
+            continue
+        mapped_numbers.add(design_order[idx])
+
+    if mapped_numbers:
+        return mapped_numbers, "reference_order"
+    return direct_numbers, "reference_mapping_failed"
+
+
+def compute_contact_geometry_metrics(
+    pdb_path: Union[str, Path],
+    epitope_residues: List[str],
+    antibody_chain: Union[str, List[str], Tuple[str, ...], None] = "H",
+    target_chain: Union[str, List[str], Tuple[str, ...], None] = "B",
+    epitope_contact_distance_threshold: float = 8.0,
+    target_contact_distance_threshold: float = 12.0,
+    reference_target_pdb: Optional[Union[str, Path]] = None,
+) -> Dict[str, Any]:
+    """
+    Compute the full antibody-target geometry bundle used by RF screening.
+
+    Returns the same headline fields the viewer already understands:
+    epitope/target contact counts, min distances, centroid distances, nearest
+    residue/atom labels, detected chain assignments, and residue counts.
+    """
+    structure = load_structure(pdb_path)
+    all_chains = [str(chain_id) for chain_id in np.unique(structure.chain_id)]
+
+    antibody_chain_ids = _infer_antibody_chains(all_chains, antibody_chain)
+    target_chain_id = _infer_target_chain(all_chains, antibody_chain_ids, target_chain, epitope_residues)
+    if target_chain_id in antibody_chain_ids:
+        antibody_chain_ids = [chain_id for chain_id in antibody_chain_ids if chain_id != target_chain_id]
+
+    if not antibody_chain_ids:
+        raise ValueError(f"No antibody chains found in structure. Chains: {all_chains}")
+    if not target_chain_id:
+        raise ValueError(f"No target chain found in structure. Chains: {all_chains}")
+
+    antibody_ca = structure[np.isin(structure.chain_id, antibody_chain_ids) & (structure.atom_name == "CA")]
+    target_ca = structure[(structure.chain_id == target_chain_id) & (structure.atom_name == "CA")]
+    antibody_atoms = structure[np.isin(structure.chain_id, antibody_chain_ids)]
+    target_atoms = structure[structure.chain_id == target_chain_id]
+
+    if len(antibody_ca) == 0:
+        raise ValueError(f"No antibody CA atoms found in chains {antibody_chain_ids}")
+    if len(target_ca) == 0:
+        raise ValueError(f"No target CA atoms found in chain {target_chain_id}")
+
+    reference_target_chain = _parse_chain_hints(target_chain)
+    epitope_residue_numbers, epitope_mapping_mode = _map_epitope_residue_numbers(
+        epitope_residues,
+        design_target_ca=target_ca,
+        target_chain_id=target_chain_id,
+        reference_target_pdb=reference_target_pdb,
+        reference_target_chain=reference_target_chain[0] if reference_target_chain else None,
+    )
+
+    epitope_residue_count = 0
+    epitope_ca = target_ca[:0]
+    epitope_atoms = target_atoms[:0]
+    if epitope_residue_numbers:
+        epitope_ca = target_ca[np.isin(target_ca.res_id, list(epitope_residue_numbers))]
+        epitope_atoms = target_atoms[np.isin(target_atoms.res_id, list(epitope_residue_numbers))]
+        epitope_residue_count = int(len(epitope_ca))
+
+    query_coords = antibody_ca.coord
+    target_pairwise = np.linalg.norm(
+        query_coords[:, None, :] - target_ca.coord[None, :, :],
+        axis=2,
+    )
+    min_target_distances = np.min(target_pairwise, axis=1)
+    target_ca_nearest = _nearest_pair_details(antibody_ca, target_ca)
+    target_atom_nearest = _nearest_pair_details(antibody_atoms, target_atoms)
+
+    epitope_contact_count = 0
+    epitope_min_distance: Optional[float] = None
+    epitope_ca_nearest = {
+        "distance": None,
+        "query_residue": None,
+        "target_residue": None,
+        "query_atom": None,
+        "target_atom": None,
+    }
+    epitope_atom_nearest = {
+        "distance": None,
+        "query_residue": None,
+        "target_residue": None,
+        "query_atom": None,
+        "target_atom": None,
+    }
+    if len(epitope_ca) > 0:
+        epitope_pairwise = np.linalg.norm(
+            query_coords[:, None, :] - epitope_ca.coord[None, :, :],
+            axis=2,
+        )
+        min_epitope_distances = np.min(epitope_pairwise, axis=1)
+        epitope_contact_count = int(np.sum(min_epitope_distances < epitope_contact_distance_threshold))
+        epitope_min_distance = float(np.min(min_epitope_distances))
+        epitope_ca_nearest = _nearest_pair_details(antibody_ca, epitope_ca)
+        epitope_atom_nearest = _nearest_pair_details(antibody_atoms, epitope_atoms) if len(epitope_atoms) > 0 else epitope_atom_nearest
+
+    return {
+        "detected_antibody_chains": ",".join(antibody_chain_ids),
+        "detected_target_chain": target_chain_id,
+        "antibody_residue_count": int(len(antibody_ca)),
+        "target_residue_count": int(len(target_ca)),
+        "epitope_residue_count": epitope_residue_count,
+        "epitope_mapping_mode": epitope_mapping_mode,
+        "epitope_contact_count": epitope_contact_count,
+        "epitope_min_distance": epitope_min_distance,
+        "epitope_min_atom_distance": epitope_atom_nearest["distance"],
+        "epitope_nearest_antibody_residue": epitope_ca_nearest["query_residue"],
+        "epitope_nearest_target_residue": epitope_ca_nearest["target_residue"],
+        "epitope_nearest_antibody_atom": epitope_atom_nearest["query_atom"],
+        "epitope_nearest_target_atom": epitope_atom_nearest["target_atom"],
+        "epitope_centroid_distance": _calculate_centroid_distance(antibody_ca, epitope_ca),
+        "target_contact_count": int(np.sum(min_target_distances < target_contact_distance_threshold)),
+        "target_min_distance": float(np.min(min_target_distances)),
+        "target_min_atom_distance": target_atom_nearest["distance"],
+        "target_nearest_antibody_residue": target_ca_nearest["query_residue"],
+        "target_nearest_target_residue": target_ca_nearest["target_residue"],
+        "target_nearest_antibody_atom": target_atom_nearest["query_atom"],
+        "target_nearest_target_atom": target_atom_nearest["target_atom"],
+        "target_centroid_distance": _calculate_centroid_distance(antibody_ca, target_ca),
+    }
+
+
 def calculate_epitope_contacts(
     pdb_path: Union[str, Path],
     epitope_residues: List[str],
-    antibody_chain: str = "H",  # RFantibody outputs H/L chains
-    target_chain: str = "B",    # Target is typically renamed to B
+    antibody_chain: Union[str, List[str], Tuple[str, ...], None] = "H",
+    target_chain: Union[str, List[str], Tuple[str, ...], None] = "B",
     distance_threshold: float = 8.0
 ) -> Tuple[int, Optional[float]]:
     """
-    Calculate antibody-epitope contact metrics.
-    
-    Counts how many antibody residues are within distance_threshold of epitope
-    residues, and returns the minimum distance to the epitope.
-    
-    Args:
-        pdb_path: Path to structure file (PDB or CIF)
-        epitope_residues: List of epitope residue specs (e.g., ["A111", "A112", ...])
-                         The chain letter is stripped - only residue numbers are used.
-        antibody_chain: Chain ID for antibody (default "H", also checks "L")
-        target_chain: Chain ID for target protein (default "B")
-        distance_threshold: Distance cutoff in Angstroms (default 8.0)
-        
-    Returns:
-        Tuple of (contact_count, min_distance)
-        - contact_count: Number of antibody CA atoms within threshold of any epitope CA
-        - min_distance: Minimum CA-CA distance to epitope (Angstroms)
-        Returns (0, None) on error
+    Backward-compatible light wrapper around the richer geometry computation.
     """
     try:
-        structure = load_structure(pdb_path)
-        
-        # Parse epitope residue numbers (strip chain prefix, only use numbers)
-        epitope_resnums = set()
-        for res_spec in epitope_residues:
-            if not res_spec:
-                continue
-            # Strip leading non-digit characters (chain ID like 'A', 'B', etc.)
-            res_spec = res_spec.strip()
-            num_str = ''.join(c for c in res_spec if c.isdigit() or c == '-')
-            if num_str:
-                try:
-                    resnum = int(num_str)
-                    epitope_resnums.add(resnum)
-                except ValueError:
-                    continue
-        
-        if not epitope_resnums:
-            logger.warning(f"[structure_utils] No valid epitope residues parsed from {epitope_residues}")
-            return 0, None
-        
-        # Get all chain IDs in structure
-        all_chains = [str(chain_id) for chain_id in np.unique(structure.chain_id)]
-        logger.info(f"[structure_utils] Structure chains: {all_chains}, epitope resnums: {sorted(epitope_resnums)[:5]}...")
-
-        # Resolve target chain before applying chain-A antibody fallback.
-        provisional_target_chain = target_chain if target_chain in all_chains else None
-        if provisional_target_chain is None:
-            for res_spec in epitope_residues:
-                res_spec = (res_spec or "").strip()
-                if res_spec and res_spec[0].isalpha() and res_spec[0] in all_chains:
-                    provisional_target_chain = res_spec[0]
-                    break
-
-        # Auto-detect antibody chains (prefer H/L; only fall back to A when H/L are absent
-        # and A is not already known to be the antigen chain).
-        ab_chain_ids = [potential_ab for potential_ab in ['H', 'L'] if potential_ab in all_chains]
-        if not ab_chain_ids:
-            if antibody_chain in all_chains and antibody_chain != provisional_target_chain:
-                ab_chain_ids.append(antibody_chain)
-            elif 'A' in all_chains and provisional_target_chain != 'A':
-                ab_chain_ids.append('A')
-
-        # Auto-detect target chain (first non-antibody chain, prefer provisional/B/T)
-        if target_chain not in all_chains:
-            non_ab_chains = [c for c in all_chains if c not in ab_chain_ids]
-            if provisional_target_chain in non_ab_chains:
-                target_chain = provisional_target_chain
-            elif 'B' in non_ab_chains:
-                target_chain = 'B'
-            elif 'T' in non_ab_chains:
-                target_chain = 'T'
-            elif non_ab_chains:
-                target_chain = non_ab_chains[0]
-            if target_chain:
-                logger.info(f"[structure_utils] Auto-detected target chain: {target_chain}")
-        
-        # Get CA atoms for antibody chains (combine H and L)
-        ab_mask = np.isin(structure.chain_id, ab_chain_ids) & (structure.atom_name == "CA")
-        ab_ca = structure[ab_mask]
-        
-        # Get CA atoms for target chain
-        target_ca = structure[
-            (structure.chain_id == target_chain) & 
-            (structure.atom_name == "CA")
-        ]
-        
-        if len(ab_ca) == 0:
-            logger.warning(f"[structure_utils] No antibody CA atoms found in chains {ab_chain_ids}")
-            return 0, None
-        if len(target_ca) == 0:
-            logger.warning(f"[structure_utils] No target CA atoms found in chain {target_chain}")
-            return 0, None
-        
-        # Filter target to only epitope residues
-        epitope_mask = np.isin(target_ca.res_id, list(epitope_resnums))
-        epitope_ca = target_ca[epitope_mask]
-        
-        if len(epitope_ca) == 0:
-            logger.warning(f"[structure_utils] No epitope residues found in chain {target_chain}. "
-                          f"Target has res_ids: {sorted(set(target_ca.res_id))[:10]}...")
-            return 0, None
-        
-        logger.info(f"[structure_utils] Found {len(epitope_ca)} epitope atoms, {len(ab_ca)} antibody atoms")
-        
-        # Calculate distances between all antibody CA and epitope CA
-        ab_coords = ab_ca.coord
-        epitope_coords = epitope_ca.coord
-        
-        # Compute pairwise distances
-        min_distances = []
-        for ab_coord in ab_coords:
-            distances = np.sqrt(np.sum((epitope_coords - ab_coord) ** 2, axis=1))
-            min_dist = np.min(distances)
-            min_distances.append(min_dist)
-        
-        min_distances = np.array(min_distances)
-        
-        # Count contacts (antibody residues within threshold)
-        contact_count = int(np.sum(min_distances < distance_threshold))
-        
-        # Overall minimum distance
-        overall_min = float(np.min(min_distances)) if len(min_distances) > 0 else None
-        
-        logger.info(f"[structure_utils] Epitope contacts: {contact_count}, min_distance: {overall_min:.2f}Å" if overall_min else "")
-        
-        return contact_count, overall_min
-        
+        metrics = compute_contact_geometry_metrics(
+            pdb_path=pdb_path,
+            epitope_residues=epitope_residues,
+            antibody_chain=antibody_chain,
+            target_chain=target_chain,
+            epitope_contact_distance_threshold=distance_threshold,
+        )
+        return int(metrics.get("epitope_contact_count") or 0), metrics.get("epitope_min_distance")
     except Exception as e:
         logger.error(f"[structure_utils] Error calculating epitope contacts: {e}")
         return 0, None
