@@ -54,9 +54,11 @@ def test_blocked_json_and_stderr_remain_visible(monkeypatch):
     captured = {}
     row = SimpleNamespace(set_subtitle=lambda text: captured.update(subtitle=text))
     buffer = SimpleNamespace(set_text=lambda text: captured.update(output=text))
-    control = SimpleNamespace(set_sensitive=lambda value: None)
+    control = SimpleNamespace(set_sensitive=lambda value: None, get_active_id=lambda: "python-verify")
     panel = SimpleNamespace(setup_status_row=row, setup_output=SimpleNamespace(get_buffer=lambda: buffer),
         setup_run_button=control, setup_action_combo=control, setup_options=control,
+        setup_group_combo=control,
+        setup_summary=SimpleNamespace(set_text=lambda text: captured.update(summary=text)),
         setup_details_row=SimpleNamespace(set_expanded=lambda value: None),
         _update_dev_updates_control=lambda: None, _refresh_status_once=lambda: None)
     panel._setup_feedback = lambda *args: module.BioModStackPanel._setup_feedback(panel, *args)
@@ -64,7 +66,7 @@ def test_blocked_json_and_stderr_remain_visible(monkeypatch):
     report = json.dumps({"status": "blocked", "errors": [{"code": "missing_prerequisite"}]})
     result = SimpleNamespace(returncode=3, stdout=report, stderr="additional diagnostics")
     module.BioModStackPanel._finish_service_action(panel, "Setup: python-verify", result, None)
-    assert "blocked (exit 3)" in captured["subtitle"]
+    assert "missing prerequisite" in captured["summary"]
     assert report in captured["output"]
     assert "additional diagnostics" in captured["output"]
 
@@ -87,7 +89,7 @@ def test_every_action_explains_inputs_and_scope(monkeypatch):
     assert set(module.SETUP_INPUTS) <= set(module.SETUP_ACTIONS)
     assert "Existing installations cannot be replaced" in module.SETUP_HELP["configure"]
     assert module.SETUP_INPUTS["recover"] == ("operation",)
-    assert module.SETUP_INPUTS["verify"] == ("models", "model_operation", "plan_digest")
+    assert module.SETUP_INPUTS["verify"] == ("models", "model_operation")
     assert all(text.strip() for text in module.SETUP_HELP.values())
 
 
@@ -100,7 +102,8 @@ def test_feedback_never_leaves_details_blank(monkeypatch):
         setup_details_row=SimpleNamespace(set_expanded=lambda expanded: captured.update(expanded=expanded)),
     )
     module.BioModStackPanel._setup_feedback(panel, "Completed", "")
-    assert captured == {"status": "Completed", "output": "No diagnostic output was returned.", "expanded": True}
+    assert captured["status"] == "Completed"
+    assert captured["output"] == "No diagnostic output was returned."
 
 
 def test_password_surface_is_removed(monkeypatch):

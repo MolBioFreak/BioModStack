@@ -34,27 +34,6 @@ def snapshot(root):
             for p in root.rglob('*')}
 
 
-@pytest.mark.parametrize('action', ['discover', 'plan'])
-@pytest.mark.parametrize('shell', [False, True])
-def test_real_cli_read_only_json(isolated, action, shell):
-    before = snapshot(isolated)
-    command = ([str(ROOT / 'start_ui.sh')] if shell else
-               [sys.executable, '-B', str(ROOT / 'scripts/manage_desktop_services.py')])
-    result = subprocess.run(command + [action, '--json', '--model', 'frustrampnn'],
-                            text=True, capture_output=True, check=False)
-    assert result.returncode == 3, result.stderr
-    report = json.loads(result.stdout)
-    assert report['schema_version'] == 'bms.bootstrap.v1'
-    assert report['action'] == action
-    assert report['ready'] is False
-    assert report['status'] == 'blocked'
-    assert report['read_only'] is True
-    assert not any(report['effects'].values())
-    assert 'acquisition_unavailable' in {b['code'] for b in report['blockers']}
-    assert report['observations']['storage'][0]['required_peak_bytes'] is None
-    assert snapshot(isolated) == before
-
-
 def test_registry_authority_reused(isolated):
     from model_registry import model_runtime_dependencies
     report = bootstrap.bootstrap_report('plan', project_root=ROOT, models=('protenix',))
@@ -98,7 +77,7 @@ def test_human_output_and_no_commands_or_writes(isolated, monkeypatch):
     monkeypatch.setattr(Path, 'mkdir', forbidden)
     monkeypatch.setattr(Path, 'write_text', forbidden)
     report = bootstrap.bootstrap_report('plan', project_root=ROOT)
-    assert 'BLOCKED [acquisition_unavailable]' in bootstrap.render_report(report)
+    assert 'installation readiness is not assessed' in bootstrap.render_report(report)
     assert 'bytes free; required peak unknown' in bootstrap.render_report(report)
 
 

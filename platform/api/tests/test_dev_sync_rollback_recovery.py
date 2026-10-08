@@ -175,6 +175,10 @@ def test_run_binds_root_despite_inherited_bms_home(tmp_path, monkeypatch):
     sync = load_module()
     monkeypatch.setenv("BMS_HOME", "/unrelated/worktree")
     monkeypatch.setenv("BMS_RUNTIME_MODE", "prod")
+    for key in ("BMS_DATA", "BMS_DB_PATH", "GIT_INDEX_FILE"):
+        monkeypatch.setenv(key, "unrelated caller value")
+    monkeypatch.setenv("HOME", str(tmp_path / "alternate user"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "selected config"))
     captured = {}
     def run(args, **kwargs):
         captured.update(kwargs)
@@ -182,4 +186,7 @@ def test_run_binds_root_despite_inherited_bms_home(tmp_path, monkeypatch):
     monkeypatch.setattr(sync.subprocess, "run", run)
     sync._run(tmp_path, "manager", "restart", "--runtime", "dev")
     assert captured["env"]["BMS_HOME"] == str(tmp_path.resolve())
-    assert "BMS_RUNTIME_MODE" not in captured["env"]
+    assert captured["env"]["HOME"] == str(tmp_path / "alternate user")
+    assert captured["env"]["XDG_CONFIG_HOME"] == str(tmp_path / "selected config")
+    for key in ("BMS_RUNTIME_MODE", "BMS_DATA", "BMS_DB_PATH", "GIT_INDEX_FILE"):
+        assert key not in captured["env"]

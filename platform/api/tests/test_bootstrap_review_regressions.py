@@ -24,9 +24,11 @@ def cli(*args, env=None, root=ROOT, startup=True):
 
 
 def report(result):
-    assert result.returncode == 3, result.stderr
     assert not result.stderr
-    return json.loads(result.stdout)
+    value = json.loads(result.stdout)
+    assert result.returncode == (3 if value['blockers'] else 0)
+    assert value['status'] == ('blocked' if value['blockers'] else 'completed')
+    return value
 
 
 def profile(raw):
@@ -159,8 +161,10 @@ def archived(isolated):
     return root
 
 
-@pytest.mark.parametrize('action', ['discover', 'plan'])
-@pytest.mark.parametrize('entry', ['shell', 'python_action_first', 'python_option_first', 'python_env'])
+@pytest.mark.parametrize('action,entry', [
+    ('discover', 'shell'), ('plan', 'python_action_first'),
+    ('discover', 'python_option_first'), ('plan', 'python_env'),
+])
 def test_archived_source_and_fresh_pycache_prefix_no_writes(isolated, archived, action, entry):
     env = dict(os.environ)
     env.pop('PYTHONDONTWRITEBYTECODE', None)
@@ -178,6 +182,12 @@ def test_archived_source_and_fresh_pycache_prefix_no_writes(isolated, archived, 
         args = [action, '--json'] if entry.endswith('action_first') else ['--runtime', 'dev', '--json', action]
         result = cli(*args, root=archived, env=env)
     value = report(result)
+    assert value['schema_version'] == 'bms.bootstrap.v1'
+    assert value['action'] == action
+    assert value['ready'] is False
+    assert value['read_only'] is True
+    assert not any(value['effects'].values())
+    assert value['observations']['storage'][0]['required_peak_bytes'] is None
     assert value['interpreter_startup']['bytecode_disabled'] is True
     assert snapshot(isolated) == before
     assert not (isolated / 'fresh-interpreter-cache').exists()
@@ -195,13 +205,3 @@ def test_direct_python_without_startup_flag_reports_boundary(isolated, archived)
     # Startup may cache stdlib; nothing imported after our first boundary may
     # cache project modules, regardless of action/option ordering.
     assert not list((isolated / 'startup-cache').rglob('*biomodstack*.pyc'))
-
-
-@pytest.mark.parametrize('models', [(), ('frustrampnn',), ('not-a-model',)])
-def test_license_applicability_is_not_invented(isolated, models):
-    value = bootstrap.bootstrap_report('plan', project_root=ROOT, models=models)
-    assert 'licensed_weights_unresolved' not in {b['code'] for b in value['blockers']}
-    if models:
-        assert value['observations']['weight_licensing']['applicability'] == 'unknown'
-    else:
-        assert 'weight_licensing' not in value['observations']

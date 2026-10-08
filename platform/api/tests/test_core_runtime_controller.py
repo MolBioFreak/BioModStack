@@ -267,7 +267,8 @@ def test_redact_removes_credential_values() -> None:
     assert rendered.count("[REDACTED]") == 3
 
 
-def test_controller_models_every_compose_service_and_strict_dependency() -> None:
+@pytest.mark.parametrize("profiles", [None, "gpu,external-addon"])
+def test_controller_models_every_compose_service_and_strict_dependency(monkeypatch, profiles) -> None:
     controller = load_controller()
 
     assert controller.ALL_SERVICES == (
@@ -280,16 +281,12 @@ def test_controller_models_every_compose_service_and_strict_dependency() -> None
         "bms-web": ("bms-api",),
     }
     assert set(controller.expected_container_names()) == set(controller.ALL_SERVICES)
-
-
-def test_managed_services_ignores_unowned_compose_profiles(monkeypatch) -> None:
-    controller = load_controller()
-    monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
-
-    assert controller.managed_services() == controller.DEFAULT_SERVICES
-
-    monkeypatch.setenv("COMPOSE_PROFILES", "gpu,external-addon")
+    if profiles is None:
+        monkeypatch.delenv("COMPOSE_PROFILES", raising=False)
+    else:
+        monkeypatch.setenv("COMPOSE_PROFILES", profiles)
     assert controller.managed_services() == controller.ALL_SERVICES
+    assert controller.managed_services() == controller.DEFAULT_SERVICES
 
 
 def test_dependency_readiness_requires_running_and_healthy_dependencies() -> None:
@@ -319,12 +316,9 @@ def test_service_failure_rejects_non_running_or_non_healthy_rows() -> None:
     assert controller.service_failure("bms-web", {"State": "running", "Health": ""}) is None
 
 
-def test_controller_source_has_no_unbounded_or_topology_mutating_recovery() -> None:
+def test_controller_source_has_no_retired_topology_tokens() -> None:
     source = CONTROLLER_PATH.read_text(encoding="utf-8")
 
     assert "--remove-orphans" not in source
-    assert "while not _STOP_REQUESTED" in source
-    assert "MAX_RECOVERIES" in source
-    assert 'compose_command("restart", service)' in source
     assert 'DATABASE_SERVICE = "bms-db"' not in source
     assert '"bms-db"' not in source

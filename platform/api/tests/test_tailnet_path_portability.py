@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
-import subprocess
 from pathlib import Path
 import sys
 
@@ -103,24 +101,3 @@ def test_production_portability_keeps_exact_provenance(monkeypatch, tmp_path, pr
         item["cgroup"] = "0::/foreign.scope"
     with pytest.raises(tailnet.TailnetEnvironmentError):
         tailnet._validated_container_runtime(tmp_path, require_web=False)
-
-
-def test_sync_restart_retains_installation_selection_without_runtime_leak(monkeypatch, tmp_path):
-    spec = importlib.util.spec_from_file_location("portable_sync", ROOT / "scripts" / "biomodstack_dev_sync.py")
-    assert spec and spec.loader
-    sync = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(sync)
-    captured = {}
-
-    def fake_run(args, **kwargs):
-        captured.update(kwargs)
-        return subprocess.CompletedProcess(args, 0, "", "")
-
-    monkeypatch.setattr(sync.subprocess, "run", fake_run)
-    for key in ("BMS_HOME", "BMS_DATA", "BMS_DB_PATH", "BMS_RUNTIME_MODE", "GIT_INDEX_FILE"):
-        monkeypatch.setenv(key, "unrelated caller value")
-    sync._run(tmp_path, sys.executable, str(tmp_path / "scripts" / "manage_desktop_services.py"), "restart", "--runtime", "dev")
-    assert captured["env"]["XDG_CONFIG_HOME"] == os.environ["XDG_CONFIG_HOME"]
-    assert captured["env"]["HOME"] == str(Path.home())
-    assert not any(key.startswith("BMS_") for key in captured["env"])
-    assert "GIT_INDEX_FILE" not in captured["env"]
