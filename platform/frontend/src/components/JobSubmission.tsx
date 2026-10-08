@@ -684,7 +684,7 @@ export function JobSubmission() {
                                                 name: 'Mutagenesis Library [DEBUG]',
                                                 description: 'Generate amino acid variants and predict their structures. DEBUG: Used for orchestrator testing.',
                                                 icon: 'dna',
-                                                color: '#A855F7', // Purple
+                                                color: '#6366F1', // Indigo (debug)
                                                 stages: [
                                                     { tool: 'Library Gen' },
                                                     { tool: 'Structure Prediction' }
@@ -717,54 +717,55 @@ export function JobSubmission() {
                                                     { tool: 'Docking' }
                                                 ]
                                             }
-                                        ].map((template: any) => (
-                                            <div
-                                                key={template.id}
-                                                onClick={() => setSelectedTemplateId(template.id)}
-                                                className={`cursor-pointer p-6 rounded-2xl border-2 transition-all flex-1 min-w-[280px] ${selectedTemplateId === template.id
-                                                    ? 'scale-[1.02] shadow-xl'
-                                                    : 'hover:shadow-lg hover:scale-[1.01]'
-                                                    }`}
-                                                style={{
-                                                    backgroundColor: selectedTemplateId === template.id ? `${template.color}15` : `${template.color}08`,
-                                                    borderColor: selectedTemplateId === template.id ? template.color : `${template.color}40`,
-                                                    boxShadow: selectedTemplateId === template.id ? `0 8px 30px ${template.color}25` : undefined
-                                                }}
-                                            >
-                                                <div className="flex items-center gap-4 mb-4">
-                                                    <div
-                                                        className="w-14 h-14 rounded-xl flex items-center justify-center text-xl font-bold"
-                                                        style={{ backgroundColor: `${template.color}25`, color: template.color, boxShadow: `0 4px 14px ${template.color}30` }}
-                                                    >
-                                                        {template.icon === 'target' ? 'TG' :
-                                                            template.icon === 'flask' ? 'AB' :
-                                                                template.icon === 'dna' ? 'MU' :
-                                                                    template.icon === 'microscope' ? 'SP' :
-                                                                        template.icon === 'pill' ? 'BG' : 'WF'}
-                                                    </div>
-                                                    <div>
-                                                        <h3 className="font-bold text-lg" style={{ color: template.color }}>{template.name}</h3>
-                                                    </div>
-                                                </div>
-                                                <p className="text-sm text-slate-500 mb-4 line-clamp-2">{template.description}</p>
-                                                {/* Stage Pipeline Diagram */}
-                                                <div className="flex items-center gap-1 flex-wrap">
-                                                    {template.stages.map((stage: any, idx: number) => (
-                                                        <div key={idx} className="flex items-center">
-                                                            <div
-                                                                className="px-3 py-1.5 rounded-lg text-xs whitespace-nowrap font-medium"
-                                                                style={{ backgroundColor: `${template.color}20`, color: template.color }}
-                                                            >
-                                                                {stage.tool}
-                                                            </div>
-                                                            {idx < template.stages.length - 1 && (
-                                                                <span className="mx-1.5 text-lg" style={{ color: `${template.color}60` }}>→</span>
-                                                            )}
+                                        ].map((template: any) => {
+                                            const isSelected = selectedTemplateId === template.id;
+                                            return (
+                                                <div
+                                                    key={template.id}
+                                                    onClick={() => setSelectedTemplateId(template.id)}
+                                                    className={`cursor-pointer p-6 rounded-2xl border-2 transition-all flex-1 min-w-[280px] 
+                                                        ${isSelected ? 'scale-[1.02] shadow-xl' : 'hover:shadow-lg hover:scale-[1.01]'}
+                                                        bg-[var(--card-bg)] text-[var(--text-primary)]`}
+                                                    style={{
+                                                        borderColor: isSelected ? template.color : `${template.color}50`,
+                                                        boxShadow: isSelected ? `0 8px 30px ${template.color}35` : undefined
+                                                    }}
+                                                >
+                                                    <div className="flex items-center gap-4 mb-4">
+                                                        <div
+                                                            className="w-14 h-14 rounded-xl flex items-center justify-center text-xl font-bold"
+                                                            style={{ backgroundColor: `${template.color}20`, color: template.color }}
+                                                        >
+                                                            {template.icon === 'target' ? 'TG' :
+                                                                template.icon === 'flask' ? 'RF' :
+                                                                    template.icon === 'dna' ? 'MU' :
+                                                                        template.icon === 'microscope' ? 'SP' :
+                                                                            template.icon === 'pill' ? 'BG' : 'WF'}
                                                         </div>
-                                                    ))}
+                                                        <div>
+                                                            <h3 className="font-bold text-lg" style={{ color: template.color }}>{template.name}</h3>
+                                                        </div>
+                                                    </div>
+                                                    <p className="text-sm opacity-70 mb-4 line-clamp-2">{template.description}</p>
+                                                    {/* Stage Pipeline Diagram */}
+                                                    <div className="flex items-center gap-1 flex-wrap">
+                                                        {template.stages.map((stage: any, idx: number) => (
+                                                            <div key={idx} className="flex items-center">
+                                                                <div
+                                                                    className="px-3 py-1.5 rounded-lg text-xs whitespace-nowrap font-medium"
+                                                                    style={{ backgroundColor: `${template.color}18`, color: template.color }}
+                                                                >
+                                                                    {stage.tool}
+                                                                </div>
+                                                                {idx < template.stages.length - 1 && (
+                                                                    <span className="mx-1.5 text-lg opacity-50" style={{ color: template.color }}>→</span>
+                                                                )}
+                                                            </div>
+                                                        ))}
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 </>
                             )}
