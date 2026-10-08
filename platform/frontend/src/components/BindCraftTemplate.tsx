@@ -262,62 +262,62 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
     // Render
     // ============================================================================
     return (
-        <div className="max-w-4xl mx-auto p-6 space-y-6">
+        <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
             {/* Header */}
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-3">
-                    <button onClick={onBack} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <button onClick={onBack} className="p-2 hover:bg-slate-700 rounded-lg transition-colors">
+                        <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
                         </svg>
                     </button>
                     <div>
-                        <h1 className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">BindCraft</h1>
-                        <p className="text-sm text-gray-500">De novo minibinder design with ~50% success rate</p>
+                        <h2 className="text-lg font-semibold text-slate-200">BindCraft Minibinder Design</h2>
+                        <p className="text-sm text-slate-500">AF2 hallucination → ProteinMPNN → PyRosetta filtering</p>
                     </div>
                 </div>
                 <button
                     onClick={() => setShowTemplateManager(true)}
-                    className="px-3 py-2 text-sm bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700"
+                    className="px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
                 >
                     Templates
                 </button>
             </div>
 
             {error && (
-                <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-red-700 dark:text-red-400">
+                <div className="p-4 bg-red-900/20 border border-red-800 rounded-lg text-red-400 mb-6">
                     {error}
                 </div>
             )}
 
             {/* Job Name */}
-            <div className="space-y-2">
-                <label className="block text-sm font-medium">Job Name</label>
+            <div className="space-y-2 mb-6">
+                <label className="block text-sm font-medium text-slate-400">Job Name</label>
                 <input
                     type="text"
                     value={jobName}
                     onChange={(e) => setJobName(e.target.value)}
                     placeholder="BindCraft_PDL1_binder"
-                    className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                 />
             </div>
 
             {/* Section 1: Target Configuration */}
-            <div className="bg-white dark:bg-gray-900 rounded-xl shadow-lg p-6 space-y-4">
-                <h2 className="text-lg font-semibold flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-full bg-emerald-100 dark:bg-emerald-900 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-sm">1</span>
+            <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 mb-6">
+                <h3 className="text-sm font-medium text-slate-300 flex items-center gap-2 mb-4">
+                    <span className="w-6 h-6 rounded-full bg-emerald-600/20 text-emerald-400 flex items-center justify-center text-xs font-bold">1</span>
                     Target Configuration
-                </h2>
+                </h3>
 
                 {/* PDB Upload with Molstar Viewer */}
                 <div className="space-y-2">
                     <label className="block text-sm font-medium">Target PDB</label>
-                    <p className="text-xs text-gray-500">Trim to binding region for faster design. 32GB GPU fits ~550 residues.</p>
+                    <p className="text-xs text-slate-500">Trim to binding region for faster design. 32GB GPU fits ~550 residues.</p>
                     <input
                         type="file"
                         accept=".pdb"
                         onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
-                        className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
                     />
 
                     {targetPdbPath && (
@@ -333,13 +333,13 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                 {/* Hotspot Residues */}
                 <div className="space-y-2">
                     <label className="block text-sm font-medium">Hotspot Residues (optional)</label>
-                    <p className="text-xs text-gray-500">Enter: A45,A46,A52 or A45-60 or leave blank for auto-detection</p>
+                    <p className="text-xs text-slate-500">Enter: A45,A46,A52 or A45-60 or leave blank for auto-detection</p>
                     <input
                         type="text"
                         value={hotspotResidues}
                         onChange={(e) => setHotspotResidues(e.target.value)}
                         placeholder="A45,A46,A52 or leave blank"
-                        className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
                     />
                 </div>
 
@@ -351,15 +351,15 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                         value={chains}
                         onChange={(e) => setChains(e.target.value)}
                         placeholder="A"
-                        className="w-32 px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                        className="w-32 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
                     />
                 </div>
             </div>
 
             {/* Section 2: Binder Settings */}
-            <div className="bg-white dark:bg-gray-900 rounded-xl shadow-lg p-6 space-y-4">
+            <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 mb-6">
                 <h2 className="text-lg font-semibold flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-full bg-emerald-100 dark:bg-emerald-900 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-sm">2</span>
+                    <span className="w-6 h-6 rounded-full bg-emerald-600/20 text-emerald-400 flex items-center justify-center text-sm">2</span>
                     Binder Settings
                 </h2>
 
@@ -368,22 +368,22 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                     <button
                         onClick={() => setDesignMode('minibinder')}
                         className={`flex-1 p-4 rounded-lg border-2 transition-colors ${designMode === 'minibinder'
-                                ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20'
-                                : 'border-gray-200 dark:border-gray-700'
+                            ? 'border-emerald-500 bg-emerald-600/20'
+                            : 'border-slate-700'
                             }`}
                     >
                         <div className="font-medium">Minibinder</div>
-                        <div className="text-sm text-gray-500">60-180 AA globular proteins</div>
+                        <div className="text-sm text-slate-500">60-180 AA globular proteins</div>
                     </button>
                     <button
                         onClick={() => setDesignMode('peptide')}
                         className={`flex-1 p-4 rounded-lg border-2 transition-colors ${designMode === 'peptide'
-                                ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20'
-                                : 'border-gray-200 dark:border-gray-700'
+                            ? 'border-emerald-500 bg-emerald-600/20'
+                            : 'border-slate-700'
                             }`}
                     >
                         <div className="font-medium">Peptide</div>
-                        <div className="text-sm text-gray-500">8-25 AA linear peptides</div>
+                        <div className="text-sm text-slate-500">8-25 AA linear peptides</div>
                     </button>
                 </div>
 
@@ -397,7 +397,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                             onChange={(e) => setBinderLengthMin(parseInt(e.target.value) || 60)}
                             min={designMode === 'peptide' ? 4 : 40}
                             max={250}
-                            className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                            className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
                         />
                     </div>
                     <div className="space-y-2">
@@ -408,7 +408,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                             onChange={(e) => setBinderLengthMax(parseInt(e.target.value) || 120)}
                             min={designMode === 'peptide' ? 8 : 60}
                             max={250}
-                            className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                            className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
                         />
                     </div>
                 </div>
@@ -416,22 +416,22 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                 {/* Number of Designs */}
                 <div className="space-y-2">
                     <label className="block text-sm font-medium">Final Designs to Generate</label>
-                    <p className="text-xs text-gray-500">Recommend 100+ for diverse candidates. Script stops when this many pass filters.</p>
+                    <p className="text-xs text-slate-500">Recommend 100+ for diverse candidates. Script stops when this many pass filters.</p>
                     <input
                         type="number"
                         value={numFinalDesigns}
                         onChange={(e) => setNumFinalDesigns(parseInt(e.target.value) || 100)}
                         min={5}
                         max={1000}
-                        className="w-32 px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                        className="w-32 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
                     />
                 </div>
             </div>
 
             {/* Section 3: Design Algorithm */}
-            <div className="bg-white dark:bg-gray-900 rounded-xl shadow-lg p-6 space-y-4">
+            <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 mb-6">
                 <h2 className="text-lg font-semibold flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-full bg-emerald-100 dark:bg-emerald-900 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-sm">3</span>
+                    <span className="w-6 h-6 rounded-full bg-emerald-600/20 text-emerald-400 flex items-center justify-center text-sm">3</span>
                     Design Algorithm
                 </h2>
 
@@ -441,12 +441,12 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                             key={algo.id}
                             onClick={() => setDesignAlgorithm(algo.id)}
                             className={`p-3 rounded-lg border text-left transition-colors ${designAlgorithm === algo.id
-                                    ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20'
-                                    : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
+                                ? 'border-emerald-500 bg-emerald-600/20'
+                                : 'border-slate-700 hover:bg-slate-800'
                                 }`}
                         >
                             <div className="font-medium">{algo.name}</div>
-                            <div className="text-sm text-gray-500">{algo.description}</div>
+                            <div className="text-sm text-slate-500">{algo.description}</div>
                         </button>
                     ))}
                 </div>
@@ -460,7 +460,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                 </button>
 
                 {showAdvanced && (
-                    <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                    <div className="grid grid-cols-2 gap-4 p-4 bg-slate-800/50 rounded-lg">
                         <div className="space-y-2">
                             <label className="flex items-center gap-2">
                                 <input
@@ -480,7 +480,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                 onChange={(e) => setNumRecyclesDesign(parseInt(e.target.value) || 3)}
                                 min={1}
                                 max={12}
-                                className="w-20 px-2 py-1 border rounded dark:bg-gray-700 dark:border-gray-600"
+                                className="w-20 px-2 py-1 bg-slate-800 border border-slate-600 rounded focus:ring-2 focus:ring-emerald-500 outline-none"
                             />
                         </div>
                         <div className="space-y-2">
@@ -488,7 +488,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                             <select
                                 value={mpnnWeights}
                                 onChange={(e) => setMpnnWeights(e.target.value as 'original' | 'soluble')}
-                                className="px-2 py-1 border rounded dark:bg-gray-700 dark:border-gray-600"
+                                className="px-2 py-1 bg-slate-800 border border-slate-600 rounded focus:ring-2 focus:ring-emerald-500 outline-none"
                             >
                                 <option value="soluble">Soluble (recommended)</option>
                                 <option value="original">Original</option>
@@ -502,7 +502,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                 onChange={(e) => setNumMpnnSequences(parseInt(e.target.value) || 8)}
                                 min={1}
                                 max={32}
-                                className="w-20 px-2 py-1 border rounded dark:bg-gray-700 dark:border-gray-600"
+                                className="w-20 px-2 py-1 bg-slate-800 border border-slate-600 rounded focus:ring-2 focus:ring-emerald-500 outline-none"
                             />
                         </div>
                     </div>
@@ -510,10 +510,10 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
             </div>
 
             {/* Section 4: Filters */}
-            <div className="bg-white dark:bg-gray-900 rounded-xl shadow-lg p-6 space-y-4">
+            <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 mb-6">
                 <div className="flex items-center justify-between">
                     <h2 className="text-lg font-semibold flex items-center gap-2">
-                        <span className="w-6 h-6 rounded-full bg-emerald-100 dark:bg-emerald-900 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-sm">4</span>
+                        <span className="w-6 h-6 rounded-full bg-emerald-600/20 text-emerald-400 flex items-center justify-center text-sm">4</span>
                         Filter Configuration
                     </h2>
                     <button
@@ -531,8 +531,8 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                             key={preset.id}
                             onClick={() => setFilterPreset(preset.id)}
                             className={`px-3 py-1 rounded-full text-sm transition-colors ${filterPreset === preset.id
-                                    ? 'bg-emerald-500 text-white'
-                                    : 'bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700'
+                                ? 'bg-emerald-500 text-white'
+                                : 'bg-slate-700 hover:bg-slate-600'
                                 }`}
                         >
                             {preset.name}
@@ -541,7 +541,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                 </div>
 
                 {showFilters && (
-                    <div className="grid grid-cols-3 gap-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                    <div className="grid grid-cols-3 gap-4 p-4 bg-slate-800/50 rounded-lg">
                         <div className="space-y-2">
                             <label className="block text-sm">Min i_pTM</label>
                             <input
@@ -551,7 +551,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                 min={0}
                                 max={1}
                                 step={0.05}
-                                className="w-20 px-2 py-1 border rounded dark:bg-gray-700 dark:border-gray-600"
+                                className="w-20 px-2 py-1 bg-slate-800 border border-slate-600 rounded focus:ring-2 focus:ring-emerald-500 outline-none"
                             />
                         </div>
                         <div className="space-y-2">
@@ -563,7 +563,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                 min={0}
                                 max={10}
                                 step={0.5}
-                                className="w-20 px-2 py-1 border rounded dark:bg-gray-700 dark:border-gray-600"
+                                className="w-20 px-2 py-1 bg-slate-800 border border-slate-600 rounded focus:ring-2 focus:ring-emerald-500 outline-none"
                             />
                         </div>
                         <div className="space-y-2">
@@ -575,7 +575,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                                 min={0}
                                 max={1}
                                 step={0.05}
-                                className="w-20 px-2 py-1 border rounded dark:bg-gray-700 dark:border-gray-600"
+                                className="w-20 px-2 py-1 bg-slate-800 border border-slate-600 rounded focus:ring-2 focus:ring-emerald-500 outline-none"
                             />
                         </div>
                     </div>
@@ -583,49 +583,49 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
             </div>
 
             {/* Section 5: Parallelism */}
-            <div className="bg-white dark:bg-gray-900 rounded-xl shadow-lg p-6 space-y-4">
+            <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 mb-6">
                 <h2 className="text-lg font-semibold flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-full bg-emerald-100 dark:bg-emerald-900 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-sm">5</span>
+                    <span className="w-6 h-6 rounded-full bg-emerald-600/20 text-emerald-400 flex items-center justify-center text-sm">5</span>
                     GPU Parallelism
                 </h2>
 
                 <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                         <label className="block text-sm font-medium">Total Trajectories</label>
-                        <p className="text-xs text-gray-500">100-10000 typical. More = better sampling.</p>
+                        <p className="text-xs text-slate-500">100-10000 typical. More = better sampling.</p>
                         <input
                             type="number"
                             value={totalTrajectories}
                             onChange={(e) => setTotalTrajectories(parseInt(e.target.value) || 100)}
                             min={10}
                             max={10000}
-                            className="w-32 px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                            className="w-32 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
                         />
                     </div>
                     <div className="space-y-2">
                         <label className="block text-sm font-medium">Trajectories per Job</label>
-                        <p className="text-xs text-gray-500">Each job runs on one GPU</p>
+                        <p className="text-xs text-slate-500">Each job runs on one GPU</p>
                         <input
                             type="number"
                             value={trajectoriesPerJob}
                             onChange={(e) => setTrajectoriesPerJob(parseInt(e.target.value) || 25)}
                             min={5}
                             max={100}
-                            className="w-32 px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-700"
+                            className="w-32 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
                         />
                     </div>
                 </div>
 
-                <div className="text-sm text-gray-500">
+                <div className="text-sm text-slate-500">
                     This will spawn <strong>{Math.ceil(totalTrajectories / trajectoriesPerJob)}</strong> parallel jobs
                 </div>
             </div>
 
             {/* Section 6: Storage Optimization */}
-            <div className="bg-white dark:bg-gray-900 rounded-xl shadow-lg p-6 space-y-4">
+            <div className="bg-slate-900/30 border border-slate-700/50 rounded-lg p-4 mb-6">
                 <div className="flex items-center justify-between">
                     <h2 className="text-lg font-semibold flex items-center gap-2">
-                        <span className="w-6 h-6 rounded-full bg-emerald-100 dark:bg-emerald-900 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-sm">6</span>
+                        <span className="w-6 h-6 rounded-full bg-emerald-600/20 text-emerald-400 flex items-center justify-center text-sm">6</span>
                         Storage Optimization
                     </h2>
                     <button
@@ -639,20 +639,20 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
                 <div className="flex gap-2">
                     <button
                         onClick={() => applyStoragePreset('minimal')}
-                        className="px-3 py-1 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 text-sm hover:bg-emerald-200"
+                        className="px-3 py-1 rounded-lg bg-emerald-600/20 text-emerald-400 text-sm hover:bg-emerald-200"
                     >
                         Minimal Storage
                     </button>
                     <button
                         onClick={() => applyStoragePreset('full_debug')}
-                        className="px-3 py-1 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 text-sm hover:bg-gray-200"
+                        className="px-3 py-1 rounded-lg bg-slate-700 text-slate-300 text-sm hover:bg-gray-200"
                     >
                         Full Debug Output
                     </button>
                 </div>
 
                 {showStorage && (
-                    <div className="grid grid-cols-2 gap-2 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                    <div className="grid grid-cols-2 gap-2 p-4 bg-slate-800/50 rounded-lg">
                         <label className="flex items-center gap-2">
                             <input type="checkbox" checked={zipAnimations} onChange={(e) => setZipAnimations(e.target.checked)} className="rounded" />
                             <span className="text-sm">Zip animations</span>
@@ -685,7 +685,7 @@ export function BindCraftTemplate({ onBack, initialValues }: BindCraftTemplatePr
             <div className="flex justify-end gap-4">
                 <button
                     onClick={onBack}
-                    className="px-6 py-3 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800"
+                    className="px-6 py-3 border border-slate-700 rounded-lg hover:bg-slate-800"
                 >
                     Cancel
                 </button>
