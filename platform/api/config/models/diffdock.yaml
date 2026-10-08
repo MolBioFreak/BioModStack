@@ -46,16 +46,20 @@ params:
     type: file
     description: Protein structure PDB file
     required: true
+    file_type: pdb
+    preset_type: pdb
 
   - name: ligand_smiles
     type: string
     description: Ligand SMILES string
     required: false
+    preset_type: ligand
 
   - name: ligand_sdf
     type: file
     description: Ligand structure in SDF format
     required: false
+    file_type: sdf
 
   - name: ntp_type
     type: string

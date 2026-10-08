@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 import os
 
 from database import init_db
-from routers import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, msa_cache
+from routers import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, msa_cache, smiles_converter
 
 
 @asynccontextmanager
@@ -49,6 +49,7 @@ app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"]
 app.include_router(user_sequences.router, prefix="/api/user-sequences", tags=["user-sequences"])
 app.include_router(user_templates.router, prefix="/api/user-templates", tags=["user-templates"])
 app.include_router(msa_cache.router, prefix="/api/msa-cache", tags=["msa-cache"])
+app.include_router(smiles_converter.router, prefix="/api/smiles", tags=["smiles"])
 
 
 @app.get("/api/health")

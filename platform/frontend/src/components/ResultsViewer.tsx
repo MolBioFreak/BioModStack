@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 import { fetchJobs, fetchJobAnalytics, fetchDesigns, fetchDesignResidueMetrics, fetchStructureAnalysis } from '../lib/api';
-import { MolViewer } from './MolViewer';
+import MolstarViewer from './MolstarViewer';
 import { Histogram, MetricScatter, ResidueLineChart } from './MetricCharts';
 import { BatchComparePane } from './BatchComparePane';
 import { PAEHeatmap } from './PAEHeatmap';
@@ -44,12 +44,11 @@ export function ResultsViewer() {
     const [selectedJobId, setSelectedJobId] = useState<string>(jobId || '');
     const [activeTab, setActiveTab] = useState<TabId>('overview');
     const [selectedDesignId, setSelectedDesignId] = useState<string>('');
-    const [pdbContent, setPdbContent] = useState<string>('');
+
     const [sortField, setSortField] = useState<string>('name');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
     const [filterText, setFilterText] = useState('');
-    const [viewerColorScheme, setViewerColorScheme] = useState<'plddt' | 'rainbow' | 'sse'>('plddt');
-    const [viewerRepStyle, setViewerRepStyle] = useState<'cartoon' | 'sticks' | 'sphere' | 'ball-stick'>('cartoon');
+    const [showPlddt, setShowPlddt] = useState(true);  // pLDDT coloring on by default
 
     // Fetch jobs list
     const { data: jobsData } = useQuery({
@@ -132,23 +131,7 @@ export function ResultsViewer() {
     }, [designs, sortField, sortDir, filterText]);
 
     // Fetch PDB content when design selected
-    useEffect(() => {
-        if (selectedDesignId && activeTab === 'structure') {
-            const design = designs.find(d => d.id === selectedDesignId);
-            console.log('Fetching PDB for design:', selectedDesignId, 'pdb_path:', design?.pdb_path);
-            if (design?.pdb_path) {
-                fetch(`/api/designs/${selectedDesignId}/pdb`)
-                    .then(res => res.text())
-                    .then(text => {
-                        console.log('PDB content fetched, length:', text.length, 'first 100 chars:', text.substring(0, 100));
-                        setPdbContent(text);
-                    })
-                    .catch(err => console.error("Failed to load PDB", err));
-            } else {
-                console.log('No pdb_path for design');
-            }
-        }
-    }, [selectedDesignId, activeTab, designs]);
+    // Note: MolstarViewer now fetches structure directly from API URL
 
     // Auto-select first design
     useEffect(() => {
@@ -158,6 +141,9 @@ export function ResultsViewer() {
     }, [designs, selectedDesignId]);
 
     const activeJob = jobs.find(j => j.id === selectedJobId);
+    const selectedDesign = designs.find(d => d.id === selectedDesignId);
+    // Detect structure format from file extension
+    const structureFormat = selectedDesign?.pdb_path?.endsWith('.cif') ? 'cif' : 'pdb';
     const isLoading = analyticsLoading || designsLoading;
 
     // Quick stats for overview
@@ -488,78 +474,40 @@ export function ResultsViewer() {
 
                                             {/* Center - 3D Viewer */}
                                             <div className="flex-1 bg-slate-950 relative flex flex-col">
-                                                {/* Toolbar */}
-                                                <div className="flex items-center gap-2 p-2 border-b border-slate-800 bg-slate-900/50">
-                                                    <span className="text-xs text-slate-500 mr-2">Color:</span>
+                                                {/* Minimal toolbar with pLDDT toggle */}
+                                                <div className="flex items-center gap-3 px-3 py-2 border-b border-slate-800 bg-slate-900/50">
                                                     <button
-                                                        onClick={() => setViewerColorScheme('plddt')}
-                                                        className={`px-2 py-1 text-xs rounded ${viewerColorScheme === 'plddt' ? 'bg-blue-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                                                        onClick={() => setShowPlddt(!showPlddt)}
+                                                        className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg transition-colors ${showPlddt
+                                                                ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                                                                : 'bg-slate-700/50 text-slate-400 border border-slate-600 hover:bg-slate-700'
+                                                            }`}
+                                                        title="Toggle pLDDT confidence coloring (AlphaFold style)"
                                                     >
-                                                        pLDDT
+                                                        <span className={`w-2 h-2 rounded-full ${showPlddt ? 'bg-blue-400' : 'bg-slate-500'}`} />
+                                                        pLDDT Coloring
                                                     </button>
-                                                    <button
-                                                        onClick={() => setViewerColorScheme('rainbow')}
-                                                        className={`px-2 py-1 text-xs rounded ${viewerColorScheme === 'rainbow' ? 'bg-blue-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-                                                    >
-                                                        Rainbow
-                                                    </button>
-                                                    <button
-                                                        onClick={() => setViewerColorScheme('sse')}
-                                                        className={`px-2 py-1 text-xs rounded ${viewerColorScheme === 'sse' ? 'bg-blue-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-                                                        title="Color by Secondary Structure"
-                                                    >
-                                                        SSE
-                                                    </button>
-                                                    <div className="ml-4 text-xs text-slate-600">
-                                                        {viewerColorScheme === 'plddt' && (
-                                                            <>
-                                                                <span className="text-fuchsia-400">■</span> ≥90
-                                                                <span className="text-pink-400 ml-1">■</span> ≥70
-                                                                <span className="text-orange-400 ml-1">■</span> ≥50
-                                                                <span className="text-red-400 ml-1">■</span> &lt;50
-                                                            </>
-                                                        )}
-                                                    </div>
-                                                    <div className="border-l border-slate-700 ml-4 pl-4 flex items-center gap-2">
-                                                        <span className="text-xs text-slate-500">Style:</span>
-                                                        <button
-                                                            onClick={() => setViewerRepStyle('cartoon')}
-                                                            className={`px-2 py-1 text-xs rounded ${viewerRepStyle === 'cartoon' ? 'bg-purple-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-                                                            title="Ribbon diagram"
-                                                        >
-                                                            Cartoon
-                                                        </button>
-                                                        <button
-                                                            onClick={() => setViewerRepStyle('sticks')}
-                                                            className={`px-2 py-1 text-xs rounded ${viewerRepStyle === 'sticks' ? 'bg-purple-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-                                                            title="All-atom stick view"
-                                                        >
-                                                            Sticks
-                                                        </button>
-                                                        <button
-                                                            onClick={() => setViewerRepStyle('ball-stick')}
-                                                            className={`px-2 py-1 text-xs rounded ${viewerRepStyle === 'ball-stick' ? 'bg-purple-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-                                                            title="Ball-and-stick model"
-                                                        >
-                                                            Ball
-                                                        </button>
-                                                        <button
-                                                            onClick={() => setViewerRepStyle('sphere')}
-                                                            className={`px-2 py-1 text-xs rounded ${viewerRepStyle === 'sphere' ? 'bg-purple-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
-                                                            title="Spacefill spheres"
-                                                        >
-                                                            Sphere
-                                                        </button>
-                                                    </div>
+                                                    {showPlddt && (
+                                                        <div className="flex items-center gap-1 text-xs text-slate-500">
+                                                            <span className="text-blue-400">■</span>≥90
+                                                            <span className="text-cyan-400 ml-1">■</span>≥70
+                                                            <span className="text-yellow-400 ml-1">■</span>≥50
+                                                            <span className="text-orange-400 ml-1">■</span>&lt;50
+                                                        </div>
+                                                    )}
+                                                    <span className="text-xs text-slate-600 ml-auto">
+                                                        Shift+click sequence for range selection
+                                                    </span>
                                                 </div>
                                                 {/* Viewer */}
                                                 <div className="flex-1 relative">
-                                                    <MolViewer
-                                                        pdbContent={pdbContent}
-                                                        height={660}
+                                                    <MolstarViewer
+                                                        key={`${selectedDesignId}-${showPlddt}`}  // Force recreation when design or pLDDT changes
+                                                        structureUrl={selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined}
+                                                        format={structureFormat}
+                                                        alphafoldView={showPlddt}
+                                                        height={620}
                                                         backgroundColor="#0f172a"
-                                                        colorScheme={viewerColorScheme}
-                                                        representationStyle={viewerRepStyle}
                                                     />
                                                 </div>
                                             </div>

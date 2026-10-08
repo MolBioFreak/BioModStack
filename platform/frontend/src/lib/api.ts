@@ -33,6 +33,7 @@ export interface GPUStatus {
     memory_utilization: number;
     memory_used_mb: number;
     memory_total_mb: number;
+    reserved_memory_mb: number;
     power_draw_w: number;
     power_limit_w: number;
     min_power_watts: number;
@@ -375,3 +376,23 @@ export const updateUserTemplate = (id: string, data: Partial<UserTemplateCreate>
 
 export const deleteUserTemplate = (id: string) =>
     api.delete(`/api/user-templates/${id}`);
+
+// SMILES Converter API
+export interface SmilesConvertRequest {
+    sequence: string;
+    sequence_type: 'peptide' | 'dna' | 'rna' | 'ntp';
+}
+
+export interface SmilesConvertResponse {
+    smiles: string;
+    sequence: string;
+    sequence_type: string;
+    length: number;
+    notes?: string;
+}
+
+export const convertToSmiles = (data: SmilesConvertRequest) =>
+    api.post<SmilesConvertResponse>('/api/smiles/convert', data);
+
+export const getNtpLibrary = () =>
+    api.get('/api/smiles/ntp-library');

@@ -24,22 +24,33 @@ outputs:
 modes:
   - id: af2_predict
     name: Structure Prediction
-    description: Standard structure prediction from PDB
+    description: Predict structure from sequence
     params:
-      - skip_input_dir
+      - sequence
+      - sequence_name
 
   - id: initial_guess
     name: Initial Guess Mode
     description: Prediction with structure hints from input PDB
     params:
+      - sequence
+      - sequence_name
       - af2_initial_guess
       - uncropped_target_pdb
 
 params:
-  - name: skip_input_dir
-    type: directory
-    description: Input directory containing PDB files
+  # Input sequence
+  - name: sequence
+    type: text
+    description: Amino acid sequence to predict
+    required: true
+    preset_type: sequence
+
+  - name: sequence_name
+    type: string
+    description: Name for output structure files
     required: false
+    default: predicted
 
   - name: af2_initial_guess
     type: boolean
@@ -51,6 +62,8 @@ params:
     type: file
     description: Full target PDB for context in binder prediction
     required: false
+    file_type: pdb
+    preset_type: pdb
 
   - name: af2_extra_config
     type: string

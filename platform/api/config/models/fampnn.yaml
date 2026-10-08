@@ -26,13 +26,24 @@ modes:
     name: Full-Atom Sequence Design
     description: Design sequences considering sidechain conformations
     params:
+      - input_pdb
       - fampnn_temperature
       - fampnn_exclude_cys
+      - fampnn_fix_target_sidechains
+      - fampnn_psce_threshold
 
 params:
+  # Input file
+  - name: input_pdb
+    type: file
+    description: Input PDB structure for sequence design
+    required: true
+    file_type: pdb
+    preset_type: pdb
+
   - name: fampnn_temperature
     type: number
-    description: Sampling temperature. Higher = more diverse sequences.
+    description: "Sampling temperature (0.1=conservative, 1.0=diverse, 2.0=creative)"
     required: false
     default: 0.1
     minimum: 0.01
@@ -40,7 +51,7 @@ params:
 
   - name: fampnn_exclude_cys
     type: boolean
-    description: Exclude cysteine residues from design
+    description: Exclude cysteine residues from design (prevents disulfide issues)
     required: false
     default: true
 
@@ -49,14 +60,14 @@ params:
     description: Fix target sidechain positions during binder design
     required: false
     default: false
-    hidden: true
 
   - name: fampnn_psce_threshold
     type: number
-    description: PSCE threshold for sidechain confidence filtering
+    description: "PSCE confidence threshold for sidechain filtering (0.0-1.0)"
     required: false
     default: 0.3
-    hidden: true
+    minimum: 0.0
+    maximum: 1.0
 
   - name: fampnn_extra_config
     type: string

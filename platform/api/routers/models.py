@@ -55,6 +55,8 @@ async def list_models(
                     "minimum": p.minimum,
                     "maximum": p.maximum,
                     "hidden": p.hidden,
+                    "preset_type": getattr(p, 'preset_type', None),
+                    "file_type": getattr(p, 'file_type', None),
                 }
                 for p in m.params
             ],
@@ -114,6 +116,8 @@ async def get_model(model_id: str):
                 "minimum": p.minimum,
                 "maximum": p.maximum,
                 "hidden": p.hidden,
+                "preset_type": getattr(p, 'preset_type', None),
+                "file_type": getattr(p, 'file_type', None),
             }
             for p in model.params
         ],
