@@ -44,6 +44,17 @@ test('assay analytics defines a shared BMS workbench primitive layer', () => {
   );
 });
 
+test('global CSS does not override BMS rounded workbench surfaces', () => {
+  const css = source('src/index.css');
+
+  assert.doesNotMatch(
+    css,
+    /\*\s*\{[^}]*border-radius\s*:\s*0(?:px)?\s*!important[^}]*\}/s,
+    'Global CSS must not force every BMS panel/card/button to square corners',
+  );
+  assert.match(css, /rounded-full\s*\{[^}]*9999px\s*!important/s, 'Circular badges and controls should keep their explicit round exception');
+});
+
 test('top-level assay page uses the shared shell/header/tabs instead of a bespoke hero', () => {
   const assay = source('src/components/AssayAnalytics.tsx');
   assert.match(assay, /AssayPageShell/);
