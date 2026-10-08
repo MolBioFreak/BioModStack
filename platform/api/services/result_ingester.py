@@ -586,6 +586,11 @@ def _default_fampnn_metrics() -> Dict[str, Any]:
         "mean_entropy": None,
         "max_entropy": None,
         "low_confidence_positions": None,
+        "mutation_scoring_available": False,
+        "mutation_score_source": None,
+        "mutation_score_scope": None,
+        "mutation_opportunity_count": None,
+        "top_model_favored_mutations": None,
     }
 
 
@@ -710,6 +715,11 @@ def _extract_fampnn_metrics(
     mean_entropy: Optional[float] = None
     max_entropy: Optional[float] = None
     low_confidence_positions: Optional[List[Dict[str, Any]]] = None
+    mutation_scoring_available = False
+    mutation_score_source: Optional[str] = None
+    mutation_score_scope: Optional[str] = None
+    mutation_opportunity_count: Optional[int] = None
+    top_model_favored_mutations: Optional[List[Dict[str, Any]]] = None
 
     if isinstance(fam_payload, dict):
         chain_avg_raw = fam_payload.get("chain_avg_psce")
@@ -739,6 +749,22 @@ def _extract_fampnn_metrics(
         low_confidence_raw = fam_payload.get("fampnn_low_confidence_positions")
         if isinstance(low_confidence_raw, list):
             low_confidence_positions = [item for item in low_confidence_raw if isinstance(item, dict)] or None
+
+        mutation_scoring_available = bool(fam_payload.get("fampnn_mutation_scoring_available"))
+        mutation_source_raw = fam_payload.get("fampnn_mutation_score_source")
+        if isinstance(mutation_source_raw, str) and mutation_source_raw.strip():
+            mutation_score_source = mutation_source_raw.strip()
+        mutation_scope_raw = fam_payload.get("fampnn_mutation_score_scope")
+        if isinstance(mutation_scope_raw, str) and mutation_scope_raw.strip():
+            mutation_score_scope = mutation_scope_raw.strip()
+        try:
+            raw_count = fam_payload.get("fampnn_mutation_opportunity_count")
+            mutation_opportunity_count = int(raw_count) if raw_count is not None else None
+        except (TypeError, ValueError):
+            mutation_opportunity_count = None
+        top_mutations_raw = fam_payload.get("fampnn_top_model_favored_mutations")
+        if isinstance(top_mutations_raw, list):
+            top_model_favored_mutations = [item for item in top_mutations_raw if isinstance(item, dict)] or None
 
         sequence_text = fam_payload.get("sequence")
         sequence = str(sequence_text).strip() if isinstance(sequence_text, str) and sequence_text.strip() else None
@@ -782,6 +808,11 @@ def _extract_fampnn_metrics(
         "mean_entropy": mean_entropy,
         "max_entropy": max_entropy,
         "low_confidence_positions": low_confidence_positions,
+        "mutation_scoring_available": mutation_scoring_available,
+        "mutation_score_source": mutation_score_source,
+        "mutation_score_scope": mutation_score_scope,
+        "mutation_opportunity_count": mutation_opportunity_count,
+        "top_model_favored_mutations": top_model_favored_mutations,
     })
     return metrics
 

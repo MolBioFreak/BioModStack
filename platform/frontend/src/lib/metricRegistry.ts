@@ -57,6 +57,16 @@ export const METRIC_REGISTRY: MetricDescriptor[] = [
         recommendedUse: 'Uncertainty hotspot review',
     },
     {
+        key: 'fampnn_mutation_log_odds_delta',
+        aliases: ['fampnn_top_model_favored_mutations', 'fampnn_mutation_score'],
+        label: 'FA-MPNN mutation log-odds delta',
+        group: 'FA-MPNN mutation scoring',
+        direction: 'higher_is_better',
+        source: 'fampnn_sample_pkl_seq_probs',
+        caveat: 'Single-substitution likelihood delta computed from FA-MPNN seq_probs for the sampled design; positive values mark model-favored alternatives, not experimental stability or binding truth.',
+        recommendedUse: 'Manual mutagenesis triage',
+    },
+    {
         key: 'ppiflow_objective_score',
         aliases: ['bms_ppiflow_local_objective_score'],
         label: 'BMS local PPIFlow objective',

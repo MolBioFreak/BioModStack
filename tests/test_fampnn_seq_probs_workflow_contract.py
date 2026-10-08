@@ -11,3 +11,5 @@ def test_fampnn_module_publishes_sample_pkls_and_runs_seq_prob_analysis() -> Non
     assert "analyse_fampnn_seq_probs.py" in module_text
     assert "fampnn_seq_prob_metrics_${batch_id}.jsonl" in module_text
     assert "${params.out_dir}/run/fampnn/sample_pkls" in module_text
+    assert "--mutation-top-n" in module_text
+    assert "fampnn_mutation_top_n" in module_text

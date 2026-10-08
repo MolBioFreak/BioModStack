@@ -35,6 +35,15 @@ test('Rosetta descriptor preserves raw REU sign convention', () => {
     assert.match(getMetricTooltip('rosetta_interface_score'), /Raw Rosetta InterfaceAnalyzerMover dG/i);
 });
 
+test('FA-MPNN mutation score descriptor labels seq_probs likelihood deltas', () => {
+    const descriptor = getMetricDescriptor('fampnn_mutation_log_odds_delta');
+
+    assert.equal(descriptor?.label, 'FA-MPNN mutation log-odds delta');
+    assert.equal(descriptor?.direction, 'higher_is_better');
+    assert.match(descriptor?.source || '', /seq_probs/i);
+    assert.match(getMetricTooltip('fampnn_mutation_log_odds_delta'), /model-favored/i);
+});
+
 test('metric completeness resolver exposes partial rows and missing metrics', () => {
     const status = resolveDesignMetricCompletenessStatus({
         metric_completeness: {
