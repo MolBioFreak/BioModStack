@@ -31,13 +31,12 @@ function exactSelectionReceipt(environment) {
   const container = (name, marker, pid) => ({
     name,
     container_id: marker.repeat(64),
-    image_id: `sha256:${marker.repeat(64)}`,
     revision: runtimeRevision,
     compose_working_dir: '/srv/biomodstack',
     pid,
     cgroup: `0::/system.slice/docker-${marker.repeat(64)}.scope`,
-    cmdline: name === 'biomodstack-web' ? 'nginx -g daemon off;' : 'uvicorn main:app',
-    cwd: name === 'biomodstack-web' ? '/' : '/app/platform/api',
+    host_pids: [pid],
+    process_reports: [{ pid, cgroup: `0::/system.slice/docker-${marker.repeat(64)}.scope` }],
   });
   const processReport = (pid, marker, overrides = {}) => ({
     pid,
@@ -55,6 +54,7 @@ function exactSelectionReceipt(environment) {
     port,
     bind_addresses: ['127.0.0.1'],
     container_listener_pids: [1],
+    listener_pid_map: [{ container_pid: 1, host_pid: pid }],
     host_listener_pids: [pid],
     listener_inodes: [inode],
     listener_inode_owners: { [inode]: [pid] },
@@ -134,11 +134,24 @@ function exactSelectionReceipt(environment) {
       config_sha256: '2c5943ce3ae5fa2ca35cd0a094a90c42b8e38b71c85c1fae58d2afe392082b62',
       listener_port: 18081,
       pid: 303,
-      listener_pids: [1, 27],
+      listener_pids: [303, 304],
+      container_listener_pids: [1, 27],
+      listener_pid_map: [
+        { container_pid: 1, host_pid: 303 },
+        { container_pid: 27, host_pid: 304 },
+      ],
+      listener_inodes: [180811, 180812],
+      listener_inode_owners: { 180811: [303], 180812: [304] },
+      container_host_pids: [303, 304],
+      listener_reports: [303, 304].map((pid) => ({
+        pid,
+        cgroup: `0::/system.slice/docker-${'3'.repeat(64)}.scope`,
+      })),
       cgroup: `0::/system.slice/docker-${'3'.repeat(64)}.scope`,
       cmdline: '/docker-entrypoint.sh nginx -g daemon off;',
       cwd: '/',
     };
+    receipt.tailnet_production_proxy_listeners = receipt.tailnet_production_proxy.listener_reports;
   } else {
     const frontendReport = processReport(201, '8', {
       cwd: '/srv/selector/platform/frontend',
@@ -509,8 +522,18 @@ test('selection response contract accepts exact development and production recei
     (value) => { delete value.selector_revision; },
     (value) => { value.managed_api_runtime.validated_revision = 'b'.repeat(40); },
     (value) => { value.managed_api_runtime.containers = []; },
+    (value) => { value.managed_api_runtime.containers[0].image_id = 'sha256:' + 'f'.repeat(64); },
     (value) => { delete value.managed_api_listener; },
     (value) => { value.managed_api_listener.listener_inode_owners['80001'] = [101, 999]; },
+    (value) => {
+      const cgroup = `0::/system.slice/docker-${'1'.repeat(64)}.scope`;
+      value.managed_api_runtime.containers[0].host_pids = [101, 999];
+      value.managed_api_runtime.containers[0].process_reports.push({ pid: 999, cgroup });
+      value.managed_api_listener.listener_inode_owners['80001'] = [101, 999];
+      value.managed_api_listener.container_host_pids = [101, 999];
+      value.managed_api_listener.listener_reports.push({ pid: 999, cgroup });
+      value.api_listeners = value.managed_api_listener.listener_reports;
+    },
     (value) => { value.api_listeners = []; },
     (value) => { delete value.workflow_adapter_listener; },
     (value) => { value.workflow_adapter_listener.listener_reports[0].executable = '/tmp/attacker/python'; },
@@ -547,6 +570,14 @@ test('selection response contract accepts exact development and production recei
     },
     (value) => { value.frontend_listeners = []; },
     (value) => { value.tailnet_production_proxy.listener_pids = []; },
+    (value) => { value.tailnet_production_proxy.container_listener_pids = [999, 1000]; },
+    (value) => { value.tailnet_production_proxy.container_host_pids = [888, 999]; },
+    (value) => { value.tailnet_production_proxy.listener_inodes = [999]; },
+    (value) => { value.tailnet_production_proxy.listener_inode_owners = { 999: [303, 304] }; },
+    (value) => { value.tailnet_production_proxy.listener_reports[0].pid = 999; },
+    (value) => { value.tailnet_production_proxy_listeners = []; },
+    (value) => { value.tailnet_production_proxy.pid = 999; },
+    (value) => { value.tailnet_production_proxy.config_path = '/tmp/docker/tailnet-production-proxy.conf'; },
     (value) => { value.tailnet_production_proxy.image_id = 'sha256:' + '0'.repeat(64); },
   ]) {
     const malformed = receipt('production');

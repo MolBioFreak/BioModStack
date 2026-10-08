@@ -293,6 +293,21 @@ def _ensure_control_route(snapshot: ServeSnapshot) -> bool:
     return True
 
 
+def _control_route_needs_mutation(snapshot: ServeSnapshot) -> bool:
+    """Preflight the control route without mutating it."""
+    existing = snapshot.handlers.get(CONTROL_PATH)
+    if existing is None:
+        return True
+    existing_target = str(existing.get("Proxy", "")).rstrip("/")
+    if existing_target == CONTROL_TARGET:
+        return False
+    if existing_target != LEGACY_CONTROL_TARGET:
+        raise TailnetEnvironmentError(
+            f"Tailnet control path is already owned by an unexpected target: {existing}"
+        )
+    return True
+
+
 def _url_probe(url: str, *, expect_json: bool = False, timeout: float = 20.0) -> dict[str, object]:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     request = urllib.request.Request(
@@ -741,6 +756,7 @@ def _adapter_identity_policy_matches(
             and Path(argv[0]).resolve() == expected_python
             and Path(argv[1]).resolve() == expected_uvicorn
             and argv[2:] == expected_args
+            and _GIT_REVISION_PATTERN.fullmatch(str(report.get("build_revision", "")))
             and _process_in_exact_systemd_unit(report.get("cgroup", ""), WORKFLOW_ADAPTER_SERVICE)
             and _pid_environment_value(pid, "BMS_TAILNET_CONTROL_SOURCE_REVISION") == expected_revision
             and _pid_environment_value(pid, "BMS_TAILNET_CONTROL_ALLOWED_TAILSCALE_USERS") == login
@@ -976,18 +992,43 @@ def _exclusive_listener_reports(port: int) -> list[dict[str, object]]:
 
 
 def _host_listener_closure(port: int) -> dict[str, object]:
-    reports = _exclusive_listener_reports(port)
-    inodes = _host_listener_inodes(port)
-    owners = _host_listener_inode_owners(inodes)
-    if not reports or not inodes or any(not owners.get(inode) for inode in inodes):
-        raise TailnetEnvironmentError(f"listener ownership closure is unavailable for port {port}")
-    return {
-        "port": port,
-        "bind_addresses": sorted(_listener_bind_addresses(port)),
-        "listener_inodes": inodes,
-        "listener_inode_owners": owners,
-        "listener_reports": reports,
-    }
+    # Bind reports, socket inodes and complete owners to one stable observation.
+    # A replacement that preserves a PID but changes the socket inode must not be
+    # combined with the prior process identity.
+    for _attempt in range(1):
+        before_inodes = _host_listener_inodes(port)
+        before_owners = _host_listener_inode_owners(before_inodes)
+        before_addresses = sorted(_listener_bind_addresses(port))
+        owner_pids = sorted({pid for pids in before_owners.values() for pid in pids})
+        before_reports = _pid_report_for_pids(owner_pids)
+        after_inodes = _host_listener_inodes(port)
+        after_owners = _host_listener_inode_owners(after_inodes)
+        after_addresses = sorted(_listener_bind_addresses(port))
+        after_owner_pids = sorted({pid for pids in after_owners.values() for pid in pids})
+        after_reports = _pid_report_for_pids(after_owner_pids)
+        report_pids: list[int] = []
+        for report in after_reports:
+            report_pid = report.get("pid")
+            if isinstance(report_pid, int):
+                report_pids.append(report_pid)
+        report_pids.sort()
+        if (
+            before_inodes
+            and before_inodes == after_inodes
+            and before_owners == after_owners
+            and before_addresses == after_addresses
+            and owner_pids == after_owner_pids == report_pids
+            and before_reports == after_reports
+            and all(after_owners.get(inode) for inode in after_inodes)
+        ):
+            return {
+                "port": port,
+                "bind_addresses": after_addresses,
+                "listener_inodes": after_inodes,
+                "listener_inode_owners": after_owners,
+                "listener_reports": after_reports,
+            }
+    raise TailnetEnvironmentError(f"listener ownership closure is unstable for port {port}")
 
 
 def _validated_workflow_adapter_listener(root: Path) -> dict[str, object]:
@@ -998,6 +1039,16 @@ def _validated_workflow_adapter_listener(root: Path) -> dict[str, object]:
     login = _tailnet_owner_login()
     if not _adapter_identity_policy_matches(root, login, reports=reports):
         raise TailnetEnvironmentError("workflow adapter listener lost exact authenticated service ownership")
+    confirmed = _host_listener_closure(8001)
+    confirmed_reports = confirmed.get("listener_reports")
+    if (
+        confirmed != closure
+        or not isinstance(confirmed_reports, list)
+        or not _adapter_identity_policy_matches(root, login, reports=confirmed_reports)
+    ):
+        raise TailnetEnvironmentError("workflow adapter listener changed during validation")
+    closure = confirmed
+    reports = confirmed_reports
     api_root = root / "platform" / "api"
     canonical_reports: list[dict[str, object]] = []
     for report in reports:
@@ -1029,6 +1080,15 @@ def _validated_development_frontend_listener(
         raise TailnetEnvironmentError("listener ownership reports are unavailable")
     if not _dev_frontend_matches_root(spec, root, reports=reports):
         raise TailnetEnvironmentError("development frontend lost exact service ownership before receipt")
+    confirmed = _host_listener_closure(spec.frontend_port)
+    confirmed_reports = confirmed.get("listener_reports")
+    if (
+        confirmed != closure
+        or not isinstance(confirmed_reports, list)
+        or not _dev_frontend_matches_root(spec, root, reports=confirmed_reports)
+    ):
+        raise TailnetEnvironmentError("development frontend listener changed during validation")
+    closure = confirmed
     closure.update({
         "systemd_service": FRONTEND_SERVICE,
         "source_root": str((root / "platform" / "frontend").resolve()),
@@ -1037,8 +1097,10 @@ def _validated_development_frontend_listener(
     return closure
 
 
-def _container_listener_host_pids(container_id: str, container_pids: list[int]) -> list[int]:
-    """Map listener PIDs from the container PID namespace to its exact host cgroup."""
+def _container_listener_pid_map(
+    container_id: str, container_pids: list[int]
+) -> list[dict[str, int]]:
+    """Map each listener namespace PID to its exact host PID."""
     wanted = set(container_pids)
     mapped: dict[int, int] = {}
     for proc in Path("/proc").glob("[0-9]*"):
@@ -1057,7 +1119,16 @@ def _container_listener_host_pids(container_id: str, container_pids: list[int]) 
             continue
     if set(mapped) != wanted:
         return []
-    return sorted(mapped.values())
+    return [
+        {"container_pid": container_pid, "host_pid": mapped[container_pid]}
+        for container_pid in sorted(mapped)
+    ]
+
+
+def _container_listener_host_pids(container_id: str, container_pids: list[int]) -> list[int]:
+    return sorted(
+        item["host_pid"] for item in _container_listener_pid_map(container_id, container_pids)
+    )
 
 
 def _container_host_pids(container_name: str) -> list[int]:
@@ -1102,7 +1173,8 @@ def _validated_runtime_container_listener(
 
     container_listener_pids = _container_listener_pids(container_name, port)
     container_listener_inodes = _container_listener_inodes(container_name, port)
-    host_listener_pids = _container_listener_host_pids(container_id, container_listener_pids)
+    listener_pid_map = _container_listener_pid_map(container_id, container_listener_pids)
+    host_listener_pids = sorted(item["host_pid"] for item in listener_pid_map)
     host_listener_inodes = _host_listener_inodes(port)
     if (
         not container_listener_pids
@@ -1115,15 +1187,35 @@ def _validated_runtime_container_listener(
         )
     inode_owners = _host_listener_inode_owners(host_listener_inodes)
     all_owner_pids = sorted({pid for pids in inode_owners.values() for pid in pids})
+    expected_host_pids = item.get("host_pids")
+    expected_process_reports = item.get("process_reports")
     container_host_pids = _container_host_pids(container_name)
     runtime_init_pid = item.get("pid")
+    reports = [
+        {"pid": owner, "cgroup": _process_cgroup(owner)}
+        for owner in all_owner_pids
+    ]
     if (
         any(not inode_owners.get(inode) for inode in host_listener_inodes)
         or not set(host_listener_pids).issubset(all_owner_pids)
+        or not isinstance(expected_host_pids, list)
+        or container_host_pids != expected_host_pids
+        or not isinstance(expected_process_reports, list)
+        or expected_process_reports != [
+            {"pid": owner, "cgroup": _process_cgroup(owner)}
+            for owner in container_host_pids
+        ]
         or not set(all_owner_pids).issubset(container_host_pids)
-        or container_listener_pids != [1]
+        or (
+            container_name == "biomodstack-api"
+            and (
+                container_listener_pids != [1]
+                or container_host_pids != [runtime_init_pid]
+                or host_listener_pids != [runtime_init_pid]
+            )
+        )
+        or len(host_listener_pids) != len(container_listener_pids)
         or not isinstance(runtime_init_pid, int)
-        or host_listener_pids != [runtime_init_pid]
         or runtime_init_pid not in container_host_pids
         or any(
             not _process_in_exact_container_cgroup(_process_cgroup(owner), container_id)
@@ -1133,16 +1225,13 @@ def _validated_runtime_container_listener(
         raise TailnetEnvironmentError(
             f"managed listener {container_name}:{port} has an owner outside its validated container"
         )
-    reports = [
-        {"pid": owner, "cgroup": _process_cgroup(owner)}
-        for owner in all_owner_pids
-    ]
     return {
         "container_name": container_name,
         "container_id": container_id,
         "port": port,
         "bind_addresses": ["127.0.0.1"],
         "container_listener_pids": container_listener_pids,
+        "listener_pid_map": listener_pid_map,
         "host_listener_pids": host_listener_pids,
         "listener_inodes": host_listener_inodes,
         "listener_inode_owners": inode_owners,
@@ -1235,9 +1324,10 @@ def _validated_production_tailnet_proxy(root: Path) -> dict[str, object]:
     )
     if not listener_pids_in_container:
         raise TailnetEnvironmentError("production Tailnet proxy has no container-owned listener")
-    host_listener_pids = _container_listener_host_pids(
+    listener_pid_map = _container_listener_pid_map(
         container_id, listener_pids_in_container
     )
+    host_listener_pids = sorted(item["host_pid"] for item in listener_pid_map)
     if not host_listener_pids:
         raise TailnetEnvironmentError(
             "production Tailnet proxy host listener is not owned by the validated container"
@@ -1253,13 +1343,18 @@ def _validated_production_tailnet_proxy(root: Path) -> dict[str, object]:
     inode_owners = _host_listener_inode_owners(host_listener_inodes)
     all_owner_pids = sorted({pid for pids in inode_owners.values() for pid in pids})
     container_host_pids = _container_host_pids(PRODUCTION_TAILNET_PROXY_CONTAINER)
+    listener_reports = [
+        {"pid": owner, "cgroup": _process_cgroup(owner)} for owner in all_owner_pids
+    ]
     if (
         any(not inode_owners.get(inode) for inode in host_listener_inodes)
         or not set(host_listener_pids).issubset(all_owner_pids)
         or not set(all_owner_pids).issubset(container_host_pids)
+        or len(host_listener_pids) != len(listener_pids_in_container)
+        or pid not in container_host_pids
         or any(
             not _process_in_exact_container_cgroup(_process_cgroup(owner), container_id)
-            for owner in all_owner_pids
+            for owner in container_host_pids
         )
     ):
         raise TailnetEnvironmentError(
@@ -1275,9 +1370,11 @@ def _validated_production_tailnet_proxy(root: Path) -> dict[str, object]:
         "pid": pid,
         "listener_pids": host_listener_pids,
         "container_listener_pids": listener_pids_in_container,
+        "listener_pid_map": listener_pid_map,
         "listener_inodes": host_listener_inodes,
         "listener_inode_owners": inode_owners,
         "container_host_pids": container_host_pids,
+        "listener_reports": listener_reports,
         "cgroup": cgroup,
         "cmdline": command,
         "cwd": str(item.get("Config", {}).get("WorkingDir", "") or "/"),
@@ -1333,9 +1430,41 @@ def _validated_container_runtime(root: Path, *, require_web: bool) -> dict[str, 
             "managed container Compose owner does not exactly match its image revision"
         )
     _run(["git", "-C", str(root), "merge-base", "--is-ancestor", revision, "HEAD"])
-    report["validated_revision"] = revision
-    report["validated_compose_root"] = str(compose_root)
-    return report
+    validated_containers: list[dict[str, object]] = []
+    for item in selected:
+        name = str(item.get("name", ""))
+        container_id = str(item.get("container_id", ""))
+        init_pid = item.get("pid")
+        host_pids = _container_host_pids(name)
+        if (
+            not isinstance(init_pid, int)
+            or init_pid not in host_pids
+            or (name == "biomodstack-api" and host_pids != [init_pid])
+            or any(
+                not _process_in_exact_container_cgroup(_process_cgroup(pid), container_id)
+                for pid in host_pids
+            )
+        ):
+            raise TailnetEnvironmentError(
+                f"managed container process inventory is inconsistent: {name}"
+            )
+        validated_containers.append({
+            "name": name,
+            "container_id": container_id,
+            "revision": revision,
+            "compose_working_dir": str(compose_root),
+            "pid": init_pid,
+            "cgroup": item.get("cgroup", ""),
+            "host_pids": host_pids,
+            "process_reports": [
+                {"pid": pid, "cgroup": _process_cgroup(pid)} for pid in host_pids
+            ],
+        })
+    return {
+        "containers": validated_containers,
+        "validated_revision": revision,
+        "validated_compose_root": str(compose_root),
+    }
 
 
 def _verify_selected_environment(
@@ -1418,8 +1547,9 @@ def _verify_selected_environment(
     if spec.runtime_mode == CONTAINER_RUNTIME_MODE:
         report["container_runtime"] = production_runtime
         report["managed_frontend_listener"] = managed_frontend_listener
-        report["tailnet_production_proxy"] = _validated_production_tailnet_proxy(root)
-        report["tailnet_production_proxy_listeners"] = _pid_report(PRODUCTION_TAILNET_PROXY_PORT)
+        proxy = _validated_production_tailnet_proxy(root)
+        report["tailnet_production_proxy"] = proxy
+        report["tailnet_production_proxy_listeners"] = proxy["listener_reports"]
     return report
 
 
@@ -1593,7 +1723,16 @@ def select_tailnet_environment(
             started_mutations = _start_selected_environment(spec, root)
             if started_mutations:
                 service_ownership_mutations.update(started_mutations)
-            control_route_attempted = _ensure_control_route(prior)
+            control_route_will_mutate = _control_route_needs_mutation(prior)
+            if control_route_will_mutate:
+                # Register before the ambiguous setter: it may apply the route
+                # and disconnect, and its own best-effort rollback may fail.
+                control_route_attempted = True
+            changed_control_route = _ensure_control_route(prior)
+            if changed_control_route is not control_route_will_mutate:
+                raise TailnetEnvironmentError(
+                    "control-route mutation accounting disagreed with preflight"
+                )
             expected_non_root = dict(prior_non_root)
             expected_non_root[CONTROL_PATH] = {"Proxy": CONTROL_TARGET}
             serve_root_attempted = True

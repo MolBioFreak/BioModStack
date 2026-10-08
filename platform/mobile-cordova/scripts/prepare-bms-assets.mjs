@@ -580,7 +580,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
   };
   const validContainerSet = (runtime, requiredNames, revision) => {
     if (
-      !runtime
+      !hasExactKeys(runtime, ['containers', 'validated_revision', 'validated_compose_root'])
       || runtime.validated_revision !== revision
       || !nonEmptyBounded(runtime.validated_compose_root)
       || !runtime.validated_compose_root.startsWith('/')
@@ -591,16 +591,30 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     if (byName.size !== requiredNames.length) return false;
     return requiredNames.every((name) => {
       const container = byName.get(name);
-      return container
-        && containerIdPattern.test(String(container.container_id || ''))
-        && digestPattern.test(String(container.image_id || ''))
-        && container.revision === revision
-        && container.compose_working_dir === runtime.validated_compose_root
-        && Number.isInteger(container.pid) && container.pid > 0
-        && nonEmptyBounded(container.cgroup, 4096)
-        && exactContainerCgroup(container.cgroup, container.container_id)
-        && nonEmptyBounded(container.cmdline, 4096)
-        && nonEmptyBounded(container.cwd, 4096);
+      if (
+        !hasExactKeys(container, [
+          'name', 'container_id', 'revision', 'compose_working_dir', 'pid', 'cgroup',
+          'host_pids', 'process_reports',
+        ])
+        || !containerIdPattern.test(String(container.container_id || ''))
+        || container.revision !== revision
+        || container.compose_working_dir !== runtime.validated_compose_root
+        || !Number.isInteger(container.pid) || container.pid <= 0
+        || !nonEmptyBounded(container.cgroup, 4096)
+        || !exactContainerCgroup(container.cgroup, container.container_id)
+        || !sortedUniquePositiveIntegers(container.host_pids)
+        || !container.host_pids.includes(container.pid)
+        || (name === 'biomodstack-api'
+          && JSON.stringify(container.host_pids) !== JSON.stringify([container.pid]))
+        || !Array.isArray(container.process_reports)
+        || container.process_reports.length !== container.host_pids.length
+      ) return false;
+      const reportPids = container.process_reports.map((report) => report?.pid);
+      return JSON.stringify(reportPids) === JSON.stringify(container.host_pids)
+        && container.process_reports.every((report) => (
+          hasExactKeys(report, ['pid', 'cgroup'])
+          && exactContainerCgroup(report.cgroup, container.container_id)
+        ));
     });
   };
   const sortedUniquePositiveIntegers = (value, allowEmpty = false) => {
@@ -652,17 +666,38 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       && listener.listener_reports.every((report) => nonEmptyBounded(report?.cgroup, 4096));
   };
   const validContainerListener = (listener, runtime, containerName, port) => {
-    if (!validListenerClosure(listener, port, ['127.0.0.1'])) return false;
+    if (
+      !hasExactKeys(listener, [
+        'container_name', 'container_id', 'port', 'bind_addresses',
+        'container_listener_pids', 'listener_pid_map', 'host_listener_pids',
+        'listener_inodes', 'listener_inode_owners', 'container_host_pids', 'listener_reports',
+      ])
+      || !validListenerClosure(listener, port, ['127.0.0.1'])
+    ) return false;
     const container = runtime?.containers?.find((item) => item?.name === containerName);
     if (
       !container
       || listener.container_name !== containerName
       || listener.container_id !== container.container_id
-      || JSON.stringify(listener.container_listener_pids) !== JSON.stringify([1])
+      || !sortedUniquePositiveIntegers(listener.container_listener_pids)
+      || !Array.isArray(listener.listener_pid_map)
+      || listener.listener_pid_map.length !== listener.container_listener_pids.length
       || !sortedUniquePositiveIntegers(listener.host_listener_pids)
+      || listener.host_listener_pids.length !== listener.container_listener_pids.length
       || !sortedUniquePositiveIntegers(listener.container_host_pids)
-      || JSON.stringify(listener.host_listener_pids) !== JSON.stringify([container.pid])
+      || JSON.stringify(listener.container_host_pids) !== JSON.stringify(container.host_pids)
       || !listener.container_host_pids.includes(container.pid)
+    ) return false;
+    const mappedContainerPids = listener.listener_pid_map.map((item) => item?.container_pid);
+    const mappedHostPids = listener.listener_pid_map.map((item) => item?.host_pid).sort((a, b) => a - b);
+    if (
+      !listener.listener_pid_map.every((item) => (
+        hasExactKeys(item, ['container_pid', 'host_pid'])
+        && Number.isInteger(item.container_pid) && item.container_pid > 0
+        && Number.isInteger(item.host_pid) && item.host_pid > 0
+      ))
+      || JSON.stringify(mappedContainerPids) !== JSON.stringify(listener.container_listener_pids)
+      || JSON.stringify(mappedHostPids) !== JSON.stringify(listener.host_listener_pids)
     ) return false;
     const ownerPids = [...new Set(Object.values(listener.listener_inode_owners).flat())];
     return listener.host_listener_pids.every((pid) => ownerPids.includes(pid))
@@ -671,6 +706,71 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         hasExactKeys(report, ['pid', 'cgroup'])
         && exactContainerCgroup(report.cgroup, container.container_id)
       ));
+  };
+  const validProductionProxy = (proxy, projectRoot, publicReports) => {
+    const keys = [
+      'container_id', 'image', 'image_id', 'config_path', 'config_sha256',
+      'listener_port', 'pid', 'listener_pids', 'container_listener_pids',
+      'listener_pid_map',
+      'listener_inodes', 'listener_inode_owners', 'container_host_pids',
+      'listener_reports', 'cgroup', 'cmdline', 'cwd',
+    ];
+    if (
+      !hasExactKeys(proxy, keys)
+      || !containerIdPattern.test(String(proxy.container_id || ''))
+      || proxy.image !== 'nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10'
+      || proxy.image_id !== 'sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea'
+      || proxy.config_path !== `${projectRoot}/docker/tailnet-production-proxy.conf`
+      || proxy.config_sha256 !== '2c5943ce3ae5fa2ca35cd0a094a90c42b8e38b71c85c1fae58d2afe392082b62'
+      || proxy.listener_port !== 18081
+      || !Number.isInteger(proxy.pid) || proxy.pid <= 0
+      || !sortedUniquePositiveIntegers(proxy.listener_pids)
+      || !sortedUniquePositiveIntegers(proxy.container_listener_pids)
+      || !Array.isArray(proxy.listener_pid_map)
+      || proxy.listener_pid_map.length !== proxy.container_listener_pids.length
+      || proxy.listener_pids.length !== proxy.container_listener_pids.length
+      || !sortedUniquePositiveIntegers(proxy.listener_inodes)
+      || !sortedUniquePositiveIntegers(proxy.container_host_pids)
+      || !proxy.container_host_pids.includes(proxy.pid)
+      || !proxy.listener_inode_owners
+      || typeof proxy.listener_inode_owners !== 'object'
+      || Array.isArray(proxy.listener_inode_owners)
+      || !Array.isArray(proxy.listener_reports)
+      || proxy.listener_reports.length === 0
+      || !nonEmptyBounded(proxy.cgroup, 4096)
+      || !exactContainerCgroup(proxy.cgroup, proxy.container_id)
+      || proxy.cmdline !== '/docker-entrypoint.sh nginx -g daemon off;'
+      || proxy.cwd !== '/'
+    ) return false;
+    const inodeKeys = Object.keys(proxy.listener_inode_owners);
+    if (
+      inodeKeys.length !== proxy.listener_inodes.length
+      || !proxy.listener_inodes.every((inode) => Object.hasOwn(proxy.listener_inode_owners, String(inode)))
+    ) return false;
+    const ownerPids = [...new Set(inodeKeys.flatMap((inode) => {
+      const owners = proxy.listener_inode_owners[inode];
+      return sortedUniquePositiveIntegers(owners) ? owners : [NaN];
+    }))].sort((left, right) => left - right);
+    const reportPids = proxy.listener_reports.map((report) => report?.pid);
+    const mappedContainerPids = proxy.listener_pid_map.map((item) => item?.container_pid);
+    const mappedHostPids = proxy.listener_pid_map.map((item) => item?.host_pid).sort((a, b) => a - b);
+    return ownerPids.length > 0
+      && ownerPids.every(Number.isInteger)
+      && proxy.listener_pids.every((listenerPid) => ownerPids.includes(listenerPid))
+      && ownerPids.every((ownerPid) => proxy.container_host_pids.includes(ownerPid))
+      && proxy.listener_pid_map.every((item) => (
+        hasExactKeys(item, ['container_pid', 'host_pid'])
+        && Number.isInteger(item.container_pid) && item.container_pid > 0
+        && Number.isInteger(item.host_pid) && item.host_pid > 0
+      ))
+      && JSON.stringify(mappedContainerPids) === JSON.stringify(proxy.container_listener_pids)
+      && JSON.stringify(mappedHostPids) === JSON.stringify(proxy.listener_pids)
+      && JSON.stringify(reportPids) === JSON.stringify(ownerPids)
+      && proxy.listener_reports.every((report) => (
+        hasExactKeys(report, ['pid', 'cgroup'])
+        && exactContainerCgroup(report.cgroup, proxy.container_id)
+      ))
+      && JSON.stringify(publicReports) === JSON.stringify(proxy.listener_reports);
   };
   const reportInExactUnit = (report, service) => {
     if (!/^[A-Za-z0-9_.@-]+\.service$/.test(service)) return false;
@@ -810,21 +910,11 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       )
       || JSON.stringify(payload.frontend_listeners)
         !== JSON.stringify(payload.managed_frontend_listener?.listener_reports)
-      || !proxy
-      || !containerIdPattern.test(String(proxy.container_id || ''))
-      || proxy.image !== 'nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10'
-      || proxy.image_id !== 'sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea'
-      || !nonEmptyBounded(proxy.config_path, 4096)
-      || !proxy.config_path.endsWith('/docker/tailnet-production-proxy.conf')
-      || proxy.config_sha256 !== '2c5943ce3ae5fa2ca35cd0a094a90c42b8e38b71c85c1fae58d2afe392082b62'
-      || proxy.listener_port !== 18081
-      || !Number.isInteger(proxy.pid) || proxy.pid <= 0
-      || !Array.isArray(proxy.listener_pids) || proxy.listener_pids.length === 0
-      || proxy.listener_pids.some((pid) => !Number.isInteger(pid) || pid <= 0)
-      || !nonEmptyBounded(proxy.cgroup, 4096)
-      || !exactContainerCgroup(proxy.cgroup, proxy.container_id)
-      || proxy.cmdline !== '/docker-entrypoint.sh nginx -g daemon off;'
-      || proxy.cwd !== '/'
+      || !validProductionProxy(
+        proxy,
+        payload.project_root,
+        payload.tailnet_production_proxy_listeners,
+      )
     ) reject();
   }
   return payload;
