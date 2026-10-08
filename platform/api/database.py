@@ -324,6 +324,10 @@ class Design(Base):
     ppiflow_filter_passed = Column(Boolean, nullable=True)
     ppiflow_filter_reason = Column(String(255), nullable=True)
     ppiflow_loop_metrics = Column(JSON, nullable=True)
+
+    # Metric provenance/completeness: explicit source/formula/direction for model and BMS-derived scores.
+    metric_provenance = Column(JSON, nullable=True)
+    metric_completeness = Column(JSON, nullable=True)
         
     created_at = Column(DateTime, default=datetime.utcnow)
     
