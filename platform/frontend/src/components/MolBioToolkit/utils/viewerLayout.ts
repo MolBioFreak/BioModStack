@@ -40,6 +40,14 @@ export interface ResolvedMolBioViewerLayout {
 
 export const MOLBIO_LIBRARY_PANEL_DEFAULT_WIDTH = 256;
 export const MOLBIO_VIEWER_MIN_WIDTH = 320;
+export const MOLBIO_MIN_VIEWPORT_FOR_OPEN_SIDE_PANELS = MOLBIO_VIEWER_MIN_WIDTH + 224 + 256;
+
+export function shouldCollapseMolBioPanelsForViewport(viewportWidth: number): boolean {
+    if (!Number.isFinite(viewportWidth)) {
+        return false;
+    }
+    return Math.round(viewportWidth) < MOLBIO_MIN_VIEWPORT_FOR_OPEN_SIDE_PANELS;
+}
 
 export function getDefaultMolBioToolPanelWidth(activePanel: MolBioActivePanel): number {
     if (activePanel === 'primers') return 480;

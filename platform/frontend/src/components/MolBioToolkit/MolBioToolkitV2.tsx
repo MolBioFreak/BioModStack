@@ -50,6 +50,7 @@ import {
     clampMolBioPanelWidth,
     getDefaultMolBioToolPanelWidth,
     resolveMolBioViewerLayout,
+    shouldCollapseMolBioPanelsForViewport,
 } from './utils/viewerLayout';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1117,11 +1118,12 @@ export function MolBioToolkitV2() {
     // View mode state (for circular view toggle)
     type ViewMode = 'linear' | 'circular' | 'both';
     type ResizeHandleSide = 'left' | 'right';
+    const initialViewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth;
     const [viewMode, setViewMode] = useState<ViewMode>('both');
     const [isViewerFullscreen, setIsViewerFullscreen] = useState(false);
-    const [isLibraryPanelCollapsed, setIsLibraryPanelCollapsed] = useState(false);
-    const [isToolPanelCollapsed, setIsToolPanelCollapsed] = useState(false);
-    const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? 1440 : window.innerWidth));
+    const [isLibraryPanelCollapsed, setIsLibraryPanelCollapsed] = useState(() => shouldCollapseMolBioPanelsForViewport(initialViewportWidth));
+    const [isToolPanelCollapsed, setIsToolPanelCollapsed] = useState(() => shouldCollapseMolBioPanelsForViewport(initialViewportWidth));
+    const [viewportWidth, setViewportWidth] = useState(initialViewportWidth);
     const [leftPanelWidth, setLeftPanelWidth] = useState(MOLBIO_LIBRARY_PANEL_DEFAULT_WIDTH);
     const [rightPanelWidth, setRightPanelWidth] = useState(() => getDefaultMolBioToolPanelWidth('view'));
     const resizeStateRef = useRef<{

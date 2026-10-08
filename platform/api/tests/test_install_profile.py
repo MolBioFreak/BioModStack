@@ -24,7 +24,6 @@ EXPECTED_CORS_ORIGINS = ",".join(
         "http://localhost:5173",
         "https://localhost:5173",
         "https://127.0.0.1",
-        "https://compute-node.taileb3a90.ts.net",
     ]
 )
 
@@ -68,7 +67,7 @@ def test_save_install_profile_writes_compatibility_exports(tmp_path: Path, monke
     assert "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001" in core_runtime_text
 
 
-def test_resolve_runtime_paths_defaults_include_cordova_and_tailscale_cors_origins(tmp_path: Path, monkeypatch) -> None:
+def test_resolve_runtime_paths_defaults_include_cordova_and_loopback_cors_origins(tmp_path: Path, monkeypatch) -> None:
     home_dir = tmp_path / "home"
     config_home = home_dir / ".config"
     project_root = tmp_path / "repo"
