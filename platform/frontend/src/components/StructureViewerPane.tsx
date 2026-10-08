@@ -629,6 +629,73 @@ export default function StructureViewerPane({
         </div>
     );
 
+    // Shared MolstarViewer component (single instance prevents WebGL context loss)
+    const SharedViewer = (
+        <MolstarViewer
+            key={selectedDesignId + '_' + colorMode}
+            structureUrl={selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined}
+            format={structureFormat}
+            alphafoldView={colorMode === 'plddt'}
+            selections={colorMode === 'cdr' ? antibodySelections : undefined}
+            height="100%"
+            backgroundColor={themeColors.bgPrimary}
+        />
+    );
+
+    // Shared toolbar for design/color selection
+    const ViewerToolbar = ({ isCompact = false }: { isCompact?: boolean }) => (
+        <div className={`flex items-center gap-2 ${isCompact ? 'flex-wrap' : 'mb-3 flex-wrap'}`}>
+            {/* Design Selector */}
+            <div className="relative">
+                <select
+                    value={selectedDesignId ?? ''}
+                    onChange={(e) => setSelectedDesignId(e.target.value)}
+                    className={`appearance-none border border-slate-700 rounded-lg px-3 py-1.5 pr-8 text-sm text-white cursor-pointer hover:bg-slate-700 transition-colors min-w-[200px] ${isCompact ? 'bg-slate-800/90 backdrop-blur-sm' : 'bg-slate-800'}`}
+                >
+                    {[...designs].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0)).map(d => (
+                        <option key={d.id} value={d.id}>
+                            {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(0)})` : ''}
+                        </option>
+                    ))}
+                </select>
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">▾</div>
+            </div>
+
+            {/* Color Mode */}
+            <select
+                value={colorMode}
+                onChange={(e) => setColorMode(e.target.value as 'default' | 'plddt' | 'cdr')}
+                className={`appearance-none border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white cursor-pointer hover:bg-slate-700 ${isCompact ? 'bg-slate-800/90 backdrop-blur-sm' : 'bg-slate-800'}`}
+            >
+                <option value="default">Chain Colors</option>
+                <option value="plddt">pLDDT</option>
+                <option value="cdr" disabled={!((designs.find(d => d.id === selectedDesignId) as any)?.cdr_h1_length)}>
+                    CDR Regions
+                </option>
+            </select>
+
+            {/* Color Legend */}
+            {colorMode === 'plddt' && !isCompact && (
+                <div className="flex items-center gap-1 text-xs text-slate-400">
+                    <span className="text-blue-400">■</span>≥90
+                    <span className="text-cyan-400 ml-1">■</span>≥70
+                    <span className="text-yellow-400 ml-1">■</span>≥50
+                    <span className="text-orange-400 ml-1">■</span>&lt;50
+                </div>
+            )}
+
+            {/* Fullscreen Toggle */}
+            <button
+                onClick={toggleFullscreen}
+                className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${isCompact
+                    ? 'bg-red-500/80 hover:bg-red-500 text-white backdrop-blur-sm'
+                    : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+            >
+                {isCompact ? '✕ Exit Fullscreen' : '⛶ Fullscreen'}
+            </button>
+        </div>
+    );
+
     return (
         <div
             ref={containerRef}
@@ -637,57 +704,14 @@ export default function StructureViewerPane({
             {isFullscreen ? (
                 /* FULLSCREEN LAYOUT */
                 <>
-                    {/* Main Viewer (bottom layer) */}
+                    {/* Main Viewer (bottom layer) - uses native fullscreen API so same element */}
                     <div className="absolute inset-0">
-                        <MolstarViewer
-                            key={selectedDesignId + '_' + colorMode}
-                            structureUrl={selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined}
-                            format={structureFormat}
-                            alphafoldView={colorMode === 'plddt'}
-                            selections={colorMode === 'cdr' ? antibodySelections : undefined}
-                            height="100%"
-                            backgroundColor={themeColors.bgPrimary}
-                        />
+                        {SharedViewer}
                     </div>
 
                     {/* Toolbar (top-left, z-40) */}
-                    <div className="absolute top-3 left-3 z-40 flex items-center gap-2 flex-wrap">
-                        {/* Design Selector */}
-                        <div className="relative">
-                            <select
-                                value={selectedDesignId ?? ''}
-                                onChange={(e) => setSelectedDesignId(e.target.value)}
-                                className="appearance-none bg-slate-800/90 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-1.5 pr-8 text-sm text-white cursor-pointer hover:bg-slate-700 transition-colors min-w-[200px]"
-                            >
-                                {[...designs].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0)).map(d => (
-                                    <option key={d.id} value={d.id}>
-                                        {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(0)})` : ''}
-                                    </option>
-                                ))}
-                            </select>
-                            <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">▾</div>
-                        </div>
-
-                        {/* Color Mode */}
-                        <select
-                            value={colorMode}
-                            onChange={(e) => setColorMode(e.target.value as 'default' | 'plddt' | 'cdr')}
-                            className="appearance-none bg-slate-800/90 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white cursor-pointer hover:bg-slate-700"
-                        >
-                            <option value="default">Chain Colors</option>
-                            <option value="plddt">pLDDT</option>
-                            <option value="cdr" disabled={!((designs.find(d => d.id === selectedDesignId) as any)?.cdr_h1_length)}>
-                                CDR Regions
-                            </option>
-                        </select>
-
-                        {/* Exit Fullscreen */}
-                        <button
-                            onClick={toggleFullscreen}
-                            className="px-3 py-1.5 text-xs rounded-lg bg-red-500/80 hover:bg-red-500 text-white backdrop-blur-sm transition-colors"
-                        >
-                            ✕ Exit Fullscreen
-                        </button>
+                    <div className="absolute top-3 left-3 z-40">
+                        <ViewerToolbar isCompact />
                     </div>
 
                     {/* Toggleable Analytics Panel (bottom-right, z-40) */}
@@ -701,66 +725,11 @@ export default function StructureViewerPane({
                     {/* Left Column: Viewer */}
                     <div className="flex-[2] min-w-0">
                         {/* Toolbar */}
-                        <div className="flex items-center gap-2 mb-3 flex-wrap">
-                            {/* Design Selector */}
-                            <div className="relative">
-                                <select
-                                    value={selectedDesignId ?? ''}
-                                    onChange={(e) => setSelectedDesignId(e.target.value)}
-                                    className="appearance-none bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 pr-8 text-sm text-white cursor-pointer hover:bg-slate-700 transition-colors min-w-[200px]"
-                                >
-                                    {[...designs].sort((a, b) => (b.plddt_overall ?? 0) - (a.plddt_overall ?? 0)).map(d => (
-                                        <option key={d.id} value={d.id}>
-                                            {d.name} {d.plddt_overall ? `(${d.plddt_overall.toFixed(0)})` : ''}
-                                        </option>
-                                    ))}
-                                </select>
-                                <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">▾</div>
-                            </div>
-
-                            {/* Color Mode */}
-                            <select
-                                value={colorMode}
-                                onChange={(e) => setColorMode(e.target.value as 'default' | 'plddt' | 'cdr')}
-                                className="appearance-none bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white cursor-pointer hover:bg-slate-700"
-                            >
-                                <option value="default">Chain Colors</option>
-                                <option value="plddt">pLDDT</option>
-                                <option value="cdr" disabled={!((designs.find(d => d.id === selectedDesignId) as any)?.cdr_h1_length)}>
-                                    CDR Regions
-                                </option>
-                            </select>
-
-                            {/* Color Legend */}
-                            {colorMode === 'plddt' && (
-                                <div className="flex items-center gap-1 text-xs text-slate-400">
-                                    <span className="text-blue-400">■</span>≥90
-                                    <span className="text-cyan-400 ml-1">■</span>≥70
-                                    <span className="text-yellow-400 ml-1">■</span>≥50
-                                    <span className="text-orange-400 ml-1">■</span>&lt;50
-                                </div>
-                            )}
-
-                            {/* Fullscreen Toggle */}
-                            <button
-                                onClick={toggleFullscreen}
-                                className="px-3 py-1.5 text-xs rounded-lg bg-slate-700 text-slate-400 hover:bg-slate-600 transition-colors"
-                            >
-                                ⛶ Fullscreen
-                            </button>
-                        </div>
+                        <ViewerToolbar />
 
                         {/* Main Viewer */}
-                        <div className="relative rounded-lg overflow-hidden border border-slate-700">
-                            <MolstarViewer
-                                key={selectedDesignId + '_' + colorMode}
-                                structureUrl={selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined}
-                                format={structureFormat}
-                                alphafoldView={colorMode === 'plddt'}
-                                selections={colorMode === 'cdr' ? antibodySelections : undefined}
-                                height={450}
-                                backgroundColor={themeColors.bgPrimary}
-                            />
+                        <div className="relative rounded-lg overflow-hidden border border-slate-700" style={{ height: 450 }}>
+                            {SharedViewer}
                         </div>
                     </div>
 

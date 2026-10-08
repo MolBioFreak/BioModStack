@@ -166,52 +166,6 @@ export default function MolstarViewer({
         }
     }, [isScriptLoaded, residueColors, applyResidueColors, absoluteUrl]);
 
-    // Apply viewport rendering settings (Occlusion, Shadow, Outline, DoF, Fog)
-    const applyViewportSettings = useCallback(async () => {
-        if (!viewerRef.current) return;
-        const viewer = viewerRef.current as any;
-
-        // Wait for canvas3d to be ready
-        for (let i = 0; i < 50; i++) {
-            if (viewer.viewerInstance?.plugin?.canvas3d) {
-                break;
-            }
-            await new Promise(r => setTimeout(r, 100));
-        }
-
-        const canvas3d = viewer.viewerInstance?.plugin?.canvas3d;
-        if (!canvas3d?.setProps) {
-            console.warn('MolstarViewer: canvas3d.setProps not available');
-            return;
-        }
-
-        try {
-            // Set default viewport rendering options
-            canvas3d.setProps({
-                postprocessing: {
-                    occlusion: { name: 'on', params: {} },
-                    shadow: { name: 'on', params: {} },
-                    outline: { name: 'on', params: {} },
-                    dof: { name: 'off', params: {} },
-                },
-                renderer: {
-                    style: { name: 'glossy', params: {} },
-                },
-            });
-            console.log('Molstar viewport settings applied: Occlusion ON, Shadow ON, Outline ON, DoF OFF');
-        } catch (err) {
-            console.error('Failed to apply viewport settings:', err);
-        }
-    }, []);
-
-    // Apply viewport settings when viewer loads
-    useEffect(() => {
-        if (isScriptLoaded && absoluteUrl) {
-            const timer = setTimeout(applyViewportSettings, 2000);
-            return () => clearTimeout(timer);
-        }
-    }, [isScriptLoaded, absoluteUrl, applyViewportSettings]);
-
     // Parse background color
     const bgColor = useMemo(() => {
         const match = backgroundColor.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
