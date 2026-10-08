@@ -1,4 +1,4 @@
-import { CustomTooltipsProvider } from 'molstar/lib/extensions/mvs/components/custom-tooltips-prop';
+import type { Loci } from 'molstar/lib/mol-model/loci';
 import {
     Queries,
     StructureElement,
@@ -13,13 +13,13 @@ import {
     setStructureOverpaint,
 } from 'molstar/lib/mol-plugin-state/helpers/structure-overpaint';
 import { clearStructureTransparency, setStructureTransparency } from 'molstar/lib/mol-plugin-state/helpers/structure-transparency';
-import { StateTransforms } from 'molstar/lib/mol-plugin-state/transforms';
+import type { LociLabelProvider } from 'molstar/lib/mol-plugin-state/manager/loci-label';
 import { Asset } from 'molstar/lib/mol-util/assets';
 import { Color } from 'molstar/lib/mol-util/color/color';
 import { Vec3 } from 'molstar/lib/mol-math/linear-algebra';
 import { PluginCommands } from 'molstar/lib/mol-plugin/commands';
 import type { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
-import { StateSelection } from 'molstar/lib/mol-state';
+
 
 import { createDirectMolstarEngineOwner } from '../runtime/createDirectMolstarEngineOwner';
 import type { MolstarEngineOwner } from '../runtime/MolstarEngineOwner';
@@ -236,7 +236,10 @@ export class MolstarDirectAdapter {
     private presentationGeneration = 0;
     private disposed = false;
     private hasSelection = false;
+    private hasOverpaint = false;
+    private hasTransparency = false;
     private hasTooltips = false;
+    private tooltipProvider: LociLabelProvider | undefined;
     private residueClickHandler: ((residue: MolstarDirectResidueClick) => void) | undefined;
     private clickSubscription: { unsubscribe(): void } | undefined;
     private documentStructures = new WeakMap<Structure, string>();
@@ -313,12 +316,16 @@ export class MolstarDirectAdapter {
         this.presentationGeneration += 1;
         this.measurementGeneration += 1;
         this.hasSelection = false;
+        this.hasOverpaint = false;
+        this.hasTransparency = false;
         this.hasTooltips = false;
 
         const task = this.sceneQueue.then(async () => {
             if (!this.isSceneCurrent(generation)) throw new MolstarDirectAdapterCancelledError();
             const plugin = this.requirePlugin();
             try {
+                if (this.tooltipProvider) plugin.managers.lociLabels.removeProvider(this.tooltipProvider);
+                this.tooltipProvider = undefined;
                 await plugin.clear();
                 this.assertSceneCurrent(generation);
                 this.documentStructures = new WeakMap<Structure, string>();
@@ -343,7 +350,7 @@ export class MolstarDirectAdapter {
                             ? { name: 'assembly', params: { id: document.assemblyId } }
                             : { name: 'model', params: {} },
                         showUnitcell: false,
-                        representationPreset: 'auto',
+                        representationPreset: 'atomic-detail',
                     });
                     this.assertSceneCurrent(generation);
                     for (const entry of plugin.managers.structure.hierarchy.current.structures) {
@@ -533,6 +540,8 @@ export class MolstarDirectAdapter {
         this.disposedPlugin = this.plugin;
         this.clickSubscription?.unsubscribe();
         this.clickSubscription = undefined;
+        if (this.plugin && this.tooltipProvider) this.plugin.managers.lociLabels.removeProvider(this.tooltipProvider);
+        this.tooltipProvider = undefined;
         this.residueClickHandler = undefined;
         this.owner.dispose();
         if (this.target) adapterRegistry.delete(this.target);
@@ -567,9 +576,11 @@ export class MolstarDirectAdapter {
 
     private async clearColorSelections(plugin: PluginUIContext): Promise<void> {
         for (const structureRef of plugin.managers.structure.hierarchy.current.structures) {
-            await clearStructureOverpaint(plugin, structureRef.components);
-            await clearStructureTransparency(plugin, structureRef.components);
+            if (this.hasOverpaint) await clearStructureOverpaint(plugin, structureRef.components);
+            if (this.hasTransparency) await clearStructureTransparency(plugin, structureRef.components);
         }
+        this.hasOverpaint = false;
+        this.hasTransparency = false;
     }
 
     private async applyColorSelections(
@@ -592,6 +603,7 @@ export class MolstarDirectAdapter {
                     normalizeColor(nonSelectedColor),
                     async (root) => queryLoci([{}], root),
                 );
+                this.hasOverpaint = true;
             }
             for (const selection of documentSelections) {
                 if (selection.color !== null) {
@@ -601,6 +613,7 @@ export class MolstarDirectAdapter {
                         normalizeColor(selection.color),
                         async (root) => queryLoci([selection], root),
                     );
+                    this.hasOverpaint = true;
                 }
                 if (selection.opacity !== undefined && selection.opacity < 1) {
                     await setStructureTransparency(
@@ -609,6 +622,7 @@ export class MolstarDirectAdapter {
                         Math.max(0, Math.min(1, 1 - selection.opacity)),
                         async (root) => queryLoci([selection], root),
                     );
+                    this.hasTransparency = true;
                 }
                 if (selection.focus) focusLoci.push(queryLoci([selection], structure));
             }
@@ -633,6 +647,7 @@ export class MolstarDirectAdapter {
                     1,
                     async (root) => queryLoci([selection], root),
                 );
+                this.hasTransparency = true;
             }
         }
     }
@@ -641,51 +656,40 @@ export class MolstarDirectAdapter {
         plugin: PluginUIContext,
         selections: readonly MolstarDirectQuery[],
     ): Promise<void> {
+        if (this.tooltipProvider) plugin.managers.lociLabels.removeProvider(this.tooltipProvider);
+        this.tooltipProvider = undefined;
+
+        const entries: Array<{ text: string; loci: StructureElement.Loci }> = [];
         for (const structureRef of plugin.managers.structure.hierarchy.current.structures) {
             const structure = structureRef.cell.obj?.data;
             if (!structure) continue;
             const documentId = this.documentStructures.get(structure);
             const documentSelections = selections.filter((selection) => !selection.document_id || selection.document_id === documentId);
-            const customTooltipProps = {
-                tooltips: documentSelections.map((selection) => ({
-                    text: selection.tooltip ?? '',
-                    selector: {
-                        name: 'bundle' as const,
-                        params: StructureElement.Bundle.fromLoci(queryLoci([selection], structure)),
-                    },
-                })),
-            };
-            const structureTransformRef = structureRef.cell.transform.ref;
-            let propertyCells = plugin.state.data.select(
-                StateSelection.Generators.ofTransformer(
-                    StateTransforms.Model.CustomStructureProperties,
-                    structureTransformRef,
-                ),
-            );
-            if (propertyCells.length === 0) {
-                await plugin.build()
-                    .to(structureTransformRef)
-                    .apply(StateTransforms.Model.CustomStructureProperties)
-                    .commit();
-                propertyCells = plugin.state.data.select(
-                    StateSelection.Generators.ofTransformer(
-                        StateTransforms.Model.CustomStructureProperties,
-                        structureTransformRef,
-                    ),
-                );
+            for (const selection of documentSelections) {
+                if (!selection.tooltip) continue;
+                entries.push({ text: selection.tooltip, loci: queryLoci([selection], structure) });
             }
-            const propertyCell = propertyCells[0];
-            if (!propertyCell) continue;
-            await plugin.build().to(propertyCell).update((old) => ({
-                properties: {
-                    ...old.properties,
-                    [CustomTooltipsProvider.descriptor.name]: customTooltipProps,
-                },
-                autoAttach: old.autoAttach.includes(CustomTooltipsProvider.descriptor.name)
-                    ? old.autoAttach
-                    : [...old.autoAttach, CustomTooltipsProvider.descriptor.name],
-            })).commit();
         }
+        if (entries.length === 0) return;
+
+        const escapeLabel = (value: string) => value
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#39;');
+        const provider: LociLabelProvider = {
+            priority: 100,
+            label: (loci: Loci) => {
+                if (!StructureElement.Loci.is(loci)) return undefined;
+                const labels = entries
+                    .filter((entry) => StructureElement.Loci.areIntersecting(entry.loci, loci))
+                    .map((entry) => escapeLabel(entry.text));
+                return labels.length > 0 ? labels.join('<br/>') : undefined;
+            },
+        };
+        plugin.managers.lociLabels.addProvider(provider);
+        this.tooltipProvider = provider;
     }
 
     private requirePlugin(): PluginUIContext {
