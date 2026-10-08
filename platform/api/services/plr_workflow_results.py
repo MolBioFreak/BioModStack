@@ -163,6 +163,70 @@ def _stage_for_relative(relative_path: str, name: str) -> str | None:
     return None
 
 
+def design_producer_model_id(job: Any, design: Any) -> str | None:
+    """Metadata-only native membership; not an artifact availability assertion."""
+    if not is_protein_local_redesign_job(job) or job.id != design.job_id:
+        return None
+    root = str(getattr(job, "output_dir", None) or "").rstrip("/")
+    path = str(getattr(design, "pdb_path", None) or "")
+    if not root or any(part in {".", ".."} for part in path.split("/")):
+        return None
+    if path.startswith("/"):
+        if not path.startswith(root + "/"):
+            return None
+        path = path[len(root) + 1:]
+    return _stage_for_relative(path, str(design.name or ""))
+
+
+def design_model_identity_expression():
+    """SQL counterpart of native membership, before shared filtering/pagination.
+
+    Uses only owning Job/Design metadata, never builds or hashes artifact surfaces.
+    Non-PLR persisted model identities keep their historical semantics.
+    """
+    from sqlalchemy import and_, case, func, or_, select
+    from database import Design, Job
+
+    def normalized(value):
+        return func.lower(func.trim(value))
+    plr_job = and_(
+        normalized(Job.model_id).in_(("protein_local_redesign", "protein_modification_experimental")),
+        or_(
+            normalized(Job.mode).in_(("local_redesign", "region_redesign")),
+            normalized(Job.stage_family).startswith("protein_local_redesign", autoescape=True),
+            normalized(Job.params["rfd_mode"].as_string()) == "protein_local_redesign",
+        ),
+    )
+    root = func.rtrim(Job.output_dir, "/")
+    path = Design.pdb_path
+    relative = case(
+        (path.startswith("/"), case(
+            (func.substr(path, 1, func.length(root) + 1) == root + "/",
+             func.substr(path, func.length(root) + 2)),
+            else_=None,
+        )),
+        else_=path,
+    )
+    canonical = and_(
+        root != "", ~path.contains("/../"), ~path.contains("/./"),
+        ~path.startswith("../"), ~path.startswith("./"),
+        ~path.endswith("/.."), ~path.endswith("/."),
+    )
+    stages = []
+    for stage_id, _label, _role, prefix in _STAGE_DEFINITIONS:
+        member = func.substr(relative, 1, len(prefix)) == prefix
+        if stage_id == "fampnn":
+            member = and_(member, Design.name.contains("_seq_", autoescape=True))
+        stages.append((member, stage_id))
+    native = case((canonical, case(*stages, else_=None)), else_=None)
+    stored = normalized(Design.provenance["model_id"].as_string())
+    # PLR source/reference rows have no native producer, even when an ingester
+    # persisted the workflow model_id on every row.
+    return select(case((plr_job, native), else_=stored)).where(
+        Job.id == Design.job_id
+    ).correlate(Design).scalar_subquery()
+
+
 def _stage_definition(stage_id: str) -> tuple[str, str, str, str]:
     return next(definition for definition in _STAGE_DEFINITIONS if definition[0] == stage_id)
 
