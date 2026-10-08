@@ -6,7 +6,6 @@ export function projectHubDNASequencesToConstructShelf(model: ProjectHubReadMode
         const isCircular = sequence.topology?.toLowerCase() !== 'linear';
         return {
             id: sequence.sequence_id,
-            revision_id: sequence.revision_id,
             reopen_href: sequence.reopen_href,
             name: sequence.name,
             description: sequence.description || null,

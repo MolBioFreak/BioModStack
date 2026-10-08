@@ -34,7 +34,7 @@ describe('DigestPanel mobile API workflow', () => {
         expect(container.querySelector('[data-digest-mobile-result="true"]')).toBeTruthy();
         expect(container.textContent).toContain('5′ AATT overhang');
         expect(container.textContent).toContain('blunt end');
-        expect(container.textContent).toContain('Supplier product evidence unavailable');
-        expect(container.querySelector('[data-product-evidence-state="unavailable"]')).toBeTruthy();
+        expect(container.textContent).not.toContain('Supplier product evidence unavailable');
+        expect(container.querySelector('[data-product-evidence-state="unavailable"]')).toBeNull();
     });
 });
