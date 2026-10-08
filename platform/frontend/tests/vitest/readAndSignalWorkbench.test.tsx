@@ -809,6 +809,48 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(apiMocks.fetchCapabilities).toHaveBeenCalledTimes(2);
     });
 
+    it('rearms persisted move-source polling after reopening the workbench', async () => {
+        const requestedExternalSource: OntMoveTableSource = {
+            ...moveSource,
+            move_source_id: 'external-moves-reopened',
+            source_job_id: null,
+            external_registration_receipt_id: 'ont-external-move-receipt-reopened',
+            state: 'requested',
+            reason_code: 'move_source_validation_requested',
+        };
+        const readyExternalSource: OntMoveTableSource = {
+            ...requestedExternalSource,
+            state: 'ready',
+            reason_code: 'move_source_exact_read_set_ready',
+        };
+        apiMocks.fetchMoveSources
+            .mockResolvedValueOnce({ items: [moveSource, requestedExternalSource] })
+            .mockResolvedValue({ items: [moveSource, readyExternalSource] });
+        apiMocks.fetchCapabilities
+            .mockResolvedValueOnce(capabilities())
+            .mockResolvedValue(capabilities({
+                move_source_id: readyExternalSource.move_source_id,
+                mapping_profile_id: null,
+                calibration_job_id: null,
+                calibration_artifact_id: null,
+                signal_to_read_mapping_job_id: null,
+                signal_to_reference_mapping_job_id: null,
+            }));
+
+        vi.useFakeTimers();
+        await renderWorkbench({ viewerSession: null });
+        await settlePromises();
+        expect(apiMocks.fetchMoveSources).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(1_500);
+        });
+        await settlePromises();
+
+        expect(apiMocks.fetchMoveSources.mock.calls.length).toBeGreaterThanOrEqual(2);
+        expect(apiMocks.fetchCapabilities).toHaveBeenCalledTimes(2);
+    });
+
     it('refreshes capabilities once without polling when external registration is immediately ready', async () => {
         const readyExternalSource: OntMoveTableSource = {
             ...moveSource,

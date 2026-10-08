@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import React, { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
@@ -108,6 +109,16 @@ afterEach(async () => {
 });
 
 describe('OntInstrumentPanel opaque intent lifecycle', () => {
+    it('distinguishes source samples from displayed waveform samples', () => {
+        const source = readFileSync(
+            'src/components/ngs/OntInstrumentPanel.tsx',
+            'utf8',
+        );
+        expect(source).toContain('source samples');
+        expect(source).toContain('displayed');
+        expect(source).not.toContain('samples returned');
+    });
+
     it('retains the created BMS intent and renders it revalidated/armed after the expected disabled-start response', async () => {
         let rejectStart: (reason: unknown) => void = () => undefined;
         ont.createIntent.mockResolvedValue({ data: intent });

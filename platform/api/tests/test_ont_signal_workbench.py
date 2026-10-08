@@ -653,7 +653,7 @@ async def test_upgraded_database_startup_applies_and_attests_migrations_33_and_3
     migrate_external_receipt_binding(str(db_path))
     migrate_lookup_terminal_immutability(str(db_path))
     with sqlite3.connect(db_path) as connection:
-        for version in (37, 38, 39):
+        for version in (37, 38, 39, 40):
             connection.execute(
                 "UPDATE schema_migrations SET content_sha256=? WHERE version=?",
                 (
@@ -720,7 +720,7 @@ async def test_upgraded_database_startup_rejects_same_name_altered_migration_33_
     migrate_external_receipt_binding(str(db_path))
     migrate_lookup_terminal_immutability(str(db_path))
     with sqlite3.connect(db_path) as connection:
-        for version in (37, 38, 39):
+        for version in (37, 38, 39, 40):
             connection.execute(
                 "UPDATE schema_migrations SET content_sha256=? WHERE version=?",
                 (
@@ -1775,6 +1775,19 @@ async def test_external_move_bam_catalog_unavailability_is_safe_503(
         )
     assert response.status_code == 503
     assert response.json() == {"detail": "external move-BAM source is unavailable"}
+
+
+def test_public_json_omits_path_keyed_receipt_entries() -> None:
+    public = service._public_json({
+        "blow5_parents": {
+            "/tmp/internal-parent/raw-0.blow5": "a" * 64,
+            "/mnt/private/raw-1.blow5": "b" * 64,
+        },
+        "safe_digest": "c" * 64,
+    })
+    assert public == {"blow5_parents": {}, "safe_digest": "c" * 64}
+    assert "/tmp/" not in json.dumps(public)
+    assert "/mnt/" not in json.dumps(public)
 
 
 @pytest.mark.asyncio
