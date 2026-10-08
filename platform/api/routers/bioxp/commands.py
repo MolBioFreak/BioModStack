@@ -34,7 +34,6 @@ async def execute_command(
         request = parse_command_request(payload)
         result = await runtime.commands.execute(
             request,
-            token_authorized=True,
             mutations_enabled=True,
         )
     except ValidationError as exc:
@@ -69,7 +68,6 @@ async def emergency_stop(
         result = await runtime.commands.emergency_stop(
             expected_generation=request.expected_generation,
             idempotency_key=request.idempotency_key,
-            token_authorized=True,
             mutations_enabled=True,
         )
     except (CommandDeniedError, IdempotencyConflictError) as exc:

@@ -142,11 +142,6 @@ def test_compose_core_runtime_contract() -> None:
         == "${BMS_BIOXP_MUTATIONS_ENABLED:-0}"
     )
     assert (
-        bioxp_environment["BMS_BIOXP_OPERATOR_TOKEN_FILE"]
-        == "${BMS_BIOXP_OPERATOR_TOKEN_FILE:-}"
-    )
-    assert bioxp_environment["BMS_BIOXP_OPERATOR_TOKEN"] == "${BMS_BIOXP_OPERATOR_TOKEN:-}"
-    assert (
         bioxp_environment["BMS_BIOXP_ALLOWED_HOSTS"]
         == "${BMS_BIOXP_ALLOWED_HOSTS:-robot}"
     )
@@ -278,8 +273,6 @@ def test_core_runtime_env_example_documents_transition_knobs() -> None:
         "BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:8001",
         "BMS_FEATURE_BIOXP=1",
         "BMS_BIOXP_MUTATIONS_ENABLED=0",
-        "BMS_BIOXP_OPERATOR_TOKEN_FILE=",
-        "BMS_BIOXP_OPERATOR_TOKEN=",
         "BMS_BIOXP_ALLOWED_HOSTS=robot",
         "BMS_BIOXP_ALLOWED_CIDRS=",
         "BMS_DOCKER_COMPOSE_PROJECT=biomodstack-core-runtime",

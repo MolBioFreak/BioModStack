@@ -61,13 +61,11 @@ class CommandCoordinator:
         self,
         request: CommandRequest,
         *,
-        token_authorized: bool,
         mutations_enabled: bool,
     ) -> CommandRecord:
         definition = self.registry[request.command]
         snapshot = self.connection.snapshot()
         context = CommandAdmissionContext(
-            token_authorized=token_authorized,
             mutations_enabled=mutations_enabled,
             active=snapshot.active,
             generation=snapshot.generation,
@@ -146,7 +144,6 @@ class CommandCoordinator:
         *,
         expected_generation: int,
         idempotency_key: str,
-        token_authorized: bool,
         mutations_enabled: bool,
     ) -> EmergencyStopResult:
         request_shape = {
@@ -157,8 +154,6 @@ class CommandCoordinator:
         fingerprint = _fingerprint(request_shape)
         snapshot = self.connection.snapshot()
         reasons = []
-        if not token_authorized:
-            reasons.append("Valid operator credential is required")
         if not mutations_enabled:
             reasons.append("BioXP mutations are disabled by the server kill switch")
         if not snapshot.active or self.connection.active_client is None:

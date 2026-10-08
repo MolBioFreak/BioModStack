@@ -12,7 +12,6 @@ from services.bioxp.runtime import BioXpRuntime
 from .dependencies import (
     get_bioxp_runtime,
     mutations_enabled,
-    operator_token_configured,
     require_bioxp_mutation_access,
 )
 
@@ -86,8 +85,6 @@ async def get_status(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict
             reason = definition.disabled_reason or "robot mapping is disabled"
         elif not mutations_enabled():
             reason = "mutations are disabled"
-        elif not operator_token_configured():
-            reason = "operator credential is not configured"
         elif not snapshot.active:
             reason = "connection is not active"
         elif snapshot.command_active:
@@ -105,7 +102,7 @@ async def get_status(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict
         else:
             unavailable[name] = reason
     available_controls: list[str] = []
-    if snapshot.active and mutations_enabled() and operator_token_configured():
+    if snapshot.active and mutations_enabled():
         available_controls.append("emergency_stop")
     return {
         "connection": _public_snapshot(snapshot),
