@@ -651,14 +651,14 @@ oem_parity_signoff_pack_complete=true
 
 ## Recommended execution order
 
-Do not jump straight to motion. The correct next phase is **G0**, then **G1**, then **G2/G3/G4**.
+Do not jump straight to motion. The corrected priority is: decode/port what the OEM stack already gives us first, then use that live readback surface to resolve switch predicates. Gap C is intentionally after A/B/D.
 
 ```text
 G0 baseline/gap ledger
-G1 command-contract oracle
-G2 config/calibration binding
-G3 live query-only shadow route
-G4 switch predicate truth
+G1 command-contract oracle from SSD/decompiled OEM lower-level methods
+G2 config/calibration binding from backup/app working dirs or explicit negative evidence
+G3 live query-only shadow route porting OEM readback/query mechanisms
+G4 switch predicate truth using the G3 readback surface
 G5 no-motion setup apply
 G6 stepwise executor implementation
 G7 supervised initializeMotors live steps
