@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any, Iterable
 
 import Bio
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,6 +51,24 @@ class PCRPersistenceResult:
 
 class IdempotencyConflictError(ValueError):
     """An idempotency key was already bound to a different canonical request."""
+
+
+async def begin_immediate_molbio_write(session: AsyncSession) -> None:
+    """Acquire SQLite's writer reservation before any mutation reads occur.
+
+    A caller may already hold an implicit read-only transaction from diagnostics
+    or object lookup. End that stale snapshot first, but never discard pending
+    ORM writes. The subsequent ``BEGIN IMMEDIATE`` serializes revision-number
+    allocation and projection mutation on this connection.
+    """
+
+    if session.in_transaction():
+        if session.new or session.dirty or session.deleted:
+            raise RuntimeError(
+                "Mol Bio write serialization cannot discard pending session writes"
+            )
+        await session.commit()
+    await session.execute(text("BEGIN IMMEDIATE"))
 
 
 def canonical_request_fingerprint(payload: dict[str, Any]) -> str:
@@ -387,6 +405,59 @@ async def add_operation_edges(
         )
 
 
+async def _record_inline_sequence_input(
+    session: AsyncSession,
+    sequence: NucleotideSequence,
+    *,
+    operation: MolecularOperation,
+    provenance: dict[str, Any] | None,
+    created_by: str | None,
+) -> MolecularRevision:
+    """Capture a request-only sequence as immutable private operation input history."""
+    document = MolecularDocument(
+        id=sequence.id,
+        document_kind="inline_sequence_input",
+        name=sequence.name,
+        current_revision_id=None,
+    )
+    session.add(document)
+    await session.flush()
+    revision = MolecularRevision(
+        id=str(uuid.uuid4()),
+        document_id=document.id,
+        revision_number=1,
+        change_kind="operation_input",
+        content_sha256=sha256_text(sequence.sequence),
+        content_length=len(sequence.sequence),
+        snapshot=sequence_snapshot(sequence),
+        provenance=_json_value(
+            {
+                **(provenance or {}),
+                "input_kind": "inline_sequence",
+                "projection_persisted": False,
+            }
+        ),
+        operation_id=operation.id,
+        created_by=created_by,
+    )
+    session.add(revision)
+    await session.flush()
+    document.current_revision_id = revision.id
+    await _emit_history_events(
+        session,
+        entity_kind="molecular_document",
+        entity_id=document.id,
+        event_kind="sequence.inline_input_captured",
+        payload={
+            "revision_id": revision.id,
+            "content_sha256": revision.content_sha256,
+            "operation_id": operation.id,
+        },
+        actor=created_by,
+    )
+    return revision
+
+
 async def record_generated_sequence(
     session: AsyncSession,
     sequence: NucleotideSequence,
@@ -399,6 +470,12 @@ async def record_generated_sequence(
     provenance: dict[str, Any] | None = None,
     idempotency_key: str | None = None,
     created_by: str | None = None,
+    input_revisions: Iterable[
+        tuple[MolecularRevision, str, dict[str, Any] | None]
+    ] = (),
+    inline_inputs: Iterable[
+        tuple[NucleotideSequence, str, dict[str, Any] | None]
+    ] = (),
 ) -> tuple[MolecularOperation, MolecularRevision]:
     session.add(sequence)
     operation = await create_operation(
@@ -420,10 +497,55 @@ async def record_generated_sequence(
         created_by=created_by,
     )
     inputs: list[tuple[MolecularRevision, str, dict[str, Any] | None]] = []
-    if parent is not None:
+    for input_revision, role, snapshot in input_revisions:
+        inputs.append(
+            (
+                input_revision,
+                role,
+                {
+                    "document_id": input_revision.document_id,
+                    "revision_id": input_revision.id,
+                    "revision_sha256": input_revision.content_sha256,
+                    **(snapshot or {}),
+                },
+            )
+        )
+    represented_documents = {input_revision.document_id for input_revision, _, _ in inputs}
+    if parent is not None and parent.id not in represented_documents:
         parent_revision = await current_molecular_revision(session, parent.id)
         if parent_revision is not None:
-            inputs.append((parent_revision, "template", {"document_id": parent.id}))
+            inputs.append(
+                (
+                    parent_revision,
+                    "template",
+                    {
+                        "document_id": parent.id,
+                        "revision_id": parent_revision.id,
+                        "revision_sha256": parent_revision.content_sha256,
+                    },
+                )
+            )
+    for inline_sequence, role, snapshot in inline_inputs:
+        inline_revision = await _record_inline_sequence_input(
+            session,
+            inline_sequence,
+            operation=operation,
+            provenance=provenance,
+            created_by=created_by,
+        )
+        inputs.append(
+            (
+                inline_revision,
+                role,
+                {
+                    "document_id": inline_revision.document_id,
+                    "revision_id": inline_revision.id,
+                    "revision_sha256": inline_revision.content_sha256,
+                    "input_kind": "inline_sequence",
+                    **(snapshot or {}),
+                },
+            )
+        )
     await add_operation_edges(
         session,
         operation,
@@ -601,9 +723,20 @@ async def persist_pcr_experiment(
         created_by=created_by,
     )
 
-    template_revision = (
-        await current_molecular_revision(session, template.id) if template_was_persisted else None
-    )
+    if template_was_persisted:
+        template_revision = await current_molecular_revision(session, template.id)
+        if template_revision is None:
+            raise ValueError(
+                f"Persisted PCR template has no immutable revision: {template.id}"
+            )
+    else:
+        template_revision = await _record_inline_sequence_input(
+            session,
+            template,
+            operation=operation,
+            provenance=provenance,
+            created_by=created_by,
+        )
     product_revision: MolecularRevision | None = None
     if product_sequence is not None:
         session.add(product_sequence)
@@ -630,8 +763,8 @@ async def persist_pcr_experiment(
         operation_id=operation.id,
         idempotency_key=idempotency_key,
         request_fingerprint=request_fingerprint,
-        template_document_id=template.id if template_revision else None,
-        template_revision_id=template_revision.id if template_revision else None,
+        template_document_id=template_revision.document_id,
+        template_revision_id=template_revision.id,
         template_sha256=sha256_text(template.sequence),
         template_snapshot=sequence_snapshot(template),
         forward_primer_snapshot=_json_value(forward_primer_snapshot),
@@ -655,9 +788,20 @@ async def persist_pcr_experiment(
     await session.flush()
     experiment.current_revision_id = experiment_revision.id
 
-    input_edges = []
-    if template_revision is not None:
-        input_edges.append((template_revision, "template", {"document_id": template.id}))
+    input_edges = [
+        (
+            template_revision,
+            "template",
+            {
+                "document_id": template_revision.document_id,
+                "revision_id": template_revision.id,
+                "revision_sha256": template_revision.content_sha256,
+                "input_kind": "persisted_sequence"
+                if template_was_persisted
+                else "inline_sequence",
+            },
+        )
+    ]
     output_edges = []
     if product_revision is not None:
         output_edges.append((product_revision, "pcr_product", {"document_id": product_sequence.id}))
