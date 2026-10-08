@@ -290,7 +290,7 @@ export interface MDSummary {
     replica_count: number;
     artifact_count: number;
     replicas: Array<{ replica: number; status: string; engine: { name?: string; version?: string; platform?: string }; performance: Record<string, number> }>;
-    analysis_status: 'absent' | 'partial' | 'completed';
+    // Analysis availability is owned by the independent analysis endpoint.
     trajectory_playback: { supported: false; reason: string } | {
         supported: true;
         replicas: Array<{
@@ -354,7 +354,7 @@ export interface MDAnalysisReportSet {
 }
 
 export const fetchMDSummary = (jobId: string) => api.get<MDSummary>(`/api/jobs/${jobId}/md/summary`);
-export const fetchMDArtifacts = (jobId: string) => api.get<{ schema: string; job_id: string; source: string; bounded: true; artifacts: MDArtifact[] }>(`/api/jobs/${jobId}/md/artifacts`);
+export const fetchMDArtifacts = (jobId: string) => api.get<{ schema: string; job_id: string; source: string; bounded: true; analysis_error?: { code: string; message: string } | null; artifacts: MDArtifact[] }>(`/api/jobs/${jobId}/md/artifacts`);
 export const fetchMDAnalysis = (jobId: string) => api.get<MDAnalysisReportSet>(`/api/jobs/${jobId}/md/analysis`);
 export const retryMDAnalysis = (jobId: string) => api.post<{ schema: 'bms.md.analysis-retry.v1'; status: string; created_child_ids: string[] }>(`/api/jobs/${jobId}/md/analysis/retry`);
 

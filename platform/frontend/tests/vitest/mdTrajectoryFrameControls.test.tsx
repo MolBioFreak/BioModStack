@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-plotly.js', () => ({ default: () => <div data-testid="plot" /> }));
+vi.mock('react-plotly.js', () => ({ default: ({ onClick }: { onClick?: (event: unknown) => void }) => <div data-testid="plot">{onClick && <><button data-testid="plot-frame-20" onClick={() => onClick({ points: [{ customdata: [0, 20] }] })}>Select point 20</button><button data-testid="plot-frame-missing" onClick={() => onClick({ points: [{ customdata: [0, 999] }] })}>Select unmapped point</button></>}</div> }));
 vi.mock('../../src/components/MolstarViewer', () => ({
     default: ({ molecularDynamics }: { molecularDynamics?: { playback?: { selectedFrame?: unknown } } }) => (
         <div data-testid="molstar-scene">{JSON.stringify(molecularDynamics?.playback?.selectedFrame ?? null)}</div>
@@ -95,6 +95,79 @@ describe('governed MD trajectory frame controls', () => {
 
         await act(async () => root.unmount());
         vi.useRealTimers();
+        client.clear();
+    });
+
+    it('lets chart selection supersede playback and retires selection on replica changes', async () => {
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        const jobId = 'selection-replay';
+        seedPlayback(client, jobId);
+        const analysis = client.getQueryData<ReturnType<typeof response>>(['md-analysis', jobId])!;
+        client.setQueryData(['md-analysis', jobId], response({ ...(analysis.data as object), status: 'completed', reports: [{
+            status: 'completed', replica: 0, inputs: {}, summary: { final: 2 }, points: [
+                { replica: 0, source_frame: 20, time_ps: 400, rmsd_angstrom: 2, radius_of_gyration_angstrom: 4 },
+                { replica: 0, source_frame: 999, time_ps: 5000, rmsd_angstrom: 3, radius_of_gyration_angstrom: 4 },
+            ],
+        }] }));
+        const inventory = client.getQueryData<{ data: { artifacts: Array<Record<string, unknown>> } }>(['md-artifacts', jobId])!.data;
+        client.setQueryData(['md-artifacts', jobId], response({ ...inventory, artifacts: [
+            ...inventory.artifacts,
+            ...inventory.artifacts.map((item) => ({ ...item, id: `${item.id}-1`, replica: 1 })),
+            ...[0, 1].map((replica) => ({ id: `final-${replica}`, replica, semantic_role: 'representative_structure', format: 'pdb', content_url: `/final-${replica}`, sha256: shaA })),
+        ] }));
+        client.setQueryData(['md-trajectory-frame-map', jobId, 'map-1'], {
+            replica: 1, frames: [{ display_frame: 0, source_frame: 81, time_ps: 177, step: 91 }],
+        });
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        await act(async () => { root.render(<MemoryRouter><QueryClientProvider client={client}><MDResultsPane jobId={jobId} /></QueryClientProvider></MemoryRouter>); });
+        const click = async (selector: string) => act(async () => container.querySelector<HTMLButtonElement>(selector)!.click());
+        const scene = () => container.querySelector('[data-testid="molstar-scene"]')!.textContent!;
+        const receipt = () => container.querySelector('[data-bms-md-frame-receipt]')?.textContent ?? '';
+        await click('[data-bms-md-display-frame="1"]');
+        await click('[data-bms-md-playback="play"]');
+        await act(async () => { vi.advanceTimersByTime(1000); });
+        expect(scene()).toContain('"displayFrame":3');
+        await click('[data-testid="plot-frame-20"]');
+        expect(scene()).toContain('"displayFrame":2');
+        expect(scene()).toContain('"sourceFrame":20');
+        expect(receipt()).toContain('source 20 / 400 ps');
+        expect(container.textContent).toContain('source frame 20 · 400.00 ps · 2.000 Å');
+        expect(container.querySelector('[data-bms-md-playback="pause"]')).toBeNull();
+        await act(async () => { vi.advanceTimersByTime(1000); });
+        expect(scene()).toContain('"displayFrame":2');
+        await click('[data-testid="plot-frame-missing"]');
+        expect(scene()).toBe('null');
+        expect(container.textContent).toContain('not in the governed playback frame map');
+        expect(receipt()).toBe('');
+        const selector = container.querySelector('select')!;
+        await act(async () => { selector.value = '1'; selector.dispatchEvent(new Event('change', { bubbles: true })); });
+        expect(scene()).toContain('"replica":1');
+        expect(scene()).toContain('"sourceFrame":81');
+        expect(receipt()).toContain('source 81 / 177 ps');
+        expect(container.textContent).not.toContain('source frame 999');
+        await act(async () => root.unmount());
+        client.clear();
+        vi.useRealTimers();
+    });
+
+    it('keeps governed dynamics mounted when analysis read fails, without stale numerical evidence', async () => {
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        const jobId = 'partial-read';
+        seedPlayback(client, jobId);
+        client.getQueryCache().find({ queryKey: ['md-analysis', jobId] })!.setState({ status: 'error', error: new Error('invalid retained analysis') });
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        await act(async () => { root.render(<MemoryRouter><QueryClientProvider client={client}><MDResultsPane jobId={jobId} /></QueryClientProvider></MemoryRouter>); });
+        expect(container.querySelector('[data-bms-md-lifecycle]')).toBeTruthy();
+        expect(container.querySelector('[data-testid="molstar-scene"]')).toBeTruthy();
+        expect(container.querySelector('[data-bms-md-playback="play"]')).toBeTruthy();
+        expect(container.textContent).toContain('Analysis unavailable:');
+        expect(container.textContent).not.toContain('mean replica RMSD:');
+        await act(async () => root.unmount());
         client.clear();
     });
 

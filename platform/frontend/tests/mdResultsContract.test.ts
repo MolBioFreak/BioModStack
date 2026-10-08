@@ -96,7 +96,7 @@ test('MD plot selections resolve the authoritative frame map before addressing M
     const source = readFileSync(path.resolve(process.cwd(), 'src/components/MDResultsPane.tsx'), 'utf8');
 
     assert.match(source, /semantic_role === 'trajectory_frame_map'/);
-    assert.match(source, /frameMap\.data\?\.frames\.find/);
+    assert.match(source, /playbackFrames\.find/);
     assert.match(source, /displayFrame: selectedFrame\.display_frame/);
     assert.match(source, /step: selectedFrame\.step/);
     assert.match(source, /artifactJobId=\{jobId\}/);
