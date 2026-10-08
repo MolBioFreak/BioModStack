@@ -594,8 +594,13 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (!jobName.trim()) return false;
         if (inputSource === 'pod5') return pod5Dir.trim() !== '';
         if (inputSource === 'bam') return bamPath.trim() !== '';
-        return fastqPath.trim() !== '' && runFastqQc && hasFastqReferenceInput && hasValidFastqNumericControls;
-    }, [jobName, inputSource, pod5Dir, bamPath, fastqPath, runFastqQc, hasFastqReferenceInput, hasValidFastqNumericControls]);
+        // FASTQ can run either BMS plasmid QC or the vendor clone-validation
+        // workflow. They are deliberately mutually exclusive, not sequential.
+        return fastqPath.trim() !== ''
+            && (runFastqQc || runAssembly)
+            && hasFastqReferenceInput
+            && hasValidFastqNumericControls;
+    }, [jobName, inputSource, pod5Dir, bamPath, fastqPath, runAssembly, runFastqQc, hasFastqReferenceInput, hasValidFastqNumericControls]);
     const selectedSavedReference = useMemo(
         () => savedReferences.find((entry) => entry.id === selectedSavedReferenceId) || null,
         [savedReferences, selectedSavedReferenceId]
@@ -924,8 +929,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             setError('Please specify a FASTQ file path');
             return;
         }
-        if (inputSource === 'fastq' && !runFastqQc) {
-            setError('Enable FASTQ plasmid QC to submit a FASTQ analysis job');
+        if (inputSource === 'fastq' && !runFastqQc && !runAssembly) {
+            setError('Choose either FASTQ plasmid QC or vendor clone validation before submitting a FASTQ analysis.');
             return;
         }
         if (inputSource === 'fastq' && !hasFastqReferenceInput) {
@@ -987,6 +992,60 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         pathPicker && pathPicker.mode === 'directory' && normalizedBrowserPath !== '/'
     );
 
+    const selectWorkflow = (workflow: 'clone' | 'plasmidQc' | 'dna' | 'rna' | 'duplex' | 'modified' | 'barcode') => {
+        setError(null);
+        if (workflow === 'clone') {
+            setInputSource('fastq');
+            setRunAssembly(true);
+            setRunFastqQc(false);
+            setRunModkit(false);
+            return;
+        }
+        if (workflow === 'plasmidQc') {
+            setInputSource('fastq');
+            setRunAssembly(false);
+            setRunFastqQc(true);
+            setRunModkit(false);
+            return;
+        }
+        setInputSource('pod5');
+        setRunAssembly(false);
+        setRunFastqQc(false);
+        if (workflow === 'rna') {
+            setDoradoMolecule('rna');
+            setDoradoMode('simplex');
+            setModifiedBases('none');
+            setBarcodeKit('');
+            setRunModkit(false);
+            return;
+        }
+        setDoradoMolecule('dna');
+        if (workflow === 'duplex') {
+            setDoradoMode('duplex');
+            setModifiedBases('none');
+            setBarcodeKit('');
+            setRunModkit(false);
+            return;
+        }
+        setDoradoMode('simplex');
+        if (workflow === 'modified') {
+            setDoradoModel('hac');
+            setModifiedBases('5mC_5hmC');
+            setBarcodeKit('');
+            setRunModkit(true);
+            return;
+        }
+        if (workflow === 'barcode') {
+            setModifiedBases('none');
+            setBarcodeKit('SQK-RBK114-96');
+            setRunModkit(false);
+            return;
+        }
+        setModifiedBases('none');
+        setBarcodeKit('');
+        setRunModkit(false);
+    };
+
     // ============================================================================
     // Render
     // ============================================================================
@@ -1011,6 +1070,39 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     </div>
                 </div>
             </div>
+
+            {/* Operator-first workflow chooser: do not make users infer a workflow from low-level switches. */}
+            <section className="bg-[var(--bg-secondary)] rounded-lg p-4 space-y-3" aria-label="Choose an NGS workflow">
+                <div>
+                    <h2 className="text-base font-semibold text-[var(--text-primary)]">Choose what you want to do</h2>
+                    <p className="text-sm text-[var(--text-secondary)] mt-1">Choose one path first. The form below then exposes only its compatible inputs and locked runtime settings.</p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {[
+                        { key: 'clone' as const, title: 'Validate a known plasmid / clone from FASTQ', input: 'FASTQ + expected construct FASTA', result: 'Vendor wf-clone-validation HTML report, assembly, construct evidence', tone: 'border-[var(--accent-secondary)]' },
+                        { key: 'plasmidQc' as const, title: 'QC plasmid reads', input: 'FASTQ + reference FASTA', result: 'BMS plasmid QC, alignment and generic multimer evidence', tone: 'border-[var(--border-primary)]' },
+                        { key: 'dna' as const, title: 'Basecall DNA simplex', input: 'DNA POD5', result: 'Dorado calls BAM, summary and runtime provenance', tone: 'border-[var(--border-primary)]' },
+                        { key: 'rna' as const, title: 'Basecall RNA', input: 'RNA POD5', result: 'RNA004 simplex calls BAM, trimming and provenance', tone: 'border-[var(--border-primary)]' },
+                        { key: 'duplex' as const, title: 'Basecall DNA duplex', input: 'DNA POD5 + validated read-pairs file', result: 'Duplex BAM with retained stereo model provenance', tone: 'border-[var(--border-primary)]' },
+                        { key: 'modified' as const, title: 'Call modified bases', input: 'DNA POD5', result: 'HAC simplex calls plus modkit tables', tone: 'border-[var(--border-primary)]' },
+                        { key: 'barcode' as const, title: 'Classify and demultiplex RBK114', input: 'DNA POD5', result: 'Canonical barcodeNN units and demux outputs', tone: 'border-[var(--border-primary)]' },
+                    ].map((workflow) => (
+                        <button
+                            key={workflow.key}
+                            type="button"
+                            onClick={() => selectWorkflow(workflow.key)}
+                            className={`rounded-lg border p-3 text-left hover:bg-[var(--bg-tertiary)] transition-colors ${workflow.tone}`}
+                        >
+                            <div className="font-medium text-[var(--text-primary)] text-sm">{workflow.title}</div>
+                            <div className="text-xs text-[var(--text-secondary)] mt-1"><strong>Provide:</strong> {workflow.input}</div>
+                            <div className="text-xs text-[var(--text-secondary)] mt-1"><strong>Get:</strong> {workflow.result}</div>
+                        </button>
+                    ))}
+                </div>
+                <div className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/50 p-3 text-xs text-[var(--text-secondary)]">
+                    <strong className="text-[var(--text-primary)]">How to use this page:</strong> choose a workflow → choose the requested input with Browse or paste/create the reference → enter a job name → submit. Completed jobs appear through <strong className="text-[var(--text-primary)]">Runs</strong>; no completed sequencing results are shown until an input is actually processed. Selecting a workflow never starts an instrument run.
+                </div>
+            </section>
 
             {/* Job Name */}
             <div className="bg-[var(--bg-secondary)] rounded-lg p-4">
