@@ -50,12 +50,18 @@ from services.conformational_mapping.import_snapshot import (
 )
 from services.conformational_mapping.persistence import (
     ConformationalPersistenceError,
+    StateLandscapeAnalysisProjectionAbsent,
+    StateLandscapeAnalysisProjectionAmbiguous,
     capability_matches,
     get_request,
     issue_request_capability,
     paged_landscape,
+    paged_state_landscape_analysis_rows,
     persist_derived_record,
     register_prepared_request,
+    resolve_state_landscape_analysis_projection,
+    state_landscape_analysis_artifact,
+    state_landscape_analysis_pair_summaries,
     transition_request,
 )
 from services.conformational_mapping.mutagenesis_handoff import MutagenesisHandoffError, prepare_handoff
@@ -1288,6 +1294,143 @@ async def request_landscape(
                 "wt": row.wt, "mutation_aa": row.mutation_aa, "score": row.score,
                 "class": row.score_class, "scoreable": row.scoreable,
                 "status": row.status, "reason": row.reason, "provenance": row.provenance_json,
+            }
+            for row in rows
+        ],
+    }
+
+
+@router.get("/requests/{request_id}/state-landscape-analysis")
+async def state_landscape_analysis_summary(
+    request_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    analysis_id: str | None = None,
+):
+    """Expose one compact, request-governed state-analysis header without canonical payload reads."""
+
+    await _authorized_record(request_id, request, session)
+    try:
+        header = await resolve_state_landscape_analysis_projection(
+            session, request_id, analysis_id=analysis_id,
+        )
+    except StateLandscapeAnalysisProjectionAbsent as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StateLandscapeAnalysisProjectionAmbiguous as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    pairs = await state_landscape_analysis_pair_summaries(session, header)
+    artifact = await state_landscape_analysis_artifact(session, header)
+    return {
+        "request_id": request_id,
+        "analysis_id": header.analysis_id,
+        "authority": {
+            "content_sha256": header.content_sha256,
+            "source_ensemble_sha256": header.source_ensemble_sha256,
+            "source_landscape_sha256": header.source_landscape_sha256,
+            "source_structure_map_sha256": header.source_structure_map_sha256,
+            "comparison_sha256": header.comparison_sha256,
+            "formula_version": header.formula_version,
+            "formula_sha256": header.formula_sha256,
+            "policy_sha256": header.policy_sha256,
+        },
+        "comparison": {
+            "mode": header.comparison_mode,
+            "target_id": header.comparison_target_id,
+            "scope": header.comparison_scope,
+            "reference_backend_coordinates": header.reference_backend_coordinates_json,
+            "reference_candidate_id": header.reference_candidate_id,
+        },
+        "counts": {
+            "pairs": header.pair_count,
+            "rows": header.row_count,
+            "exclusions": header.exclusion_count,
+        },
+        "pairs": [
+            {
+                "pair_id": pair.pair_id,
+                "candidate_a_id": pair.candidate_a_id,
+                "candidate_b_id": pair.candidate_b_id,
+            }
+            for pair in pairs
+        ],
+        "artifact": None if artifact is None else {
+            "artifact_id": artifact.artifact_id,
+            "content_sha256": artifact.content_sha256,
+            "size_bytes": artifact.size_bytes,
+            "media_type": artifact.media_type,
+            "download_url": f"/api/conformational-mapping/requests/{request_id}/artifacts/{artifact.artifact_id}",
+        },
+    }
+
+
+@router.get("/requests/{request_id}/state-landscape-analysis/rows")
+async def state_landscape_analysis_rows(
+    request_id: str,
+    request: Request,
+    analysis_id: str | None = None,
+    pair_id: str | None = None,
+    candidate_id: str | None = None,
+    entity_instance_id: str | None = None,
+    auth_asym_id: str | None = None,
+    sequence_start: int | None = None,
+    sequence_end: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    session: AsyncSession = Depends(get_session),
+):
+    """Page normalized state-analysis rows; all values are persisted artifact projections."""
+
+    await _authorized_record(request_id, request, session)
+    try:
+        header, rows = await paged_state_landscape_analysis_rows(
+            session,
+            request_id,
+            analysis_id=analysis_id,
+            pair_id=pair_id,
+            candidate_id=candidate_id,
+            entity_instance_id=entity_instance_id,
+            auth_asym_id=auth_asym_id,
+            sequence_start=sequence_start,
+            sequence_end=sequence_end,
+            offset=offset,
+            limit=limit,
+        )
+    except StateLandscapeAnalysisProjectionAbsent as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StateLandscapeAnalysisProjectionAmbiguous as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConformationalPersistenceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "request_id": request_id,
+        "selected_analysis_id": header.analysis_id,
+        "offset": offset,
+        "limit": limit,
+        "applied_filters": {
+            "pair_id": pair_id,
+            "candidate_id": candidate_id,
+            "entity_instance_id": entity_instance_id,
+            "auth_asym_id": auth_asym_id,
+            "sequence_start": sequence_start,
+            "sequence_end": sequence_end,
+        },
+        "next_offset": offset + len(rows) if len(rows) == limit else None,
+        "rows": [
+            {
+                "pair_id": row.pair_id,
+                "candidate_a_id": row.candidate_a_id,
+                "candidate_b_id": row.candidate_b_id,
+                "identity": {
+                    "target_id": row.target_id,
+                    "entity_instance_id": row.entity_instance_id,
+                    "auth_asym_id": row.auth_asym_id,
+                    "auth_seq_id": row.auth_seq_id,
+                    "insertion_code": row.insertion_code,
+                    "sequence_index": row.sequence_index,
+                    "validated_wt": row.validated_wt,
+                },
+                "metrics": row.metrics_json,
+                "availability": row.availability_json,
             }
             for row in rows
         ],

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import (
@@ -54,6 +54,14 @@ _RECORD_TYPES = frozenset(
 
 class ConformationalPersistenceError(ValueError):
     """Canonical state could not be persisted without partial visibility."""
+
+
+class StateLandscapeAnalysisProjectionAbsent(ConformationalPersistenceError):
+    """The request has no selected immutable state-analysis projection."""
+
+
+class StateLandscapeAnalysisProjectionAmbiguous(ConformationalPersistenceError):
+    """The request has more than one state-analysis projection without a selector."""
 
 
 def _landscape_provenance(landscape: Mapping[str, Any]) -> dict[str, str]:
@@ -680,6 +688,123 @@ async def ingest_result_bundle(
         "completed_coordinates": ensemble["expected_cardinality"],
     }
     await session.flush()
+
+
+async def resolve_state_landscape_analysis_projection(
+    session: AsyncSession,
+    request_id: str,
+    *,
+    analysis_id: str | None = None,
+) -> ConformationalMappingStateLandscapeAnalysisHeader:
+    """Resolve exactly one request-local state-analysis projection without reading canonical JSON."""
+
+    statement = select(ConformationalMappingStateLandscapeAnalysisHeader).where(
+        ConformationalMappingStateLandscapeAnalysisHeader.request_id == request_id
+    )
+    if analysis_id is not None:
+        statement = statement.where(
+            ConformationalMappingStateLandscapeAnalysisHeader.analysis_id == analysis_id
+        )
+    headers = list((await session.execute(
+        statement.order_by(ConformationalMappingStateLandscapeAnalysisHeader.analysis_id)
+    )).scalars().all())
+    if not headers:
+        raise StateLandscapeAnalysisProjectionAbsent("state landscape analysis is absent for request")
+    if len(headers) != 1:
+        raise StateLandscapeAnalysisProjectionAmbiguous(
+            "state landscape analysis selection is ambiguous; analysis_id is required"
+        )
+    return headers[0]
+
+
+async def state_landscape_analysis_pair_summaries(
+    session: AsyncSession,
+    header: ConformationalMappingStateLandscapeAnalysisHeader,
+) -> list[ConformationalMappingStateLandscapeAnalysisPair]:
+    """Return compact canonical-order pair identities from the normalized projection."""
+
+    statement = select(ConformationalMappingStateLandscapeAnalysisPair).where(
+        ConformationalMappingStateLandscapeAnalysisPair.request_id == header.request_id,
+        ConformationalMappingStateLandscapeAnalysisPair.analysis_id == header.analysis_id,
+    ).order_by(ConformationalMappingStateLandscapeAnalysisPair.pair_id)
+    return list((await session.execute(statement)).scalars().all())
+
+
+async def state_landscape_analysis_artifact(
+    session: AsyncSession,
+    header: ConformationalMappingStateLandscapeAnalysisHeader,
+) -> ConformationalMappingArtifact | None:
+    """Return an unambiguous registered byte artifact matching the authoritative content hash."""
+
+    artifacts = list((await session.execute(
+        select(ConformationalMappingArtifact).where(
+            ConformationalMappingArtifact.request_id == header.request_id,
+            ConformationalMappingArtifact.content_sha256 == header.content_sha256,
+        ).order_by(ConformationalMappingArtifact.artifact_id)
+    )).scalars().all())
+    return artifacts[0] if len(artifacts) == 1 else None
+
+
+async def paged_state_landscape_analysis_rows(
+    session: AsyncSession,
+    request_id: str,
+    *,
+    analysis_id: str | None = None,
+    pair_id: str | None = None,
+    candidate_id: str | None = None,
+    entity_instance_id: str | None = None,
+    auth_asym_id: str | None = None,
+    sequence_start: int | None = None,
+    sequence_end: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+) -> tuple[ConformationalMappingStateLandscapeAnalysisHeader, list[ConformationalMappingStateLandscapeAnalysisRow]]:
+    """Page stored state-analysis rows in the exact canonical artifact identity order."""
+
+    if offset < 0 or limit < 1 or limit > 1000:
+        raise ConformationalPersistenceError("invalid state landscape analysis page")
+    if sequence_start is not None and sequence_start < 1:
+        raise ConformationalPersistenceError("invalid state landscape analysis sequence range")
+    if sequence_end is not None and (
+        sequence_end < 1 or (sequence_start is not None and sequence_end < sequence_start)
+    ):
+        raise ConformationalPersistenceError("invalid state landscape analysis sequence range")
+    header = await resolve_state_landscape_analysis_projection(
+        session, request_id, analysis_id=analysis_id,
+    )
+    statement = select(ConformationalMappingStateLandscapeAnalysisRow).where(
+        ConformationalMappingStateLandscapeAnalysisRow.request_id == request_id,
+        ConformationalMappingStateLandscapeAnalysisRow.analysis_id == header.analysis_id,
+    )
+    if pair_id is not None:
+        statement = statement.where(ConformationalMappingStateLandscapeAnalysisRow.pair_id == pair_id)
+    if candidate_id is not None:
+        statement = statement.where(or_(
+            ConformationalMappingStateLandscapeAnalysisRow.candidate_a_id == candidate_id,
+            ConformationalMappingStateLandscapeAnalysisRow.candidate_b_id == candidate_id,
+        ))
+    if entity_instance_id is not None:
+        statement = statement.where(
+            ConformationalMappingStateLandscapeAnalysisRow.entity_instance_id == entity_instance_id
+        )
+    if auth_asym_id is not None:
+        statement = statement.where(ConformationalMappingStateLandscapeAnalysisRow.auth_asym_id == auth_asym_id)
+    if sequence_start is not None:
+        statement = statement.where(ConformationalMappingStateLandscapeAnalysisRow.sequence_index >= sequence_start)
+    if sequence_end is not None:
+        statement = statement.where(ConformationalMappingStateLandscapeAnalysisRow.sequence_index <= sequence_end)
+    statement = statement.order_by(
+        ConformationalMappingStateLandscapeAnalysisRow.pair_id,
+        ConformationalMappingStateLandscapeAnalysisRow.target_id,
+        ConformationalMappingStateLandscapeAnalysisRow.entity_instance_id,
+        ConformationalMappingStateLandscapeAnalysisRow.auth_asym_id,
+        ConformationalMappingStateLandscapeAnalysisRow.auth_seq_id,
+        ConformationalMappingStateLandscapeAnalysisRow.insertion_code,
+        ConformationalMappingStateLandscapeAnalysisRow.sequence_index,
+        ConformationalMappingStateLandscapeAnalysisRow.validated_wt,
+        ConformationalMappingStateLandscapeAnalysisRow.id,
+    ).offset(offset).limit(limit)
+    return header, list((await session.execute(statement)).scalars().all())
 
 
 async def paged_landscape(
