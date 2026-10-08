@@ -2,8 +2,8 @@
 
 Only BioPython (already in both runtime manifests) and the standard library are
 required. pSCE is an Angstrom error, never pLDDT. Sequence probabilities have a
-separate native authority. Policy v1 selects the first model, amino-acid residues
-and occupancy-selected alternate atoms; residue means have equal weight.
+separate native authority. Policy v1 preserves the original producer population:
+all models, all residues and all alternate atoms; residue means have equal weight.
 """
 import argparse
 import json
@@ -25,7 +25,7 @@ def psce_policy(chain_id="all_chains", ignore_cbeta=True):
     if type(ignore_cbeta) is not bool:
         raise ValueError("pSCE ignore_cbeta must be boolean")
     return {"version": 1, "chain_id": chain_id, "ignore_cbeta": ignore_cbeta,
-            "model_index": 0, "residues": "amino_acids", "altloc": "highest_occupancy",
+            "models": "all", "residues": "all", "altloc": "all",
             "aggregation": "residue_mean", "unit": "angstrom"}
 
 
@@ -43,35 +43,41 @@ def compute_psce_profile(path, policy):
     path = Path(path)
     parser = MMCIFParser(QUIET=True) if path.suffix.lower() in {".cif", ".mmcif"} else PDBParser(QUIET=True, PERMISSIVE=False)
     structure = parser.get_structure("fampnn", str(path))
-    model = next(iter(structure), None)
-    if model is None:
+    if len(structure) == 0:
         raise ValueError("pSCE structure has no model")
     excluded = {"C", "N", "O", "CA"} | ({"CB"} if policy["ignore_cbeta"] else set())
     chains, sequences, all_scores = {}, {}, []
-    for chain in model:
-        if policy["chain_id"] != "all_chains" and chain.id != policy["chain_id"]:
-            continue
-        scores, numbers, names, insertions, sequence = [], [], [], [], []
-        for residue in chain:
-            if not is_aa(residue, standard=False):
+    for model_index, model in enumerate(structure):
+        for chain in model:
+            if policy["chain_id"] != "all_chains" and chain.id != policy["chain_id"]:
                 continue
-            sequence.append(seq1(residue.resname, custom_map={"MSE": "M"}))
-            values = [float(atom.bfactor) for atom in residue if atom.name not in excluded]
-            if any(not math.isfinite(value) or value < 0 for value in values):
-                raise ValueError("pSCE requires finite nonnegative atom errors")
-            if not values:
-                continue
-            scores.append(sum(values) / len(values))
-            numbers.append(int(residue.id[1]))
-            insertions.append(residue.id[2].strip())
-            names.append(residue.resname)
-        sequences[chain.id] = "".join(sequence)
-        if scores:
-            all_scores.extend(scores)
-            chains[chain.id] = {"type": "protein", "length": len(scores),
-                "avg_psce": sum(scores) / len(scores), "max_psce": max(scores), "min_psce": min(scores),
-                "residue_numbers": numbers, "insertion_codes": insertions,
-                "residue_names": names, "psce": scores}
+            sequence = []
+            profile = chains.setdefault(chain.id, {"type": "protein", "psce": [],
+                "residue_numbers": [], "insertion_codes": [], "residue_names": [], "model_indices": []})
+            # Gemmi's original producer walked every residue/alternate atom.
+            # BioPython's default iterators select conformers; unpack both levels.
+            for residue in chain.get_unpacked_list():
+                if is_aa(residue, standard=False):
+                    sequence.append(seq1(residue.resname, custom_map={"MSE": "M"}))
+                values = [float(atom.bfactor) for atom in residue.get_unpacked_list() if atom.name not in excluded]
+                if any(not math.isfinite(value) or value < 0 for value in values):
+                    raise ValueError("pSCE requires finite nonnegative atom errors")
+                if not values:
+                    continue
+                score = sum(values) / len(values)
+                profile["psce"].append(score)
+                all_scores.append(score)
+                profile["residue_numbers"].append(int(residue.id[1]))
+                profile["insertion_codes"].append(residue.id[2].strip())
+                profile["residue_names"].append(residue.resname)
+                profile["model_indices"].append(model_index)
+            # Preserve the producer's last-model sequence representation.
+            sequences[chain.id] = "".join(sequence)
+    chains = {c: v for c, v in chains.items() if v["psce"]}
+    for profile in chains.values():
+        scores = profile["psce"]
+        profile.update(length=len(scores), avg_psce=sum(scores) / len(scores),
+                       max_psce=max(scores), min_psce=min(scores))
     if not all_scores:
         raise NoScoredSidechainError("No scored sidechain atoms in requested pSCE scope")
     summary = {"chain_count": len(chains), "residue_count": len(all_scores),
@@ -85,7 +91,11 @@ def average_per_residue_bfactor(input_dir, chain_id, ignore_cbeta, out_dir):
     policy = psce_policy(chain_id, ignore_cbeta)
     results = {}
     for path in sorted(Path(input_dir).glob("*.pdb")):
-        profile = compute_psce_profile(path, policy)
+        try:
+            profile = compute_psce_profile(path, policy)
+        except NoScoredSidechainError:
+            print(f"No scored sidechain atoms in {path.name}; skipping")
+            continue
         summary, sequences = profile["summary"], profile["sequences"]
         output = {"design": path.stem, "psce_policy": policy,
                   "sequence": "|".join(f"{c}:{s}" for c, s in sequences.items()) if chain_id == "all_chains" else sequences[chain_id],

@@ -2877,11 +2877,13 @@ export function ResultsViewer() {
         || chainMetricsAnalysisRun?.status === 'queued'
         || chainMetricsAnalysisRun?.status === 'running';
 
+    const [fampnnRequestedPolicy, setFampnnRequestedPolicy] = useState<{ designId: string; params: Record<string, unknown> } | null>(null);
+    const fampnnActiveParams = fampnnRequestedPolicy?.designId === selectedDesignId ? fampnnRequestedPolicy.params : {};
     const { data: fampnnPsceProfileAnalysisRun } = useQuery({
-        queryKey: ['design-analysis', 'fampnn_psce_profile', selectedDesignId],
+        queryKey: ['design-analysis', 'fampnn_psce_profile', selectedDesignId, fampnnActiveParams],
         queryFn: () => (
             selectedDesignId
-                ? fetchDesignAnalysis<FampnnPsceProfile>(selectedDesignId, 'fampnn_psce_profile').then((response) => response.data)
+                ? fetchDesignAnalysis<FampnnPsceProfile>(selectedDesignId, 'fampnn_psce_profile', fampnnActiveParams).then((response) => response.data)
                 : null
         ),
         enabled: structureViewerAnalysisEnabled && selectedDesignCanRunSequenceAnalysis && selectedDesignLens === 'fampnn',
@@ -2895,11 +2897,11 @@ export function ResultsViewer() {
         ? (fampnnPsceProfileAnalysisRun.result as FampnnPsceProfile | null)
         : null;
     const runFampnnPsceProfileAnalysis = useMutation({
-        mutationFn: async () => {
+        mutationFn: async (params: Record<string, unknown> = {}) => {
             if (!selectedDesignId) {
                 throw new Error('No design selected');
             }
-            const response = await triggerDesignAnalysis<FampnnPsceProfile>(selectedDesignId, 'fampnn_psce_profile');
+            const response = await triggerDesignAnalysis<FampnnPsceProfile>(selectedDesignId, 'fampnn_psce_profile', params);
             return response.data;
         },
         onSuccess: () => {
@@ -3034,9 +3036,10 @@ export function ResultsViewer() {
         if (!selectedDesignId || chainMetricsAnalysisBusy) return;
         runChainMetricsAnalysis.mutate();
     }, [chainMetricsAnalysisBusy, runChainMetricsAnalysis, selectedDesignId]);
-    const onRunFampnnPsceProfileAnalysis = useCallback(() => {
+    const onRunFampnnPsceProfileAnalysis = useCallback((params: { chain_id: string; ignore_cbeta: boolean } | Record<string, never> = {}) => {
         if (!selectedDesignId || fampnnPsceProfileAnalysisBusy) return;
-        runFampnnPsceProfileAnalysis.mutate();
+        setFampnnRequestedPolicy({ designId: selectedDesignId, params });
+        runFampnnPsceProfileAnalysis.mutate(params);
     }, [fampnnPsceProfileAnalysisBusy, runFampnnPsceProfileAnalysis, selectedDesignId]);
     const onRunPaeMatrixAnalysis = useCallback(() => {
         if (!selectedDesignId || paeMatrixAnalysisBusy) return;
