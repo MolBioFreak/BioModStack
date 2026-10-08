@@ -4,9 +4,14 @@ import MolstarViewerImpl from '../components/MolstarViewerImpl';
 import type { MolstarViewerProps } from '../components/MolstarViewerImpl';
 import { adaptLegacyResidueColors } from './adapters/residueColorSelections';
 import type { StructureFilterState, StructurePresentationQuery, StructureScenePresentation } from './contracts/scenePresentation.js';
+import type { StructureComponentType } from './contracts/scenePresentation.js';
 import { canonicalResidueRefKey, type ResidueRef } from './contracts/structureIdentity.js';
+import type { ViewerMeasurement } from './contracts/measurements.js';
+import type { DerivedStructureComponent } from './contracts/complexAnalysis.js';
+import { ComplexAnalysisPanel } from './extensions/complex/ComplexAnalysisPanel';
 import { FilterPanel } from './extensions/filters/FilterPanel';
 import { MetricLegendPanel } from './extensions/metrics/MetricLegendPanel';
+import { MeasurementPanel } from './extensions/measurements/MeasurementPanel';
 import { PairMatrixExtension } from './extensions/pairMatrix/PairMatrixExtension';
 import { ViewerResourceOwner } from './runtime/resourceOwnership.js';
 import { SequenceTrackExtension } from './extensions/sequence/SequenceTrackExtension';
@@ -25,10 +30,15 @@ export interface StructureViewerHostProps extends MolstarViewerProps {
     readonly onMetricSelection?: (selection: MetricSelection) => void;
     readonly residueSelections?: readonly ResidueRef[];
     readonly structureData?: string;
+    readonly showMeasurements?: boolean;
+    readonly showComplexWorkbench?: boolean;
+    readonly derivedComponents?: readonly DerivedStructureComponent[];
+    readonly onMeasurementsChange?: (measurements: readonly ViewerMeasurement[]) => void;
 }
 
 const EMPTY_METRIC_LAYERS: readonly MetricLayer[] = [];
-const DEFAULT_FILTERS: StructureFilterState = { includeMissing: false };
+const ALL_COMPONENT_TYPES: readonly StructureComponentType[] = ['protein', 'dna', 'rna', 'ligand', 'glycan', 'ion', 'water', 'unknown'];
+const DEFAULT_FILTERS: StructureFilterState = { includeMissing: false, entityTypes: ALL_COMPONENT_TYPES };
 
 const residueLabel = (residue: ResidueRef): string => `${residue.labelAsymId ?? residue.authAsymId ?? '?'}:${residue.labelSeqId ?? residue.authSeqId ?? '?'}`;
 
@@ -80,6 +90,11 @@ export default function StructureViewerHost({
     onMetricSelection,
     residueSelections = [],
     structureData,
+    measurements: controlledMeasurements,
+    onMeasurementsChange,
+    showMeasurements = true,
+    showComplexWorkbench = true,
+    derivedComponents = [],
     residueMetricLayer: compatibilityLayer,
     residueColors: compatibilityColors,
     selections: callerSelections,
@@ -99,15 +114,24 @@ export default function StructureViewerHost({
         setOwnedStructureUrl(url);
         return () => { void owner.dispose(); };
     }, [structureData]);
-    const [localFilters, setLocalFilters] = useState<StructureFilterState>({ includeMissing: false });
+    const [localFilters, setLocalFilters] = useState<StructureFilterState>(DEFAULT_FILTERS);
+    const [localMeasurements, setLocalMeasurements] = useState<readonly ViewerMeasurement[]>(controlledMeasurements ?? []);
     const [selection, setSelection] = useState<MetricSelection | null>(null);
     const [selectedMetricId, setSelectedMetricId] = useState(activeMetricId);
     const [layerVisible, setLayerVisible] = useState(true);
     const [layerOpacity, setLayerOpacity] = useState(1);
     const [cameraResetToken, setCameraResetToken] = useState(0);
     const filters = controlledFilters ?? localFilters;
+    const measurements = controlledMeasurements ?? localMeasurements;
+    useEffect(() => {
+        if (controlledMeasurements) setLocalMeasurements(controlledMeasurements);
+    }, [controlledMeasurements]);
     useEffect(() => setSelectedMetricId(activeMetricId), [activeMetricId]);
     const setFilters = (next: StructureFilterState) => { setLocalFilters(next); onFiltersChange?.(next); };
+    const setMeasurements = (next: readonly ViewerMeasurement[]) => {
+        setLocalMeasurements(next);
+        onMeasurementsChange?.(next);
+    };
     const effectiveMetricLayers = useMemo<readonly MetricLayer[]>(() => {
         if (!compatibilityLayer) return metricLayers;
         const compatibilityMetric: MetricLayer = {
@@ -225,6 +249,27 @@ export default function StructureViewerHost({
             tooltip: point.tooltip,
         })) ?? [];
     }, [layerVisible, residueMetricLayer]);
+    const hiddenQueries = useMemo((): readonly StructurePresentationQuery[] => {
+        const queries: StructurePresentationQuery[] = [];
+        if (activeLayer?.descriptor.dimension === 'residue-scalar' && filteredLayer?.descriptor.dimension === 'residue-scalar') {
+            const kept = new Set((filteredLayer.values as readonly MetricValue<ResidueRef>[]).map((entry) => canonicalResidueRefKey(entry.identity)));
+            for (const entry of activeLayer.values as readonly MetricValue<ResidueRef>[]) {
+                if (kept.has(canonicalResidueRefKey(entry.identity))) continue;
+                queries.push({
+                    documentId: entry.identity.documentId,
+                    entityId: entry.identity.entityId,
+                    labelAsymId: entry.identity.labelAsymId,
+                    authAsymId: entry.identity.authAsymId,
+                    startLabelSeqId: entry.identity.labelSeqId,
+                    endLabelSeqId: entry.identity.labelSeqId,
+                    startAuthSeqId: entry.identity.authSeqId,
+                    endAuthSeqId: entry.identity.authSeqId,
+                    insertionCode: entry.identity.insertionCode,
+                });
+            }
+        }
+        return queries;
+    }, [activeLayer, filteredLayer]);
     const commitSelection = (next: MetricSelection) => { setSelection(next); onMetricSelection?.(next); };
     const changeMetricLayer = (metricId: string) => {
         setSelection(null);
@@ -256,11 +301,12 @@ export default function StructureViewerHost({
         }] : [],
         selection: residues.length > 0 ? [{ selectionSetId: 'linked-selection', label: 'Linked selection', residues }] : [],
         filters,
-        measurements: viewerProps.measurements,
+        measurements,
         colorQueries,
         tooltipQueries,
+        hiddenQueries,
         nonSelectedColor: residueMetricLayer?.nonSelectedColor ?? (legacyColors?.selections.length ? { r: 68, g: 68, b: 68 } : undefined),
-    }), [activeLayer, colorQueries, filters, layerOpacity, layerVisible, legacyColors, residueMetricLayer, residues, tooltipQueries, viewerProps.measurements]);
+    }), [activeLayer, colorQueries, filters, hiddenQueries, layerOpacity, layerVisible, legacyColors, measurements, residueMetricLayer, residues, tooltipQueries]);
 
     const residueLayer = filteredLayer?.descriptor.dimension === 'residue-scalar' ? filteredLayer : undefined;
     const pairLayer = filteredLayer?.descriptor.dimension === 'residue-pair-matrix'
@@ -274,11 +320,15 @@ export default function StructureViewerHost({
             ? (activeLayer.values as readonly MetricValue<ResiduePairIdentity>[]).flatMap((entry) => [entry.identity.first, entry.identity.second])
             : [];
     const chains = [...new Set(activeResidues.map((residue) => residue.labelAsymId ?? residue.authAsymId).filter((value): value is string => Boolean(value)))].sort();
+    const chainPairLayers = registry.list().filter((layer) => layer.descriptor.dimension === 'chain-pair-scalar') as readonly Extract<MetricLayer, { descriptor: { dimension: 'chain-pair-scalar' } }>[];
+    const geometryLayers = registry.list().filter((layer) => layer.descriptor.dimension === 'geometry-annotation') as readonly Extract<MetricLayer, { descriptor: { dimension: 'geometry-annotation' } }>[];
+    const hasComplexAnalysis = derivedComponents.length > 0 || chainPairLayers.length > 0 || geometryLayers.length > 0;
+    const hasWorkbenchContent = Boolean(activeLayer || structureSummaryLayers.length > 0 || showMeasurements || (showComplexWorkbench && hasComplexAnalysis));
 
     return (
         <div className="relative h-full w-full" data-bms-structure-viewer-host="direct-4.5.0">
-            <MolstarViewerImpl {...viewerProps} structureUrl={ownedStructureUrl ?? viewerProps.structureUrl} selections={selections} residueMetricLayer={residueMetricLayer} scenePresentation={scenePresentation} cameraResetToken={cameraResetToken} onResidueClick={handleResidueClick} />
-            {!showMetricWorkbench && (activeLayer || structureSummaryLayers.length > 0) && onMetricWorkbenchVisibilityChange && (
+            <MolstarViewerImpl {...viewerProps} structureUrl={ownedStructureUrl ?? viewerProps.structureUrl} selections={selections} residueMetricLayer={residueMetricLayer} measurements={measurements} scenePresentation={scenePresentation} cameraResetToken={cameraResetToken} onResidueClick={handleResidueClick} />
+            {!showMetricWorkbench && hasWorkbenchContent && onMetricWorkbenchVisibilityChange && (
                 <button
                     type="button"
                     onClick={() => onMetricWorkbenchVisibilityChange(true)}
@@ -287,7 +337,7 @@ export default function StructureViewerHost({
                     Show metrics
                 </button>
             )}
-            {(showMetricWorkbench || showLinkedSequence) && (activeLayer || structureSummaryLayers.length > 0) && (
+            {(showMetricWorkbench || showLinkedSequence) && hasWorkbenchContent && (
                 <aside className="absolute bottom-2 right-2 z-30 max-h-[55%] w-[min(28rem,calc(100%-1rem))] space-y-2 overflow-auto rounded bg-slate-950/90 p-2 shadow-xl" aria-label={showMetricWorkbench ? 'Structure metric workbench' : 'Linked sequence overlay'}>
                     {showMetricWorkbench && (
                         <div className="flex items-center justify-between border-b border-slate-700/70 pb-2 text-xs font-semibold text-slate-200">
@@ -323,9 +373,11 @@ export default function StructureViewerHost({
                         </details>
                     )}
                     {showMetricWorkbench && activeLayer && <MetricLegendPanel layer={activeLayer} visible={layerVisible} opacity={layerOpacity} onVisibilityChange={setLayerVisible} onOpacityChange={setLayerOpacity} onReset={() => { setLayerVisible(true); setLayerOpacity(1); setFilters(DEFAULT_FILTERS); }} />}
-                    {showMetricWorkbench && activeLayer && (activeLayer.descriptor.dimension === 'residue-scalar' || activeLayer.descriptor.dimension === 'residue-pair-matrix') && <FilterPanel value={filters} availableChains={chains} metricRange={activeLayer.descriptor.valueRange} onChange={setFilters} />}
+                    {showMetricWorkbench && <FilterPanel value={filters} availableChains={chains} metricRange={activeLayer?.descriptor.valueRange} onChange={setFilters} />}
                     {showLinkedSequence && residueLayer && <SequenceTrackExtension metricId={residueLayer.descriptor.id} points={residueValues.map((entry) => ({ residue: entry.identity, label: residueLabel(entry.identity), value: typeof entry.value === 'number' ? entry.value : null }))} selectedKeys={selectedResidueKeys} onSelection={commitSelection} />}
                     {showMetricWorkbench && pairLayer && <PairMatrixExtension layer={pairLayer} onSelection={commitSelection} />}
+                    {showMetricWorkbench && showComplexWorkbench && <ComplexAnalysisPanel components={derivedComponents} chainPairLayers={chainPairLayers} geometryLayers={geometryLayers} onSelection={commitSelection} />}
+                    {showMetricWorkbench && showMeasurements && <MeasurementPanel documentId="primary" measurements={measurements} onChange={setMeasurements} />}
                     {showMetricWorkbench && (registryState.issues.length > 0 || (projected && projected.status !== 'ok')) && <div role="alert" className="rounded bg-red-950/80 p-2 text-xs text-red-200">{[...registryState.issues, ...(projected && projected.status !== 'ok' ? [projected.status === 'error' ? projected.error.message : projected.reason] : [])].join(' · ')}</div>}
                 </aside>
             )}

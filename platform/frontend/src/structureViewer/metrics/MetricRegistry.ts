@@ -5,7 +5,7 @@ import {
     type ResidueRef,
 } from '../contracts/structureIdentity.js';
 import { viewerOk, viewerUnsupported, type ViewerResult } from '../contracts/viewerResults.js';
-import type { MetricDescriptor, MetricLayer, MetricValue, ResiduePairIdentity } from './metricContracts.js';
+import type { ChainPairIdentity, GeometryAnnotationIdentity, MetricDescriptor, MetricLayer, MetricValue, ResiduePairIdentity } from './metricContracts.js';
 
 const nonEmpty = (value: string): boolean => Boolean(value.trim());
 const SHA256 = /^[0-9a-f]{64}$/i;
@@ -91,6 +91,52 @@ const validatePairValues = (values: readonly MetricValue<ResiduePairIdentity>[])
     return viewerOk(undefined);
 };
 
+const validateChainPairValues = (values: readonly MetricValue<ChainPairIdentity>[]): ViewerResult<void> => {
+    const seen = new Set<string>();
+    for (const point of values) {
+        const value = validateValue(point);
+        if (value.status !== 'ok') return value;
+        const identity = point.identity;
+        if (!nonEmpty(identity.documentId) || !nonEmpty(identity.firstChainId) || !nonEmpty(identity.secondChainId)) {
+            return viewerUnsupported('Chain-pair metrics require documentId and two chain IDs', 'metric-identity');
+        }
+        if (identity.firstChainId === identity.secondChainId
+            && (!identity.firstInstanceId || !identity.secondInstanceId || identity.firstInstanceId === identity.secondInstanceId)) {
+            return viewerUnsupported('Same-chain interface metrics require two distinct repeated-instance IDs', 'metric-identity');
+        }
+        const key = [identity.documentId, identity.firstChainId, identity.firstInstanceId ?? '', identity.secondChainId, identity.secondInstanceId ?? ''].join('|');
+        if (seen.has(key)) return viewerUnsupported(`Duplicate chain-pair metric identity: ${key}`, 'metric-identity');
+        seen.add(key);
+    }
+    return viewerOk(undefined);
+};
+
+const validateGeometryValues = (values: readonly MetricValue<GeometryAnnotationIdentity>[]): ViewerResult<void> => {
+    const seen = new Set<string>();
+    for (const point of values) {
+        const value = validateValue(point);
+        if (value.status !== 'ok') return value;
+        const identity = point.identity;
+        if (!nonEmpty(identity.annotationId) || !nonEmpty(identity.documentId)) {
+            return viewerUnsupported('Geometry annotations require annotationId and documentId', 'metric-identity');
+        }
+        if (!identity.residues?.length && !identity.atoms?.length) {
+            return viewerUnsupported('Geometry annotations require exact residue or atom endpoints', 'metric-identity');
+        }
+        for (const residue of [...(identity.residues ?? []), ...(identity.atoms ?? [])]) {
+            const assessed = validateResidue(residue);
+            if (assessed.status !== 'ok') return assessed;
+            if (residue.documentId !== identity.documentId) {
+                return viewerUnsupported('Geometry endpoint document identity must match its annotation', 'metric-identity');
+            }
+        }
+        const key = `${identity.documentId}|${identity.annotationId}`;
+        if (seen.has(key)) return viewerUnsupported(`Duplicate geometry annotation identity: ${key}`, 'metric-identity');
+        seen.add(key);
+    }
+    return viewerOk(undefined);
+};
+
 export const validateMetricLayer = (layer: MetricLayer): ViewerResult<MetricLayer> => {
     const descriptor = validateMetricDescriptor(layer.descriptor);
     if (descriptor.status !== 'ok') return descriptor;
@@ -113,6 +159,10 @@ export const validateMetricLayer = (layer: MetricLayer): ViewerResult<MetricLaye
         values = validateAtomValues(layer.values as readonly MetricValue<AtomRef>[]);
     } else if (layer.descriptor.dimension === 'residue-pair-matrix') {
         values = validatePairValues(layer.values as readonly MetricValue<ResiduePairIdentity>[]);
+    } else if (layer.descriptor.dimension === 'chain-pair-scalar') {
+        values = validateChainPairValues(layer.values as readonly MetricValue<ChainPairIdentity>[]);
+    } else if (layer.descriptor.dimension === 'geometry-annotation') {
+        values = validateGeometryValues(layer.values as readonly MetricValue<GeometryAnnotationIdentity>[]);
     } else {
         for (const point of layer.values) {
             values = validateValue(point as MetricValue<unknown>);
