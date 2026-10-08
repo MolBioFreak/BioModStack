@@ -89,6 +89,7 @@ from database import ExecutionTarget
 from services.remote_execution import targets
 from services.remote_execution.contracts import ExecutionTargetActivateRequest
 from test_vast_inventory_reconciliation import store, inventory
+from tests.test_remote_lifecycle_gaps import delivery_resources, remote_readiness
 
 
 def test_bootstrap_failure_whitelist_rejects_untrusted_detail():
@@ -102,7 +103,7 @@ def test_bootstrap_failure_whitelist_rejects_untrusted_detail():
     ('25.10.1', False, None), ('25.10.2', False, None), ('25.10.1', True, None),
     ('25.10.1', False, 'env'), ('25.10.1', False, 'apptainer'),
 ])
-async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(store, monkeypatch, tmp_path, version, busy, failed_command):
+async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(store, monkeypatch, tmp_path, version, busy, failed_command, delivery_resources):
     session, factory = store
     inventory(monkeypatch, ['49674511'])
     launcher = tmp_path / 'nextflow'
@@ -137,7 +138,7 @@ async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(store,
     monkeypatch.setattr(targets, 'run_remote', run)
     monkeypatch.setattr(targets, 'rsync_to_remote', transfer)
     monkeypatch.setattr(targets, '_sha256_file', lambda p: 'hash')
-    async def probe(*args): return {'gpus': ['gpu']}
+    async def probe(connection): return remote_readiness(connection.remote_root)
     monkeypatch.setattr(targets, 'probe_readiness', probe)
     if failed_command:
         detail = 'Pinned Nextflow version verification failed' if failed_command == 'env' else 'CUDA container verification failed'
@@ -155,6 +156,10 @@ async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(store,
         return
     result = await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
     assert result.setup.phase == 'ready'
+    _, resource_db = delivery_resources
+    policy = resource_db.execute("SELECT * FROM resource_admission_policy WHERE policy_id='execution-target:vast:49674511'").fetchone()
+    assert policy['cpu_thread_limit'] == 48
+    assert result.capabilities['resource_policy']['policy_version'] == policy['policy_version']
     assert any(kw.get('input_bytes', b'').startswith(b'#!/usr/bin/env bash') for _, kw in calls)
     assert any('apptainer' in argv and any('@sha256:' in arg for arg in argv) for argv, _ in calls)
 

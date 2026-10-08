@@ -12,11 +12,12 @@ from services.remote_execution import targets, executor as ex
 from services.remote_execution.contracts import ExecutionTargetActivateRequest
 from test_vast_inventory_reconciliation import store as attachment_store, inventory
 from test_remote_lifecycle_gaps import store, preparing
+from tests.test_remote_lifecycle_gaps import delivery_resources, remote_readiness
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('failure', [None, 'interrupt', 'corrupt'])
-async def test_attachment_never_transfers_over_published_artifacts(attachment_store, monkeypatch, tmp_path, failure):
+async def test_attachment_never_transfers_over_published_artifacts(attachment_store, monkeypatch, tmp_path, failure, delivery_resources):
     session, factory = attachment_store
     inventory(monkeypatch, ['49674511'])
     root = tmp_path / 'remote'
@@ -32,7 +33,7 @@ async def test_attachment_never_transfers_over_published_artifacts(attachment_st
     monkeypatch.setattr(nextflow, 'resolve_nextflow_version', lambda: '25.10.1')
     async def capture(*_): return ('fixture key', 'a' * 64)
     async def noop(*_, **__): pass
-    async def probe(*_): return {'gpus': ['fixture']}
+    async def probe(connection): return remote_readiness(connection.remote_root)
     transfers = []
     async def transfer(conn, source, destination, **kw):
         transfers.append(destination)

@@ -335,14 +335,48 @@ async def rsync_selected_from_remote(
 
 async def probe_readiness(connection: RemoteConnection) -> dict[str, object]:
     root = connection.remote_root
+    capacity_script = '''
+import json, os, pathlib, platform, shutil, subprocess, sys
+root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+cpu = len(os.sched_getaffinity(0))
+mem = dict(line.split(':', 1) for line in pathlib.Path('/proc/meminfo').read_text().splitlines())
+ram = int(mem['MemAvailable'].split()[0]) * 1024
+mounts = [line.split() for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines() if ' - cgroup2 ' in line]
+memberships = [line[3:] for line in pathlib.Path('/proc/self/cgroup').read_text().splitlines() if line.startswith('0::')]
+if len(mounts) != 1 or len(memberships) != 1 or '..' in pathlib.PurePosixPath(memberships[0]).parts:
+    raise RuntimeError('remote process resource hierarchy is unavailable')
+mount_root = pathlib.PurePosixPath(mounts[0][3])
+mount_point = pathlib.Path(mounts[0][4])
+relative = pathlib.PurePosixPath(memberships[0]).relative_to(mount_root)
+cg = mount_point.joinpath(*relative.parts).resolve(strict=True)
+if cg != mount_point and mount_point not in cg.parents:
+    raise RuntimeError('remote process resource hierarchy escapes mount')
+while True:
+    if (cg / 'memory.max').exists():
+        limit = (cg / 'memory.max').read_text().strip()
+        if limit != 'max':
+            ram = min(ram, max(0, int(limit) - int((cg / 'memory.current').read_text())))
+    if (cg / 'cpu.max').exists():
+        quota, period = (cg / 'cpu.max').read_text().split()
+        if quota != 'max':
+            cpu = min(cpu, int(quota) // int(period))
+    if cg == mount_point:
+        break
+    cg = cg.parent
+disk = shutil.disk_usage(root)
+g = subprocess.run(['nvidia-smi','--query-gpu=index,uuid,name,memory.total','--format=csv,noheader,nounits'], capture_output=True, text=True, check=True)
+print(json.dumps({'architecture': platform.machine(), 'free_bytes': disk.free,
+    'gpus': [line.strip() for line in g.stdout.splitlines() if line.strip()],
+    'resources': {'cpu_threads': cpu, 'dram_bytes': ram, 'disk_bytes': disk.total,
+        'free_disk_bytes': disk.free, 'storage_root': str(root), 'storage_device': str(root.stat().st_dev),
+        'machine_id': pathlib.Path('/etc/machine-id').read_text().strip()}}))
+'''
     script = (
         "set -eu; "
         f"mkdir -p {shlex.quote(root)}/{{revisions,runtimes,attempts,incoming,cache}}; "
         f"test -w {shlex.quote(root)}; "
         "for c in python3 bash rsync tar sha256sum java apptainer nvidia-smi; do command -v \"$c\" >/dev/null || { echo \"missing:$c\"; exit 20; }; done; "
-        "python3 -c 'import json,platform,shutil,subprocess; "
-        "g=subprocess.run([\"nvidia-smi\",\"--query-gpu=index,uuid,name,memory.total\",\"--format=csv,noheader,nounits\"],capture_output=True,text=True,check=True); "
-        "print(json.dumps({\"architecture\":platform.machine(),\"free_bytes\":shutil.disk_usage(\"/\").free,\"gpus\":[x.strip() for x in g.stdout.splitlines() if x.strip()]}))'"
+        f"python3 -c {shlex.quote(capacity_script)} {shlex.quote(root)}"
     )
     result = await run_remote(connection, ["bash", "-lc", script], timeout=45)
     try:

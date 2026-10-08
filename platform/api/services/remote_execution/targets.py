@@ -14,6 +14,7 @@ from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import ExecutionTarget, Job
+from services.global_resource_admission import ResourceCapacityUnavailable, publish_execution_target_readiness
 
 from .contracts import (
     DiscoveredExecutionTarget,
@@ -531,7 +532,9 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         ], "CUDA container verification failed", timeout=3600)
         if "BMS_CUDA_OK" not in cuda.stdout.splitlines():
             raise RemoteTransportError("CUDA container verification failed")
-    except (RemoteTransportError, OSError) as exc:
+        resource_policy = await asyncio.to_thread(publish_execution_target_readiness,
+            target_id=str(target.id), remote_root=connection.remote_root, readiness=probe)
+    except (RemoteTransportError, ResourceCapacityUnavailable, OSError) as exc:
         await session.refresh(target)
         phase = (target.provider_metadata or {}).get("setup", {}).get("phase", "checking")
         safe = BOOTSTRAP_ERRORS | {
@@ -541,7 +544,9 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
             "Unable to read the remote SSH host key", "Remote readiness probe returned invalid output",
             "Remote readiness probe is incomplete",
         }
-        message = str(exc) if str(exc) in safe else f"Remote setup failed during {phase}; retry Attach"
+        message = ("Remote global resource policy could not be published; verify resource-store readiness and retry Attach"
+                   if isinstance(exc, ResourceCapacityUnavailable) else
+                   str(exc) if str(exc) in safe else f"Remote setup failed during {phase}; retry Attach")
         setup = {**(target.provider_metadata or {}).get("setup", {}), "phase": "failed",
                  "message": message, "updated_at": datetime.utcnow().isoformat()}
         await session.execute(update(ExecutionTarget).where(
@@ -596,7 +601,7 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
                 **(target.provider_metadata or {}).get("setup", {}), "phase": "ready",
                 "message": "Remote worker ready; analytics available", "updated_at": now.isoformat()}},
             host_key_sha256=fingerprint,
-            capabilities={**dict(target.capabilities or {}), "readiness": probe,
+            capabilities={**dict(target.capabilities or {}), "readiness": probe, "resource_policy": resource_policy,
                           "runner_sha256": runner_sha256, "nextflow_launcher_sha256": nextflow_sha256},
         ).execution_options(synchronize_session=False)
     )

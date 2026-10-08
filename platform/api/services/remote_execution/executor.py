@@ -301,6 +301,8 @@ def _remote_receipt(
         "attempt_id": bundle.attempt_id,
         "execution_target_id": str(target.id),
         "remote_root": str(target.remote_root),
+        "endpoint": {"host": target.host, "port": target.port, "username": target.username,
+                     "host_key_sha256": target.host_key_sha256},
         "remote_attempt_dir": bundle.remote_attempt_dir,
         "source_revision": bundle.envelope.source_revision,
         "source_tree": bundle.envelope.source_tree,
@@ -529,6 +531,12 @@ def _connection_for_attempt(target: ExecutionTarget, job: Job) -> tuple[RemoteCo
         else {}
     )
     receipt_attempt = str(receipt.get("attempt_id") or "")
+    endpoint = receipt.get("endpoint")
+    if endpoint is not None and endpoint != {
+        "host": target.host, "port": target.port, "username": target.username,
+        "host_key_sha256": target.host_key_sha256,
+    }:
+        raise RemoteExecutionError("Remote attempt endpoint changed; retained evidence cannot be redirected")
     receipt_root = str(receipt.get("remote_root") or "").rstrip("/")
     receipt_attempt_dir = str(receipt.get("remote_attempt_dir") or "")
     if receipt_attempt == str(job.remote_attempt_id) and receipt_root and receipt_attempt_dir:

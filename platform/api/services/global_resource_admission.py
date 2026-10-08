@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -524,6 +525,32 @@ def remove_quiescent_storage(owned_path, *, owner):
     finally:
         for descriptor in descriptors:
             os.close(descriptor)
+
+
+def publish_execution_target_readiness(*, target_id, remote_root, readiness):
+    """Provisioner-only policy publication from authenticated actual-target I/O.
+
+    Never infer remote capacity from the controller, provider marketing, or GPU
+    telemetry. Publication does not admit work or copy the experiment database.
+    """
+    value = readiness.get("resources") if isinstance(readiness, dict) else None
+    keys = {"cpu_threads", "dram_bytes", "disk_bytes", "free_disk_bytes", "storage_root",
+            "storage_device", "machine_id"}
+    if not isinstance(value, dict) or set(value) != keys or value["storage_root"] != remote_root:
+        raise ResourceCapacityUnavailable("remote readiness resource identity is incomplete")
+    for key in ("cpu_threads", "dram_bytes", "disk_bytes"):
+        _positive(value[key], key)
+    _positive(value["free_disk_bytes"], "free disk", zero=True)
+    if (value["free_disk_bytes"] > value["disk_bytes"]
+            or not isinstance(value["machine_id"], str)
+            or re.fullmatch(r"[0-9a-f]{32}", value["machine_id"]) is None
+            or not isinstance(value["storage_device"], str) or not value["storage_device"].isdigit()):
+        raise ResourceCapacityUnavailable("remote readiness resource identity is invalid")
+    policy = {"target_id": target_id, **value}
+    version = hashlib.sha256(json.dumps(policy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    configure_execution_target_policy(target_id=target_id, cpu_thread_limit=value["cpu_threads"],
+        dram_byte_limit=value["dram_bytes"], disk_byte_limit=value["disk_bytes"], policy_version=version)
+    return {**policy, "policy_id": "execution-target:" + target_id, "policy_version": version}
 
 
 def configure_execution_target_policy(*, target_id, cpu_thread_limit, dram_byte_limit,

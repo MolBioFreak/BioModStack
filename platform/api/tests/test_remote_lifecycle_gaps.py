@@ -11,6 +11,47 @@ from services.remote_execution import executor as ex
 from services.remote_execution.contracts import RemoteAttemptStatus
 
 
+def remote_readiness(root):
+    return {"gpus": ["fixture"], "resources": {
+        "cpu_threads": 48, "dram_bytes": 192000000000, "disk_bytes": 4000000000000,
+        "free_disk_bytes": 3000000000000, "storage_root": root,
+        "storage_device": "19", "machine_id": "a" * 32,
+    }}
+
+
+def test_readiness_publishes_actual_named_policy(delivery_resources):
+    resources, db = delivery_resources
+    policy = resources.publish_execution_target_readiness(target_id="cloud", remote_root="/worker",
+        readiness=remote_readiness("/worker"))
+    row = db.execute("SELECT * FROM resource_admission_policy WHERE policy_id='execution-target:cloud'").fetchone()
+    assert row["cpu_thread_limit"] == 48
+    assert row["dram_byte_limit"] == 192000000000
+    assert row["disk_byte_limit"] == 4000000000000
+    assert row["policy_version"] == policy["policy_version"]
+    assert policy["machine_id"] == "a" * 32
+
+
+@pytest.mark.parametrize("field,value", [("cpu_threads", True), ("dram_bytes", 0),
+    ("machine_id", "unknown"), ("storage_root", "/controller"), ("free_disk_bytes", -1)])
+def test_invalid_readiness_does_not_publish_policy(delivery_resources, field, value):
+    resources, db = delivery_resources
+    sample = remote_readiness("/worker")
+    sample["resources"][field] = value
+    with pytest.raises(resources.ResourceCapacityUnavailable):
+        resources.publish_execution_target_readiness(target_id="cloud", remote_root="/worker", readiness=sample)
+    assert db.execute("SELECT * FROM resource_admission_policy WHERE policy_id='execution-target:cloud'").fetchone() is None
+
+
+def test_ngs_remote_callback_is_optional_not_another_target():
+    from services.remote_execution.bundle import _remote_api_environment, RemoteBundleError
+    assert _remote_api_environment("nanopore", "") == {"API_BASE_URL": ""}
+    assert _remote_api_environment("nanopore", "https://bms.example/") == {"API_BASE_URL": "https://bms.example"}
+    with pytest.raises(RemoteBundleError):
+        _remote_api_environment("nanopore", "http://localhost:8000")
+    with pytest.raises(RemoteBundleError):
+        _remote_api_environment("molecular_dynamics", "")
+
+
 @pytest.fixture
 def delivery_resources(tmp_path, monkeypatch):
     """Use the production immutable-identity/transition triggers, offline only."""

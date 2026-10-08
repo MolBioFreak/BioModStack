@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from tests.test_remote_lifecycle_gaps import delivery_resources, remote_readiness
 import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -331,7 +332,7 @@ async def test_existing_attempt_unknown_inventory_does_not_probe_or_rewrite_hist
 @pytest.mark.asyncio
 @pytest.mark.parametrize('refresh_at', ['probe', 'final'])
 @pytest.mark.parametrize('username', ['root', 'worker-user'])
-async def test_inventory_healthy_refresh_preserves_attachment(store, monkeypatch, tmp_path, refresh_at, username):
+async def test_inventory_healthy_refresh_preserves_attachment(store, monkeypatch, tmp_path, refresh_at, username, delivery_resources):
     session, factory = store
     inventory(monkeypatch, ['49674511'])
     launcher = tmp_path / 'nextflow'
@@ -346,7 +347,7 @@ async def test_inventory_healthy_refresh_preserves_attachment(store, monkeypatch
     async def probe(*args):
         if refresh_at == 'probe':
             await refresh()
-        return {'ok': True}
+        return remote_readiness(args[0].remote_root)
     async def run(connection, command, **kwargs):
         if refresh_at == 'final' and command[0] == 'sha256sum':
             await refresh()

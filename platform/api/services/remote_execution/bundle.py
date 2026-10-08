@@ -450,6 +450,28 @@ def _relocate_python_runtime(source: Path, destination: Path, remote_destination
     return destination
 
 
+def _remote_api_environment(model_id: str, api_url: str) -> dict[str, str]:
+    api_url = api_url.strip()
+    # Native NGS completion is pulled through SSH and the shared native barrier.
+    # An optional progress callback must not become an execution prerequisite.
+    if model_id.lower() == "nanopore" and not api_url:
+        return {"API_BASE_URL": ""}
+    parsed = urlsplit(api_url)
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username
+            or parsed.password or parsed.query or parsed.fragment):
+        raise RemoteBundleError("BMS_REMOTE_API_BASE_URL is not configured as a credential-free HTTP(S) URL")
+    host = parsed.hostname.lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        raise RemoteBundleError("BMS_REMOTE_API_BASE_URL must be reachable from the remote worker")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address is not None and (address.is_loopback or address.is_link_local or address.is_unspecified):
+        raise RemoteBundleError("BMS_REMOTE_API_BASE_URL must be reachable from the remote worker")
+    return {"API_BASE_URL": api_url.rstrip("/")}
+
+
 def prepare_remote_bundle(
     *,
     job: Any,
@@ -616,29 +638,7 @@ def prepare_remote_bundle(
         "NXF_ANSI_LOG": "false",
         "CUDA_VISIBLE_DEVICES": ",".join(str(value) for value in assigned_gpu_indices),
     }
-    api_url = os.getenv("BMS_REMOTE_API_BASE_URL", "").strip()
-    parsed_api_url = urlsplit(api_url)
-    if (
-        parsed_api_url.scheme not in {"http", "https"}
-        or not parsed_api_url.hostname
-        or parsed_api_url.username
-        or parsed_api_url.password
-        or parsed_api_url.query
-        or parsed_api_url.fragment
-    ):
-        raise RemoteBundleError("BMS_REMOTE_API_BASE_URL is not configured as a credential-free HTTP(S) URL")
-    api_host = parsed_api_url.hostname.lower()
-    if api_host == "localhost" or api_host.endswith(".localhost"):
-        raise RemoteBundleError("BMS_REMOTE_API_BASE_URL must be reachable from the remote worker")
-    try:
-        api_address = ipaddress.ip_address(api_host)
-    except ValueError:
-        api_address = None
-    if api_address is not None and (
-        api_address.is_loopback or api_address.is_link_local or api_address.is_unspecified
-    ):
-        raise RemoteBundleError("BMS_REMOTE_API_BASE_URL must be reachable from the remote worker")
-    effective_environment["API_BASE_URL"] = api_url.rstrip("/")
+    effective_environment.update(_remote_api_environment(str(job.model_id), os.getenv("BMS_REMOTE_API_BASE_URL", "")))
     for key, value in dict(environment or {}).items():
         if key in {
             "PYTORCH_CUDA_ALLOC_CONF",
