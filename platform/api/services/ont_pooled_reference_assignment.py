@@ -741,8 +741,7 @@ async def submit_pooled_reference_assignment(
             pinned_gpu=request.pinned_gpu,
         )
         token, token_digest = alignment_access.issue_alignment_access_token()
-        trust_tokens = ont_submission_trust.begin_trusted_ont_job_creation(token_digest)
-        try:
+        with ont_submission_trust.trusted_ont_job_creation(token_digest):
             from routers.jobs import create_job  # noqa: PLC0415
 
             created = await create_job(
@@ -752,8 +751,6 @@ async def submit_pooled_reference_assignment(
                 _preallocated_job_id=assignment_job_id,
                 _commit=False,
             )
-        finally:
-            ont_submission_trust.end_trusted_ont_job_creation(trust_tokens)
         if str(getattr(created, "id", assignment_job_id)) != assignment_job_id:
             raise PooledAssignmentError("canonical assignment job identity changed", status_code=409)
 
@@ -1597,8 +1594,7 @@ async def _create_release_child(
         }
     )
     token, token_digest = alignment_access.issue_alignment_access_token()
-    trust_tokens = ont_submission_trust.begin_trusted_ont_job_creation(token_digest)
-    try:
+    with ont_submission_trust.trusted_ont_job_creation(token_digest):
         from routers.jobs import create_job  # noqa: PLC0415
 
         created = await create_job(
@@ -1608,8 +1604,6 @@ async def _create_release_child(
             _preallocated_job_id=child_id,
             _commit=False,
         )
-    finally:
-        ont_submission_trust.end_trusted_ont_job_creation(trust_tokens)
     if str(getattr(created, "id", child_id)) != child_id:
         raise PooledAssignmentError("canonical release child identity changed", status_code=409)
     return child_id, token

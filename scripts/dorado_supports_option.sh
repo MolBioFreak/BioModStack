@@ -1,31 +1,33 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Source inside a task to reuse its completed help output; direct invocation
+# retains the three-argument capability probe interface.
+_dorado_help_command=''
+_dorado_help_subcommand=''
+_dorado_help_status=1
+_dorado_help_output=''
 
-if [[ $# -ne 3 ]]; then
-    echo "usage: dorado_supports_option.sh <dorado-command> <subcommand> <option>" >&2
-    exit 2
+dorado_supports_option() {
+    if [[ $# -ne 3 ]]; then
+        echo "usage: dorado_supports_option.sh <dorado-command> <subcommand> <option>" >&2
+        return 2
+    fi
+    local dorado_command=$1 subcommand=$2 option=$3
+    if [[ -z "$dorado_command" || -z "$subcommand" || "$option" != --* ]]; then
+        echo "invalid Dorado capability probe arguments" >&2
+        return 2
+    fi
+    if [[ "${_dorado_help_command-}" != "$dorado_command" || "${_dorado_help_subcommand-}" != "$subcommand" ]]; then
+        _dorado_help_command=$dorado_command
+        _dorado_help_subcommand=$subcommand
+        _dorado_help_status=0
+        _dorado_help_output=$("$dorado_command" "$subcommand" --help 2>&1) || _dorado_help_status=$?
+    fi
+    [[ "${_dorado_help_status}" -eq 0 ]] || return 1
+    # Match completed output, never a live help | grep -q pipeline (SIGPIPE).
+    [[ "${_dorado_help_output}" == *"$option"* ]]
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    set -euo pipefail
+    dorado_supports_option "$@"
 fi
-
-dorado_command=$1
-subcommand=$2
-option=$3
-
-if [[ -z "$dorado_command" || -z "$subcommand" || "$option" != --* ]]; then
-    echo "invalid Dorado capability probe arguments" >&2
-    exit 2
-fi
-
-help_file=$(mktemp)
-trap 'rm -f "$help_file"' EXIT
-
-if ! "$dorado_command" "$subcommand" --help >"$help_file" 2>&1; then
-    exit 1
-fi
-
-# Search a completed help file rather than a live `help | grep -q` pipeline.
-# Under `set -o pipefail`, grep's early exit can SIGPIPE Dorado and turn a real
-# capability match into status 141.
-if grep -F -q -- "$option" "$help_file"; then
-    exit 0
-fi
-exit 1

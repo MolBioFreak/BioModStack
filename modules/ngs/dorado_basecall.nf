@@ -1,4 +1,4 @@
-/** Pinned Dorado 1.3.1 P4 data plane: preflight -> exact model -> optional demux. */
+/** Dorado 1.3.1: verify inputs and models, basecall, then optionally demultiplex. */
 def doradoShellQuote(value) {
     return "'" + value.toString().replace("'", "'\"'\"'") + "'"
 }
@@ -217,15 +217,16 @@ process DoradoBasecall {
     if [[ -n "\${barcode_kit}" ]]; then command+=(--kit-name "\${barcode_kit}"); fi
     if [[ -n "\${sample_relative}" ]]; then command+=(--sample-sheet "\${pod5_root}/\${sample_relative}"); fi
     if [[ -n "\${mod_model_id}" ]]; then command+=(--modified-bases-models "\$PWD/sealed_models/\${mod_model_id}"); fi
+    source ${doradoShellQuote(params.code_root + '/scripts/dorado_supports_option.sh')}
     if [[ "\${molecule}" == dna && "\${mode}" == simplex && "\${trim_adapters}" == false ]]; then
-      bash ${doradoShellQuote(params.code_root + '/scripts/dorado_supports_option.sh')} dorado basecaller --no-trim || { echo 'locked Dorado runtime lacks --no-trim' >&2; exit 1; }
+      dorado_supports_option dorado basecaller --no-trim || { echo 'locked Dorado runtime lacks --no-trim' >&2; exit 1; }
       command+=(--no-trim)
     fi
-    if [[ '${summaryRequested}' == 'true' && "\${mode}" == simplex ]] && bash ${doradoShellQuote("${params.code_root}/scripts/dorado_supports_option.sh")} dorado basecaller --emit-summary; then command+=(--emit-summary); fi
+    if [[ '${summaryRequested}' == 'true' && "\${mode}" == simplex ]] && dorado_supports_option dorado basecaller --emit-summary; then command+=(--emit-summary); fi
     emit_moves='${movesRequested}'
     if [[ "\${emit_moves}" == true ]]; then
       [[ "\${mode}" == simplex ]] || { echo 'move-tag emission is not qualified for duplex' >&2; exit 1; }
-      bash ${doradoShellQuote(params.code_root + '/scripts/dorado_supports_option.sh')} dorado basecaller --emit-moves || { echo 'locked Dorado runtime lacks --emit-moves' >&2; exit 1; }
+      dorado_supports_option dorado basecaller --emit-moves || { echo 'locked Dorado runtime lacks --emit-moves' >&2; exit 1; }
       command+=(--emit-moves)
     fi
 

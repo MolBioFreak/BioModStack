@@ -52,7 +52,7 @@ process RunCloneValidation {
     def expectedCoverage = (params.wf_clone_expected_coverage != null ? params.wf_clone_expected_coverage : 95) as BigDecimal
     def expectedIdentity = (params.wf_clone_expected_identity != null ? params.wf_clone_expected_identity : 99) as BigDecimal
     if (cutsiteMismatch < 0 || cutsiteMismatch > 10 || primerMismatch < 0 || primerMismatch > 10 || expectedCoverage < 0 || expectedCoverage > 100 || expectedIdentity < 0 || expectedIdentity > 100) {
-        error('wf_clone advanced thresholds are outside the accepted bounded policy')
+        error('wf_clone thresholds are out of range: mismatch counts must be 0–10; coverage and identity must be 0–100')
     }
     def primersPath = (params.wf_clone_primers ?: '').toString().trim()
     def insertReferencePath = (params.wf_clone_insert_reference ?: '').toString().trim()
@@ -64,7 +64,7 @@ process RunCloneValidation {
     def regionsBedfileArg = regionsBedfilePath ? "--regions_bedfile ${shellQuote(regionsBedfilePath)}" : ''
     def referencePath = reference_fasta ? reference_fasta.toString().trim() : ''
     if (!referencePath) {
-        error("wf_clone_validation requires an authoritative full reference for P3 construct verification")
+        error("wf_clone_validation requires a full reference FASTA for construct verification")
     }
     def codeRoot = params.code_root ?: projectDir
     def modelValidator = shellQuote("${codeRoot}/scripts/validate_clone_input_model.py")

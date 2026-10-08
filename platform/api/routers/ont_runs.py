@@ -650,8 +650,7 @@ async def _create_pipeline_job(
     if launch_context_id:
         job = job.model_copy(update={"launch_context_id": launch_context_id})
     token, token_digest = alignment_access.issue_alignment_access_token()
-    trust_token = ont_submission_trust.begin_trusted_ont_job_creation(token_digest)
-    try:
+    with ont_submission_trust.trusted_ont_job_creation(token_digest):
         created = await create_job(
             job,
             background_tasks,
@@ -659,8 +658,6 @@ async def _create_pipeline_job(
             _commit=commit,
             experiment_session=experiment_session,
         )
-    finally:
-        ont_submission_trust.end_trusted_ont_job_creation(trust_token)
     alignment_access.set_alignment_access_cookie(created.id, token, response, request)
     return created
 
@@ -687,7 +684,7 @@ async def ont_validate_and_start_intent(run_id: str, payload: dict[str, Any]) ->
     except ValidationError as exc:
         # Do not reflect rejected body values: callers may have supplied host
         # protocol/path identifiers that are intentionally browser-opaque.
-        raise HTTPException(status_code=422, detail="invalid opaque intent confirmation") from exc
+        raise HTTPException(status_code=422, detail="Invalid run-intent confirmation; provide confirm_start and intent_generation.") from exc
     try:
         return await ont_run_control.validate_armed_intent_start(run_id, confirmed.model_dump())
     except KeyError as exc:
@@ -697,7 +694,7 @@ async def ont_validate_and_start_intent(run_id: str, payload: dict[str, Any]) ->
     except NotImplementedError as exc:
         raise HTTPException(
             status_code=501,
-            detail="MinKNOW protocol start remains disabled pending separately authorized supervised commissioning.",
+            detail="Starting MinKNOW runs from BMS is disabled; enabling it requires separate authorization and supervised commissioning.",
         ) from exc
 
 
@@ -735,7 +732,7 @@ async def ont_start_instrument_run(position: str, payload: dict[str, Any]) -> di
     del position, payload
     raise HTTPException(
         status_code=410,
-        detail="raw ONT start is retired; create a run intent from an opaque protocol receipt and use /runs/{id}/start",
+        detail="Direct ONT start is retired. Run-intent validation uses /runs/{id}/start, but physical starting remains disabled.",
     )
 
 
@@ -989,7 +986,7 @@ async def ont_handoff_plasmid_qc(run_id: str, payload: dict[str, Any]) -> dict[s
     del run_id, payload
     raise HTTPException(
         status_code=410,
-        detail="raw ONT handoff descriptors are server-only; submit through /runs/{id}/handoff/plasmid-qc/submit",
+        detail="This endpoint no longer returns run-output paths. Submit plasmid QC through /runs/{id}/handoff/plasmid-qc/submit.",
     )
 
 
@@ -1028,7 +1025,7 @@ async def ont_submit_ngs_workflow(
     experiment_session: AsyncSession = Depends(get_experiment_session),
     molbio_ngs_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> JobResponse:
-    """Submit a canonical ONT/NGS Nextflow analysis job.
+    """Submit an ONT/NGS Nextflow analysis job.
 
     This is the typed ONT product-family launch seam. It normalizes workflow
     aliases/defaults through the ONT registry, then delegates to the canonical
@@ -1408,7 +1405,7 @@ async def ont_submit_plasmid_qc_from_run(
         raise HTTPException(status_code=422, detail="instrument handoff accepts only a name, tuning params, pinned_gpu, and molbio_ngs_receipt_id")
     name = payload.get("name")
     if name is not None and (not isinstance(name, str) or len(name.strip()) > 255):
-        raise HTTPException(status_code=422, detail="instrument handoff name must be a bounded string")
+        raise HTTPException(status_code=422, detail="Instrument handoff name must be text with at most 255 characters after trimming.")
     pinned_gpu = payload.get("pinned_gpu")
     if pinned_gpu is not None and (isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0):
         raise HTTPException(status_code=422, detail="instrument handoff pinned_gpu must be a non-negative integer")

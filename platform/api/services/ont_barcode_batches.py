@@ -685,8 +685,7 @@ async def _create_one_child(
         }
     )
     token, token_digest = alignment_access.issue_alignment_access_token()
-    trust_token = ont_submission_trust.begin_trusted_ont_job_creation(token_digest)
-    try:
+    with ont_submission_trust.trusted_ont_job_creation(token_digest):
         created = await create_job(
             job,
             background_tasks,
@@ -694,8 +693,6 @@ async def _create_one_child(
             _preallocated_job_id=child_job_id,
             _commit=False,
         )
-    finally:
-        ont_submission_trust.end_trusted_ont_job_creation(trust_token)
     created_id = getattr(created, "id", None)
     if created_id is not None and str(created_id) != child_job_id:
         raise BarcodeBatchError("canonical job creation returned an unexpected child identity", status_code=409, code="CHILD_IDENTITY_CONFLICT")

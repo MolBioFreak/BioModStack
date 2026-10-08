@@ -128,8 +128,12 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
     ONT Dorado basecaller + modkit methylation analysis container.
     GPU-accelerated basecalling with modified base detection.
 
-    Expects model weights bind-mounted at /weights/dorado.
-    Usage:
-      apptainer run --nv --bind /mnt/BioModStack/weights/dorado:/weights/dorado dorado.sif \
-        dorado basecaller --model-path /weights/dorado/dna_r10.4.1_e8.2_400bps_sup@v5.0.0 \
-        --modified-bases 5mCG_5hmCG /input/pod5/
+    Mount the selected model directory and POD5 input read-only. The native form is:
+      dorado basecaller <model-directory> <POD5-directory>
+
+    Example mounting syntax (replace the host directories):
+      apptainer run --nv --bind /path/to/model:/model:ro,/path/to/pod5:/input/pod5:ro dorado.sif \
+        dorado basecaller /model /input/pod5
+
+    Use BMS workflow settings for locked model selections and scientific options.
+    Select the model for the actual DNA or RNA input; they are not interchangeable.

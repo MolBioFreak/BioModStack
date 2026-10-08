@@ -47,7 +47,7 @@ process ValidateModifiedBaseBam {
     fi
 
     if [[ "\${tagged_records}" -eq 0 ]]; then
-        echo "ERROR: BAM contains no meaningful paired MM/ML modified-base tags for modkit; operator review required." >&2
+        echo "ERROR: BAM has no non-empty paired MM/ML modified-base tags required by modkit." >&2
         echo "Basecall POD5 with --modified-bases or provide a BAM containing non-empty MM/ML tags." >&2
         exit 1
     fi

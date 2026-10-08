@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import re
-from pathlib import Path
 from typing import Any
 
 from services.host_agent_client import get_ont_status, host_agent_enabled
@@ -18,7 +17,7 @@ from services.mk1d_reconnect import (
     ReconnectHelperUnavailable,
     request_mk1d_reconnect,
 )
-from services.ont_ngs_contract import ANALYSIS_OWNER, DEVICE_CONTROL_OWNER, get_ont_workflow_spec
+from services.ont_ngs_contract import ANALYSIS_OWNER, DEVICE_CONTROL_OWNER
 from services.ont_minknow_client import discover_minknow_devices
 
 DEVICE_CONTROL_STATUS_NOT_CONFIGURED = "not_configured"
@@ -113,7 +112,7 @@ def get_device_control_status() -> dict[str, Any]:
         "supported_device_types": list(SUPPORTED_DEVICE_TYPES),
         "live_devices": [],
         "fake_or_demo_devices": False,
-        "message": "MinKNOW/Mk1D live device control is a service/API boundary and is not configured in this runtime.",
+        "message": "MinKNOW/Mk1D device control is not configured on this BMS instance.",
     }
 
 
@@ -159,29 +158,4 @@ def reconnect_mk1d() -> dict[str, Any]:
         "post_action_device_status": observation,
         "device_status_observed": device_status_observed,
         "connected": helper_verified and device_status_observed,
-    }
-
-
-def build_analysis_handoff(*, workflow_id: str, run_output_dir: str | Path, primary_input_kind: str) -> dict[str, Any]:
-    """Describe handoff from live-run outputs into a reproducible analysis workflow."""
-    spec = get_ont_workflow_spec(workflow_id)
-    output_path = Path(run_output_dir).expanduser()
-    input_kind = str(primary_input_kind or "").strip().lower()
-    if (
-        input_kind not in ONT_DEVICE_CONTROL_CAPABILITIES["analysis_handoff_inputs"]
-        or input_kind not in spec.input_modes
-    ):
-        raise ValueError(
-            f"workflow {spec.workflow_id!r} does not accept ONT input kind: "
-            f"{primary_input_kind!r}"
-        )
-
-    return {
-        "workflow_id": spec.workflow_id,
-        "analysis_owner": ANALYSIS_OWNER,
-        "device_control_owner": DEVICE_CONTROL_OWNER,
-        "requires_live_device": False,
-        "primary_input_kind": input_kind,
-        "run_output_dir": str(output_path),
-        "manifest_contract": spec.manifest_schema,
     }

@@ -20,20 +20,7 @@ include { ConstructVerify } from '../../modules/ngs/construct_verify.nf'
 include { RunCloneValidation; CloneValidationAdapter; ComparePlasmidConsensus } from '../../modules/ngs/clone_validation.nf'
 include { ComparisonPanelAttribution } from '../../modules/ngs/comparison_panel_attribution.nf'
 
-def reportStage(params, stageName, files) {
-    def jobId = params.containsKey('job_id') ? params.job_id : null
-    if (!jobId) return
-    try {
-        def reportFiles = files.findAll { it != null && it.toString().trim() }
-        if (reportFiles.isEmpty()) return
-        def args = [jobId.toString(), stageName, "complete"] + reportFiles.collect { it.toString() }
-        def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-        def rc = proc.waitFor()
-        if (rc != 0) throw new IllegalStateException("Stage reporting failed for ${stageName} (exit ${rc})")
-    } catch (Exception e) {
-        throw new IllegalStateException("Stage reporting failed for ${stageName}", e)
-    }
-}
+include { reportStage } from '../../modules/ngs/stage_reporting.nf'
 
 workflow ONT_CONSTRUCT_SCREENING {
     main:
@@ -110,29 +97,17 @@ workflow ONT_CONSTRUCT_SCREENING {
             ])
         }
 
-        if (has_reference) {
-            DoradoAlign(DoradoBasecall.out.bam, Channel.of(reference_file))
-            DoradoAlign.out.aligned.subscribe { bam, bai ->
-                reportStage(params, "dorado_align", [
-                    "${params.out_dir}/align/aligned.bam",
-                    "${params.out_dir}/align/aligned.bam.bai",
-                    "${params.out_dir}/align/reference.fasta",
-                    "${params.out_dir}/align/reference.fasta.fai",
-                    "${params.out_dir}/align/align.log",
-                ])
-            }
-            analysis_bam = DoradoAlign.out.aligned
-        } else {
-            PrepareBamForAnalysis(DoradoBasecall.out.bam)
-            PrepareBamForAnalysis.out.aligned.subscribe { bam, bai ->
-                reportStage(params, "bam_prepare", [
-                    "${params.out_dir}/align/aligned.bam",
-                    "${params.out_dir}/align/aligned.bam.bai",
-                    "${params.out_dir}/align/bam_prepare.log",
-                ])
-            }
-            analysis_bam = PrepareBamForAnalysis.out.aligned
+        DoradoAlign(DoradoBasecall.out.bam, Channel.of(reference_file))
+        DoradoAlign.out.aligned.subscribe { bam, bai ->
+            reportStage(params, "dorado_align", [
+                "${params.out_dir}/align/aligned.bam",
+                "${params.out_dir}/align/aligned.bam.bai",
+                "${params.out_dir}/align/reference.fasta",
+                "${params.out_dir}/align/reference.fasta.fai",
+                "${params.out_dir}/align/align.log",
+            ])
         }
+        analysis_bam = DoradoAlign.out.aligned
     }
 
     // --- BAM input: prepare (sort/index) or realign ---
@@ -142,7 +117,7 @@ workflow ONT_CONSTRUCT_SCREENING {
             error("BAM file not found: ${params.bam_path}")
         }
 
-        if (has_reference && forceBamRealign) {
+        if (forceBamRealign) {
             DoradoAlign(Channel.of(bam_input), Channel.of(reference_file))
             DoradoAlign.out.aligned.subscribe { bam, bai ->
                 reportStage(params, "dorado_align", [
@@ -159,8 +134,8 @@ workflow ONT_CONSTRUCT_SCREENING {
                     "${params.out_dir}/align/aligned.bam",
                     "${params.out_dir}/align/aligned.bam.bai",
                     "${params.out_dir}/align/bam_prepare.log",
-                    has_reference ? "${params.out_dir}/align/reference.fasta" : null,
-                    has_reference ? "${params.out_dir}/align/reference.fasta.fai" : null,
+                    "${params.out_dir}/align/reference.fasta",
+                    "${params.out_dir}/align/reference.fasta.fai",
                 ])
             }
             analysis_bam = PrepareBamForAnalysis.out.aligned

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 import hashlib
 import os
@@ -112,6 +113,16 @@ def end_trusted_ont_job_creation(tokens: tuple[Token[bool], Token[str | None]]) 
     trust_token, digest_token = tokens
     _alignment_capability_digest.reset(digest_token)
     _trusted_ont_job_creation.reset(trust_token)
+
+
+@contextmanager
+def trusted_ont_job_creation(capability_digest: str | None = None):
+    """Scope trusted job creation and restore both context values on every exit."""
+    tokens = begin_trusted_ont_job_creation(capability_digest)
+    try:
+        yield
+    finally:
+        end_trusted_ont_job_creation(tokens)
 
 
 def is_trusted_ont_job_creation() -> bool:
@@ -556,7 +567,7 @@ def materialize_fastq_launch_custody(params: Mapping[str, Any]) -> dict[str, Any
     provenance = result.get("ont_input_provenance")
     if (result.get("ont_input_mode") != "fastq" or not isinstance(provenance, Mapping)
             or provenance.get("source") != "submitted_path"):
-        raise ValueError("ordinary FASTQ custody requires submitted-path input authority")
+        raise ValueError("This FASTQ snapshot operation requires a submitted-path FASTQ input.")
     source = _canonical_absolute_path(result.get("fastq_path"))
     root = _canonical_absolute_path(get_inputs_dir())
     if source is None or root is None:
