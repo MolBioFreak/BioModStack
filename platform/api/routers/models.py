@@ -131,6 +131,14 @@ def _frustrampnn_discovery_metadata() -> dict:
             "default_source": "bms_default",
         },
         {
+            "field": "protein_selection.regions",
+            "api_type": "array_of_stable_entity_sequence_ranges",
+            "ownership": "scientific_operator",
+            "control_kind": "region_range_editor",
+            "backing": "positions",
+            "default_source": "bms_default",
+        },
+        {
             "field": "protein_selection.residues",
             "api_type": "array_of_stable_residue_references",
             "ownership": "scientific_operator",
@@ -216,7 +224,11 @@ def _frustrampnn_discovery_metadata() -> dict:
             },
             {
                 "rule_id": "selector_exact_coverage",
-                "fields": ["protein_selection.entities", "protein_selection.residues"],
+                "fields": [
+                    "protein_selection.entities",
+                    "protein_selection.regions",
+                    "protein_selection.residues",
+                ],
                 "requirement": "complete_source_identity_match",
             },
             {

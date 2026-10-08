@@ -67,7 +67,16 @@ def test_frustrampnn_integration_exposes_exact_bounded_capability_and_settings_m
     assert definitions["FrustraMPNNProteinSelection"]["required"] == [
         "mode",
         "entities",
+        "regions",
         "residues",
+    ]
+    assert definitions["FrustraMPNNRegionSelector"]["required"] == [
+        "entity_instance_id",
+        "source_entity_id",
+        "label_asym_id",
+        "auth_asym_id",
+        "sequence_start",
+        "sequence_end",
     ]
     assert definitions["FrustraMPNNSourceStructureSettings"]["required"] == [
         "selected_model_number",
@@ -87,6 +96,7 @@ def test_frustrampnn_integration_exposes_exact_bounded_capability_and_settings_m
         "source_artifact",
         "protein_selection.mode",
         "protein_selection.entities",
+        "protein_selection.regions",
         "protein_selection.residues",
         "source_structure.selected_model_number",
         "source_structure.preferred_altloc",
@@ -105,6 +115,16 @@ def test_frustrampnn_integration_exposes_exact_bounded_capability_and_settings_m
         "classification_threshold_order",
         "queue_reresolution_required",
     }
+    selector_rule = next(
+        rule
+        for rule in payload["compatibility_rules"]
+        if rule["rule_id"] == "selector_exact_coverage"
+    )
+    assert selector_rule["fields"] == [
+        "protein_selection.entities",
+        "protein_selection.regions",
+        "protein_selection.residues",
+    ]
 
     for key, value in _walk(payload):
         lowered = key.lower()

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 
@@ -7,6 +7,7 @@ import {
     cmSourceContentUrl,
     CANONICAL_CM_ANALYSIS_POLICY,
     compileCmRuntimePolicy,
+    inspectCmFrustrampnnSource,
     listCmSources,
     listCmReusableRuns,
     registerCmRcsbSelection,
@@ -33,6 +34,7 @@ import { useModelIntegrationConfig, type ModelIntegrationLoader } from '../Model
 import { FrustraMpnnSettingsPanel } from '../frustrampnn/FrustraMpnnSettingsPanel';
 import {
     hydrateFrustraMpnnSettings,
+    selectFrustraMpnnProteinSelectionMode,
     type FrustraMpnnRequestedSettings,
 } from '../frustrampnn/frustraMpnnSettingsState';
 import MolstarViewer from '../MolstarViewer';
@@ -42,6 +44,7 @@ interface Props {
     initialValues?: Record<string, unknown>;
     services?: {
         listSources?: typeof listCmSources;
+        inspectFrustrampnnSource?: typeof inspectCmFrustrampnnSource;
         listReusableRuns?: typeof listCmReusableRuns;
         registerRunArtifact?: typeof registerCmRunArtifact;
         searchRcsb?: typeof searchCmRcsb;
@@ -151,7 +154,9 @@ const hydrateState = (values?: Record<string, unknown>): LauncherState => {
     // navigation. Explicit clone/template loads clear this key before mounting.
     const merged = { ...(values || {}), ...stored };
     const editableState = Object.fromEntries(
-        Object.entries(merged).filter(([key]) => key !== 'analysis' && key !== 'analysis_policy'),
+        Object.entries(merged).filter(([key]) => key !== 'analysis'
+            && key !== 'analysis_policy'
+            && key !== 'frustrampnnSelectionSourceId'),
     );
     const confornets = asObject(merged.confornets) || {};
     const feature = asObject(merged.feature_policy) || {};
@@ -170,23 +175,29 @@ const hydrateState = (values?: Record<string, unknown>): LauncherState => {
             ? merged.stateComparisonMode : DEFAULT_STATE.stateComparisonMode);
     const referenceBackend = ['protenix_v2_ensemble', 'confornets', 'external_import'].includes(String(reference.backend))
         ? reference.backend as CmBackend : DEFAULT_STATE.referenceBackend;
+    const snapshotId = String(merged.registered_snapshot_id || merged.snapshotId || '');
+    const sequenceId = String(merged.registered_sequence_id || merged.sequenceId || '');
+    const importIds = asStringArray(
+        merged.registered_artifact_ids
+        || (typeof merged.registered_artifact_id === 'string' ? [merged.registered_artifact_id] : undefined)
+        || merged.importIds,
+    ).slice(0, 1);
+    const frustrampnnSettings = hydrateFrustraMpnnSettings(
+        merged.frustrampnn_settings ?? merged.frustrampnnSettings,
+    );
     return {
         ...DEFAULT_STATE,
         ...editableState,
         name: typeof merged.name === 'string' ? merged.name : DEFAULT_STATE.name,
         notes: typeof merged.notes === 'string' ? merged.notes : DEFAULT_STATE.notes,
         backend,
-        snapshotId: String(merged.registered_snapshot_id || merged.snapshotId || ''),
-        sequenceId: String(merged.registered_sequence_id || merged.sequenceId || ''),
+        snapshotId,
+        sequenceId,
         checkpointId: String(merged.registered_checkpoint_id || merged.checkpointId || ''),
         configId: String(merged.registered_config_id || merged.configId || ''),
         transferId: String(merged.registered_transfer_id || merged.transferId || ''),
         referenceIds: asStringArray(merged.registered_reference_ids || merged.referenceIds),
-        importIds: asStringArray(
-            merged.registered_artifact_ids
-            || (typeof merged.registered_artifact_id === 'string' ? [merged.registered_artifact_id] : undefined)
-            || merged.importIds,
-        ).slice(0, 1),
+        importIds,
 
         seeds: backend === 'confornets' && /^-?\d+$/.test(firstSeed) ? firstSeed : hydratedSeeds,
         samples: finite(merged.samples_per_seed ?? merged.samples, DEFAULT_STATE.samples),
@@ -229,9 +240,7 @@ const hydrateState = (values?: Record<string, unknown>): LauncherState => {
         referenceStagedIndex: finite(reference.staged_index ?? merged.referenceStagedIndex, DEFAULT_STATE.referenceStagedIndex),
         referenceSourceContentSha256: String(reference.source_content_sha256 || merged.referenceSourceContentSha256 || ''),
         referenceStagedReceiptSha256: String(reference.staged_receipt_sha256 || merged.referenceStagedReceiptSha256 || ''),
-        frustrampnnSettings: hydrateFrustraMpnnSettings(
-            merged.frustrampnn_settings ?? merged.frustrampnnSettings,
-        ),
+        frustrampnnSettings,
     };
 };
 
@@ -363,6 +372,7 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const [form, setForm] = useState<LauncherState>(() => hydrateState(initialValues));
+    const [frustrampnnSelectionSourceId, setFrustrampnnSelectionSourceId] = useState('');
     const frustrampnnIntegrationQuery = useModelIntegrationConfig(
         'frustrampnn', services?.loadFrustrampnnIntegration,
     );
@@ -473,17 +483,68 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
     }, [registeredSources.length, sourceRegistry, sources.data]);
     const selectedSnapshot = sourceRegistry.find((source) =>
         source.source_id === form.snapshotId && source.source_kind === 'complex_snapshot');
-    const selectedSource = sourceRegistry.find((source) => source.source_id === (
-        form.backend === 'protenix_v2_ensemble'
-            ? form.snapshotId
-            : form.backend === 'confornets'
-                ? form.sequenceId
-                : form.importIds[0]
-    ) && (
+    const frustrampnnRequestedSourceId = form.backend === 'protenix_v2_ensemble'
+        ? form.snapshotId
+        : form.backend === 'confornets'
+            ? form.sequenceId
+            : form.importIds[0] || '';
+    const selectedSource = sourceRegistry.find((source) => source.source_id === frustrampnnRequestedSourceId && (
         (form.backend === 'protenix_v2_ensemble' && source.source_kind === 'complex_snapshot')
         || (form.backend === 'confornets' && source.source_kind === 'protein_sequence')
         || (form.backend === 'external_import' && ['structure_upload', 'structure_artifact'].includes(source.source_kind))
     ));
+    const frustrampnnInspectionSourceId = selectedSource
+        && [
+            'complex_snapshot',
+            'protein_sequence',
+            'structure_upload',
+            'structure_artifact',
+        ].includes(selectedSource.source_kind)
+        ? selectedSource.source_id
+        : '';
+    const frustrampnnSourceInspection = useQuery({
+        queryKey: ['cm-frustrampnn-source-inspection', frustrampnnInspectionSourceId],
+        queryFn: () => (services?.inspectFrustrampnnSource || inspectCmFrustrampnnSource)(
+            frustrampnnInspectionSourceId,
+        ),
+        enabled: Boolean(frustrampnnInspectionSourceId),
+        retry: false,
+    });
+    const frustrampnnInspectionReady = Boolean(
+        frustrampnnRequestedSourceId
+        && frustrampnnInspectionSourceId === frustrampnnRequestedSourceId
+        && !frustrampnnSourceInspection.isFetching
+        && !frustrampnnSourceInspection.isError
+        && frustrampnnSourceInspection.data,
+    );
+    const previousFrustrampnnSourceId = useRef(frustrampnnRequestedSourceId);
+    useEffect(() => {
+        if (previousFrustrampnnSourceId.current === frustrampnnRequestedSourceId) return;
+        previousFrustrampnnSourceId.current = frustrampnnRequestedSourceId;
+        setFrustrampnnSelectionSourceId('');
+        setForm((current) => {
+            if (current.frustrampnnSettings.protein_selection.mode === 'all_protein_entities') return current;
+            return {
+                ...current,
+                frustrampnnSettings: selectFrustraMpnnProteinSelectionMode(
+                    current.frustrampnnSettings,
+                    'all_protein_entities',
+                ),
+            };
+        });
+    }, [frustrampnnRequestedSourceId]);
+    const updateFrustrampnnSettings = (settings: FrustraMpnnRequestedSettings) => {
+        const proteinSelectionChanged = JSON.stringify(settings.protein_selection)
+            !== JSON.stringify(form.frustrampnnSettings.protein_selection);
+        setForm((current) => ({ ...current, frustrampnnSettings: settings }));
+        setFrustrampnnSelectionSourceId((current) => {
+            if (settings.protein_selection.mode === 'all_protein_entities') return '';
+            if (current && current === frustrampnnRequestedSourceId) return current;
+            return frustrampnnInspectionReady && proteinSelectionChanged
+                ? frustrampnnRequestedSourceId
+                : '';
+        });
+    };
     const selectedInputIdentity = useMemo(
         () => selectedSource ? sourceIdentityContext(selectedSource) : null,
         [selectedSource],
@@ -565,6 +626,15 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         if (!frustrampnnConfigurationReady) {
             errors.push('FrustraMPNN integration configuration is unavailable. Launch is blocked.');
         }
+        if (form.frustrampnnSettings.protein_selection.mode !== 'all_protein_entities') {
+            if (!frustrampnnRequestedSourceId
+                || frustrampnnSelectionSourceId !== frustrampnnRequestedSourceId) {
+                errors.push('Source-specific FrustraMPNN selection is not bound to the selected source.');
+            }
+            if (!frustrampnnInspectionReady) {
+                errors.push('Source-specific FrustraMPNN selection requires a current exact source inspection.');
+            }
+        }
         if (!form.name.trim()) errors.push('Request name is required.');
         if (form.notes.length > 4000) errors.push('Notes cannot exceed 4,000 characters.');
 
@@ -641,7 +711,8 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         }
         if (expectedCount < 1) errors.push('The current controls produce no candidate coordinates.');
         return errors;
-    }, [candidatePoolCount, expectedCount, form, frustrampnnConfigurationReady, referenceSources.length, seedValues, selectedCheckpoint, selectedConfig,
+    }, [candidatePoolCount, expectedCount, form, frustrampnnConfigurationReady, frustrampnnInspectionReady,
+        frustrampnnRequestedSourceId, frustrampnnSelectionSourceId, referenceSources.length, seedValues, selectedCheckpoint, selectedConfig,
         selectedSnapshot, selectedSource?.submission_policy, selectedTransfer, stepValues, structureSources]);
 
     const register = useMutation({
@@ -1016,112 +1087,131 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
                 <ModelDocumentationLinks topics={['protenix', 'confornets', 'fampnn']} summary="Primary Protenix v2 ensemble generation, canonical ConforNets, and FrustraMPNN analysis references." compact className="mt-4" />
             </header>
 
-            <div className="grid gap-5 xl:grid-cols-2">
-                <section className={`${cardClass} order-1 xl:order-1`} aria-labelledby="cm-run-record-heading">
-                    <div className="flex items-start justify-between gap-3">
-                        <div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-300">1</p><h3 id="cm-run-record-heading" className="mt-1 font-semibold text-white">Run record</h3><p className="mt-1 text-xs text-slate-500">Name, notes, and derived details</p></div>
-                        <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${validationErrors.length ? 'bg-amber-500/10 text-amber-200' : 'bg-emerald-500/10 text-emerald-200'}`}>{validationErrors.length ? 'Draft' : 'Ready'}</span>
-                    </div>
-                    <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                        <label className="space-y-1 text-sm">Run name<input value={form.name} maxLength={255} onChange={(event) => update('name', event.target.value)} className={inputClass} /></label>
-                        <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 text-xs"><span className="text-slate-500">Effective workflow</span><div className="mt-1 font-medium text-white">{backendLabel}</div><span className="mt-2 block text-slate-500">Planned output</span><div className="mt-1 text-white">{expectedCount.toLocaleString()} candidate{expectedCount === 1 ? '' : 's'}</div></div>
-                        <label className="space-y-1 text-sm lg:col-span-2">Notes<textarea value={form.notes} maxLength={4000} rows={5} onChange={(event) => update('notes', event.target.value)} className={inputClass} placeholder="Purpose, hypothesis, or handling context" /><span className="block text-right text-[11px] text-slate-600">{form.notes.length.toLocaleString()} / 4,000</span></label>
-                    </div>
-                    <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
-                        <div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Owner</span><div className="mt-1 text-slate-200">Personal workflow</div></div>
-                        <div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Input</span><div className="mt-1 truncate text-slate-200">{selectedSource ? sourceLabel(selectedSource) : 'Not selected'}</div></div>
-                        <div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Chains</span><div className="mt-1 text-slate-200">{availableChainIds.join(', ') || 'Derived at server normalization'}</div></div>
-                        <div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Validation</span><div className="mt-1 text-slate-200">{validationErrors.length ? `${validationErrors.length} blocking` : 'Typed request ready'}</div></div>
-                    </div>
-                </section>
+            <div className="grid items-start gap-5 xl:grid-cols-2" data-cm-launcher-columns>
+                <div className="min-w-0 space-y-5 self-start" data-cm-launcher-column="record-source">
+                    <section className={`${cardClass}`} aria-labelledby="cm-run-record-heading">
+                        <div className="flex items-start justify-between gap-3">
+                            <div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-300">1</p><h3 id="cm-run-record-heading" className="mt-1 font-semibold text-white">Run record</h3><p className="mt-1 text-xs text-slate-500">Name, notes, and derived details</p></div>
+                            <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${validationErrors.length ? 'bg-amber-500/10 text-amber-200' : 'bg-emerald-500/10 text-emerald-200'}`}>{validationErrors.length ? 'Draft' : 'Ready'}</span>
+                        </div>
+                        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                            <label className="space-y-1 text-sm">Run name<input value={form.name} maxLength={255} onChange={(event) => update('name', event.target.value)} className={inputClass} /></label>
+                            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 text-xs"><span className="text-slate-500">Effective workflow</span><div className="mt-1 font-medium text-white">{backendLabel}</div><span className="mt-2 block text-slate-500">Planned output</span><div className="mt-1 text-white">{expectedCount.toLocaleString()} candidate{expectedCount === 1 ? '' : 's'}</div></div>
+                            <label className="space-y-1 text-sm lg:col-span-2">Notes<textarea value={form.notes} maxLength={4000} rows={5} onChange={(event) => update('notes', event.target.value)} className={inputClass} placeholder="Purpose, hypothesis, or handling context" /><span className="block text-right text-[11px] text-slate-600">{form.notes.length.toLocaleString()} / 4,000</span></label>
+                        </div>
+                        <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                            <div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Owner</span><div className="mt-1 text-slate-200">Personal workflow</div></div>
+                            <div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Input</span><div className="mt-1 truncate text-slate-200">{selectedSource ? sourceLabel(selectedSource) : 'Not selected'}</div></div>
+                            <div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Chains</span><div className="mt-1 text-slate-200">{availableChainIds.join(', ') || 'Derived at server normalization'}</div></div>
+                            <div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Validation</span><div className="mt-1 text-slate-200">{validationErrors.length ? `${validationErrors.length} blocking` : 'Typed request ready'}</div></div>
+                        </div>
+                    </section>
 
-                <section className={`${cardClass} order-4 xl:order-2`} aria-labelledby="cm-science-heading">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-300">2</p><h3 id="cm-science-heading" className="mt-1 font-semibold text-white">Scientific controls</h3><p className="mt-1 text-xs text-slate-500">One workflow and backend authority</p>
-                    <div className="mt-4 grid gap-2 md:grid-cols-3">
-                        {([
-                            ['protenix_v2_ensemble', 'Complete-complex ensemble', 'Target × seed × sample'],
-                            ['confornets', 'Canonical ConforNets', 'One explicit seed and chain'],
-                            ['external_import', 'Immutable import', 'One registered protein mmCIF'],
-                        ] as const).map(([value, title, detail]) => <button key={value} type="button" onClick={() => backendChanged(value)} aria-pressed={form.backend === value} className={`rounded-xl border p-3 text-left ${form.backend === value ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800 bg-slate-950/30 hover:border-slate-700'}`}><span className="text-sm font-medium text-white">{title}</span><span className="mt-1 block text-xs text-slate-500">{detail}</span></button>)}
-                    </div>
-                    {form.backend === 'protenix_v2_ensemble' && <div className="mt-4 space-y-4">
-                        <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Ordered seeds<input value={form.seeds} onChange={(event) => update('seeds', event.target.value)} className={inputClass} inputMode="numeric" /></label><label className="space-y-1 text-sm">Samples per seed<span className="flex items-center gap-3"><input type="range" min={1} max={100} value={form.samples} onChange={(event) => update('samples', Number(event.target.value))} className="w-full accent-orange-500" /><output className="w-10 text-right text-white">{form.samples}</output></span></label><label className="space-y-1 text-sm md:col-span-2">Feature policy<select value={form.featureMode} onChange={(event) => update('featureMode', event.target.value as CmFeaturePolicy['mode'])} className={inputClass}><option value="regenerate_mutated_protein_v1">Regenerate changed protein</option><option value="paired_regenerate_changed_protein_v1">Regenerate matched WT and mutant</option><option value="features_disabled_control_v1">Feature-disabled control</option></select></label></div>
-                        <div className="grid gap-2 sm:grid-cols-3">{([['proteinMsa', 'Protein MSA'], ['templates', 'Templates'], ['rnaMsa', 'RNA MSA']] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2 rounded-lg border border-slate-800 p-3 text-sm"><input type="checkbox" checked={form[key]} disabled={form.featureMode === 'features_disabled_control_v1'} onChange={(event) => update(key, event.target.checked)} className={checkClass} />{label}</label>)}</div>
-                        {comparisonControls}
-                    </div>}
-                    {form.backend === 'confornets' && <div className="mt-4 space-y-4">
-                        <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Task<select value={form.task} onChange={(event) => taskChanged(event.target.value as CmTask)} className={inputClass}><option value="diversity">Diversity</option><option value="mse">Reference-guided MSE</option><option value="transfer">Transfer state</option></select></label><label className="space-y-1 text-sm">Explicit seed<input type="number" value={form.seeds} onChange={(event) => update('seeds', event.target.value)} className={inputClass} /></label><label className="space-y-1 text-sm">Diffusion samples per network checkpoint<span className="flex items-center gap-3"><input type="range" min={1} max={100} value={form.samples} onChange={(event) => update('samples', Number(event.target.value))} className="w-full accent-orange-500" /><output className="w-10 text-right text-white">{form.samples}</output></span></label>{form.task === 'diversity' && <label className="space-y-1 text-sm">Returned outputs<input type="number" min={1} max={candidatePoolCount} value={form.outputCount ?? ''} placeholder="Full pool" onChange={(event) => update('outputCount', event.target.value === '' ? null : Number(event.target.value))} className={inputClass} /><span className="block text-xs text-slate-500">{form.outputCount === null ? 'Legacy full-pool behavior is preserved.' : `Selected from ${candidatePoolCount.toLocaleString()} configured run/checkpoint/network/sample candidates.`}</span></label>}</div>
-                        {(form.task === 'diversity' || form.task === 'mse') && <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Runs<input type="number" min={1} value={form.runs} onChange={(event) => update('runs', Number(event.target.value))} className={inputClass} /></label>{form.task === 'diversity' && <label className="space-y-1 text-sm">Scientific ConforNet count (k)<input type="number" min={2} value={form.networks} onChange={(event) => update('networks', Number(event.target.value))} className={inputClass} /></label>}{form.task === 'diversity' && <label className="space-y-1 text-sm">Saved steps<input value={form.savedSteps} onChange={(event) => update('savedSteps', event.target.value)} className={inputClass} /></label>}<label className="space-y-1 text-sm">Maximum step index<input type="number" min={1} value={form.maxSteps} onChange={(event) => update('maxSteps', Number(event.target.value))} className={inputClass} /></label></div>}
-                        {form.task === 'mse' && <label className="block space-y-1 text-sm">One or two registered references<select multiple value={form.referenceIds} onChange={(event) => update('referenceIds', Array.from(event.target.selectedOptions, (option) => option.value).slice(0, 2))} className={`${inputClass} min-h-24`}>{structureSources.map((source) => <option key={source.source_id} value={source.source_id}>{sourceLabel(source)}</option>)}</select></label>}
-                        {form.task === 'transfer' && <label className="block space-y-1 text-sm">Registered transfer state<select value={form.transferId} onChange={(event) => update('transferId', event.target.value)} className={inputClass}><option value="">Select…</option>{byKind('confornets_state').map((source) => <option key={source.source_id} value={source.source_id}>{sourceLabel(source)}</option>)}</select></label>}
-                        {comparisonControls}
-                    </div>}
-                    {form.backend === 'external_import' && <div className="mt-4 rounded-xl border border-sky-500/20 bg-sky-500/5 p-3 text-sm text-sky-100"><strong>External import accepts registered mmCIF handles only.</strong><p className="mt-1 text-xs leading-5 text-slate-400">Snapshot and residue identity are derived server-side from immutable staged bytes. Ambiguous structures fail closed.</p></div>}
-                    <div className="mt-4 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3" data-model-integration="frustrampnn">
-                        <div className="mb-3"><h4 className="text-sm font-medium text-cyan-100">Global FrustraMPNN settings</h4><p className="mt-1 text-xs text-slate-400">The same required settings apply to every generated conformer.</p></div>
-                        {frustrampnnConfigurationReady ? (
-                            <FrustraMpnnSettingsPanel
-                                value={form.frustrampnnSettings}
-                                onChange={(settings) => update('frustrampnnSettings', settings)}
-                            />
-                        ) : (
-                            <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">FrustraMPNN integration configuration is loading or unavailable. Launch remains blocked.</div>
-                        )}
-                    </div>
-                    {form.backend !== 'external_import' && <details className="mt-4 rounded-xl border border-slate-800 p-3">
-                        <summary className="cursor-pointer text-sm font-medium text-slate-300">Advanced settings</summary>
-                        {form.backend === 'protenix_v2_ensemble' && <label className="mt-3 flex items-center gap-2 text-xs"><input type="checkbox" checked={form.defaultRuntime} onChange={(event) => update('defaultRuntime', event.target.checked)} className={checkClass} />Use installed runtime defaults</label>}
-                        {!form.defaultRuntime && form.backend === 'protenix_v2_ensemble' && <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Recycling cycles<input type="number" min={1} value={form.nCycle} onChange={(event) => update('nCycle', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">Sampling steps<input type="number" min={1} value={form.nStep} onChange={(event) => update('nStep', Number(event.target.value))} className={inputClass} /></label></div>}
-                        {form.backend === 'confornets' && <>
-                            {checkpointSources.length > 1 ? <label className="mt-3 block space-y-1 text-xs text-slate-400">Checkpoint authority<select value={form.checkpointId} onChange={(event) => update('checkpointId', event.target.value)} className={inputClass}><option value="">Select…</option>{checkpointSources.map((source) => <option key={source.source_id} value={source.source_id}>{sourceLabel(source)}</option>)}</select></label> : <div className="mt-3 rounded-lg border border-slate-800 p-3 text-xs"><span className="text-slate-500">Canonical checkpoint</span><div className="mt-1 text-slate-200">{checkpointSources[0] ? sourceLabel(checkpointSources[0]) : 'No registered checkpoint authority'}</div></div>}
-                            <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Recycles<input type="number" min={0} value={form.numRecycles} onChange={(event) => update('numRecycles', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">Diffusion steps<input type="number" min={1} value={form.numDiffusionSteps} onChange={(event) => update('numDiffusionSteps', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">Learning rate<input type="number" min="0.0000001" step="0.0001" value={form.learningRate} onChange={(event) => update('learningRate', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">Gradient clip<input type="number" min="0.0000001" value={form.gradientClip} onChange={(event) => update('gradientClip', Number(event.target.value))} className={inputClass} /></label></div>
-                            <div className="mt-3 grid gap-2 sm:grid-cols-2">{([['skipMsa', 'Skip MSA'], ['computeConfidence', 'Compute confidence'], ['saveFullConfidence', 'Save full confidence'], ['computeEvaluation', 'Compute evaluation']] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form[key]} onChange={(event) => update(key, event.target.checked)} className={checkClass} />{label}</label>)}</div>
-                        </>}
-                        <p className="mt-3 text-xs text-slate-500">Backend identity, detector identity, benchmark IDs, and admission policy remain server-derived.</p>
-                    </details>}
-                </section>
+                    <section className={`${cardClass}`} aria-labelledby="cm-source-browser-heading">
+                        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-300">3</p><h3 id="cm-source-browser-heading" className="mt-1 font-semibold text-white">Source browser</h3><p className="mt-1 text-xs text-slate-500">Choose an immutable input</p></div><span className="text-xs text-slate-500">{sourceRegistry.length} registered</span></div>
+                        <div className="mt-4 flex flex-wrap gap-2" role="tablist" aria-label="CM input sources">{SOURCE_TABS.map((tab, index) => <button key={tab.value} id={`cm-source-tab-${tab.value}`} aria-controls={`cm-source-panel-${tab.value}`} type="button" role="tab" aria-selected={activeSourceTab === tab.value} tabIndex={activeSourceTab === tab.value ? 0 : -1} onClick={() => selectSourceTab(tab.value)} onKeyDown={(event) => handleSourceTabKeyDown(event, index)} className={`rounded-lg border px-3 py-2 text-xs font-medium ${activeSourceTab === tab.value ? 'border-orange-400/60 bg-orange-500/10 text-orange-100' : 'border-slate-800 text-slate-400'}`}>{tab.label}</button>)}</div>
+                        {activeSourceTab === 'upload' && <div id="cm-source-panel-upload" role="tabpanel" aria-labelledby="cm-source-tab-upload" className="mt-4 space-y-4">
+                            <div className="grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Source type<select value={sourceKind} onChange={(event) => setSourceKind(event.target.value as CmSourceKind)} className={inputClass}>{uploadSourceKinds.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Local file<input type="file" accept={sourceAccept} onChange={(event) => { const file = event.target.files?.[0] || null; setSourceFile(file); if (file && form.backend === 'external_import' && sourceKind === 'structure_upload') update('importIds', []); }} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">{sourceKind === 'protein_sequence' ? 'Target ID' : 'Optional source label'}<input value={sourceTargetId} onChange={(event) => setSourceTargetId(event.target.value)} className={inputClass} /></label><button type="button" disabled={!sourceFile || register.isPending} onClick={() => sourceFile && register.mutate({ file: sourceFile, kind: sourceKind })} className="self-end rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-40">Register</button></div>
+                            {sourceKind === 'structure_upload' && <label className="block max-w-sm space-y-1 text-xs text-slate-400">Reference state label<input value={sourceState} onChange={(event) => setSourceState(event.target.value)} className={inputClass} /></label>}
+                            {sourceKind === 'confornets_state' && <div className="grid max-w-2xl gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Transfer-state kind<select value={transferKind} onChange={(event) => setTransferKind(event.target.value as typeof transferKind)} className={inputClass}><option value="confornet_state">ConforNet state</option><option value="mse_state">MSE state</option></select></label><label className="space-y-1 text-xs text-slate-400">Source test cases<input value={sourceTestCases} onChange={(event) => setSourceTestCases(event.target.value)} className={inputClass} /></label></div>}
+                            {sourceKind === 'protein_sequence' && <section className="rounded-xl border border-sky-500/25 bg-sky-500/5 p-3" aria-label="Paste protein sequence"><div className="flex items-center justify-between gap-2"><h4 className="text-sm font-medium text-sky-100">Paste protein sequence</h4><span className="text-xs text-slate-500">{pastedSequence.replace(/\s+/g, '').length.toLocaleString()} residues</span></div><textarea value={pastedSequence} onChange={(event) => setPastedSequence(event.target.value)} rows={5} spellCheck={false} className={`${inputClass} mt-3 font-mono text-xs`} placeholder="MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG" /><button type="button" disabled={!pastedSequence.trim() || register.isPending} onClick={registerPastedSequence} className="mt-3 rounded-lg border border-sky-400/40 px-3 py-2 text-sm text-sky-100 disabled:opacity-40">Register and select sequence</button></section>}
+                            {sourceKind === 'complex_snapshot' && <details className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><summary className="cursor-pointer text-sm font-medium text-slate-300">Complete-complex snapshot editor</summary><textarea value={snapshotEditor} onChange={(event) => setSnapshotEditor(event.target.value)} rows={8} spellCheck={false} className={`${inputClass} mt-3 font-mono text-xs`} placeholder='{"schema_name":"cm_complex_snapshot",...}' /><button type="button" disabled={!snapshotEditor.trim() || register.isPending} onClick={registerSnapshotEditor} className="mt-3 rounded-lg border border-orange-400/40 px-3 py-2 text-sm text-orange-200 disabled:opacity-40">Validate and register snapshot</button></details>}
+                        </div>}
+                        {activeSourceTab === 'runs' && <div id="cm-source-panel-runs" role="tabpanel" aria-labelledby="cm-source-tab-runs" className="mt-4 space-y-3">
+                            <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 p-3 text-xs leading-5 text-sky-100">Completed artifacts remain discoverable here, but they become CM input authority only after you explicitly register one artifact.</div>
+                            <label className="block max-w-sm space-y-1 text-xs text-slate-400">Upload source type<select aria-label="CM upload source type" value={sourceKind} onChange={(event) => setSourceKind(event.target.value as CmSourceKind)} className={inputClass}>{uploadSourceKinds.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+                            {reusableRuns.isLoading && <p className="text-sm text-slate-500">Loading your completed runs…</p>}
+                            {reusableRuns.isError && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{cmApiError(reusableRuns.error, 'Unable to load your completed runs.')}</div>}
+                            {!reusableRuns.isLoading && !reusableRuns.isError && !reusableRuns.data?.length && <div className="rounded-xl border border-dashed border-slate-800 p-6 text-center text-sm text-slate-500">No completed reusable runs are available.</div>}
+                            {reusableRuns.data?.map((run) => <article key={runIdentity(run)} className="rounded-xl border border-slate-800 bg-slate-950/30 p-3">
+                                <div className="flex flex-wrap items-start justify-between gap-2"><div><h4 className="text-sm font-medium text-white">{runLabel(run)}</h4><p className="mt-1 text-xs text-slate-500">{run.workflow} · {run.status}{run.completed_at ? ` · completed ${run.completed_at}` : ''}</p></div><span className="font-mono text-[11px] text-slate-600">{runIdentity(run)}</span></div>
+                                <div className="mt-3 space-y-2">{run.artifacts.map((artifact) => <div key={artifact.artifact_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 p-3"><div className="min-w-0"><div className="truncate text-sm text-slate-200">{artifactLabel(artifact)}</div><div className="mt-1 text-[11px] leading-5 text-slate-500">{artifact.format} · {artifact.sha256} · model {artifact.model_id || '—'} · sample {artifact.sample_id || '—'} · chain {(artifact.chain_ids || []).join(', ') || '—'} · entity {(artifact.entity_ids || []).join(', ') || '—'}</div></div><button type="button" disabled={registerRunArtifactMutation.isPending || artifact.available === false} onClick={() => registerRunArtifactMutation.mutate({ run, artifact })} className="shrink-0 rounded-lg border border-sky-400/40 px-3 py-2 text-xs text-sky-100 disabled:opacity-40">Use {artifactLabel(artifact)}</button></div>)}</div>
+                            </article>)}
+                        </div>}
+                        {activeSourceTab === 'rcsb' && <div id="cm-source-panel-rcsb" role="tabpanel" aria-labelledby="cm-source-tab-rcsb" className="mt-4 rounded-xl border border-violet-500/25 bg-violet-500/5 p-3">
+                            <h4 className="text-sm font-medium text-violet-100">RCSB PDB tie-in</h4>
+                            <p className="mt-1 text-xs text-slate-400">Search the RCSB catalogue, inspect entry metadata, select the exact model/sample/chain/entity context, then register the immutable mmCIF.</p>
+                            <div className="mt-3 flex max-w-xl gap-2"><input aria-label="RCSB accession or keyword" value={rcsbQuery} onChange={(event) => setRcsbQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') searchRcsbMutation.mutate(); }} placeholder="4HHB or deoxyhaemoglobin" className={inputClass} /><button type="button" disabled={searchRcsbMutation.isPending || rcsbQuery.trim().length < 2} onClick={() => searchRcsbMutation.mutate()} className="shrink-0 rounded-lg border border-violet-400/40 px-3 py-2 text-sm text-violet-100 disabled:opacity-40">{searchRcsbMutation.isPending ? 'Searching…' : 'Search RCSB'}</button></div>
+                            {rcsbSearchResults && <div className="mt-4 space-y-2" aria-label="RCSB search results">{rcsbSearchResults.results.length ? rcsbSearchResults.results.map((entry) => <article key={entry.accession} className="rounded-xl border border-slate-800 bg-slate-950/30 p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div><h5 className="text-sm font-medium text-white">{entry.title}</h5><p className="mt-1 text-xs text-slate-400">{entry.accession} · {entry.method || 'method unavailable'} · resolution {entry.resolution ?? '—'} Å · {entry.organism || 'organism unavailable'} · released {entry.release_date || '—'}</p></div><button type="button" onClick={() => selectRcsbEntry(entry)} className="shrink-0 rounded-lg border border-violet-400/40 px-3 py-2 text-xs text-violet-100">Select {entry.accession}</button></div></article>) : <p className="text-sm text-slate-500">No RCSB entries matched this search.</p>}</div>}
+                            {selectedRcsbEntry && <div className="mt-4 rounded-xl border border-violet-400/30 bg-violet-500/5 p-3"><div className="text-xs font-semibold text-violet-100">Selected entry: {selectedRcsbEntry.accession}</div><div className="mt-1 text-xs text-slate-400">{selectedRcsbEntry.title} · {selectedRcsbEntry.method || 'method unavailable'} · {selectedRcsbEntry.organism || 'organism unavailable'}</div><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Model<select aria-label="RCSB model" value={rcsbModelId} onChange={(event) => setRcsbModelId(event.target.value)} className={inputClass}><option value="">Select model…</option>{selectedRcsbEntry.models.map((model) => <option key={model.model_id} value={model.model_id}>{model.label || `Model ${model.model_id}`}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Sample<select aria-label="RCSB sample" value={rcsbSampleId} onChange={(event) => setRcsbSampleId(event.target.value)} className={inputClass}><option value="">Select sample…</option>{selectedRcsbEntry.samples.map((sample) => <option key={sample.sample_id} value={sample.sample_id}>{sample.label || sample.sample_id}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Chain<select aria-label="RCSB chain" value={rcsbChainId} onChange={(event) => setRcsbChainId(event.target.value)} className={inputClass}><option value="">Select chain…</option>{selectedRcsbEntry.chains.map((chain) => <option key={chain.chain_id} value={chain.chain_id}>{chain.label || chain.chain_id} · entity {chain.entity_id}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Entity<select aria-label="RCSB entity" value={rcsbEntityId} onChange={(event) => setRcsbEntityId(event.target.value)} className={inputClass}><option value="">Select entity…</option>{selectedRcsbEntry.entities.map((entity) => <option key={entity.entity_id} value={entity.entity_id}>{entity.label || entity.entity_id} · {entity.entity_type}</option>)}</select></label></div><div className="mt-3 flex flex-wrap items-center justify-between gap-3"><span className="text-xs text-slate-400">{rcsbSelectionSummary}</span><button type="button" disabled={!rcsbSelectionReady || registerRcsbSelectionMutation.isPending} onClick={() => registerRcsbSelectionMutation.mutate()} className="rounded-lg border border-violet-400/40 px-3 py-2 text-sm text-violet-100 disabled:opacity-40">{registerRcsbSelectionMutation.isPending ? 'Registering…' : 'Register selected RCSB mmCIF'}</button></div></div>}
+                            <div className="mt-4 space-y-2">{tabSources.length ? tabSources.map((source) => <button key={source.source_id} type="button" onClick={() => selectSource(source)} aria-pressed={selectedSourceId === source.source_id} className={`w-full rounded-xl border p-3 text-left ${selectedSourceId === source.source_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800 bg-slate-950/30'}`}><span className="block text-sm font-medium text-white">{source.source_id}</span><span className="mt-1 block text-[11px] text-slate-400">{sourceCardAuthority(source)}</span></button>) : <div className="rounded-lg border border-dashed border-violet-500/20 p-3 text-xs text-slate-500">No registered RCSB sources are available.</div>}</div>
+                        </div>}
+                        {activeSourceTab === 'cached' && <div id="cm-source-panel-cached" role="tabpanel" aria-labelledby="cm-source-tab-cached" className="mt-4 space-y-2">{tabSources.length ? tabSources.map((source) => <button key={source.source_id} type="button" onClick={() => selectSource(source)} aria-pressed={selectedSourceId === source.source_id} className={`w-full rounded-xl border p-3 text-left ${selectedSourceId === source.source_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800 bg-slate-950/30'}`}><span className="block text-sm font-medium text-white">{source.source_id}</span><span className="mt-1 block text-[11px] text-slate-400">{sourceCardAuthority(source)}</span></button>) : <div className="rounded-xl border border-dashed border-slate-800 p-6 text-center text-sm text-slate-500">No compatible sources are available in this view.</div>}</div>}
+                        {sources.isError && <div role="alert" className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{cmApiError(sources.error, 'Unable to load the authenticated source registry.')}</div>}
+                    </section>
 
-                <section className={`${cardClass} order-2 xl:order-3`} aria-labelledby="cm-source-browser-heading">
-                    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-300">3</p><h3 id="cm-source-browser-heading" className="mt-1 font-semibold text-white">Source browser</h3><p className="mt-1 text-xs text-slate-500">Choose an immutable input</p></div><span className="text-xs text-slate-500">{sourceRegistry.length} registered</span></div>
-                    <div className="mt-4 flex flex-wrap gap-2" role="tablist" aria-label="CM input sources">{SOURCE_TABS.map((tab, index) => <button key={tab.value} id={`cm-source-tab-${tab.value}`} aria-controls={`cm-source-panel-${tab.value}`} type="button" role="tab" aria-selected={activeSourceTab === tab.value} tabIndex={activeSourceTab === tab.value ? 0 : -1} onClick={() => selectSourceTab(tab.value)} onKeyDown={(event) => handleSourceTabKeyDown(event, index)} className={`rounded-lg border px-3 py-2 text-xs font-medium ${activeSourceTab === tab.value ? 'border-orange-400/60 bg-orange-500/10 text-orange-100' : 'border-slate-800 text-slate-400'}`}>{tab.label}</button>)}</div>
-                    {activeSourceTab === 'upload' && <div id="cm-source-panel-upload" role="tabpanel" aria-labelledby="cm-source-tab-upload" className="mt-4 space-y-4">
-                        <div className="grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Source type<select value={sourceKind} onChange={(event) => setSourceKind(event.target.value as CmSourceKind)} className={inputClass}>{uploadSourceKinds.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Local file<input type="file" accept={sourceAccept} onChange={(event) => { const file = event.target.files?.[0] || null; setSourceFile(file); if (file && form.backend === 'external_import' && sourceKind === 'structure_upload') update('importIds', []); }} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">{sourceKind === 'protein_sequence' ? 'Target ID' : 'Optional source label'}<input value={sourceTargetId} onChange={(event) => setSourceTargetId(event.target.value)} className={inputClass} /></label><button type="button" disabled={!sourceFile || register.isPending} onClick={() => sourceFile && register.mutate({ file: sourceFile, kind: sourceKind })} className="self-end rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-40">Register</button></div>
-                        {sourceKind === 'structure_upload' && <label className="block max-w-sm space-y-1 text-xs text-slate-400">Reference state label<input value={sourceState} onChange={(event) => setSourceState(event.target.value)} className={inputClass} /></label>}
-                        {sourceKind === 'confornets_state' && <div className="grid max-w-2xl gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Transfer-state kind<select value={transferKind} onChange={(event) => setTransferKind(event.target.value as typeof transferKind)} className={inputClass}><option value="confornet_state">ConforNet state</option><option value="mse_state">MSE state</option></select></label><label className="space-y-1 text-xs text-slate-400">Source test cases<input value={sourceTestCases} onChange={(event) => setSourceTestCases(event.target.value)} className={inputClass} /></label></div>}
-                        {sourceKind === 'protein_sequence' && <section className="rounded-xl border border-sky-500/25 bg-sky-500/5 p-3" aria-label="Paste protein sequence"><div className="flex items-center justify-between gap-2"><h4 className="text-sm font-medium text-sky-100">Paste protein sequence</h4><span className="text-xs text-slate-500">{pastedSequence.replace(/\s+/g, '').length.toLocaleString()} residues</span></div><textarea value={pastedSequence} onChange={(event) => setPastedSequence(event.target.value)} rows={5} spellCheck={false} className={`${inputClass} mt-3 font-mono text-xs`} placeholder="MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG" /><button type="button" disabled={!pastedSequence.trim() || register.isPending} onClick={registerPastedSequence} className="mt-3 rounded-lg border border-sky-400/40 px-3 py-2 text-sm text-sky-100 disabled:opacity-40">Register and select sequence</button></section>}
-                        {sourceKind === 'complex_snapshot' && <details className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><summary className="cursor-pointer text-sm font-medium text-slate-300">Complete-complex snapshot editor</summary><textarea value={snapshotEditor} onChange={(event) => setSnapshotEditor(event.target.value)} rows={8} spellCheck={false} className={`${inputClass} mt-3 font-mono text-xs`} placeholder='{"schema_name":"cm_complex_snapshot",...}' /><button type="button" disabled={!snapshotEditor.trim() || register.isPending} onClick={registerSnapshotEditor} className="mt-3 rounded-lg border border-orange-400/40 px-3 py-2 text-sm text-orange-200 disabled:opacity-40">Validate and register snapshot</button></details>}
-                    </div>}
-                    {activeSourceTab === 'runs' && <div id="cm-source-panel-runs" role="tabpanel" aria-labelledby="cm-source-tab-runs" className="mt-4 space-y-3">
-                        <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 p-3 text-xs leading-5 text-sky-100">Completed artifacts remain discoverable here, but they become CM input authority only after you explicitly register one artifact.</div>
-                        <label className="block max-w-sm space-y-1 text-xs text-slate-400">Upload source type<select aria-label="CM upload source type" value={sourceKind} onChange={(event) => setSourceKind(event.target.value as CmSourceKind)} className={inputClass}>{uploadSourceKinds.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-                        {reusableRuns.isLoading && <p className="text-sm text-slate-500">Loading your completed runs…</p>}
-                        {reusableRuns.isError && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{cmApiError(reusableRuns.error, 'Unable to load your completed runs.')}</div>}
-                        {!reusableRuns.isLoading && !reusableRuns.isError && !reusableRuns.data?.length && <div className="rounded-xl border border-dashed border-slate-800 p-6 text-center text-sm text-slate-500">No completed reusable runs are available.</div>}
-                        {reusableRuns.data?.map((run) => <article key={runIdentity(run)} className="rounded-xl border border-slate-800 bg-slate-950/30 p-3">
-                            <div className="flex flex-wrap items-start justify-between gap-2"><div><h4 className="text-sm font-medium text-white">{runLabel(run)}</h4><p className="mt-1 text-xs text-slate-500">{run.workflow} · {run.status}{run.completed_at ? ` · completed ${run.completed_at}` : ''}</p></div><span className="font-mono text-[11px] text-slate-600">{runIdentity(run)}</span></div>
-                            <div className="mt-3 space-y-2">{run.artifacts.map((artifact) => <div key={artifact.artifact_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 p-3"><div className="min-w-0"><div className="truncate text-sm text-slate-200">{artifactLabel(artifact)}</div><div className="mt-1 text-[11px] leading-5 text-slate-500">{artifact.format} · {artifact.sha256} · model {artifact.model_id || '—'} · sample {artifact.sample_id || '—'} · chain {(artifact.chain_ids || []).join(', ') || '—'} · entity {(artifact.entity_ids || []).join(', ') || '—'}</div></div><button type="button" disabled={registerRunArtifactMutation.isPending || artifact.available === false} onClick={() => registerRunArtifactMutation.mutate({ run, artifact })} className="shrink-0 rounded-lg border border-sky-400/40 px-3 py-2 text-xs text-sky-100 disabled:opacity-40">Use {artifactLabel(artifact)}</button></div>)}</div>
-                        </article>)}
-                    </div>}
-                    {activeSourceTab === 'rcsb' && <div id="cm-source-panel-rcsb" role="tabpanel" aria-labelledby="cm-source-tab-rcsb" className="mt-4 rounded-xl border border-violet-500/25 bg-violet-500/5 p-3">
-                        <h4 className="text-sm font-medium text-violet-100">RCSB PDB tie-in</h4>
-                        <p className="mt-1 text-xs text-slate-400">Search the RCSB catalogue, inspect entry metadata, select the exact model/sample/chain/entity context, then register the immutable mmCIF.</p>
-                        <div className="mt-3 flex max-w-xl gap-2"><input aria-label="RCSB accession or keyword" value={rcsbQuery} onChange={(event) => setRcsbQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') searchRcsbMutation.mutate(); }} placeholder="4HHB or deoxyhaemoglobin" className={inputClass} /><button type="button" disabled={searchRcsbMutation.isPending || rcsbQuery.trim().length < 2} onClick={() => searchRcsbMutation.mutate()} className="shrink-0 rounded-lg border border-violet-400/40 px-3 py-2 text-sm text-violet-100 disabled:opacity-40">{searchRcsbMutation.isPending ? 'Searching…' : 'Search RCSB'}</button></div>
-                        {rcsbSearchResults && <div className="mt-4 space-y-2" aria-label="RCSB search results">{rcsbSearchResults.results.length ? rcsbSearchResults.results.map((entry) => <article key={entry.accession} className="rounded-xl border border-slate-800 bg-slate-950/30 p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div><h5 className="text-sm font-medium text-white">{entry.title}</h5><p className="mt-1 text-xs text-slate-400">{entry.accession} · {entry.method || 'method unavailable'} · resolution {entry.resolution ?? '—'} Å · {entry.organism || 'organism unavailable'} · released {entry.release_date || '—'}</p></div><button type="button" onClick={() => selectRcsbEntry(entry)} className="shrink-0 rounded-lg border border-violet-400/40 px-3 py-2 text-xs text-violet-100">Select {entry.accession}</button></div></article>) : <p className="text-sm text-slate-500">No RCSB entries matched this search.</p>}</div>}
-                        {selectedRcsbEntry && <div className="mt-4 rounded-xl border border-violet-400/30 bg-violet-500/5 p-3"><div className="text-xs font-semibold text-violet-100">Selected entry: {selectedRcsbEntry.accession}</div><div className="mt-1 text-xs text-slate-400">{selectedRcsbEntry.title} · {selectedRcsbEntry.method || 'method unavailable'} · {selectedRcsbEntry.organism || 'organism unavailable'}</div><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Model<select aria-label="RCSB model" value={rcsbModelId} onChange={(event) => setRcsbModelId(event.target.value)} className={inputClass}><option value="">Select model…</option>{selectedRcsbEntry.models.map((model) => <option key={model.model_id} value={model.model_id}>{model.label || `Model ${model.model_id}`}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Sample<select aria-label="RCSB sample" value={rcsbSampleId} onChange={(event) => setRcsbSampleId(event.target.value)} className={inputClass}><option value="">Select sample…</option>{selectedRcsbEntry.samples.map((sample) => <option key={sample.sample_id} value={sample.sample_id}>{sample.label || sample.sample_id}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Chain<select aria-label="RCSB chain" value={rcsbChainId} onChange={(event) => setRcsbChainId(event.target.value)} className={inputClass}><option value="">Select chain…</option>{selectedRcsbEntry.chains.map((chain) => <option key={chain.chain_id} value={chain.chain_id}>{chain.label || chain.chain_id} · entity {chain.entity_id}</option>)}</select></label><label className="space-y-1 text-xs text-slate-400">Entity<select aria-label="RCSB entity" value={rcsbEntityId} onChange={(event) => setRcsbEntityId(event.target.value)} className={inputClass}><option value="">Select entity…</option>{selectedRcsbEntry.entities.map((entity) => <option key={entity.entity_id} value={entity.entity_id}>{entity.label || entity.entity_id} · {entity.entity_type}</option>)}</select></label></div><div className="mt-3 flex flex-wrap items-center justify-between gap-3"><span className="text-xs text-slate-400">{rcsbSelectionSummary}</span><button type="button" disabled={!rcsbSelectionReady || registerRcsbSelectionMutation.isPending} onClick={() => registerRcsbSelectionMutation.mutate()} className="rounded-lg border border-violet-400/40 px-3 py-2 text-sm text-violet-100 disabled:opacity-40">{registerRcsbSelectionMutation.isPending ? 'Registering…' : 'Register selected RCSB mmCIF'}</button></div></div>}
-                        <div className="mt-4 space-y-2">{tabSources.length ? tabSources.map((source) => <button key={source.source_id} type="button" onClick={() => selectSource(source)} aria-pressed={selectedSourceId === source.source_id} className={`w-full rounded-xl border p-3 text-left ${selectedSourceId === source.source_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800 bg-slate-950/30'}`}><span className="block text-sm font-medium text-white">{source.source_id}</span><span className="mt-1 block text-[11px] text-slate-400">{sourceCardAuthority(source)}</span></button>) : <div className="rounded-lg border border-dashed border-violet-500/20 p-3 text-xs text-slate-500">No registered RCSB sources are available.</div>}</div>
-                    </div>}
-                    {activeSourceTab === 'cached' && <div id="cm-source-panel-cached" role="tabpanel" aria-labelledby="cm-source-tab-cached" className="mt-4 space-y-2">{tabSources.length ? tabSources.map((source) => <button key={source.source_id} type="button" onClick={() => selectSource(source)} aria-pressed={selectedSourceId === source.source_id} className={`w-full rounded-xl border p-3 text-left ${selectedSourceId === source.source_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800 bg-slate-950/30'}`}><span className="block text-sm font-medium text-white">{source.source_id}</span><span className="mt-1 block text-[11px] text-slate-400">{sourceCardAuthority(source)}</span></button>) : <div className="rounded-xl border border-dashed border-slate-800 p-6 text-center text-sm text-slate-500">No compatible sources are available in this view.</div>}</div>}
-                    {sources.isError && <div role="alert" className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{cmApiError(sources.error, 'Unable to load the authenticated source registry.')}</div>}
-                </section>
+                </div>
+                <div className="min-w-0 space-y-5 self-start" data-cm-launcher-column="science-preview">
+                    <section className={`${cardClass}`} aria-labelledby="cm-science-heading">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-300">2</p><h3 id="cm-science-heading" className="mt-1 font-semibold text-white">Scientific controls</h3><p className="mt-1 text-xs text-slate-500">One workflow and backend authority</p>
+                        <div className="mt-4 grid gap-2 md:grid-cols-3">
+                            {([
+                                ['protenix_v2_ensemble', 'Complete-complex ensemble', 'Target × seed × sample'],
+                                ['confornets', 'Canonical ConforNets', 'One explicit seed and chain'],
+                                ['external_import', 'Immutable import', 'One registered protein mmCIF'],
+                            ] as const).map(([value, title, detail]) => <button key={value} type="button" onClick={() => backendChanged(value)} aria-pressed={form.backend === value} className={`rounded-xl border p-3 text-left ${form.backend === value ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800 bg-slate-950/30 hover:border-slate-700'}`}><span className="text-sm font-medium text-white">{title}</span><span className="mt-1 block text-xs text-slate-500">{detail}</span></button>)}
+                        </div>
+                        {form.backend === 'protenix_v2_ensemble' && <div className="mt-4 space-y-4">
+                            <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Ordered seeds<input value={form.seeds} onChange={(event) => update('seeds', event.target.value)} className={inputClass} inputMode="numeric" /></label><label className="space-y-1 text-sm">Samples per seed<span className="flex items-center gap-3"><input type="range" min={1} max={100} value={form.samples} onChange={(event) => update('samples', Number(event.target.value))} className="w-full accent-orange-500" /><output className="w-10 text-right text-white">{form.samples}</output></span></label><label className="space-y-1 text-sm md:col-span-2">Feature policy<select value={form.featureMode} onChange={(event) => update('featureMode', event.target.value as CmFeaturePolicy['mode'])} className={inputClass}><option value="regenerate_mutated_protein_v1">Regenerate changed protein</option><option value="paired_regenerate_changed_protein_v1">Regenerate matched WT and mutant</option><option value="features_disabled_control_v1">Feature-disabled control</option></select></label></div>
+                            <div className="grid gap-2 sm:grid-cols-3">{([['proteinMsa', 'Protein MSA'], ['templates', 'Templates'], ['rnaMsa', 'RNA MSA']] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2 rounded-lg border border-slate-800 p-3 text-sm"><input type="checkbox" checked={form[key]} disabled={form.featureMode === 'features_disabled_control_v1'} onChange={(event) => update(key, event.target.checked)} className={checkClass} />{label}</label>)}</div>
+                            {comparisonControls}
+                        </div>}
+                        {form.backend === 'confornets' && <div className="mt-4 space-y-4">
+                            <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Task<select value={form.task} onChange={(event) => taskChanged(event.target.value as CmTask)} className={inputClass}><option value="diversity">Diversity</option><option value="mse">Reference-guided MSE</option><option value="transfer">Transfer state</option></select></label><label className="space-y-1 text-sm">Explicit seed<input type="number" value={form.seeds} onChange={(event) => update('seeds', event.target.value)} className={inputClass} /></label><label className="space-y-1 text-sm">Diffusion samples per network checkpoint<span className="flex items-center gap-3"><input type="range" min={1} max={100} value={form.samples} onChange={(event) => update('samples', Number(event.target.value))} className="w-full accent-orange-500" /><output className="w-10 text-right text-white">{form.samples}</output></span></label>{form.task === 'diversity' && <label className="space-y-1 text-sm">Returned outputs<input type="number" min={1} max={candidatePoolCount} value={form.outputCount ?? ''} placeholder="Full pool" onChange={(event) => update('outputCount', event.target.value === '' ? null : Number(event.target.value))} className={inputClass} /><span className="block text-xs text-slate-500">{form.outputCount === null ? 'Legacy full-pool behavior is preserved.' : `Selected from ${candidatePoolCount.toLocaleString()} configured run/checkpoint/network/sample candidates.`}</span></label>}</div>
+                            {(form.task === 'diversity' || form.task === 'mse') && <div className="grid gap-4 md:grid-cols-2"><label className="space-y-1 text-sm">Runs<input type="number" min={1} value={form.runs} onChange={(event) => update('runs', Number(event.target.value))} className={inputClass} /></label>{form.task === 'diversity' && <label className="space-y-1 text-sm">Scientific ConforNet count (k)<input type="number" min={2} value={form.networks} onChange={(event) => update('networks', Number(event.target.value))} className={inputClass} /></label>}{form.task === 'diversity' && <label className="space-y-1 text-sm">Saved steps<input value={form.savedSteps} onChange={(event) => update('savedSteps', event.target.value)} className={inputClass} /></label>}<label className="space-y-1 text-sm">Maximum step index<input type="number" min={1} value={form.maxSteps} onChange={(event) => update('maxSteps', Number(event.target.value))} className={inputClass} /></label></div>}
+                            {form.task === 'mse' && <label className="block space-y-1 text-sm">One or two registered references<select multiple value={form.referenceIds} onChange={(event) => update('referenceIds', Array.from(event.target.selectedOptions, (option) => option.value).slice(0, 2))} className={`${inputClass} min-h-24`}>{structureSources.map((source) => <option key={source.source_id} value={source.source_id}>{sourceLabel(source)}</option>)}</select></label>}
+                            {form.task === 'transfer' && <label className="block space-y-1 text-sm">Registered transfer state<select value={form.transferId} onChange={(event) => update('transferId', event.target.value)} className={inputClass}><option value="">Select…</option>{byKind('confornets_state').map((source) => <option key={source.source_id} value={source.source_id}>{sourceLabel(source)}</option>)}</select></label>}
+                            {comparisonControls}
+                        </div>}
+                        {form.backend === 'external_import' && <div className="mt-4 rounded-xl border border-sky-500/20 bg-sky-500/5 p-3 text-sm text-sky-100"><strong>External import accepts registered mmCIF handles only.</strong><p className="mt-1 text-xs leading-5 text-slate-400">Snapshot and residue identity are derived server-side from immutable staged bytes. Ambiguous structures fail closed.</p></div>}
+                        <div className="mt-4 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3" data-model-integration="frustrampnn">
+                            {frustrampnnConfigurationReady ? (
+                                <>
+                                    <FrustraMpnnSettingsPanel
+                                        value={form.frustrampnnSettings}
+                                        onChange={updateFrustrampnnSettings}
+                                        inspection={frustrampnnInspectionReady ? frustrampnnSourceInspection.data : undefined}
+                                        sourceStructurePolicy="derived"
+                                        allowIndividualResidues={false}
+                                    />
+                                    {frustrampnnSourceInspection.isFetching && (
+                                        <p className="mt-2 text-xs text-cyan-100" role="status">Resolving exact source sequence identities…</p>
+                                    )}
+                                    {frustrampnnSourceInspection.isError && (
+                                        <div role="alert" className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">
+                                            {cmApiError(frustrampnnSourceInspection.error, 'FrustraMPNN source inspection failed.')}
+                                        </div>
+                                    )}
+                                    {!frustrampnnInspectionSourceId && (
+                                        <p className="mt-2 text-xs text-slate-400">Region controls require one registered protein source. All-residue analysis remains available for this input.</p>
+                                    )}
+                                </>
+                            ) : (
+                                <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">FrustraMPNN integration configuration is loading or unavailable. Launch remains blocked.</div>
+                            )}
+                        </div>
+                        {form.backend !== 'external_import' && <details className="mt-4 rounded-xl border border-slate-800 p-3">
+                            <summary className="cursor-pointer text-sm font-medium text-slate-300">Advanced settings</summary>
+                            {form.backend === 'protenix_v2_ensemble' && <label className="mt-3 flex items-center gap-2 text-xs"><input type="checkbox" checked={form.defaultRuntime} onChange={(event) => update('defaultRuntime', event.target.checked)} className={checkClass} />Use installed runtime defaults</label>}
+                            {!form.defaultRuntime && form.backend === 'protenix_v2_ensemble' && <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Recycling cycles<input type="number" min={1} value={form.nCycle} onChange={(event) => update('nCycle', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">Sampling steps<input type="number" min={1} value={form.nStep} onChange={(event) => update('nStep', Number(event.target.value))} className={inputClass} /></label></div>}
+                            {form.backend === 'confornets' && <>
+                                {checkpointSources.length > 1 ? <label className="mt-3 block space-y-1 text-xs text-slate-400">Checkpoint authority<select value={form.checkpointId} onChange={(event) => update('checkpointId', event.target.value)} className={inputClass}><option value="">Select…</option>{checkpointSources.map((source) => <option key={source.source_id} value={source.source_id}>{sourceLabel(source)}</option>)}</select></label> : <div className="mt-3 rounded-lg border border-slate-800 p-3 text-xs"><span className="text-slate-500">Canonical checkpoint</span><div className="mt-1 text-slate-200">{checkpointSources[0] ? sourceLabel(checkpointSources[0]) : 'No registered checkpoint authority'}</div></div>}
+                                <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-slate-400">Recycles<input type="number" min={0} value={form.numRecycles} onChange={(event) => update('numRecycles', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">Diffusion steps<input type="number" min={1} value={form.numDiffusionSteps} onChange={(event) => update('numDiffusionSteps', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">Learning rate<input type="number" min="0.0000001" step="0.0001" value={form.learningRate} onChange={(event) => update('learningRate', Number(event.target.value))} className={inputClass} /></label><label className="space-y-1 text-xs text-slate-400">Gradient clip<input type="number" min="0.0000001" value={form.gradientClip} onChange={(event) => update('gradientClip', Number(event.target.value))} className={inputClass} /></label></div>
+                                <div className="mt-3 grid gap-2 sm:grid-cols-2">{([['skipMsa', 'Skip MSA'], ['computeConfidence', 'Compute confidence'], ['saveFullConfidence', 'Save full confidence'], ['computeEvaluation', 'Compute evaluation']] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form[key]} onChange={(event) => update(key, event.target.checked)} className={checkClass} />{label}</label>)}</div>
+                            </>}
+                            <p className="mt-3 text-xs text-slate-500">Backend identity, detector identity, benchmark IDs, and admission policy remain server-derived.</p>
+                        </details>}
+                    </section>
 
-                <section className={`${cardClass} order-3 xl:order-4`} aria-labelledby="cm-preview-heading">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-300">4</p><h3 id="cm-preview-heading" className="mt-1 font-semibold text-white">Input preview</h3><p className="mt-1 text-xs text-slate-500">Resolved structure and selection context</p>
-                    <div className="mt-4 overflow-hidden rounded-xl border border-slate-800 bg-slate-950/50">{sourcePreviewUrl ? <MolstarViewer structureUrl={sourcePreviewUrl} format="cif" height={340} hideControls label="Selected CM input preview" /> : <div className="flex h-[340px] items-center justify-center px-6 text-center text-sm text-slate-500">{selectedSource ? 'This immutable source has no browser-safe preview URL. Its identity remains available below.' : 'Select a structure source or choose a local mmCIF file to preview it.'}</div>}</div>
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2"><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Selected input</span><div className="mt-1 break-words text-white">{selectedSource?.source_id || sourceFile?.name || 'None'}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Immutable provenance</span><div className="mt-1 break-all font-mono text-white">{selectedSource?.sha256 || 'Created after registration'}</div></div></div>
-                    {selectedSource && <div className="mt-3 rounded-xl border border-slate-800 p-3 text-xs" aria-label="Preview source identity"><span className="text-slate-500">Server-owned source identity</span><div className="mt-1 break-words leading-5 text-slate-200">{selectedInputContext}</div></div>}
-                    <div className="mt-4"><div className="text-xs text-slate-500">{form.backend === 'confornets' ? 'Server-canonical chain' : 'Retained source chains'}</div>{availableChainIds.length ? <div className="mt-2 flex flex-wrap gap-2">{availableChainIds.map((chainId) => <span key={chainId} className="rounded-lg border border-slate-800 px-3 py-2 text-xs text-slate-300">Chain {chainId}</span>)}</div> : <p className="mt-2 text-xs text-slate-500">Chain identities are derived after server-side source normalization.</p>}</div>
-                    <p className="mt-4 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3 text-xs leading-5 text-sky-100">{CM_SCIENTIFIC_LIMIT}</p>
-                </section>
+                    <section className={`${cardClass}`} aria-labelledby="cm-preview-heading">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-orange-300">4</p><h3 id="cm-preview-heading" className="mt-1 font-semibold text-white">Input preview</h3><p className="mt-1 text-xs text-slate-500">Resolved structure and selection context</p>
+                        <div className="mt-4 overflow-hidden rounded-xl border border-slate-800 bg-slate-950/50">{sourcePreviewUrl ? <MolstarViewer structureUrl={sourcePreviewUrl} format="cif" height={340} hideControls label="Selected CM input preview" /> : <div className="flex h-[340px] items-center justify-center px-6 text-center text-sm text-slate-500">{selectedSource ? 'This immutable source has no browser-safe preview URL. Its identity remains available below.' : 'Select a structure source or choose a local mmCIF file to preview it.'}</div>}</div>
+                        <div className="mt-4 grid gap-3 sm:grid-cols-2"><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Selected input</span><div className="mt-1 break-words text-white">{selectedSource?.source_id || sourceFile?.name || 'None'}</div></div><div className="rounded-xl border border-slate-800 p-3 text-xs"><span className="text-slate-500">Immutable provenance</span><div className="mt-1 break-all font-mono text-white">{selectedSource?.sha256 || 'Created after registration'}</div></div></div>
+                        {selectedSource && <div className="mt-3 rounded-xl border border-slate-800 p-3 text-xs" aria-label="Preview source identity"><span className="text-slate-500">Server-owned source identity</span><div className="mt-1 break-words leading-5 text-slate-200">{selectedInputContext}</div></div>}
+                        <div className="mt-4"><div className="text-xs text-slate-500">{form.backend === 'confornets' ? 'Server-canonical chain' : 'Retained source chains'}</div>{availableChainIds.length ? <div className="mt-2 flex flex-wrap gap-2">{availableChainIds.map((chainId) => <span key={chainId} className="rounded-lg border border-slate-800 px-3 py-2 text-xs text-slate-300">Chain {chainId}</span>)}</div> : <p className="mt-2 text-xs text-slate-500">Chain identities are derived after server-side source normalization.</p>}</div>
+                        <p className="mt-4 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3 text-xs leading-5 text-sky-100">{CM_SCIENTIFIC_LIMIT}</p>
+                    </section>
+                </div>
             </div>
 
             <section className={`${cardClass} ${planningWarning ? 'border-amber-500/40' : ''}`} aria-labelledby="cm-summary-heading">

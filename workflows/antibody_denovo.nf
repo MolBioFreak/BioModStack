@@ -24,14 +24,17 @@ def requireExactSettingsObject(value, Set<String> expectedKeys, String location)
 
 def requireCompleteFrustraMPNNSettings(value) {
     requireExactSettingsObject(value, ['schema_name', 'schema_version', 'protein_selection', 'source_structure', 'classification_policy'] as Set, 'frustrampnn_settings')
-    requireExactSettingsObject(value.protein_selection, ['mode', 'entities', 'residues'] as Set, 'frustrampnn_settings.protein_selection')
+    requireExactSettingsObject(value.protein_selection, ['mode', 'entities', 'regions', 'residues'] as Set, 'frustrampnn_settings.protein_selection')
     requireExactSettingsObject(value.source_structure, ['selected_model_number', 'preferred_altloc'] as Set, 'frustrampnn_settings.source_structure')
     requireExactSettingsObject(value.classification_policy, ['mode', 'high_max', 'minimal_min'] as Set, 'frustrampnn_settings.classification_policy')
-    if (!(value.protein_selection.entities instanceof Collection) || !(value.protein_selection.residues instanceof Collection)) {
+    if (!(value.protein_selection.entities instanceof Collection) || !(value.protein_selection.regions instanceof Collection) || !(value.protein_selection.residues instanceof Collection)) {
         throw new IllegalArgumentException('frustrampnn_settings protein selectors must be arrays')
     }
     value.protein_selection.entities.eachWithIndex { selector, index ->
         requireExactSettingsObject(selector, ['entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id'] as Set, "frustrampnn_settings.protein_selection.entities[${index}]")
+    }
+    value.protein_selection.regions.eachWithIndex { selector, index ->
+        requireExactSettingsObject(selector, ['entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id', 'sequence_start', 'sequence_end'] as Set, "frustrampnn_settings.protein_selection.regions[${index}]")
     }
     value.protein_selection.residues.eachWithIndex { selector, index ->
         requireExactSettingsObject(selector, ['entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id', 'auth_seq_id', 'insertion_code', 'sequence_index'] as Set, "frustrampnn_settings.protein_selection.residues[${index}]")

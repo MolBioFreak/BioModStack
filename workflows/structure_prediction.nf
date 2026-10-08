@@ -57,7 +57,7 @@ def requireCompleteFrustraMPNNSettings(value) {
         'source_structure', 'classification_policy',
     ] as Set, 'frustrampnn_settings')
     requireExactSettingsObject(value.protein_selection, [
-        'mode', 'entities', 'residues',
+        'mode', 'entities', 'regions', 'residues',
     ] as Set, 'frustrampnn_settings.protein_selection')
     requireExactSettingsObject(value.source_structure, [
         'selected_model_number', 'preferred_altloc',
@@ -66,6 +66,7 @@ def requireCompleteFrustraMPNNSettings(value) {
         'mode', 'high_max', 'minimal_min',
     ] as Set, 'frustrampnn_settings.classification_policy')
     if (!(value.protein_selection.entities instanceof Collection) ||
+        !(value.protein_selection.regions instanceof Collection) ||
         !(value.protein_selection.residues instanceof Collection)) {
         throw new IllegalArgumentException(
             'frustrampnn_settings protein selectors must be arrays'
@@ -75,6 +76,12 @@ def requireCompleteFrustraMPNNSettings(value) {
         requireExactSettingsObject(selector, [
             'entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id',
         ] as Set, "frustrampnn_settings.protein_selection.entities[${index}]")
+    }
+    value.protein_selection.regions.eachWithIndex { selector, index ->
+        requireExactSettingsObject(selector, [
+            'entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id',
+            'sequence_start', 'sequence_end',
+        ] as Set, "frustrampnn_settings.protein_selection.regions[${index}]")
     }
     value.protein_selection.residues.eachWithIndex { selector, index ->
         requireExactSettingsObject(selector, [

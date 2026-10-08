@@ -32,6 +32,16 @@ def _pdb() -> bytes:
     return ("".join(lines) + "END\n").encode("ascii")
 
 
+def _hierarchy_mmcif(*, auth_asym_id: str, label_asym_id: str, entity_id: str) -> bytes:
+    return (
+        "data_candidate\n#\nloop_\n"
+        "_atom_site.auth_asym_id\n"
+        "_atom_site.label_asym_id\n"
+        "_atom_site.label_entity_id\n"
+        f"{auth_asym_id} {label_asym_id} {entity_id}\n#\n"
+    ).encode("utf-8")
+
+
 def _snapshot(source_sha256: str) -> dict:
     snapshot = {
         "schema_name": "cm_complex_snapshot", "schema_version": 1,
@@ -62,6 +72,68 @@ def _snapshot(source_sha256: str) -> dict:
     return snapshot
 
 
+def test_cm_source_inspection_exposes_source_identity_and_sequence_span_without_generated_chain_authority() -> None:
+    from services.conformational_mapping.frustrampnn_adapter import (
+        build_cm_frustrampnn_source_inspection,
+    )
+
+    inspection = build_cm_frustrampnn_source_inspection(_snapshot("0" * 64))
+
+    assert inspection == {
+        "source_models": [1],
+        "selected_source_model": 1,
+        "observed_altlocs": [""],
+        "selected_altloc": "",
+        "protein_entities": [{
+            "entity_instance_id": "protein-1",
+            "source_entity_id": "source-protein",
+            "label_asym_id": None,
+            "auth_asym_id": None,
+            "pdb_chain_id": None,
+        }],
+        "protein_sequence_spans": [{
+            "entity_instance_id": "protein-1",
+            "source_entity_id": "source-protein",
+            "label_asym_id": None,
+            "auth_asym_id": None,
+            "sequence_start": 1,
+            "sequence_end": 2,
+        }],
+        "mapped_residues": [],
+    }
+
+
+def test_cm_source_inspection_ignores_candidate_local_output_identity_changes() -> None:
+    from services.conformational_mapping.frustrampnn_adapter import (
+        build_cm_frustrampnn_source_inspection,
+    )
+
+    snapshot = _snapshot("0" * 64)
+    duplicate = copy.deepcopy(snapshot["instance_mappings"][0])
+    duplicate["candidate_id"] = "c-2"
+    snapshot["instance_mappings"].append(duplicate)
+    snapshot["normalized_source_sha256"] = canonical_sha256({
+        key: value for key, value in snapshot.items() if key != "normalized_source_sha256"
+    })
+    assert len(build_cm_frustrampnn_source_inspection(snapshot)["protein_entities"]) == 1
+
+    snapshot["instance_mappings"][1]["output_auth_asym_id"] = "Y"
+    snapshot["instance_mappings"][1]["output_label_asym_id"] = "YY"
+    snapshot["instance_mappings"][1]["output_entity_id"] = "candidate-two-output"
+    snapshot["normalized_source_sha256"] = canonical_sha256({
+        key: value for key, value in snapshot.items() if key != "normalized_source_sha256"
+    })
+    inspection = build_cm_frustrampnn_source_inspection(snapshot)
+    assert inspection["protein_sequence_spans"] == [{
+        "entity_instance_id": "protein-1",
+        "source_entity_id": "source-protein",
+        "label_asym_id": None,
+        "auth_asym_id": None,
+        "sequence_start": 1,
+        "sequence_end": 2,
+    }]
+
+
 def test_cm_candidate_binding_parses_the_exact_supplied_source_bytes() -> None:
     from services.conformational_mapping.frustrampnn_adapter import (
         bind_cm_candidate_snapshot_bytes,
@@ -86,6 +158,62 @@ def test_cm_candidate_binding_parses_the_exact_supplied_source_bytes() -> None:
         key: value for key, value in bound.items()
         if key != "normalized_source_sha256"
     })
+
+
+def test_cm_candidate_binding_selects_requested_candidate_before_source_key_deduplication() -> None:
+    from services.conformational_mapping.frustrampnn_adapter import (
+        FrustraMPNNAdapterError,
+        bind_cm_candidate_snapshot_bytes,
+    )
+
+    snapshot = _snapshot("0" * 64)
+    first = snapshot["instance_mappings"][0]
+    first.update({
+        "candidate_id": "candidate-1",
+        "output_entity_id": "candidate-one-output",
+        "output_label_asym_id": "XX",
+        "output_auth_asym_id": "X",
+    })
+    second = copy.deepcopy(first)
+    second.update({
+        "candidate_id": "candidate-2",
+        "output_entity_id": "candidate-two-output",
+        "output_label_asym_id": "YY",
+        "output_auth_asym_id": "Y",
+    })
+    snapshot["instance_mappings"] = [first, second]
+    snapshot["normalized_source_sha256"] = canonical_sha256({
+        key: value for key, value in snapshot.items()
+        if key != "normalized_source_sha256"
+    })
+    payload = _hierarchy_mmcif(
+        auth_asym_id="Y",
+        label_asym_id="YY",
+        entity_id="candidate-two-output",
+    )
+
+    bound = bind_cm_candidate_snapshot_bytes(
+        snapshot,
+        candidate_id="candidate-2",
+        source_bytes=payload,
+        source_suffix=".cif",
+    )
+
+    assert bound["instance_mappings"] == [{
+        **second,
+        "candidate_id": "candidate-2",
+        "output_entity_id": "candidate-two-output",
+        "output_label_asym_id": "YY",
+        "output_auth_asym_id": "Y",
+    }]
+
+    with pytest.raises(FrustraMPNNAdapterError, match="lacks a requested-candidate"):
+        bind_cm_candidate_snapshot_bytes(
+            snapshot,
+            candidate_id="candidate-missing",
+            source_bytes=payload,
+            source_suffix=".cif",
+        )
 
 
 def test_cm_producer_projection_binds_exact_candidate_snapshot_digest() -> None:

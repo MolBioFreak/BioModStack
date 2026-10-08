@@ -93,9 +93,16 @@
       "description": "Stable source-backed identity for one protein entity/chain instance.",
       "properties": {
         "auth_asym_id": {
-          "minLength": 1,
-          "title": "Auth Asym Id",
-          "type": "string"
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Auth Asym Id"
         },
         "entity_instance_id": {
           "minLength": 1,
@@ -152,6 +159,9 @@
               "entities": {
                 "maxItems": 0
               },
+              "regions": {
+                "maxItems": 0
+              },
               "residues": {
                 "maxItems": 0
               }
@@ -171,10 +181,38 @@
               "entities": {
                 "minItems": 1
               },
+              "regions": {
+                "maxItems": 0
+              },
               "residues": {
                 "maxItems": 0
               }
             }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "selected_regions"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "entities": {
+                "maxItems": 0
+              },
+              "regions": {
+                "minItems": 1
+              },
+              "residues": {
+                "maxItems": 0
+              }
+            },
+            "required": [
+              "regions"
+            ]
           }
         },
         {
@@ -188,6 +226,9 @@
           "then": {
             "properties": {
               "entities": {
+                "maxItems": 0
+              },
+              "regions": {
                 "maxItems": 0
               },
               "residues": {
@@ -210,10 +251,19 @@
           "enum": [
             "all_protein_entities",
             "selected_entities",
+            "selected_regions",
             "selected_residues"
           ],
           "title": "Mode",
           "type": "string"
+        },
+        "regions": {
+          "items": {
+            "$ref": "#/$defs/FrustraMPNNRegionSelector"
+          },
+          "title": "Regions",
+          "type": "array",
+          "uniqueItems": true
         },
         "residues": {
           "items": {
@@ -249,6 +299,14 @@
             "operator_request"
           ],
           "title": "Mode",
+          "type": "string"
+        },
+        "regions": {
+          "enum": [
+            "bms_default",
+            "operator_request"
+          ],
+          "title": "Regions",
           "type": "string"
         },
         "residues": {
@@ -631,6 +689,73 @@
         "preferred_altloc"
       ],
       "title": "FrustraMPNNSourceStructureValueSources",
+      "type": "object"
+    },
+    "FrustraMPNNRegionSelector": {
+      "additionalProperties": false,
+      "description": "One inclusive source-sequence region on one stable protein entity.",
+      "properties": {
+        "auth_asym_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Auth Asym Id"
+        },
+        "entity_instance_id": {
+          "minLength": 1,
+          "title": "Entity Instance Id",
+          "type": "string"
+        },
+        "label_asym_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Label Asym Id"
+        },
+        "sequence_end": {
+          "minimum": 1,
+          "title": "Sequence End",
+          "type": "integer"
+        },
+        "sequence_start": {
+          "minimum": 1,
+          "title": "Sequence Start",
+          "type": "integer"
+        },
+        "source_entity_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Entity Id"
+        }
+      },
+      "required": [
+        "entity_instance_id",
+        "source_entity_id",
+        "label_asym_id",
+        "auth_asym_id",
+        "sequence_start",
+        "sequence_end"
+      ],
+      "title": "FrustraMPNNRegionSelector",
       "type": "object"
     }
   },

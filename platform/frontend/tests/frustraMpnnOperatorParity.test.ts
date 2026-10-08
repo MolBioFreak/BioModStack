@@ -93,7 +93,7 @@ const effectiveSettings = {
         normalized_pdb_sha256: hashes.c,
     },
     value_sources: {
-        protein_selection: { mode: 'operator_request', entities: 'operator_request', residues: 'operator_request' },
+        protein_selection: { mode: 'operator_request', entities: 'operator_request', regions: 'operator_request', residues: 'operator_request' },
         source_structure: { selected_model_number: 'operator_request', preferred_altloc: 'operator_request' },
         classification_policy: { mode: 'operator_request', high_max: 'operator_request', minimal_min: 'operator_request' },
     },
@@ -834,6 +834,7 @@ test('requested-effective settings summary preserves safe identities, counts, th
             protein_selection: {
                 mode: 'selected_residues',
                 entities: [],
+                regions: [],
                 residues: [{
                     entity_instance_id: 'entity-1', source_entity_id: '1', label_asym_id: 'AA', auth_asym_id: 'A',
                     auth_seq_id: 10, insertion_code: '', sequence_index: 1,
@@ -859,13 +860,42 @@ test('requested-effective settings summary preserves safe identities, counts, th
         origins: { mode: 'operator_request', highMax: 'operator_request', minimalMin: 'operator_request' },
     });
     assert.deepEqual(summary.counts, {
-        selectedEntities: 0, selectedResidues: 1, resolvedEntities: 1, resolvedChains: 1, resolvedResidues: 1,
+        selectedEntities: 0, selectedRegions: 0, selectedResidues: 1,
+        resolvedEntities: 1, resolvedChains: 1, resolvedResidues: 1,
     });
     assert.match(summary.selectedResidues[0]!, /entity-1.*A:10.*sequence 1/i);
     assert.match(summary.resolvedResidues[0]!, /entity-1.*A:10.*G.*model position 0/i);
-    assert.equal(Object.keys(summary.valueOrigins).length, 8);
+    assert.equal(Object.keys(summary.valueOrigins).length, 9);
     assert.equal(JSON.stringify(summary).includes('/private/'), false);
 });
+
+test('requested-effective settings summary reports source sequence regions separately', async () => {
+    const { buildFrustraMpnnRequestedEffectiveSummary } = await import(
+        '../src/components/frustrampnn/frustraMpnnSettingsSummary.js'
+    );
+    const resolved = {
+        ...effectiveSettings,
+        requested_settings: {
+            ...persistedRequestedSettings,
+            protein_selection: {
+                mode: 'selected_regions',
+                entities: [],
+                regions: [{
+                    entity_instance_id: 'entity-1', source_entity_id: '1',
+                    label_asym_id: null, auth_asym_id: null,
+                    sequence_start: 10, sequence_end: 24,
+                }],
+                residues: [],
+            },
+        },
+    } as const;
+
+    const summary = buildFrustraMpnnRequestedEffectiveSummary(resolved as never);
+    assert.equal(summary.counts.selectedRegions, 1);
+    assert.match(summary.selectedRegions[0]!, /source instance entity-1.*sequence 10–24/i);
+    assert.equal(summary.valueOrigins['selected regions'], 'operator_request');
+});
+
 
 test('all standard launch surfaces own one typed settings panel and the typed statistics route', () => {
     const apiSource = readFileSync('src/lib/frustraMpnnApi.ts', 'utf8');

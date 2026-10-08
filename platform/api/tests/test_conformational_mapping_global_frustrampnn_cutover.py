@@ -32,6 +32,31 @@ def _candidate_pdb() -> bytes:
     return "".join(lines).encode("ascii") + b"END\n"
 
 
+def _candidate_mmcif() -> bytes:
+    columns = (
+        "group_PDB", "id", "type_symbol", "label_atom_id", "label_alt_id",
+        "label_comp_id", "label_asym_id", "label_entity_id", "label_seq_id",
+        "pdbx_PDB_ins_code", "Cartn_x", "Cartn_y", "Cartn_z", "occupancy",
+        "B_iso_or_equiv", "auth_seq_id", "auth_comp_id", "auth_asym_id",
+        "auth_atom_id", "pdbx_PDB_model_num",
+    )
+    rows: list[str] = []
+    for serial, (atom, element) in enumerate(
+        (("N", "N"), ("CA", "C"), ("C", "C"), ("O", "O")), 1,
+    ):
+        rows.append(" ".join((
+            "ATOM", str(serial), element, atom, ".", "GLY", "X",
+            "generated-protein", "1", "?", str(serial), str(serial + 1),
+            str(serial + 2), "1.0", "20.0", "10", "GLY", "X", atom, "1",
+        )))
+    return (
+        "data_candidate\n#\nloop_\n"
+        + "".join(f"_atom_site.{column}\n" for column in columns)
+        + "\n".join(rows)
+        + "\n#\n"
+    ).encode("ascii")
+
+
 def _candidate_snapshot(source_sha256: str) -> dict[str, object]:
     from services.conformational_mapping.contracts import canonical_sha256
 
@@ -353,6 +378,124 @@ def test_cm_candidate_v2_preparation_binds_snapshot_source_settings_and_invocati
     assert json.loads(request["producer_provenance"]["producer_sample"])[
         "backend"
     ] == "protenix_v2_ensemble"
+
+
+@pytest.mark.parametrize(
+    "selection_mode",
+    ["selected_entities", "selected_regions", "selected_residues"],
+)
+def test_cm_candidate_source_scope_resolves_per_generated_map_and_compiles_zero_based_positions(
+    tmp_path: Path, selection_mode: str,
+) -> None:
+    from services.conformational_mapping.frustrampnn_adapter import prepare_cm_candidate_v2
+    from services.frustrampnn.manifests import validate_v2_input_closure
+    from services.frustrampnn.runtime import compile_frustrampnn_command_plan
+    from services.frustrampnn.settings import (
+        FrustraMPNNEffectiveSettings,
+        validate_complete_requested_settings,
+    )
+
+    generated_entity_differs = selection_mode != "selected_residues"
+    source_bytes = _candidate_mmcif() if generated_entity_differs else _candidate_pdb()
+    source = tmp_path / ("candidate.cif" if generated_entity_differs else "candidate.pdb")
+    source.write_bytes(source_bytes)
+    snapshot = _candidate_snapshot(hashlib.sha256(source_bytes).hexdigest())
+    settings_payload = default_settings().model_dump(mode="json", exclude_none=False)
+    settings_payload.pop("settings_value_origin", None)
+    selector = {
+        "entity_instance_id": "protein-1",
+        "source_entity_id": "protein",
+        "label_asym_id": None,
+        "auth_asym_id": None,
+    }
+    settings_payload["protein_selection"] = {
+        "mode": selection_mode,
+        "entities": [selector] if selection_mode == "selected_entities" else [],
+        "regions": [
+            {**selector, "sequence_start": 1, "sequence_end": 1}
+        ] if selection_mode == "selected_regions" else [],
+        "residues": [{
+            **selector,
+            "label_asym_id": "X",
+            "auth_asym_id": "X",
+            "auth_seq_id": 10,
+            "insertion_code": "",
+            "sequence_index": 1,
+        }] if selection_mode == "selected_residues" else [],
+    }
+    settings_payload["source_structure"] = {
+        "selected_model_number": 2,
+        "preferred_altloc": "A",
+    }
+    settings = validate_complete_requested_settings(settings_payload)
+    request = prepare_cm_candidate_v2(
+        source=source,
+        output_pdb_path=tmp_path / "canonical_source.pdb",
+        structure_map_path=tmp_path / "frustrampnn_structure_map_v1.json",
+        request_path=tmp_path / "workflow_component_request_v2.json",
+        authority_artifact_path=tmp_path / "authority_artifact_v1.json",
+        parent_job_id="cm-parent-job",
+        parent_workflow_id="conformational_mapping",
+        candidate={
+            "candidate_id": "candidate-a",
+            "authoritative_structure_path": (
+                "native/candidate.cif" if generated_entity_differs
+                else "native/candidate.pdb"
+            ),
+            "backend_coordinates": {
+                "backend": "protenix_v2_ensemble",
+                "target_id": "target-a",
+                "ordered_seed": 7,
+                "sample_index": 2,
+            },
+        },
+        complex_snapshot=snapshot,
+        requested_settings=settings,
+    )
+
+    effective = FrustraMPNNEffectiveSettings.model_validate(
+        request["effective_settings"],
+        strict=True,
+    )
+    selector_collection = (
+        "entities" if selection_mode == "selected_entities"
+        else "regions" if selection_mode == "selected_regions"
+        else "residues"
+    )
+    assert request["requested_settings"]["protein_selection"][selector_collection][0][
+        "source_entity_id"
+    ] == "protein"
+    structure_map = json.loads(
+        (tmp_path / "frustrampnn_structure_map_v1.json").read_text()
+    )
+    assert structure_map["rows"][0]["source_entity_id"] == (
+        "generated-protein" if generated_entity_differs else "protein"
+    )
+    assert effective.resolved_chains[0].entity.source_entity_id == "protein"
+    if selection_mode == "selected_regions":
+        assert effective.requested_settings.protein_selection.regions[0].sequence_start == 1
+    assert effective.requested_settings.source_structure.model_dump() == {
+        "selected_model_number": 1,
+        "preferred_altloc": "",
+    }
+    validated_map, validated_effective, _ = validate_v2_input_closure(
+        request,
+        (tmp_path / "canonical_source.pdb").read_bytes(),
+        (tmp_path / "frustrampnn_structure_map_v1.json").read_bytes(),
+    )
+    assert validated_map == structure_map
+    assert validated_effective == effective
+    assert [
+        residue.model_position
+        for chain in effective.resolved_chains
+        for residue in chain.residues
+    ] == [0]
+    plan = compile_frustrampnn_command_plan(effective)
+    assert len(plan.entries) == 1
+    assert plan.entries[0].chains == (structure_map["rows"][0]["pdb_chain_id"],)
+    assert plan.entries[0].positions == (
+        None if selection_mode == "selected_entities" else (0,)
+    )
 
 
 def test_cm_external_v2_component_seals_identity_authority_artifact(

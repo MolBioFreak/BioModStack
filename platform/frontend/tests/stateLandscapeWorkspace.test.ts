@@ -120,9 +120,9 @@ test('workspace hides its lens and does not fetch a B2 projection without a cano
     assert.equal(typeof enabled, 'function');
     assert.equal(typeof tabs, 'function');
     assert.equal(enabled!(null), false);
-    assert.deepEqual(tabs!(false), ['ensemble', 'mapping', 'landscape', 'analysis', 'evidence', 'downloads']);
+    assert.deepEqual(tabs!(false), ['ensemble', 'mapping', 'analysis', 'evidence', 'downloads']);
     assert.equal(enabled!({ analysis_id: summary().analysis_id }), true);
-    assert.deepEqual(tabs!(true), ['ensemble', 'mapping', 'landscape', 'state-analysis', 'analysis', 'evidence', 'downloads']);
+    assert.deepEqual(tabs!(true), ['ensemble', 'mapping', 'state-analysis', 'analysis', 'evidence', 'downloads']);
 });
 
 test('workspace fails closed on an otherwise-valid B2 content hash mismatch before exposing its lens or rows', async () => {
@@ -138,7 +138,7 @@ test('workspace fails closed on an otherwise-valid B2 content hash mismatch befo
     altered.artifact.content_sha256 = sha('9');
     assert.throws(() => validateSummary(altered, canonicalAuthority()), /content hash|canonical authority/i);
     assert.equal(workspaceEnabled!(null), false);
-    assert.deepEqual(tabs!(workspaceEnabled!(null)), ['ensemble', 'mapping', 'landscape', 'analysis', 'evidence', 'downloads']);
+    assert.deepEqual(tabs!(workspaceEnabled!(null)), ['ensemble', 'mapping', 'analysis', 'evidence', 'downloads']);
 });
 
 test('workspace rejects a malformed summary and a row page whose next offset skips persisted rows', async () => {
@@ -153,6 +153,18 @@ test('workspace rejects a malformed summary and a row page whose next offset ski
         applied_filters: { pair_id: 'candidate-a__candidate-b', candidate_id: null, entity_instance_id: null, auth_asym_id: null, sequence_start: null, sequence_end: null },
         next_offset: 2, rows: [row()],
     }, accepted, 'candidate-a__candidate-b', 0), /offset|bounds/i);
+    for (const limit of [49, 1001]) {
+        assert.throws(() => validateRows({
+            request_id: 'request-a', selected_analysis_id: summary().analysis_id, offset: 0, limit,
+            applied_filters: { pair_id: 'candidate-a__candidate-b', candidate_id: null, entity_instance_id: null, auth_asym_id: null, sequence_start: null, sequence_end: null },
+            next_offset: null, rows: [row()],
+        }, accepted, 'candidate-a__candidate-b', 0), /limit|bounds/i);
+    }
+    assert.throws(() => validateRows({
+        request_id: 'request-a', selected_analysis_id: summary().analysis_id, offset: 0, limit: 50,
+        applied_filters: { pair_id: 'candidate-a__candidate-b', candidate_id: null, entity_instance_id: null, auth_asym_id: null, sequence_start: null, sequence_end: null },
+        next_offset: null, rows: [row(), row()],
+    }, accepted, 'candidate-a__candidate-b', 0), /duplicate|identity/i);
 });
 
 test('workspace selects a 3D residue only from one exact persisted identity mapping', async () => {

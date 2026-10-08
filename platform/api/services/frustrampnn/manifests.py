@@ -1235,6 +1235,134 @@ def _snapshot_v2(
         os.close(root_fd)
 
 
+def _resolve_cm_source_alias_projection(
+    requested: Any,
+    effective: Any,
+    structure: Mapping[str, Any],
+) -> Any:
+    from .settings import (
+        FrustraMPNNProteinSelection,
+        FrustraMPNNResolvedChainSelection,
+        resolve_effective_settings,
+    )
+
+    source_to_output: dict[tuple[str, str], tuple[str, str, str, str]] = {}
+    generated_chains: list[Any] = []
+    rows = structure["rows"]
+    for chain in effective.resolved_chains:
+        output_keys = {
+            (
+                str(row["entity_instance_id"]),
+                str(row["source_entity_id"] or ""),
+                str(row["label_asym_id"] or ""),
+                str(row["auth_asym_id"]),
+            )
+            for row in rows
+            if (
+                row["entity_instance_id"] == chain.entity.entity_instance_id
+                and row["label_asym_id"] == chain.entity.label_asym_id
+                and row["auth_asym_id"] == chain.entity.auth_asym_id
+                and row["pdb_chain_id"] == chain.pdb_chain_id
+            )
+        }
+        if len(output_keys) != 1:
+            raise ManifestValidationError(
+                "CM effective chain does not bind one exact generated entity identity"
+            )
+        output_key = next(iter(output_keys))
+        source_key = chain.entity.source_key()
+        existing = source_to_output.get(source_key)
+        if existing is not None and existing != output_key:
+            raise ManifestValidationError(
+                "CM source entity maps to conflicting generated entity identities"
+            )
+        source_to_output[source_key] = output_key
+        generated_entity = chain.entity.model_copy(update={
+            "source_entity_id": output_key[1] or None,
+        })
+        generated_chains.append(FrustraMPNNResolvedChainSelection(
+            entity=generated_entity,
+            pdb_chain_id=chain.pdb_chain_id,
+            residues=tuple(
+                residue.model_copy(update={"source_entity_id": output_key[1] or None})
+                for residue in chain.residues
+            ),
+        ))
+
+    selection = requested.protein_selection
+
+    def rebound(selector: Any) -> Any:
+        selector_source_key = (
+            selector.entity_instance_id,
+            selector.source_entity_id or "",
+        )
+        output_key = source_to_output.get(selector_source_key)
+        if output_key is None:
+            raise ManifestValidationError(
+                "CM requested source entity has no effective generated binding"
+            )
+        if (
+            selector.label_asym_id not in {None, output_key[2]}
+            or selector.auth_asym_id not in {None, output_key[3]}
+        ):
+            raise ManifestValidationError(
+                "CM requested source entity conflicts with generated chain authority"
+            )
+        return selector.model_copy(update={
+            "source_entity_id": output_key[1] or None,
+            "label_asym_id": output_key[2] or None,
+            "auth_asym_id": output_key[3],
+        })
+
+    if selection.mode == "selected_entities":
+        candidate_selection = FrustraMPNNProteinSelection(
+            mode=selection.mode,
+            entities=tuple(rebound(selector) for selector in selection.entities),
+        )
+    elif selection.mode == "selected_regions":
+        candidate_selection = FrustraMPNNProteinSelection(
+            mode=selection.mode,
+            regions=tuple(rebound(selector) for selector in selection.regions),
+        )
+    elif selection.mode == "selected_residues":
+        candidate_selection = FrustraMPNNProteinSelection(
+            mode=selection.mode,
+            residues=tuple(rebound(selector) for selector in selection.residues),
+        )
+    else:
+        candidate_selection = selection
+    candidate_requested = requested.model_copy(
+        update={"protein_selection": candidate_selection}
+    )
+    try:
+        resolved = resolve_effective_settings(candidate_requested, structure)
+    except Exception as exc:
+        raise ManifestValidationError(
+            f"CM generated-identity residue resolution is invalid: {exc}"
+        ) from exc
+    expected_chains = sorted(generated_chains, key=lambda chain: chain.pdb_chain_id)
+    actual_chains = sorted(resolved.resolved_chains, key=lambda chain: chain.pdb_chain_id)
+    if actual_chains != expected_chains:
+        raise ManifestValidationError(
+            "CM effective source identities do not project to the exact generated map rows"
+        )
+    for field in (
+        "settings_value_origin",
+        "normalization_policy_id",
+        "normalization_policy_version",
+        "threshold_policy_id",
+        "threshold_policy_sha256",
+        "capability_inventory_byte_sha256",
+        "resolution_identity",
+        "value_sources",
+    ):
+        if getattr(resolved, field) != getattr(effective, field):
+            raise ManifestValidationError(
+                f"CM generated-identity projection changes effective {field}"
+            )
+    return resolved
+
+
 def validate_v2_input_closure(
     request: Mapping[str, Any],
     normalized_pdb: bytes,
@@ -1334,12 +1462,19 @@ def validate_v2_input_closure(
     if structure["identity_authority"] != authority:
         raise ManifestValidationError("v2 structure-map identity authority binding is stale")
 
-    try:
-        resolved_again = resolve_effective_settings(requested, structure)
-    except Exception as exc:
-        raise ManifestValidationError(f"v2 effective residue resolution is invalid: {exc}") from exc
-    if resolved_again != effective:
-        raise ManifestValidationError("v2 effective settings are stale relative to the exact map")
+    if request["identity_authority"] == "cm_complex_snapshot":
+        resolved_again = _resolve_cm_source_alias_projection(
+            requested, effective, structure,
+        )
+        map_resolved_chains = resolved_again.resolved_chains
+    else:
+        try:
+            resolved_again = resolve_effective_settings(requested, structure)
+        except Exception as exc:
+            raise ManifestValidationError(f"v2 effective residue resolution is invalid: {exc}") from exc
+        if resolved_again != effective:
+            raise ManifestValidationError("v2 effective settings are stale relative to the exact map")
+        map_resolved_chains = effective.resolved_chains
 
     source_fields = (
         "entity_instance_id", "source_entity_id", "label_asym_id", "auth_asym_id",
@@ -1348,7 +1483,7 @@ def validate_v2_input_closure(
     )
     rows = structure["rows"]
     matched_indexes: set[int] = set()
-    for chain in effective.resolved_chains:
+    for chain in map_resolved_chains:
         for residue in chain.residues:
             expected = residue.model_dump(mode="json", exclude_none=False)
             matches = [

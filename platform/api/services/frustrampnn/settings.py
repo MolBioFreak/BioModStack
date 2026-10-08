@@ -87,14 +87,44 @@ class FrustraMPNNEntitySelector(_StrictFrozenModel):
     entity_instance_id: NonEmptyString
     source_entity_id: OptionalNonEmptyString
     label_asym_id: OptionalNonEmptyString
-    auth_asym_id: NonEmptyString
+    auth_asym_id: OptionalNonEmptyString
 
     def canonical_key(self) -> tuple[str, str, str, str]:
         return (
             self.entity_instance_id,
             self.source_entity_id or "",
             self.label_asym_id or "",
-            self.auth_asym_id,
+            self.auth_asym_id or "",
+        )
+
+    def source_key(self) -> tuple[str, str]:
+        return (self.entity_instance_id, self.source_entity_id or "")
+
+    def matches_entity_key(self, key: tuple[str, str, str, str]) -> bool:
+        return (
+            key[:2] == self.source_key()
+            and (self.label_asym_id is None or key[2] == self.label_asym_id)
+            and (self.auth_asym_id is None or key[3] == self.auth_asym_id)
+        )
+
+
+class FrustraMPNNRegionSelector(FrustraMPNNEntitySelector):
+    """One inclusive source-sequence region on one stable protein entity."""
+
+    sequence_start: Annotated[StrictInt, Field(ge=1)]
+    sequence_end: Annotated[StrictInt, Field(ge=1)]
+
+    @model_validator(mode="after")
+    def _validate_bounds(self) -> FrustraMPNNRegionSelector:
+        if self.sequence_start > self.sequence_end:
+            raise ValueError("region sequence_start must be <= sequence_end")
+        return self
+
+    def region_key(self) -> tuple[str, str, str, str, int, int]:
+        return (
+            *super().canonical_key(),
+            self.sequence_start,
+            self.sequence_end,
         )
 
 
@@ -133,12 +163,14 @@ class FrustraMPNNProteinSelection(_StrictFrozenModel):
     mode: Literal[
         "all_protein_entities",
         "selected_entities",
+        "selected_regions",
         "selected_residues",
     ] = "all_protein_entities"
     entities: tuple[FrustraMPNNEntitySelector, ...] = ()
+    regions: tuple[FrustraMPNNRegionSelector, ...] = ()
     residues: tuple[FrustraMPNNResidueSelector, ...] = ()
 
-    @field_validator("entities", "residues", mode="before")
+    @field_validator("entities", "regions", "residues", mode="before")
     @classmethod
     def _sequence_to_tuple(cls, value: Any) -> tuple[Any, ...]:
         if value is None:
@@ -150,22 +182,47 @@ class FrustraMPNNProteinSelection(_StrictFrozenModel):
     @model_validator(mode="after")
     def _validate_mode_and_canonicalize(self) -> FrustraMPNNProteinSelection:
         if self.mode == "all_protein_entities":
-            if self.entities or self.residues:
+            if self.entities or self.regions or self.residues:
                 raise ValueError(
-                    "all_protein_entities cannot contain entity or residue selectors"
+                    "all_protein_entities cannot contain entity, region, or residue selectors"
                 )
         elif self.mode == "selected_entities":
-            if not self.entities or self.residues:
+            if not self.entities or self.regions or self.residues:
                 raise ValueError(
-                    "selected_entities requires entities and cannot contain residues"
+                    "selected_entities requires entities and cannot contain regions or residues"
                 )
             identities = [item.entity_instance_id for item in self.entities]
             if len(identities) != len(set(identities)):
                 raise ValueError("selected_entities contains a duplicate entity identity")
-        else:
-            if not self.residues or self.entities:
+        elif self.mode == "selected_regions":
+            if not self.regions or self.entities or self.residues:
                 raise ValueError(
-                    "selected_residues requires residues and cannot contain entities"
+                    "selected_regions requires regions and cannot contain entities or residues"
+                )
+            ordered_regions = sorted(
+                self.regions, key=lambda item: item.region_key()
+            )
+            by_entity: dict[tuple[str, str, str, str], list[FrustraMPNNRegionSelector]] = {}
+            for region in ordered_regions:
+                by_entity.setdefault(
+                    FrustraMPNNEntitySelector(
+                        entity_instance_id=region.entity_instance_id,
+                        source_entity_id=region.source_entity_id,
+                        label_asym_id=region.label_asym_id,
+                        auth_asym_id=region.auth_asym_id,
+                    ).canonical_key(),
+                    [],
+                ).append(region)
+            if any(
+                current.sequence_start <= previous.sequence_end
+                for regions in by_entity.values()
+                for previous, current in zip(regions, regions[1:], strict=False)
+            ):
+                raise ValueError("selected_regions cannot contain overlapping regions")
+        else:
+            if not self.residues or self.entities or self.regions:
+                raise ValueError(
+                    "selected_residues requires residues and cannot contain entities or regions"
                 )
             locators = [item.locator_key() for item in self.residues]
             if len(locators) != len(set(locators)):
@@ -175,6 +232,11 @@ class FrustraMPNNProteinSelection(_StrictFrozenModel):
             self,
             "entities",
             tuple(sorted(self.entities, key=lambda item: item.canonical_key())),
+        )
+        object.__setattr__(
+            self,
+            "regions",
+            tuple(sorted(self.regions, key=lambda item: item.region_key())),
         )
         object.__setattr__(
             self,
@@ -331,6 +393,7 @@ class FrustraMPNNResolutionIdentity(_StrictFrozenModel):
 class FrustraMPNNProteinSelectionValueSources(_StrictFrozenModel):
     mode: ValueSource
     entities: ValueSource
+    regions: ValueSource = "bms_default"
     residues: ValueSource
 
 
@@ -380,6 +443,18 @@ class FrustraMPNNEffectiveSettings(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def _validate_resolution_and_hashes(self) -> FrustraMPNNEffectiveSettings:
+        protein_sources = self.value_sources.protein_selection
+        if "regions" not in protein_sources.model_fields_set:
+            protein_sources = protein_sources.model_copy(
+                update={"regions": self.settings_value_origin}
+            )
+            object.__setattr__(
+                self,
+                "value_sources",
+                self.value_sources.model_copy(
+                    update={"protein_selection": protein_sources}
+                ),
+            )
         if not self.resolved_chains:
             raise ValueError("effective settings require a non-empty resolved chain selection")
         object.__setattr__(
@@ -408,12 +483,46 @@ class FrustraMPNNEffectiveSettings(_StrictFrozenModel):
             raise ValueError("effective settings contain duplicate normalized model position")
 
         selection = self.requested_settings.protein_selection
-        resolved_entities = {chain.entity.canonical_key() for chain in self.resolved_chains}
+        resolved_entities = [chain.entity for chain in self.resolved_chains]
         if selection.mode == "selected_entities":
-            selected_entities = {entity.canonical_key() for entity in selection.entities}
-            if resolved_entities != selected_entities:
+            if len(resolved_entities) != len(selection.entities) or any(
+                sum(
+                    entity.matches_entity_key(resolved.canonical_key())
+                    for resolved in resolved_entities
+                )
+                != 1
+                for entity in selection.entities
+            ):
                 raise ValueError(
                     "resolved chain entity identities do not match every selected entity"
+                )
+        elif selection.mode == "selected_regions":
+            resolved_region_positions = [
+                (*chain.entity.source_key(), residue.sequence_index)
+                for chain in self.resolved_chains
+                for residue in chain.residues
+            ]
+            expected_count = sum(
+                region.sequence_end - region.sequence_start + 1
+                for region in selection.regions
+            )
+            complete = len(resolved_region_positions) == expected_count
+            for region in selection.regions:
+                observed = {
+                    sequence_index
+                    for *source_key, sequence_index in resolved_region_positions
+                    if tuple(source_key) == region.source_key()
+                    and region.sequence_start <= sequence_index <= region.sequence_end
+                }
+                span_size = region.sequence_end - region.sequence_start + 1
+                complete = complete and (
+                    len(observed) == span_size
+                    and min(observed, default=0) == region.sequence_start
+                    and max(observed, default=0) == region.sequence_end
+                )
+            if not complete:
+                raise ValueError(
+                    "resolved region coverage does not match every requested region"
                 )
         elif selection.mode == "selected_residues":
             selected_residues = {residue.canonical_key() for residue in selection.residues}
@@ -446,10 +555,48 @@ def _canonical_model_dump(model: BaseModel) -> dict[str, Any]:
     return model.model_dump(mode="json", by_alias=True, exclude_none=False)
 
 
+def _compatible_requested_settings_payload(
+    settings: Mapping[str, Any] | FrustraMPNNRequestedSettings,
+) -> dict[str, Any]:
+    payload = (
+        _canonical_model_dump(settings)
+        if isinstance(settings, BaseModel)
+        else copy.deepcopy(dict(settings))
+    )
+    selection = payload.get("protein_selection")
+    if isinstance(selection, dict) and selection.get("regions") == []:
+        selection.pop("regions")
+    return payload
+
+
+def compatible_effective_settings_payload(
+    settings: Mapping[str, Any] | BaseModel,
+) -> dict[str, Any]:
+    payload = (
+        _canonical_model_dump(settings)
+        if isinstance(settings, BaseModel)
+        else copy.deepcopy(dict(settings))
+    )
+    requested = payload.get("requested_settings")
+    regions_empty = False
+    if isinstance(requested, dict):
+        selection = requested.get("protein_selection")
+        if isinstance(selection, dict) and selection.get("regions") == []:
+            regions_empty = True
+            selection.pop("regions")
+    if regions_empty:
+        value_sources = payload.get("value_sources")
+        if isinstance(value_sources, dict):
+            protein_sources = value_sources.get("protein_selection")
+            if isinstance(protein_sources, dict):
+                protein_sources.pop("regions", None)
+    return payload
+
+
 def requested_settings_sha256(settings: FrustraMPNNRequestedSettings) -> str:
     if not isinstance(settings, FrustraMPNNRequestedSettings):
         raise TypeError("settings must be typed FrustraMPNN requested settings")
-    return canonical_sha256(_canonical_model_dump(settings))
+    return canonical_sha256(_compatible_requested_settings_payload(settings))
 
 
 def classification_policy_sha256(policy: FrustraMPNNClassificationPolicy) -> str:
@@ -459,11 +606,7 @@ def classification_policy_sha256(policy: FrustraMPNNClassificationPolicy) -> str
 
 
 def _effective_payload_sha256(settings: Mapping[str, Any] | BaseModel) -> str:
-    payload = (
-        _canonical_model_dump(settings)
-        if isinstance(settings, BaseModel)
-        else copy.deepcopy(dict(settings))
-    )
+    payload = compatible_effective_settings_payload(settings)
     payload.pop("effective_settings_sha256", None)
     return canonical_sha256(payload)
 
@@ -515,7 +658,10 @@ def validate_complete_requested_settings(
                 }
             ),
         ),
-        (("protein_selection",), frozenset({"mode", "entities", "residues"})),
+        (
+            ("protein_selection",),
+            frozenset({"mode", "entities", "regions", "residues"}),
+        ),
         (
             ("source_structure",),
             frozenset({"selected_model_number", "preferred_altloc"}),
@@ -554,6 +700,19 @@ def validate_complete_requested_settings(
                     "source_entity_id",
                     "label_asym_id",
                     "auth_asym_id",
+                }
+            ),
+        ),
+        (
+            "regions",
+            frozenset(
+                {
+                    "entity_instance_id",
+                    "source_entity_id",
+                    "label_asym_id",
+                    "auth_asym_id",
+                    "sequence_start",
+                    "sequence_end",
                 }
             ),
         ),
@@ -626,6 +785,7 @@ def complete_requested_settings_schema() -> dict[str, Any]:
     definitions["FrustraMPNNProteinSelection"]["required"] = [
         "mode",
         "entities",
+        "regions",
         "residues",
     ]
     definitions["FrustraMPNNSourceStructureSettings"]["required"] = [
@@ -655,6 +815,7 @@ def settings_value_sources(
         protein_selection=FrustraMPNNProteinSelectionValueSources(
             mode=origin,
             entities=origin,
+            regions=origin,
             residues=origin,
         ),
         source_structure=FrustraMPNNSourceStructureValueSources(
@@ -908,7 +1069,12 @@ def resolve_effective_settings(
     selection = requested.protein_selection
     selected_rows: list[dict[str, Any]] = []
     if selection.mode == "all_protein_entities":
-        selected_rows = mapped_rows
+        if len(mapped_rows) != len(rows):
+            raise SourceResolutionError(
+                "all-protein scope contains excluded or unscoreable residues",
+                location=("protein_selection",),
+            )
+        selected_rows = rows
     elif selection.mode == "selected_entities":
         rows_by_entity: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
         rows_by_instance: dict[str, set[tuple[str, str, str, str]]] = {}
@@ -917,9 +1083,16 @@ def resolve_effective_settings(
             rows_by_entity.setdefault(key, []).append(row)
             rows_by_instance.setdefault(key[0], set()).add(key)
         for index, entity in enumerate(selection.entities):
-            key = entity.canonical_key()
-            matches = rows_by_entity.get(key, [])
             location = ("protein_selection", "entities", index)
+            matching_keys = [
+                key for key in rows_by_entity if entity.matches_entity_key(key)
+            ]
+            if len(matching_keys) > 1:
+                raise SourceResolutionError(
+                    "selected entity identity is ambiguous",
+                    location=location,
+                )
+            matches = rows_by_entity.get(matching_keys[0], []) if matching_keys else []
             if not matches:
                 if entity.entity_instance_id in rows_by_instance:
                     raise SourceResolutionError(
@@ -927,13 +1100,67 @@ def resolve_effective_settings(
                         location=location,
                     )
                 raise SourceResolutionError("selected entity is absent", location=location)
-            scoreable = [row for row in matches if row["status"] == "mapped"]
-            if not scoreable:
+            if any(row["status"] != "mapped" for row in matches):
                 raise SourceResolutionError(
-                    "selected entity is excluded or has no scoreable mapped residues",
+                    "selected entity contains excluded or unscoreable residues",
                     location=location,
                 )
-            selected_rows.extend(scoreable)
+            selected_rows.extend(matches)
+    elif selection.mode == "selected_regions":
+        rows_by_entity: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+        rows_by_instance: dict[str, set[tuple[str, str, str, str]]] = {}
+        for row in rows:
+            key = _row_entity_key(row)
+            rows_by_entity.setdefault(key, []).append(row)
+            rows_by_instance.setdefault(key[0], set()).add(key)
+        for index, region in enumerate(selection.regions):
+            location = ("protein_selection", "regions", index)
+            matching_keys = [
+                key for key in rows_by_entity if region.matches_entity_key(key)
+            ]
+            if len(matching_keys) > 1:
+                raise SourceResolutionError(
+                    "selected region entity identity is ambiguous",
+                    location=location,
+                )
+            entity_rows = (
+                rows_by_entity.get(matching_keys[0], []) if matching_keys else []
+            )
+            if not entity_rows:
+                if region.entity_instance_id in rows_by_instance:
+                    raise SourceResolutionError(
+                        "selected region entity identity is stale or mismatched",
+                        location=location,
+                    )
+                raise SourceResolutionError(
+                    "selected region entity is absent", location=location
+                )
+            region_rows = [
+                row for row in entity_rows
+                if region.sequence_start
+                <= int(row["sequence_index"])
+                <= region.sequence_end
+            ]
+            observed_positions = {
+                int(row["sequence_index"]) for row in region_rows
+            }
+            span_size = region.sequence_end - region.sequence_start + 1
+            if (
+                len(region_rows) != span_size
+                or len(observed_positions) != span_size
+                or min(observed_positions, default=0) != region.sequence_start
+                or max(observed_positions, default=0) != region.sequence_end
+            ):
+                raise SourceResolutionError(
+                    "selected region sequence coverage is incomplete",
+                    location=location,
+                )
+            if any(row["status"] != "mapped" for row in region_rows):
+                raise SourceResolutionError(
+                    "selected region contains excluded or unscoreable residues",
+                    location=location,
+                )
+            selected_rows.extend(region_rows)
     else:
         rows_by_source: dict[
             tuple[str, str, str, str, int, str, int], list[dict[str, Any]]

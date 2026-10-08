@@ -13,7 +13,11 @@ from services.frustrampnn.configuration import (
     global_configuration,
     request_parameters,
 )
-from services.frustrampnn.contracts import ContractValidationError, validate_schema
+from services.frustrampnn.contracts import (
+    ContractValidationError,
+    canonical_sha256,
+    validate_schema,
+)
 from services.frustrampnn.settings import (
     FrustraMPNNResolutionIdentity,
     FrustraMPNNResolvedChainSelection,
@@ -150,6 +154,39 @@ def _request_v2() -> dict[str, object]:
             "execution_receipt",
         ],
     }
+
+
+def _pre_region_v2_request() -> dict[str, object]:
+    request = copy.deepcopy(_request_v2())
+    requested = request["requested_settings"]
+    effective = request["effective_settings"]
+    configuration = request["execution_configuration"]
+    assert isinstance(requested, dict)
+    assert isinstance(effective, dict)
+    assert isinstance(configuration, dict)
+
+    requested["protein_selection"].pop("regions")
+    legacy_requested_hash = canonical_sha256(requested)
+    request["requested_settings_sha256"] = legacy_requested_hash
+
+    effective["requested_settings"]["protein_selection"].pop("regions")
+    effective["value_sources"]["protein_selection"].pop("regions")
+    effective["settings_sha256"] = legacy_requested_hash
+    legacy_effective_hash = canonical_sha256({
+        key: value
+        for key, value in effective.items()
+        if key != "effective_settings_sha256"
+    })
+    effective["effective_settings_sha256"] = legacy_effective_hash
+    request["effective_settings_sha256"] = legacy_effective_hash
+
+    configuration["effective_settings"] = copy.deepcopy(effective)
+    configuration["effective_settings_sha256"] = legacy_effective_hash
+    configuration["configuration_sha256"] = configuration_sha256(configuration)
+    request["execution_configuration_sha256"] = configuration[
+        "configuration_sha256"
+    ]
+    return request
 
 
 def _assert_closed_object_schemas(node: object, location: str = "$") -> None:
@@ -338,6 +375,43 @@ def test_v2_request_rejects_caller_runtime_storage_or_raw_cli_values() -> None:
         request[field] = value
         with pytest.raises(ContractValidationError):
             validate_schema("workflow_component_request_v2", request)
+
+
+def test_pre_region_v1_v2_settings_and_component_hash_chain_remain_readable() -> None:
+    from services.frustrampnn.settings import (
+        FrustraMPNNEffectiveSettings,
+        effective_settings_sha256,
+        requested_settings_sha256,
+        validate_persisted_requested_settings,
+    )
+
+    request = _pre_region_v2_request()
+    requested = request["requested_settings"]
+    effective = request["effective_settings"]
+    configuration = request["execution_configuration"]
+    assert isinstance(requested, dict)
+    assert isinstance(effective, dict)
+    assert isinstance(configuration, dict)
+
+    validate_schema("frustrampnn_requested_settings_v1", requested)
+    validate_schema("frustrampnn_effective_settings_v1", effective)
+    validate_schema("frustrampnn_execution_configuration_v2", configuration)
+    validate_schema("workflow_component_request_v2", request)
+
+    parsed_requested = validate_persisted_requested_settings(requested)
+    parsed_effective = FrustraMPNNEffectiveSettings.model_validate(
+        effective, strict=True
+    )
+    assert parsed_requested.protein_selection.regions == ()
+    assert parsed_effective.value_sources.protein_selection.regions == (
+        parsed_effective.settings_value_origin
+    )
+    assert requested_settings_sha256(parsed_requested) == request[
+        "requested_settings_sha256"
+    ]
+    assert effective_settings_sha256(parsed_effective) == request[
+        "effective_settings_sha256"
+    ]
 
 
 def test_v1_historical_request_validation_remains_readable_unchanged() -> None:

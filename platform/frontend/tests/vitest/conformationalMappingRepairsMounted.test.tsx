@@ -20,6 +20,7 @@ import {
     type CmStatus,
     type CmSubmitRequest,
 } from '../../src/components/conformationalMapping/conformationalMappingApi.js';
+import type { FrustraMpnnSourceInspection } from '../../src/components/frustrampnn/frustraMpnnSettingsState.js';
 import { api } from '../../src/lib/api.js';
 
 const sha = (letter: string) => letter.repeat(64);
@@ -53,11 +54,22 @@ const snapshot: CmSource = {
 const mountLauncher = async (services: Record<string, unknown>, initialValues: Record<string, unknown> = {}) => {
     sessionStorage.clear();
     const queryClient = client();
+    const resolvedServices = {
+        loadFrustrampnnIntegration: async () => ({
+            workflows: {
+                conformational_mapping: {
+                    default_enabled: true,
+                    enabled_summary: 'Required state-conditioned analysis.',
+                },
+            },
+        }),
+        ...services,
+    };
     let renderer: ReactTestRenderer;
     await act(async () => {
         renderer = create(
             <MemoryRouter><QueryClientProvider client={queryClient}>
-                <ConformationalMappingLauncher services={services as never} initialValues={initialValues} />
+                <ConformationalMappingLauncher services={resolvedServices as never} initialValues={initialValues} />
             </QueryClientProvider></MemoryRouter>,
         );
     });
@@ -73,6 +85,37 @@ const clickButton = async (renderer: ReactTestRenderer, label: RegExp) => {
 };
 
 afterEach(() => sessionStorage.clear());
+
+test('mounted launcher uses independent record/source and science/preview columns', async () => {
+    const mounted = await mountLauncher({
+        listSources: async () => [],
+        loadFrustrampnnIntegration: async () => ({
+            workflows: {
+                conformational_mapping: {
+                    default_enabled: true,
+                    enabled_summary: 'Required state-conditioned analysis.',
+                },
+            },
+        }),
+    });
+
+    const left = mounted.renderer.root.findByProps({ 'data-cm-launcher-column': 'record-source' });
+    const right = mounted.renderer.root.findByProps({ 'data-cm-launcher-column': 'science-preview' });
+    const leftText = text(left);
+    const rightText = text(right);
+    assert.ok(leftText.indexOf('Run record') < leftText.indexOf('Source browser'));
+    assert.doesNotMatch(leftText, /Scientific controls|Input preview/);
+    assert.ok(rightText.indexOf('Scientific controls') < rightText.indexOf('Input preview'));
+    assert.doesNotMatch(rightText, /Run record|Source browser/);
+    assert.match(
+        rightText,
+        /Region controls require one registered protein source\./,
+    );
+
+    await act(async () => mounted.renderer.unmount());
+    mounted.client.clear();
+});
+
 
 test('mounted launcher round-trips reference state-landscape authority into the typed request', async () => {
     const submissions: CmSubmitRequest[] = [];
@@ -112,6 +155,382 @@ test('mounted launcher round-trips reference state-landscape authority into the 
     await act(async () => mounted.renderer.unmount());
     mounted.client.clear();
 });
+
+test('mounted launcher inspects external-import structures for FrustraMPNN scope', async () => {
+    const externalSource: CmSource = {
+        ...snapshot,
+        source_id: 'external-structure',
+        source_kind: 'structure_upload',
+        format: 'mmcif',
+        metadata: { name: 'Imported structure' },
+        authority_receipt: {
+            schema_name: 'cm_source_authority_receipt',
+            schema_version: 1,
+            source_id: 'external-structure',
+            source_kind: 'structure_upload',
+            content_sha256: sha('a'),
+            authority_kind: 'run_artifact',
+            receipt_sha256: sha('b'),
+            payload: {},
+        },
+    };
+    const inspectedSources: string[] = [];
+    const mounted = await mountLauncher({
+        listSources: async () => [externalSource],
+        inspectFrustrampnnSource: async (sourceId: string) => {
+            inspectedSources.push(sourceId);
+            return {
+                source_models: [1], selected_source_model: 1,
+                observed_altlocs: [''], selected_altloc: '',
+                protein_entities: [{
+                    entity_instance_id: 'A', source_entity_id: '1',
+                    label_asym_id: null, auth_asym_id: null, pdb_chain_id: null,
+                }],
+                protein_sequence_spans: [{
+                    entity_instance_id: 'A', source_entity_id: '1',
+                    label_asym_id: null, auth_asym_id: null,
+                    sequence_start: 1, sequence_end: 25,
+                }],
+                mapped_residues: [],
+            };
+        },
+    }, {
+        name: 'External region analysis', backend: 'external_import',
+        registered_artifact_ids: [externalSource.source_id],
+        ordered_seeds: [0], samples_per_seed: 1,
+    });
+
+    assert.deepEqual(inspectedSources, [externalSource.source_id]);
+    const mode = mounted.renderer.root.findByProps({ 'data-frustrampnn-selection-mode': true });
+    await act(async () => mode.props.onChange({ target: { value: 'selected_entities' } }));
+    await flush();
+    const sourceSelectorText = text(mounted.renderer.root);
+    assert.match(sourceSelectorText, /Source instance A/i);
+    assert.match(sourceSelectorText, /Scope:\s*Source instance A/i);
+    assert.doesNotMatch(sourceSelectorText, /Chain null/i);
+    await act(async () => mounted.renderer.unmount());
+    mounted.client.clear();
+});
+
+test('mounted launcher loads source-backed sequence spans and submits one exact FrustraMPNN region', async () => {
+    const submissions: CmSubmitRequest[] = [];
+    const inspection: FrustraMpnnSourceInspection = {
+        source_models: [1],
+        selected_source_model: 1,
+        observed_altlocs: [''],
+        selected_altloc: '',
+        protein_entities: [{
+            entity_instance_id: 'A', source_entity_id: '1', label_asym_id: null,
+            auth_asym_id: null, pdb_chain_id: null,
+        }],
+        protein_sequence_spans: [{
+            entity_instance_id: 'A', source_entity_id: '1', label_asym_id: null,
+            auth_asym_id: null, sequence_start: 1, sequence_end: 50,
+        }],
+        mapped_residues: [],
+    };
+    const inspectedSources: string[] = [];
+    const mounted = await mountLauncher({
+        listSources: async () => [snapshot],
+        loadFrustrampnnIntegration: async () => ({
+            workflows: {
+                conformational_mapping: {
+                    default_enabled: true,
+                    enabled_summary: 'Required state-conditioned analysis.',
+                },
+            },
+        }),
+        inspectFrustrampnnSource: async (sourceId: string) => {
+            inspectedSources.push(sourceId);
+            return inspection;
+        },
+        submitRequest: async (payload: CmSubmitRequest) => {
+            submissions.push(payload);
+            return {
+                request_id: 'request-region', job_id: 'request-region', status: 'queued',
+                backend: payload.backend, request_sha256: sha('c'), coordinate_plan_sha256: sha('d'), expected_cardinality: 1,
+            };
+        },
+    }, {
+        name: 'Region analysis', backend: 'protenix_v2_ensemble',
+        registered_snapshot_id: snapshot.source_id, ordered_seeds: [101], samples_per_seed: 1,
+    });
+
+    assert.deepEqual(inspectedSources, [snapshot.source_id]);
+    const mode = mounted.renderer.root.findByProps({ 'data-frustrampnn-selection-mode': true });
+    await act(async () => mode.props.onChange({ target: { value: 'selected_regions' } }));
+    await flush();
+    const start = mounted.renderer.root.findByProps({ 'data-frustrampnn-region-start': true });
+    await act(async () => start.props.onChange({ target: { value: '10' } }));
+    await flush();
+    await clickButton(mounted.renderer, /Launch conformational mapping/i);
+
+    assert.deepEqual(submissions[0].frustrampnn_settings.protein_selection, {
+        mode: 'selected_regions',
+        entities: [],
+        regions: [{
+            entity_instance_id: 'A', source_entity_id: '1', label_asym_id: null,
+            auth_asym_id: null, sequence_start: 10, sequence_end: 50,
+        }],
+        residues: [],
+    });
+    assert.deepEqual(submissions[0].frustrampnn_settings.source_structure, {
+        selected_model_number: 1,
+        preferred_altloc: '',
+    });
+    const persistedDraft = JSON.parse(
+        sessionStorage.getItem('bms.conformational-mapping.launcher.v1') || '{}',
+    ) as Record<string, unknown>;
+    assert.equal(Object.hasOwn(persistedDraft, 'frustrampnnSelectionSourceId'), false);
+
+    await act(async () => mounted.renderer.unmount());
+    mounted.client.clear();
+});
+
+test('mounted launcher clears source-specific FrustraMPNN intent when the selected source changes', async () => {
+    const secondSnapshot: CmSource = {
+        ...snapshot,
+        source_id: 'snapshot-source-2',
+        sha256: sha('2'),
+        metadata: { name: 'Second kinase complex', target_ids: ['target-b'] },
+        authority_receipt: {
+            ...snapshot.authority_receipt!,
+            source_id: 'snapshot-source-2',
+            content_sha256: sha('2'),
+            receipt_sha256: sha('3'),
+            payload: {
+                target_ids: ['target-b'], model_ids: ['model-2'], sample_ids: ['sample-2'],
+                chain_ids: ['A'], entity_ids: ['entity-2'],
+            },
+        },
+    };
+    const inspection = (sourceId: string): FrustraMpnnSourceInspection => ({
+        source_models: [1], selected_source_model: 1,
+        observed_altlocs: [''], selected_altloc: '',
+        protein_entities: [{
+            entity_instance_id: sourceId === snapshot.source_id ? 'A' : 'B',
+            source_entity_id: sourceId === snapshot.source_id ? '1' : '2',
+            label_asym_id: null, auth_asym_id: null, pdb_chain_id: null,
+        }],
+        protein_sequence_spans: [{
+            entity_instance_id: sourceId === snapshot.source_id ? 'A' : 'B',
+            source_entity_id: sourceId === snapshot.source_id ? '1' : '2',
+            label_asym_id: null, auth_asym_id: null,
+            sequence_start: 1, sequence_end: 50,
+        }],
+        mapped_residues: [],
+    });
+    const submissions: CmSubmitRequest[] = [];
+    const mounted = await mountLauncher({
+        listSources: async () => [snapshot, secondSnapshot],
+        inspectFrustrampnnSource: async (sourceId: string) => inspection(sourceId),
+        submitRequest: async (payload: CmSubmitRequest) => {
+            submissions.push(payload);
+            return {
+                request_id: 'request-source-switch', job_id: 'request-source-switch', status: 'queued',
+                backend: payload.backend, request_sha256: sha('4'), coordinate_plan_sha256: sha('5'), expected_cardinality: 1,
+            };
+        },
+    }, {
+        name: 'Source switch', backend: 'protenix_v2_ensemble',
+        registered_snapshot_id: snapshot.source_id, ordered_seeds: [101], samples_per_seed: 1,
+    });
+
+    const mode = mounted.renderer.root.findByProps({ 'data-frustrampnn-selection-mode': true });
+    await act(async () => mode.props.onChange({ target: { value: 'selected_regions' } }));
+    await flush();
+    assert.equal(mounted.renderer.root.findByProps({ 'data-frustrampnn-selection-mode': true }).props.value, 'selected_regions');
+
+    await clickButton(mounted.renderer, /^Cached$/i);
+    await clickButton(mounted.renderer, /snapshot-source-2/i);
+    assert.equal(
+        mounted.renderer.root.findByProps({ 'data-frustrampnn-selection-mode': true }).props.value,
+        'all_protein_entities',
+    );
+    await clickButton(mounted.renderer, /Launch conformational mapping/i);
+    assert.equal(submissions[0]?.registered_snapshot_id, secondSnapshot.source_id);
+    assert.deepEqual(submissions[0]?.frustrampnn_settings.protein_selection, {
+        mode: 'all_protein_entities', entities: [], regions: [], residues: [],
+    });
+
+    await act(async () => mounted.renderer.unmount());
+    mounted.client.clear();
+});
+
+test('mounted launcher blocks reopened source-specific intent while source inspection is pending or failed', async () => {
+    const submissions: CmSubmitRequest[] = [];
+    let rejectInspection!: (reason?: unknown) => void;
+    const pendingInspection = new Promise<FrustraMpnnSourceInspection>((_resolve, reject) => {
+        rejectInspection = reject;
+    });
+    const mounted = await mountLauncher({
+        listSources: async () => [snapshot],
+        inspectFrustrampnnSource: async () => pendingInspection,
+        submitRequest: async (payload: CmSubmitRequest) => {
+            submissions.push(payload);
+            throw new Error('submission must remain unreachable');
+        },
+    }, {
+        name: 'Reopened region', backend: 'protenix_v2_ensemble',
+        registered_snapshot_id: snapshot.source_id, ordered_seeds: [101], samples_per_seed: 1,
+        frustrampnn_settings: {
+            schema_name: 'frustrampnn_settings', schema_version: 1,
+            protein_selection: {
+                mode: 'selected_regions', entities: [], residues: [],
+                regions: [{
+                    entity_instance_id: 'A', source_entity_id: '1', label_asym_id: null,
+                    auth_asym_id: null, sequence_start: 10, sequence_end: 20,
+                }],
+            },
+            source_structure: { selected_model_number: 1, preferred_altloc: '' },
+            classification_policy: { mode: 'canonical', high_max: -1.0, minimal_min: 0.58 },
+        },
+    });
+
+    const launch = mounted.renderer.root.findAllByType('button').find((item) => /Launch conformational mapping/i.test(text(item)));
+    assert.ok(launch);
+    assert.equal(launch.props.disabled, true);
+    assert.match(text(mounted.renderer.root), /source-specific FrustraMPNN selection.*inspection/i);
+    assert.match(text(mounted.renderer.root), /Resolving exact source sequence identities/i);
+    assert.equal(submissions.length, 0);
+
+    await act(async () => rejectInspection(new Error('inspection unavailable')));
+    await flush();
+    const failedLaunch = mounted.renderer.root.findAllByType('button').find((item) => /Launch conformational mapping/i.test(text(item)));
+    assert.ok(failedLaunch);
+    assert.equal(failedLaunch.props.disabled, true);
+    assert.match(text(mounted.renderer.root), /source-specific FrustraMPNN selection.*inspection/i);
+    assert.equal(submissions.length, 0);
+
+    await act(async () => mounted.renderer.unmount());
+    mounted.client.clear();
+});
+
+test('mounted launcher requires a selector edit before rebinding reopened source-specific intent', async () => {
+    const inspection: FrustraMpnnSourceInspection = {
+        source_models: [1], selected_source_model: 1,
+        observed_altlocs: [''], selected_altloc: '',
+        protein_entities: [{
+            entity_instance_id: 'A', source_entity_id: '1',
+            label_asym_id: null, auth_asym_id: null, pdb_chain_id: null,
+        }],
+        protein_sequence_spans: [{
+            entity_instance_id: 'A', source_entity_id: '1',
+            label_asym_id: null, auth_asym_id: null,
+            sequence_start: 1, sequence_end: 50,
+        }],
+        mapped_residues: [],
+    };
+    const submissions: CmSubmitRequest[] = [];
+    const mounted = await mountLauncher({
+        listSources: async () => [snapshot],
+        inspectFrustrampnnSource: async () => inspection,
+        submitRequest: async (payload: CmSubmitRequest) => {
+            submissions.push(payload);
+            return {
+                request_id: 'request-rebound-region', job_id: 'request-rebound-region', status: 'queued',
+                backend: payload.backend, request_sha256: sha('6'), coordinate_plan_sha256: sha('7'), expected_cardinality: 1,
+            };
+        },
+    }, {
+        name: 'Reopened region', backend: 'protenix_v2_ensemble',
+        registered_snapshot_id: snapshot.source_id, ordered_seeds: [101], samples_per_seed: 1,
+        frustrampnn_settings: {
+            schema_name: 'frustrampnn_settings', schema_version: 1,
+            protein_selection: {
+                mode: 'selected_regions', entities: [], residues: [],
+                regions: [{
+                    entity_instance_id: 'A', source_entity_id: '1', label_asym_id: null,
+                    auth_asym_id: null, sequence_start: 10, sequence_end: 20,
+                }],
+            },
+            source_structure: { selected_model_number: 1, preferred_altloc: '' },
+            classification_policy: { mode: 'canonical', high_max: -1.0, minimal_min: 0.58 },
+        },
+    });
+
+    await flush();
+    let launch = mounted.renderer.root.findAllByType('button').find((item) => /Launch conformational mapping/i.test(text(item)));
+    assert.ok(launch);
+    assert.equal(launch.props.disabled, true);
+    assert.match(text(mounted.renderer.root), /source-specific FrustraMPNN selection is not bound/i);
+    assert.equal(submissions.length, 0);
+
+    const start = mounted.renderer.root.findByProps({ 'data-frustrampnn-region-start': true });
+    await act(async () => start.props.onChange({ target: { value: '11' } }));
+    await flush();
+    launch = mounted.renderer.root.findAllByType('button').find((item) => /Launch conformational mapping/i.test(text(item)));
+    assert.ok(launch);
+    assert.equal(launch.props.disabled, false);
+    await clickButton(mounted.renderer, /Launch conformational mapping/i);
+    assert.equal(submissions.length, 1);
+    assert.equal(submissions[0]?.frustrampnn_settings.protein_selection.mode, 'selected_regions');
+    if (submissions[0]?.frustrampnn_settings.protein_selection.mode === 'selected_regions') {
+        assert.equal(submissions[0].frustrampnn_settings.protein_selection.regions[0]?.sequence_start, 11);
+    }
+
+    await act(async () => mounted.renderer.unmount());
+    mounted.client.clear();
+});
+
+test('mounted launcher preserves an exact source binding across a same-source inspection refresh', async () => {
+    const inspection: FrustraMpnnSourceInspection = {
+        source_models: [1], selected_source_model: 1,
+        observed_altlocs: [''], selected_altloc: '',
+        protein_entities: [{
+            entity_instance_id: 'A', source_entity_id: '1',
+            label_asym_id: null, auth_asym_id: null, pdb_chain_id: null,
+        }],
+        protein_sequence_spans: [{
+            entity_instance_id: 'A', source_entity_id: '1',
+            label_asym_id: null, auth_asym_id: null,
+            sequence_start: 1, sequence_end: 50,
+        }],
+        mapped_residues: [],
+    };
+    let inspectionCalls = 0;
+    let resolveRefresh!: (value: FrustraMpnnSourceInspection) => void;
+    const mounted = await mountLauncher({
+        listSources: async () => [snapshot],
+        inspectFrustrampnnSource: async () => {
+            inspectionCalls += 1;
+            if (inspectionCalls === 1) return inspection;
+            return new Promise<FrustraMpnnSourceInspection>((resolve) => {
+                resolveRefresh = resolve;
+            });
+        },
+    }, {
+        name: 'Same-source refresh', backend: 'protenix_v2_ensemble',
+        registered_snapshot_id: snapshot.source_id, ordered_seeds: [101], samples_per_seed: 1,
+    });
+
+    const selectionMode = mounted.renderer.root.findByProps({ 'data-frustrampnn-selection-mode': true });
+    await act(async () => selectionMode.props.onChange({ target: { value: 'selected_regions' } }));
+    await flush();
+    await act(async () => {
+        void mounted.client.invalidateQueries({
+            queryKey: ['cm-frustrampnn-source-inspection', snapshot.source_id],
+        });
+    });
+    await flush();
+    assert.match(text(mounted.renderer.root), /Resolving exact source sequence identities/i);
+    const classificationMode = mounted.renderer.root.findByProps({ 'data-frustrampnn-classification-mode': true });
+    await act(async () => classificationMode.props.onChange({ target: { value: 'custom' } }));
+    await act(async () => resolveRefresh(inspection));
+    await flush();
+
+    const launch = mounted.renderer.root.findAllByType('button').find((item) => /Launch conformational mapping/i.test(text(item)));
+    assert.ok(launch);
+    assert.equal(launch.props.disabled, false);
+    assert.equal(
+        mounted.renderer.root.findByProps({ 'data-frustrampnn-selection-mode': true }).props.value,
+        'selected_regions',
+    );
+
+    await act(async () => mounted.renderer.unmount());
+    mounted.client.clear();
+});
+
 
 test('mounted Your Runs discovers reusable artifacts and registers only an explicit authoritative choice', async () => {
     const runs: CmReusableRun[] = [{

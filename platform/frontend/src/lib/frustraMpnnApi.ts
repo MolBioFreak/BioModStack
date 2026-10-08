@@ -7,6 +7,7 @@ import {
     parseFrustraMpnnRequestedSettings,
     type FrustraMpnnInspectableEntity,
     type FrustraMpnnInspectableResidue,
+    type FrustraMpnnRegionSelector,
     type FrustraMpnnRequestedSettings,
     type FrustraMpnnSourceInspection,
 } from '../components/frustrampnn/frustraMpnnSettingsState.js';
@@ -93,6 +94,10 @@ const FRUSTRAMPNN_INSPECTION_KEYS = [
     'protein_entities',
     'mapped_residues',
 ] as const;
+const FRUSTRAMPNN_INSPECTION_WITH_SEQUENCE_SPANS_KEYS = [
+    ...FRUSTRAMPNN_INSPECTION_KEYS,
+    'protein_sequence_spans',
+] as const;
 const FRUSTRAMPNN_INSPECTION_ENTITY_KEYS = [
     'entity_instance_id',
     'source_entity_id',
@@ -109,6 +114,14 @@ const FRUSTRAMPNN_INSPECTION_RESIDUE_KEYS = [
     'insertion_code',
     'sequence_index',
     'wt',
+] as const;
+const FRUSTRAMPNN_INSPECTION_SPAN_KEYS = [
+    'entity_instance_id',
+    'source_entity_id',
+    'label_asym_id',
+    'auth_asym_id',
+    'sequence_start',
+    'sequence_end',
 ] as const;
 const FRUSTRAMPNN_VALIDATION_KEYS = [
     'validation_scope',
@@ -279,14 +292,14 @@ const parseInspectableEntity = (value: unknown, label: string): FrustraMpnnInspe
                 label_asym_id: record.label_asym_id,
                 auth_asym_id: record.auth_asym_id,
             }],
+            regions: [],
             residues: [],
         },
         source_structure: { selected_model_number: 1, preferred_altloc: '' },
         classification_policy: { mode: 'canonical', high_max: -1, minimal_min: 0.58 },
     });
     if (parsed.protein_selection.mode !== 'selected_entities') throw new Error(`${label} is invalid`);
-    const pdbChainId = fmString(record.pdb_chain_id, `${label}.pdb_chain_id`);
-    if (pdbChainId.length !== 1) throw new Error(`${label}.pdb_chain_id must be one character`);
+    const pdbChainId = fmNullableString(record.pdb_chain_id, `${label}.pdb_chain_id`);
     return { ...parsed.protein_selection.entities[0], pdb_chain_id: pdbChainId };
 };
 
@@ -299,6 +312,7 @@ const parseInspectableResidue = (value: unknown, label: string): FrustraMpnnInsp
         protein_selection: {
             mode: 'selected_residues',
             entities: [],
+            regions: [],
             residues: [{
                 entity_instance_id: record.entity_instance_id,
                 source_entity_id: record.source_entity_id,
@@ -318,9 +332,38 @@ const parseInspectableResidue = (value: unknown, label: string): FrustraMpnnInsp
     return { ...parsed.protein_selection.residues[0], wt };
 };
 
+const parseInspectableSequenceSpan = (
+    value: unknown,
+    label: string,
+): FrustraMpnnRegionSelector => {
+    const record = fmRecord(value, label);
+    fmExactKeys(record, FRUSTRAMPNN_INSPECTION_SPAN_KEYS, label);
+    const parsed = parseFrustraMpnnRequestedSettings({
+        schema_name: 'frustrampnn_settings',
+        schema_version: 1,
+        protein_selection: {
+            mode: 'selected_regions',
+            entities: [],
+            regions: [record],
+            residues: [],
+        },
+        source_structure: { selected_model_number: 1, preferred_altloc: '' },
+        classification_policy: { mode: 'canonical', high_max: -1, minimal_min: 0.58 },
+    });
+    if (parsed.protein_selection.mode !== 'selected_regions') throw new Error(`${label} is invalid`);
+    return parsed.protein_selection.regions[0];
+};
+
 export const parseFrustraMpnnSourceInspection = (value: unknown): FrustraMpnnSourceInspection => {
     const payload = fmRecord(value, 'FrustraMPNN source inspection');
-    fmExactKeys(payload, FRUSTRAMPNN_INSPECTION_KEYS, 'FrustraMPNN source inspection');
+    const hasSequenceSpans = Object.prototype.hasOwnProperty.call(payload, 'protein_sequence_spans');
+    fmExactKeys(
+        payload,
+        hasSequenceSpans
+            ? FRUSTRAMPNN_INSPECTION_WITH_SEQUENCE_SPANS_KEYS
+            : FRUSTRAMPNN_INSPECTION_KEYS,
+        'FrustraMPNN source inspection',
+    );
     const sourceModels = Array.isArray(payload.source_models)
         ? payload.source_models.map((item, index) => fmInteger(item, `source_models[${index}]`, 1))
         : (() => { throw new Error('source_models must be an array'); })();
@@ -340,7 +383,9 @@ export const parseFrustraMpnnSourceInspection = (value: unknown): FrustraMpnnSou
     if (!observedAltlocs.includes(selectedAltloc)) {
         throw new Error('selected_altloc must be one of observed_altlocs');
     }
-    if (!Array.isArray(payload.protein_entities) || !Array.isArray(payload.mapped_residues)) {
+    if (!Array.isArray(payload.protein_entities)
+        || (hasSequenceSpans && !Array.isArray(payload.protein_sequence_spans))
+        || !Array.isArray(payload.mapped_residues)) {
         throw new Error('source inspection selectors must be arrays');
     }
     const proteinEntities = payload.protein_entities.map((item, index) => (
@@ -349,12 +394,18 @@ export const parseFrustraMpnnSourceInspection = (value: unknown): FrustraMpnnSou
     const mappedResidues = payload.mapped_residues.map((item, index) => (
         parseInspectableResidue(item, `mapped_residues[${index}]`)
     ));
+    const proteinSequenceSpans = hasSequenceSpans
+        ? (payload.protein_sequence_spans as unknown[]).map((item, index) => (
+            parseInspectableSequenceSpan(item, `protein_sequence_spans[${index}]`)
+        ))
+        : [];
     return {
         source_models: sourceModels,
         selected_source_model: selectedSourceModel,
         observed_altlocs: observedAltlocs,
         selected_altloc: selectedAltloc,
         protein_entities: proteinEntities,
+        protein_sequence_spans: proteinSequenceSpans,
         mapped_residues: mappedResidues,
     };
 };
@@ -803,7 +854,12 @@ export interface FrustraMpnnEffectiveSettingsProjection {
         normalized_pdb_sha256: string;
     };
     value_sources: {
-        protein_selection: { mode: 'bms_default' | 'operator_request'; entities: 'bms_default' | 'operator_request'; residues: 'bms_default' | 'operator_request' };
+        protein_selection: {
+            mode: 'bms_default' | 'operator_request';
+            entities: 'bms_default' | 'operator_request';
+            regions: 'bms_default' | 'operator_request';
+            residues: 'bms_default' | 'operator_request';
+        };
         source_structure: { selected_model_number: 'bms_default' | 'operator_request'; preferred_altloc: 'bms_default' | 'operator_request' };
         classification_policy: { mode: 'bms_default' | 'operator_request'; high_max: 'bms_default' | 'operator_request'; minimal_min: 'bms_default' | 'operator_request' };
     };
@@ -1436,10 +1492,17 @@ const parsePersistedRequestedSettingsProjection = (
     if (payload.settings_value_origin !== 'bms_default' && payload.settings_value_origin !== 'operator_request') {
         throw new Error(`${label}.settings_value_origin is invalid`);
     }
+    const persistedSelection = fmRecord(
+        payload.protein_selection,
+        `${label}.protein_selection`,
+    );
+    const proteinSelection = Object.hasOwn(persistedSelection, 'regions')
+        ? persistedSelection
+        : { ...persistedSelection, regions: [] };
     return parseFrustraMpnnRequestedSettings({
         schema_name: payload.schema_name,
         schema_version: payload.schema_version,
-        protein_selection: payload.protein_selection,
+        protein_selection: proteinSelection,
         source_structure: payload.source_structure,
         classification_policy: payload.classification_policy,
     });
@@ -1517,14 +1580,18 @@ export const parseFrustraMpnnEffectiveSettingsProjection = (
         };
     });
     const valueSources = fmClosedProjection(payload.value_sources, 'effective_settings.value_sources', ['protein_selection', 'source_structure', 'classification_policy'], ['protein_selection', 'source_structure', 'classification_policy']);
-    const proteinSources = fmClosedProjection(valueSources.protein_selection, 'effective_settings.value_sources.protein_selection', ['mode', 'entities', 'residues'], ['mode', 'entities', 'residues']);
+    const proteinSources = fmClosedProjection(valueSources.protein_selection, 'effective_settings.value_sources.protein_selection', ['mode', 'entities', 'regions', 'residues'], ['mode', 'entities', 'residues']);
     const structureSources = fmClosedProjection(valueSources.source_structure, 'effective_settings.value_sources.source_structure', ['selected_model_number', 'preferred_altloc'], ['selected_model_number', 'preferred_altloc']);
     const classificationSources = fmClosedProjection(valueSources.classification_policy, 'effective_settings.value_sources.classification_policy', ['mode', 'high_max', 'minimal_min'], ['mode', 'high_max', 'minimal_min']);
+    const settingsValueOrigin = fmValueOrigin(
+        payload.settings_value_origin,
+        'effective_settings.settings_value_origin',
+    );
     return {
         schema_name: 'frustrampnn_effective_settings',
         schema_version: 1,
         requested_settings: parsePersistedRequestedSettingsProjection(payload.requested_settings, 'effective_settings.requested_settings'),
-        settings_value_origin: fmValueOrigin(payload.settings_value_origin, 'effective_settings.settings_value_origin'),
+        settings_value_origin: settingsValueOrigin,
         resolved_chains: resolvedChains,
         normalization_policy_id: 'frustrampnn_structure_normalizer',
         normalization_policy_version: 1,
@@ -1543,6 +1610,9 @@ export const parseFrustraMpnnEffectiveSettingsProjection = (
             protein_selection: {
                 mode: fmValueOrigin(proteinSources.mode, 'effective_settings.value_sources.protein_selection.mode'),
                 entities: fmValueOrigin(proteinSources.entities, 'effective_settings.value_sources.protein_selection.entities'),
+                regions: proteinSources.regions === undefined
+                    ? settingsValueOrigin
+                    : fmValueOrigin(proteinSources.regions, 'effective_settings.value_sources.protein_selection.regions'),
                 residues: fmValueOrigin(proteinSources.residues, 'effective_settings.value_sources.protein_selection.residues'),
             },
             source_structure: {
