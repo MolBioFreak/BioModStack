@@ -263,6 +263,10 @@ class DesignResponse(BaseModel):
     artifact_schema_version: Optional[int] = None
     selected_loop_scope: Optional[Dict[str, Any]] = None
     provenance: Optional[Dict[str, Any]] = None
+    is_imported: bool = False
+    import_source: Optional[str] = None
+    import_method: Optional[str] = None
+    import_label: Optional[str] = None
     
     # Backbone grouping & epitope analysis
     backbone_id: Optional[int] = None
@@ -994,7 +998,7 @@ def _fampnn_payload_records(design: Design) -> List[Dict[str, Any]]:
     return records
 
 
-def _proteinbase_payload_records(design: Design) -> List[Dict[str, Any]]:
+def _import_payload_records(design: Design) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     try:
         state = sa_inspect(design)
@@ -1003,22 +1007,167 @@ def _proteinbase_payload_records(design: Design) -> List[Dict[str, Any]]:
         unloaded = set()
     provenance_value = None if "provenance" in unloaded else getattr(design, "provenance", None)
     confidence_value = None if "confidence_metrics" in unloaded else getattr(design, "confidence_metrics", None)
+    artifact_class_value = None if "artifact_class" in unloaded else getattr(design, "artifact_class", None)
+    stage_mode_value = None if "stage_mode" in unloaded else getattr(design, "stage_mode", None)
+
     provenance = provenance_value if isinstance(provenance_value, dict) else {}
     confidence = confidence_value if isinstance(confidence_value, dict) else {}
+    artifact_class = str(artifact_class_value or "").strip().lower()
+    stage_mode = str(stage_mode_value or "").strip().lower()
+    imported_hint = artifact_class.startswith("imported") or "import" in stage_mode or bool(provenance.get("import_source"))
 
-    if (
-        provenance.get("source") == "proteinbase"
-        or provenance.get("proteinbase_id")
+    if provenance and (
+        imported_hint
         or provenance.get("sequence")
         or provenance.get("length_aa")
+        or provenance.get("binder_sequence")
+        or provenance.get("binder_length")
     ):
         records.append(provenance)
 
-    proteinbase_confidence = confidence.get("proteinbase")
-    if isinstance(proteinbase_confidence, dict):
-        records.append(proteinbase_confidence)
+    for value in confidence.values():
+        if not isinstance(value, dict):
+            continue
+        if any(key in value for key in ("sequence", "length_aa", "binder_sequence", "binder_length", "raw_evaluations")):
+            records.append(value)
 
     return records
+
+
+def _normalize_import_source_value(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    aliases = {
+        "external_import": "external",
+        "external-import": "external",
+        "competition_import": "competition",
+        "competition-import": "competition",
+    }
+    return aliases.get(text, text)
+
+
+def _format_import_source_label(value: Optional[str]) -> Optional[str]:
+    if not value or value == "external":
+        return None
+    labels = {
+        "competition": "Competition",
+        "dataset": "Dataset",
+    }
+    return labels.get(value, value.replace("_", " ").replace("-", " ").title())
+
+
+def _format_import_method_label(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    labels = {
+        "boltz2": "Boltz2",
+        "esmfold": "ESMFold",
+    }
+    return labels.get(value, value.replace("_", " ").replace("-", " ").title())
+
+
+def _iter_import_metric_names(design: Design) -> List[str]:
+    metric_names: List[str] = []
+    try:
+        state = sa_inspect(design)
+        unloaded = set(state.unloaded)
+    except NoInspectionAvailable:
+        unloaded = set()
+
+    confidence_value = None if "confidence_metrics" in unloaded else getattr(design, "confidence_metrics", None)
+    confidence = confidence_value if isinstance(confidence_value, dict) else {}
+    for key in confidence.keys():
+        key_text = str(key or "").strip().lower()
+        if key_text:
+            metric_names.append(key_text)
+
+    for record in _import_payload_records(design):
+        raw_evaluations = record.get("raw_evaluations")
+        if isinstance(raw_evaluations, list):
+            for evaluation in raw_evaluations:
+                if not isinstance(evaluation, dict):
+                    continue
+                metric_name = str(evaluation.get("metric") or "").strip().lower()
+                if metric_name:
+                    metric_names.append(metric_name)
+
+        for key in record.keys():
+            key_text = str(key or "").strip().lower()
+            if key_text:
+                metric_names.append(key_text)
+
+    return metric_names
+
+
+def _has_boltz2_import_metrics(design: Design) -> bool:
+    for field_name in (
+        "ptm",
+        "iptm",
+        "ipsae",
+        "complex_iplddt",
+        "complex_ipde",
+        "protein_iptm",
+        "ligand_iptm",
+    ):
+        value = getattr(design, field_name, None)
+        if isinstance(value, (int, float)) and math.isfinite(float(value)):
+            return True
+
+    return any(metric_name.startswith("boltz2_") for metric_name in _iter_import_metric_names(design))
+
+
+def _compute_import_metadata(design: Design) -> Dict[str, Any]:
+    try:
+        state = sa_inspect(design)
+        unloaded = set(state.unloaded)
+    except NoInspectionAvailable:
+        unloaded = set()
+
+    provenance_value = None if "provenance" in unloaded else getattr(design, "provenance", None)
+    confidence_value = None if "confidence_metrics" in unloaded else getattr(design, "confidence_metrics", None)
+    artifact_class_value = None if "artifact_class" in unloaded else getattr(design, "artifact_class", None)
+    stage_mode_value = None if "stage_mode" in unloaded else getattr(design, "stage_mode", None)
+
+    provenance = provenance_value if isinstance(provenance_value, dict) else {}
+    confidence = confidence_value if isinstance(confidence_value, dict) else {}
+    artifact_class = str(artifact_class_value or "").strip().lower()
+    stage_mode = str(stage_mode_value or "").strip().lower()
+
+    import_source = _normalize_import_source_value(provenance.get("import_source"))
+    if import_source is None:
+        import_source = _normalize_import_source_value(confidence.get("import_source"))
+
+    is_imported = bool(import_source) or "import" in stage_mode or artifact_class.startswith("imported")
+    if not is_imported:
+        return {
+            "is_imported": False,
+            "import_source": None,
+            "import_method": None,
+            "import_label": None,
+        }
+
+    import_source = import_source or "external"
+    import_metric_names = _iter_import_metric_names(design)
+    import_method: Optional[str] = None
+    if _has_boltz2_import_metrics(design):
+        import_method = "boltz2"
+    elif any(metric_name.startswith("esmfold_") for metric_name in import_metric_names):
+        import_method = "esmfold"
+
+    source_label = _format_import_source_label(import_source)
+    method_label = _format_import_method_label(import_method)
+    label_parts = [part for part in (source_label, method_label) if part]
+    import_label = f"Imported • {' • '.join(label_parts)}" if label_parts else "Imported"
+
+    return {
+        "is_imported": True,
+        "import_source": import_source,
+        "import_method": import_method,
+        "import_label": import_label,
+    }
 
 
 def _sequence_text_length(sequence: Optional[str]) -> Optional[int]:
@@ -1121,7 +1270,7 @@ def _compute_binder_sequence_response_value(
         if binder_sequence:
             return binder_sequence
 
-    for record in _proteinbase_payload_records(design):
+    for record in _import_payload_records(design):
         binder_sequence = _text_record_value(record, "binder_sequence", "sequence")
         if binder_sequence:
             return binder_sequence
@@ -1184,7 +1333,7 @@ def _compute_binder_length_response_value(
             if rounded_length > 0:
                 return rounded_length
 
-    for record in _proteinbase_payload_records(design):
+    for record in _import_payload_records(design):
         payload_length = _numeric_record_value(record, "binder_length", "length_aa")
         if payload_length is not None:
             rounded_length = int(round(payload_length))
@@ -1266,6 +1415,7 @@ def _design_to_response(
         design,
         binder_sequence=binder_sequence,
     )
+    data.update(_compute_import_metadata(design))
     return DesignResponse.model_validate(data)
 
 
@@ -1422,7 +1572,7 @@ async def list_designs(
     source_stage_family: Optional[str] = Query(None, description="Filter by source stage family"),
     sort_by: Optional[str] = Query(None, description="Sort field for table ordering"),
     sort_desc: bool = Query(True, description="Sort descending"),
-    limit: int = Query(100, le=10000),
+    limit: int = Query(100, le=50000),
     offset: int = Query(0),
     session: AsyncSession = Depends(get_session)
 ):
@@ -1981,7 +2131,7 @@ async def update_notes(
 async def get_designs_for_job(
     job_id: str,
     include_children: bool = Query(True, description="Include designs from child jobs (for parent jobs)"),
-    limit: int = Query(100, le=10000),
+    limit: int = Query(100, le=50000),
     offset: int = Query(0),
     session: AsyncSession = Depends(get_session)
 ):
