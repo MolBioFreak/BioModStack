@@ -488,5 +488,23 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
             raise ValueError(f"wf_clone_basecaller_model must equal the locked exact identity {accepted_model}")
         normalized["wf_clone_assembly_tool"] = assembly_tool
         normalized["wf_clone_basecaller_model"] = model_id
+        primers = str(normalized.get("wf_clone_primers") or "").strip()
+        insert_reference = str(normalized.get("wf_clone_insert_reference") or "").strip()
+        host_reference = str(normalized.get("wf_clone_host_reference") or "").strip()
+        regions_bedfile = str(normalized.get("wf_clone_regions_bedfile") or "").strip()
+        if insert_reference and not primers:
+            raise ValueError("wf_clone_insert_reference requires wf_clone_primers")
+        if regions_bedfile and not host_reference:
+            raise ValueError("wf_clone_regions_bedfile requires wf_clone_host_reference")
+        for key, value in (
+            ("wf_clone_primers", primers),
+            ("wf_clone_insert_reference", insert_reference),
+            ("wf_clone_host_reference", host_reference),
+            ("wf_clone_regions_bedfile", regions_bedfile),
+        ):
+            if value:
+                normalized[key] = value
+            else:
+                normalized.pop(key, None)
 
     return normalized
