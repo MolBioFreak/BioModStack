@@ -6,7 +6,6 @@ patched pysam and HTTP sockets, not mocked HTSlib responses.
 """
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 import hashlib
 import os
 from pathlib import Path
@@ -217,6 +216,85 @@ def test_binding_patch_covers_open_and_iterator_reopen():
     assert "+    cdef readonly bint save_remote_index" in patch
 
 
+@pytest.mark.native_http
+def test_native_lane_blocks_external_python_and_child_network(native_http):
+    import socket
+    import subprocess
+    import sys
+    import pytest_socket
+    with socket.socket() as client:
+        for address in (("192.0.2.1", 9), ("localhost", 9), ("0.0.0.0", 9)):
+            with pytest.raises(pytest_socket.SocketBlockedError):
+                client.connect(address)
+        with pytest.raises(pytest_socket.SocketBlockedError):
+            client.bind(("0.0.0.0", 0))
+    with pytest.raises(pytest_socket.SocketBlockedError):
+        socket.getaddrinfo("example.invalid", 9)
+    with pytest.raises(pytest.UsageError):
+        pytest_socket.enable_socket()
+    # Fresh child has unpatched sockets (like C HTSlib), but inherits the same
+    # kernel network namespace. TEST-NET never reaches a real endpoint.
+    result = subprocess.run([sys.executable, "-c", """
+import errno, os, socket, sys
+assert os.readlink('/proc/self/ns/net') == sys.argv[1]
+with socket.socket() as client:
+    client.settimeout(1)
+    assert client.connect_ex(('192.0.2.1', 9)) == errno.ENETUNREACH
+print('external unreachable')
+""", os.readlink("/proc/self/ns/net")], capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "external unreachable"
+
+
+@pytest.mark.native_http
+def test_native_lane_restores_after_fixture_failure(request):
+    import socket
+    import pytest_socket
+    from conftest import isolated_native_loopback, default_network_namespace_active
+    qualified = SimpleNamespace(node=request.node, fixturenames=["native_http"])
+    lane = isolated_native_loopback.__wrapped__(qualified, None)
+    next(lane)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+    with pytest.raises(RuntimeError, match="synthetic startup failure"):
+        lane.throw(RuntimeError("synthetic startup failure"))
+    assert default_network_namespace_active()
+    with pytest.raises(pytest_socket.SocketBlockedError):
+        socket.socket()
+
+
+@pytest.mark.native_http
+def test_native_lane_refuses_unqualified_namespace(request, monkeypatch):
+    import conftest
+    qualified = SimpleNamespace(node=request.node, fixturenames=["native_http"])
+    monkeypatch.setattr(conftest, "default_network_namespace_active", lambda: False)
+    lane = conftest.isolated_native_loopback.__wrapped__(qualified, None)
+    with pytest.raises(pytest.UsageError, match="route-free private netns"):
+        next(lane)
+
+
+def test_native_lane_restores_default_guards():
+    import socket
+    import pytest_socket
+    from conftest import default_network_namespace_active
+    assert default_network_namespace_active()
+    with pytest.raises(pytest_socket.SocketBlockedError):
+        socket.socket()
+
+
+@pytest.mark.native_http
+def test_native_marker_alone_does_not_enable_sockets():
+    import socket
+    import pytest_socket
+    with pytest.raises(pytest_socket.SocketBlockedError):
+        socket.socket()
+
+
+def test_native_fixture_requires_marker(request):
+    with pytest.raises(pytest.UsageError, match="native HTTP requires"):
+        request.getfixturevalue("isolated_native_loopback")
+
+
 def test_stock_runtime_is_rejected(monkeypatch):
     import pysam
     monkeypatch.setattr(pysam, "__version__", "0.23.3")
@@ -224,58 +302,7 @@ def test_stock_runtime_is_rejected(monkeypatch):
         native.require_runtime()
 
 
-@pytest.fixture
-def native_http(generations, monkeypatch):
-    """Actual managed-ASGI byte path; allocation accounting has separate tests."""
-    for key in ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
-                "HTS_AUTH_LOCATION", "HTS_ALLOW_UNENCRYPTED_AUTHORIZATION_HEADER"):
-        monkeypatch.delenv(key, raising=False)
-    native.require_runtime().set_verbosity(0)
-    import socket
-    import time
-    import uvicorn
-    from contextlib import nullcontext
-    listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    listener.listen()
-    delivery = native.Delivery()
-    delivery.slots = 16
-    delivery.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="qualification-producer")
-    delivery.origin = "http://127.0.0.1:" + str(listener.getsockname()[1])
-    async def app(scope, receive, send):
-        if scope["type"] == "lifespan":
-            while True:
-                message = await receive()
-                if message["type"] == "lifespan.startup":
-                    delivery.loop = asyncio.get_running_loop()
-                    await send({"type": "lifespan.startup.complete"})
-                else:
-                    await send({"type": "lifespan.shutdown.complete"})
-                    return
-        else:
-            await delivery.serve(scope, receive, send, scope["path"])
-    server = uvicorn.Server(uvicorn.Config(app, access_log=False, log_level="critical"))
-    thread = threading.Thread(target=lambda: asyncio.run(server.serve(sockets=[listener])), daemon=True)
-    monkeypatch.setattr(native, "delivery", delivery)
-    monkeypatch.setattr(native, "compute", lambda: nullcontext())
-    thread.start()
-    deadline = time.monotonic() + 15
-    while not server.started:
-        assert thread.is_alive() and time.monotonic() < deadline, "qualification HTTP startup failed"
-        time.sleep(0.01)
-    try:
-        yield delivery
-    finally:
-        server.should_exit = True
-        thread.join(15)
-        assert not thread.is_alive(), "qualification HTTP shutdown did not quiesce"
-        listener.close()
-        delivery.pool.shutdown(wait=True)
-        assert not delivery.grants and delivery.active == 0
-
-
 @pytest.mark.native_http
-@pytest.mark.enable_socket
 def test_real_native_no_save_index_and_iterator_reopen(tmp_path, generations, native_http, monkeypatch):
     import pysam
     native.require_runtime()
@@ -322,7 +349,6 @@ def test_real_native_no_save_index_and_iterator_reopen(tmp_path, generations, na
 
 
 @pytest.mark.native_http
-@pytest.mark.enable_socket
 def test_real_native_literal_fasta_sidecar(tmp_path, generations, native_http):
     import pysam
     native.require_runtime()
@@ -387,7 +413,6 @@ async def test_native_worker_cancellation_revokes_then_quiesces(generations, tra
 
 
 @pytest.mark.native_http
-@pytest.mark.enable_socket
 def test_real_fastx_preserves_sequence_quality(generations, native_http):
     source, _ = generations(b"@read\nACGT\n+\nIIII\n")
     with source, native.fastx(source, persist=False) as fastq:
@@ -408,7 +433,6 @@ def test_compute_context_uses_existing_allocation_without_double_charge(monkeypa
 
 
 @pytest.mark.native_http
-@pytest.mark.enable_socket
 def test_fastx_missing_http_source_is_io_error_not_null_dereference(native_http):
     pysam = native.require_runtime()
     with pytest.raises(OSError):
@@ -424,7 +448,6 @@ def test_native_format_guard_rejects_external_dispatch(generations, content):
 
 
 @pytest.mark.native_http
-@pytest.mark.enable_socket
 def test_explicit_bcf_csi_fetch_reopen_ignores_cwd(tmp_path, generations, native_http, monkeypatch):
     pysam = native.require_runtime()
     from pysam import bcftools

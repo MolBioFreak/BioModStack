@@ -1,13 +1,16 @@
 """Repository-wide pytest safety policy.
 
 INET and DNS access are denied when this module is imported, before pytest
-collects test modules.  Only a test marked ``live_bioxp`` *and* an exact
-``BIOXP_LIVE_TESTS=1`` operator opt-in may temporarily enable networking.
+collects test modules. The qualified ``native_http`` fixture permits literal
+loopback TCP only inside the private namespace, restoring loopback on teardown.
+``live_bioxp`` plus exact ``BIOXP_LIVE_TESTS=1`` allows construction only.
 """
 
 from __future__ import annotations
 
 import os
+import fcntl
+import struct
 import shlex
 import shutil
 import socket
@@ -344,6 +347,134 @@ class _InetBlockedSocket(_TRUE_SOCKET):
         if hasattr(socket, "AF_UNIX") and family == socket.AF_UNIX:
             return super().__new__(cls, family, type, proto, fileno)
         raise SocketBlockedError()
+
+
+class _NativeLoopbackSocket(_TRUE_SOCKET):
+    """Only literal IPv4 loopback TCP and asyncio's AF_UNIX sockets."""
+
+    def __init__(self, family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0, fileno=None):
+        if family not in (socket.AF_INET, socket.AF_UNIX) or type != socket.SOCK_STREAM:
+            raise SocketBlockedError("native qualification permits loopback TCP only")
+        super().__init__(family, type, proto, fileno)
+
+    def _check_address(self, address):
+        if self.family == socket.AF_INET and (
+            not isinstance(address, tuple) or len(address) != 2 or address[0] != "127.0.0.1"
+        ):
+            raise SocketBlockedError("native qualification permits literal 127.0.0.1 only")
+
+    def bind(self, address):
+        self._check_address(address)
+        return super().bind(address)
+
+    def connect(self, address):
+        self._check_address(address)
+        return super().connect(address)
+
+    def connect_ex(self, address):
+        self._check_address(address)
+        return super().connect_ex(address)
+
+    def sendto(self, data, *args):
+        self._check_address(args[-1])
+        return super().sendto(data, *args)
+
+    def sendmsg(self, buffers, ancdata=(), flags=0, address=None):
+        if address is not None:
+            self._check_address(address)
+        return super().sendmsg(buffers, ancdata, flags, address)
+
+
+@pytest.fixture
+def isolated_native_loopback(request, _bioxp_live_network_opt_in):
+    """Raise only lo inside the proven private netns, never join a host network.
+
+    Native libraries and descendants remain kernel-isolated even though they do
+    not use Python's socket guard. DNS and generic socket opt-ins stay blocked.
+    The HTTP fixture must depend on this fixture so its server is stopped first.
+    """
+    qualified_modules = {
+        "test_verified_native_reads.py", "test_ngs_f3_f4_completion.py",
+        "test_ngs_historical_backfill.py", "test_ngs_alignment_sessions.py",
+    }
+    if (Path(str(request.node.path)).resolve().parent != API_ROOT / "tests"
+            or Path(str(request.node.path)).name not in qualified_modules
+            or request.node.get_closest_marker("native_http") is None
+            or "native_http" not in request.fixturenames
+            or request.node.get_closest_marker("live_bioxp") is not None
+            or not default_network_namespace_active()):
+        raise pytest.UsageError("native HTTP requires its fixture and a route-free private netns")
+    interfaces = {line.split(":", 1)[0].strip() for line in
+                  Path("/proc/net/dev").read_text().splitlines() if ":" in line}
+    if interfaces != {"lo"}:
+        raise pytest.UsageError("native HTTP namespace must contain only lo")
+    # Linux SIOCGIFFLAGS/SIOCSIFFLAGS; retain all original flags on teardown.
+    with _TRUE_SOCKET(socket.AF_INET, socket.SOCK_DGRAM) as control:
+        original = fcntl.ioctl(control, 0x8913, struct.pack("16sH14x", b"lo", 0))
+        flags = struct.unpack_from("H", original, 16)[0]
+        try:
+            fcntl.ioctl(control, 0x8914, struct.pack("16sH14x", b"lo", flags | 1))
+            socket.socket = _NativeLoopbackSocket
+            yield
+        finally:
+            _disable_inet_and_dns()
+            fcntl.ioctl(control, 0x8914, original)
+    assert default_network_namespace_active(), "native HTTP teardown lost route-free isolation"
+
+
+@pytest.fixture
+def native_http(monkeypatch, isolated_native_loopback):
+    """Actual managed-ASGI byte path; allocation accounting has separate tests."""
+    import asyncio
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from services import verified_native_reads as native
+
+    for key in ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                "HTS_AUTH_LOCATION", "HTS_ALLOW_UNENCRYPTED_AUTHORIZATION_HEADER"):
+        monkeypatch.delenv(key, raising=False)
+    native.require_runtime().set_verbosity(0)
+    import socket
+    import time
+    import uvicorn
+    from contextlib import nullcontext
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    delivery = native.Delivery()
+    delivery.slots = 16
+    delivery.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="qualification-producer")
+    delivery.origin = "http://127.0.0.1:" + str(listener.getsockname()[1])
+    async def app(scope, receive, send):
+        if scope["type"] == "lifespan":
+            while True:
+                message = await receive()
+                if message["type"] == "lifespan.startup":
+                    delivery.loop = asyncio.get_running_loop()
+                    await send({"type": "lifespan.startup.complete"})
+                else:
+                    await send({"type": "lifespan.shutdown.complete"})
+                    return
+        else:
+            await delivery.serve(scope, receive, send, scope["path"])
+    server = uvicorn.Server(uvicorn.Config(app, access_log=False, log_level="critical"))
+    thread = threading.Thread(target=lambda: asyncio.run(server.serve(sockets=[listener])), daemon=True)
+    monkeypatch.setattr(native, "delivery", delivery)
+    monkeypatch.setattr(native, "compute", lambda: nullcontext())
+    thread.start()
+    try:
+        deadline = time.monotonic() + 15
+        while not server.started:
+            assert thread.is_alive() and time.monotonic() < deadline, "qualification HTTP startup failed"
+            time.sleep(0.01)
+        yield delivery
+    finally:
+        server.should_exit = True
+        thread.join(15)
+        assert not thread.is_alive(), "qualification HTTP shutdown did not quiesce"
+        listener.close()
+        delivery.pool.shutdown(wait=True)
+        assert not delivery.grants and delivery.active == 0
 
 
 def _blocked_dns(name: str):
