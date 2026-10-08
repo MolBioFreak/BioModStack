@@ -10,6 +10,7 @@ import { useState } from 'react';
 import MolstarViewer from './MolstarViewer';
 import type { Job } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
+import { classifyShapeStructureFiles, type ShapePhaseArtifact, type StructureFile } from '../lib/shapeResultPhases';
 
 interface DockingResult {
     name: string;
@@ -22,14 +23,6 @@ interface DockingResult {
     engine?: 'diffdock' | 'unidock';
     ligand?: string;
     pose?: number;
-}
-
-interface StructureFile {
-    name: string;
-    filename: string;
-    path: string;
-    type: 'pdb' | 'cif';
-    size_bytes: number;
 }
 
 export function JobDetailPage() {
@@ -59,6 +52,7 @@ export function JobDetailPage() {
     const isMolecularDynamicsJob = job?.model_id === 'molecular_dynamics' ||
         job?.mode === 'molecular_dynamics' ||
         job?.mode === 'md';
+    const isShapeJob = job?.mode === 'shape_blueprint';
 
     // Fetch docking results
     const { data: dockingData, isLoading: dockingLoading } = useQuery({
@@ -84,6 +78,9 @@ export function JobDetailPage() {
 
     const poses = dockingData?.sdfs || [];
     const currentSdf = poses[selectedPose];
+    const shapePhases = isShapeJob
+        ? classifyShapeStructureFiles(structureData?.structures || [])
+        : [];
 
     if (jobLoading) {
         return (
@@ -296,46 +293,33 @@ export function JobDetailPage() {
                                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-accent" />
                             </div>
                         ) : structureData?.structures && structureData.structures.length > 0 ? (
-                            <div className="grid gap-3">
-                                {structureData.structures.map((struct) => (
-                                    <div
-                                        key={struct.path}
-                                        className="flex items-center justify-between bg-slate-900/50 rounded-lg px-4 py-3 border border-slate-700/50 hover:border-accent/30 transition-colors"
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            <span className={`px-2 py-0.5 rounded text-xs font-medium uppercase ${struct.type === 'pdb'
-                                                ? 'bg-green-500/20 text-green-400'
-                                                : 'bg-blue-500/20 text-blue-400'
-                                                }`}>
-                                                {struct.type}
-                                            </span>
-                                            <div>
-                                                <span className="text-white font-medium">{struct.name}</span>
-                                                <span className="text-slate-500 text-sm ml-2">
-                                                    ({(struct.size_bytes / 1024).toFixed(1)} KB)
-                                                </span>
-                                            </div>
-                                        </div>
-                                        <div className="flex gap-2">
-                                            <a
-                                                href={`/api/files/pdb/${struct.path}`}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="px-3 py-1.5 bg-accent/20 text-accent rounded-lg text-sm hover:bg-accent/30 transition-colors"
-                                            >
-                                                View
-                                            </a>
-                                            <a
-                                                href={`/api/files/download/${struct.path}`}
-                                                download={struct.filename}
-                                                className="px-3 py-1.5 bg-slate-700/50 text-slate-300 rounded-lg text-sm hover:bg-slate-700 transition-colors"
-                                            >
-                                                Download
-                                            </a>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
+                            isShapeJob ? (
+                                <div className="space-y-6">
+                                    {shapePhases.map((phase) => (
+                                        <section key={phase.key} className="border border-slate-700/60 rounded-xl p-4">
+                                            <h4 className="font-semibold text-white">{phase.label}</h4>
+                                            <p className="text-sm text-slate-400 mt-1 mb-3">{phase.description}</p>
+                                            {phase.artifacts.length > 0 ? (
+                                                <div className="grid gap-3">
+                                                    {phase.artifacts.map((artifact) => (
+                                                        <StructureArtifactRow key={artifact.path} artifact={artifact} />
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div className="text-sm text-slate-500">
+                                                    No viewable structure artifact for this phase. Sequence-only outputs remain in the job artifacts.
+                                                </div>
+                                            )}
+                                        </section>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="grid gap-3">
+                                    {structureData.structures.map((struct) => (
+                                        <StructureArtifactRow key={struct.path} artifact={struct} />
+                                    ))}
+                                </div>
+                            )
                         ) : (
                             <div className="text-center py-8 text-slate-500">
                                 No structure files found
@@ -347,6 +331,50 @@ export function JobDetailPage() {
                         </div>
                     </div>
                 )}
+            </div>
+        </div>
+    );
+}
+
+function StructureArtifactRow({ artifact }: { artifact: StructureFile | ShapePhaseArtifact }) {
+    const classified = 'engine' in artifact;
+    return (
+        <div className="flex items-center justify-between bg-slate-900/50 rounded-lg px-4 py-3 border border-slate-700/50 hover:border-accent/30 transition-colors">
+            <div className="flex items-center gap-3">
+                <span className={`px-2 py-0.5 rounded text-xs font-medium uppercase ${artifact.type === 'pdb'
+                    ? 'bg-green-500/20 text-green-400'
+                    : 'bg-blue-500/20 text-blue-400'
+                    }`}>
+                    {artifact.type}
+                </span>
+                <div>
+                    {classified && (
+                        <div className="text-xs text-cyan-300 mb-1">
+                            {artifact.engine} · {artifact.role}
+                        </div>
+                    )}
+                    <span className="text-white font-medium">{artifact.name}</span>
+                    <span className="text-slate-500 text-sm ml-2">
+                        ({(artifact.size_bytes / 1024).toFixed(1)} KB)
+                    </span>
+                </div>
+            </div>
+            <div className="flex gap-2">
+                <a
+                    href={`/api/files/pdb/${artifact.path}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 bg-accent/20 text-accent rounded-lg text-sm hover:bg-accent/30 transition-colors"
+                >
+                    View
+                </a>
+                <a
+                    href={`/api/files/download/${artifact.path}`}
+                    download={artifact.filename}
+                    className="px-3 py-1.5 bg-slate-700/50 text-slate-300 rounded-lg text-sm hover:bg-slate-700 transition-colors"
+                >
+                    Download
+                </a>
             </div>
         </div>
     );
