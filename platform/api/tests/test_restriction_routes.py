@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import hashlib
 import hmac
 import json
@@ -592,6 +593,56 @@ def test_complete_public_response_bound_rejects_wrapper_overflow_and_admits_exac
     assert len(rfc8785.dumps(admitted.json())) == len(complete_bytes)
 
 
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("schema",), "bms.molbio.restriction-analysis-response.changed"),
+        (("catalog", "counts", "total"), 1093),
+        (("catalog", "source_age_notice"), "changed source-age notice"),
+        (("catalog", "analysis_enabled"), False),
+        (("catalog", "bounds", "maximum_limit"), 251),
+        (("catalog", "resource_policy", "policy_version"), "changed"),
+    ],
+)
+def test_outer_result_digest_binds_each_public_wrapper_field(
+    path: tuple[str, ...], replacement: object,
+) -> None:
+    body = _client(_authority()).post(
+        "/api/molbio/restriction/analyze", json=_inline_request(),
+    ).json()
+    unsigned = copy.deepcopy(body)
+    claimed = unsigned.pop("result_sha256")
+    baseline_digest = hashlib.sha256(rfc8785.dumps(unsigned)).hexdigest()
+    mutated = copy.deepcopy(unsigned)
+    cursor = mutated
+    for key in path[:-1]:
+        cursor = cursor[key]
+    cursor[path[-1]] = replacement
+    mutated_digest = hashlib.sha256(rfc8785.dumps(mutated)).hexdigest()
+
+    assert mutated["analysis"] == body["analysis"]
+    assert claimed == baseline_digest
+    assert mutated_digest != baseline_digest
+
+
+def test_unsigned_response_model_keyset_is_exactly_public_response_without_digest() -> None:
+    assert set(molbio_restriction.UnsignedAnalysisResponse.model_fields) == (
+        set(molbio_restriction.AnalysisResponse.model_fields) - {"result_sha256"}
+    )
+    assert set(molbio_restriction.AnalysisResponse.model_fields) == (
+        set(molbio_restriction.UnsignedAnalysisResponse.model_fields) | {"result_sha256"}
+    )
+    response = _client(_authority()).post(
+        "/api/molbio/restriction/analyze", json=_inline_request(),
+    ).json()
+    unsigned = molbio_restriction.UnsignedAnalysisResponse.model_validate({
+        key: value for key, value in response.items() if key != "result_sha256"
+    })
+    assert set(unsigned.model_dump(mode="json", by_alias=True)) == (
+        set(response) - {"result_sha256"}
+    )
+
+
 @pytest.mark.asyncio
 async def test_cpu_analysis_does_not_block_event_loop(monkeypatch) -> None:
     app = FastAPI()
@@ -690,6 +741,56 @@ async def test_analysis_worker_concurrency_is_process_bounded(monkeypatch) -> No
     assert observed == [True]
     assert [response.status_code for response in completed] == [200, 200]
     assert maximum_active == 2
+
+
+def test_executor_submit_failure_releases_slot_once_and_next_request_completes(
+    monkeypatch,
+) -> None:
+    class TrackingCapacity:
+        def __init__(self) -> None:
+            self.semaphore = threading.BoundedSemaphore(1)
+            self.releases = 0
+
+        def acquire(self, *, blocking: bool) -> bool:
+            return self.semaphore.acquire(blocking=blocking)
+
+        def release(self) -> None:
+            self.semaphore.release()
+            self.releases += 1
+
+    class FailFirstSubmit:
+        def __init__(self, delegate: concurrent.futures.ThreadPoolExecutor) -> None:
+            self.delegate = delegate
+            self.calls = 0
+
+        def submit(self, function, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("private executor failure")
+            return self.delegate.submit(function, **kwargs)
+
+    capacity = TrackingCapacity()
+    delegate = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    executor = FailFirstSubmit(delegate)
+    monkeypatch.setattr(molbio_restriction, "_analysis_capacity", capacity)
+    monkeypatch.setattr(molbio_restriction, "_analysis_executor", executor)
+    client = _client(_authority())
+    try:
+        failed = client.post("/api/molbio/restriction/analyze", json=_inline_request())
+        assert failed.status_code == 500
+        assert failed.json() == {"detail": {
+            "code": "analysis_failed",
+            "message": "restriction analysis failed",
+        }}
+        assert "private executor failure" not in failed.text
+        assert capacity.releases == 1
+
+        recovered = client.post("/api/molbio/restriction/analyze", json=_inline_request())
+        assert recovered.status_code == 200
+        assert capacity.releases == 2
+        assert executor.calls == 2
+    finally:
+        delegate.shutdown(wait=True)
 
 
 @pytest.mark.asyncio
@@ -827,14 +928,13 @@ def test_analysis_returns_exact_validated_worker_canonical_bytes() -> None:
     inner_preimage = dict(analysis)
     inner_digest = inner_preimage.pop("result_sha256")
     assert inner_digest == hashlib.sha256(rfc8785.dumps(inner_preimage)).hexdigest()
-    outer_preimage = {
-        "source": body["source"],
-        "catalog_id": body["catalog"]["catalog_id"],
-        "catalog_sha256": body["catalog"]["catalog_sha256"],
-        "request_sha256": body["request_sha256"],
-        "analysis": analysis,
-    }
-    assert body["result_sha256"] == hashlib.sha256(rfc8785.dumps(outer_preimage)).hexdigest()
+    outer_preimage = dict(body)
+    outer_digest = outer_preimage.pop("result_sha256")
+    assert set(outer_preimage) == set(body) - {"result_sha256"}
+    molbio_restriction.UnsignedAnalysisResponse.model_validate_json(
+        rfc8785.dumps(outer_preimage), strict=True,
+    )
+    assert outer_digest == hashlib.sha256(rfc8785.dumps(outer_preimage)).hexdigest()
 
 
 @pytest.mark.asyncio

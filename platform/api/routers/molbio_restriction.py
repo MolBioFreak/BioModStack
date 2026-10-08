@@ -325,13 +325,16 @@ class AnalysisSourceReceipt(StrictResponse):
     topology: Literal["linear", "circular"]
 
 
-class AnalysisResponse(StrictResponse):
+class UnsignedAnalysisResponse(StrictResponse):
     schema_: Literal["bms.molbio.restriction-analysis-response.v1"] = Field(alias="schema")
     source: AnalysisSourceReceipt
     catalog: CatalogReceipt
     request_sha256: str
-    result_sha256: str
     analysis: AnalysisResult
+
+
+class AnalysisResponse(UnsignedAnalysisResponse):
+    result_sha256: str
 
 
 _ANALYZE_EXAMPLE = {
@@ -796,22 +799,19 @@ def _complete_analysis_pipeline(
         regions=tuple((region.start, region.end) for region in payload.regions),
     )
     catalog_receipt = _receipt(authority)
-    result_preimage = {
-        "source": source_receipt.model_dump(mode="json"),
-        "catalog_id": view.catalog_id,
-        "catalog_sha256": view.content_sha256,
-        "request_sha256": request_sha256,
-        "analysis": analysis.model_dump(mode="json", by_alias=True),
-    }
-    result_sha256 = hashlib.sha256(rfc8785.dumps(result_preimage)).hexdigest()
-    response = AnalysisResponse(
+    unsigned_response = UnsignedAnalysisResponse(
         schema="bms.molbio.restriction-analysis-response.v1",
         source=source_receipt,
         catalog=catalog_receipt,
         request_sha256=request_sha256,
-        result_sha256=result_sha256,
         analysis=analysis,
     )
+    unsigned_document = unsigned_response.model_dump(mode="json", by_alias=True)
+    result_sha256 = hashlib.sha256(rfc8785.dumps(unsigned_document)).hexdigest()
+    response = AnalysisResponse.model_validate({
+        **unsigned_document,
+        "result_sha256": result_sha256,
+    })
     canonical_bytes = rfc8785.dumps(response.model_dump(mode="json", by_alias=True))
     if len(canonical_bytes) > MAX_RESPONSE_BYTES:
         raise AnalysisLimitError("analysis response exceeds byte limit")
