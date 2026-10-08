@@ -853,6 +853,77 @@ export interface HierarchyMutationResult {
     domain_kind?: string;
 }
 
+export interface ProteinTargetAuthority {
+    target_id: string;
+    label: string;
+    role: string;
+    entity_receipt_ids: string[];
+}
+
+export interface ProteinDomainAuthority {
+    domain_kind: 'protein_in_silico';
+    domain_revision_id: string;
+    experiment_mode: string;
+    scientific_objective: string;
+    targets: ProteinTargetAuthority[];
+    planned_capabilities: string[];
+    comparison_groups: JsonObject[];
+    validation_strategy: string[];
+}
+
+export type ProteinWorkspaceSection = 'overview' | 'targets' | 'datasets' | 'plans' | 'runs' | 'results' | 'comparisons' | 'evidence' | 'history';
+
+export function proteinWorkspaceHref(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    section: ProteinWorkspaceSection = 'overview',
+): string {
+    const query = new URLSearchParams({ workspace: 'protein', section });
+    return `/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}?${query.toString()}`;
+}
+
+export function proteinDomainAuthority(domain: HierarchyMutationResult): ProteinDomainAuthority | null {
+    const payload = domain.payload;
+    if (!payload || payload.domain_kind !== 'protein_in_silico' || typeof domain.current_revision_id !== 'string') return null;
+    const nested = payload.domain_payload;
+    if (!nested || typeof nested !== 'object' || Array.isArray(nested)) return null;
+    const raw = nested as JsonObject;
+    if (typeof raw.experiment_mode !== 'string' || !Array.isArray(raw.targets)) return null;
+    const targets: ProteinTargetAuthority[] = [];
+    for (const value of raw.targets) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+        const target = value as JsonObject;
+        if (
+            typeof target.target_id !== 'string'
+            || typeof target.label !== 'string'
+            || typeof target.role !== 'string'
+            || !Array.isArray(target.entity_receipt_ids)
+            || target.entity_receipt_ids.some((receiptId) => typeof receiptId !== 'string')
+        ) return null;
+        targets.push({
+            target_id: target.target_id,
+            label: target.label,
+            role: target.role,
+            entity_receipt_ids: target.entity_receipt_ids as string[],
+        });
+    }
+    const strings = (value: JsonValue | undefined): string[] => Array.isArray(value) && value.every((item) => typeof item === 'string') ? value as string[] : [];
+    const comparisons = Array.isArray(raw.comparison_groups)
+        ? raw.comparison_groups.filter((value): value is JsonObject => Boolean(value) && typeof value === 'object' && !Array.isArray(value))
+        : [];
+    return {
+        domain_kind: 'protein_in_silico',
+        domain_revision_id: domain.current_revision_id,
+        experiment_mode: raw.experiment_mode,
+        scientific_objective: typeof raw.scientific_objective === 'string' ? raw.scientific_objective : '',
+        targets,
+        planned_capabilities: strings(raw.planned_capabilities),
+        comparison_groups: comparisons,
+        validation_strategy: strings(raw.validation_strategy),
+    };
+}
+
 export type HierarchyPatch = Record<string, JsonValue> & { expected_head_generation: number };
 
 export interface ResearchRecordSubject {

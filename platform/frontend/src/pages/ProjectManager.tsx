@@ -20,6 +20,7 @@ import {
     retryDomainRunGroup,
     searchProjects,
     projectManagerErrorMessage,
+    proteinWorkspaceHref,
     type JsonObject,
     type ProjectListItem,
     type ProjectManagerReadModel,
@@ -34,6 +35,7 @@ import { RelationshipMap } from '../components/project-manager/RelationshipMap';
 import { RunPanel } from '../components/project-manager/RunPanel';
 import { VirtualFolderPanel, type FolderKind } from '../components/project-manager/VirtualFolderPanel';
 import { focusIdFromReadModel, globalExperimentForNode } from '../components/project-manager/projectManagerState';
+import { ProteinProjectWorkspace } from '../components/project-manager/protein/ProteinProjectWorkspace';
 
 const MAP_LIMIT = 50;
 const RUN_LIMIT = 25;
@@ -109,6 +111,15 @@ function nativeProjectContext(summary: ProjectManagerReadModel): { globalExperim
     const globalExperiment = summary.tree.nodes.find((node) => node.node_key === domain.parent_node_key && node.node_type === 'global_experiment');
     if (!globalExperiment?.subject_id) return null;
     return { globalExperimentId: globalExperiment.subject_id, domainExperimentId: domain.subject_id };
+}
+
+function selectedDomainIsProtein(summary: ProjectManagerReadModel): boolean {
+    if (summary.selection.node_type !== 'domain_experiment') return false;
+    const payload = summary.selection.summary.domain_payload;
+    const payloadSchema = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload.schema : null;
+    return summary.selection.summary.schema === 'bms.protein-in-silico-experiment.v3'
+        || summary.selection.summary.domain_kind === 'protein_in_silico'
+        || payloadSchema === 'bms.protein-in-silico-experiment.v1';
 }
 
 function NativeProjectDataPanel({ summary, stateRevisionId }: { summary: ProjectManagerReadModel; stateRevisionId: string | null }) {
@@ -556,6 +567,10 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             ?? focusIdFromReadModel(summary);
         const selectedDomainExperimentId = domainExperimentForNode(summary, summary.selection.node_key);
         if (!selectedGlobalExperimentId || !selectedDomainExperimentId) return;
+        if (selectedDomainIsProtein(summary)) {
+            navigate(proteinWorkspaceHref(projectId, selectedGlobalExperimentId, selectedDomainExperimentId, 'plans'));
+            return;
+        }
         const query = new URLSearchParams({
             workspace_id: projectId,
             global_experiment_id: selectedGlobalExperimentId,
@@ -652,6 +667,12 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     ?? focusIdFromReadModel(summary);
                 if (!globalExperimentId || !domainExperimentId) {
                     throw new Error('The run has no validated Domain Experiment context.');
+                }
+                if (run.adapter_id === 'bms.core-job.esmfold2.adapter.v1' && action !== 'retry') {
+                    const destination = new URL(proteinWorkspaceHref(projectId, globalExperimentId, domainExperimentId, 'plans'), window.location.origin);
+                    destination.searchParams.set('run_group_id', run.batch_or_run_group_id);
+                    destination.searchParams.set('run_group_action', action);
+                    return { kind: 'route' as const, route: `${destination.pathname}${destination.search}` };
                 }
                 if (action === 'retry' && run.adapter_id === 'bms.core-job.esmfold2.adapter.v1') {
                     const sourceAttempt = run.attempts.at(-1);
@@ -992,6 +1013,10 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
 
 export function ProjectManager() {
     const { projectId, experimentId, domainId } = useParams<{ projectId?: string; experimentId?: string; domainId?: string }>();
+    const [searchParams] = useSearchParams();
+    if (projectId && experimentId && domainId && searchParams.get('workspace') === 'protein') {
+        return <ProteinProjectWorkspace projectId={projectId} globalExperimentId={experimentId} domainExperimentId={domainId} />;
+    }
     return projectId ? <ProjectWorkspace projectId={projectId} routeFocusId={experimentId} routeDomainId={domainId} /> : <ProjectsIndex />;
 }
 
