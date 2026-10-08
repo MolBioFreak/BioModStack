@@ -17,6 +17,7 @@ export interface Job {
     params: Record<string, any>;
     created_at: string;
     design_count: number;
+    requested_design_count?: number | null;
     output_dir: string | null;
     error_message?: string | null;
     // Batch grouping for job sets
@@ -140,6 +141,38 @@ export interface PowerControlResponse {
     eco_mode: boolean;
 }
 
+export interface PerGpuFanStatus {
+    gpu_index: number;
+    gpu_name: string;
+    settings_gpu_target?: number | null;
+    fan_targets?: string[];
+    mapping_source?: string;
+    mode: 'auto' | 'manual' | 'unknown';
+    target_percent: number | null;
+    current_percent: number | null;
+    current_rpm: number | null;
+    min_percent: number;
+    max_percent: number;
+    profile_mode: 'auto' | 'manual' | 'unknown';
+    profile_target_percent: number;
+    writable: boolean;
+    warning?: string | null;
+}
+
+export interface FanControlState {
+    supported: boolean;
+    message: string;
+    backend: string;
+    available_modes: string[];
+    gpus: Record<string, PerGpuFanStatus>;
+}
+
+export interface FanControlResponse {
+    success: boolean;
+    message: string;
+    fan_control: FanControlState;
+}
+
 // API functions
 // API functions
 export const fetchJobs = (params?: {
@@ -219,6 +252,7 @@ export type AntibodyIterationAction =
     | 'fampnn_redesign'
     | 'frustrampnn'
     | 'cdr_indel_round'
+    | 'mutation_seeded_refinement'
     | 'ui_refinement';
 
 export interface AntibodyCdrIndelConfig {
@@ -241,6 +275,7 @@ export interface LaunchAntibodyIterationRequest {
     name_suffix?: string;
     param_overrides?: Record<string, unknown>;
     cdr_indel_config?: AntibodyCdrIndelConfig;
+    manual_mutagenesis_config?: ManualMutagenesisConfig;
 }
 
 export interface LaunchAntibodyIterationResponse {
@@ -402,6 +437,7 @@ export interface Design {
     conf_score: number | null;
     rmsd_overall: number | null;
     rmsd_binder: number | null;
+    rmsd_target?: number | null;
     ligand_iptm: number | null;
     affinity_score: number | null;
     binder_probability: number | null;
@@ -420,6 +456,19 @@ export interface Design {
     backbone_id: number | null;
     epitope_contact_count: number | null;
     epitope_min_distance: number | null;
+    epitope_min_atom_distance?: number | null;
+    epitope_nearest_antibody_residue?: string | null;
+    epitope_nearest_target_residue?: string | null;
+    epitope_nearest_antibody_atom?: string | null;
+    epitope_nearest_target_atom?: string | null;
+    target_contact_count?: number | null;
+    target_min_distance?: number | null;
+    target_min_atom_distance?: number | null;
+    target_nearest_antibody_residue?: string | null;
+    target_nearest_target_residue?: string | null;
+    target_nearest_antibody_atom?: string | null;
+    target_nearest_target_atom?: string | null;
+    screening_reason?: string | null;
     // Antibody annotation
     binder_length: number | null;
     antibody_type: string | null;
@@ -472,7 +521,7 @@ export interface DesignFilters {
     rfd_rog_min?: number;
     rfd_rog_max?: number;
     favorites_only?: boolean;
-    sort_by?: 'plddt' | 'iptm' | 'ptm' | 'pae' | 'conf_score' | 'rog' | 'rfd_rog' | 'backbone' | 'frustration_high_count' | 'frustration_pct_high';
+    sort_by?: 'name' | 'plddt' | 'iptm' | 'ptm' | 'pae' | 'conf_score' | 'rog' | 'rfd_rog' | 'backbone' | 'frustration_high_count' | 'frustration_pct_high';
     sort_desc?: boolean;
     limit?: number;
     offset?: number;
@@ -481,12 +530,28 @@ export interface DesignFilters {
 export interface BackboneSummary {
     job_id: string;
     total: number;
+    assigned_total?: number;
+    unassigned_total?: number;
     backbones: Record<number, {
         count: number;
         avg_plddt: number | null;
+        max_plddt?: number | null;
         avg_iptm: number | null;
         avg_ptm: number | null;
         min_pae: number | null;
+        max_epitope_contacts?: number | null;
+        min_epitope_distance?: number | null;
+        avg_cdr_h1_length?: number | null;
+        avg_cdr_h2_length?: number | null;
+        avg_cdr_h3_length?: number | null;
+        representative?: {
+            id: string;
+            name: string;
+            pdb_path: string | null;
+            plddt_overall: number | null;
+            epitope_contact_count: number | null;
+            epitope_min_distance: number | null;
+        } | null;
     }>;
 }
 
@@ -546,6 +611,20 @@ export const setPowerControlManual = (gpuIndex: number, limitWatts: number) =>
     api.post<PowerControlResponse>('/api/gpu/power-control', {
         gpu_index: gpuIndex,
         limit_watts: limitWatts
+    });
+
+export const fetchFanControl = () =>
+    api.get<FanControlState>('/api/gpu/fan-control');
+
+export const setFanControl = (
+    gpuIndex: number,
+    mode: 'auto' | 'manual',
+    targetPercent?: number
+) =>
+    api.post<FanControlResponse>('/api/gpu/fan-control', {
+        gpu_index: gpuIndex,
+        mode,
+        ...(targetPercent != null ? { target_percent: targetPercent } : {}),
     });
 
 // Analytics API
@@ -739,8 +818,27 @@ export const generateNTP3D = (ntpName: string) =>
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export interface SchedulerConfig {
-    global: { busy_threshold: number; cooldown_ms: number; enabled: boolean };
-    overrides: Record<string, { disabled?: boolean; force_available?: boolean }>;
+    global: {
+        busy_threshold: number;
+        cooldown_ms: number;
+        enabled: boolean;
+        target_vram_fill: number;
+        capacity_weight: number;
+        emptiness_weight: number;
+        max_launches_per_cycle: number;
+        msa_concurrency_limit: number;
+        msa_preferred_gpu_ids?: number[];
+        msa_avoid_heavy_gpus?: boolean;
+    };
+    overrides: Record<string, {
+        disabled?: boolean;
+        force_available?: boolean;
+        quick_enable?: boolean;
+        threshold?: number | null;
+        priority_tier?: number | null;
+        vram_safety_margin_mb?: number;
+        max_concurrent_jobs?: number | null;
+    }>;
 }
 
 export const fetchSchedulerConfig = () =>
@@ -764,6 +862,7 @@ export interface QueuedJob {
     assigned_gpu: number | null;
     priority: number;
     vram_estimate_mb: number | null;
+    live_vram_mb: number | null;
     sequence_length: number | null;
     batch_id: string | null;
     batch_name: string | null;
@@ -773,6 +872,10 @@ export interface QueuedJob {
     started_at: string | null;
     current_stage: string | null;  // Current workflow step (e.g., 'rfantibody', 'fampnn', 'boltz2')
     stage_progress: string | null;  // Granular progress (e.g., '5/30', 'step 500/1000')
+    scheduler_required_mb: number | null;
+    scheduler_candidate_gpus: number[] | null;
+    scheduler_ready: boolean | null;
+    scheduler_blockers: string[] | null;
 }
 
 export interface QueueStats {
@@ -807,7 +910,7 @@ export const retryQueueJob = (jobId: string) =>
     api.post(`/api/queue/${jobId}/retry`);
 
 export const cancelAllQueuedJobs = () =>
-    api.delete('/api/queue/cancel-all');
+    api.delete('/api/queue/clear-all');
 
 export const fetchCancelledJobs = (limit: number = 20) =>
     api.get<QueuedJob[]>('/api/queue/cancelled', { params: { limit } });
@@ -1115,7 +1218,7 @@ export interface CachedFramework {
     file_path: string;
     size_bytes: number;
     cached_at: string;
-    last_used_at: string;
+    last_used_at?: string | null;
 }
 
 export interface CachedRcsbEntry {
@@ -1124,7 +1227,7 @@ export interface CachedRcsbEntry {
     url: string;
     size_bytes: number;
     cached_at: string;
-    last_used_at: string;
+    last_used_at?: string | null;
 }
 
 export interface RcsbCacheResponse {

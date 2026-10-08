@@ -74,6 +74,7 @@ class JobResponse(BaseModel):
     output_dir: Optional[str] = None
     error_message: Optional[str] = None
     design_count: int = 0
+    requested_design_count: Optional[int] = None
     # Batch grouping for job sets
     batch_id: Optional[str] = None
     batch_name: Optional[str] = None

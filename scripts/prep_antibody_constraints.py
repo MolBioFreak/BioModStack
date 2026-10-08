@@ -208,6 +208,33 @@ def parse_chain_position_spec(spec):
     return {k: sorted(v) for k, v in mapping.items()}
 
 
+def merge_chain_position_maps(*maps):
+    merged = defaultdict(set)
+    for mapping in maps:
+        if not mapping:
+            continue
+        for chain, residues in mapping.items():
+            merged[str(chain).upper()].update(int(residue) for residue in residues)
+    return {chain: sorted(values) for chain, values in merged.items()}
+
+
+def resolve_per_pdb_fixed_positions(pdb_name, mapping):
+    if not mapping:
+        return {}
+    if pdb_name in mapping:
+        return mapping[pdb_name]
+
+    prefix_matches = [
+        (key, value)
+        for key, value in mapping.items()
+        if pdb_name.startswith(f"{key}_") or pdb_name.startswith(f"{key}-") or pdb_name == key
+    ]
+    if not prefix_matches:
+        return {}
+    prefix_matches.sort(key=lambda item: len(item[0]), reverse=True)
+    return prefix_matches[0][1]
+
+
 def compute_fixed_residues(mode, chains_data, cdr_dict, tetrad_positions,
                            selected_loops, protect_tetrad, antibody_chains,
                            extra_protected_positions=None, extra_fixed_by_chain=None,
@@ -350,6 +377,8 @@ def main():
                         help="Comma-separated list of additional IMGT positions to protect (e.g., '23,72,73,104')")
     parser.add_argument("--extra_fixed_positions", default="",
                         help="Chain-specific PDB positions to always fix (e.g., 'H27,H30-33,L50')")
+    parser.add_argument("--extra_fixed_positions_json", default="",
+                        help="Optional JSON mapping PDB stem -> extra_fixed_positions spec")
     parser.add_argument("--cdr_positions", default="",
                         help="Chain-specific CDR positions to use (e.g., 'H26-33,L50-58'). Overrides HLT labels.")
     parser.add_argument("--cdr_positions_by_loop", default="",
@@ -383,6 +412,16 @@ def main():
     # Build extra protected positions list (IMGT numbering)
     extra_protected_imgt = []
     extra_fixed_by_chain = parse_chain_position_spec(args.extra_fixed_positions)
+    per_pdb_extra_fixed_positions = {}
+    if args.extra_fixed_positions_json:
+        try:
+            with open(args.extra_fixed_positions_json, 'r') as f:
+                raw_mapping = json.load(f)
+            if isinstance(raw_mapping, dict):
+                for pdb_name, spec in raw_mapping.items():
+                    per_pdb_extra_fixed_positions[str(pdb_name)] = parse_chain_position_spec(str(spec or ""))
+        except Exception as e:
+            print(f"Warning: Failed to read extra_fixed_positions_json: {e}")
     cdr_override_by_chain = parse_chain_position_spec(args.cdr_positions)
     cdr_positions_by_loop = {}
     if args.cdr_positions_by_loop:
@@ -426,6 +465,8 @@ def main():
         print(f"Extra protected IMGT positions: {sorted(extra_protected_imgt)}")
     if extra_fixed_by_chain:
         print(f"Extra fixed positions by chain: {extra_fixed_by_chain}")
+    if per_pdb_extra_fixed_positions:
+        print(f"Per-PDB extra fixed positions loaded: {len(per_pdb_extra_fixed_positions)} entries")
     if cdr_override_by_chain:
         print(f"CDR override positions by chain: {cdr_override_by_chain}")
     if cdr_positions_by_loop:
@@ -434,6 +475,10 @@ def main():
     for pdb in pdb_files:
         pdb_name = pdb.stem
         chains_data = parse_pdb_chains(pdb)
+        effective_extra_fixed_by_chain = merge_chain_position_maps(
+            extra_fixed_by_chain,
+            resolve_per_pdb_fixed_positions(pdb_name, per_pdb_extra_fixed_positions),
+        )
         
         # Parse CDR labels from HLT format
         cdr_dict = parse_hlt_cdr_labels(pdb)
@@ -467,7 +512,7 @@ def main():
                     fampnn_constraints.append(f"{chain}{r_start}-{r_end}")
 
             # Add extra fixed positions (anchors) if provided
-            for chain, residues in extra_fixed_by_chain.items():
+            for chain, residues in effective_extra_fixed_by_chain.items():
                 if chain not in chains_data:
                     continue
                 valid = set(residues) & set(chains_data[chain])
@@ -511,7 +556,7 @@ def main():
             protect_tetrad=protect_tetrad,
             antibody_chains=effective_antibody_chains,
             extra_protected_positions=extra_protected_pdb,
-            extra_fixed_by_chain=extra_fixed_by_chain,
+            extra_fixed_by_chain=effective_extra_fixed_by_chain,
             cdr_override_by_chain=cdr_override_by_chain,
             lock_target_chains=lock_target_chains,
             lock_antibody_framework=lock_antibody_framework,

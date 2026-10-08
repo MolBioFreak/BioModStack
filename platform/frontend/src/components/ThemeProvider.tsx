@@ -52,8 +52,8 @@ export const THEMES: ThemeConfig[] = [
     {
         id: 'desert',
         name: 'Desert',
-        description: 'Warm sandy dunes',
-        preview: { bg: '#3b3022', accent: '#f0a030', text: '#fff8e7' }
+        description: 'Warm adobe parchment with clay and mineral accents',
+        preview: { bg: '#e7dcc8', accent: '#b56d3a', text: '#433022' }
     },
     {
         id: 'solarized',
@@ -88,8 +88,8 @@ export const THEMES: ThemeConfig[] = [
     {
         id: 'retro',
         name: 'Retro Terminal',
-        description: 'Classic green phosphor',
-        preview: { bg: '#0a0a0a', accent: '#22c55e', text: '#4ade80' }
+        description: 'CRT workstation with phosphor mint and amber',
+        preview: { bg: '#101311', accent: '#68e39b', text: '#e2eadf' }
     },
     {
         id: 'cyberpunk',

@@ -25,6 +25,69 @@ const GPU_NAMES: Record<number, string> = {
     3: 'RTX 3090 #2',
 };
 
+const INTERNAL_BATCH_NAME_RE = /^antibody_batch_[0-9a-f-]{36}$/i;
+const INTERNAL_CHILD_NAME_RE = /^antibody_batch_[0-9a-f-]{36}_(.+)$/i;
+
+function parseApiTimestamp(timestamp: string | null): number | null {
+    if (!timestamp) return null;
+    const trimmed = timestamp.trim();
+    if (!trimmed) return null;
+    const normalized = /(?:Z|[+-]\d{2}:\d{2})$/i.test(trimmed) ? trimmed : `${trimmed}Z`;
+    const parsed = Date.parse(normalized);
+    return Number.isNaN(parsed) ? null : parsed;
+}
+
+function humanizeChildStage(token: string): string {
+    const normalized = token.trim().toLowerCase();
+    if (!normalized) return 'Child';
+    if (normalized === 'rfa') return 'RFA';
+    if (normalized === 'fampnn') return 'FA-MPNN';
+    if (normalized === 'maturation' || normalized === 'validated_maturation' || normalized === 'maturation_post_validation') return 'PPIFlow';
+    if (normalized === 'protenix' || normalized === 'protenix_batch') return 'Protenix';
+    if (normalized === 'boltz2' || normalized === 'boltz2_batch' || normalized === 'boltz_batch' || normalized === 'boltz') return 'Boltz-2';
+    return token.replace(/_/g, ' ');
+}
+
+function prettifyInternalChildName(name: string, batchName?: string | null): string {
+    const rawName = name.trim();
+    if (!rawName) return rawName;
+
+    let suffix = '';
+    const normalizedBatch = batchName?.trim() || '';
+    if (normalizedBatch && rawName.startsWith(`${normalizedBatch}_`)) {
+        suffix = rawName.slice(normalizedBatch.length + 1);
+    } else {
+        const internalMatch = rawName.match(INTERNAL_CHILD_NAME_RE);
+        suffix = internalMatch?.[1] || '';
+    }
+
+    if (!suffix) return rawName;
+
+    let match = suffix.match(/^(rfa|fampnn|maturation|validated_maturation|maturation_post_validation)_(\d+)$/i);
+    if (match) {
+        return `${humanizeChildStage(match[1])} ${Number(match[2]) + 1}`;
+    }
+
+    match = suffix.match(/^(protenix|boltz2|boltz)_batch_(\d+)$/i);
+    if (match) {
+        return `${humanizeChildStage(match[1])} ${Number(match[2]) + 1}`;
+    }
+
+    return rawName;
+}
+
+function getDisplayJobName(job: Pick<QueuedJob, 'name' | 'batch_name'>): string {
+    return prettifyInternalChildName(job.name, job.batch_name);
+}
+
+function getDisplayBatchName(batchName?: string | null): string | null {
+    const normalized = batchName?.trim() || '';
+    if (!normalized || INTERNAL_BATCH_NAME_RE.test(normalized)) {
+        return null;
+    }
+    return normalized;
+}
+
 function getModelBadge(modelId: string): string {
     const key = modelId.toLowerCase();
     if (key === 'msa_batch') return 'MSA';
@@ -90,12 +153,18 @@ function StatusBadge({ status, paused }: { status: string; paused: boolean }) {
     }
 }
 
-function VramBadge({ vramMb }: { vramMb: number | null }) {
+function VramBadge({ vramMb, label = 'VRAM', tone = 'accent' }: { vramMb: number | null; label?: string; tone?: 'accent' | 'live' | 'muted' }) {
     if (!vramMb) return null;
     const vramGb = (vramMb / 1024).toFixed(1);
+    const toneClasses =
+        tone === 'live'
+            ? 'bg-emerald-500/20 text-emerald-400'
+            : tone === 'muted'
+                ? 'bg-slate-500/20 text-slate-400'
+                : 'bg-accent/20 text-accent';
     return (
-        <span className="px-2 py-0.5 rounded text-xs font-medium bg-accent/20 text-accent">
-            {vramGb} GB
+        <span className={`px-2 py-0.5 rounded text-xs font-medium ${toneClasses}`}>
+            {label} {vramGb} GB
         </span>
     );
 }
@@ -116,14 +185,20 @@ function GPUBadge({ gpu, pinned }: { gpu: number | null; pinned: boolean }) {
     );
 }
 
+function formatGpuList(gpuIds: number[] | null | undefined): string | null {
+    if (!gpuIds || gpuIds.length === 0) return null;
+    return gpuIds.map((gpuId) => GPU_NAMES[gpuId] || `GPU ${gpuId}`).join(', ');
+}
+
 // Elapsed time badge for running jobs
 // NOTE: tick prop is passed from parent to trigger re-renders without N intervals
 function ElapsedTimeBadge({ startedAt, tick: _tick }: { startedAt: string | null; tick: number }) {
     if (!startedAt) return null;
 
-    const start = new Date(startedAt).getTime();
+    const start = parseApiTimestamp(startedAt);
+    if (start === null) return null;
     const now = Date.now();
-    const elapsedMs = now - start;
+    const elapsedMs = Math.max(0, now - start);
 
     const seconds = Math.floor(elapsedMs / 1000) % 60;
     const minutes = Math.floor(elapsedMs / 60000) % 60;
@@ -178,6 +253,19 @@ function StageBadge({ stage, progress }: { stage: string | null; progress?: stri
         'proteinmpnn': 'ProteinMPNN',
         'thermompnn': 'ThermoMPNN',
         'structure_validation': 'Structure Validation',
+        'spawnrfantibodyjobs': 'Queueing RFA',
+        'waitforchildren': 'Waiting RFA Children',
+        'spawnfampnnjobs': 'Queueing FA-MPNN',
+        'waitforfampnnchildren': 'Waiting FA-MPNN',
+        'spawnmaturationjobs': 'Queueing PPIFlow',
+        'waitformaturationchildren': 'Waiting PPIFlow',
+        'spawnvalidatedmaturationjobs': 'Queueing PPIFlow',
+        'waitforvalidatedmaturationchildren': 'Waiting PPIFlow',
+        'spawnchildjobs': 'Queueing Validation',
+        'waitandaggregatechildresults': 'Waiting Validation',
+        'collectfampnnoutputs': 'Collecting FA-MPNN',
+        'collectmaturationoutputs': 'Collecting PPIFlow',
+        'triggeranarciiannotation': 'Trigger ANARCII',
         'boltz2': 'Boltz-2',
         'protenix': 'Protenix',
         'maturation_post_validation': 'PPIFlow Repair',
@@ -310,23 +398,25 @@ export function JobQueuePanel() {
     const visibleQueue = showNgsJobs ? queue : queue.filter(j => !isNgsJob(j.model_id, j.mode));
     const cancelledJobs = showNgsJobs ? cancelledJobsRaw : cancelledJobsRaw.filter(j => !isNgsJob(j.model_id, j.mode));
 
-    // Separate running, queued, and pending_msa jobs
+    // Separate running, paused, queued, and pending_msa jobs
     const runningJobs = visibleQueue.filter(j => j.queue_status === 'running');
-    const queuedJobs = visibleQueue.filter(j => j.queue_status === 'queued' || j.queue_status === 'paused');
+    const pausedJobs = visibleQueue.filter(j => j.queue_status === 'paused' || j.paused);
+    const queuedJobs = visibleQueue.filter(j => j.queue_status === 'queued' && !j.paused);
     const pendingMsaJobs = visibleQueue.filter(j => j.queue_status === 'pending_msa');
     const hiddenQueuedCount = showNgsJobs
         ? 0
         : Math.max(
             0,
-            queue.filter(j => j.queue_status === 'queued' || j.queue_status === 'paused').length - queuedJobs.length
+            queue.filter(j => j.queue_status === 'queued' && !j.paused).length - queuedJobs.length
         );
+    const clearableJobs = visibleQueue.filter(j => j.queue_status === 'queued' || j.queue_status === 'paused' || j.paused);
 
     const handleCancelAll = () => {
-        if (queuedJobs.length === 0) return;
+        if (clearableJobs.length === 0) return;
         const hiddenNgsNote = hiddenQueuedCount > 0
             ? ` This will also clear ${hiddenQueuedCount} hidden NGS job(s).`
             : '';
-        if (confirm(`Clear ${queuedJobs.length} queued jobs from database?${hiddenNgsNote}`)) {
+        if (confirm(`Clear ${clearableJobs.length} queued/paused jobs from database?${hiddenNgsNote}`)) {
             cancelAllMutation.mutate();
         }
     };
@@ -373,12 +463,12 @@ export function JobQueuePanel() {
                         Kill Active
                     </button>
                     {/* Clear Queue - removes from database */}
-                    {queuedJobs.length > 0 && (
+                    {clearableJobs.length > 0 && (
                         <button
                             onClick={handleCancelAll}
                             disabled={isPending}
                             className="px-2 py-1 rounded bg-red-600/30 hover:bg-red-600/50 text-red-400 text-xs disabled:opacity-50"
-                            title="Clear all queued jobs from database"
+                            title="Clear all queued and paused jobs from database"
                         >
                             Clear Queue
                         </button>
@@ -422,8 +512,8 @@ export function JobQueuePanel() {
                                         >
                                             <div className="flex items-center gap-2 min-w-0">
                                                 <span className="px-1.5 py-0.5 rounded text-xs font-mono bg-slate-600 text-slate-300">{getModelBadge(job.model_id)}</span>
-                                                <span className="text-sm text-white truncate">{job.name}</span>
-                                                <VramBadge vramMb={job.vram_estimate_mb} />
+                                                <span className="text-sm text-white truncate" title={job.name}>{getDisplayJobName(job)}</span>
+                                                <VramBadge vramMb={job.vram_estimate_mb} label="Est" tone="muted" />
                                             </div>
                                             <button
                                                 onClick={() => retryMutation.mutate(job.id)}
@@ -460,7 +550,7 @@ export function JobQueuePanel() {
                                                 job={job}
                                                 onPause={() => pauseMutation.mutate(job.id)}
                                                 onCancel={() => {
-                                                    if (confirm(`Cancel "${job.name}"?`)) {
+                                                    if (confirm(`Cancel "${getDisplayJobName(job)}"?`)) {
                                                         cancelMutation.mutate(job.id);
                                                     }
                                                 }}
@@ -485,10 +575,37 @@ export function JobQueuePanel() {
                                                 job={job}
                                                 onPause={() => pauseMutation.mutate(job.id)}
                                                 onCancel={() => {
-                                                    if (confirm(`Cancel "${job.name}"?`)) {
+                                                    if (confirm(`Cancel "${getDisplayJobName(job)}"?`)) {
                                                         cancelMutation.mutate(job.id);
                                                     }
                                                 }}
+                                                isPending={isPending}
+                                                elapsedTick={elapsedTick}
+                                            />
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Paused Jobs */}
+                            {pausedJobs.length > 0 && (
+                                <div>
+                                    <h4 className="text-xs font-semibold text-yellow-400 mb-1 uppercase tracking-wide">
+                                        Paused ({pausedJobs.length})
+                                    </h4>
+                                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                                        {pausedJobs.map((job) => (
+                                            <JobRow
+                                                key={job.id}
+                                                job={job}
+                                                onResume={() => resumeMutation.mutate(job.id)}
+                                                onCancel={() => {
+                                                    if (confirm(`Cancel "${getDisplayJobName(job)}"?`)) {
+                                                        cancelMutation.mutate(job.id);
+                                                    }
+                                                }}
+                                                onPin={(gpuId) => pinMutation.mutate({ jobId: job.id, gpuId })}
+                                                onForceLaunch={(gpuId) => forceLaunchMutation.mutate({ jobId: job.id, gpuId })}
                                                 isPending={isPending}
                                                 elapsedTick={elapsedTick}
                                             />
@@ -501,7 +618,7 @@ export function JobQueuePanel() {
                             {queuedJobs.length > 0 && (
                                 <div>
                                     <h4 className="text-xs font-semibold text-slate-400 mb-1 uppercase tracking-wide">
-                                        Pending ({queuedJobs.length})
+                                        Queued ({queuedJobs.length})
                                     </h4>
                                     <div className="space-y-1 max-h-48 overflow-y-auto">
                                         {queuedJobs.map((job) => (
@@ -511,7 +628,7 @@ export function JobQueuePanel() {
                                                 onPause={() => pauseMutation.mutate(job.id)}
                                                 onResume={() => resumeMutation.mutate(job.id)}
                                                 onCancel={() => {
-                                                    if (confirm(`Cancel "${job.name}"?`)) {
+                                                    if (confirm(`Cancel "${getDisplayJobName(job)}"?`)) {
                                                         cancelMutation.mutate(job.id);
                                                     }
                                                 }}
@@ -555,6 +672,9 @@ function JobRow({
 }: JobRowProps) {
     const [showPinMenu, setShowPinMenu] = useState(false);
     const [showForceMenu, setShowForceMenu] = useState(false);
+    const displayName = getDisplayJobName(job);
+    const displayBatchName = getDisplayBatchName(job.batch_name);
+    const candidateGpuLabel = formatGpuList(job.scheduler_candidate_gpus);
 
     return (
         <div className="bg-slate-700/30 rounded-lg p-3 hover:bg-slate-700/50 transition-colors">
@@ -563,21 +683,36 @@ function JobRow({
                     <span className={`px-1.5 py-0.5 rounded text-xs font-mono ${isMsaJob(job.model_id) ? 'bg-violet-600 text-white' : 'bg-slate-600 text-slate-300'}`}>{getModelBadge(job.model_id)}</span>
                     <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                            <span className="font-medium text-white truncate">{job.name}</span>
+                            <span className="font-medium text-white truncate" title={job.name}>{displayName}</span>
                             <StatusBadge status={job.queue_status} paused={job.paused} />
                         </div>
                         <div className="flex items-center gap-2 mt-1">
                             <span className="text-xs text-slate-500">{job.mode}</span>
-                            <VramBadge vramMb={job.vram_estimate_mb} />
+                            {job.queue_status === 'running' ? (
+                                <>
+                                    {job.live_vram_mb ? (
+                                        <VramBadge vramMb={job.live_vram_mb} label="Live" tone="live" />
+                                    ) : (
+                                        <span
+                                            className="px-2 py-0.5 rounded text-xs font-medium bg-slate-500/20 text-slate-400"
+                                            title={job.vram_estimate_mb ? `Scheduler estimate: ${(job.vram_estimate_mb / 1024).toFixed(1)} GB` : 'Live VRAM not available for this process yet'}
+                                        >
+                                            Live n/a
+                                        </span>
+                                    )}
+                                </>
+                            ) : (
+                                <VramBadge vramMb={job.vram_estimate_mb} label="Est" tone="muted" />
+                            )}
                             <GPUBadge gpu={job.assigned_gpu ?? job.pinned_gpu} pinned={job.pinned_gpu !== null} />
                             {job.priority > 0 && (
                                 <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400">
                                     P{job.priority}
                                 </span>
                             )}
-                            {job.batch_name && (
+                            {displayBatchName && (
                                 <span className="px-2 py-0.5 rounded text-xs font-medium bg-accent/20 text-accent" title={`Batch: ${job.batch_name}`}>
-                                    📦 {job.batch_name.length > 15 ? job.batch_name.slice(0, 15) + '...' : job.batch_name}
+                                    📦 {displayBatchName.length > 15 ? displayBatchName.slice(0, 15) + '...' : displayBatchName}
                                 </span>
                             )}
                             {/* Elapsed time for running jobs */}
@@ -587,7 +722,29 @@ function JobRow({
                                     <ElapsedTimeBadge startedAt={job.started_at} tick={elapsedTick} />
                                 </>
                             )}
+                            {job.queue_status === 'queued' && job.scheduler_required_mb ? (
+                                <VramBadge vramMb={job.scheduler_required_mb} label="Need" tone="accent" />
+                            ) : null}
+                            {job.queue_status === 'queued' && job.scheduler_ready ? (
+                                <span className="px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/20 text-emerald-400">
+                                    Ready now
+                                </span>
+                            ) : null}
                         </div>
+                        {job.queue_status === 'queued' && (
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                                {candidateGpuLabel && (
+                                    <span className="text-slate-400">
+                                        GPUs: <span className="text-cyan-300">{candidateGpuLabel}</span>
+                                    </span>
+                                )}
+                                {job.scheduler_blockers && job.scheduler_blockers.length > 0 && (
+                                    <span className="text-amber-300" title={job.scheduler_blockers.join(' | ')}>
+                                        Why waiting: {job.scheduler_blockers.join(' • ')}
+                                    </span>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
 

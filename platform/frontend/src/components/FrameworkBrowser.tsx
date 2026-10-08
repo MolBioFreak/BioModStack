@@ -201,7 +201,13 @@ export function FrameworkBrowser({
 
             const aTime = Date.parse(a[cachedSortBy] || '') || 0;
             const bTime = Date.parse(b[cachedSortBy] || '') || 0;
-            return bTime - aTime;
+            if (bTime !== aTime) return bTime - aTime;
+
+            const aCached = Date.parse(a.cached_at || '') || 0;
+            const bCached = Date.parse(b.cached_at || '') || 0;
+            if (bCached !== aCached) return bCached - aCached;
+
+            return a.pdb_code.localeCompare(b.pdb_code);
         });
         return entries;
     }, [cached, cachedSortBy]);
@@ -323,9 +329,9 @@ export function FrameworkBrowser({
     // CDR-H3 length range from filter options
     const cdrRange = filterOptions?.cdr_h3_length_range ?? [5, 25];
     const formatCacheTimestamp = (value?: string | null) => {
-        if (!value) return 'n/a';
+        if (!value) return 'unknown';
         const parsed = new Date(value);
-        if (Number.isNaN(parsed.getTime())) return 'n/a';
+        if (Number.isNaN(parsed.getTime())) return 'unknown';
         return parsed.toLocaleString([], {
             month: 'short',
             day: 'numeric',

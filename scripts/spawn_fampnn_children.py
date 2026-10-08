@@ -17,6 +17,13 @@ from pathlib import Path
 DEFAULT_API_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 
 
+def _child_display_name(display_prefix: str, stage_label: str, index: int, total: int) -> str:
+    prefix = (display_prefix or "").strip() or "Antibody"
+    if total > 1:
+        return f"{prefix} · {stage_label} {index + 1}/{total}"
+    return f"{prefix} · {stage_label}"
+
+
 def _normalize_pinned_gpus(raw_value):
     if raw_value in (None, "", []):
         return None
@@ -64,6 +71,7 @@ def spawn_fampnn_jobs(
     pdbs_per_job: int,
     seqs_per_design: int,
     batch_name: str,
+    display_prefix: str = "",
     params_json: str = None,
     api_url: str = DEFAULT_API_URL
 ):
@@ -199,7 +207,7 @@ def spawn_fampnn_jobs(
         estimated_seq_len = 40 if is_vhh else 80
         
         job_data = {
-            "name": f"{batch_name}_fampnn_{i}",
+            "name": _child_display_name(display_prefix, "FA-MPNN", i, num_jobs),
             "model_id": "fampnn_child",
             "mode": "sequence_design",
             "params": {
@@ -264,6 +272,7 @@ def main():
     parser.add_argument("--pdbs_per_job", type=int, default=5, help="PDBs per child job")
     parser.add_argument("--seqs_per_design", type=int, default=20, help="Sequences per design")
     parser.add_argument("--batch_name", required=True, help="Batch name for display")
+    parser.add_argument("--display_prefix", default="", help="Human-readable prefix for child job names")
     parser.add_argument("--params_json", default=None, help="Additional params as JSON")
     parser.add_argument("--api_url", default=DEFAULT_API_URL, help="API URL")
     parser.add_argument("--output", default="spawn_fampnn_result.json", help="Output JSON file")
@@ -276,6 +285,7 @@ def main():
         pdbs_per_job=args.pdbs_per_job,
         seqs_per_design=args.seqs_per_design,
         batch_name=args.batch_name,
+        display_prefix=args.display_prefix,
         params_json=args.params_json,
         api_url=args.api_url
     )

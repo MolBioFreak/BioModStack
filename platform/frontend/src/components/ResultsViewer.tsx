@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 
 import { fetchJobs, fetchDesigns, fetchStructureAnalysis, fetchAntibodyData, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis } from '../lib/api';
-import type { AntibodyCdrIndelConfig, AntibodyIterationAction, Job, ManualMutagenesisConfig } from '../lib/api';
+import type { AntibodyCdrIndelConfig, AntibodyIterationAction, BackboneSummary, Job, ManualMutagenesisConfig } from '../lib/api';
+import { getOutputSourceBadgeClass, getOutputSourceLabel, inferDesignOutputSource, type OutputSourceFilter } from './designOutputSource';
 import MolstarViewer from './MolstarViewer';
 // FloatingViewer - unused, kept for reference
 import { StabilityHeatmap } from './MetricCharts';
@@ -18,14 +19,13 @@ const TABS = [
     { id: 'overview', label: 'Overview', icon: 'View' },
     { id: 'charts', label: 'Charts', icon: 'Chart' },
     { id: 'structure', label: 'Structure', icon: '3D' },
-    { id: 'antibody', label: 'Antibody', icon: 'Immune' },
+    { id: 'antibody', label: 'Binder Info', icon: 'Immune' },
     { id: 'table', label: 'Data Table', icon: 'List' },
     { id: 'compare_designs', label: 'Compare Designs', icon: 'Chart' },
     { id: 'compare', label: 'Compare Jobs', icon: 'Vs' },
 ] as const;
 
 type TabId = typeof TABS[number]['id'];
-type OutputSourceFilter = 'all' | 'rfantibody' | 'fampnn' | 'validation';
 const OUTPUT_SOURCE_ORDER: OutputSourceFilter[] = ['rfantibody', 'fampnn', 'validation', 'all'];
 
 // Formatting helpers
@@ -75,45 +75,85 @@ const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
     );
 };
 
-const inferDesignOutputSource = (design: { pdb_path?: string | null; confidence_metrics?: Record<string, any> | null }): OutputSourceFilter => {
-    const path = design.pdb_path || '';
-    const metrics = design.confidence_metrics || {};
-    if (path.includes('/validated_designs/') || path.includes('/collected/structure_validation/')) return 'validation';
-    if (path.includes('/collected/fampnn/') || path.includes('/collected/fampnn_filtered/') || path.includes('/fampnn_filtered/')) return 'fampnn';
-    if (path.includes('/collected/rfantibody/') || path.includes('/collected/rfantibody_raw/') || path.includes('/collected/rfantibody_filtered/') || path.includes('/rfantibody/')) return 'rfantibody';
-    if (metrics && typeof metrics === 'object' && ('ranking_score' in metrics || 'gpde' in metrics || 'chain_pair_iptm' in metrics)) return 'validation';
+const inferPreferredOutputSource = (job: Job | null | undefined): OutputSourceFilter => {
+    const stage = String(job?.awaiting_stage || job?.current_stage || '').toLowerCase();
+    const candidateDir = String(job?.awaiting_payload?.candidate_dir || '').toLowerCase();
+
+    if (stage === 'post_structure_validation' || candidateDir.includes('structure_validation')) return 'validation';
+    if (stage === 'post_fampnn' || candidateDir.includes('fampnn')) return 'fampnn';
+    if (stage === 'post_rfantibody' || candidateDir.includes('rfantibody')) return 'rfantibody';
     return 'all';
 };
 
-const getOutputSourceLabel = (design: { pdb_path?: string | null; confidence_metrics?: Record<string, any> | null }): string => {
-    const source = inferDesignOutputSource(design);
-    if (source === 'validation') {
-        const metrics = design.confidence_metrics || {};
-        if (metrics && typeof metrics === 'object' && ('ranking_score' in metrics || 'gpde' in metrics || 'chain_pair_iptm' in metrics)) {
-            return 'Protenix';
-        }
-        return 'Validation';
-    }
-    if (source === 'fampnn') return 'FAMPNN';
-    if (source === 'rfantibody') return 'RFantibody';
-    return 'Other';
+const stageRank = (job: Job | null | undefined): number => {
+    const stage = String(job?.awaiting_stage || job?.current_stage || '').toLowerCase();
+    if (stage === 'post_structure_validation') return 3;
+    if (stage === 'post_fampnn') return 2;
+    if (stage === 'post_rfantibody') return 1;
+    return 0;
 };
 
-const getOutputSourceBadgeClass = (source: OutputSourceFilter): string => {
-    if (source === 'rfantibody') return 'border-violet-500/40 bg-violet-500/10 text-violet-200';
-    if (source === 'fampnn') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
-    if (source === 'validation') return 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200';
-    return 'border-slate-600/40 bg-slate-700/30 text-slate-300';
+const pickPreferredResultsJob = (jobs: Job[]): Job | undefined => {
+    if (jobs.length === 0) return undefined;
+
+    const scored = [...jobs].sort((a, b) => {
+        const aStage = stageRank(a);
+        const bStage = stageRank(b);
+        if (aStage !== bStage) return bStage - aStage;
+
+        const aIsParent = !a.parent_job_id;
+        const bIsParent = !b.parent_job_id;
+        if (aIsParent !== bIsParent) return aIsParent ? -1 : 1;
+
+        const aAwaiting = Boolean(a.awaiting_input);
+        const bAwaiting = Boolean(b.awaiting_input);
+        if (aAwaiting !== bAwaiting) return aAwaiting ? -1 : 1;
+
+        const aCompleted = a.status === 'completed';
+        const bCompleted = b.status === 'completed';
+        if (aCompleted !== bCompleted) return aCompleted ? -1 : 1;
+
+        return String(b.created_at || '').localeCompare(String(a.created_at || ''));
+    });
+
+    return scored[0];
+};
+
+const normalizeValidationDesignName = (name: string): string => {
+    let normalized = name;
+    while (/^\d+_/.test(normalized)) {
+        normalized = normalized.replace(/^\d+_/, '');
+    }
+    return normalized;
+};
+
+const validationDesignPreference = (
+    design: { job_id: string; pdb_path?: string | null },
+    selectedJobId: string
+): number => {
+    const path = design.pdb_path || '';
+    let score = 0;
+    if (design.job_id === selectedJobId) score += 100;
+    if (path.includes('/validated_designs/') || path.includes('/collected/structure_validation/')) score += 50;
+    if (path.endsWith('.pdb')) score += 10;
+    if (path.includes('/pdb_files/predictions/')) score += 5;
+    return score;
 };
 
 const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null; confidence_metrics?: Record<string, any> | null }): string => {
     const source = inferDesignOutputSource(design);
     const sampleMatch = design.name.match(/_sample_(\d+)$/);
+    const seqMatch = design.name.match(/_seq_(\d+)/);
     if (source === 'validation' && sampleMatch) {
-        return `${getOutputSourceLabel(design)} Sample ${sampleMatch[1]}`;
+        return seqMatch
+            ? `Seq ${seqMatch[1]} • ${getOutputSourceLabel(design)} Sample ${sampleMatch[1]}`
+            : `${getOutputSourceLabel(design)} Sample ${sampleMatch[1]}`;
     }
-    if (source === 'fampnn') return 'FAMPNN Candidate';
-    if (source === 'rfantibody') return 'RFantibody Backbone';
+    if (source === 'fampnn') return seqMatch ? `FAMPNN Seq ${seqMatch[1]}` : 'FAMPNN Candidate';
+    if (source === 'rfantibody') {
+        const jobMatch = design.name.match(/job[_-]?(\d+)/i);
+        return jobMatch ? `RFantibody Backbone ${jobMatch[1]}` : 'RFantibody Backbone';
+    }
     return design.name;
 };
 
@@ -136,7 +176,27 @@ type AntibodyLoopRow = {
     length: number | null;
 };
 
+type GateBackboneSummary = {
+    mode?: string | null;
+    total?: number | null;
+    assigned_total?: number | null;
+    unassigned_total?: number | null;
+    backbones?: Record<string, {
+        count?: number | null;
+        representative_file?: string | null;
+        preview?: string[] | null;
+        sample_names?: string[] | null;
+    }> | null;
+};
+
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+const coerceGateBackboneSummary = (value: unknown): GateBackboneSummary | null => {
+    if (!value || typeof value !== 'object') return null;
+    const typed = value as Record<string, unknown>;
+    if (!typed.backbones || typeof typed.backbones !== 'object') return null;
+    return typed as GateBackboneSummary;
+};
 
 export function ResultsViewer() {
     const { jobId } = useParams();
@@ -182,6 +242,7 @@ export function ResultsViewer() {
         run_frustrampnn: false,
         interactive_gating: true,
     });
+    const workflowOnlyRefinement = true;
     const [showParamOverrides, setShowParamOverrides] = useState(false);
 
     // Filter state
@@ -201,6 +262,7 @@ export function ResultsViewer() {
     const [rfdRogMin, setRfdRogMin] = useState<string>('');
     const [rfdRogMax, setRfdRogMax] = useState<string>('');
     const [epitopeMaxDist, setEpitopeMaxDist] = useState<string>('');
+    const [targetMaxDist, setTargetMaxDist] = useState<string>('');
     // const MAX_COMPARE_VIEWERS = 3; // unused
 
     // Pagination state for large design sets
@@ -218,6 +280,10 @@ export function ResultsViewer() {
     const activeJob = useMemo(
         () => nonNgsJobs.find((j: Job) => j.id === selectedJobId),
         [nonNgsJobs, selectedJobId]
+    );
+    const activeParentJob = useMemo(
+        () => activeJob?.parent_job_id ? nonNgsJobs.find((j: Job) => j.id === activeJob.parent_job_id) : undefined,
+        [nonNgsJobs, activeJob?.parent_job_id]
     );
     const isAntibodyContext = useMemo(() => {
         if (!activeJob) return false;
@@ -260,7 +326,7 @@ export function ResultsViewer() {
 
     // Sync URL with selection
     useEffect(() => {
-        const fallbackJob = nonNgsJobs.find((j: Job) => j.status === 'completed') ?? nonNgsJobs[0];
+        const fallbackJob = pickPreferredResultsJob(nonNgsJobs);
 
         if (nonNgsJobs.length === 0) {
             if (selectedJobId) {
@@ -300,6 +366,15 @@ export function ResultsViewer() {
         }
     }, [jobId, nonNgsJobs, selectedJobId, activeJob, navigate]);
 
+    useEffect(() => {
+        if (!activeJob?.parent_job_id || !activeParentJob) return;
+        if (selectedJobId === activeParentJob.id) return;
+        setSelectedJobId(activeParentJob.id);
+        setSelectedDesignId('');
+        setCurrentPage(1);
+        navigate(`/designs/${activeParentJob.id}`, { replace: true });
+    }, [activeJob?.id, activeJob?.parent_job_id, activeParentJob?.id, navigate, selectedJobId]);
+
     const handleJobChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
         const newId = e.target.value;
         setSelectedJobId(newId);
@@ -318,10 +393,10 @@ export function ResultsViewer() {
         queryKey: ['designs', selectedJobId, currentPage, pageSize, sortField, sortDir, selectedBackboneId, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue],
         queryFn: () => fetchDesigns({
             job_id: selectedJobId,
-            include_children: true, // Include designs from child jobs (mutagenesis variants, exploration spawns)
+            include_children: false, // Parent review should default to aggregated parent outputs, not raw child artifacts
             limit: pageSize === 0 ? 10000 : pageSize, // 0 = All (fetch up to 10000)
             offset: pageSize === 0 ? 0 : (currentPage - 1) * pageSize,
-            sort_by: sortField as 'plddt' | 'iptm' | 'ptm' | 'pae' | 'rog' | 'rfd_rog' | 'backbone' | 'frustration_high_count' | 'frustration_pct_high' | undefined,
+            sort_by: sortField as 'name' | 'plddt' | 'iptm' | 'ptm' | 'pae' | 'rog' | 'rfd_rog' | 'backbone' | 'frustration_high_count' | 'frustration_pct_high' | undefined,
             sort_desc: sortDir === 'desc',
             backbone_id: selectedBackboneId ?? undefined,
             rog_min: rogMinValue,
@@ -331,8 +406,34 @@ export function ResultsViewer() {
         }),
         enabled: !!activeJob,
     });
-    const designs = designsData?.data.designs ?? [];
-    const totalDesigns = designsData?.data.total ?? 0;
+    const rawDesigns = designsData?.data.designs ?? [];
+    const designs = useMemo(() => {
+        const deduped: typeof rawDesigns = [];
+        const validationIndices = new Map<string, number>();
+
+        for (const design of rawDesigns) {
+            if (inferDesignOutputSource(design as any) !== 'validation') {
+                deduped.push(design);
+                continue;
+            }
+
+            const key = normalizeValidationDesignName(design.name);
+            const existingIndex = validationIndices.get(key);
+            if (existingIndex == null) {
+                validationIndices.set(key, deduped.length);
+                deduped.push(design);
+                continue;
+            }
+
+            const existing = deduped[existingIndex];
+            if (validationDesignPreference(design, selectedJobId) > validationDesignPreference(existing, selectedJobId)) {
+                deduped[existingIndex] = design;
+            }
+        }
+
+        return deduped;
+    }, [rawDesigns, selectedJobId]);
+    const totalDesigns = designs.length;
     const totalPages = pageSize === 0 ? 1 : Math.ceil(totalDesigns / pageSize);
 
     // Fetch backbone summary for toggle UI
@@ -342,6 +443,62 @@ export function ResultsViewer() {
         enabled: !!activeJob,
     });
     const backboneSummary = backboneSummaryData?.data;
+    const isPostRFantibodyReview = isAntibodyContext && String(activeJob?.awaiting_stage || '').toLowerCase() === 'post_rfantibody';
+    const gateCandidateBackboneSummary = useMemo(
+        () => coerceGateBackboneSummary(activeJob?.awaiting_payload?.candidate_backbone_summary),
+        [activeJob?.awaiting_payload?.candidate_backbone_summary]
+    );
+    const gateRawBackboneSummary = useMemo(
+        () => coerceGateBackboneSummary(activeJob?.awaiting_payload?.raw_backbone_summary),
+        [activeJob?.awaiting_payload?.raw_backbone_summary]
+    );
+    const gateFilteredBackboneSummary = useMemo(
+        () => coerceGateBackboneSummary(activeJob?.awaiting_payload?.filtered_backbone_summary),
+        [activeJob?.awaiting_payload?.filtered_backbone_summary]
+    );
+    const reviewBackboneRows = useMemo(() => {
+        const ids = new Set<number>();
+        const apiBackbones = (backboneSummary?.backbones || {}) as Record<string, any>;
+        const pushKeys = (summary?: BackboneSummary | GateBackboneSummary | null) => {
+            const entries = summary?.backbones || {};
+            for (const key of Object.keys(entries)) {
+                const parsed = Number(key);
+                if (Number.isFinite(parsed)) ids.add(parsed);
+            }
+        };
+        pushKeys(backboneSummary);
+        pushKeys(gateCandidateBackboneSummary);
+        pushKeys(gateRawBackboneSummary);
+        pushKeys(gateFilteredBackboneSummary);
+
+        return Array.from(ids)
+            .sort((a, b) => a - b)
+            .map((backboneId) => {
+                const idKey = String(backboneId);
+                const apiEntry = apiBackbones[idKey];
+                const candidateEntry = gateCandidateBackboneSummary?.backbones?.[idKey];
+                const rawEntry = gateRawBackboneSummary?.backbones?.[idKey];
+                const filteredEntry = gateFilteredBackboneSummary?.backbones?.[idKey];
+                return {
+                    id: backboneId,
+                    count: apiEntry?.count ?? candidateEntry?.count ?? 0,
+                    avgPlddt: apiEntry?.avg_plddt ?? null,
+                    avgIptm: apiEntry?.avg_iptm ?? null,
+                    avgH3: apiEntry?.avg_cdr_h3_length ?? null,
+                    representative: apiEntry?.representative ?? null,
+                    candidateCount: candidateEntry?.count ?? null,
+                    rawCount: rawEntry?.count ?? null,
+                    filteredCount: filteredEntry?.count ?? null,
+                    previewName: candidateEntry?.sample_names?.[0] || null,
+                };
+            });
+    }, [backboneSummary, gateCandidateBackboneSummary, gateRawBackboneSummary, gateFilteredBackboneSummary]);
+    const reviewBackboneTotal = useMemo(() => {
+        if (isPostRFantibodyReview) {
+            return gateCandidateBackboneSummary?.total ?? backboneSummary?.total ?? 0;
+        }
+        return backboneSummary?.total ?? 0;
+    }, [isPostRFantibodyReview, gateCandidateBackboneSummary?.total, backboneSummary?.total]);
 
     // Fetch structure analysis for selected design (Biotite-powered)
     const { data: structureAnalysisData, isLoading: _structureAnalysisLoading } = useQuery({
@@ -441,6 +598,10 @@ export function ResultsViewer() {
         if (!isNaN(parsedEpitopeDist) && parsedEpitopeDist > 0) {
             filtered = filtered.filter(d => d.epitope_min_distance != null && d.epitope_min_distance <= parsedEpitopeDist);
         }
+        const parsedTargetDist = parseFloat(targetMaxDist);
+        if (!isNaN(parsedTargetDist) && parsedTargetDist > 0) {
+            filtered = filtered.filter(d => d.target_min_distance != null && d.target_min_distance <= parsedTargetDist);
+        }
         // RoG filter
         if (rogMinValue !== undefined) {
             filtered = filtered.filter(d => (d.rog ?? 0) >= rogMinValue);
@@ -495,6 +656,17 @@ export function ResultsViewer() {
         setSelectedDesignIds([]);
         setIterationMessage(null);
     }, [selectedJobId]);
+
+    useEffect(() => {
+        const preferredSource = inferPreferredOutputSource(activeJob);
+        setOutputSourceFilter(preferredSource);
+        setAntibodySourceFilter(preferredSource);
+    }, [selectedJobId, activeJob?.awaiting_stage, activeJob?.current_stage, activeJob?.awaiting_payload?.candidate_dir]);
+
+    useEffect(() => {
+        if (!isPostRFantibodyReview) return;
+        setSortField((current) => (current === 'name' ? 'backbone' : current));
+    }, [selectedJobId, isPostRFantibodyReview]);
 
     // For oligo_design jobs: default to element coloring (B-factors are design confidence, not pLDDT)
     const isOligoJob = (activeJob?.model_id || '').toLowerCase().includes('oligo');
@@ -881,6 +1053,37 @@ export function ResultsViewer() {
 
                 {activeJob && (
                     <>
+                        {isPostRFantibodyReview && (
+                            <div className="mb-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                                <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                                    <div>
+                                        <div className="text-sm font-semibold text-emerald-200">Paused after RFantibody backbone generation</div>
+                                        <div className="text-xs text-slate-300">
+                                            Review this stage by backbone family first. The UI is using existing <span className="font-mono text-emerald-300">backbone_id</span> as the first family primitive.
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2 text-[11px] text-slate-300">
+                                        <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
+                                            Candidate {gateCandidateBackboneSummary?.total ?? reviewBackboneTotal}
+                                        </span>
+                                        {gateRawBackboneSummary?.total != null && (
+                                            <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
+                                                Raw {gateRawBackboneSummary.total}
+                                            </span>
+                                        )}
+                                        {gateFilteredBackboneSummary?.total != null && (
+                                            <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
+                                                Filtered {gateFilteredBackboneSummary.total}
+                                            </span>
+                                        )}
+                                        <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
+                                            Backbone families {reviewBackboneRows.length}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {/* Tabs */}
                         <div className="flex gap-1 mb-6 border-b border-slate-800 pb-px">
                             {TABS.map(tab => (
@@ -968,7 +1171,7 @@ export function ResultsViewer() {
                                     <div>
                                         <div className="text-sm font-medium text-cyan-200">Antibody Iteration Set</div>
                                         <p className="mt-1 text-xs text-slate-400">
-                                            Use the Data Table filters and check rows to define a working set, then launch the next round directly from this viewer.
+                                            Use the Data Table filters and check rows to define a working set, then open Custom Refinement Round to relaunch through the main workflow UI.
                                         </p>
                                         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                                             <span className="rounded-full border border-cyan-500/30 bg-slate-900/70 px-2 py-1 text-cyan-200">
@@ -1004,103 +1207,9 @@ export function ResultsViewer() {
                                         >
                                             Clear
                                         </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => setShowParamOverrides(!showParamOverrides)}
-                                            className={`rounded-lg border px-3 py-2 text-xs transition-colors ${showParamOverrides ? 'border-indigo-500/40 bg-indigo-500/10 text-indigo-200' : 'border-slate-700 bg-slate-800/80 text-slate-200 hover:border-slate-600'}`}
-                                            title="Override pipeline parameters for the next round (JSON format)"
-                                        >
-                                            ⚙️ Overrides
-                                        </button>
-                                        {([
-                                            ['validate_boltz2', 'Boltz-2'],
-                                            ['validate_protenix', 'Protenix'],
-                                            ['ppiflow_maturation', 'PPIFlow'],
-                                            ['fampnn_redesign', 'FAMPNN'],
-                                            ['frustrampnn', 'FrustraMPNN'],
-                                        ] as Array<[AntibodyIterationAction, string]>).map(([action, label]) => (
-                                            <button
-                                                key={action}
-                                                type="button"
-                                                onClick={() => {
-                                                    setIterationMessage(null);
-                                                    let paramOverrides = undefined;
-
-                                                    if (showParamOverrides) {
-                                                        paramOverrides = {
-                                                            ...(pipelineOverrides.run_structure_validation && {
-                                                                run_structure_validation: true,
-                                                                structure_validator: pipelineOverrides.structure_validator,
-                                                                interactive_gate_stage: 'post_structure_validation'
-                                                            }),
-                                                            ...(pipelineOverrides.run_ppiflow && {
-                                                                run_post_validation_maturation: true,
-                                                                run_post_boltz_maturation: true,
-                                                                run_maturation: true,
-                                                                maturation_redesign_temp: pipelineOverrides.maturation_redesign_temp,
-                                                            }),
-                                                            lock_target_chains: pipelineOverrides.lock_target_chains,
-                                                            lock_antibody_framework: pipelineOverrides.lock_antibody_framework,
-                                                            ...(pipelineOverrides.run_frustrampnn && {
-                                                                run_frustrampnn: true
-                                                            }),
-                                                            interactive_gating: pipelineOverrides.interactive_gating
-                                                        };
-                                                    }
-
-                                                    launchIterationMutation.mutate({ action, paramOverrides });
-                                                }}
-                                                disabled={selectedDesignIds.length === 0 || launchBusy}
-                                                className={`rounded-lg border px-3 py-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${action === 'validate_protenix'
-                                                    ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:border-cyan-400'
-                                                    : action === 'validate_boltz2'
-                                                        ? 'border-blue-500/40 bg-blue-500/10 text-blue-200 hover:border-blue-400'
-                                                        : action === 'ppiflow_maturation'
-                                                            ? 'border-teal-500/40 bg-teal-500/10 text-teal-200 hover:border-teal-400'
-                                                            : action === 'fampnn_redesign'
-                                                                ? 'border-violet-500/40 bg-violet-500/10 text-violet-200 hover:border-violet-400'
-                                                                : 'border-amber-500/40 bg-amber-500/10 text-amber-200 hover:border-amber-400'
-                                                    }`}
-                                                title={
-                                                    action === 'validate_boltz2'
-                                                        ? 'Re-run Boltz-2 validation on the selected set and pause at structure review.'
-                                                        : action === 'validate_protenix'
-                                                            ? 'Re-run Protenix validation on the selected set and pause at structure review.'
-                                                            : action === 'ppiflow_maturation'
-                                                                ? 'Run post-validation PPIFlow maturation on the selected set.'
-                                                                : action === 'fampnn_redesign'
-                                                                    ? 'Use the selected structures as the next FAMPNN redesign inputs.'
-                                                                    : 'Run FrustraMPNN analysis on the selected set.'
-                                                }
-                                            >
-                                                {label}
-                                            </button>
-                                        ))}
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                setIterationMessage(null);
-                                                setShowCdrIndelModal(true);
-                                            }}
-                                            disabled={selectedDesignIds.length === 0 || launchBusy}
-                                            className="rounded-lg border border-fuchsia-500/40 bg-fuchsia-500/10 px-3 py-2 text-xs text-fuchsia-200 transition-colors hover:border-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-50"
-                                            title="Generate explicit CDR insertion/deletion variants from the selected set, then validate them as a new round."
-                                        >
-                                            CDR Indels
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                setIterationMessage(null);
-                                                setShowManualMutagenesisModal(true);
-                                            }}
-                                            disabled={selectedDesignIds.length === 0 || launchBusy}
-                                            className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200 transition-colors hover:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-                                            title="Apply explicit manual mutation sets to a chosen chain while preserving all other protein chains exactly as-is."
-                                        >
-                                            Manual Mutagenesis
-                                        </button>
-                                        <div className="w-px h-6 bg-slate-700/50 mx-1"></div>
+                                        <div className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-[11px] text-slate-400">
+                                            Direct rerun buttons are retired. Use <span className="text-indigo-200 font-medium">Custom Refinement Round</span> for all antibody loop orchestration.
+                                        </div>
                                         <button
                                             type="button"
                                             onClick={() => {
@@ -1122,10 +1231,66 @@ export function ResultsViewer() {
                                             </svg>
                                             Custom Refinement Round
                                         </button>
+                                        {!workflowOnlyRefinement && (
+                                            <>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowParamOverrides(!showParamOverrides)}
+                                                    className={`rounded-lg border px-3 py-2 text-xs transition-colors ${showParamOverrides ? 'border-indigo-500/40 bg-indigo-500/10 text-indigo-200' : 'border-slate-700 bg-slate-800/80 text-slate-200 hover:border-slate-600'}`}
+                                                    title="Override pipeline parameters for the next round (JSON format)"
+                                                >
+                                                    ⚙️ Overrides
+                                                </button>
+                                                {([
+                                                    ['validate_boltz2', 'Boltz-2'],
+                                                    ['validate_protenix', 'Protenix'],
+                                                    ['ppiflow_maturation', 'PPIFlow'],
+                                                    ['fampnn_redesign', 'FAMPNN'],
+                                                    ['frustrampnn', 'FrustraMPNN'],
+                                                ] as Array<[AntibodyIterationAction, string]>).map(([action, label]) => (
+                                                    <button
+                                                        key={action}
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setIterationMessage(null);
+                                                            let paramOverrides = undefined;
+
+                                                            if (showParamOverrides) {
+                                                                paramOverrides = {
+                                                                    ...(pipelineOverrides.run_structure_validation && {
+                                                                        run_structure_validation: true,
+                                                                        structure_validator: pipelineOverrides.structure_validator,
+                                                                        interactive_gate_stage: 'post_structure_validation'
+                                                                    }),
+                                                                    ...(pipelineOverrides.run_ppiflow && {
+                                                                        run_post_validation_maturation: true,
+                                                                        run_post_boltz_maturation: true,
+                                                                        run_maturation: true,
+                                                                        maturation_redesign_temp: pipelineOverrides.maturation_redesign_temp,
+                                                                    }),
+                                                                    lock_target_chains: pipelineOverrides.lock_target_chains,
+                                                                    lock_antibody_framework: pipelineOverrides.lock_antibody_framework,
+                                                                    ...(pipelineOverrides.run_frustrampnn && {
+                                                                        run_frustrampnn: true
+                                                                    }),
+                                                                    interactive_gating: pipelineOverrides.interactive_gating
+                                                                };
+                                                            }
+
+                                                            launchIterationMutation.mutate({ action, paramOverrides });
+                                                        }}
+                                                        disabled={selectedDesignIds.length === 0 || launchBusy}
+                                                        className="hidden"
+                                                    >
+                                                        {label}
+                                                    </button>
+                                                ))}
+                                            </>
+                                        )}
                                     </div>
                                 </div>
 
-                                {showParamOverrides && (
+                                {!workflowOnlyRefinement && showParamOverrides && (
                                     <div className="mt-4 border-t border-slate-700/50 pt-4">
                                         <div className="text-xs text-indigo-300 font-medium mb-3">Pipeline Add-ons & Overrides</div>
                                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-4">
@@ -1249,7 +1414,7 @@ export function ResultsViewer() {
                             </div>
                         )}
 
-                        {showCdrIndelModal && isAntibodyContext && (
+                        {!workflowOnlyRefinement && showCdrIndelModal && isAntibodyContext && (
                             <div className="mb-4 rounded-xl border border-fuchsia-500/30 bg-slate-950/95 p-4 shadow-2xl">
                                 <div className="flex items-start justify-between gap-4">
                                     <div>
@@ -1495,7 +1660,7 @@ export function ResultsViewer() {
                             </div>
                         )}
 
-                        {showManualMutagenesisModal && (
+                        {!workflowOnlyRefinement && showManualMutagenesisModal && (
                             <div className="mb-4 rounded-xl border border-emerald-500/30 bg-slate-950/95 p-4 shadow-2xl">
                                 <div className="flex items-start justify-between gap-4">
                                     <div>
@@ -1777,7 +1942,7 @@ export function ResultsViewer() {
                                                         <div className="flex flex-col gap-4">
                                                             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                                                                 <div>
-                                                                    <div className="text-sm font-semibold text-white">Antibody Design Inspector</div>
+                                                                    <div className="text-sm font-semibold text-white">Binder Info Inspector</div>
                                                                     <div className="mt-1 text-xs text-slate-400">
                                                                         Inspect CDR annotation, validation metrics, frustration hotspots, and antibody-specific structure overlays for the selected design.
                                                                     </div>
@@ -1829,11 +1994,14 @@ export function ResultsViewer() {
                                                     <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
                                                         {[
                                                             { label: 'Output', value: getOutputSourceLabel(selectedDesign), tone: selectedDesignSource === 'rfantibody' ? 'text-violet-300' : selectedDesignSource === 'fampnn' ? 'text-emerald-300' : 'text-cyan-300' },
-                                                            { label: 'Antibody Type', value: selectedDesign.antibody_type?.toUpperCase() || '—', tone: 'text-slate-200' },
+                                                            { label: 'Binder Type', value: selectedDesign.antibody_type?.toUpperCase() || '—', tone: 'text-slate-200' },
                                                             { label: 'pLDDT', value: formatMetric(selectedDesign.plddt_overall, 1), tone: getMetricColor('plddt_overall', selectedDesign.plddt_overall) },
                                                             { label: 'iPTM', value: formatMetric(selectedDesign.iptm, 2), tone: getMetricColor('ptm', selectedDesign.iptm ?? null) },
                                                             { label: 'Epitope Contacts', value: selectedDesign.epitope_contact_count ?? '—', tone: 'text-slate-200' },
                                                             { label: 'Min Epitope Dist', value: selectedDesign.epitope_min_distance != null ? `${selectedDesign.epitope_min_distance.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
+                                                            { label: 'Min Target Dist', value: selectedDesign.target_min_distance != null ? `${selectedDesign.target_min_distance.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
+                                                            { label: 'Epitope Atom Dist', value: selectedDesign.epitope_min_atom_distance != null ? `${selectedDesign.epitope_min_atom_distance.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
+                                                            { label: 'Target Atom Dist', value: selectedDesign.target_min_atom_distance != null ? `${selectedDesign.target_min_atom_distance.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
                                                             { label: 'Val RMSD All', value: selectedDesign.rmsd_overall != null ? `${selectedDesign.rmsd_overall.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
                                                             { label: 'Val RMSD Bd', value: selectedDesign.rmsd_binder != null ? `${selectedDesign.rmsd_binder.toFixed(2)} Å` : '—', tone: 'text-slate-200' },
                                                             { label: 'Humanness', value: antibodyData?.humanness_score != null ? `${(antibodyData.humanness_score * 100).toFixed(0)}%` : '—', tone: antibodyData?.humanness_score != null ? ((antibodyData.humanness_score > 0.8) ? 'text-emerald-300' : (antibodyData.humanness_score > 0.6 ? 'text-amber-300' : 'text-red-300')) : 'text-slate-500' },
@@ -1848,9 +2016,38 @@ export function ResultsViewer() {
                                                         ))}
                                                     </div>
 
+                                                    <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                                                        <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
+                                                            <div className="text-[11px] uppercase tracking-wider text-slate-500">Nearest Epitope Pair</div>
+                                                            <div className="mt-2 text-sm text-slate-200">
+                                                                {selectedDesign.epitope_nearest_antibody_residue && selectedDesign.epitope_nearest_target_residue
+                                                                    ? `${selectedDesign.epitope_nearest_antibody_residue} ↔ ${selectedDesign.epitope_nearest_target_residue}`
+                                                                    : '—'}
+                                                            </div>
+                                                            <div className="mt-2 text-xs text-slate-500">
+                                                                Atom pair: {selectedDesign.epitope_nearest_antibody_atom && selectedDesign.epitope_nearest_target_atom
+                                                                    ? `${selectedDesign.epitope_nearest_antibody_atom} ↔ ${selectedDesign.epitope_nearest_target_atom}`
+                                                                    : '—'}
+                                                            </div>
+                                                        </div>
+                                                        <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
+                                                            <div className="text-[11px] uppercase tracking-wider text-slate-500">Nearest Target Pair</div>
+                                                            <div className="mt-2 text-sm text-slate-200">
+                                                                {selectedDesign.target_nearest_antibody_residue && selectedDesign.target_nearest_target_residue
+                                                                    ? `${selectedDesign.target_nearest_antibody_residue} ↔ ${selectedDesign.target_nearest_target_residue}`
+                                                                    : '—'}
+                                                            </div>
+                                                            <div className="mt-2 text-xs text-slate-500">
+                                                                Atom pair: {selectedDesign.target_nearest_antibody_atom && selectedDesign.target_nearest_target_atom
+                                                                    ? `${selectedDesign.target_nearest_antibody_atom} ↔ ${selectedDesign.target_nearest_target_atom}`
+                                                                    : '—'}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
                                                     {!antibodyHasAnnotation && (
                                                         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-200">
-                                                            ANARCII-derived CDR sequences are not populated for this design yet. Lengths and structure-level metrics are still shown below when available.
+                                                            Binder CDR annotation is not populated for this design yet. Lengths and structure-level metrics are still shown below when available.
                                                         </div>
                                                     )}
 
@@ -1954,11 +2151,20 @@ export function ResultsViewer() {
                                     {/* DATA TABLE TAB */}
                                     {activeTab === 'table' && (
                                         <div className="p-4">
-                                            {/* Backbone Toggle Bar */}
-                                            {backboneSummary && Object.keys(backboneSummary.backbones).length > 0 && (
+                                            {/* Backbone / Family Toggle Bar */}
+                                            {reviewBackboneRows.length > 0 && (
                                                 <div className="mb-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
-                                                    <div className="flex items-center gap-2 mb-2 flex-wrap overflow-x-auto max-h-24">
-                                                        <span className="text-xs text-slate-400 font-medium shrink-0">Backbone:</span>
+                                                    <div className="mb-2 flex items-center justify-between gap-3">
+                                                        <div className="text-xs font-medium text-slate-300">
+                                                            {isPostRFantibodyReview ? 'Backbone families' : 'Backbone'}
+                                                        </div>
+                                                        {isPostRFantibodyReview && (
+                                                            <div className="text-[11px] text-slate-400">
+                                                                Candidate / raw / filtered counts come from the paused stage gate payload.
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex items-center gap-2 flex-wrap overflow-x-auto max-h-36">
                                                         <button
                                                             onClick={() => setSelectedBackboneId(null)}
                                                             className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${selectedBackboneId === null
@@ -1966,19 +2172,39 @@ export function ResultsViewer() {
                                                                 : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
                                                                 }`}
                                                         >
-                                                            All ({backboneSummary.total})
+                                                            All ({reviewBackboneTotal})
                                                         </button>
-                                                        {Object.entries(backboneSummary.backbones).map(([id, data]) => (
+                                                        {reviewBackboneRows.map((row) => (
                                                             <button
-                                                                key={id}
-                                                                onClick={() => setSelectedBackboneId(Number(id))}
-                                                                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${selectedBackboneId === Number(id)
+                                                                key={row.id}
+                                                                onClick={() => setSelectedBackboneId(row.id)}
+                                                                className={`px-3 py-1.5 text-left text-xs font-medium rounded-lg transition-colors ${selectedBackboneId === row.id
                                                                     ? 'bg-emerald-500/30 text-emerald-400 border border-emerald-500/40'
                                                                     : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50'
                                                                     }`}
-                                                                title={`pLDDT: ${data.avg_plddt ?? '—'} | iPTM: ${data.avg_iptm ?? '—'}`}
+                                                                title={
+                                                                    row.representative?.name
+                                                                        ? `Representative: ${row.representative.name} | pLDDT: ${row.avgPlddt ?? '—'} | iPTM: ${row.avgIptm ?? '—'}`
+                                                                        : `pLDDT: ${row.avgPlddt ?? '—'} | iPTM: ${row.avgIptm ?? '—'}`
+                                                                }
                                                             >
-                                                                #{id} ({data.count})
+                                                                <div className="flex items-center gap-2">
+                                                                    <span>#{row.id}</span>
+                                                                    <span className="text-slate-500">({row.count})</span>
+                                                                </div>
+                                                                {isPostRFantibodyReview && (
+                                                                    <div className="mt-1 text-[10px] text-slate-500">
+                                                                        C {row.candidateCount ?? 0}
+                                                                        {row.rawCount != null ? ` • R ${row.rawCount}` : ''}
+                                                                        {row.filteredCount != null ? ` • F ${row.filteredCount}` : ''}
+                                                                    </div>
+                                                                )}
+                                                                {!isPostRFantibodyReview && (
+                                                                    <div className="mt-1 text-[10px] text-slate-500">
+                                                                        pLDDT {row.avgPlddt ?? '—'}
+                                                                        {row.avgH3 != null ? ` • H3 ${row.avgH3}` : ''}
+                                                                    </div>
+                                                                )}
                                                             </button>
                                                         ))}
                                                     </div>
@@ -2026,13 +2252,25 @@ export function ResultsViewer() {
                                                         <span className="text-xs text-amber-400 font-mono w-8">{contactsMin}</span>
                                                     </div>
                                                     <div className="flex items-center gap-2">
-                                                        <span className="text-xs text-slate-500" title="RMSD / Distance limit from target AAs to CDR loop atoms">Max Dist ≤</span>
+                                                        <span className="text-xs text-slate-500" title="Maximum nearest CA distance from the binder to the selected epitope residues">Max Dist ≤</span>
                                                         <input
                                                             type="number"
                                                             min="0"
                                                             step="0.5"
                                                             value={epitopeMaxDist}
                                                             onChange={(e) => setEpitopeMaxDist(e.target.value)}
+                                                            placeholder="max (Å)"
+                                                            className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs text-slate-500" title="Maximum nearest CA distance from the binder to any target residue">Max Tgt Dist ≤</span>
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.5"
+                                                            value={targetMaxDist}
+                                                            onChange={(e) => setTargetMaxDist(e.target.value)}
                                                             placeholder="max (Å)"
                                                             className="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono"
                                                         />
@@ -2142,9 +2380,13 @@ export function ResultsViewer() {
                                                                 { key: 'name', label: 'Output' },
                                                                 { key: 'binding_tier', label: 'Binding' },
                                                                 { key: 'binder_length', label: 'Size' },
+                                                                { key: 'cdr_h1_length', label: 'CDR-H1' },
+                                                                { key: 'cdr_h2_length', label: 'CDR-H2' },
                                                                 { key: 'cdr_h3_length', label: 'CDR-H3' },
                                                                 { key: 'epitope_contact_count', label: 'Contacts' },
+                                                                { key: 'target_contact_count', label: 'Tgt Cts' },
                                                                 { key: 'epitope_min_distance', label: 'Min Dist' },
+                                                                { key: 'target_min_distance', label: 'Tgt Dist' },
                                                                 { key: 'affinity_score', label: 'Affinity' },
                                                                 { key: 'binder_probability', label: 'Binder %' },
                                                                 { key: 'fampnn_psce', label: 'pSCE' },
@@ -2159,6 +2401,8 @@ export function ResultsViewer() {
                                                                 { key: 'conf_score', label: 'Conf' },
                                                                 { key: 'rmsd_binder', label: 'Val RMSD Bd' },
                                                                 { key: 'rmsd_overall', label: 'Val RMSD All' },
+                                                                { key: 'rmsd_target', label: 'Val RMSD Tgt' },
+                                                                { key: 'screening_reason', label: 'RFA Screen' },
                                                                 { key: 'frustration_high_count', label: 'Frust High' },
                                                                 { key: 'frustration_pct_high', label: '% High Frust' },
                                                                 { key: 'has_clash', label: 'Clash' },
@@ -2246,6 +2490,16 @@ export function ResultsViewer() {
                                                                     {(d as any).binder_length ?? '—'}
                                                                 </td>
 
+                                                                {/* CDR-H1 Length */}
+                                                                <td className="px-3 py-2 font-mono text-violet-400">
+                                                                    {(d as any).cdr_h1_length ?? '—'}
+                                                                </td>
+
+                                                                {/* CDR-H2 Length */}
+                                                                <td className="px-3 py-2 font-mono text-violet-400">
+                                                                    {(d as any).cdr_h2_length ?? '—'}
+                                                                </td>
+
                                                                 {/* CDR-H3 Length */}
                                                                 <td className="px-3 py-2 font-mono text-violet-400">
                                                                     {(d as any).cdr_h3_length ?? '—'}
@@ -2257,10 +2511,20 @@ export function ResultsViewer() {
                                                                     {d.epitope_contact_count ?? '—'}
                                                                 </td>
 
+                                                                {/* Target Contact Count */}
+                                                                <td className={`px-3 py-2 font-mono ${((d as any).target_contact_count ?? 0) >= 5 ? 'text-emerald-400' :
+                                                                    ((d as any).target_contact_count ?? 0) > 0 ? 'text-amber-400' : 'text-slate-500'}`}>
+                                                                    {(d as any).target_contact_count ?? '—'}
+                                                                </td>
+
                                                                 {/* Epitope Min Distance */}
                                                                 <td className={`px-3 py-2 font-mono ${d.epitope_min_distance != null && d.epitope_min_distance <= 4 ? 'text-emerald-400' :
                                                                     d.epitope_min_distance != null && d.epitope_min_distance <= 8 ? 'text-amber-400' : 'text-slate-500'}`}>
                                                                     {formatMetric(d.epitope_min_distance, 1)}
+                                                                </td>
+                                                                <td className={`px-3 py-2 font-mono ${d.target_min_distance != null && d.target_min_distance <= 4 ? 'text-emerald-400' :
+                                                                    d.target_min_distance != null && d.target_min_distance <= 8 ? 'text-amber-400' : 'text-slate-500'}`}>
+                                                                    {formatMetric(d.target_min_distance, 1)}
                                                                 </td>
 
                                                                 {/* Affinity */}
@@ -2312,6 +2576,10 @@ export function ResultsViewer() {
                                                                 </td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_binder, 2)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_overall, 2)}</td>
+                                                                <td className="px-3 py-2 font-mono text-slate-300">{formatMetric((d as any).rmsd_target, 2)}</td>
+                                                                <td className="px-3 py-2 max-w-[180px] truncate text-xs text-slate-400" title={(d as any).screening_reason ?? ''}>
+                                                                    {(d as any).screening_reason ?? '—'}
+                                                                </td>
                                                                 <td className={`px-3 py-2 font-mono ${d.frustration_high_count != null
                                                                     ? d.frustration_high_count > 5
                                                                         ? 'text-red-400'

@@ -64,6 +64,29 @@ export function JobQueueTable({
         });
     };
 
+    const getDisplayDesignCount = (job: Job) => job.requested_design_count ?? job.design_count;
+
+    const renderDesignCountCell = (job: Job) => {
+        const displayCount = getDisplayDesignCount(job);
+        const hasSeparateStoredCount =
+            typeof job.requested_design_count === 'number' &&
+            job.requested_design_count !== job.design_count;
+        const title = hasSeparateStoredCount
+            ? `Requested designs: ${job.requested_design_count}; stored design rows: ${job.design_count}`
+            : undefined;
+
+        return (
+            <div className="flex flex-col" title={title}>
+                <span className="text-slate-300">{displayCount}</span>
+                {hasSeparateStoredCount && (
+                    <span className="text-[11px] text-slate-500 leading-tight">
+                        {job.design_count} stored
+                    </span>
+                )}
+            </div>
+        );
+    };
+
     const SortHeader = ({ column, children }: { column: SortColumn; children: React.ReactNode }) => (
         <th
             onClick={() => handleSort(column)}
@@ -165,7 +188,7 @@ export function JobQueueTable({
                                         if (jobs.some(j => j.status === 'failed')) return statusOrder.failed;
                                         return statusOrder.completed;
                                     }
-                                    case 'designs': return jobs.reduce((sum, j) => sum + j.design_count, 0);
+                                    case 'designs': return jobs.reduce((sum, j) => sum + getDisplayDesignCount(j), 0);
                                     case 'created': return new Date(item.firstDate).getTime();
                                 }
                             } else {
@@ -174,7 +197,7 @@ export function JobQueueTable({
                                     case 'name': return job.name;
                                     case 'mode': return job.mode;
                                     case 'status': return statusOrder[job.status] ?? 5;
-                                    case 'designs': return job.design_count;
+                                    case 'designs': return getDisplayDesignCount(job);
                                     case 'created': return new Date(job.created_at).getTime();
                                 }
                             }
@@ -202,7 +225,7 @@ export function JobQueueTable({
                                 const batchJobs = item.jobs;
                                 const batchId = item.batchId;
                                 const batchName = batchJobs[0].batch_name!;
-                                const totalDesigns = batchJobs.reduce((sum, j) => sum + j.design_count, 0);
+                                const totalDesigns = batchJobs.reduce((sum, j) => sum + getDisplayDesignCount(j), 0);
                                 const allCompleted = batchJobs.every(j => j.status === 'completed');
                                 const anyRunning = batchJobs.some(j => j.status === 'running');
                                 const anyAwaiting = batchJobs.some(j => j.status === 'awaiting_input');
@@ -264,7 +287,7 @@ export function JobQueueTable({
                                                     <td className="py-3 px-4">
                                                         <StatusBadge status={job.status} errorMessage={job.error_message} />
                                                     </td>
-                                                    <td className="py-3 px-4 text-slate-300">{job.design_count}</td>
+                                                    <td className="py-3 px-4">{renderDesignCountCell(job)}</td>
                                                     <td className="py-3 px-4 text-slate-400 text-sm">
                                                         {new Date(job.created_at).toLocaleString()}
                                                     </td>
@@ -324,7 +347,7 @@ export function JobQueueTable({
                                             <td className="py-3 px-4">
                                                 <StatusBadge status={job.status} errorMessage={job.error_message} />
                                             </td>
-                                            <td className="py-3 px-4 text-slate-300">{job.design_count}</td>
+                                            <td className="py-3 px-4">{renderDesignCountCell(job)}</td>
                                             <td className="py-3 px-4 text-slate-400 text-sm">
                                                 {new Date(job.created_at).toLocaleString()}
                                             </td>

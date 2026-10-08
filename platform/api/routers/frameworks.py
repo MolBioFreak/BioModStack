@@ -25,7 +25,10 @@ from services.sabdab_client import (
     download_pdb,
     get_structure_summary,
     convert_sabdab_to_hlt,
-    CACHE_DIR
+    CACHE_DIR,
+    get_cache_timestamps,
+    set_cache_timestamps,
+    _touch_cache_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,7 +75,7 @@ class CachedFramework(BaseModel):
     file_path: str
     size_bytes: int
     cached_at: str
-    last_used_at: str
+    last_used_at: Optional[str] = None
 
 
 class FrameworkLibraryResponse(BaseModel):
@@ -85,14 +88,6 @@ def _isoformat_timestamp(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
 
 
-def _touch_last_used(cache_file: Path) -> None:
-    try:
-        stat = cache_file.stat()
-        os.utime(cache_file, ns=(time.time_ns(), stat.st_mtime_ns))
-    except Exception as exc:
-        logger.warning(f"[Framework Library] Failed to update last-used timestamp for {cache_file}: {exc}")
-
-
 def _parse_cached_framework_name(pdb_file: Path) -> tuple[str, str]:
     parts = pdb_file.stem.split("_", 1)
     pdb_code = parts[0].upper()
@@ -103,13 +98,14 @@ def _parse_cached_framework_name(pdb_file: Path) -> tuple[str, str]:
 def _cached_framework_entry(pdb_file: Path) -> CachedFramework:
     pdb_code, scheme = _parse_cached_framework_name(pdb_file)
     stat = pdb_file.stat()
+    cached_at, last_used_at = get_cache_timestamps(pdb_file)
     return CachedFramework(
         pdb_code=pdb_code,
         scheme=scheme,
         file_path=str(pdb_file),
         size_bytes=stat.st_size,
-        cached_at=_isoformat_timestamp(stat.st_mtime),
-        last_used_at=_isoformat_timestamp(stat.st_atime),
+        cached_at=cached_at,
+        last_used_at=last_used_at,
     )
 
 
@@ -341,8 +337,18 @@ async def download_framework(
                 light_chain=l_chain,
                 antigen_chain=antigen_chain,
             )
-            cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}_hlt.pdb"
-            cache_file.write_text(pdb_content)
+            hlt_cache_file = CACHE_DIR / f"{pdb_code.lower()}_{scheme}_hlt.pdb"
+            existing_cached_at = None
+            if hlt_cache_file.exists():
+                existing_cached_at, _ = get_cache_timestamps(hlt_cache_file)
+            hlt_cache_file.write_text(pdb_content)
+            now_iso = _isoformat_timestamp(time.time())
+            set_cache_timestamps(
+                hlt_cache_file,
+                cached_at=existing_cached_at or now_iso,
+                last_used_at=now_iso,
+            )
+            cache_file = hlt_cache_file
         
         return FrameworkDownloadResponse(
             pdb_code=pdb_code.upper(),
@@ -430,7 +436,7 @@ async def touch_cached_framework(
         if not cache_file.exists():
             raise HTTPException(status_code=404, detail=f"No cached file found for {pdb_code} ({scheme})")
 
-        _touch_last_used(cache_file)
+        _touch_cache_file(cache_file)
         return _cached_framework_entry(cache_file)
     except HTTPException:
         raise

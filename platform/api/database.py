@@ -132,6 +132,7 @@ class Design(Base):
     pae_overall = Column(Float, nullable=True)
     rmsd_overall = Column(Float, nullable=True)
     rmsd_binder = Column(Float, nullable=True)
+    rmsd_target = Column(Float, nullable=True)
     
     # Boltz-2 specific
     conf_score = Column(Float, nullable=True)
@@ -170,6 +171,21 @@ class Design(Base):
     backbone_id = Column(Integer, nullable=True, index=True)  # Job number from design name (antibody_job_X)
     epitope_contact_count = Column(Integer, nullable=True)    # CDR residues within 8Å of epitope
     epitope_min_distance = Column(Float, nullable=True)       # Closest CDR-epitope distance (Å)
+    epitope_min_atom_distance = Column(Float, nullable=True)  # Closest atom-atom antibody-epitope distance (Å)
+    epitope_nearest_antibody_residue = Column(String(64), nullable=True)
+    epitope_nearest_target_residue = Column(String(64), nullable=True)
+    epitope_nearest_antibody_atom = Column(String(64), nullable=True)
+    epitope_nearest_target_atom = Column(String(64), nullable=True)
+    target_contact_count = Column(Integer, nullable=True)     # Total target-contact count from RFA screening
+    target_min_distance = Column(Float, nullable=True)        # Closest CDR-to-any-target-residue CA distance (Å)
+    target_min_atom_distance = Column(Float, nullable=True)   # Closest atom-atom antibody-target distance (Å)
+    target_nearest_antibody_residue = Column(String(64), nullable=True)
+    target_nearest_target_residue = Column(String(64), nullable=True)
+    target_nearest_antibody_atom = Column(String(64), nullable=True)
+    target_nearest_target_atom = Column(String(64), nullable=True)
+    screening_reason = Column(String(255), nullable=True)     # RFantibody screening pass/fail summary
+    source_stage = Column(String(64), nullable=True, index=True)   # review-stage rows (e.g. post_rfantibody)
+    artifact_group = Column(String(64), nullable=True)             # candidate/raw/filtered/final
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ANTIBODY / DISCOVERY METRICS

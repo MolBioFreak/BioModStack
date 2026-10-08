@@ -169,31 +169,31 @@
   --link-hover: #7dd3fc;
 }
 
-/* Theme: Desert - Warm sandy dunes with high contrast */
+/* Theme: Desert - Warm adobe parchment with clay and mineral accents */
 [data-theme="desert"] {
-  --bg-primary: #3b3022;
-  --bg-secondary: #4a3d2e;
-  --bg-tertiary: #5c4d3a;
-  --bg-gradient-from: #3b3022;
-  --bg-gradient-via: #4a3d2e;
-  --bg-gradient-to: #3b3022;
-  --text-primary: #fff8e7;
-  --text-secondary: #e8d5b5;
-  --text-muted: #c4a882;
-  --accent-primary: #f0a030;
-  --accent-secondary: #d4842a;
-  --accent-gradient-from: #f0a030;
-  --accent-gradient-to: #d4842a;
-  --border-primary: #6d5c48;
-  --border-secondary: #8a7560;
-  --nav-bg: rgba(59, 48, 34, 0.92);
-  --card-bg: #4a3d2e;
-  --card-hover: #5c4d3a;
-  --success: #b8d048;
-  --warning: #f0a030;
-  --error: #e85a4f;
-  --link: #f0c050;
-  --link-hover: #ffd875;
+  --bg-primary: #efe6d6;
+  --bg-secondary: #eadfcd;
+  --bg-tertiary: #e2d5bf;
+  --bg-gradient-from: #f1e9da;
+  --bg-gradient-via: #eee3d2;
+  --bg-gradient-to: #eadfcd;
+  --text-primary: #4b3626;
+  --text-secondary: #6b5541;
+  --text-muted: #8a735d;
+  --accent-primary: #b26a3a;
+  --accent-secondary: #ca9869;
+  --accent-gradient-from: #aa6033;
+  --accent-gradient-to: #d3a476;
+  --border-primary: #c8b090;
+  --border-secondary: #af9575;
+  --nav-bg: rgba(241, 233, 218, 0.96);
+  --card-bg: #f0e5d4;
+  --card-hover: #e7d9c2;
+  --success: #7f8f65;
+  --warning: #bf7f34;
+  --error: #b3624a;
+  --link: #5b7f72;
+  --link-hover: #466459;
 }
 
 /* Theme: Solarized Dark - Classic developer color scheme */
@@ -331,31 +331,31 @@
   --link-hover: #ffb88c;
 }
 
-/* Theme: Retro Terminal - Classic green phosphor */
+/* Theme: Retro Terminal - CRT workstation with phosphor mint and amber */
 [data-theme="retro"] {
-  --bg-primary: #0a0a0a;
-  --bg-secondary: #111111;
-  --bg-tertiary: #1a1a1a;
-  --bg-gradient-from: #0a0a0a;
-  --bg-gradient-via: #0f0f0f;
-  --bg-gradient-to: #0a0a0a;
-  --text-primary: #4ade80;
-  --text-secondary: #22c55e;
-  --text-muted: #16a34a;
-  --accent-primary: #22c55e;
-  --accent-secondary: #4ade80;
-  --accent-gradient-from: #22c55e;
-  --accent-gradient-to: #86efac;
-  --border-primary: #1f2937;
-  --border-secondary: #374151;
-  --nav-bg: rgba(10, 10, 10, 0.9);
-  --card-bg: #111111;
-  --card-hover: #1a1a1a;
-  --success: #4ade80;
-  --warning: #fde047;
-  --error: #f87171;
-  --link: #86efac;
-  --link-hover: #bbf7d0;
+  --bg-primary: #101311;
+  --bg-secondary: #161b18;
+  --bg-tertiary: #202823;
+  --bg-gradient-from: #121713;
+  --bg-gradient-via: #171d19;
+  --bg-gradient-to: #101311;
+  --text-primary: #e2eadf;
+  --text-secondary: #a7b8aa;
+  --text-muted: #748477;
+  --accent-primary: #68e39b;
+  --accent-secondary: #92f0bc;
+  --accent-gradient-from: #54d58d;
+  --accent-gradient-to: #9cebbf;
+  --border-primary: #2f3a33;
+  --border-secondary: #465349;
+  --nav-bg: rgba(16, 19, 17, 0.92);
+  --card-bg: #171d19;
+  --card-hover: #222a25;
+  --success: #74e5a2;
+  --warning: #d9a85f;
+  --error: #d97869;
+  --link: #9de6d2;
+  --link-hover: #c7f2e6;
 }
 
 /* Theme: Cyberpunk - Neon pink & cyan on deep purple */
@@ -496,6 +496,19 @@ body {
 
 [class*="bg-slate-700/"] {
   background-color: color-mix(in srgb, var(--card-hover) 50%, transparent) !important;
+}
+
+/* Lighten translucent slate remaps for the light desert theme */
+[data-theme="desert"] [class*="bg-slate-900/"] {
+  background-color: color-mix(in srgb, var(--bg-secondary) 82%, white 18%) !important;
+}
+
+[data-theme="desert"] [class*="bg-slate-800/"] {
+  background-color: color-mix(in srgb, var(--card-bg) 88%, white 12%) !important;
+}
+
+[data-theme="desert"] [class*="bg-slate-700/"] {
+  background-color: color-mix(in srgb, var(--card-hover) 84%, white 16%) !important;
 }
 
 /* Text color overrides */

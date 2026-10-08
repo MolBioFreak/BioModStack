@@ -7,6 +7,8 @@ PROJECT_DIR="${BMS_HOME:-$SCRIPT_DIR}"
 API_LOG="/tmp/biomodstack_api.log"
 FRONTEND_LOG="/tmp/biomodstack_frontend.log"
 API_RELOAD_RAW="${BMS_API_RELOAD:-1}"
+CPU_POWER_STRICT_RAW="${BMS_CPU_POWER_STRICT:-1}"
+RAPL_ENERGY_PATH="${BMS_CPU_POWER_RAPL_PATH:-/sys/class/powercap/intel-rapl:0/energy_uj}"
 
 # Load NVM if available to ensure correct Node version
 export NVM_DIR="$HOME/.nvm"
@@ -32,6 +34,17 @@ api_reload_enabled() {
         1|true|yes|on) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+cpu_power_strict_enabled() {
+    case "${CPU_POWER_STRICT_RAW,,}" in
+        0|false|no|off) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+rapl_requires_privileged_api_launch() {
+    [ -e "$RAPL_ENERGY_PATH" ] && [ ! -r "$RAPL_ENERGY_PATH" ]
 }
 
 build_api_cmd() {
@@ -64,6 +77,35 @@ build_api_launch_wrapper() {
     printf '%s\n' 'exit $status'
 }
 
+launch_api_with_rapl_caps() {
+    local api_cmd=$1
+    local helper="$PROJECT_DIR/scripts/launch_api_with_rapl_caps.sh"
+    if [ ! -x "$helper" ]; then
+        echo "❌ Missing RAPL capability launcher: $helper"
+        return 1
+    fi
+    if ! command -v pkexec >/dev/null 2>&1; then
+        echo "❌ pkexec is required for accurate CPU power telemetry"
+        return 1
+    fi
+
+    echo "   Authenticating API launch for accurate CPU RAPL telemetry..."
+    DISPLAY="${DISPLAY:-:0}" \
+    XAUTHORITY="${XAUTHORITY:-/run/user/$(id -u)/gdm/Xauthority}" \
+        pkexec env \
+        TARGET_USER="$(id -un)" \
+        TARGET_UID="$(id -u)" \
+        TARGET_GID="$(id -g)" \
+        TARGET_HOME="$HOME" \
+        TARGET_PATH="$PATH" \
+        PROJECT_DIR="$PROJECT_DIR" \
+        API_LOG="$API_LOG" \
+        API_CMD="$api_cmd" \
+        BMS_INPUTS="${BMS_INPUTS:-}" \
+        BMS_FAN_CONTROL_BACKEND="${BMS_FAN_CONTROL_BACKEND:-}" \
+        "$helper"
+}
+
 check_port() {
     local port=$1
     if lsof -i :$port > /dev/null; then
@@ -89,8 +131,18 @@ start_services() {
     echo "   Starting API with uv..."
     API_CMD="$(build_api_cmd)"
     echo "   API command: $API_CMD"
-    nohup bash -lc "$(build_api_launch_wrapper)" > "$API_LOG" 2>&1 &
-    API_PID=$!
+    if rapl_requires_privileged_api_launch; then
+        if cpu_power_strict_enabled; then
+            API_PID="$(launch_api_with_rapl_caps "$API_CMD")" || exit 1
+        else
+            echo "   Warning: RAPL powercap is unreadable and strict CPU power is disabled."
+            nohup bash -lc "$(build_api_launch_wrapper)" > "$API_LOG" 2>&1 &
+            API_PID=$!
+        fi
+    else
+        nohup bash -lc "$(build_api_launch_wrapper)" > "$API_LOG" 2>&1 &
+        API_PID=$!
+    fi
     echo "   API started (PID: $API_PID) → http://localhost:8000"
     
     sleep 3
