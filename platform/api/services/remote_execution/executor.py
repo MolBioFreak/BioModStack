@@ -1357,9 +1357,15 @@ async def remote_live_logs(session: AsyncSession, job: Job, *, tail: int = 200) 
         raise RemoteExecutionError('Remote execution target record is missing')
     connection, attempt_dir = _connection_for_attempt(target, job)
     identity = {key: getattr(observed, key) for key in reader.IDENTITY_FIELDS}
+    from scripts.lib import native_diagnostics
+    import inspect
+    from tools import bms_remote_worker as worker
+    helpers = "from pathlib import Path\nfrom typing import Any\n" + "\n".join(
+        inspect.getsource(fn) for fn in (worker.boot_id, worker.process_start_ticks, worker.process_matches))
+    script = helpers + "\nexec(" + repr(Path(native_diagnostics.__file__).read_text()) + ")\n" + Path(reader.__file__).read_text()
     response = await run_remote(connection, [
         connection.runtime_binding['paths']['python'] if connection.runtime_binding else 'python3',
-        '-c', Path(reader.__file__).read_text(), attempt_dir,
+        '-c', script, attempt_dir,
         json.dumps(identity), str(max(1, min(int(tail), 5000))),
     ], timeout=30)
     # A retry/reattachment while SSH was in flight must not expose predecessor logs.

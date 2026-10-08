@@ -522,7 +522,7 @@ def checkpoint_control(attempt_dir: Path, *, attempt_id: str, expected_boot_id: 
                     workflow_pid=None, workflow_start_ticks=None, quiescent=False, checkpoints=[],
                     continuation_lease_id=continuation_lease_id, exit_code=None, completed_at=None,
                     started_at=None, result_manifest_sha256=None, error=None, control_group=None,
-                    generation=generation, plan_sha256=edge['plan_sha256'],
+                    diagnostic_offsets=None, generation=generation, plan_sha256=edge['plan_sha256'],
                     native_output_directory=edge['parent_snapshot']['output_dir'])
                 _write_atomic_json(status_path(attempt_dir), latest)
         atomic_json(attempt_dir / ("checkpoint-launch-" + hashlib.sha256(operation_id.encode()).hexdigest() + ".json"), binding)
@@ -596,7 +596,7 @@ def component_retry_control(attempt_dir: Path, *, attempt_id: str, expected_boot
                 workflow_pid=None, workflow_start_ticks=None, quiescent=False, checkpoints=[],
                 continuation_lease_id=continuation_lease_id, exit_code=None, completed_at=None,
                 started_at=None, result_manifest_sha256=None, error=None, control_group=None,
-                generation=edge["generation"], plan_sha256=edge["plan_sha256"],
+                diagnostic_offsets=None, generation=edge["generation"], plan_sha256=edge["plan_sha256"],
                 native_output_directory=str(output))
             _write_atomic_json(status_path(attempt_dir), latest)
         atomic_json(claim, dict(operation_id=operation_id, attempt_id=attempt_id,
@@ -739,6 +739,7 @@ def _supervise_owned(attempt_dir: Path) -> int:
         if (Path(publication_envelope["output_directory"]) / RESULT_MANIFEST_FILE).exists():
             raise RuntimeError("Refuse to relaunch into a sealed result generation")
         latest = load_json(status_path(attempt_dir))
+        latest["diagnostic_offsets"] = diagnostic_offsets
         latest["native_output_directory"] = publication_envelope["output_directory"]
         latest["plan_sha256"] = runtime.context['plan_sha256'] if runtime is not None else None
         latest["generation"] = ((runtime.root_state() or {}).get("generation", 0) if runtime is not None else 0)

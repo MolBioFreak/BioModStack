@@ -392,7 +392,7 @@ export interface JobLogs {
     nextflow_log: string | null;
     exit_code: number | null;
     parsed_error: string | null;
-    nextflow_log_source?: 'job_output' | 'legacy_global' | 'remote_pending' | 'remote_returned' | 'remote_diagnostics' | null;
+    nextflow_log_source?: 'job_output' | 'legacy_global' | 'remote_pending' | 'remote_returned' | 'remote_diagnostics' | 'remote_live' | null;
     remote_result_identity?: { attempt_id: string; generation: number; result_manifest_sha256: string; kind: 'current' | 'diagnostics' };
     remote_read_error?: string;
 }

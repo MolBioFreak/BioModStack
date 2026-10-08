@@ -333,6 +333,7 @@ class RemoteExecutionEnvelope(StrictModel):
 
 
 class RemoteAttemptStatus(StrictModel):
+    diagnostic_offsets: dict[Literal["nextflow.log", "supervisor.log", "component-root.log", "internal_mtime_ns"], int] | None = Field(default=None, max_length=4)
     generation: int = Field(default=0, ge=0, strict=True)
     native_output_directory: str | None = None
     control_group: str | None = None
