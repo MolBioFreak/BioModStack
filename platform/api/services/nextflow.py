@@ -3367,8 +3367,17 @@ def compile_job_nextflow_invocation(job, params, output_dir):
     Compilation does not materialize biological inputs.
     """
     from dataclasses import replace
-    from component_runtime import canonical_bytes
+    from component_runtime import canonical_bytes, SourceIdentity
+    from paths import get_code_root
     from services.core_protein_scientific_contract import workflow_params
+    source = SourceIdentity.from_checkout(get_code_root())
+    pinned_revision = getattr(job, 'execution_source_revision', None)
+    pinned_tree = getattr(job, 'execution_source_tree', None)
+    if pinned_revision is not None or pinned_tree is not None:
+        if not isinstance(pinned_revision, str) or not isinstance(pinned_tree, str):
+            raise ValueError('Job source identity is incomplete; explicit re-preview is required')
+        if SourceIdentity(pinned_revision, pinned_tree) != source:
+            raise ValueError('Job source identity changed; explicit re-preview is required')
     requested = (job.provenance or {}).get('core_protein_requested_params')
     invocation = compile_nextflow_invocation(job.model_id, job.mode, workflow_params(job, params),
         output_dir, job_id=job.id, requested_params=requested)
@@ -3389,7 +3398,9 @@ def compile_job_nextflow_invocation(job, params, output_dir):
         if params.get(key):
             command.extend(['--' + key, str(params[key])])
             native_parameters[key] = params[key]
-    return replace(invocation, command=tuple(command),
+    if SourceIdentity.from_checkout(get_code_root()) != source:
+        raise ValueError('Source identity changed during native compilation')
+    return replace(invocation, command=tuple(command), source_identity=source,
                    native_parameters_json=canonical_bytes(native_parameters))
 
 

@@ -139,15 +139,13 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def current_source_identity(source_root: Path | None = None) -> tuple[str, str]:
-    """Return the committed source identity used for new remote Jobs."""
-    repo_root = (source_root or get_code_root()).resolve()
-    if _git(repo_root, "status", "--porcelain", "--untracked-files=no"):
-        raise RemoteBundleError("Remote execution requires a clean tracked source checkout")
-    revision = _git(repo_root, "rev-parse", "HEAD")
-    tree = _git(repo_root, "rev-parse", f"{revision}^{{tree}}")
-    if not _SOURCE_IDENTITY_RE.fullmatch(revision) or not _SOURCE_IDENTITY_RE.fullmatch(tree):
-        raise RemoteBundleError("Committed BMS source identity is invalid")
-    return revision, tree
+    """Compatibility projection of the shared committed-source authority."""
+    from component_runtime import SourceIdentity
+    try:
+        source = SourceIdentity.from_checkout(source_root or get_code_root())
+    except ValueError as exc:
+        raise RemoteBundleError(str(exc)) from exc
+    return source.revision, source.tree
 
 
 def resolve_job_result_contract(job: Any) -> dict[str, Any]:

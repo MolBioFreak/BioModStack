@@ -29,6 +29,30 @@ def digest(value: Any) -> str:
     return hashlib.sha256(canonical_bytes(value)).hexdigest()
 
 
+@dataclass(frozen=True)
+class SourceIdentity:
+    """Committed scientific source identity shared by placement projections."""
+    revision: str
+    tree: str
+
+    def __post_init__(self) -> None:
+        if any(type(value) is not str or len(value) != 40
+               or any(char not in '0123456789abcdef' for char in value)
+               for value in (self.revision, self.tree)):
+            raise ValueError('committed BMS source identity is invalid')
+
+    @classmethod
+    def from_checkout(cls, root: Path) -> SourceIdentity:
+        import subprocess
+        def git(*args):
+            return subprocess.run(['git', *args], cwd=Path(root).resolve(),
+                check=True, capture_output=True, text=True, timeout=60).stdout.strip()
+        if git('status', '--porcelain', '--untracked-files=no'):
+            raise ValueError('execution requires a clean tracked source checkout')
+        revision = git('rev-parse', 'HEAD')
+        return cls(revision, git('rev-parse', revision + '^{tree}'))
+
+
 def durable_write(path: Path, payload: bytes) -> None:
     """Atomic publication with durable file and containing-directory metadata."""
     path = Path(path)
@@ -238,6 +262,7 @@ class NativeInvocation:
     effective_json: bytes
     native_parameters_json: bytes
     generated_inputs: tuple[GeneratedInput, ...] = ()
+    source_identity: SourceIdentity | None = None
 
     def __post_init__(self) -> None:
         if (type(self.model_id) is not str or not self.model_id
@@ -246,6 +271,8 @@ class NativeInvocation:
             raise ValueError('native invocation requires model, mode and command')
         if any(not isinstance(value, str) or '\x00' in value for value in self.command):
             raise ValueError('native invocation command must contain text arguments')
+        if self.source_identity is not None and not isinstance(self.source_identity, SourceIdentity):
+            raise ValueError('native invocation source identity must be typed')
         if type(self.generated_inputs) is not tuple or any(not isinstance(item, GeneratedInput) for item in self.generated_inputs):
             raise ValueError('generated input roster must be immutable and typed')
         paths = [item.relative_path for item in self.generated_inputs]
@@ -280,6 +307,7 @@ class NativeInvocation:
         return {
             'schema_name': 'bms.native-invocation.v1', 'schema_version': 1,
             'model_id': self.model_id, 'mode': self.mode,
+            'source_identity': asdict(self.source_identity) if self.source_identity is not None else None,
             'command': list(self.command),
             'requested': json.loads(self.requested_json),
             'requested_sha256': hashlib.sha256(self.requested_json).hexdigest(),
