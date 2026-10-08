@@ -17,6 +17,7 @@ import { TargetAntigenSelector } from './TargetAntigenSelector';
 import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { parsePDBFile, parsePDB, type Chain, formatSelectedResidues } from '../utils/pdbUtils';
+import { TemplateManagerModal } from './TemplateManagerModal';
 
 // NTP Templates - pre-defined nucleotide SMILES
 const NTP_TEMPLATES = [
@@ -255,6 +256,9 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
     // Parallelization factor - designs per child job (SWA pattern)
     const [designsPerJob, setDesignsPerJob] = useState<number>(initialValues?.boltzgen_designs_per_job || 100);
 
+    // Template manager state
+    const [showTemplateManager, setShowTemplateManager] = useState(false);
+
     // Covalent bond constraints (disulfide, WHL staple, custom)
     interface CovalentBond {
         id: string;
@@ -442,17 +446,25 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
     return (
         <div className="space-y-6">
             {/* Header */}
-            <div className="flex items-center gap-4">
-                <button
-                    onClick={onBack}
-                    className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-colors"
-                >
-                    ← Back
-                </button>
-                <div>
-                    <h2 className="text-2xl font-bold text-white">Ligand-Aware Binder Design</h2>
-                    <p className="text-slate-400 text-sm">Design proteins that bind small molecules using BoltzGen</p>
+            <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                    <button
+                        onClick={onBack}
+                        className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-colors"
+                    >
+                        ← Back
+                    </button>
+                    <div>
+                        <h2 className="text-2xl font-bold text-white">Ligand-Aware Binder Design</h2>
+                        <p className="text-slate-400 text-sm">Design proteins that bind small molecules using BoltzGen</p>
+                    </div>
                 </div>
+                <button
+                    onClick={() => setShowTemplateManager(true)}
+                    className="px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors"
+                >
+                    Templates
+                </button>
             </div>
 
             {/* Job Name & GPU Pinning */}
@@ -1831,6 +1843,45 @@ export function BoltzGenTemplate({ onBack, initialValues }: BoltzGenTemplateProp
                     {submitMutation.isPending ? 'Submitting...' : 'Launch BoltzGen'}
                 </button>
             </div>
+
+            {/* Template Manager Modal */}
+            <TemplateManagerModal
+                isOpen={showTemplateManager}
+                onClose={() => setShowTemplateManager(false)}
+                currentParams={{
+                    boltzgen_mode: mode,
+                    boltzgen_scaffold_length: scaffoldLength,
+                    boltzgen_num_designs: numDesigns,
+                    boltzgen_batch_size: batchSize,
+                    boltzgen_protocol: protocol,
+                    boltzgen_budget: budget,
+                    boltzgen_alpha: alpha,
+                    boltzgen_min_plddt: minPlddt,
+                    boltzgen_max_rmsd: maxRmsd,
+                    boltzgen_ligand_smiles: ligandSmiles,
+                    boltzgen_ntp_type: selectedNtp,
+                    boltzgen_inverse_fold_avoid: inverseFoldAvoid,
+                    job_name: jobName,
+                }}
+                currentModelId="boltzgen"
+                currentMode={mode}
+                onSelect={(template) => {
+                    if (template.params.boltzgen_mode) setMode(template.params.boltzgen_mode as DesignMode);
+                    if (template.params.boltzgen_scaffold_length) setScaffoldLength(template.params.boltzgen_scaffold_length);
+                    if (template.params.boltzgen_num_designs) setNumDesigns(template.params.boltzgen_num_designs);
+                    if (template.params.boltzgen_batch_size) setBatchSize(template.params.boltzgen_batch_size);
+                    if (template.params.boltzgen_protocol) setProtocol(template.params.boltzgen_protocol as Protocol);
+                    if (template.params.boltzgen_budget) setBudget(template.params.boltzgen_budget);
+                    if (template.params.boltzgen_alpha !== undefined) setAlpha(template.params.boltzgen_alpha);
+                    if (template.params.boltzgen_min_plddt) setMinPlddt(template.params.boltzgen_min_plddt);
+                    if (template.params.boltzgen_max_rmsd) setMaxRmsd(template.params.boltzgen_max_rmsd);
+                    if (template.params.boltzgen_ligand_smiles) setLigandSmiles(template.params.boltzgen_ligand_smiles);
+                    if (template.params.boltzgen_ntp_type) setSelectedNtp(template.params.boltzgen_ntp_type);
+                    if (template.params.boltzgen_inverse_fold_avoid) setInverseFoldAvoid(template.params.boltzgen_inverse_fold_avoid);
+                    if (template.params.job_name) setJobName(template.params.job_name);
+                    setShowTemplateManager(false);
+                }}
+            />
         </div>
     );
 }
