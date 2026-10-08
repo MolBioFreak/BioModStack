@@ -254,16 +254,79 @@ def main():
         
         # Protein entity - use framework if provided, else scaffold length range
         if args.nanobody_framework:
-            # Framework sequence - X marks CDR loops to be designed
-            # BoltzGen should interpret X as positions to design
-            framework_seq = args.nanobody_framework.replace('X', 'X')  # Keep as-is
+            # BoltzGen proper scaffold-constrained design:
+            # Replace CDR regions with length ranges (e.g., "6..10") in the sequence
+            # This tells BoltzGen to design those positions while keeping framework fixed
+            # 
+            # IMGT VHH CDR positions (approximate, 0-indexed):
+            # CDR-H1: positions 26-35 (10 residues typical)
+            # CDR-H2: positions 50-65 (16 residues typical)  
+            # CDR-H3: positions 95-115 (variable, 8-25 residues)
+            
+            framework_seq = args.nanobody_framework
+            
+            # Parse CDR length ranges
+            cdr_h1_range = args.cdr_h1_length if args.cdr_h1_length else "6..10"
+            cdr_h2_range = args.cdr_h2_length if args.cdr_h2_length else "8..12"
+            cdr_h3_range = args.cdr_h3_length if args.cdr_h3_length else "10..20"
+            
+            # Convert "6-10" to "6..10" (BoltzGen format)
+            cdr_h1_range = cdr_h1_range.replace('-', '..')
+            cdr_h2_range = cdr_h2_range.replace('-', '..')
+            cdr_h3_range = cdr_h3_range.replace('-', '..')
+            
+            # If framework contains X markers, use those positions
+            if 'X' in framework_seq:
+                # Count X runs and replace with length ranges
+                import re
+                x_runs = list(re.finditer(r'X+', framework_seq))
+                
+                if len(x_runs) >= 3:
+                    # 3 CDR regions marked
+                    new_seq = framework_seq
+                    # Replace from end to preserve indices
+                    for i, cdr_range in enumerate(reversed([cdr_h1_range, cdr_h2_range, cdr_h3_range])):
+                        if i < len(x_runs):
+                            match = x_runs[-(i+1)]
+                            new_seq = new_seq[:match.start()] + cdr_range + new_seq[match.end():]
+                    framework_seq = new_seq
+                    print(f"  Masked CDRs with length ranges: CDR1={cdr_h1_range}, CDR2={cdr_h2_range}, CDR3={cdr_h3_range}")
+                else:
+                    # Replace all X with single length range
+                    framework_seq = re.sub(r'X+', cdr_h3_range, framework_seq)
+                    print(f"  Replaced X markers with length range: {cdr_h3_range}")
+            else:
+                # Full sequence provided - need to insert CDR length ranges at IMGT positions
+                # This is scaffold redesign mode - replace CDR positions with length ranges
+                # 
+                # Typical VHH positions (IMGT):
+                # FR1: 1-26, CDR1: 27-38, FR2: 39-55, CDR2: 56-65, FR3: 66-104, CDR3: 105-117, FR4: 118-128
+                # Converting to 0-indexed: FR1: 0-25, CDR1: 26-37, FR2: 38-54, CDR2: 55-64, FR3: 65-103, CDR3: 104-116, FR4: 117+
+                
+                seq_len = len(framework_seq)
+                if seq_len >= 110:  # Typical VHH length
+                    # Extract framework regions and insert CDR length ranges
+                    fr1 = framework_seq[:26]      # FR1 (fixed)
+                    fr2 = framework_seq[38:55]    # FR2 (fixed) 
+                    fr3 = framework_seq[65:104]   # FR3 (fixed)
+                    fr4 = framework_seq[117:]     # FR4 (fixed)
+                    
+                    # Construct hybrid sequence: FR1 + CDR1_range + FR2 + CDR2_range + FR3 + CDR3_range + FR4
+                    framework_seq = f"{fr1}{cdr_h1_range}{fr2}{cdr_h2_range}{fr3}{cdr_h3_range}{fr4}"
+                    print(f"  Scaffold redesign: Inserted CDR length ranges at IMGT positions")
+                    print(f"    CDR1={cdr_h1_range}, CDR2={cdr_h2_range}, CDR3={cdr_h3_range}")
+                else:
+                    # Sequence too short - use as-is but warn
+                    print(f"  Warning: Framework sequence ({seq_len} AA) shorter than typical VHH - using de novo mode")
+                    framework_seq = '110..130'  # Fall back to de novo
+            
             entities.append({
                 'protein': {
                     'id': 'H',  # Heavy chain / VHH
                     'sequence': framework_seq
                 }
             })
-            print(f"  VHH framework: {len(framework_seq)} residues")
+            print(f"  Final VHH sequence spec: {framework_seq[:50]}..." if len(framework_seq) > 50 else f"  Final VHH sequence spec: {framework_seq}")
         else:
             # De novo - use VHH-typical length range
             entities.append({
