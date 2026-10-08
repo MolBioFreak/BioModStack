@@ -234,7 +234,12 @@ export function createMainWindow(context: ShellContext): BrowserWindow {
       dialog.showErrorBox(title, content);
     },
   });
-  void window.loadURL(context.windowUrl);
+  window.webContents.session.clearCache().catch((error: unknown) => {
+    const details = error instanceof Error ? error.message : String(error);
+    console.warn(`[BioModStack Shell] Failed to clear HTTP cache before loading frontend: ${details}`);
+  }).finally(() => {
+    void window.loadURL(context.windowUrl);
+  });
 
   return window;
 }

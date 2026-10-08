@@ -5,7 +5,7 @@ System monitoring API router - GPU, CPU, RAM statistics.
 from fastapi import APIRouter, HTTPException
 from datetime import datetime
 from typing import List, Optional, Dict, Any, Union
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from collections import deque
 from pathlib import Path
 import base64
@@ -125,6 +125,17 @@ class GPUStatusEnhanced(BaseModel):
     processes: List[GPUProcess]
 
 
+class CPUPowerTelemetry(BaseModel):
+    """Diagnostics for host-dependent CPU package power telemetry."""
+    source: str = "rapl"
+    available: bool = False
+    status: str = "unknown"
+    message: str = ""
+    discovered_sources: int = 0
+    readable_sources: int = 0
+    setup_hint: Optional[str] = None
+
+
 class CPUStatus(BaseModel):
     """CPU status information."""
     name: str
@@ -136,6 +147,7 @@ class CPUStatus(BaseModel):
     frequency_max_mhz: float
     temperature: Optional[float] = None  # Celsius, if available
     power_watts: Optional[float] = None  # Package power via RAPL
+    power_telemetry: CPUPowerTelemetry = Field(default_factory=CPUPowerTelemetry)
 
 
 # RAPL power tracking (for computing instantaneous power from energy delta)
@@ -221,6 +233,33 @@ def _safe_int(value: Any, fallback: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return int(fallback)
+
+
+def _status_power_limits_for_gpu(gpu_index: int, live_power_limit_w: float) -> Dict[str, Any]:
+    """Return display power bounds for telemetry without inventing a writable range.
+
+    HARDWARE_LIMITS is populated only when the host exposes explicit power
+    min/default/max metadata.  Some systems can report basic telemetry but do
+    not expose power-limit constraints to nvidia-smi/NVML.  In that case the UI
+    should still show the live cap, but it must not fabricate a 100-400W
+    writable range that the power-control endpoint will later reject.
+    """
+    hw = HARDWARE_LIMITS.get(gpu_index)
+    if hw:
+        return hw
+
+    try:
+        live_limit = int(round(float(live_power_limit_w)))
+    except (TypeError, ValueError):
+        live_limit = 0
+    live_limit = max(0, live_limit)
+    return {
+        "min": live_limit,
+        "default": live_limit,
+        "max": live_limit,
+        "eco": live_limit,
+        "name": f"GPU {gpu_index}",
+    }
 
 
 def _derive_power_enabled_from_current() -> bool:
@@ -416,6 +455,21 @@ def _fan_control_backend() -> str:
     return _auto_detect_fan_control_backend()
 
 
+def _coolercontrol_has_writable_gpu_channels(force_refresh: bool = False) -> bool:
+    """Return true only when CoolerControl can map live GPUs to writable fan channels."""
+    cookie, cookie_error = _coolercontrol_login_cookie(force_refresh=force_refresh)
+    if not cookie or cookie_error:
+        return False
+    smi_map = _query_smi_gpu_map()
+    if not smi_map:
+        return False
+    devices, devices_error = _coolercontrol_devices(force_refresh=force_refresh)
+    if devices_error or not devices:
+        return False
+    device_map = _coolercontrol_gpu_device_map(smi_map, devices)
+    return any(bool(meta.get("device_uid") and meta.get("fan_channels")) for meta in device_map.values())
+
+
 def _auto_detect_fan_control_backend() -> str:
     global _fan_backend_auto_cache, _fan_backend_auto_cache_time
 
@@ -427,8 +481,7 @@ def _auto_detect_fan_control_backend() -> str:
         return _fan_backend_auto_cache
 
     backend = FAN_BACKEND_NVIDIA_SETTINGS
-    cookie, cookie_error = _coolercontrol_login_cookie()
-    if cookie and not cookie_error:
+    if _coolercontrol_has_writable_gpu_channels():
         backend = FAN_BACKEND_COOLERCONTROL
 
     _fan_backend_auto_cache = backend
@@ -1121,7 +1174,7 @@ def _load_fan_state() -> None:
                 gpu_idx = int(k)
             except (TypeError, ValueError):
                 continue
-            if gpu_idx not in HARDWARE_LIMITS or not isinstance(v, dict):
+            if not isinstance(v, dict):
                 continue
             mode = str(v.get("mode", "auto")).strip().lower()
             if mode not in {"auto", "manual"}:
@@ -1139,7 +1192,7 @@ def _load_fan_state() -> None:
                 gpu_idx = int(k)
             except (TypeError, ValueError):
                 continue
-            if gpu_idx not in HARDWARE_LIMITS or not isinstance(v, list):
+            if not isinstance(v, list):
                 continue
             fan_targets: List[int] = []
             for fan in v:
@@ -1191,8 +1244,6 @@ def _query_smi_gpu_map() -> Dict[int, Dict[str, Any]]:
         try:
             idx = int(parts[0])
         except ValueError:
-            continue
-        if idx not in HARDWARE_LIMITS:
             continue
         out[idx] = {
             "uuid": parts[1],
@@ -1855,7 +1906,8 @@ def _collect_gpu_stats() -> tuple[List[GPUStatusEnhanced], Optional[str]]:
             except (TypeError, ValueError):
                 continue
 
-            hw_limits = HARDWARE_LIMITS.get(gpu_idx, {"min": 100, "default": 300, "max": 400})
+            power_limit_w = round(_parse_float(parts[7], 0.0), 1)
+            hw_limits = _status_power_limits_for_gpu(gpu_idx, power_limit_w)
             clock_graphics = _parse_int(parts[10], 0)
             clock_memory = _parse_int(parts[11], 0)
             gpus.append(
@@ -1868,7 +1920,7 @@ def _collect_gpu_stats() -> tuple[List[GPUStatusEnhanced], Optional[str]]:
                     memory_total_mb=_parse_int(parts[5], 0),
                     reserved_memory_mb=reservations.get(gpu_idx, 0),
                     power_draw_w=round(_parse_float(parts[6], 0.0), 1),
-                    power_limit_w=round(_parse_float(parts[7], 0.0), 1),
+                    power_limit_w=power_limit_w,
                     min_power_watts=hw_limits["min"],
                     default_power_watts=hw_limits["default"],
                     max_power_watts=hw_limits["max"],
@@ -2051,8 +2103,10 @@ def _collect_gpu_stats() -> tuple[List[GPUStatusEnhanced], Optional[str]]:
                     if p.name in ["python", "python3"]:
                         p.name = process_label
             
-            # Get hardware limits for this GPU (fallback to defaults if not defined)
-            hw_limits = HARDWARE_LIMITS.get(i, {"min": 100, "default": 300, "max": 400})
+            # Get hardware limits for this GPU. If explicit constraints are not
+            # discoverable, collapse the display range to the live cap instead
+            # of fabricating writable defaults.
+            hw_limits = _status_power_limits_for_gpu(i, power_limit)
             
             gpus.append(GPUStatusEnhanced(
                 index=i,
@@ -2137,8 +2191,75 @@ def get_gpu_stats() -> List[GPUStatusEnhanced]:
     return get_gpu_stats_with_error()[0]
 
 
+RAPL_POWER_SETUP_HINT = (
+    "Grant read access to /sys/class/powercap/*/energy_uj with a udev/group ACL, "
+    "or run a small privileged telemetry collector that exposes package watts to BMS."
+)
+
+
+def _rapl_status(
+    *,
+    available: bool,
+    status: str,
+    message: str,
+    discovered_sources: int,
+    readable_sources: int,
+    setup_hint: Optional[str] = None,
+    source: str = "rapl",
+) -> Dict[str, Any]:
+    return {
+        "source": source,
+        "available": available,
+        "status": status,
+        "message": message,
+        "discovered_sources": int(discovered_sources),
+        "readable_sources": int(readable_sources),
+        "setup_hint": setup_hint,
+    }
+
+
+def _sample_cpu_power_from_collector(collector_url: str) -> tuple[Optional[float], Dict[str, Any]]:
+    """Sample CPU package watts from an optional host-side RAPL collector."""
+    try:
+        with urlrequest.urlopen(collector_url, timeout=1.5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError, urlerror.URLError) as exc:
+        return None, _rapl_status(
+            available=False,
+            status="collector_error",
+            message=f"CPU power collector unavailable: {exc}",
+            discovered_sources=0,
+            readable_sources=0,
+            setup_hint=RAPL_POWER_SETUP_HINT,
+            source="rapl_collector",
+        )
+
+    power_watts: Optional[float]
+    raw_power = payload.get("power_watts")
+    try:
+        power_watts = None if raw_power is None else round(float(raw_power), 1)
+    except (TypeError, ValueError):
+        power_watts = None
+
+    status = str(payload.get("status") or ("ok" if power_watts is not None else "unavailable"))
+    available = bool(payload.get("available", power_watts is not None))
+    message = str(payload.get("message") or "CPU package power sampled by host RAPL collector.")
+    discovered_sources = int(payload.get("discovered_sources") or 0)
+    readable_sources = int(payload.get("readable_sources") or (1 if power_watts is not None else 0))
+
+    return power_watts, _rapl_status(
+        available=available,
+        status=status,
+        message=message,
+        discovered_sources=discovered_sources,
+        readable_sources=readable_sources,
+        setup_hint=payload.get("setup_hint"),
+        source=str(payload.get("source") or "rapl_collector"),
+    )
+
+
 def _discover_rapl_package_sources() -> List[Dict[str, Any]]:
-    """Find readable package-level RAPL energy counters."""
+    """Find package-level RAPL energy counters and record readability diagnostics."""
     powercap_root = Path("/sys/class/powercap")
     sources: List[Dict[str, Any]] = []
 
@@ -2166,8 +2287,10 @@ def _discover_rapl_package_sources() -> List[Dict[str, Any]]:
                 pass
 
             sources.append({
+                "domain_name": domain_name,
                 "energy_path": energy_path,
                 "max_energy_uj": max_energy_uj,
+                "readable": os.access(str(energy_path), os.R_OK),
             })
 
     fallback_path = Path("/sys/class/powercap/intel-rapl:0/energy_uj")
@@ -2181,8 +2304,10 @@ def _discover_rapl_package_sources() -> List[Dict[str, Any]]:
             pass
 
         sources.append({
+            "domain_name": "package-0",
             "energy_path": fallback_path,
             "max_energy_uj": max_energy_uj,
+            "readable": os.access(str(fallback_path), os.R_OK),
         })
 
     return sources
@@ -2197,25 +2322,65 @@ def _get_rapl_package_sources() -> List[Dict[str, Any]]:
     return _rapl_package_sources
 
 
-def _sample_cpu_package_power_watts() -> Optional[float]:
-    """Sample package power directly from RAPL energy counters."""
+def _source_readable_hint(source: Dict[str, Any]) -> bool:
+    readable = source.get("readable")
+    if readable is not None:
+        return bool(readable)
+    energy_path = source.get("energy_path")
+    try:
+        return os.access(str(energy_path), os.R_OK)
+    except Exception:
+        return True
+
+
+def _sample_cpu_package_power() -> tuple[Optional[float], Dict[str, Any]]:
+    """Sample package power from a configured collector or direct RAPL counters."""
+    collector_url = os.environ.get("BMS_CPU_POWER_COLLECTOR_URL", "").strip()
+    if collector_url:
+        collector_watts, collector_status = _sample_cpu_power_from_collector(collector_url)
+        if collector_watts is not None or collector_status.get("status") == "priming":
+            return collector_watts, collector_status
+
     sources = _get_rapl_package_sources()
+    discovered_sources = len(sources)
     if not sources:
-        return None
+        return None, _rapl_status(
+            available=False,
+            status="no_sources",
+            message="No Linux RAPL package energy counters were discovered on this host.",
+            discovered_sources=0,
+            readable_sources=0,
+            setup_hint="CPU package watts require readable Linux RAPL powercap counters or a privileged collector.",
+        )
 
     total_power_watts = 0.0
     valid_samples = 0
+    successful_reads = 0
+    unreadable_sources = 0
+    read_errors: List[str] = []
 
     with _rapl_state_lock:
         for source in sources:
             energy_path = source["energy_path"]
-            max_energy_uj = float(source["max_energy_uj"])
+            max_energy_uj = float(source.get("max_energy_uj") or float(2**32))
+
+            if not _source_readable_hint(source):
+                unreadable_sources += 1
+                continue
 
             try:
                 current_energy = float(energy_path.read_text().strip())
-            except (PermissionError, FileNotFoundError, ValueError, OSError):
+            except PermissionError:
+                unreadable_sources += 1
+                continue
+            except FileNotFoundError:
+                read_errors.append(f"{energy_path}: missing")
+                continue
+            except (ValueError, OSError) as exc:
+                read_errors.append(f"{energy_path}: {exc}")
                 continue
 
+            successful_reads += 1
             current_time = time.monotonic()
             cache_key = str(energy_path)
             previous = _rapl_sample_state.get(cache_key)
@@ -2247,10 +2412,48 @@ def _sample_cpu_package_power_watts() -> Optional[float]:
                 total_power_watts += power_watts
                 valid_samples += 1
 
-    if valid_samples == 0:
-        return None
+    if valid_samples > 0:
+        return round(total_power_watts, 1), _rapl_status(
+            available=True,
+            status="ok",
+            message="CPU package power sampled from Linux RAPL energy counters.",
+            discovered_sources=discovered_sources,
+            readable_sources=successful_reads,
+        )
 
-    return round(total_power_watts, 1)
+    if successful_reads == 0 and unreadable_sources > 0:
+        return None, _rapl_status(
+            available=False,
+            status="unreadable",
+            message="RAPL energy counters are not readable by this service user.",
+            discovered_sources=discovered_sources,
+            readable_sources=0,
+            setup_hint=RAPL_POWER_SETUP_HINT,
+        )
+
+    if successful_reads == 0:
+        return None, _rapl_status(
+            available=False,
+            status="read_error",
+            message="RAPL energy counters were discovered but could not be sampled: " + " | ".join(read_errors[:3]),
+            discovered_sources=discovered_sources,
+            readable_sources=0,
+            setup_hint=RAPL_POWER_SETUP_HINT,
+        )
+
+    return None, _rapl_status(
+        available=False,
+        status="priming",
+        message="RAPL package power source is readable; waiting for a second sample to compute watts.",
+        discovered_sources=discovered_sources,
+        readable_sources=successful_reads,
+    )
+
+
+def _sample_cpu_package_power_watts() -> Optional[float]:
+    """Backward-compatible watts-only wrapper for RAPL package power sampling."""
+    watts, _status = _sample_cpu_package_power()
+    return watts
 
 
 def _normalize_cpu_frequency_mhz(value: Optional[float]) -> Optional[float]:
@@ -2377,8 +2580,8 @@ def get_cpu_stats() -> CPUStatus:
     )
 
     # Get CPU package power via RAPL only. If powercap is unreadable, return null
-    # so the UI does not fabricate a wattage value.
-    cpu_power = _sample_cpu_package_power_watts()
+    # plus diagnostics so the UI does not fabricate a wattage value.
+    cpu_power, cpu_power_telemetry = _sample_cpu_package_power()
     
     return CPUStatus(
         name=cpu_name,
@@ -2389,7 +2592,8 @@ def get_cpu_stats() -> CPUStatus:
         frequency_current_mhz=frequency_current_mhz,
         frequency_max_mhz=frequency_max_mhz,
         temperature=cpu_temp,
-        power_watts=cpu_power
+        power_watts=cpu_power,
+        power_telemetry=CPUPowerTelemetry(**cpu_power_telemetry),
     )
 
 
@@ -2462,6 +2666,65 @@ async def get_ram_only():
         return _gpu_proxy_request("GET", "/ram")
     ram = await asyncio.to_thread(get_ram_stats)
     return {"ram": ram, "timestamp": datetime.utcnow()}
+
+
+def _reset_hardware_discovery_caches() -> None:
+    """Clear cached hardware discovery state so the next samples reflect the live host."""
+    global _gpu_status_cache, _gpu_status_error, _gpu_status_cache_time
+    global _power_control_cache, _power_control_cache_time
+    global _fan_control_cache, _fan_control_cache_time
+    global _coolercontrol_cookie_cache, _coolercontrol_cookie_cache_time
+    global _coolercontrol_devices_cache, _coolercontrol_devices_error, _coolercontrol_devices_cache_time
+    global _coolercontrol_modes_cache, _coolercontrol_modes_error, _coolercontrol_modes_cache_time
+    global _fan_backend_auto_cache, _fan_backend_auto_cache_time
+    global _rapl_package_sources
+
+    _gpu_status_cache = []
+    _gpu_status_error = None
+    _gpu_status_cache_time = 0.0
+    _power_control_cache = None
+    _power_control_cache_time = 0.0
+    _fan_control_cache = None
+    _fan_control_cache_time = 0.0
+    _coolercontrol_cookie_cache = None
+    _coolercontrol_cookie_cache_time = 0.0
+    _coolercontrol_devices_cache = []
+    _coolercontrol_devices_error = ""
+    _coolercontrol_devices_cache_time = 0.0
+    _coolercontrol_modes_cache = []
+    _coolercontrol_modes_error = ""
+    _coolercontrol_modes_cache_time = 0.0
+    _fan_backend_auto_cache = None
+    _fan_backend_auto_cache_time = 0.0
+    _rapl_package_sources = None
+    with _rapl_state_lock:
+        _rapl_sample_state.clear()
+
+
+def _discover_hardware_sync() -> Dict[str, Any]:
+    _reset_hardware_discovery_caches()
+    gpus, gpu_error = get_gpu_stats_with_error(force_refresh=True)
+    cpu = get_cpu_stats()
+    power_control = _get_power_control_payload(force_refresh=True)
+    fan_control = _get_fan_control_snapshot(force_refresh=True)
+    return {
+        "success": True,
+        "message": "Hardware discovery caches refreshed from the live host",
+        "gpu_count": len(gpus),
+        "gpu_error": gpu_error,
+        "cpu_power_telemetry": cpu.power_telemetry.model_dump(),
+        "power_control": power_control,
+        "fan_control": fan_control,
+        "timestamp": datetime.utcnow(),
+    }
+
+
+@router.post("/hardware/discover")
+async def discover_hardware():
+    """Refresh GPU/CPU/fan/power discovery caches and return current capability probes."""
+    if _gpu_proxy_enabled():
+        return _gpu_proxy_request("POST", "/hardware/discover")
+    return await asyncio.to_thread(_discover_hardware_sync)
 
 
 # --- Power Profile Endpoints ---
@@ -2619,14 +2882,16 @@ def _update_fan_control_mapping_sync(request: FanMappingOverrideRequest) -> Dict
             detail="Fan target mapping overrides are only supported with BMS_FAN_CONTROL_BACKEND=nvidia-settings",
         )
 
+    live_gpu_indices = set(_query_smi_gpu_map().keys())
     normalized: Dict[int, List[int]] = {}
     for gpu_key, fan_list in request.mapping.items():
         try:
             gpu_idx = int(gpu_key)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail=f"Invalid GPU key: {gpu_key}")
-        if gpu_idx not in HARDWARE_LIMITS:
-            raise HTTPException(status_code=400, detail=f"Unknown GPU index: {gpu_idx}")
+        if live_gpu_indices and gpu_idx not in live_gpu_indices:
+            valid = ",".join(str(idx) for idx in sorted(live_gpu_indices))
+            raise HTTPException(status_code=400, detail=f"Unknown live GPU index: {gpu_idx}. Valid: {valid}")
         if not isinstance(fan_list, list):
             raise HTTPException(status_code=400, detail=f"Fan list for GPU {gpu_idx} must be an array")
         parsed_fans: List[int] = []
@@ -2659,9 +2924,6 @@ async def update_fan_control_mapping(request: FanMappingOverrideRequest):
 
 def _set_fan_control_sync(request: FanControlRequest) -> Dict[str, Any]:
     gpu_idx = int(request.gpu_index)
-    if gpu_idx not in HARDWARE_LIMITS:
-        valid = ",".join(str(idx) for idx in sorted(HARDWARE_LIMITS.keys()))
-        raise HTTPException(status_code=400, detail=f"Unknown GPU index {gpu_idx}. Valid: {valid}")
 
     with _fan_control_lock:
         snapshot = _get_fan_control_snapshot(force_refresh=True)
@@ -2676,6 +2938,13 @@ def _set_fan_control_sync(request: FanControlRequest) -> Dict[str, Any]:
             return {
                 "success": False,
                 "message": f"GPU {gpu_idx} not present in fan control snapshot",
+                "fan_control": snapshot,
+            }
+        if gpu_state.get("writable") is False:
+            warning = str(gpu_state.get("warning") or "Fan control capability probe failed").strip()
+            return {
+                "success": False,
+                "message": f"GPU {gpu_idx} fan control is not writable: {warning}",
                 "fan_control": snapshot,
             }
 
@@ -2838,6 +3107,7 @@ class SchedulerGlobalConfig(BaseModel):
     msa_concurrency_limit: int = DEFAULT_SCHEDULER_CONFIG["global"]["msa_concurrency_limit"]
     msa_preferred_gpu_ids: List[int] = DEFAULT_SCHEDULER_CONFIG["global"]["msa_preferred_gpu_ids"]
     msa_avoid_heavy_gpus: bool = DEFAULT_SCHEDULER_CONFIG["global"]["msa_avoid_heavy_gpus"]
+    force_run_excluded_gpu_ids: List[int] = DEFAULT_SCHEDULER_CONFIG["global"]["force_run_excluded_gpu_ids"]
 
 
 class SchedulerGPUOverride(BaseModel):
@@ -2893,6 +3163,7 @@ async def update_scheduler_config(global_config: SchedulerGlobalConfig):
         "msa_concurrency_limit": max(1, min(4, global_config.msa_concurrency_limit)),
         "msa_preferred_gpu_ids": sorted({int(g) for g in global_config.msa_preferred_gpu_ids if isinstance(g, int) and g >= 0}),
         "msa_avoid_heavy_gpus": bool(global_config.msa_avoid_heavy_gpus),
+        "force_run_excluded_gpu_ids": sorted({int(g) for g in global_config.force_run_excluded_gpu_ids if isinstance(g, int) and g >= 0}),
     }
     
     if not write_scheduler_config(config):
@@ -3190,6 +3461,69 @@ async def get_batch_status(batch_id: str):
 # These endpoints allow bypassing normal orchestrator scheduling for debugging
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _normalize_force_run_gpu_id_list(raw_value: Any) -> set[int]:
+    """Parse a scheduler-config GPU-id list without assuming host-specific ordinals."""
+    if raw_value in (None, ""):
+        return set()
+    if isinstance(raw_value, (list, tuple, set)):
+        values = raw_value
+    else:
+        values = str(raw_value).split(",")
+
+    normalized: set[int] = set()
+    for value in values:
+        try:
+            gpu_id = int(str(value).strip())
+        except (TypeError, ValueError):
+            continue
+        if gpu_id >= 0:
+            normalized.add(gpu_id)
+    return normalized
+
+
+def _force_run_auto_excluded_gpu_ids(config: Dict[str, Any]) -> set[int]:
+    """
+    Resolve GPUs excluded from automatic force-run placement.
+
+    Historically this route contained a workstation-specific ordinal exclusion.
+    That is not portable: GPU ordinals and display ownership are host-specific.
+    Use explicit scheduler config instead.
+    """
+    global_config = config.get("global", {}) if isinstance(config, dict) else {}
+    excluded = _normalize_force_run_gpu_id_list(
+        global_config.get("force_run_excluded_gpu_ids") if isinstance(global_config, dict) else None
+    )
+
+    overrides = config.get("overrides", {}) if isinstance(config, dict) else {}
+    if isinstance(overrides, dict):
+        for raw_gpu_id, override in overrides.items():
+            if not isinstance(override, dict):
+                continue
+            if override.get("disabled") and not (override.get("force_available") or override.get("quick_enable")):
+                excluded.update(_normalize_force_run_gpu_id_list([raw_gpu_id]))
+    return excluded
+
+
+def _select_auto_force_run_gpu_id(gpu_stats: List[Any], config: Dict[str, Any]) -> int:
+    """Choose the least-loaded discovered GPU for force-run auto placement."""
+    excluded = _force_run_auto_excluded_gpu_ids(config)
+
+    def _gpu_index(gpu: Any) -> Optional[int]:
+        try:
+            return int(getattr(gpu, "index"))
+        except (TypeError, ValueError):
+            return None
+
+    candidates = [gpu for gpu in gpu_stats if (idx := _gpu_index(gpu)) is not None and idx not in excluded]
+    if not candidates:
+        candidates = [gpu for gpu in gpu_stats if _gpu_index(gpu) is not None]
+    if not candidates:
+        return 0
+
+    selected_index = _gpu_index(min(candidates, key=lambda gpu: (getattr(gpu, "memory_used_mb", 0), _gpu_index(gpu) or 0)))
+    return selected_index if selected_index is not None else 0
+
+
 class ForceRunRequest(BaseModel):
     """Request to force-run a queued job."""
     gpu_id: Optional[int] = None  # None = any available
@@ -3208,14 +3542,8 @@ async def force_run_job(job_id: str, request: ForceRunRequest):
     # Determine GPU
     gpu_id = request.gpu_id
     if gpu_id is None:
-        # Pick least-loaded GPU
         try:
-            gpu_stats = get_gpu_stats()
-            enabled_gpus = [g for g in gpu_stats if g.index != 1]  # Skip GPU 1 (display)
-            if enabled_gpus:
-                gpu_id = min(enabled_gpus, key=lambda g: g.memory_used_mb).index
-            else:
-                gpu_id = 0
+            gpu_id = _select_auto_force_run_gpu_id(get_gpu_stats(), read_scheduler_config())
         except Exception:
             gpu_id = 0
 

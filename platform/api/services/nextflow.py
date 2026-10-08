@@ -462,11 +462,19 @@ def _derive_boltz_cp_gpu_launch_settings(
     *,
     pinned_gpus: object,
     requested_size_cp: object,
-    fallback_gpu_ids: object,
+    fallback_gpu_ids: object = None,
+    scheduler_gpu_id: object = None,
 ) -> Tuple[str, int]:
-    parsed_gpu_ids = _parse_boltz_cp_gpu_ids(
-        pinned_gpus if isinstance(pinned_gpus, list) and pinned_gpus else fallback_gpu_ids
-    )
+    """Resolve the physical CP launch bridge without assuming host GPU ordinals."""
+    raw_gpu_ids = None
+    if isinstance(pinned_gpus, list) and pinned_gpus:
+        raw_gpu_ids = pinned_gpus
+    elif fallback_gpu_ids not in (None, ""):
+        raw_gpu_ids = fallback_gpu_ids
+    elif scheduler_gpu_id not in (None, ""):
+        raw_gpu_ids = scheduler_gpu_id
+
+    parsed_gpu_ids = _parse_boltz_cp_gpu_ids(raw_gpu_ids)
     return ",".join(str(gpu_id) for gpu_id in parsed_gpu_ids), _largest_square_divisor(len(parsed_gpu_ids), requested_size_cp)
 
 
@@ -2275,6 +2283,7 @@ def build_nextflow_command(
         ('caliby_experimental', 'design'): 'caliby_experimental',
         ('protein_hunter_experimental', 'design'): 'protein_hunter_experimental',
         ('boltz_cp_experimental', 'design'): 'boltz_cp_experimental',
+        ('confornets_experimental', 'design'): 'confornets_experimental',
         # Nanopore basecalling + methylation analysis
         ('nanopore', 'methylation_analysis'): 'nanopore_methylation',
         # Protenix structure prediction
@@ -2871,6 +2880,64 @@ def build_nextflow_command(
             params['rfd_num_designs'] = params['ph_num_designs']
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'protein_hunter_experimental'
+    elif model_id == 'confornets_experimental':
+        confornets_mappings = {
+            'task': 'cn_task',
+            'sequence': 'cn_sequence',
+            'chain_id': 'cn_chain_id',
+            'benchmark_name': 'cn_benchmark_name',
+            'test_case_name': 'cn_test_case_name',
+            'reference_pdb_1': 'cn_reference_pdb_1',
+            'reference_name_1': 'cn_reference_name_1',
+            'reference_pdb_2': 'cn_reference_pdb_2',
+            'reference_name_2': 'cn_reference_name_2',
+            'checkpoint_path': 'cn_checkpoint_path',
+            'config_yaml': 'cn_config_yaml',
+            'confornets_repo_path': 'cn_confornets_repo_path',
+            'skip_msa': 'cn_skip_msa',
+            'num_runs': 'cn_num_runs',
+            'k_confornets': 'cn_k_confornets',
+            'num_samples': 'cn_num_samples',
+            'max_steps': 'cn_max_steps',
+            'save_steps': 'cn_save_steps',
+            'num_recycles': 'cn_num_recycles',
+            'num_diffusion_steps': 'cn_num_diffusion_steps',
+            'lr': 'cn_lr',
+            'grad_clip': 'cn_grad_clip',
+            'compute_confidence': 'cn_compute_confidence',
+            'save_full_confidence': 'cn_save_full_confidence',
+            'confornet_path': 'cn_confornet_path',
+            'mse_dir': 'cn_mse_dir',
+            'source_test_cases': 'cn_source_test_cases',
+        }
+        for src_key, dest_key in confornets_mappings.items():
+            if src_key == dest_key:
+                continue
+            if src_key in params:
+                if dest_key not in params:
+                    params[dest_key] = params[src_key]
+                params.pop(src_key, None)
+
+        params.setdefault('cn_task', 'diversity')
+        params.setdefault('cn_chain_id', 'A')
+        params.setdefault('cn_benchmark_name', 'bms_confornets')
+        params.setdefault('cn_test_case_name', 'monomer_case')
+        params.setdefault('cn_num_runs', 2)
+        params.setdefault('cn_k_confornets', 2)
+        params.setdefault('cn_num_samples', 5)
+        params.setdefault('cn_max_steps', 21)
+        params.setdefault('cn_save_steps', '5,10,15,20')
+        params.setdefault('cn_num_recycles', 0)
+        params.setdefault('cn_num_diffusion_steps', 200)
+        params.setdefault('cn_lr', 0.001)
+        params.setdefault('cn_grad_clip', 10.0)
+        params.setdefault('cn_skip_msa', False)
+        params.setdefault('cn_compute_confidence', False)
+        params.setdefault('cn_save_full_confidence', False)
+        if 'cn_num_samples' in params and 'rfd_num_designs' not in params:
+            params['rfd_num_designs'] = params['cn_num_samples']
+        if not params.get('rfd_mode'):
+            params['rfd_mode'] = 'confornets_experimental'
     elif model_id == 'boltz_cp_experimental':
         boltz_cp_mappings = {
             'input_path': 'bcp_input_path',
@@ -2883,6 +2950,7 @@ def build_nextflow_command(
             'sampling_steps': 'bcp_sampling_steps',
             'diffusion_samples': 'bcp_diffusion_samples',
             'seed': 'bcp_seed',
+            'backend': 'bcp_backend',
             'repo_path': 'bcp_repo_path',
         }
         for src_key, dest_key in boltz_cp_mappings.items():
@@ -2919,7 +2987,8 @@ def build_nextflow_command(
         derived_gpu_ids, derived_size_cp = _derive_boltz_cp_gpu_launch_settings(
             pinned_gpus=params.get('pinned_gpus'),
             requested_size_cp=requested_size_cp,
-            fallback_gpu_ids=params.get('bcp_gpu_ids') or '0,1,2,3',
+            fallback_gpu_ids=params.get('bcp_gpu_ids'),
+            scheduler_gpu_id=params.get('gpu_id'),
         )
         if derived_gpu_ids:
             params['bcp_gpu_ids'] = derived_gpu_ids
@@ -2928,6 +2997,7 @@ def build_nextflow_command(
         params.setdefault('bcp_input_format', 'config_files')
         params.setdefault('bcp_output_format', 'mmcif')
         params.setdefault('bcp_write_full_pae', False)
+        params.setdefault('bcp_backend', 'dram-context-spill-workhorse')
         params.setdefault(
             'bcp_container_path',
             str(Path(explicit_container_dir) / DEFAULT_BOLTZ_CP_COMPAT_CONTAINER),

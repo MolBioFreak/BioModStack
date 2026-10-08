@@ -62,6 +62,7 @@ def build_single_request_from_namespace(args: Namespace) -> SingleMSARequest:
             fast_env_fallback_min_depth=int(args.fast_env_fallback_min_depth)
             if args.fast_env_fallback_min_depth is not None
             else None,
+            allow_degraded_quality=bool(getattr(args, "allow_degraded_quality", False)),
         ),
     )
 
@@ -119,4 +120,5 @@ def dispatch_single_request(
         target_shards=request.runtime.target_shards,
         target_shard_min_size_gb=request.runtime.target_shard_min_size_gb,
         disallow_cpu_fallback=request.runtime.disallow_cpu_fallback,
+        allow_degraded_quality=request.overrides.allow_degraded_quality,
     )

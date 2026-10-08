@@ -8,7 +8,28 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential curl git \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        curl \
+        git \
+        libcurl4-openssl-dev \
+        libfontconfig1-dev \
+        libfreetype6-dev \
+        libfribidi-dev \
+        libharfbuzz-dev \
+        libgmp-dev \
+        libglpk-dev \
+        libgsl-dev \
+        libicu-dev \
+        libjpeg-dev \
+        libpng-dev \
+        libssl-dev \
+        libtiff5-dev \
+        libuv1-dev \
+        libxml2-dev \
+        r-base \
+        r-base-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv==0.9.12
@@ -18,6 +39,8 @@ COPY . /app
 WORKDIR /app/platform/api
 
 RUN uv sync --frozen --no-dev
+
+RUN Rscript /app/docker/install_assay_r_packages.R
 
 RUN groupadd --gid 1000 biomodstack \
     && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash biomodstack \

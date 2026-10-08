@@ -207,3 +207,82 @@ async def test_daemon_stop_is_disabled_in_favor_of_robot_local_supervision() -> 
 
     assert exc_info.value.status_code == 409
     assert 'robot-local' in str(exc_info.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_bioxp_capabilities_reports_robot_local_route_parity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bioxp, '_GLOBAL_LINKAGE_URL', 'http://robot:8123')
+
+    response = await bioxp.bioxp_capabilities()
+
+    assert response['linkage_url'] == 'http://robot:8123'
+    assert response['bms_proxy_routes']['/liquid/status'] is True
+    assert response['bms_proxy_routes']['/motion/reference/status'] is True
+    assert response['bms_proxy_routes']['/camera/stream_state'] is True
+    assert response['bms_proxy_routes']['/vision/inspect'] is True
+    assert response['robot_local_expected_routes']['/liquid/aspirate'] is True
+
+
+@pytest.mark.asyncio
+async def test_liquid_routes_proxy_to_robot_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, dict | None, dict | None, float]] = []
+
+    async def fake_proxy_request(method: str, path: str, json_data=None, params=None, timeout: float = 65.0):
+        calls.append((method, path, json_data, params, timeout))
+        return {'ok': True, 'path': path}
+
+    class RequestStub:
+        async def json(self):
+            return {'volume_ul': 12.5, 'source': {'location_id': 'reagent_rack', 'well_id': 'A1'}}
+
+    monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
+
+    assert await bioxp.liquid_status() == {'ok': True, 'path': '/liquid/status'}
+    assert await bioxp.liquid_init(RequestStub()) == {'ok': True, 'path': '/liquid/init'}
+    assert await bioxp.liquid_tip(RequestStub()) == {'ok': True, 'path': '/liquid/tip'}
+    assert await bioxp.liquid_aspirate(RequestStub()) == {'ok': True, 'path': '/liquid/aspirate'}
+    assert await bioxp.liquid_dispense(RequestStub()) == {'ok': True, 'path': '/liquid/dispense'}
+    assert await bioxp.liquid_mix(RequestStub()) == {'ok': True, 'path': '/liquid/mix'}
+
+    assert [call[1] for call in calls] == [
+        '/liquid/status',
+        '/liquid/init',
+        '/liquid/tip',
+        '/liquid/aspirate',
+        '/liquid/dispense',
+        '/liquid/mix',
+    ]
+    assert calls[0] == ('GET', '/liquid/status', None, None, 20.0)
+    assert calls[3][0] == 'POST'
+    assert calls[3][2]['volume_ul'] == 12.5
+
+
+@pytest.mark.asyncio
+async def test_motion_reference_camera_and_vision_routes_proxy_to_robot_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, dict | None, dict | None, float]] = []
+
+    async def fake_proxy_request(method: str, path: str, json_data=None, params=None, timeout: float = 65.0):
+        calls.append((method, path, json_data, params, timeout))
+        return {'ok': True, 'path': path, 'params': params}
+
+    class RequestStub:
+        async def json(self):
+            return {'axes': ['x'], 'reason': 'operator_verified'}
+
+    monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
+
+    assert await bioxp.motion_reference_status('x,y,z,g,door') == {'ok': True, 'path': '/motion/reference/status', 'params': {'axes': 'x,y,z,g,door'}}
+    assert await bioxp.motion_reference_mark_referenced(RequestStub()) == {'ok': True, 'path': '/motion/reference/mark_referenced', 'params': None}
+    assert await bioxp.motion_reference_mark_desynced(RequestStub()) == {'ok': True, 'path': '/motion/reference/mark_desynced', 'params': None}
+    assert await bioxp.camera_stream_state() == {'ok': True, 'path': '/camera/stream_state', 'params': None}
+    assert await bioxp.vision_inspect(RequestStub()) == {'ok': True, 'path': '/vision/inspect', 'params': None}
+    assert await bioxp.vision_barcode_read(RequestStub()) == {'ok': True, 'path': '/vision/barcode/read', 'params': None}
+
+    assert calls == [
+        ('GET', '/motion/reference/status', None, {'axes': 'x,y,z,g,door'}, 20.0),
+        ('POST', '/motion/reference/mark_referenced', {'axes': ['x'], 'reason': 'operator_verified'}, None, 30.0),
+        ('POST', '/motion/reference/mark_desynced', {'axes': ['x'], 'reason': 'operator_verified'}, None, 30.0),
+        ('GET', '/camera/stream_state', None, None, 20.0),
+        ('POST', '/vision/inspect', {'axes': ['x'], 'reason': 'operator_verified'}, None, 45.0),
+        ('POST', '/vision/barcode/read', {'axes': ['x'], 'reason': 'operator_verified'}, None, 45.0),
+    ]

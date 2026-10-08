@@ -1191,7 +1191,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 onChange={(e) => setPredictorParams(p => ({ ...p, use_potentials: e.target.checked }))}
                                 className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600"
                             />
-                            <label className="text-slate-300" title="Enable physics-based potentials (Boltz-2x). More accurate but slower.">Use Potentials (Boltz-2x)</label>
+                            <label className="text-slate-300" title="Enable physics/FK steering potentials (Boltz-2x). Can improve geometry, but high sample counts multiply internal particles and need memory-safe batching.">Use Potentials (Boltz-2x)</label>
                         </div>
                         <div className="flex items-center gap-2 pt-6">
                             <input

@@ -2625,12 +2625,13 @@ if __name__ == "__main__":
     # Quick test of packing algorithm
     logging.basicConfig(level=logging.INFO)
     
-    # Mock data
+    # Portable mock data for exercising the packing algorithm without embedding
+    # workstation-specific adapter names or ordinals.
     test_gpus = [
-        GPUState(0, "RTX 5090", 5000, 32607, 27607, 10, 45),
-        GPUState(1, "RTX 5060 Ti", 2000, 16311, 14311, 5, 40),
-        GPUState(2, "RTX 3090", 8000, 24576, 16576, 15, 50),
-        GPUState(3, "RTX 3090", 3000, 24576, 21576, 8, 48),
+        GPUState(0, "GPU-A", 5000, 32768, 27768, 10, 45),
+        GPUState(1, "GPU-B", 2000, 16384, 14384, 5, 40),
+        GPUState(2, "GPU-C", 8000, 24576, 16576, 15, 50),
+        GPUState(3, "GPU-D", 3000, 24576, 21576, 8, 48),
     ]
     
     test_jobs = [

@@ -119,6 +119,166 @@ def assign_tiles_weighted(tiles: Iterable[TileSpec], workers: Iterable[GpuWorker
     return assignments
 
 
+def fake_pair_state(sequence_length: int) -> list[list[int]]:
+    """Create a deterministic square pair/context map for spill-runtime tests.
+
+    The values are deliberately simple integers so tiled and full-reference
+    execution can be compared exactly without NumPy, PyTorch, or CUDA.
+    """
+
+    if sequence_length <= 0:
+        raise ValueError("sequence_length must be positive")
+    return [[row * sequence_length + col for col in range(sequence_length)] for row in range(sequence_length)]
+
+
+def _clone_square_state(state: list[list[int]], *, sequence_length: int | None = None) -> list[list[int]]:
+    if not state:
+        raise ValueError("state must not be empty")
+    size = sequence_length if sequence_length is not None else len(state)
+    if size <= 0:
+        raise ValueError("sequence_length must be positive")
+    if len(state) != size:
+        raise ValueError("state row count does not match sequence_length")
+    cloned: list[list[int]] = []
+    for row in state:
+        if len(row) != size:
+            raise ValueError("state must be square and match sequence_length")
+        cloned.append(list(row))
+    return cloned
+
+
+def _fake_update_value(value: int, *, row: int, col: int, phase: int, step: int) -> int:
+    """Deterministic local fake-kernel update used for reference equivalence.
+
+    This intentionally depends on global row/column indices so tests prove tile
+    workers preserve logical geometry while remaining independent of GPU count.
+    """
+
+    return value + (phase + 1) * 10_000 + (step + 1) * 100 + row - col
+
+
+def fake_reference_pair_update(
+    initial_state: list[list[int]],
+    *,
+    phases: int = 1,
+    compute_steps_per_lease: int = 1,
+) -> list[list[int]]:
+    """Run the fake kernel over the full state as the tiny correctness reference."""
+
+    if phases <= 0:
+        raise ValueError("phases must be positive")
+    if compute_steps_per_lease <= 0:
+        raise ValueError("compute_steps_per_lease must be positive")
+    state = _clone_square_state(initial_state)
+    for phase in range(phases):
+        for step in range(compute_steps_per_lease):
+            for row_idx, row_values in enumerate(state):
+                for col_idx, value in enumerate(row_values):
+                    row_values[col_idx] = _fake_update_value(value, row=row_idx, col=col_idx, phase=phase, step=step)
+    return state
+
+
+def run_single_gpu_context_spill_simulation(
+    *,
+    sequence_length: int,
+    tile_tokens: int,
+    phases: int = 1,
+    compute_steps_per_lease: int = 1,
+    gpu_id: int = 0,
+    initial_state: list[list[int]] | None = None,
+    scalar_bytes: int = 8,
+) -> dict[str, Any]:
+    """Run a torch-free single-workhorse DRAM context-spill micro-runtime.
+
+    This is the first executable proof of the desired control/data contract:
+    logical global state lives in a host-side store, one active tile window is
+    staged into the simulated device working set, updated, written back, and
+    released. It does not claim real CUDA speed; it proves shard geometry and
+    lease metadata independently from GPU count before real kernels are ported.
+    """
+
+    if sequence_length <= 0:
+        raise ValueError("sequence_length must be positive")
+    if tile_tokens <= 0:
+        raise ValueError("tile_tokens must be positive")
+    if phases <= 0:
+        raise ValueError("phases must be positive")
+    if compute_steps_per_lease <= 0:
+        raise ValueError("compute_steps_per_lease must be positive")
+    if scalar_bytes <= 0:
+        raise ValueError("scalar_bytes must be positive")
+
+    dram_state = _clone_square_state(initial_state or fake_pair_state(sequence_length), sequence_length=sequence_length)
+    tiles = plan_square_tiles(sequence_length=sequence_length, tile_tokens=tile_tokens)
+    full_state_cells = sequence_length * sequence_length
+    full_state_bytes = full_state_cells * scalar_bytes
+    peak_device_window_cells = 0
+    leases: list[dict[str, Any]] = []
+
+    for phase in range(phases):
+        for lease_index, tile in enumerate(tiles):
+            row_start, row_stop = tile.row_range
+            col_start, col_stop = tile.col_range
+            device_window = [dram_state[row][col_start:col_stop] for row in range(row_start, row_stop)]
+            window_rows = row_stop - row_start
+            window_cols = col_stop - col_start
+            window_cells = window_rows * window_cols
+            peak_device_window_cells = max(peak_device_window_cells, window_cells)
+
+            for step in range(compute_steps_per_lease):
+                for local_row, row_values in enumerate(device_window):
+                    global_row = row_start + local_row
+                    for local_col, value in enumerate(row_values):
+                        global_col = col_start + local_col
+                        row_values[local_col] = _fake_update_value(
+                            value,
+                            row=global_row,
+                            col=global_col,
+                            phase=phase,
+                            step=step,
+                        )
+
+            for local_row, row_values in enumerate(device_window):
+                global_row = row_start + local_row
+                dram_state[global_row][col_start:col_stop] = row_values
+
+            leases.append(
+                {
+                    "lease_index": lease_index,
+                    "phase": phase,
+                    "tile_id": tile.tile_id,
+                    "row_range": list(tile.row_range),
+                    "col_range": list(tile.col_range),
+                    "gpu_id": gpu_id,
+                    "logical_worker_role": "main_workhorse",
+                    "lifecycle": ["load", "compute", "writeback", "release"],
+                    "compute_steps": compute_steps_per_lease,
+                    "window_cells": window_cells,
+                    "window_bytes": window_cells * scalar_bytes,
+                }
+            )
+
+    manifest = {
+        "backend": "single-gpu-dram-context-spill-sim",
+        "state_residency": "dram_between_leases",
+        "worker_count": 1,
+        "gpu_id": gpu_id,
+        "sequence_length": sequence_length,
+        "tile_tokens": tile_tokens,
+        "logical_tile_count": len(tiles),
+        "phases": phases,
+        "compute_steps_per_lease": compute_steps_per_lease,
+        "full_state_cells": full_state_cells,
+        "full_state_bytes": full_state_bytes,
+        "peak_device_window_cells": peak_device_window_cells,
+        "peak_device_window_bytes": peak_device_window_cells * scalar_bytes,
+        "full_state_allocated_in_vram": False,
+        "logical_shards_independent_of_gpu_count": True,
+        "leases": leases,
+    }
+    return {"final_state": dram_state, "manifest": manifest}
+
+
 def _parse_gpu_ids(text: str | None) -> list[int]:
     if not text:
         return []

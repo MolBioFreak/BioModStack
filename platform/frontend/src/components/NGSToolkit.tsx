@@ -6,6 +6,8 @@ import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import type { IGV as IgvLibrary } from 'igv';
 import { fetchJobLogs, fetchJobStages, fetchJobs, type Job, type JobLogs } from '../lib/api';
 import { NanoporeTemplate } from './NanoporeTemplate';
+import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
+import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
 import { useThemeColors, useThemePlotlyLayout } from './useThemeColors';
 
 type ToolkitView = 'launch' | 'runs';
@@ -2100,7 +2102,7 @@ function normalizeInitialValues(job: Job | null): Record<string, unknown> | unde
         rotationScanStepBp: p.rotation_scan_step_bp ?? 1,
 
         minFastqReadLength: p.min_fastq_read_length ?? 0,
-        fastqMinimap2Preset: p.fastq_minimap2_preset ?? 'lr:hq',
+        fastqMinimap2Preset: p.fastq_minimap2_preset ?? 'map-ont',
         fastqMinimap2AllowSecondary: p.fastq_minimap2_allow_secondary ?? true,
         igvTrackWindowBp: p.igv_track_window_bp ?? 100,
         igvReportMaxSites: p.igv_report_max_sites ?? 40,
@@ -2219,7 +2221,7 @@ export function NGSToolkit() {
 
     const { data: jobsData, isLoading } = useQuery({
         queryKey: ['jobs', 'ngs'],
-        queryFn: () => fetchJobs({ include_children: true }),
+        queryFn: () => fetchJobs({ include_children: true, model_id: 'nanopore', limit: 100 }),
         refetchInterval: 5000,
     });
 
@@ -2301,6 +2303,7 @@ export function NGSToolkit() {
     const hasBamInput = hasMeaningfulValue(selectedJobParams.bam_path);
     const hasPod5Input = hasMeaningfulValue(selectedJobParams.pod5_dir);
     const isFastqOnlyRun = hasFastqInput && !hasBamInput && !hasPod5Input;
+    const sequenceQcManifestState = useSequenceQcManifest(selectedJob?.id, selectedJob?.status);
     const shouldShowMethylationInspector = !isFastqOnlyRun;
     const shouldShowMultimerInspector = hasFastqInput;
     const igvArtifacts = useMemo(
@@ -4089,6 +4092,12 @@ export function NGSToolkit() {
                                     ))}
                                 </div>
 
+                                <SequenceQcManifestPanel
+                                    status={sequenceQcManifestState.status}
+                                    manifest={sequenceQcManifestState.manifest}
+                                    message={sequenceQcManifestState.message}
+                                />
+
                                 <div className="space-y-2">
                                     <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">IGV Readiness</h4>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -4687,7 +4696,7 @@ export function NGSToolkit() {
 
                                             {methylationReport.summary ? (
                                                 <div className="bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded p-3">
-                                                    <div className="text-xs text-[var(--text-secondary)] mb-2">modkit summary (first 100 rows)</div>
+                                                    <div className="text-xs text-[var(--text-secondary)] mb-2">modkit summary (first 20 rows)</div>
                                                     <div className="overflow-x-auto">
                                                         <table className="w-full text-xs">
                                                             <thead>

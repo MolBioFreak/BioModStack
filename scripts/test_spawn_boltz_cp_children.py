@@ -220,6 +220,12 @@ def test_spawn_boltz_cp_children_propagates_store_root_and_assigned_gpu(tmp_path
             "repo_path": "/repo/boltz-cp",
             "container_path": "/containers/boltz.sif",
             "physical_gpu_ids": [5, 6],
+            "bcp_backend": "shared-cache-serial-output-tiling",
+            "bcp_context_store_manifest_path": "/shared/context/manifest.json",
+            "bcp_context_execution_mode": "cuda",
+            "bcp_context_tile_tokens": 256,
+            "bcp_context_key_tile_tokens": 128,
+            "bcp_context_query_tile_tokens": 64,
         },
         "bundles": [
             {
@@ -296,6 +302,15 @@ def test_spawn_boltz_cp_children_propagates_store_root_and_assigned_gpu(tmp_path
     assert second_job["params"]["pinned_gpus"] == [6]
     assert first_job["params"]["bcp_size_cp"] == 1
     assert second_job["params"]["bcp_size_cp"] == 1
+    assert first_job["params"]["bcp_backend"] == "shared-cache-serial-output-tiling"
+    assert second_job["params"]["bcp_backend"] == "shared-cache-serial-output-tiling"
+    assert first_job["params"]["bcp_context_store_manifest_path"] == "/shared/context/manifest.json"
+    assert second_job["params"]["bcp_context_store_manifest_path"] == "/shared/context/manifest.json"
+    assert first_job["params"]["bcp_context_execution_mode"] == "cuda"
+    assert second_job["params"]["bcp_context_execution_mode"] == "cuda"
+    assert first_job["params"]["bcp_context_tile_tokens"] == 256
+    assert first_job["params"]["bcp_context_key_tile_tokens"] == 128
+    assert first_job["params"]["bcp_context_query_tile_tokens"] == 64
 
 
 def test_spawn_children_smoke_proves_shared_store_bundle_execution_and_finalize(tmp_path, monkeypatch) -> None:

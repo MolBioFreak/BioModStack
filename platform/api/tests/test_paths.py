@@ -57,3 +57,22 @@ def test_get_mobile_ui_updates_dir_defaults_under_runtime_data_root(monkeypatch,
     monkeypatch.setattr(paths, "get_data_root", lambda: runtime_root)
 
     assert paths.get_mobile_ui_updates_dir() == runtime_root / "mobile-ui-updates"
+
+
+def test_resolve_allowed_path_rejects_symlink_prefix_escape(monkeypatch, tmp_path: Path) -> None:
+    allowed_root = (tmp_path / "data").resolve()
+    outside_prefix_sibling = (tmp_path / "data_evil").resolve()
+    outside_manifest = outside_prefix_sibling / "qc_manifest.json"
+    outside_manifest.parent.mkdir(parents=True)
+    outside_manifest.write_text("{}", encoding="utf-8")
+    allowed_root.mkdir(parents=True)
+    (allowed_root / "linked").symlink_to(outside_prefix_sibling, target_is_directory=True)
+
+    monkeypatch.setattr(paths, "get_allowed_roots", lambda: {"bms_results": allowed_root})
+
+    try:
+        paths.resolve_allowed_path("bms_results/linked/qc_manifest.json")
+    except ValueError as exc:
+        assert "escapes" in str(exc)
+    else:
+        raise AssertionError("symlink escape with shared string prefix was allowed")

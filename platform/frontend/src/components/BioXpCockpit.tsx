@@ -5,6 +5,7 @@ import {
     useSetCameraControl,
     useAxisStatus,
     useAxisStatusBatch,
+    useBioXpCapabilities,
     useBioXpStatus,
     useCameraAutoRecover,
     useCameraControls,
@@ -13,6 +14,7 @@ import {
     useCameraSnapshot,
     useCameraStop,
     useCameraStreamHealth,
+    useCameraStreamState,
     useChillerBaseline,
     useChillerHardReset,
     useSetChillerFan,
@@ -29,11 +31,20 @@ import {
     useLedOff,
     useLedPct,
     useLedRgb,
+    useLiquidAspirate,
+    useLiquidDispense,
+    useLiquidInit,
+    useLiquidMix,
+    useLiquidStatus,
+    useLiquidTip,
+    useMarkMotionDesynced,
+    useMarkMotionReferenced,
     useMotionArmStrictStartup,
     useMotionHardReset,
     useMotionPowerDiag,
     useMotionPowerEnable,
     useMotionPowerStatus,
+    useMotionReferenceStatus,
     useMoveAbsolute,
     useMoveRelative,
     usePrepareInterlock,
@@ -48,9 +59,11 @@ import {
     useThermalBaseline,
     useThermalFastProfile,
     useThermalHardReset,
-    useThermalSnapshot
+    useThermalSnapshot,
+    useVisionBarcodeRead,
+    useVisionInspect
 } from '../lib/bioxpClient';
-import type { AxisMotionResult, AxisName, AxisStatus, CameraControlRow, ChillerBankName, MotionPowerStatus, ThermalBankName } from '../lib/bioxpClient';
+import type { AxisMotionResult, AxisName, AxisStatus, CameraControlRow, ChillerBankName, LiquidStatus, MotionPowerStatus, MotionReferenceStatus, ThermalBankName } from '../lib/bioxpClient';
 import { BioXpProtocolRunner } from './BioXpProtocolRunner';
 import { deriveRuntimeStatusSummary } from './bioxpConnectionSemantics.js';
 
@@ -232,6 +245,35 @@ const getBoardAckSummary = (boardStatus: MotionPowerStatus['board_status']) => {
             return `0x${Number(key).toString(16).toUpperCase()}:${statusText}`;
         })
         .join('  ');
+};
+
+const getReferenceRows = (referenceStatus: MotionReferenceStatus | undefined) => {
+    const rows = referenceStatus?.rows;
+    if (!rows || typeof rows !== 'object') {
+        return [] as Array<{ axis: string; state: string; updated_at?: string; origin?: number | null }>;
+    }
+    return Object.entries(rows).map(([axis, row]) => ({
+        axis,
+        state: String(row?.state ?? 'unknown'),
+        updated_at: typeof row?.updated_at === 'string' ? row.updated_at : undefined,
+        origin: typeof row?.origin_position_steps === 'number' ? row.origin_position_steps : null,
+    }));
+};
+
+const getReferenceSummary = (referenceStatus: MotionReferenceStatus | undefined) => {
+    const rows = getReferenceRows(referenceStatus);
+    if (!rows.length) {
+        return 'reference unknown';
+    }
+    const referenced = rows.filter((row) => row.state === 'referenced').length;
+    return `${referenced}/${rows.length} referenced`;
+};
+
+const getLiquidTruthLabel = (liquidStatus: LiquidStatus | undefined) => {
+    if (!liquidStatus) {
+        return 'pending';
+    }
+    return liquidStatus.hardware_truth_level ?? (liquidStatus.available ? 'software shadow' : 'unavailable');
 };
 
 const getAxisDirectionState = (axisData: AxisStatus | undefined, steps: number) => {
@@ -1310,6 +1352,14 @@ export const BioXpCockpit = () => {
     const [viewerFullscreen, setViewerFullscreen] = useState(false);
     const [pendingCameraControlCid, setPendingCameraControlCid] = useState<number | null>(null);
     const [motionHardResetRounds, setMotionHardResetRounds] = useState(2);
+    const [liquidVolumeUl, setLiquidVolumeUl] = useState(10);
+    const [liquidCycles, setLiquidCycles] = useState(3);
+    const [liquidPressureProfile, setLiquidPressureProfile] = useState('1R');
+    const [liquidSource, setLiquidSource] = useState('reagent_rack:A1');
+    const [liquidDestination, setLiquidDestination] = useState('reaction_plate:A1');
+    const [latestLiquidAction, setLatestLiquidAction] = useState<{ action: string; data: any } | null>(null);
+    const [latestReferenceAction, setLatestReferenceAction] = useState<{ action: string; data: any } | null>(null);
+    const [latestVisionAction, setLatestVisionAction] = useState<{ action: string; data: any } | null>(null);
     const cameraViewerRef = useRef<HTMLDivElement | null>(null);
 
     const hardwareMutationCount = useIsMutating({
@@ -1357,6 +1407,18 @@ export const BioXpCockpit = () => {
     const connectionPollingEnabled = hardwareReachable && activeTab === 'connection' && !hardwareBusy;
     const controlsPollingEnabled = hardwareReachable && activeTab === 'controls' && !hardwareBusy;
     const cameraDiscoveryEnabled = hardwareReachable && activeTab === 'camera' && !pollCamera && !motionBusy;
+    const capabilities = useBioXpCapabilities(linkageConfigured);
+    const motionReferenceStatus = useMotionReferenceStatus(controlsPollingEnabled, ['x', 'y', 'z', 'g', 'door'], motionBusy ? false : 5000);
+    const markMotionReferenced = useMarkMotionReferenced();
+    const markMotionDesynced = useMarkMotionDesynced();
+    const liquidStatus = useLiquidStatus(controlsPollingEnabled, motionBusy ? false : 5000);
+    const liquidInit = useLiquidInit();
+    const liquidTip = useLiquidTip();
+    const liquidAspirate = useLiquidAspirate();
+    const liquidDispense = useLiquidDispense();
+    const liquidMix = useLiquidMix();
+    const visionInspect = useVisionInspect();
+    const visionBarcodeRead = useVisionBarcodeRead();
     const motionPowerStatus = useMotionPowerStatus(controlsPollingEnabled, motionBusy ? false : 8000);
 
     const latchStatus = useLatchStatus(connectionPollingEnabled);
@@ -1382,6 +1444,7 @@ export const BioXpCockpit = () => {
     const cameraSnapshot = useCameraSnapshot();
     const cameraStop = useCameraStop();
     const cameraStreamHealth = useCameraStreamHealth();
+    const cameraStreamState = useCameraStreamState(hardwareReachable && activeTab === 'camera', pollCamera ? 1500 : 3000);
     const cameraAutoRecover = useCameraAutoRecover();
     const selectedStreamMode =
         CAMERA_STREAM_MODES.find((mode) => mode.key === streamMode) ?? CAMERA_STREAM_MODES[1];
@@ -1523,6 +1586,42 @@ export const BioXpCockpit = () => {
         }
         return parts.join(' | ');
     })();
+
+    const parseLiquidLocation = (value: string) => {
+        const [location_id, well_id] = value.split(':').map((part) => part.trim()).filter(Boolean);
+        return { location_id: location_id || value.trim() || 'unknown', well_id: well_id || null };
+    };
+
+    const liquidCommandPayload = () => ({
+        volume_ul: liquidVolumeUl,
+        cycles: liquidCycles,
+        pressure_profile: liquidPressureProfile,
+        source: parseLiquidLocation(liquidSource),
+        destination: parseLiquidLocation(liquidDestination),
+        liquid_class: 'aqueous_default',
+        metadata: { source: 'bms-cockpit' },
+    });
+
+    const recordLiquidAction = (action: string, data: any) => setLatestLiquidAction({ action, data });
+    const recordLiquidError = (action: string, error: unknown) => recordLiquidAction(action, { ok: false, error: getErrorMessage(error) ?? `${action} failed` });
+    const recordReferenceAction = (action: string, data: any) => setLatestReferenceAction({ action, data });
+    const recordReferenceError = (action: string, error: unknown) => recordReferenceAction(action, { ok: false, error: getErrorMessage(error) ?? `${action} failed` });
+    const recordVisionAction = (action: string, data: any) => setLatestVisionAction({ action, data });
+    const recordVisionError = (action: string, error: unknown) => recordVisionAction(action, { ok: false, error: getErrorMessage(error) ?? `${action} failed` });
+
+    const referenceRows = getReferenceRows(motionReferenceStatus.data);
+    const liquidActionError =
+        getErrorMessage(liquidStatus.error) ||
+        getErrorMessage(liquidInit.error) ||
+        getErrorMessage(liquidTip.error) ||
+        getErrorMessage(liquidAspirate.error) ||
+        getErrorMessage(liquidDispense.error) ||
+        getErrorMessage(liquidMix.error);
+    const referenceActionError =
+        getErrorMessage(motionReferenceStatus.error) ||
+        getErrorMessage(markMotionReferenced.error) ||
+        getErrorMessage(markMotionDesynced.error);
+    const visionActionError = getErrorMessage(visionInspect.error) || getErrorMessage(visionBarcodeRead.error);
 
     const cameraControlRows = Array.isArray(cameraControls.data?.rows)
         ? [...cameraControls.data.rows]
@@ -1673,6 +1772,124 @@ export const BioXpCockpit = () => {
             },
         );
     };
+
+    const referencePanel = (
+        <SectionCard
+            title="Motion Reference Truth"
+            subtitle="Robot-local reference state is separate from motion power. Liquid/live protocol work should wait for referenced axes."
+        >
+            <div className="flex items-center gap-3 flex-wrap">
+                <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${referenceRows.every((row) => row.state === 'referenced') && referenceRows.length ? 'bg-success/10 text-success border-success/30' : 'bg-warning/10 text-warning border-warning/30'}`}>
+                    REFERENCE: {getReferenceSummary(motionReferenceStatus.data).toUpperCase()}
+                </div>
+                <button
+                    onClick={() => markMotionReferenced.mutate({ axes: ['x', 'y', 'z', 'g', 'door'], reason: 'operator_verified_at_console', operator: 'bms-cockpit' }, {
+                        onSuccess: (data) => recordReferenceAction('mark_referenced', data),
+                        onError: (error) => recordReferenceError('mark_referenced', error),
+                    })}
+                    disabled={!isConnected || markMotionReferenced.isPending}
+                    className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40"
+                >
+                    {markMotionReferenced.isPending ? 'MARKING...' : 'Mark Referenced'}
+                </button>
+                <button
+                    onClick={() => markMotionDesynced.mutate({ axes: ['x', 'y', 'z', 'g', 'door'], reason: 'operator_forced_desync', operator: 'bms-cockpit' }, {
+                        onSuccess: (data) => recordReferenceAction('mark_desynced', data),
+                        onError: (error) => recordReferenceError('mark_desynced', error),
+                    })}
+                    disabled={!isConnected || markMotionDesynced.isPending}
+                    className="px-3 py-2 bg-error/20 hover:bg-error/30 text-error text-xs rounded-lg transition-colors disabled:opacity-40"
+                >
+                    {markMotionDesynced.isPending ? 'DESYNCING...' : 'Mark Desynced'}
+                </button>
+            </div>
+            {referenceRows.length > 0 && (
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                    {referenceRows.map((row) => (
+                        <div key={row.axis} className="p-2 rounded border border-border-primary bg-surface text-xs font-mono">
+                            <div className="text-content font-semibold">{row.axis.toUpperCase()}</div>
+                            <div className={row.state === 'referenced' ? 'text-success' : 'text-warning'}>{row.state}</div>
+                            {row.origin != null && <div className="text-content-muted">origin {row.origin}</div>}
+                        </div>
+                    ))}
+                </div>
+            )}
+            {referenceActionError && <div className="text-xs text-error">{referenceActionError}</div>}
+            <JsonBlock title="Reference Snapshot" data={latestReferenceAction?.data ?? motionReferenceStatus.data} fallback="Reference state pending." />
+        </SectionCard>
+    );
+
+    const liquidPanel = (
+        <SectionCard
+            title="Liquid Handler"
+            subtitle="CAN pipette surface with explicit software-vs-hardware truth. Use at the physical console only until live validation is complete."
+        >
+            <div className="flex items-center gap-3 flex-wrap">
+                <div className={`px-3 py-1.5 rounded-sm text-xs font-mono font-semibold border ${liquidStatus.data?.available ? 'bg-success/10 text-success border-success/30' : 'bg-warning/10 text-warning border-warning/30'}`}>
+                    LIQUID: {liquidStatus.data?.available ? 'TRANSPORT' : 'UNKNOWN'} | {getLiquidTruthLabel(liquidStatus.data).toUpperCase()}
+                </div>
+                <div className="text-xs font-mono text-content-muted">
+                    init {String(liquidStatus.data?.initialized ?? liquidStatus.data?.software_initialized ?? false)} | tip {String(liquidStatus.data?.tip_loaded ?? liquidStatus.data?.software_tip_loaded ?? false)}
+                </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                <label className="text-xs text-content-muted space-y-1">
+                    <span>Volume uL</span>
+                    <input type="number" min={0.1} step={0.1} value={liquidVolumeUl} onChange={(e) => setLiquidVolumeUl(Number(e.target.value))} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm" />
+                </label>
+                <label className="text-xs text-content-muted space-y-1">
+                    <span>Cycles</span>
+                    <input type="number" min={1} max={20} value={liquidCycles} onChange={(e) => setLiquidCycles(Number(e.target.value))} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm" />
+                </label>
+                <label className="text-xs text-content-muted space-y-1">
+                    <span>Pressure</span>
+                    <input value={liquidPressureProfile} onChange={(e) => setLiquidPressureProfile(e.target.value)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono" />
+                </label>
+                <label className="text-xs text-content-muted space-y-1">
+                    <span>Source</span>
+                    <input value={liquidSource} onChange={(e) => setLiquidSource(e.target.value)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono" />
+                </label>
+                <label className="text-xs text-content-muted space-y-1 md:col-span-2">
+                    <span>Destination</span>
+                    <input value={liquidDestination} onChange={(e) => setLiquidDestination(e.target.value)} className="w-full bg-surface border border-accent/10 rounded-lg px-3 py-2 text-content text-sm font-mono" />
+                </label>
+            </div>
+            <div className="flex flex-wrap gap-2">
+                <button onClick={() => liquidInit.mutate({}, { onSuccess: (data) => recordLiquidAction('init', data), onError: (error) => recordLiquidError('init', error) })} disabled={!isConnected || liquidInit.isPending} className="px-3 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40">{liquidInit.isPending ? 'INIT...' : 'Init'}</button>
+                <button onClick={() => liquidTip.mutate({ tip_action: 'load' }, { onSuccess: (data) => recordLiquidAction('load_tip', data), onError: (error) => recordLiquidError('load_tip', error) })} disabled={!isConnected || liquidTip.isPending} className="px-3 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40">Load Tip</button>
+                <button onClick={() => liquidTip.mutate({ tip_action: 'eject' }, { onSuccess: (data) => recordLiquidAction('eject_tip', data), onError: (error) => recordLiquidError('eject_tip', error) })} disabled={!isConnected || liquidTip.isPending} className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40">Eject Tip</button>
+                <button onClick={() => liquidAspirate.mutate(liquidCommandPayload(), { onSuccess: (data) => recordLiquidAction('aspirate', data), onError: (error) => recordLiquidError('aspirate', error) })} disabled={!isConnected || liquidAspirate.isPending} className="px-3 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40">Aspirate</button>
+                <button onClick={() => liquidDispense.mutate(liquidCommandPayload(), { onSuccess: (data) => recordLiquidAction('dispense', data), onError: (error) => recordLiquidError('dispense', error) })} disabled={!isConnected || liquidDispense.isPending} className="px-3 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40">Dispense</button>
+                <button onClick={() => liquidMix.mutate(liquidCommandPayload(), { onSuccess: (data) => recordLiquidAction('mix', data), onError: (error) => recordLiquidError('mix', error) })} disabled={!isConnected || liquidMix.isPending} className="px-3 py-2 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg transition-colors disabled:opacity-40">Mix</button>
+            </div>
+            {liquidActionError && <div className="text-xs text-error">{liquidActionError}</div>}
+            <JsonBlock title="Liquid Snapshot / Last Command" data={latestLiquidAction?.data ?? liquidStatus.data} fallback="Liquid status pending." />
+        </SectionCard>
+    );
+
+    const visionPanel = (
+        <SectionCard title="Vision / Barcode Smoke Tests" subtitle="Thin proxies for robot-local inspection/barcode endpoints; useful before live workflow tests.">
+            <div className="flex flex-wrap gap-2">
+                <button
+                    onClick={() => visionInspect.mutate({ device: cameraDevice, mode: 'deck_smoke' }, { onSuccess: (data) => recordVisionAction('inspect', data), onError: (error) => recordVisionError('inspect', error) })}
+                    disabled={!isConnected || visionInspect.isPending}
+                    className="px-3 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
+                >
+                    {visionInspect.isPending ? 'INSPECTING...' : 'Inspect'}
+                </button>
+                <button
+                    onClick={() => visionBarcodeRead.mutate({ device: cameraDevice }, { onSuccess: (data) => recordVisionAction('barcode', data), onError: (error) => recordVisionError('barcode', error) })}
+                    disabled={!isConnected || visionBarcodeRead.isPending}
+                    className="px-3 py-2 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors disabled:opacity-40"
+                >
+                    {visionBarcodeRead.isPending ? 'READING...' : 'Read Barcode'}
+                </button>
+            </div>
+            {visionActionError && <div className="text-xs text-error">{visionActionError}</div>}
+            <JsonBlock title="Vision Result" data={latestVisionAction?.data} fallback="No vision action executed yet." />
+        </SectionCard>
+    );
+
     const cameraTransportPanel = (
         <div className="space-y-3">
             <div className="space-y-1">
@@ -2258,6 +2475,10 @@ export const BioXpCockpit = () => {
                         <SectionCard title="Telemetry Payload" subtitle="This is the raw status object returned from the BioXP runtime through the BMS proxy.">
                             <JsonBlock title="Status JSON" data={statusIsError ? { error: getErrorMessage(statusError) } : status} fallback="Polling..." />
                         </SectionCard>
+
+                        <SectionCard title="Proxy Capability Matrix" subtitle="Shows whether BMS now exposes the robot-local automation routes needed for reference, liquid, camera, and vision testing.">
+                            <JsonBlock title="Capabilities" data={capabilities.data} fallback="Capability matrix pending." />
+                        </SectionCard>
                     </div>
                 </div>
             )}
@@ -2279,6 +2500,9 @@ export const BioXpCockpit = () => {
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         <div className="space-y-6">
                             {motionPowerPanel}
+                            {referencePanel}
+                            {liquidPanel}
+                            {visionPanel}
                             <SectionCard
                                 title="Motion Control System"
                                 subtitle="All five documented BioXP axes are now surfaced, including the gripper and thermal door."
@@ -2458,12 +2682,15 @@ export const BioXpCockpit = () => {
                             )}
                         </div>
 
-                        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                        <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
                             <SectionCard title="Visible Camera Nodes" subtitle="Live device discovery from the robot runtime host.">
                                 <JsonBlock title="Devices" data={cameraDevices.data} fallback="No camera devices reported yet." />
                             </SectionCard>
                             <SectionCard title="Control Enumeration" subtitle="V4L2 control enumeration for the selected device.">
                                 <JsonBlock title="Controls" data={cameraControls.data} fallback="Control enumeration pending." />
+                            </SectionCard>
+                            <SectionCard title="Stream State" subtitle="Robot-local stream lock/busy/reset provenance for separating software recovery from hardware symptoms.">
+                                <JsonBlock title="Stream State" data={cameraStreamState.data} fallback="Stream state pending." />
                             </SectionCard>
                             <SectionCard title="Latest Camera Result" subtitle="Most recent snapshot, health test, or auto-recovery response.">
                                 <JsonBlock title="Camera Action" data={latestCameraResult} fallback="No camera action executed yet." />

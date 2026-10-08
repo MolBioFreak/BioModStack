@@ -20,6 +20,8 @@ import { parsePDBFile, parsePDB, type Chain, formatSelectedResidues } from '../u
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
 import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
+import { useLiveGpuCatalog } from './useLiveGpuCatalog';
+import { resolveInitialGpuPinningState } from './gpuToggleState.js';
 
 // NTP Templates - pre-defined nucleotide SMILES
 const NTP_TEMPLATES = [
@@ -72,15 +74,21 @@ export function BoltzGenTemplate({
 }: BoltzGenTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const { gpuOptions } = useLiveGpuCatalog();
     const allowModeSelection = !forcedMode;
 
     // Mode selection
     const [mode, setMode] = useState<DesignMode>((forcedMode || initialValues?.mode || 'ligand_binder') as DesignMode);
 
     // Job metadata
+    const initialGpuPinningState = resolveInitialGpuPinningState(initialValues);
     const [jobName, setJobName] = useState(initialValues?.name || 'boltzgen_design');
-    const [pinnedGpus, setPinnedGpus] = useState<number[]>(initialValues?.pinned_gpus ?? []);
-    const [lockGpus, setLockGpus] = useState(false);
+    const [pinnedGpus, setPinnedGpus] = useState(initialGpuPinningState.pinnedGpus);
+    const [lockGpus, setLockGpus] = useState(initialGpuPinningState.lockGpus);
+    const clearGpuPinning = () => {
+        setPinnedGpus([]);
+        setLockGpus(false);
+    };
 
     // Ligand inputs
     const [ligandSmiles, setLigandSmiles] = useState(initialValues?.ligand_smiles || initialValues?.boltzgen_ligand_smiles || '');
@@ -576,7 +584,7 @@ export function BoltzGenTemplate({
                         </label>
                         <div className="flex gap-2">
                             <button
-                                onClick={() => setPinnedGpus([])}
+                                onClick={clearGpuPinning}
                                 className={`px-3 py-2.5 rounded-lg font-medium text-sm transition-all ${pinnedGpus.length === 0
                                     ? 'bg-slate-600 text-white ring-2 ring-slate-400'
                                     : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
@@ -584,27 +592,22 @@ export function BoltzGenTemplate({
                             >
                                 Auto
                             </button>
-                            {[
-                                { id: 0, name: '5090' },
-                                { id: 1, name: '5060Ti' },
-                                { id: 2, name: '3090#1' },
-                                { id: 3, name: '3090#2' },
-                            ].map(gpu => (
+                            {gpuOptions.map(gpu => (
                                 <button
-                                    key={gpu.id}
+                                    key={gpu.index}
                                     onClick={() => {
                                         setPinnedGpus(prev =>
-                                            prev.includes(gpu.id)
-                                                ? prev.filter(g => g !== gpu.id)
-                                                : [...prev, gpu.id].sort()
+                                            prev.includes(gpu.index)
+                                                ? prev.filter(g => g !== gpu.index)
+                                                : [...prev, gpu.index].sort((a, b) => a - b)
                                         );
                                     }}
-                                    className={`px-3 py-2.5 rounded-lg font-medium text-sm transition-all ${pinnedGpus.includes(gpu.id)
+                                    className={`px-3 py-2.5 rounded-lg font-medium text-sm transition-all ${pinnedGpus.includes(gpu.index)
                                         ? 'bg-amber-600 text-white ring-2 ring-amber-400'
                                         : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                         }`}
                                 >
-                                    {gpu.name}
+                                    {gpu.label}
                                 </button>
                             ))}
                         </div>
@@ -1175,7 +1178,7 @@ export function BoltzGenTemplate({
                         <div className="mt-3 space-y-3">
                             <div className="text-xs text-amber-400/80">
                                 Unlocks up to 60,000 designs. Recommended: 10k-60k for production runs.
-                                <br />Estimated time: ~30-60 sec/design on RTX 5090/3090.
+                                <br />Estimated time varies with detected GPU model, VRAM, and queue load.
                             </div>
 
                             {/* Parallelization Slider */}

@@ -11,6 +11,7 @@ import { useState, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { fetchFiles, submitJob, uploadFile } from '../lib/api';
+import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 
 
 // ============================================================================
@@ -29,7 +30,7 @@ type ModifiedBases =
     | '5hmCG'
     | 'none';
 type AssemblyTool = 'flye' | 'canu';
-type MinimapPreset = 'map-ont' | 'lr:hq' | 'map-hifi' | 'map-pb' | 'sr';
+type MinimapPreset = 'map-ont' | 'map-hifi' | 'map-pb' | 'sr';
 type InputSource = 'pod5' | 'bam' | 'fastq';
 type PathField = 'pod5Dir' | 'bamPath' | 'fastqPath' | 'referencePath' | 'wfCloneWorkflowDir';
 type PathPickerMode = 'file' | 'directory';
@@ -98,20 +99,44 @@ function getQscoreLabel(q: number): string {
     return QSCORE_LABELS[keys[0]];
 }
 
-const GPU_OPTIONS = [
-    { id: 0, name: '5090' },
-    { id: 1, name: '5060Ti' },
-    { id: 2, name: '3090#1' },
-    { id: 3, name: '3090#2' },
-];
+const FASTQ_DEFAULT_MINIMAP_PRESET: MinimapPreset = 'map-ont';
+const FASTQ_DEFAULT_EXPECTED_PLASMID_SIZE_BP = 7000;
+const FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP = 100_000_000;
+const FASTQ_DEFAULT_MIN_READ_LENGTH_BP = 0;
+const FASTQ_MAX_MIN_READ_LENGTH_BP = 10_000_000;
+const FASTQ_DEFAULT_IGV_TRACK_WINDOW_BP = 100;
+const FASTQ_MAX_IGV_TRACK_WINDOW_BP = 100_000;
+const FASTQ_DEFAULT_IGV_REPORT_MAX_SITES = 40;
+const FASTQ_MAX_IGV_REPORT_MAX_SITES = 10_000;
+const FASTQ_DEFAULT_IGV_REPORT_FLANKING_BP = 200;
+const FASTQ_MAX_IGV_REPORT_FLANKING_BP = 100_000;
 
 const FASTQ_MINIMAP_PRESETS: Record<MinimapPreset, string> = {
-    'map-ont': 'map-ont (legacy ONT noisy long reads)',
-    'lr:hq': 'lr:hq (recommended for Q20+/R10.4.1)',
+    'map-ont': 'map-ont (ONT reads; bundled minimap2 2.24 compatible default)',
     'map-hifi': 'map-hifi (PacBio HiFi)',
     'map-pb': 'map-pb (PacBio CLR)',
     'sr': 'sr (short reads)',
 };
+
+const FASTQ_SUPPORTED_MINIMAP_PRESETS = new Set<MinimapPreset>(Object.keys(FASTQ_MINIMAP_PRESETS) as MinimapPreset[]);
+
+function normalizeFastqMinimapPreset(value: unknown): MinimapPreset {
+    return typeof value === 'string' && FASTQ_SUPPORTED_MINIMAP_PRESETS.has(value as MinimapPreset)
+        ? (value as MinimapPreset)
+        : FASTQ_DEFAULT_MINIMAP_PRESET;
+}
+
+function coerceIntegerInput(value: unknown, fallback: number, min: number, max: number): number {
+    const parsed = typeof value === 'number'
+        ? value
+        : Number.parseInt(String(value ?? ''), 10);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(max, Math.max(min, Math.trunc(parsed)));
+}
+
+function isIntegerInRange(value: number, min: number, max: number): boolean {
+    return Number.isFinite(value) && Number.isInteger(value) && value >= min && value <= max;
+}
 
 const REFERENCE_LIBRARY_STORAGE_KEY = 'bms.nanopore.referenceLibrary.v1';
 
@@ -392,6 +417,7 @@ function normalizeReferenceLabel(name: string): string {
 export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const { gpuOptions } = useLiveGpuCatalog();
 
     // ============================================================================
     // State: Core Configuration
@@ -438,33 +464,44 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         ?? (initialValues?.runMultimerQc as boolean | undefined)
         ?? true
     );
-    const [expectedPlasmidSize, setExpectedPlasmidSize] = useState<number>(initialValues?.expectedPlasmidSize as number || 7000);
-    const [minFastqReadLength, setMinFastqReadLength] = useState<number>(initialValues?.minFastqReadLength as number || 0);
-    const [fastqMinimap2Preset, setFastqMinimap2Preset] = useState<MinimapPreset>(
-        ((initialValues?.fastqMinimap2Preset as MinimapPreset | undefined)
-            ?? (initialValues?.fastq_minimap2_preset as MinimapPreset | undefined)
-            ?? 'lr:hq')
-    );
+    const [expectedPlasmidSize, setExpectedPlasmidSize] = useState<number>(() => coerceIntegerInput(
+        initialValues?.expectedPlasmidSize ?? initialValues?.expected_plasmid_size,
+        FASTQ_DEFAULT_EXPECTED_PLASMID_SIZE_BP,
+        1,
+        FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP,
+    ));
+    const [minFastqReadLength, setMinFastqReadLength] = useState<number>(() => coerceIntegerInput(
+        initialValues?.minFastqReadLength ?? initialValues?.min_fastq_read_length,
+        FASTQ_DEFAULT_MIN_READ_LENGTH_BP,
+        0,
+        FASTQ_MAX_MIN_READ_LENGTH_BP,
+    ));
+    const [fastqMinimap2Preset, setFastqMinimap2Preset] = useState<MinimapPreset>(() => normalizeFastqMinimapPreset(
+        initialValues?.fastqMinimap2Preset ?? initialValues?.fastq_minimap2_preset,
+    ));
     const [fastqMinimap2AllowSecondary, setFastqMinimap2AllowSecondary] = useState<boolean>(
         (initialValues?.fastqMinimap2AllowSecondary as boolean | undefined)
         ?? (initialValues?.fastq_minimap2_allow_secondary as boolean | undefined)
         ?? true
     );
-    const [igvTrackWindowBp, setIgvTrackWindowBp] = useState<number>(
-        (initialValues?.igvTrackWindowBp as number | undefined)
-        ?? (initialValues?.igv_track_window_bp as number | undefined)
-        ?? 100
-    );
-    const [igvReportMaxSites, setIgvReportMaxSites] = useState<number>(
-        (initialValues?.igvReportMaxSites as number | undefined)
-        ?? (initialValues?.igv_report_max_sites as number | undefined)
-        ?? 40
-    );
-    const [igvReportFlankingBp, setIgvReportFlankingBp] = useState<number>(
-        (initialValues?.igvReportFlankingBp as number | undefined)
-        ?? (initialValues?.igv_report_flanking_bp as number | undefined)
-        ?? 200
-    );
+    const [igvTrackWindowBp, setIgvTrackWindowBp] = useState<number>(() => coerceIntegerInput(
+        initialValues?.igvTrackWindowBp ?? initialValues?.igv_track_window_bp,
+        FASTQ_DEFAULT_IGV_TRACK_WINDOW_BP,
+        1,
+        FASTQ_MAX_IGV_TRACK_WINDOW_BP,
+    ));
+    const [igvReportMaxSites, setIgvReportMaxSites] = useState<number>(() => coerceIntegerInput(
+        initialValues?.igvReportMaxSites ?? initialValues?.igv_report_max_sites,
+        FASTQ_DEFAULT_IGV_REPORT_MAX_SITES,
+        1,
+        FASTQ_MAX_IGV_REPORT_MAX_SITES,
+    ));
+    const [igvReportFlankingBp, setIgvReportFlankingBp] = useState<number>(() => coerceIntegerInput(
+        initialValues?.igvReportFlankingBp ?? initialValues?.igv_report_flanking_bp,
+        FASTQ_DEFAULT_IGV_REPORT_FLANKING_BP,
+        0,
+        FASTQ_MAX_IGV_REPORT_FLANKING_BP,
+    ));
     const [runAssembly, setRunAssembly] = useState(initialValues?.runAssembly as boolean || false);
     const [assemblyTool, setAssemblyTool] = useState<AssemblyTool>(initialValues?.assemblyTool as AssemblyTool || 'flye');
     const [assemblyApproxSize, setAssemblyApproxSize] = useState<number>(initialValues?.assemblyApproxSize as number || 7000);
@@ -532,12 +569,27 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // ============================================================================
     // Computed
     // ============================================================================
+    const hasFastqReferenceInput = useMemo(() => {
+        if (referenceTab === 'browse') return referencePath.trim() !== '';
+        if (referenceTab === 'paste') return normalizeFastaText(pastedFasta) !== null;
+        if (!newFastaName.trim() || !newFastaSeq.trim()) return false;
+        return normalizeFastaText(`>${newFastaName.trim()}\n${newFastaSeq.replace(/\s/g, '').toUpperCase()}`) !== null;
+    }, [newFastaName, newFastaSeq, pastedFasta, referencePath, referenceTab]);
+
+    const hasValidFastqNumericControls = useMemo(() => (
+        isIntegerInRange(expectedPlasmidSize, 1, FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP)
+        && isIntegerInRange(minFastqReadLength, 0, FASTQ_MAX_MIN_READ_LENGTH_BP)
+        && isIntegerInRange(igvTrackWindowBp, 1, FASTQ_MAX_IGV_TRACK_WINDOW_BP)
+        && isIntegerInRange(igvReportMaxSites, 1, FASTQ_MAX_IGV_REPORT_MAX_SITES)
+        && isIntegerInRange(igvReportFlankingBp, 0, FASTQ_MAX_IGV_REPORT_FLANKING_BP)
+    ), [expectedPlasmidSize, igvReportFlankingBp, igvReportMaxSites, igvTrackWindowBp, minFastqReadLength]);
+
     const canSubmit = useMemo(() => {
         if (!jobName.trim()) return false;
         if (inputSource === 'pod5') return pod5Dir.trim() !== '';
         if (inputSource === 'bam') return bamPath.trim() !== '';
-        return fastqPath.trim() !== '' && runFastqQc;
-    }, [jobName, inputSource, pod5Dir, bamPath, fastqPath, runFastqQc]);
+        return fastqPath.trim() !== '' && runFastqQc && hasFastqReferenceInput && hasValidFastqNumericControls;
+    }, [jobName, inputSource, pod5Dir, bamPath, fastqPath, runFastqQc, hasFastqReferenceInput, hasValidFastqNumericControls]);
     const selectedSavedReference = useMemo(
         () => savedReferences.find((entry) => entry.id === selectedSavedReferenceId) || null,
         [savedReferences, selectedSavedReferenceId]
@@ -833,7 +885,12 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         },
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate(`/results/${response.data.job_id}`);
+            const submittedJobId = response.data?.job_id ?? response.data?.id;
+            if (submittedJobId) {
+                navigate(`/jobs/${submittedJobId}`);
+                return;
+            }
+            navigate('/ngs');
         },
         onError: (err: unknown) => {
             setError(extractApiErrorMessage(err));
@@ -860,6 +917,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         }
         if (inputSource === 'fastq' && !runFastqQc) {
             setError('Enable FASTQ plasmid QC to submit a FASTQ analysis job');
+            return;
+        }
+        if (inputSource === 'fastq' && !hasFastqReferenceInput) {
+            setError('FASTQ plasmid QC requires a reference FASTA path or a pasted/created FASTA sequence.');
+            return;
+        }
+        if (inputSource === 'fastq' && !hasValidFastqNumericControls) {
+            setError('FASTQ QC numeric controls must be finite integers within the displayed bounds.');
             return;
         }
         submitMutation.mutate();
@@ -998,28 +1063,28 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             >
                                 Auto
                             </button>
-                            {GPU_OPTIONS.map((gpu) => (
+                            {gpuOptions.map((gpu) => (
                                 <button
-                                    key={gpu.id}
+                                    key={gpu.index}
                                     onClick={() => {
                                         setPinnedGpus((prev) => (
-                                            prev.includes(gpu.id)
-                                                ? prev.filter((g) => g !== gpu.id)
-                                                : [...prev, gpu.id].sort((a, b) => a - b)
+                                            prev.includes(gpu.index)
+                                                ? prev.filter((g) => g !== gpu.index)
+                                                : [...prev, gpu.index].sort((a, b) => a - b)
                                         ));
                                     }}
-                                    className={`px-3 py-2 rounded border text-sm transition-colors ${pinnedGpus.includes(gpu.id)
+                                    className={`px-3 py-2 rounded border text-sm transition-colors ${pinnedGpus.includes(gpu.index)
                                         ? 'text-[var(--text-primary)]'
                                         : 'text-[var(--text-secondary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]'
                                         }`}
-                                    style={pinnedGpus.includes(gpu.id)
+                                    style={pinnedGpus.includes(gpu.index)
                                         ? {
                                             borderColor: 'var(--accent-secondary)',
                                             backgroundColor: 'color-mix(in srgb, var(--accent-secondary) 12%, transparent)',
                                         }
                                         : undefined}
                                 >
-                                    {gpu.name}
+                                    {gpu.label}
                                 </button>
                             ))}
                         </div>
@@ -1562,8 +1627,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 <input
                                     type="number"
                                     min={1}
+                                    max={FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP}
                                     value={expectedPlasmidSize}
-                                    onChange={(e) => setExpectedPlasmidSize(Math.max(1, parseInt(e.target.value || '7000', 10)))}
+                                    onChange={(e) => setExpectedPlasmidSize(coerceIntegerInput(
+                                        e.target.value,
+                                        FASTQ_DEFAULT_EXPECTED_PLASMID_SIZE_BP,
+                                        1,
+                                        FASTQ_MAX_EXPECTED_PLASMID_SIZE_BP,
+                                    ))}
                                     className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                 />
                             </label>
@@ -1573,8 +1644,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 <input
                                     type="number"
                                     min={0}
+                                    max={FASTQ_MAX_MIN_READ_LENGTH_BP}
                                     value={minFastqReadLength}
-                                    onChange={(e) => setMinFastqReadLength(Math.max(0, parseInt(e.target.value || '0', 10)))}
+                                    onChange={(e) => setMinFastqReadLength(coerceIntegerInput(
+                                        e.target.value,
+                                        FASTQ_DEFAULT_MIN_READ_LENGTH_BP,
+                                        0,
+                                        FASTQ_MAX_MIN_READ_LENGTH_BP,
+                                    ))}
                                     className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                 />
                             </label>
@@ -1583,7 +1660,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 Alignment preset (`minimap2 -x`)
                                 <select
                                     value={fastqMinimap2Preset}
-                                    onChange={(e) => setFastqMinimap2Preset(e.target.value as MinimapPreset)}
+                                    onChange={(e) => setFastqMinimap2Preset(normalizeFastqMinimapPreset(e.target.value))}
                                     className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                 >
                                     {Object.entries(FASTQ_MINIMAP_PRESETS).map(([preset, label]) => (
@@ -1714,8 +1791,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                         <input
                                             type="number"
                                             min={1}
+                                            max={FASTQ_MAX_IGV_TRACK_WINDOW_BP}
                                             value={igvTrackWindowBp}
-                                            onChange={(e) => setIgvTrackWindowBp(Math.max(1, parseInt(e.target.value || '100', 10)))}
+                                            onChange={(e) => setIgvTrackWindowBp(coerceIntegerInput(
+                                                e.target.value,
+                                                FASTQ_DEFAULT_IGV_TRACK_WINDOW_BP,
+                                                1,
+                                                FASTQ_MAX_IGV_TRACK_WINDOW_BP,
+                                            ))}
                                             className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         />
                                     </label>
@@ -1724,8 +1807,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                         <input
                                             type="number"
                                             min={1}
+                                            max={FASTQ_MAX_IGV_REPORT_MAX_SITES}
                                             value={igvReportMaxSites}
-                                            onChange={(e) => setIgvReportMaxSites(Math.max(1, parseInt(e.target.value || '40', 10)))}
+                                            onChange={(e) => setIgvReportMaxSites(coerceIntegerInput(
+                                                e.target.value,
+                                                FASTQ_DEFAULT_IGV_REPORT_MAX_SITES,
+                                                1,
+                                                FASTQ_MAX_IGV_REPORT_MAX_SITES,
+                                            ))}
                                             className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         />
                                     </label>
@@ -1734,8 +1823,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                         <input
                                             type="number"
                                             min={0}
+                                            max={FASTQ_MAX_IGV_REPORT_FLANKING_BP}
                                             value={igvReportFlankingBp}
-                                            onChange={(e) => setIgvReportFlankingBp(Math.max(0, parseInt(e.target.value || '200', 10)))}
+                                            onChange={(e) => setIgvReportFlankingBp(coerceIntegerInput(
+                                                e.target.value,
+                                                FASTQ_DEFAULT_IGV_REPORT_FLANKING_BP,
+                                                0,
+                                                FASTQ_MAX_IGV_REPORT_FLANKING_BP,
+                                            ))}
                                             className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         />
                                     </label>
@@ -1749,7 +1844,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             <div className="space-y-2 border-t border-[var(--border-primary)] pt-3">
                                 <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">CLI parameter preview</div>
                                 <pre className="text-[11px] leading-5 whitespace-pre-wrap break-all bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded p-3 text-[var(--text-primary)] font-mono">
-nextflow run main.nf \
+nextflow run ngs.nf -profile nanopore_methylation \\
   {fastqCliPreview}
                                 </pre>
                             </div>

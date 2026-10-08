@@ -36,7 +36,7 @@ import {
     type StructureViewerSectionId,
     type StructureViewerSummaryCardSpec,
 } from './structureViewerSemantics.js';
-import { resolveStructureViewerLayout } from './structureViewerLayout.js';
+import { resolveStructureViewerFullscreenAnalyticsLayout, resolveStructureViewerLayout } from './structureViewerLayout.js';
 
 interface Selection {
     chain_id?: string;
@@ -300,6 +300,10 @@ export default function StructureViewerPane({
     const [viewportWidth, setViewportWidth] = useState(() => (
         typeof window === 'undefined' ? 1280 : window.innerWidth
     ));
+    const [viewportHeight, setViewportHeight] = useState(() => (
+        typeof window === 'undefined' ? 720 : window.innerHeight
+    ));
+    const [analyticsPanelOpen, setAnalyticsPanelOpen] = useState(true);
     const [overlayView, setOverlayView] = useState<OverlayView>('metrics');
     const [focusedMetricSection, setFocusedMetricSection] = useState<StructureViewerSectionId>('summary');
     const [showReferenceDock, setShowReferenceDock] = useState(false);
@@ -325,7 +329,10 @@ export default function StructureViewerPane({
             return undefined;
         }
 
-        const handleViewportResize = () => setViewportWidth(window.innerWidth);
+        const handleViewportResize = () => {
+            setViewportWidth(window.innerWidth);
+            setViewportHeight(window.innerHeight);
+        };
         handleViewportResize();
         window.addEventListener('resize', handleViewportResize);
         return () => window.removeEventListener('resize', handleViewportResize);
@@ -337,6 +344,10 @@ export default function StructureViewerPane({
         viewportWidth,
         isFullscreen,
     }), [viewportWidth, isFullscreen]);
+    const fullscreenAnalyticsLayout = useMemo(() => resolveStructureViewerFullscreenAnalyticsLayout({
+        viewportWidth,
+        viewportHeight,
+    }), [viewportWidth, viewportHeight]);
     const designOrigin = getDesignOriginLabel(selectedDesign);
     const designLens = selectedDesign ? inferDesignAnalysisLens(selectedDesign as any) : null;
     const selectedDesignPpiflowRecord = asRecord(asRecord(selectedDesign?.provenance)?.ppiflow);
@@ -1196,25 +1207,40 @@ export default function StructureViewerPane({
 
     // Toggleable Analytics Panel for fullscreen
     const FullscreenOverlay = () => (
-        <div className="w-80 bg-slate-900/80 backdrop-blur-sm rounded-lg border border-slate-700/50 overflow-hidden">
+        <div
+            data-structure-viewer-fullscreen-analytics-layout={fullscreenAnalyticsLayout.mode}
+            className={fullscreenAnalyticsLayout.panelClassName}
+            style={{ maxHeight: fullscreenAnalyticsLayout.panelMaxHeight }}
+        >
             {/* Tab Header */}
-            <div className="flex border-b border-slate-700/50">
-                {overlayTabs.map(tab => (
-                    <button
-                        key={tab.id}
-                        onClick={() => handleOverlayTabClick(tab.id as OverlayView)}
-                        className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${overlayView === tab.id
-                            ? 'bg-blue-500/20 text-blue-400 border-b-2 border-blue-400'
-                            : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
-                            }`}
-                    >
-                        {tab.label}
-                    </button>
-                ))}
+            <div className="flex shrink-0 border-b border-slate-700/50">
+                <div className="flex min-w-0 flex-1">
+                    {overlayTabs.map(tab => (
+                        <button
+                            key={tab.id}
+                            onClick={() => handleOverlayTabClick(tab.id as OverlayView)}
+                            className={`min-w-0 flex-1 px-3 py-2 text-xs font-medium transition-colors ${overlayView === tab.id
+                                ? 'bg-blue-500/20 text-blue-400 border-b-2 border-blue-400'
+                                : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                                }`}
+                        >
+                            <span className="truncate">{tab.label}</span>
+                        </button>
+                    ))}
+                </div>
+                <button
+                    type="button"
+                    aria-label="Close analytics panel"
+                    onClick={() => setAnalyticsPanelOpen(false)}
+                    className="border-l border-slate-700/50 px-3 py-2 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-800/70 hover:text-white"
+                    title="Close analytics panel"
+                >
+                    ✕
+                </button>
             </div>
 
             {/* Content */}
-            <div className="p-3">
+            <div className={fullscreenAnalyticsLayout.contentClassName}>
                 {overlayView === 'metrics' && (
                     <div className="space-y-3">
                         {/* Design Title */}
@@ -1799,6 +1825,17 @@ export default function StructureViewerPane({
             data-structure-viewer-analytics-layout={viewerLayout.isStacked ? 'stacked' : 'sidebar'}
             className={`${analyticsSidebarWidthClass} ${analyticsSidebarSpacingClass}`}
         >
+            <div className="flex justify-end">
+                <button
+                    type="button"
+                    aria-label="Close analytics panel"
+                    onClick={() => setAnalyticsPanelOpen(false)}
+                    className="rounded-lg border border-slate-700/70 bg-slate-900/50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 transition-colors hover:border-slate-500 hover:text-white"
+                    title="Close analytics panel"
+                >
+                    Close Analytics
+                </button>
+            </div>
             {/* Design Title */}
             {selectedDesign && (
                 <div className={`bg-slate-800/50 rounded-lg border border-slate-700/50 ${analyticsPanelPaddingClass}`}>
@@ -2353,6 +2390,21 @@ export default function StructureViewerPane({
 
             {renderQuickViewBar(isCompact)}
 
+            <button
+                type="button"
+                onClick={() => setAnalyticsPanelOpen((open) => !open)}
+                className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${isCompact
+                    ? (analyticsPanelOpen
+                        ? 'bg-slate-800/90 text-slate-100 backdrop-blur-sm hover:bg-slate-700/90'
+                        : 'bg-blue-500/80 text-white backdrop-blur-sm hover:bg-blue-500')
+                    : (analyticsPanelOpen
+                        ? 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                        : 'bg-blue-500/10 text-blue-300 border border-blue-500/40 hover:bg-blue-500/20')}`}
+                title={analyticsPanelOpen ? 'Hide the analytics panel' : 'Show the analytics panel'}
+            >
+                {analyticsPanelOpen ? 'Hide Analytics' : 'Show Analytics'}
+            </button>
+
             {/* Color Legend */}
             {effectiveColorMode === 'plddt' && !isCompact && (
                 <div className="flex items-center gap-1 text-xs text-slate-400">
@@ -2434,6 +2486,7 @@ export default function StructureViewerPane({
     return (
         <div
             ref={containerRef}
+            data-structure-viewer-analytics-open={analyticsPanelOpen ? 'true' : 'false'}
             className={`${isFullscreen ? 'fixed inset-0 z-50 bg-slate-950' : 'p-4'}`}
         >
             {/* Main layout container - always present */}
@@ -2551,12 +2604,12 @@ export default function StructureViewerPane({
                 </div>
 
                 {/* Right Column: Analytics Sidebar - hidden in fullscreen */}
-                {!isFullscreen && <AnalyticsSidebar />}
+                {!isFullscreen && analyticsPanelOpen && <AnalyticsSidebar />}
             </div>
 
             {/* Fullscreen overlay panel - only in fullscreen mode */}
-            {isFullscreen && (
-                <div className="absolute bottom-4 right-4 z-40">
+            {isFullscreen && analyticsPanelOpen && (
+                <div className={fullscreenAnalyticsLayout.frameClassName}>
                     <FullscreenOverlay />
                 </div>
             )}

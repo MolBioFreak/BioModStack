@@ -1484,6 +1484,230 @@ def _is_final_ppiflow_structure_path(path: Path) -> bool:
     )
 
 
+def _is_confornets_job(job: Optional[Job]) -> bool:
+    if not job:
+        return False
+    params = _parse_job_params(job.params)
+    model_id = str(job.model_id or "").strip().lower()
+    mode = str(job.mode or "").strip().lower()
+    rfd_mode = str(params.get("rfd_mode") or "").strip().lower()
+    return "confornets" in {model_id, mode, rfd_mode} or model_id == "confornets_experimental"
+
+
+def _load_json_any(path: Optional[Path]) -> Any:
+    if not path or not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
+def _resolve_confornets_final_root(output_path: Path) -> Optional[Path]:
+    candidates = [
+        output_path / "final" / "confornets",
+        output_path,
+        output_path / "final_confornets_results",
+        output_path / "confornets_results",
+    ]
+    for candidate in candidates:
+        if (candidate / "conformers").exists() and (
+            (candidate / "samples.json").exists()
+            or (candidate / "ensemble_manifest.json").exists()
+            or any((candidate / "conformers").glob("*.cif"))
+            or any((candidate / "conformers").glob("*.pdb"))
+            or any((candidate / "conformers").glob("*.mmcif"))
+        ):
+            return candidate
+    return None
+
+
+def _confornets_samples_by_id(samples_payload: Any) -> Dict[str, Dict[str, Any]]:
+    if isinstance(samples_payload, dict):
+        raw_samples = samples_payload.get("samples") or samples_payload.get("conformers") or []
+    elif isinstance(samples_payload, list):
+        raw_samples = samples_payload
+    else:
+        raw_samples = []
+
+    samples_by_id: Dict[str, Dict[str, Any]] = {}
+    for idx, entry in enumerate(raw_samples):
+        if not isinstance(entry, dict):
+            continue
+        sample_id = str(
+            entry.get("sample_id")
+            or entry.get("id")
+            or entry.get("name")
+            or f"sample_{idx}"
+        ).strip()
+        if sample_id:
+            samples_by_id[sample_id] = entry
+    return samples_by_id
+
+
+def _confornets_manifest_entries(ensemble_payload: Any) -> List[Dict[str, Any]]:
+    if isinstance(ensemble_payload, dict):
+        entries = ensemble_payload.get("conformers") or ensemble_payload.get("samples") or []
+    elif isinstance(ensemble_payload, list):
+        entries = ensemble_payload
+    else:
+        entries = []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _confornets_entry_path(final_root: Path, entry: Dict[str, Any]) -> Optional[Path]:
+    raw_path = str(
+        entry.get("path")
+        or entry.get("conformer_path")
+        or entry.get("structure_path")
+        or entry.get("cif_path")
+        or entry.get("pdb_path")
+        or ""
+    ).strip()
+    if not raw_path:
+        return None
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = final_root / candidate
+    try:
+        resolved = candidate.resolve()
+        conformers_root = (final_root / "conformers").resolve()
+        resolved.relative_to(conformers_root)
+    except Exception:
+        return None
+    return resolved if resolved.exists() and resolved.suffix.lower() in {".pdb", ".cif", ".mmcif"} else None
+
+
+async def ingest_confornets_results(
+    job_id: str,
+    output_path: Path,
+    session: AsyncSession,
+    current_job: Optional[Job],
+) -> int:
+    """Ingest only final ConforNets conformers, not raw/work duplicate structures."""
+    final_root = _resolve_confornets_final_root(output_path)
+    if final_root is None:
+        print(f"[Ingester] No final/confornets conformer directory found under {output_path}")
+        return 0
+
+    existing = await session.execute(
+        select(Design).where(
+            Design.job_id == job_id,
+            Design.source_stage.is_(None),
+        ).limit(1)
+    )
+    if existing.scalar_one_or_none():
+        print(f"[Ingester] ConforNets designs already ingested for job {job_id}")
+        return 0
+
+    samples_json = final_root / "samples.json"
+    landscape_json = final_root / "landscape.json"
+    provenance_json = final_root / "provenance.json"
+    ensemble_manifest_json = final_root / "ensemble_manifest.json"
+    samples_payload = _load_json_any(samples_json)
+    landscape_payload = _load_json_any(landscape_json)
+    provenance_payload = _load_json_any(provenance_json)
+    ensemble_payload = _load_json_any(ensemble_manifest_json)
+    samples_by_id = _confornets_samples_by_id(samples_payload)
+    manifest_entries = _confornets_manifest_entries(ensemble_payload)
+
+    candidate_records: List[tuple[Path, Optional[Dict[str, Any]], Optional[Dict[str, Any]]]] = []
+    seen_paths: set[Path] = set()
+    for entry in manifest_entries:
+        structure_path = _confornets_entry_path(final_root, entry)
+        if structure_path is None or structure_path in seen_paths:
+            continue
+        sample_id = str(entry.get("sample_id") or entry.get("id") or structure_path.stem).strip()
+        candidate_records.append((structure_path, entry, samples_by_id.get(sample_id)))
+        seen_paths.add(structure_path)
+
+    if not candidate_records:
+        for structure_path in sorted(final_root.glob("conformers/*.pdb")) + sorted(final_root.glob("conformers/*.cif")) + sorted(final_root.glob("conformers/*.mmcif")):
+            resolved = structure_path.resolve()
+            if resolved in seen_paths:
+                continue
+            sample_entry = None
+            for sample_id, entry in samples_by_id.items():
+                raw_sample_path = str(entry.get("conformer_path") or entry.get("path") or "")
+                if raw_sample_path and Path(raw_sample_path).name == structure_path.name:
+                    sample_entry = entry
+                    break
+                if sample_id and sample_id in structure_path.stem:
+                    sample_entry = entry
+                    break
+            candidate_records.append((resolved, None, sample_entry))
+            seen_paths.add(resolved)
+
+    if not candidate_records:
+        print(f"[Ingester] No final ConforNets conformer structures found in {final_root / 'conformers'}")
+        return 0
+
+    job_context = _job_stage_context(current_job)
+    job_params = _parse_job_params(current_job.params) if current_job else {}
+    designs_created = 0
+    for structure_path, manifest_entry, sample_entry in candidate_records:
+        design_name = structure_path.stem
+        plddt, residue_plddt = extract_plddt_from_pdb(structure_path)
+        confornets_provenance: Dict[str, Any] = {
+            **job_context.get("provenance", {}),
+            "artifact_group": "confornets",
+            "model_id": "confornets_experimental",
+            "structure_path": str(structure_path),
+            "final_root": str(final_root),
+        }
+        for key, path in {
+            "samples_json": samples_json,
+            "landscape_json": landscape_json,
+            "provenance_json": provenance_json,
+            "ensemble_manifest_json": ensemble_manifest_json,
+        }.items():
+            if path.exists():
+                confornets_provenance[key] = str(path)
+        if isinstance(provenance_payload, dict):
+            confornets_provenance["confornets_provenance"] = provenance_payload
+
+        confidence_metrics: Dict[str, Any] = {}
+        if isinstance(sample_entry, dict):
+            confidence_metrics["confornets_sample"] = sample_entry
+        if isinstance(landscape_payload, dict):
+            confidence_metrics["confornets_landscape"] = landscape_payload
+        if isinstance(manifest_entry, dict):
+            confidence_metrics["confornets_ensemble"] = manifest_entry
+        if job_params:
+            confidence_metrics["confornets_params"] = {
+                key: value for key, value in job_params.items() if str(key).startswith("cn_")
+            }
+
+        design = Design(
+            id=str(uuid.uuid4()),
+            job_id=job_id,
+            name=design_name,
+            pdb_path=str(structure_path),
+            json_path=str(samples_json) if samples_json.exists() else (str(ensemble_manifest_json) if ensemble_manifest_json.exists() else None),
+            backbone_id=parse_backbone_id(design_name),
+            stage_family=job_context.get("stage_family") or "confornets",
+            stage_mode=job_context.get("stage_mode"),
+            selected_loop_scope=job_context.get("selected_loop_scope"),
+            provenance=confornets_provenance,
+            plddt_overall=plddt,
+            residue_plddt=residue_plddt,
+            confidence_metrics=confidence_metrics or None,
+            is_favorite=False,
+            created_at=datetime.utcnow(),
+        )
+        session.add(design)
+        designs_created += 1
+
+    try:
+        await session.commit()
+        print(f"[Ingester] Ingested {designs_created} final ConforNets conformers for job {job_id}")
+    except Exception as exc:
+        print(f"[Ingester] Error committing ConforNets designs: {exc}")
+        await session.rollback()
+        return 0
+    return designs_created
+
+
 async def ingest_job_results(
     job_id: str, 
     output_dir: str, 
@@ -1543,6 +1767,9 @@ async def ingest_job_results(
             Design.source_stage.is_not(None),
         )
     )
+
+    if _is_confornets_job(current_job):
+        return await ingest_confornets_results(job_id, output_path, session, current_job)
     
     # Only try to process CSV if it exists
     if csv_path.exists():

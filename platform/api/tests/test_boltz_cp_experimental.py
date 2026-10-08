@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 
 import yaml
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +35,7 @@ def test_model_registry_loads_boltz_cp_experimental() -> None:
     assert any(param.name == "input_path" for param in model.params)
     assert any(param.name == "shard_plan_id" for param in model.params)
     assert any(param.name == "gpu_ids" for param in model.params)
+    assert any(param.name == "backend" for param in model.params)
     assert not any(param.name == "size_cp" for param in model.params)
 
 
@@ -54,6 +57,25 @@ def test_template_registry_loads_boltz_cp_experimental() -> None:
     assert not any(param.name == "size_cp" for param in template.user_params)
 
 
+def test_boltz_cp_launch_copy_is_honest_about_current_data_plane_semantics() -> None:
+    model_text = (API_ROOT / "config" / "models" / "boltz_cp_experimental.yaml").read_text(encoding="utf-8")
+    template_text = (API_ROOT / "config" / "templates" / "boltz_cp_experimental.yaml").read_text(encoding="utf-8")
+    combined = f"{model_text}\n{template_text}"
+
+    assert "control-plane" in combined
+    assert "not native distributed context parallel" in combined
+    assert "single full Boltz prediction then output tiling" in combined
+    assert "true multi-GPU single-fold" not in combined
+    assert "Run DTensor context-parallel Boltz-2 inference across the selected GPUs" not in combined
+
+
+def test_boltz_cp_workflow_banner_prints_backend_and_honesty_boundary() -> None:
+    workflow_text = (API_ROOT.parents[1] / "workflows" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    assert "* Backend: ${params.bcp_backend ?: 'dram-context-spill-workhorse'}" in workflow_text
+    assert "* Data-plane boundary: current large-protein coordinator is control-plane/tile-store; not native distributed context-parallel Boltz prediction" in workflow_text
+
+
 def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
     cmd = build_nextflow_command(
         "boltz_cp_experimental",
@@ -69,6 +91,7 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
             "sampling_steps": 150,
             "diffusion_samples": 2,
             "seed": 17,
+            "backend": "dram-context-spill-workhorse",
         },
         "/tmp/out",
         job_id="job-bcp-1",
@@ -89,9 +112,32 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
     assert "--bcp_sampling_steps 150" in joined
     assert "--bcp_diffusion_samples 2" in joined
     assert "--bcp_seed 17" in joined
+    assert "--bcp_backend dram-context-spill-workhorse" in joined
     assert "--rfd_mode boltz_cp_experimental" in joined
     assert "--input_path /tmp/complex_input.yaml" not in joined
     assert "--gpu_ids 0,1,2,3" not in joined
+
+
+def test_build_nextflow_command_defaults_boltz_cp_gpu_bridge_to_scheduler_gpu_not_local_four_gpu_rig(tmp_path: Path) -> None:
+    output_dir = tmp_path / "bcp_scheduler_gpu_default"
+    cmd = build_nextflow_command(
+        "boltz_cp_experimental",
+        "design",
+        {
+            "input_path": "/tmp/complex_input.yaml",
+            "shard_plan_id": "4x4",
+            "gpu_id": 2,
+        },
+        str(output_dir),
+        job_id="job-bcp-scheduler-gpu",
+    )
+
+    joined = " ".join(cmd)
+
+    assert "--bcp_gpu_ids 2" in joined
+    assert "--bcp_size_cp 1" in joined
+    assert "0,1,2,3" not in joined
+
 
 
 def test_boltz_cp_structure_launcher_aliases_pass_registry_validation_without_explicit_input_path() -> None:
@@ -107,6 +153,7 @@ def test_boltz_cp_structure_launcher_aliases_pass_registry_validation_without_ex
             "bcp_output_format": "mmcif",
             "bcp_write_full_pae": False,
             "bcp_gpu_ids": "0,1,2,3",
+            "bcp_backend": "dram-context-spill-workhorse",
             "boltz_recycling_steps": 6,
             "boltz_sampling_steps": 200,
             "boltz_num_samples": 2,
@@ -117,6 +164,7 @@ def test_boltz_cp_structure_launcher_aliases_pass_registry_validation_without_ex
     assert validation_params["input_path"] == jobs.BOLTZ_CP_STRUCTURE_LAUNCHER_INPUT_SENTINEL
     assert validation_params["shard_plan_id"] == "4x4"
     assert validation_params["gpu_ids"] == "0,1,2,3"
+    assert validation_params["backend"] == "dram-context-spill-workhorse"
     assert "size_cp" not in validation_params
     assert validation_params["input_format"] == "config_files"
     assert validation_params["output_format"] == "mmcif"
@@ -180,7 +228,8 @@ def test_boltz_cp_structure_launcher_clamps_gpu_bridge_to_valid_square_divisor_w
 
 
 
-def test_boltz_cp_shard_plan_catalog_exposes_valid_logical_plans() -> None:
+def test_boltz_cp_shard_plan_catalog_exposes_valid_logical_plans(monkeypatch) -> None:
+    monkeypatch.setattr(jobs, "_get_boltz_cp_catalog_physical_gpu_count", lambda: 4)
     catalog = jobs.list_boltz_cp_shard_plans()
     payload = catalog.model_dump() if hasattr(catalog, "model_dump") else catalog
     plans_by_id = {plan["id"]: plan for plan in payload["plans"]}
@@ -198,6 +247,20 @@ def test_boltz_cp_shard_plan_catalog_exposes_valid_logical_plans() -> None:
         {"gpu_count": 3, "launch_size_cp": 1},
         {"gpu_count": 4, "launch_size_cp": 4},
     ]
+
+
+def test_boltz_cp_shard_plan_catalog_route_uses_documented_jobs_prefix(monkeypatch) -> None:
+    monkeypatch.setattr(jobs, "_get_boltz_cp_catalog_physical_gpu_count", lambda: 4)
+    app = FastAPI()
+    app.include_router(jobs.router, prefix="/api/jobs")
+
+    with TestClient(app) as client:
+        response = client.get("/api/jobs/boltz-cp/shard-plans")
+        accidental_double_prefix = client.get("/api/jobs/api/jobs/boltz-cp/shard-plans")
+
+    assert response.status_code == 200
+    assert response.json()["default_plan_id"] == "2x2"
+    assert accidental_double_prefix.status_code == 404
 
 
 
@@ -355,6 +418,26 @@ def test_build_nextflow_command_threads_boltz_cp_msa_submission_params(tmp_path:
     assert "--bcp_size_cp 1" in joined
 
 
+def test_boltz_cp_production_sources_do_not_embed_local_four_gpu_default() -> None:
+    repo_root = API_ROOT.parents[1]
+    production_files = [
+        repo_root / "main.nf",
+        repo_root / "nextflow.config",
+        repo_root / "modules" / "boltz_cp_experimental.nf",
+        repo_root / "workflows" / "boltz_cp_experimental.nf",
+        API_ROOT / "services" / "nextflow.py",
+        API_ROOT / "services" / "boltz_cp_shard_plans.py",
+        API_ROOT / "routers" / "jobs.py",
+        API_ROOT / "config" / "models" / "boltz_cp_experimental.yaml",
+    ]
+
+    for source_path in production_files:
+        source = source_path.read_text(encoding="utf-8")
+        assert "0,1,2,3" not in source, f"{source_path} should not assume the DALAB 4-GPU ordinals"
+    assert "max_physical_gpu_count=4" not in (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
+
+
+
 def test_boltz_cp_module_materializes_msa_inputs_with_run_local_msa() -> None:
     module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
 
@@ -378,7 +461,9 @@ def test_boltz_cp_workflow_branches_between_child_and_coordinator_paths() -> Non
     assert "WaitForBoltzCPChildren" in workflow_text
     assert "FinalizeBoltzCPExperimentalChildren" in workflow_text
     assert "def bcpRole = params.get('bcp_role', 'coordinator').toString()" in workflow_text
-    assert "def useCoordinator = bcpRole != 'child' && logicalSizeCp > 1" in workflow_text
+    assert "def requestedBackend = (params.bcp_backend ?: 'dram-context-spill-workhorse').toString()" in workflow_text
+    assert "def requiresPlanRuntime = requestedBackend == 'dram-context-spill-workhorse'" in workflow_text
+    assert "def useCoordinator = bcpRole != 'child' && (logicalSizeCp > 1 || requiresPlanRuntime)" in workflow_text
     assert "logicalSizeCp = ['1x1': 1, '2x2': 4, '4x4': 16]" in workflow_text
     assert "BuildBoltzCPPlanManifest.out.plan_store" in workflow_text
     assert "FinalizeBoltzCPExperimentalChildren(WaitForBoltzCPChildren.out.result, BuildBoltzCPPlanManifest.out.plan_store)" in workflow_text
@@ -405,6 +490,30 @@ def test_boltz_cp_module_exposes_plan_manifest_and_child_aggregation_processes()
 
 
 
+def test_boltz_cp_finalize_children_mirrors_store_root_published_artifacts_for_viewer() -> None:
+    module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    assert "store_published = store_root / 'published'" in module_text
+    assert "boltz_cp_result_0" in module_text
+    assert "confidence_boltz_cp_result_0.json" in module_text
+    assert "published_original" in module_text
+    assert "path 'published/*.cif', emit: cifs" in module_text
+    assert "path 'published/*.json', emit: jsons" in module_text
+    assert "pattern: 'published/*.cif'" in module_text
+    assert "pattern: 'published/*.json'" in module_text
+
+
+
+def test_boltz_cp_plan_manifest_exports_context_tile_params_without_truncation_artifacts() -> None:
+    module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    assert "cont..." not in module_text
+    assert "BCP_CONTEXT_TILE_TOKENS=${contextTileTokens}" in module_text
+    assert "BCP_CONTEXT_KEY_TILE_TOKENS=${contextKeyTileTokens}" in module_text
+    assert "BCP_CONTEXT_QUERY_TILE_TOKENS=${contextQueryTileTokens}" in module_text
+
+
+
 def test_boltz_cp_spawn_script_uses_parent_child_job_contract() -> None:
     script_text = (API_ROOT.parents[1] / "scripts" / "spawn_boltz_cp_children.py").read_text(encoding="utf-8")
 
@@ -412,6 +521,7 @@ def test_boltz_cp_spawn_script_uses_parent_child_job_contract() -> None:
     assert '"model_id": "boltz_cp_experimental"' in script_text
     assert '"bcp_role": "child"' in script_text
     assert '"bcp_store_root"' in script_text
+    assert '"bcp_backend"' in script_text
     assert '"bcp_plan_manifest_path"' in script_text
     assert '"bcp_bundle_id"' in script_text
     assert '"bcp_assigned_gpu"' in script_text
