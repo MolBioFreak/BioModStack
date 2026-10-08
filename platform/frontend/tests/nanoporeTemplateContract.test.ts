@@ -68,12 +68,21 @@ test('Nanopore P4 controls serialize only locked molecule, quality, duplex, and 
 test('Nanopore consensus assembly launches the wf-clone-validation workflow instead of a basecall-only workflow', () => {
     const template = readSource('src/components/NanoporeTemplate.tsx');
 
-    assert.match(template, /inputSource !== 'fastq' && runAssembly && !barcodeKit\s*\? 'wf_clone_validation'/u);
+    assert.match(template, /runAssembly && !barcodeKit\s*\? 'wf_clone_validation'/u);
     assert.match(template, /Consensus assembly requires a reference FASTA for construct verification/u);
     assert.match(template, /setRunAssembly\(false\)/u);
-    assert.match(template, /run_assembly: inputSource !== 'fastq' \? runAssembly && !barcodeKit : false/u);
+    assert.match(template, /run_assembly: runAssembly && !barcodeKit/u);
     assert.match(template, /if \(value\) \{ setModifiedBases\('none'\); setRunModkit\(false\); setRunAssembly\(false\); \}/u);
     assert.match(template, /type="range"\s+min=\{0\}/u);
+});
+
+test('Nanopore FASTQ inputs can launch the vendor-supported wf-clone-validation path', () => {
+    const template = readSource('src/components/NanoporeTemplate.tsx');
+
+    assert.match(template, /inputSource === 'fastq' \|\| inputSource === 'bam'/u);
+    assert.match(template, /if \(value && inputSource === 'fastq'\) setRunFastqQc\(false\)/u);
+    assert.match(template, /run_fastq_qc: inputSource === 'fastq' && !runAssembly/u);
+    assert.match(template, /run_assembly: runAssembly && !barcodeKit/u);
 });
 
 test('NGS runs polling is scoped to Nanopore jobs instead of pulling the whole job table', () => {
