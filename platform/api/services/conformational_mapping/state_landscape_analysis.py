@@ -13,6 +13,10 @@ class StateLandscapeAnalysisError(ValueError):
 
 
 MAX_STATE_LANDSCAPE_COMPARISONS = 10_000
+# Canonical backend snapshots currently reject source complexes over 20,000
+# tokens. A state landscape has at most one comparison residue per token.
+MAX_STATE_LANDSCAPE_RESIDUES_PER_CANDIDATE = 20_000
+MAX_STATE_LANDSCAPE_COMPARISON_ROWS = 100_000
 
 
 _FORMULA = {
@@ -29,6 +33,27 @@ _THREE_TO_ONE = {
     "PRO": "P", "GLN": "Q", "ARG": "R", "SER": "S", "THR": "T", "VAL": "V",
     "TRP": "W", "TYR": "Y",
 }
+
+
+def _comparison_pair_limit_error(comparison_count: int) -> StateLandscapeAnalysisError:
+    return StateLandscapeAnalysisError(
+        "state landscape comparison resolves "
+        f"{comparison_count} comparisons, exceeding configured maximum "
+        f"{MAX_STATE_LANDSCAPE_COMPARISONS}"
+    )
+
+
+def _comparison_row_limit_error(row_count: int) -> StateLandscapeAnalysisError:
+    return StateLandscapeAnalysisError(
+        "state landscape comparison resolves "
+        f"{row_count} comparison rows, exceeding configured maximum "
+        f"{MAX_STATE_LANDSCAPE_COMPARISON_ROWS}"
+    )
+
+
+def _validate_comparison_pair_count(comparison_count: int) -> None:
+    if comparison_count > MAX_STATE_LANDSCAPE_COMPARISONS:
+        raise _comparison_pair_limit_error(comparison_count)
 
 
 def resolve_state_landscape_comparison(
@@ -69,12 +94,7 @@ def resolve_state_landscape_comparison(
         if len(candidates) < 2:
             raise StateLandscapeAnalysisError("pairwise state comparison resolved fewer than two candidates")
         comparison_count = len(candidates) * (len(candidates) - 1) // 2
-        if comparison_count > MAX_STATE_LANDSCAPE_COMPARISONS:
-            raise StateLandscapeAnalysisError(
-                "state landscape comparison resolves "
-                f"{comparison_count} comparisons, exceeding configured maximum "
-                f"{MAX_STATE_LANDSCAPE_COMPARISONS}"
-            )
+        _validate_comparison_pair_count(comparison_count)
         return {
             "mode": "pairwise",
             "comparison_target_id": target_id,
@@ -113,12 +133,7 @@ def resolve_state_landscape_comparison(
     if not candidate_ids:
         raise StateLandscapeAnalysisError("reference state comparison resolved no other candidates")
     comparison_count = len(candidate_ids)
-    if comparison_count > MAX_STATE_LANDSCAPE_COMPARISONS:
-        raise StateLandscapeAnalysisError(
-            "state landscape comparison resolves "
-            f"{comparison_count} comparisons, exceeding configured maximum "
-            f"{MAX_STATE_LANDSCAPE_COMPARISONS}"
-        )
+    _validate_comparison_pair_count(comparison_count)
     return {
         "mode": "reference",
         "comparison_target_id": target_id,
@@ -188,6 +203,7 @@ def _resolved_comparison(comparison: Mapping[str, Any]) -> dict[str, Any]:
         pairs.append({"pair_id": pair_id, "candidate_a_id": candidate_a_id, "candidate_b_id": candidate_b_id})
     if len({item["pair_id"] for item in pairs}) != len(pairs):
         raise StateLandscapeAnalysisError("resolved comparison pair IDs must be unique")
+    _validate_comparison_pair_count(len(pairs))
     pairs.sort(key=lambda item: item["pair_id"])
     if mode == "pairwise":
         if scope != "all_within_target":
@@ -373,6 +389,33 @@ def _identity(target_id: str, key: tuple[str, str, int, str, int], wt: str) -> d
     }
 
 
+def _preflight_comparison_row_work(
+    pairs: Sequence[Mapping[str, str]],
+    landscape_rows_by_candidate: Mapping[str, Mapping[tuple[str, str, int, str, int], Mapping[str, Any]]],
+    map_rows_by_candidate: Mapping[str, Mapping[tuple[str, str, int, str, int], str]],
+) -> None:
+    """Fail closed before constructing artifact rows or exclusions for bounded work."""
+
+    total_rows = 0
+    for pair in pairs:
+        candidate_a_id, candidate_b_id = pair["candidate_a_id"], pair["candidate_b_id"]
+        if (
+            candidate_a_id not in landscape_rows_by_candidate
+            or candidate_b_id not in landscape_rows_by_candidate
+            or candidate_a_id not in map_rows_by_candidate
+            or candidate_b_id not in map_rows_by_candidate
+        ):
+            continue
+        # This is the same no-imputation union iterated below, including rows
+        # which become explicit exclusions rather than metric values.
+        total_rows += len(
+            set(landscape_rows_by_candidate[candidate_a_id])
+            | set(landscape_rows_by_candidate[candidate_b_id])
+        )
+        if total_rows > MAX_STATE_LANDSCAPE_COMPARISON_ROWS:
+            raise _comparison_row_limit_error(total_rows)
+
+
 def derive_state_landscape_analysis(
     ensemble: Mapping[str, Any],
     landscapes: Sequence[Mapping[str, Any]],
@@ -394,6 +437,15 @@ def derive_state_landscape_analysis(
     map_by_candidate = _source_by_candidate(
         structure_maps, schema_key="cm_structure_map_v1", label="structure map",
     )
+    landscape_rows_by_candidate = {
+        candidate_id: {_residue_key(row): row for row in landscape["residues"]}
+        for candidate_id, landscape in landscape_by_candidate.items()
+    }
+    map_rows_by_candidate = {
+        candidate_id: _map_rows(structure_map)
+        for candidate_id, structure_map in map_by_candidate.items()
+    }
+    _preflight_comparison_row_work(pairs, landscape_rows_by_candidate, map_rows_by_candidate)
     rows: list[dict[str, Any]] = []
     exclusions: list[dict[str, Any]] = []
     support: list[dict[str, Any]] = []
@@ -422,9 +474,8 @@ def derive_state_landscape_analysis(
             continue
         landscape_a, landscape_b = landscape_by_candidate[candidate_a_id], landscape_by_candidate[candidate_b_id]
         map_a, map_b = map_by_candidate[candidate_a_id], map_by_candidate[candidate_b_id]
-        rows_a = {_residue_key(row): row for row in landscape_a["residues"]}
-        rows_b = {_residue_key(row): row for row in landscape_b["residues"]}
-        maps_a, maps_b = _map_rows(map_a), _map_rows(map_b)
+        rows_a, rows_b = landscape_rows_by_candidate[candidate_a_id], landscape_rows_by_candidate[candidate_b_id]
+        maps_a, maps_b = map_rows_by_candidate[candidate_a_id], map_rows_by_candidate[candidate_b_id]
         all_keys = sorted(set(rows_a) | set(rows_b))
         eligible = 0
         provenance_match = all(

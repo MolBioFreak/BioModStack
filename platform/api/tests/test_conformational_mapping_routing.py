@@ -559,6 +559,12 @@ def test_cm3_004da_state_comparison_authority_is_admitted_and_hash_bound(tmp_pat
         "scope": "all_within_target",
     }
     params = _request_params("protenix_v2_ensemble")
+    params.update(
+        ordered_seeds=[101, 202],
+        generated_json_ordered_seeds=[101, 202],
+        cli_ordered_seeds=[101, 202],
+        samples_per_seed=1,
+    )
     params["state_landscape_comparison"] = authority
 
     validated = validate_request_params(params)
@@ -672,16 +678,16 @@ def test_cm3_004dab_reference_state_comparison_authority_with_two_planned_coordi
     [
         (
             "pairwise",
-            (1 + math.isqrt(1 + 8 * MAX_STATE_LANDSCAPE_COMPARISONS)) // 2,
+            3,
             True,
         ),
         (
             "pairwise",
-            (1 + math.isqrt(1 + 8 * MAX_STATE_LANDSCAPE_COMPARISONS)) // 2 + 1,
+            4,
             False,
         ),
-        ("reference", MAX_STATE_LANDSCAPE_COMPARISONS + 1, True),
-        ("reference", MAX_STATE_LANDSCAPE_COMPARISONS + 2, False),
+        ("reference", 6, True),
+        ("reference", 7, False),
     ],
 )
 def test_cm3_004dac_state_comparison_work_cap_is_enforced_at_admission(
@@ -695,7 +701,29 @@ def test_cm3_004dac_state_comparison_work_cap_is_enforced_at_admission(
     if admitted:
         assert len(validate_request_params(params).coordinate_plan) == candidate_count
     else:
-        with pytest.raises(ConformationalMappingRequestError, match="configured maximum"):
+        with pytest.raises(ConformationalMappingRequestError, match="comparison rows"):
+            validate_request_params(params)
+
+
+@pytest.mark.parametrize(
+    ("candidate_count", "admitted"),
+    [
+        (6, True),  # Five reference pairs × the 20,000-residue backend envelope.
+        (7, False),
+    ],
+)
+def test_cm3_004dacb_state_comparison_row_work_envelope_is_enforced_at_admission(
+    candidate_count: int, admitted: bool
+) -> None:
+    params = _request_params("protenix_v2_ensemble")
+    _configure_state_comparison_candidate_count(
+        params, mode="reference", candidate_count=candidate_count,
+    )
+
+    if admitted:
+        assert len(validate_request_params(params).coordinate_plan) == candidate_count
+    else:
+        with pytest.raises(ConformationalMappingRequestError, match="comparison rows"):
             validate_request_params(params)
 
 
