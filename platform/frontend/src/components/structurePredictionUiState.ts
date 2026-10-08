@@ -1,6 +1,6 @@
 export type StructurePredictionMode = 'predict' | 'complex';
 export type StructurePredictorFamily = 'boltz' | 'rf3' | 'protenix' | 'esmfold2';
-export type StructurePredictorSelection = StructurePredictorFamily | 'both' | 'all' | 'boltz_protenix';
+export type StructurePredictorSelection = StructurePredictorFamily | 'boltz_api' | 'both' | 'all' | 'boltz_protenix';
 export type BoltzQualityPresetId = 'quick' | 'balanced' | 'max' | 'custom';
 export type StructureLaunchVariant = 'default' | 'boltz_cp_experimental';
 export type StructureMsaProvider = 'local' | 'colabfold_api';
@@ -78,7 +78,7 @@ export interface BoltzCpShardPlanDefinition {
 }
 
 export interface StructureSubmitTarget {
-    modelId: 'boltz2' | 'rf3' | 'protenix' | 'esmfold2' | 'boltz_cp_experimental';
+    modelId: 'boltz2' | 'boltz_api' | 'rf3' | 'protenix' | 'esmfold2' | 'boltz_cp_experimental';
     mode: 'predict' | 'complex' | 'design';
 }
 
@@ -312,13 +312,15 @@ export const resolveStructureSubmitTarget = ({
 
     const resolvedSelection = resolveStructurePredictorSelection(predictionMode, predictorSelection);
     return {
-        modelId: resolvedSelection.canonicalSelection === 'rf3'
-            ? 'rf3'
-            : resolvedSelection.canonicalSelection === 'protenix'
-                ? 'protenix'
-                : resolvedSelection.canonicalSelection === 'esmfold2'
-                    ? 'esmfold2'
-                    : 'boltz2',
+        modelId: resolvedSelection.canonicalSelection === 'boltz_api'
+            ? 'boltz_api'
+            : resolvedSelection.canonicalSelection === 'rf3'
+                ? 'rf3'
+                : resolvedSelection.canonicalSelection === 'protenix'
+                    ? 'protenix'
+                    : resolvedSelection.canonicalSelection === 'esmfold2'
+                        ? 'esmfold2'
+                        : 'boltz2',
         mode: predictionMode,
     };
 };
@@ -383,6 +385,7 @@ export const BOLTZ_QUALITY_PRESETS = [
 
 const PREDICT_MODE_OPTIONS: StructurePredictorOption[] = [
     { id: 'boltz', name: 'Boltz-2', desc: 'Fast, SOTA accuracy', color: 'blue' },
+    { id: 'boltz_api', name: 'Boltz API', desc: 'Remote Boltz-2.1 queue', color: 'blue' },
     { id: 'rf3', name: 'RoseTTAFold3', desc: 'Open-source AF3 alt.', color: 'green' },
     { id: 'protenix', name: 'Protenix', desc: 'AF3-level, multi-modal', color: 'violet' },
     { id: 'esmfold2', name: 'ESMFold2', desc: 'Fast local all-atom folding', color: 'blue' },
@@ -392,6 +395,7 @@ const PREDICT_MODE_OPTIONS: StructurePredictorOption[] = [
 
 const COMPLEX_MODE_OPTIONS: StructurePredictorOption[] = [
     { id: 'boltz', name: 'Boltz-2', desc: 'Complex prediction with target conditioning', color: 'blue' },
+    { id: 'boltz_api', name: 'Boltz API', desc: 'Remote Boltz-2.1 complex prediction', color: 'blue' },
     { id: 'rf3', name: 'RoseTTAFold3', desc: 'Predict-only; unavailable for complexes', color: 'green', disabled: true, disabledReason: COMPLEX_RF3_DISABLED_REASON },
     { id: 'protenix', name: 'Protenix', desc: 'Template-guided complex prediction', color: 'violet' },
     { id: 'esmfold2', name: 'ESMFold2', desc: 'Fast MSA-free complex co-folding', color: 'blue' },
@@ -400,7 +404,7 @@ const COMPLEX_MODE_OPTIONS: StructurePredictorOption[] = [
 
 const toPredictorSelection = (value: string | null | undefined): StructurePredictorSelection => {
     const normalized = String(value || '').trim().toLowerCase();
-    if (normalized === 'rf3' || normalized === 'protenix' || normalized === 'esmfold2' || normalized === 'both' || normalized === 'all' || normalized === 'boltz_protenix') {
+    if (normalized === 'boltz_api' || normalized === 'rf3' || normalized === 'protenix' || normalized === 'esmfold2' || normalized === 'both' || normalized === 'all' || normalized === 'boltz_protenix') {
         return normalized;
     }
     return 'boltz';
@@ -417,6 +421,14 @@ export const resolveStructurePredictorSelection = (
     const requestedSelection = toPredictorSelection(selection);
 
     if (mode === 'complex') {
+        if (requestedSelection === 'boltz_api') {
+            return {
+                requestedSelection,
+                canonicalSelection: 'boltz_api',
+                families: ['boltz'],
+                valid: true,
+            };
+        }
         if (requestedSelection === 'rf3') {
             return {
                 requestedSelection,
@@ -458,6 +470,14 @@ export const resolveStructurePredictorSelection = (
         };
     }
 
+    if (requestedSelection === 'boltz_api') {
+        return {
+            requestedSelection,
+            canonicalSelection: 'boltz_api',
+            families: ['boltz'],
+            valid: true,
+        };
+    }
     if (requestedSelection === 'both') {
         return {
             requestedSelection,

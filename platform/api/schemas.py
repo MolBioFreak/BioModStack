@@ -129,6 +129,36 @@ class JobList(BaseModel):
     total: int
 
 
+class BoltzApiStructureRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    client_request_id: str = Field(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    model: str = Field(default="boltz-2.1", max_length=64)
+    sequence: str = Field(..., min_length=1, max_length=100000)
+    primary_chain_id: str = Field(default="A", min_length=1, max_length=8)
+    complex_components: List[dict] = Field(default_factory=list, max_length=64)
+    num_samples: int = Field(default=1, ge=1, le=10)
+    use_msa: bool = True
+
+
+class BoltzApiEstimateResponse(BaseModel):
+    model: str
+    provider_input: dict
+    estimate: dict
+    estimate_fingerprint: str
+
+
+class BoltzApiSubmitRequest(BoltzApiStructureRequest):
+    approved_estimate_fingerprint: str = Field(..., min_length=64, max_length=64)
+
+
+class BoltzApiProviderStatusResponse(BaseModel):
+    available: bool
+    cli_available: bool
+    credential_configured: bool
+    model: str
+    message: str
+
+
 class ExternalImportPreviewRequest(BaseModel):
     source_path: str = Field(..., min_length=1, max_length=1000)
     provider_hint: str = Field(default="boltz_api", max_length=64)

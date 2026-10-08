@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+import os
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import ExternalResultImport, async_session, get_session
-from paths import resolve_allowed_path
+from database import ExternalResultImport, get_session
+from paths import get_data_root, resolve_allowed_path
 from schemas import (
     ExternalImportCreateRequest,
     ExternalImportPreviewRequest,
@@ -16,14 +16,9 @@ from schemas import (
     ExternalImportResponse,
 )
 from services.external_imports.boltz_api import BoltzImportError, preview_boltz_api_run
-from services.external_imports.service import (
-    process_external_import,
-    queue_external_import,
-    retry_external_import,
-)
+from services.external_imports.service import queue_external_import, retry_external_import
 
 
-logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -42,6 +37,20 @@ def _resolve_source(source_path: str) -> Path:
         raise HTTPException(
             status_code=422,
             detail={"code": "SOURCE_NOT_ALLOWED", "message": str(exc)},
+        ) from exc
+    source_root = Path(
+        os.getenv("BMS_BOLTZ_DOWNLOAD_ROOT")
+        or (get_data_root() / "boltz_results")
+    ).expanduser().resolve()
+    try:
+        source.relative_to(source_root)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "SOURCE_NOT_ALLOWED",
+                "message": "source must be inside the configured Boltz download root",
+            },
         ) from exc
     if not source.is_dir() or source.is_symlink():
         raise HTTPException(
@@ -65,18 +74,9 @@ async def preview_external_import(payload: ExternalImportPreviewRequest) -> Exte
     return ExternalImportPreviewResponse(**preview.to_dict())
 
 
-async def _run_import(import_id: str) -> None:
-    async with async_session() as session:
-        try:
-            await process_external_import(session, import_id=import_id)
-        except Exception:
-            logger.exception("External result import %s failed", import_id)
-
-
 @router.post("", response_model=ExternalImportResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_external_import(
     payload: ExternalImportCreateRequest,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> ExternalImportResponse:
     if payload.provider != "boltz_api":
@@ -95,8 +95,6 @@ async def create_external_import(
         )
     except BoltzImportError as exc:
         raise _http_error(exc) from exc
-    if record.state == "discovered":
-        background_tasks.add_task(_run_import, record.id)
     return ExternalImportResponse.model_validate(record)
 
 
@@ -117,13 +115,10 @@ async def get_external_import(
 @router.post("/{import_id}/retry", response_model=ExternalImportResponse, status_code=status.HTTP_202_ACCEPTED)
 async def retry_external_import_route(
     import_id: str,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> ExternalImportResponse:
     try:
         record = await retry_external_import(session, import_id=import_id)
     except BoltzImportError as exc:
         raise _http_error(exc) from exc
-    if record.state == "discovered":
-        background_tasks.add_task(_run_import, record.id)
     return ExternalImportResponse.model_validate(record)

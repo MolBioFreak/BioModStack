@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,10 @@ KNOWN_RESOURCES = frozenset(
 )
 _SAMPLE_STRUCTURE = re.compile(r"^prediction/sample_([0-9]+)_predicted_structure\.cif$")
 _SAMPLE_PAE = re.compile(r"^prediction/sample_([0-9]+)_pae\.npz$")
+_SAFE_PROVIDER_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_MAX_PAE_DIMENSION = 8192
+_MAX_PAE_EXPANDED_BYTES = 512 * 1024**2
+_MAX_NPZ_COMPRESSION_RATIO = 200
 _SENSITIVE_METADATA_KEY = re.compile(
     r"(?:token|secret|password|authorization|cookie|credential|api[_-]?key|url|uri|endpoint|host|connection)",
     re.IGNORECASE,
@@ -166,6 +171,40 @@ def _sample_count(run: dict[str, Any], metrics: dict[str, Any]) -> int:
     return len(all_samples)
 
 
+def _load_bounded_pae(payload: bytes, sample_index: int) -> np.ndarray:
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            members = archive.infolist()
+            if len(members) != 1 or members[0].filename != "pae.npy":
+                raise ValueError("NPZ must contain only pae.npy")
+            member = members[0]
+            if member.file_size <= 0 or member.file_size > _MAX_PAE_EXPANDED_BYTES:
+                raise ValueError("PAE matrix exceeds the expanded-size limit")
+            if member.compress_size <= 0 or member.file_size > member.compress_size * _MAX_NPZ_COMPRESSION_RATIO:
+                raise ValueError("PAE NPZ exceeds the compression-ratio limit")
+            with archive.open(member) as stream:
+                version = np.lib.format.read_magic(stream)
+                if version == (1, 0):
+                    shape, _fortran, dtype = np.lib.format.read_array_header_1_0(stream)
+                elif version in {(2, 0), (3, 0)}:
+                    shape, _fortran, dtype = np.lib.format.read_array_header_2_0(stream)
+                else:
+                    raise ValueError(f"unsupported NPY version {version}")
+            if dtype.hasobject or dtype.kind not in "fiu":
+                raise ValueError("PAE dtype must be a non-object numeric type")
+            if len(shape) != 2 or shape[0] != shape[1] or not (1 <= shape[0] <= _MAX_PAE_DIMENSION):
+                raise ValueError("PAE must be a bounded square matrix")
+            if int(shape[0]) * int(shape[1]) * int(dtype.itemsize) > _MAX_PAE_EXPANDED_BYTES:
+                raise ValueError("PAE allocation exceeds the memory limit")
+        with np.load(io.BytesIO(payload), allow_pickle=False) as values:
+            matrix = np.asarray(values["pae"], dtype=float)
+    except Exception as exc:
+        raise BoltzImportError("PAE_INVALID", f"sample {sample_index} PAE is invalid: {exc}") from exc
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1] or not np.isfinite(matrix).all():
+        raise BoltzImportError("PAE_INVALID", f"sample {sample_index} PAE must be a finite square matrix")
+    return matrix
+
+
 def _validate_artifact_set(archive_path: Path, run: dict[str, Any], members: dict[str, int]) -> tuple[int, dict[str, Any]]:
     if "prediction/metrics.json" not in members:
         raise BoltzImportError("ARTIFACT_SET_INCOMPLETE", "archive is missing prediction/metrics.json")
@@ -183,15 +222,7 @@ def _validate_artifact_set(archive_path: Path, run: dict[str, Any], members: dic
         raise BoltzImportError("ARTIFACT_SET_INCOMPLETE", "structure/PAE sample set is incomplete or non-contiguous")
     for index in expected:
         payload = read_member_bytes(archive_path, f"prediction/sample_{index}_pae.npz")
-        try:
-            with np.load(io.BytesIO(payload)) as values:
-                if "pae" not in values:
-                    raise ValueError("missing pae key")
-                matrix = np.asarray(values["pae"], dtype=float)
-        except Exception as exc:
-            raise BoltzImportError("PAE_INVALID", f"sample {index} PAE is invalid: {exc}") from exc
-        if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1] or not np.isfinite(matrix).all():
-            raise BoltzImportError("PAE_INVALID", f"sample {index} PAE must be a finite square matrix")
+        _load_bounded_pae(payload, index)
     return count, metrics
 
 
@@ -230,6 +261,8 @@ def preview_boltz_api_run(source_dir: Path) -> ExternalImportPreview:
     job_id = str(run.get("id") or checkpoint.get("job_id") or "").strip()
     if not job_id or checkpoint.get("job_id") not in {None, job_id}:
         raise BoltzImportError("RUN_METADATA_INVALID", "provider job identity is missing or inconsistent")
+    if not _SAFE_PROVIDER_JOB_ID.fullmatch(job_id):
+        raise BoltzImportError("RUN_METADATA_INVALID", "provider job identity contains unsafe characters")
     resource = _resource_from_checkpoint(checkpoint, job_id)
     status = str(run.get("status") or "").strip().lower()
     run_sha = hashlib.sha256(run_bytes).hexdigest()

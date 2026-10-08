@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Design, ExternalResultImport, Job
 from services.external_imports.boltz_api import BoltzImportError, preview_boltz_api_run
-from services.external_imports.service import process_external_import, queue_external_import
+from services.external_imports.service import process_external_import, queue_external_import, recover_external_imports
 from services.external_imports.worker import ExternalImportWorker
 
 
@@ -130,6 +130,19 @@ def test_preview_accepts_the_flat_entity_shape_emitted_by_boltz_api(tmp_path: Pa
     assert [entity["sequence"] for entity in preview.entities] == ["A", "A"]
 
 
+def test_preview_rejects_provider_job_id_that_could_escape_the_publish_root(tmp_path: Path) -> None:
+    run_dir = _write_run(tmp_path)
+    run = json.loads((run_dir / "run.json").read_text())
+    run["id"] = "../escape"
+    (run_dir / "run.json").write_text(json.dumps(run))
+    checkpoint = json.loads((run_dir / ".boltz-run.json").read_text())
+    checkpoint["job_id"] = "../escape"
+    (run_dir / ".boltz-run.json").write_text(json.dumps(checkpoint))
+
+    with pytest.raises(BoltzImportError, match="unsafe characters"):
+        preview_boltz_api_run(run_dir)
+
+
 def test_preview_rejects_archive_path_traversal(tmp_path: Path) -> None:
     run_dir = _write_run(tmp_path, unsafe_member="../../escape.txt")
 
@@ -213,6 +226,52 @@ async def test_import_creates_authoritative_viewer_job_and_is_idempotent(tmp_pat
             assert duplicate.id == import_id
             assert len(imports) == 1
             assert len(jobs) == 1
+            assert len(designs) == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_import_completes_the_existing_remote_submission_job_in_place(tmp_path: Path) -> None:
+    source = _write_run(tmp_path / "source")
+    data_root = tmp_path / "data"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        preview = preview_boltz_api_run(source)
+        async with Session() as session:
+            remote_job = Job(
+                id="remote-submission-job",
+                name="Remote structure",
+                status="running",
+                queue_status="running",
+                model_id="boltz_api",
+                mode="external_api",
+                params={"provider_state": "downloaded", "provider_job_id": "sab_pred_test123"},
+            )
+            session.add(remote_job)
+            await session.commit()
+            queued = await queue_external_import(
+                session,
+                source_dir=source,
+                preview_fingerprint=preview.source_fingerprint,
+                dataset_name="Remote Boltz API run",
+                job_name=remote_job.name,
+                bms_job_id=remote_job.id,
+            )
+            import_id = queued.id
+
+        async with Session() as session:
+            completed = await process_external_import(session, import_id=import_id, data_root=data_root)
+            assert completed.bms_job_id == "remote-submission-job"
+            job = await session.get(Job, "remote-submission-job")
+            designs = list((await session.execute(select(Design).where(Design.job_id == job.id))).scalars())
+            assert job.status == "completed"
+            assert job.model_id == "boltz2"
+            assert job.params["provider_state"] == "completed"
+            assert job.params["provider_job_id"] == "sab_pred_test123"
             assert len(designs) == 1
     finally:
         await engine.dispose()
@@ -319,5 +378,47 @@ async def test_import_redacts_credentials_from_copied_source_and_persisted_recor
             assert "supersecret" not in persisted
             assert "supersecret" not in source_text
             assert "[REDACTED]" in source_text
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_recovery_does_not_complete_a_linked_import_without_canonical_artifacts(tmp_path: Path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'recovery.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with Session() as session:
+            job = Job(
+                id="remote-incomplete",
+                name="remote incomplete",
+                status="running",
+                queue_status="running",
+                model_id="boltz_api",
+                mode="external_api",
+                params={"provider_state": "importing"},
+            )
+            session.add(job)
+            session.add(ExternalResultImport(
+                id="import-committing",
+                provider_id="boltz_api",
+                resource_type="predictions:structure-and-binding",
+                provider_job_id="sab_pred_recovery",
+                state="committing",
+                source_path=str(tmp_path),
+                source_fingerprint="a" * 64,
+                run_metadata_sha256="b" * 64,
+                archive_sha256="c" * 64,
+                bms_job_id=job.id,
+                dataset_name="recovery",
+                provider_metadata={},
+            ))
+            await session.commit()
+            assert await recover_external_imports(session) == ["import-committing"]
+            record = await session.get(ExternalResultImport, "import-committing")
+            assert record.state == "failed"
+            assert record.failure_code == "IMPORT_INTERRUPTED"
+            assert (await session.execute(select(Design).where(Design.job_id == job.id))).scalar_one_or_none() is None
     finally:
         await engine.dispose()

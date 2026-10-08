@@ -56,6 +56,10 @@ services:
       ADDGENE_API_TOKEN: ${ADDGENE_API_TOKEN:-}
       NCBI_API_KEY: ${NCBI_API_KEY:-}
       NCBI_EMAIL: ${NCBI_EMAIL:-}
+      BOLTZ_API_KEY: ${BOLTZ_API_KEY:-}
+      BMS_BOLTZ_API_CLI: ${BMS_BOLTZ_API_CLI:-/var/lib/biomodstack/tools/boltz-api}
+      BMS_BOLTZ_API_HOME: ${BMS_BOLTZ_API_HOME:-/var/lib/biomodstack/secrets/boltz-api-home}
+      BMS_BOLTZ_DOWNLOAD_ROOT: ${BMS_BOLTZ_DOWNLOAD_ROOT:-/var/lib/biomodstack/boltz_results}
       BMS_WORKFLOW_ADAPTER_URL: ${BMS_WORKFLOW_ADAPTER_URL:-http://127.0.0.1:8001}
       BMS_HOST_AGENT_URL: ${BMS_HOST_AGENT_URL:-http://127.0.0.1:8798}
       BMS_HOST_AGENT_TIMEOUT_SECONDS: ${BMS_HOST_AGENT_TIMEOUT_SECONDS:-2.0}
