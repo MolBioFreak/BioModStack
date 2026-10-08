@@ -372,26 +372,15 @@ def verify_current_artifact_bytes(
     expected_size: int,
     expected_sha256: str,
 ) -> None:
-    """Verify the current descriptor-backed source without consulting the snapshot cache."""
+    """Verify fresh source identity, reusing only unchanged descriptor digests."""
 
     if expected_size < 0 or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
         raise AlignmentSessionError("artifact integrity metadata is invalid")
-    source = _open_regular_file_no_symlinks(path)
-    try:
-        if os.fstat(source.fileno()).st_size != expected_size:
-            raise AlignmentSessionError("artifact integrity size mismatch")
-        digest = hashlib.sha256()
-        copied = 0
-        while copied <= expected_size:
-            chunk = source.read(min(SNAPSHOT_CHUNK_BYTES, expected_size + 1 - copied))
-            if not chunk:
-                break
-            copied += len(chunk)
-            digest.update(chunk)
-        if copied != expected_size or digest.hexdigest() != expected_sha256:
-            raise AlignmentSessionError("artifact integrity digest mismatch")
-    finally:
-        source.close()
+    digest, size = _sha256_file_and_size(path)
+    if size != expected_size:
+        raise AlignmentSessionError("artifact integrity size mismatch")
+    if digest != expected_sha256:
+        raise AlignmentSessionError("artifact integrity digest mismatch")
 
 
 def _uncached_artifact_snapshot(path: Path, expected_size: int, expected_sha256: str) -> BinaryIO:
@@ -544,12 +533,13 @@ def _safe_job_root(
 def _sha256_file_and_size(path: Path) -> tuple[str, int]:
     """Hash one no-follow descriptor and return its size from the same descriptor."""
     handle = _open_regular_file_no_symlinks(path)
-    digest = hashlib.sha256()
+    from services.scientific_artifacts.writer import descriptor_content_digest, ScientificArtifactError
+
     try:
-        size_bytes = os.fstat(handle.fileno()).st_size
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-        return digest.hexdigest(), size_bytes
+        size, digest = descriptor_content_digest(handle.fileno(), scope=str(path.parent.resolve()))
+        return digest, size
+    except ScientificArtifactError as exc:
+        raise AlignmentSessionError(str(exc)) from exc
     finally:
         handle.close()
 
