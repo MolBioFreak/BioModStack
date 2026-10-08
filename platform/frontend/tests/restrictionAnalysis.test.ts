@@ -83,6 +83,58 @@ describe('restriction API boundary', () => {
         ['authority mismatch', () => { const value = clone(ANALYSIS); value.analysis.catalog_sha256 = 'b'.repeat(64); return value; }],
     ])('rejects %s', (_label, mutate) => expect(() => parseRestrictionAnalysis(mutate())).toThrow());
 
+    it.each([
+        ['result hash mismatch', () => { const value = clone(ANALYSIS); value.result_sha256 = 'b'.repeat(64); return value; }],
+        ['occurrence summary mismatch', () => { const value = clone(ANALYSIS); value.analysis.occurrences[0].canonical_name = 'EcoRI-inconsistent'; return value; }],
+        ['duplicate occurrence ordinal', () => { const value = clone(ANALYSIS); const occurrence = clone(value.analysis.occurrences[0]); occurrence.occurrence_id = 'occ:2'; occurrence.double_strand_events = []; value.analysis.occurrences.push(occurrence); value.analysis.counts.recognition_site_count_definite = 2; value.analysis.enzyme_summaries[0].recognition_site_count_definite = 2; return value; }],
+        ['duplicate event ordinal', () => { const value = clone(ANALYSIS); const event = clone(value.analysis.occurrences[0].double_strand_events[0]); event.contributor_group_id = 'cut:duplicate'; value.analysis.occurrences[0].double_strand_events.push(event); value.analysis.counts.double_strand_break_count = 2; value.analysis.enzyme_summaries[0].double_strand_break_count = 2; const group = clone(value.analysis.grouped_cleavages[0]); group.contributor_group_id = 'cut:duplicate'; value.analysis.grouped_cleavages.push(group); return value; }],
+        ['duplicate contributor identity', () => { const value = clone(ANALYSIS); value.analysis.grouped_cleavages[0].contributors.push(clone(value.analysis.grouped_cleavages[0].contributors[0])); return value; }],
+        ['unresolved contributor event', () => { const value = clone(ANALYSIS); value.analysis.grouped_cleavages[0].contributors[0].event_ordinal = 99; return value; }],
+    ])('rejects relational analysis contradiction: %s', (_label, mutate) => expect(() => parseRestrictionAnalysis(mutate())).toThrow());
+
+    it.each([
+        ['unselected occurrence enzyme', () => { const value = clone(DIGEST); value.occurrences[0].enzyme_id = 'Other'; value.occurrences[0].double_strand_events[0].enzyme_id = 'Other'; return value; }],
+        ['unselected cleavage contributor enzyme', () => { const value = clone(DIGEST); value.cleavages[0].contributors[0].enzyme_id = 'Other'; return value; }],
+        ['duplicate cleavage ordinal', () => { const value = clone(DIGEST); const duplicate = clone(value.cleavages[0]); duplicate.contributor_group_id = 'cut:2'; value.cleavages.push(duplicate); return value; }],
+        ['unresolved cleavage contributor event', () => { const value = clone(DIGEST); value.cleavages[0].contributors[0].event_ordinal = 99; return value; }],
+        ['unresolved fragment lineage', () => { const value = clone(DIGEST); value.fragments[0].lineage_cleavage_group_ids = ['cut:missing']; return value; }],
+        ['duplicate fragment lineage', () => { const value = clone(DIGEST); value.fragments[0].lineage_cleavage_group_ids.push('cut:1'); return value; }],
+    ])('rejects relational digest contradiction: %s', (_label, mutate) => expect(() => parseRestrictionDigestSimulation(mutate())).toThrow());
+
+    it.each([
+        ['linear DSB boundary outside source axis', () => { const value = clone(ANALYSIS); const event = value.analysis.occurrences[0].double_strand_events[0]; event.top_boundary = 11; event.top_boundary_unwrapped = 11; value.analysis.grouped_cleavages[0].top_boundary = 11; return value; }],
+        ['linear nick boundary outside source axis', () => { const value = clone(ANALYSIS); const occurrence = value.analysis.occurrences[0]; occurrence.double_strand_events = []; occurrence.nicks = [{ enzyme_id: 'EcoRI', occurrence_id: 'occ:1', event_ordinal: 0, orientation: 'forward', strand: 'top', status: 'complete', boundary: 11, boundary_unwrapped: 11, winding: 0, contributor_group_id: 'cut:1', activity_assessment: 'not_evaluated' }]; value.analysis.counts.double_strand_break_count = 0; value.analysis.counts.nick_count = 1; value.analysis.enzyme_summaries[0].double_strand_break_count = 0; value.analysis.enzyme_summaries[0].nick_count = 1; return value; }],
+        ['circular DSB normalized boundary inconsistent with unwrapped geometry', () => { const value = clone(ANALYSIS); value.source.topology = 'circular'; value.analysis.topology = 'circular'; const event = value.analysis.occurrences[0].double_strand_events[0]; event.top_boundary = 10; return value; }],
+        ['circular nick winding inconsistent with unwrapped geometry', () => { const value = clone(ANALYSIS); value.source.topology = 'circular'; value.analysis.topology = 'circular'; const occurrence = value.analysis.occurrences[0]; occurrence.double_strand_events = []; occurrence.nicks = [{ enzyme_id: 'EcoRI', occurrence_id: 'occ:1', event_ordinal: 0, orientation: 'forward', strand: 'top', status: 'complete', boundary: 1, boundary_unwrapped: 11, winding: 0, contributor_group_id: 'cut:1', activity_assessment: 'not_evaluated' }]; value.analysis.counts.double_strand_break_count = 0; value.analysis.counts.nick_count = 1; value.analysis.enzyme_summaries[0].double_strand_break_count = 0; value.analysis.enzyme_summaries[0].nick_count = 1; return value; }],
+        ['occurrence policy maximum', () => { const value = clone(ANALYSIS); value.analysis.resource_policy_receipt.occurrence_maximum = 0; return value; }],
+        ['event policy maximum', () => { const value = clone(ANALYSIS); value.analysis.resource_policy_receipt.event_maximum = 0; return value; }],
+        ['source length policy maximum', () => { const value = clone(ANALYSIS); value.analysis.resource_policy_receipt.sequence_length_maximum = 9; return value; }],
+        ['analysis response byte maximum', () => { const value = clone(ANALYSIS); value.analysis.resource_policy_receipt.response_maximum_bytes = 1; return value; }],
+    ])('rejects analysis bound violation: %s', (_label, mutate) => expect(() => parseRestrictionAnalysis(mutate())).toThrow());
+
+    it.each([
+        ['selected enzyme maximum', () => { const value = clone(DIGEST); value.resource_policy.selected_enzyme_maximum = 0; return value; }],
+        ['physical cut maximum', () => { const value = clone(DIGEST); value.resource_policy.physical_cut_maximum = 0; return value; }],
+        ['fragment maximum', () => { const value = clone(DIGEST); value.resource_policy.fragment_maximum = 0; return value; }],
+        ['total fragment bases maximum', () => { const value = clone(DIGEST); value.resource_policy.total_fragment_bases_maximum = 2; return value; }],
+        ['digest response byte maximum', () => { const value = clone(DIGEST); value.resource_policy.simulation_response_maximum_bytes = 1; return value; }],
+        ['fragment source segment outside source', () => { const value = clone(DIGEST); value.fragments[0].source_segments = [[0, 11]]; return value; }],
+        ['fragment topology mismatch', () => { const value = clone(DIGEST); value.fragments[0].topology = 'circular'; return value; }],
+        ['fragment normalized boundary outside source', () => { const value = clone(DIGEST); value.fragments[0].top_end_boundary_normalized = 11; return value; }],
+        ['fragment winding inconsistent with linear source', () => { const value = clone(DIGEST); value.fragments[0].top_end_winding = 1; return value; }],
+    ])('rejects digest bound violation: %s', (_label, mutate) => expect(() => parseRestrictionDigestSimulation(mutate())).toThrow());
+
+    it.each([
+        [500, 'analysis_failed', 'Restriction analysis is unavailable.'],
+        [413, 'request_too_large', 'Restriction request exceeds the supported limits.'],
+        [418, 'unknown_backend_code', 'Restriction service request failed.'],
+    ])('sanitizes backend error %s/%s', async (status, code, expected) => {
+        const internalDetail = '/srv/internal/database.sqlite stack trace internal query plan';
+        const transport = vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: { code, message: internalDetail } }), { status }));
+        await expect(fetchRestrictionCatalog({ transport })).rejects.toThrow(expected);
+        await expect(fetchRestrictionCatalog({ transport })).rejects.not.toThrow(internalDetail);
+    });
+
     it('sends only stable enzyme IDs and source/catalog authority', async () => {
         const revisionSource = { ...SOURCE, kind: 'molecular_revision', name: 'fixture', sequence_id: 'seq-1', revision_id: 'rev-1', revision_number: 1 };
         const analysisResponse = { ...ANALYSIS, source: revisionSource };
