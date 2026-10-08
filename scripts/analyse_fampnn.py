@@ -1,155 +1,112 @@
-import gemmi
-import argparse
-import os
-import json
+"""FA-MPNN pSCE numerical authority, shared by producer and global analysis.
 
-def get_chain_sequence(chain):
-    """Extract amino acid sequence from a Gemmi chain object"""
-    sequence = []
-    for residue in chain:
-        # Get residue info using built-in chemical data
-        res_info = gemmi.find_tabulated_residue(residue.name)
-        if not res_info or not res_info.is_amino_acid():
+Only BioPython (already in both runtime manifests) and the standard library are
+required. pSCE is an Angstrom error, never pLDDT. Sequence probabilities have a
+separate native authority. Policy v1 selects the first model, amino-acid residues
+and occupancy-selected alternate atoms; residue means have equal weight.
+"""
+import argparse
+import json
+import math
+from pathlib import Path
+
+from Bio.PDB import MMCIFParser, PDBParser
+from Bio.PDB.Polypeptide import is_aa
+from Bio.SeqUtils import seq1
+
+
+class NoScoredSidechainError(ValueError):
+    """Valid structure/scope without sidechain observations."""
+
+
+def psce_policy(chain_id="all_chains", ignore_cbeta=True):
+    if not isinstance(chain_id, str) or not chain_id.strip():
+        raise ValueError("pSCE chain_id must be an explicit chain or all_chains")
+    if type(ignore_cbeta) is not bool:
+        raise ValueError("pSCE ignore_cbeta must be boolean")
+    return {"version": 1, "chain_id": chain_id, "ignore_cbeta": ignore_cbeta,
+            "model_index": 0, "residues": "amino_acids", "altloc": "highest_occupancy",
+            "aggregation": "residue_mean", "unit": "angstrom"}
+
+
+def validate_psce_policy(policy):
+    if not isinstance(policy, dict):
+        raise ValueError("Missing pSCE policy")
+    expected = psce_policy(policy.get("chain_id"), policy.get("ignore_cbeta"))
+    if policy != expected:
+        raise ValueError("Unsupported pSCE policy")
+    return expected
+
+
+def compute_psce_profile(path, policy):
+    policy = validate_psce_policy(policy)
+    path = Path(path)
+    parser = MMCIFParser(QUIET=True) if path.suffix.lower() in {".cif", ".mmcif"} else PDBParser(QUIET=True, PERMISSIVE=False)
+    structure = parser.get_structure("fampnn", str(path))
+    model = next(iter(structure), None)
+    if model is None:
+        raise ValueError("pSCE structure has no model")
+    excluded = {"C", "N", "O", "CA"} | ({"CB"} if policy["ignore_cbeta"] else set())
+    chains, sequences, all_scores = {}, {}, []
+    for chain in model:
+        if policy["chain_id"] != "all_chains" and chain.id != policy["chain_id"]:
             continue
-        # Use fasta_code() to get X for non-standard residues
-        aa = res_info.fasta_code()
-        sequence.append(aa if aa != ' ' else 'X')
-    return ''.join(sequence)
+        scores, numbers, names, insertions, sequence = [], [], [], [], []
+        for residue in chain:
+            if not is_aa(residue, standard=False):
+                continue
+            sequence.append(seq1(residue.resname, custom_map={"MSE": "M"}))
+            values = [float(atom.bfactor) for atom in residue if atom.name not in excluded]
+            if any(not math.isfinite(value) or value < 0 for value in values):
+                raise ValueError("pSCE requires finite nonnegative atom errors")
+            if not values:
+                continue
+            scores.append(sum(values) / len(values))
+            numbers.append(int(residue.id[1]))
+            insertions.append(residue.id[2].strip())
+            names.append(residue.resname)
+        sequences[chain.id] = "".join(sequence)
+        if scores:
+            all_scores.extend(scores)
+            chains[chain.id] = {"type": "protein", "length": len(scores),
+                "avg_psce": sum(scores) / len(scores), "max_psce": max(scores), "min_psce": min(scores),
+                "residue_numbers": numbers, "insertion_codes": insertions,
+                "residue_names": names, "psce": scores}
+    if not all_scores:
+        raise NoScoredSidechainError("No scored sidechain atoms in requested pSCE scope")
+    summary = {"chain_count": len(chains), "residue_count": len(all_scores),
+               "avg_psce": sum(all_scores) / len(all_scores),
+               "max_psce": max(all_scores), "min_psce": min(all_scores)}
+    return {"policy": policy, "chains": chains, "sequences": sequences, "summary": summary}
+
 
 def average_per_residue_bfactor(input_dir, chain_id, ignore_cbeta, out_dir):
-    os.makedirs(out_dir, exist_ok=True)
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    policy = psce_policy(chain_id, ignore_cbeta)
     results = {}
-    
-    for pdb_file in os.listdir(input_dir):
-        if pdb_file.endswith('.pdb'):
-            full_path = os.path.join(input_dir, pdb_file)
-            try:
-                structure = gemmi.read_structure(full_path)
-            except FileNotFoundError:
-                print(f"File {full_path} not found, skipping")
-                continue
-                
-            if ignore_cbeta:
-                backbone_atoms = {'C', 'N', 'O', 'CA', 'CB'}
-            else:
-                backbone_atoms = {'C', 'N', 'O', 'CA'}
-                
-            design_name = os.path.splitext(pdb_file)[0]  # Remove .pdb extension
-            
-            # If processing of all chains is requested
-            if chain_id == 'all_chains':
-                all_chains_residue_averages = []
-                all_chains_sequences = {}
-                chain_averages = {}
-                
-                for model in structure:
-                    for chain in model:
-                        chain_id_current = chain.name
-                        sequence_str = get_chain_sequence(chain)
-                        all_chains_sequences[chain_id_current] = sequence_str
-                        
-                        chain_residue_averages = []
-                        for residue in chain:
-                            residue_total = 0.0
-                            residue_count = 0
-                            
-                            for atom in residue:
-                                if atom.name not in backbone_atoms:
-                                    residue_total += atom.b_iso
-                                    residue_count += 1
-                            
-                            if residue_count > 0:
-                                chain_residue_averages.append(residue_total / residue_count)
-                        
-                        if chain_residue_averages:
-                            all_chains_residue_averages.extend(chain_residue_averages)
-                            chain_avg = sum(chain_residue_averages) / len(chain_residue_averages)
-                            chain_averages[chain_id_current] = round(chain_avg, 2)
-                            print(f"Chain {chain_id_current} average pSCE: {chain_avg:.2f}")
-                
-                if not all_chains_residue_averages:
-                    print(f"No atoms with pSCE score in {pdb_file}")
-                    continue
-                
-                # Calculate the overall average across all chains
-                average_psce = sum(all_chains_residue_averages) / len(all_chains_residue_averages)
-                max_residue_psce = max(all_chains_residue_averages)
-                min_residue_psce = min(all_chains_residue_averages)
-                print(f"Overall average pSCE for all chains in {pdb_file}: {average_psce:.2f} (max: {max_residue_psce:.2f})")
-
-                # Create JSON output with sequences from all chains
-                output_data = {
-                    "design": design_name,
-                    "sequence": '|'.join(f"{chain_id}:{seq}" for chain_id, seq in all_chains_sequences.items()),
-                    "chain_avg_psce": chain_averages,
-                    "fampnn_avg_psce": round(average_psce, 2),
-                    "fampnn_max_residue_psce": round(max_residue_psce, 2),
-                    "fampnn_min_residue_psce": round(min_residue_psce, 2)
-                }
-            
-            # If a specific chain is requested, process only that chain
-            else:
-                residue_averages = []
-                sequence_str = ""
-                
-                for model in structure:
-                    chain = model.find_chain(chain_id)
-                    if not chain:
-                        continue
-
-                    # extract sequence for chain_id
-                    sequence_str = get_chain_sequence(chain)    
-                    for residue in chain:
-                        residue_total = 0.0
-                        residue_count = 0
-                        
-                        for atom in residue:
-                            if atom.name not in backbone_atoms:
-                                residue_total += atom.b_iso
-                                residue_count += 1
-                        
-                        if residue_count > 0:
-                            residue_averages.append(residue_total / residue_count)
-                
-                if not residue_averages:
-                    print(f"No atoms with pSCE score in chain {chain_id} of {pdb_file}")
-                    continue  # Skip to next file
-                
-                average_psce = sum(residue_averages) / len(residue_averages)
-                max_residue_psce = max(residue_averages)
-                min_residue_psce = min(residue_averages)
-                print(f"Average pSCE (on a per-residue basis) for side chains in chain {chain_id} of {pdb_file}: {average_psce:.2f} (max: {max_residue_psce:.2f})")
-                
-                # Create JSON output for single chain
-                output_data = {
-                    "design": design_name,
-                    "sequence": sequence_str,
-                    "fampnn_avg_psce": round(average_psce, 2),
-                    "fampnn_max_residue_psce": round(max_residue_psce, 2),
-                    "fampnn_min_residue_psce": round(min_residue_psce, 2)
-                }
-            
-            # Write JSON file
-            output_filename = f"{design_name}.json"
-            output_path = os.path.join(out_dir, output_filename)
-            with open(output_path, 'w') as f:
-                f.write(json.dumps(output_data) + '\n')
-            
-            results[pdb_file] = average_psce
-            print(f"Created {output_filename}")
-    
+    for path in sorted(Path(input_dir).glob("*.pdb")):
+        profile = compute_psce_profile(path, policy)
+        summary, sequences = profile["summary"], profile["sequences"]
+        output = {"design": path.stem, "psce_policy": policy,
+                  "sequence": "|".join(f"{c}:{s}" for c, s in sequences.items()) if chain_id == "all_chains" else sequences[chain_id],
+                  "chain_avg_psce": {c: round(v["avg_psce"], 2) for c, v in profile["chains"].items()},
+                  "fampnn_avg_psce": round(summary["avg_psce"], 2),
+                  "fampnn_max_residue_psce": round(summary["max_psce"], 2),
+                  "fampnn_min_residue_psce": round(summary["min_psce"], 2)}
+        (Path(out_dir) / f"{path.stem}.json").write_text(json.dumps(output, allow_nan=False) + "\n")
+        results[path.name] = summary["avg_psce"]
     return results
 
-def main():
-    parser = argparse.ArgumentParser(description='Calculates average pSCE metric (Predicted Sidechain Confidence Error) of designs by Full-Atom MPNN')
-    parser.add_argument('--input_dir', required=True, help='Input directory containing PDB files')
-    parser.add_argument('--chain_id', required=False, default='all', 
-                        help='Chain ID of designed chain. If not provided, will calculate average over all chains (default: all)')
-    parser.add_argument('--ignore_cbeta', action='store_true', help='Ignore C-beta atom types when calculating average pSCE')
-    parser.add_argument('--out_dir', default='./averagePSCE', help='Output directory for scores in JSON format (default: ./averagePSCE)')
-    args = parser.parse_args()
 
-    average_psce = average_per_residue_bfactor(args.input_dir, args.chain_id, args.ignore_cbeta, args.out_dir)
+def main():
+    parser = argparse.ArgumentParser(description="FA-MPNN predicted sidechain error (Angstrom; lower is better)")
+    parser.add_argument("--input_dir", required=True)
+    parser.add_argument("--chain_id", default="all_chains")
+    parser.add_argument("--ignore_cbeta", action="store_true")
+    parser.add_argument("--out_dir", default="./averagePSCE")
+    args = parser.parse_args()
+    average_per_residue_bfactor(args.input_dir, args.chain_id, args.ignore_cbeta, args.out_dir)
+
 
 if __name__ == "__main__":
     main()

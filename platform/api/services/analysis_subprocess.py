@@ -37,7 +37,6 @@ from services.structure_utils import (
     compute_contact_map,
     compute_gyration_radius,
     get_chain_ids,
-    get_per_chain_fampnn_psce,
     get_per_chain_metrics,
     get_residue_count,
     get_secondary_structure,
@@ -251,34 +250,18 @@ def _compute_chain_metrics(design: Design) -> tuple[dict[str, Any], dict[str, An
 
 
 def _compute_fampnn_psce_profile(design: Design, params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Any]:
-    structure_path = _resolve_design_structure_path(design)
-    ignore_cbeta = bool((params or {}).get("ignore_cbeta", False))
-    chains = get_per_chain_fampnn_psce(str(structure_path), ignore_cbeta=ignore_cbeta) or {}
-    all_scores = [
-        float(score)
-        for chain in chains.values()
-        if isinstance(chain, dict)
-        for score in (chain.get("psce") or [])
-        if isinstance(score, (int, float))
-    ]
-    residue_count = sum(int(chain.get("length") or 0) for chain in chains.values() if isinstance(chain, dict))
-    result = {
-        "design_id": design.id,
-        "design_name": design.name,
-        "metric_kind": "fampnn_psce",
-        "direction": "lower_is_better",
-        "scope": "all_chains",
-        "ignore_cbeta": ignore_cbeta,
-        "chains": chains,
-    }
-    summary = {
-        "chain_count": len(chains),
-        "residue_count": residue_count,
-        "avg_psce": round(sum(all_scores) / len(all_scores), 4) if all_scores else None,
-        "max_psce": round(max(all_scores), 4) if all_scores else None,
-        "min_psce": round(min(all_scores), 4) if all_scores else None,
-        "ignore_cbeta": ignore_cbeta,
-    }
+    from services.structure_utils import fampnn_psce_authority, resolve_fampnn_psce_policy
+    policy = resolve_fampnn_psce_policy(design, params)
+    result = {"design_id": design.id, "design_name": design.name,
+              "metric_kind": "fampnn_psce", "direction": "lower_is_better",
+              "policy": policy, "chains": {}}
+    if policy is None:
+        result.update(status="unavailable", reason="historical_psce_policy_unknown",
+                      scope=None, ignore_cbeta=None)
+        return result, {"status": "unavailable", "reason": result["reason"]}, result
+    profile = fampnn_psce_authority().compute_psce_profile(_resolve_design_structure_path(design), policy)
+    result.update(status="ok", scope=policy["chain_id"], ignore_cbeta=policy["ignore_cbeta"], chains=profile["chains"])
+    summary = {**profile["summary"], "policy": policy, "ignore_cbeta": policy["ignore_cbeta"]}
     return result, summary, result
 
 

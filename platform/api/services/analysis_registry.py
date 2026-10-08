@@ -189,7 +189,13 @@ def normalize_chain_metrics_params(raw: dict[str, Any] | None) -> dict[str, Any]
 
 def normalize_fampnn_psce_profile_params(raw: dict[str, Any] | None) -> dict[str, Any]:
     params = dict(raw or {})
-    return {"ignore_cbeta": _normalize_bool(params.get("ignore_cbeta"), False)}
+    if set(params) - {"chain_id", "ignore_cbeta"}:
+        raise ValueError("Unknown pSCE analysis parameter")
+    if "chain_id" in params and (not isinstance(params["chain_id"], str) or not params["chain_id"].strip()):
+        raise ValueError("pSCE chain_id must be an explicit chain or all_chains")
+    if "ignore_cbeta" in params and type(params["ignore_cbeta"]) is not bool:
+        raise ValueError("pSCE ignore_cbeta must be boolean")
+    return params
 
 
 def normalize_pae_matrix_params(raw: dict[str, Any] | None) -> dict[str, Any]:
@@ -256,10 +262,13 @@ def build_chain_metrics_signature(design: Design, params: dict[str, Any], _sessi
 
 
 def build_fampnn_psce_profile_signature(design: Design, params: dict[str, Any], _session: AsyncSession) -> str:
+    from services.structure_utils import resolve_fampnn_psce_policy
     return _json_hash({
         "analysis_type": FAMPNN_PSCE_PROFILE_ANALYSIS,
         "structure": _structure_fingerprint(design.pdb_path),
         "params": params,
+        "psce_policy": resolve_fampnn_psce_policy(design, params),
+        "policy_adapter": 2,
     })
 
 
@@ -492,7 +501,7 @@ ANALYSIS_DEFINITIONS: Dict[str, AnalysisDefinition] = {
     FAMPNN_PSCE_PROFILE_ANALYSIS: AnalysisDefinition(
         analysis_type=FAMPNN_PSCE_PROFILE_ANALYSIS,
         subject_kind="design",
-        version="2026-03-23-v1",
+        version="2026-09-12-policy-v2",
         resource_class="cpu_light",
         normalize_params=normalize_fampnn_psce_profile_params,
         build_input_signature=build_fampnn_psce_profile_signature,
