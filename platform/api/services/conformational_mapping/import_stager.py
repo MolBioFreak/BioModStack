@@ -24,7 +24,7 @@ from .import_snapshot import (
 
 
 MAX_IMPORT_FILES = 256
-MAX_IMPORT_BYTES = 2 * 1024 * 1024 * 1024
+MAX_IMPORT_BYTES = 6 * 1024 * 1024 * 1024
 _ALLOWED_SUFFIXES = {".cif", ".mmcif", ".pdb"}
 
 
