@@ -29,7 +29,7 @@ Spec: sections 3–5, 12–15. No review campaign or science execution.
 1. Populate the coverage table from the actual existing workflow/model registry and request entrypoints as implementation prerequisites, including all advertised scientific families, not only design workflows.
 2. Locate and record the current owners of plan compilation, component lifecycle, runtime storage/provisioning, placement, return/import and UI/API contracts. Starting anchors include `platform/api/component_runtime.py`, `platform/api/model_registry.py`, `platform/api/services/nextflow.py`, `platform/api/routers/queue.py`, `platform/api/services/remote_execution/`, `platform/api/services/result_ingester.py`, existing workflows/modules and native scripts. These are anchors, not a claim that every edit belongs there.
 3. Classify existing native design additions as shared infrastructure, native scientific adapter, consumer wiring, or duplicate infrastructure. Retain scientific runners and correctly implemented shared behavior.
-4. Record unresolved source/acquisition, provider-policy and intentional scientific-semantic decisions. Do not invent answers.
+4. Record unresolved source/acquisition, provider-policy and intentional scientific-semantic decisions. Do not invent answers. Owner clarification settles the current acquisition direction as on-command host-to-worker push with existing working authentication; do not reopen release hosting or redesign authentication as a prerequisite.
 
 Deliverable/exit: a finite coverage denominator and ownership map feeding the following implementation items; no success percentage or generic audit report substituted for code work.
 
@@ -64,7 +64,7 @@ Exit: local and worker adapters use the same lifecycle/scientific authority, wit
 
 Spec: sections 6–7, 11, 15; shared image lifecycle policy.
 
-1. Complete the pinned critical release manifest, approved acquisition sources, compatibility requirements, digest checks and atomic activation/recovery. Resolve actual publication/credential prerequisites rather than fabricate endpoints.
+1. Complete the pinned critical release manifest, compatibility requirements, digest checks and atomic activation/recovery using the selected existing on-command host-push path and unchanged authentication. Do not fabricate endpoints or make new release hosting/authentication a prerequisite. Other acquisition mechanisms require their own approved sources and are not substitutes for connecting the existing path.
 2. Reuse the canonical immutable runtime store and existing lifecycle authority, with separate licensed weights; no competing caches or task-local SIF restoration.
 3. Complete observed inventory of release, boot identity, freshness, images, weights/databases, compatibility, partial/corrupt/unverified assets, retained output and reservations.
 4. Connect both workflow-without-Job dependency provisioning and independent catalog provisioning to the same dependency authority and supported human/agent setup interfaces.

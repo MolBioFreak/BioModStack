@@ -101,7 +101,7 @@ This is an implementation tracking table, not an executable catalog or acceptanc
 - Antibody de novo, local redesign and PPIFLOW remain callback-dependent remote exclusions.
 - Existing native design integration is source implementation, not all-mode shared-runtime acceptance.
 - Tests, review passes and delegation remain prohibited; acceptance status stays unestablished.
-- Resolve actual release acquisition/credential authority and compliant ColabFold fleet admission before enabling those paths; provider key availability is not acceptance.
+- Current acquisition direction is on-command host-to-worker push with existing authentication, as clarified by the owner. New release hosting/auth changes are not prerequisites. Compliant ColabFold fleet admission remains a separate scientific-service boundary; provider key availability is not acceptance.
 
 ## Coverage expansion still required
 

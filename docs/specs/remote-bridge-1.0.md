@@ -94,7 +94,7 @@ Do not install a duplicate full interactive BMS server/database merely to imitat
 ### Critical runtime release
 A versioned release manifest declares runner/coordinator, Nextflow, support Python, Apptainer compatibility, OS/architecture/driver constraints, artifact digests and authorized acquisition sources. Bootstrap verifies content before atomic activation; incomplete releases never become ready. Preserve prior installed identity for rollback/recovery where feasible.
 
-Worker startup can acquire critical components without requiring that the host possess every large model asset. Acquisition uses approved immutable sources with digest verification. Host push remains a supported route for local-only/private artifacts. Release publication location and credential distribution must be resolved before implementation; this specification invents no endpoint or credentials.
+**Owner clarification:** retain on-command host-to-worker push through the existing working authentication as the current provisioning direction. No authentication redesign or new release-hosting prerequisite is authorized. Continue using the existing transfer and runtime lifecycle authorities, with digest verification and pinned identities. Worker-side acquisition from other approved immutable sources remains distinct from host push; it must not be invented or used to block implementation of the selected push path. This clarification does not waive readiness, complete dependency provisioning, or autonomous computation after setup.
 
 Reboot reports boot identity and desired/observed runtime state. Reboot does not implicitly upgrade code, restart science or certify readiness.
 
@@ -212,7 +212,7 @@ These are dependency-oriented work packages, not delivery dates. Work may overla
 ## 15. Engineering decisions and release evidence still required
 
 The product scope is finalized; the following are implementation/acceptance prerequisites, not reasons to invent behavior:
-- Select authorized runtime/artifact release locations and private acquisition credential mechanism before building direct pulls.
+- Host-to-worker push with existing authentication is the selected current provisioning path. Additional release hosting/direct-download credentials are not an open prerequisite for that path; no changes are authorized merely by the earlier direct-pull discussion.
 - Establish the complete advertised workflow/mode denominator and exact-release coverage evidence.
 - Document intentional scientific grouping/failure-semantic changes for separate review.
 - Verify provider lifecycle/storage behavior before offering destructive actions.
