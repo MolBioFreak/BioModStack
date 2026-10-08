@@ -11,8 +11,10 @@ from services.assembly.golden_gate_workflow_wire import WorkflowWire, expand_wor
 from services.assembly.golden_gate_workflow import run_workflow
 from services.assembly.golden_gate_workflow_persistence import resolve_sources, request_sources, save_workup, read_workup
 from services.assembly.types import AssemblyError
+from routers.molbio_golden_gate_batch import router as batch_router
 
 router = APIRouter(prefix='/api/molbio/assembly/golden-gate', tags=['Molecular Biology'])
+router.include_router(batch_router)
 WireView = Literal['full', 'normalized']
 
 

@@ -8,7 +8,8 @@ import { api } from '../../src/lib/api';
 import { AssemblyPanel } from '../../src/components/MolBioToolkit/panels/AssemblyPanel';
 import { GoldenGateWorkflowControls } from '../../src/components/MolBioToolkit/panels/golden-gate/GoldenGateWorkflowControls';
 import { designGoldenGateBatch, captureAlternative, editAlternative, type BatchRequest, type BatchEvent } from '../../src/lib/goldenGateBatch';
-import type { AssembleTask } from '../../src/lib/goldenGateWorkflowTypes';
+import type { AssembleTask, SaveDesignRequest } from '../../src/lib/goldenGateWorkflowTypes';
+import { expandGoldenGateWire, projectGoldenGateWire } from '../../src/lib/goldenGateWorkflowWire';
 import type { RestrictionRecord, RestrictionCatalogSummary } from '../../src/lib/restrictionAnalysis';
 import native from '../fixtures/golden-gate/batch-receiving.json';
 import workflow from '../fixtures/golden-gate/workflow-receiving.json';
@@ -42,9 +43,9 @@ function transport() {
   if(url.endsWith('/primer-tm/options'))return response(workflow.tm_options);
   if(url==='/api/user-templates') { if(config.method==='post'){template={id:'batch-config',...data};return response(template);} return response([template]); }
   if(url==='/api/user-templates/batch-config')return response(template);
-  if(url.endsWith('/design/save'))return response(native.saved);
+  if(url.endsWith('/design/save')){expect(config.params).toEqual({view:'normalized'});return response(projectGoldenGateWire(native.saved,'saved'));}
   if(url.endsWith('/export'))return response(new Blob(['Native ZIP contents qualified by ASGI test']));
-  if(url.includes('/design/'))return response(native.saved);
+  if(url.includes('/design/'))return response(projectGoldenGateWire(native.saved,'saved'));
   throw new Error('Unexpected HTTP '+url);
  };
  vi.stubGlobal('fetch',vi.fn(async (input: string, init?: RequestInit) => {
@@ -101,8 +102,15 @@ describe('Golden Gate native batch receiving at actual Assembly entry',()=>{
   await click('View batch combination 0: vector-0 / insert-0');
   expect(host.querySelector('[aria-label="Selected product DNA"]')).toBeTruthy();
   await click('Save fixed selected candidate');await waitFor(()=>expect(host.textContent).toContain('Saved operation'));
-  const save=calls.find(c=>c.url.endsWith('/design/save'))!.data;
+  const wireSave=calls.find(c=>c.url.endsWith('/design/save'))!.data;
+  const save=expandGoldenGateWire<SaveDesignRequest>(wireSave,'save');
   expect(save.selection.request).toEqual(native.events[1].event==='result'?native.events[1].result!.solutions[0].fixed_request:null);
+  await click('Save fixed selected candidate');await settle();
+  expect(calls.filter(c=>c.url.endsWith('/design/save')).at(-1)!.data).toEqual(wireSave);
+  await change('Workup name','Changed batch metadata');await click('Save fixed selected candidate');await settle();
+  const changed=expandGoldenGateWire<SaveDesignRequest>(calls.filter(c=>c.url.endsWith('/design/save')).at(-1)!.data,'save');
+  expect(changed.idempotency_key).not.toBe(save.idempotency_key);
+  expect(changed.name).toBe('Changed batch metadata');
   await click('Load selected product with annotations');expect(loaded).toHaveBeenCalledOnce();
   await click('Reopen retained workup');await settle();expect(host.querySelector('[aria-label="Selected product DNA"]')).toBeTruthy();
   vi.stubGlobal('URL',class extends URL {static createObjectURL(){return 'blob:test';}static revokeObjectURL(){}});

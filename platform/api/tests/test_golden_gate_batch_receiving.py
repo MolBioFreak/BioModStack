@@ -78,7 +78,6 @@ def test_large_cartesian_count_has_no_enumeration_cap():
 @pytest.mark.asyncio
 async def test_one_http_batch_all_results_save_reopen_export_and_next_stage(tmp_path):
     async with client_store(tmp_path) as (client, sessions):
-        client._transport.app.include_router(route.router, prefix='/api/molbio/assembly/golden-gate')
         schema = client._transport.app.openapi()
         endpoint = schema['paths'][URL + '/batch']['post']
         assert endpoint['requestBody']['content']['application/json']['schema']['$ref'].endswith('/BatchRequest')
@@ -147,7 +146,6 @@ async def test_one_http_batch_all_results_save_reopen_export_and_next_stage(tmp_
 @pytest.mark.asyncio
 async def test_sampled_scope_and_bad_combination_keep_other_results(tmp_path):
     async with client_store(tmp_path) as (client, _):
-        client._transport.app.include_router(route.router, prefix='/api/molbio/assembly/golden-gate')
         body = batch_request().model_dump(mode='json')
         body['scope'] = dict(mode='sampled', count=2, seed=17)
         first = await client.post(URL + '/batch', json=body)
@@ -219,7 +217,6 @@ async def test_actual_asgi_disconnect_after_first_delivered_result(tmp_path):
     import asyncio
     async with client_store(tmp_path) as (client, _):
         app = client._transport.app
-        app.include_router(route.router, prefix='/api/molbio/assembly/golden-gate')
         payload = batch_request().model_dump_json().encode()
         request_sent = False
         disconnected = asyncio.Event()
