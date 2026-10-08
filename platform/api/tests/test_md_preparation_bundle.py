@@ -125,3 +125,18 @@ def test_bundle_fails_closed_on_worker_error(tmp_path: Path) -> None:
             profile_id="amber_ff19sb_opc_protein_v1", profile_sha256="b" * 64,
             runtime_lock=lock, runner=failing_runner)
     assert not destination.exists()
+
+
+def test_nextflow_preparation_runs_directly_in_pinned_preparation_image() -> None:
+    module = (REPO_ROOT / "modules/experimental/molecular_dynamics/prepare.nf").read_text()
+    config = (REPO_ROOT / "nextflow.config").read_text()
+
+    assert "label 'MolecularDynamicsPreparation'" in module
+    assert "worker_command=['apptainer', 'exec'" not in module
+    assert "withLabel: MolecularDynamicsPreparation" in config
+    label_start = config.index("withLabel: MolecularDynamicsPreparation")
+    label_end = config.index("withLabel: MolecularDynamicsCpu", label_start)
+    label = config[label_start:label_end]
+    assert "md_preparation_container" in label
+    assert "BMS_MD_PREPARATION_SIF=/opt/bms-md-preparation-runtime.sif" in label
+    assert "BMS_MD_PREPARATION_RUNTIME_LOCK=/opt/bms-md-preparation-runtime.lock" in label
