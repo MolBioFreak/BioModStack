@@ -1417,6 +1417,12 @@ workflow ANTIBODY_DENOVO {
             
             // Final validated structures from aggregation
             validated_structures = WaitAndAggregateChildResults.out.pdbs
+                .flatten()
+                .map { pdb ->
+                    def name = pdb.baseName.replace('_model_0', '').replace('_boltzpred', '')
+                    def meta = [id: name]
+                    [meta, pdb]
+                }
         }
         else {
             // ═══════════════════════════════════════════════════════════════════
