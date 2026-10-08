@@ -103,7 +103,7 @@
     "source_authorities": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 256,
+      "maxItems": 512,
       "x-bms-unique-by": "path",
       "items": {
         "type": "object",

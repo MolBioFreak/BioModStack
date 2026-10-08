@@ -65,7 +65,7 @@ def _source_denominator() -> dict[str, Any]:
         or denominator.get("schema") != _DENOMINATOR_SCHEMA
         or type(paths) is not list
         or not paths
-        or len(paths) > 256
+        or len(paths) > 512
         or any(type(path) is not str or not path or path.startswith("/") for path in paths)
         or any(".." in Path(path).parts for path in paths)
         or len(paths) != len(set(paths))
