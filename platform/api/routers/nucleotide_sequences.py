@@ -22,6 +22,7 @@ from services.molbio_persistence import (
     record_primer_revision,
     record_sequence_deletion,
     record_sequence_revision,
+    resolve_sequence_operation_params,
 )
 from services.nucleotide_validation import canonicalize_nucleotide_sequence
 
@@ -811,7 +812,7 @@ async def list_saved_gibson_workups(
 
     # Missing keys fall through; explicit null/wrong types must not fall through.
     fragment_count = case(
-        (NucleotideSequence.operation == 'golden_gate_design', func.coalesce(func.json_extract(params, '$.fragment_count'), 0)),
+        (or_(NucleotideSequence.operation == 'golden_gate_design', text_field('schema') == 'bms.gibson-workup-ref.v1'), func.coalesce(func.json_extract(params, '$.fragment_count'), 0)),
         (func.json_type(params, "$.ordered_fragments").is_not(None), array_count("ordered_fragments")),
         (func.json_type(params, "$.source_fragments").is_not(None), array_count("source_fragments")),
         else_=array_count("fragments"),
@@ -823,7 +824,7 @@ async def list_saved_gibson_workups(
             NucleotideSequence.created_at, NucleotideSequence.updated_at,
             text_field("engine").label("engine"), text_field("engine_version").label("engine_version"),
             fragment_count.label("fragment_count"), case(
-                (NucleotideSequence.operation == 'golden_gate_design', func.coalesce(func.json_extract(params, '$.primer_count'), 0)),
+                (or_(NucleotideSequence.operation == 'golden_gate_design', text_field('schema') == 'bms.gibson-workup-ref.v1'), func.coalesce(func.json_extract(params, '$.primer_count'), 0)),
                 else_=array_count('primers')).label('primer_count'),
         )
         .where(NucleotideSequence.operation.in_(['gibson', 'golden_gate_design']))
@@ -998,7 +999,9 @@ async def get_sequence(
     if not seq:
         raise HTTPException(status_code=404, detail="Sequence not found")
     
-    return serialize_sequence(seq)
+    response = serialize_sequence(seq)
+    response.operation_params = await resolve_sequence_operation_params(session, seq.operation_params)
+    return response
 
 
 @router.put("/{sequence_id}", response_model=NucleotideSequenceResponse)
@@ -1088,7 +1091,9 @@ async def update_sequence(
     await session.commit()
     await session.refresh(seq)
     
-    return serialize_sequence(seq)
+    response = serialize_sequence(seq)
+    response.operation_params = await resolve_sequence_operation_params(session, seq.operation_params)
+    return response
 
 
 @router.delete("/{sequence_id}")
@@ -1191,7 +1196,9 @@ async def add_feature(
     await session.commit()
     await session.refresh(seq)
     
-    return serialize_sequence(seq)
+    response = serialize_sequence(seq)
+    response.operation_params = await resolve_sequence_operation_params(session, seq.operation_params)
+    return response
 
 
 @router.delete("/{sequence_id}/features/{feature_id}")

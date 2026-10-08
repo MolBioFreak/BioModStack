@@ -459,6 +459,16 @@ async def _record_inline_sequence_input(
     return revision
 
 
+async def resolve_sequence_operation_params(
+    session: AsyncSession, parameters: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Expand forward-written workup references without changing stored history."""
+    if not isinstance(parameters, dict) or parameters.get("schema") != "bms.gibson-workup-ref.v1":
+        return parameters
+    operation = await session.get(MolecularOperation, parameters.get("operation_id"))
+    return operation.parameters if operation is not None else parameters
+
+
 async def record_generated_sequence(
     session: AsyncSession,
     sequence: NucleotideSequence,
@@ -489,6 +499,17 @@ async def record_generated_sequence(
         idempotency_key=idempotency_key,
         created_by=SERVER_OWNED_ACTOR,
     )
+    if operation_kind == "gibson":
+        workup = operation.parameters
+        fragments = workup.get("ordered_fragments", workup.get("source_fragments", workup.get("fragments")))
+        primers = workup.get("primers")
+        sequence.operation_params = {
+            "schema": "bms.gibson-workup-ref.v1",
+            "operation_id": operation.id,
+            **{key: workup[key] for key in ("computation_id", "engine", "engine_version") if key in workup},
+            "fragment_count": len(fragments) if isinstance(fragments, list) else 0,
+            "primer_count": len(primers) if isinstance(primers, list) else 0,
+        }
     revision = await record_sequence_revision(
         session,
         sequence,
