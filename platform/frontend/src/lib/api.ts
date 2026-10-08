@@ -3377,6 +3377,11 @@ export interface OntMk1dReconnectResponse {
         host_agent_recreate: string;
         host_agent_health: string;
     };
+    post_action_device_status: {
+        implementation_status: string;
+        observed_mk1d_position_count: number;
+        safe_mk1d_observed: boolean;
+    };
     device_status_observed: boolean;
     connected: boolean;
 }

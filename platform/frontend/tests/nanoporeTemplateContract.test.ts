@@ -225,3 +225,17 @@ test('NGS instrument panel renders only safe device truth and an intent status',
     assert.match(ontApi, /output_summary: Record<'fastq' \| 'pod5' \| 'bam', number>/u);
     assert.doesNotMatch(ontApi, /fake_or_demo_device\?: boolean|is_ctc\?: boolean|channel_count\?: number|output_director(?:y|ies)|rpc_ports|connection_error/u);
 });
+
+test('NGS Mk1D reconnect uses one fixed confirmation and a finite public receipt', () => {
+    const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
+    const api = readSource('src/lib/api.ts');
+    const ontApi = api.slice(api.indexOf('// ONT INSTRUMENT CONTROL API'));
+
+    assert.match(panel, /Reconnect Mk1D/u);
+    assert.match(panel, /does not start sequencing, alter a flow cell, or restart active MinKNOW/u);
+    assert.match(ontApi, /requestMk1dReconnect/u);
+    assert.match(ontApi, /\{ confirm_reconnect: true \}/u);
+    assert.match(ontApi, /observed_mk1d_position_count: number/u);
+    assert.match(ontApi, /safe_mk1d_observed: boolean/u);
+    assert.doesNotMatch(ontApi, /mk1d_positions|connection_error|command|service_name/u);
+});

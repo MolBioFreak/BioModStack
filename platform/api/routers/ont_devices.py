@@ -7,10 +7,8 @@ configured.
 from __future__ import annotations
 
 import asyncio
-from typing import Literal
-
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StrictBool, field_validator
 
 from mobile_apk_auth import require_mk1d_reconnect_tailscale_identity
 from services import ont_device_control
@@ -22,7 +20,14 @@ class Mk1dReconnectRequest(BaseModel):
     """The only accepted reconnect command; arbitrary body fields are forbidden."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
-    confirm_reconnect: Literal[True]
+    confirm_reconnect: StrictBool
+
+    @field_validator("confirm_reconnect")
+    @classmethod
+    def require_literal_true(cls, value: bool) -> bool:
+        if value is not True:
+            raise ValueError("confirm_reconnect must be literal true")
+        return value
 
 @router.get("/devices/status")
 async def ont_device_status() -> dict[str, object]:

@@ -120,23 +120,19 @@ def get_device_control_status() -> dict[str, Any]:
 def _safe_post_action_observation(status: dict[str, Any]) -> dict[str, Any]:
     """Project only read-only Mk1D evidence needed by the recovery receipt."""
     implementation_status = str(status.get("implementation_status") or "unknown")
-    positions: list[dict[str, Any]] = []
+    position_count = 0
+    safe_mk1d_observed = False
     for device in status.get("live_devices") or []:
         if not isinstance(device, dict) or device.get("device_type") != "mk1d":
             continue
+        position_count += 1
         connection_error = device.get("connection_error")
-        positions.append(
-            {
-                "position": str(device.get("position") or "unknown"),
-                "connection_error": connection_error if isinstance(connection_error, str) and connection_error else None,
-            }
-        )
-    safe_mk1d_observed = implementation_status == "configured" and any(
-        position["connection_error"] is None for position in positions
-    )
+        if not (isinstance(connection_error, str) and connection_error):
+            safe_mk1d_observed = True
+    safe_mk1d_observed = implementation_status == "configured" and safe_mk1d_observed
     return {
         "implementation_status": implementation_status,
-        "mk1d_positions": positions,
+        "observed_mk1d_position_count": position_count,
         "safe_mk1d_observed": safe_mk1d_observed,
     }
 
