@@ -696,7 +696,7 @@ interface SchedulerConfig {
         threshold: number | null;
         disabled?: boolean;
         priority_tier?: number | null;
-        vram_safety_margin_mb?: number;
+        vram_safety_margin_mb?: number | null;
         max_concurrent_jobs?: number | null;
     }>;
 }
@@ -802,7 +802,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
 
         const override = (config?.overrides[gpuId] || {}) as {
             threshold?: number | null;
-            vram_safety_margin_mb?: number;
+            vram_safety_margin_mb?: number | null;
             priority_tier?: number | null;
             max_concurrent_jobs?: number | null;
         };
@@ -850,7 +850,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                     threshold: thresholdPct,
                     disabled: existing.disabled ?? false,
                     priority_tier: local.priorityTier,
-                    vram_safety_margin_mb: existing.vram_safety_margin_mb ?? config.global.vram_safety_margin_mb,
+                    vram_safety_margin_mb: existing.vram_safety_margin_mb ?? null,
                     max_concurrent_jobs: local.maxConcurrentJobs,
                 })
             });
@@ -885,7 +885,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                         threshold: thresholdPct,
                         disabled: existing.disabled ?? false,
                         priority_tier: existing.priority_tier ?? null,
-                        vram_safety_margin_mb: existing.vram_safety_margin_mb ?? config.global.vram_safety_margin_mb,
+                        vram_safety_margin_mb: existing.vram_safety_margin_mb ?? null,
                         max_concurrent_jobs: existing.max_concurrent_jobs ?? null,
                     })
                 });
@@ -962,7 +962,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                     threshold: config.overrides[gpuId]?.threshold ?? null,
                     disabled: config.overrides[gpuId]?.disabled ?? false,
                     priority_tier: config.overrides[gpuId]?.priority_tier ?? null,
-                    vram_safety_margin_mb: config.overrides[gpuId]?.vram_safety_margin_mb ?? config.global.vram_safety_margin_mb,
+                    vram_safety_margin_mb: config.overrides[gpuId]?.vram_safety_margin_mb ?? null,
                     max_concurrent_jobs: config.overrides[gpuId]?.max_concurrent_jobs ?? null,
                 })
             });
@@ -989,7 +989,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
                     threshold: config.overrides[gpuId]?.threshold ?? null,
                     disabled: config.overrides[gpuId]?.disabled ?? false,
                     priority_tier: config.overrides[gpuId]?.priority_tier ?? null,
-                    vram_safety_margin_mb: config.overrides[gpuId]?.vram_safety_margin_mb ?? config.global.vram_safety_margin_mb,
+                    vram_safety_margin_mb: config.overrides[gpuId]?.vram_safety_margin_mb ?? null,
                     max_concurrent_jobs: config.overrides[gpuId]?.max_concurrent_jobs ?? null,
                 })
             });

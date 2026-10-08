@@ -1578,7 +1578,7 @@ export interface SchedulerConfig {
         quick_enable?: boolean;
         threshold?: number | null;
         priority_tier?: number | null;
-        vram_safety_margin_mb?: number;
+        vram_safety_margin_mb?: number | null;
         max_concurrent_jobs?: number | null;
     }>;
 }

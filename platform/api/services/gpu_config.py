@@ -49,7 +49,6 @@ DEFAULT_SCHEDULER_CONFIG: Dict[str, Any] = {
         # global admission even when several GPUs appear mostly idle.
         "maturation_child": 2,
         "ppiflow": 2,
-        "esmfold": 1,
         "esmfold2": 1,
         "esmfold2_experimental": 1,
     },
@@ -57,16 +56,21 @@ DEFAULT_SCHEDULER_CONFIG: Dict[str, Any] = {
 
 # These defaults are mandatory safety caps. Operators may tune them through
 # the API, but may not remove them and expose an unlimited state.
-PROTECTED_CONCURRENCY_LIMITS = frozenset(
-    {"maturation_child", "ppiflow", "esmfold", "esmfold2", "esmfold2_experimental"}
-)
+MANDATORY_CONCURRENCY_CAPS = {
+    "maturation_child": 2,
+    "ppiflow": 2,
+    "esmfold2": 1,
+    "esmfold2_experimental": 1,
+}
+PROTECTED_CONCURRENCY_LIMITS = frozenset(MANDATORY_CONCURRENCY_CAPS)
 
 
 def get_default_config() -> Dict[str, Any]:
     return copy.deepcopy(DEFAULT_SCHEDULER_CONFIG)
 
 
-def _merge_with_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_scheduler_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge persisted state with defaults and enforce mandatory safety caps."""
     merged = get_default_config()
     global_config = config.get("global")
     if isinstance(global_config, dict):
@@ -78,12 +82,22 @@ def _merge_with_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
     concurrency_limits = config.get("concurrency_limits")
     if isinstance(concurrency_limits, dict):
         merged["concurrency_limits"].update(concurrency_limits)
-    for model_type in PROTECTED_CONCURRENCY_LIMITS:
-        if merged["concurrency_limits"].get(model_type) is None:
-            merged["concurrency_limits"][model_type] = DEFAULT_SCHEDULER_CONFIG[
-                "concurrency_limits"
-            ][model_type]
+    limits = merged["concurrency_limits"]
+    limits.pop("esmfold", None)
+    for model_type, mandatory_cap in MANDATORY_CONCURRENCY_CAPS.items():
+        value = limits.get(model_type)
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < 1
+            or value > mandatory_cap
+        ):
+            limits[model_type] = mandatory_cap
     return merged
+
+
+def _merge_with_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
+    return normalize_scheduler_config(config)
 
 
 @contextmanager
