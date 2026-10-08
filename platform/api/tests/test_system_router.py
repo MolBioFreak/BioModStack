@@ -285,6 +285,36 @@ def test_system_features_get_is_read_only_tailnet_safe(monkeypatch) -> None:
     }
 
 
+def test_remote_system_boundary_exposes_only_read_only_features(tmp_path, monkeypatch) -> None:
+    snapshot = {
+        "profile": {"features": {"bioxp": True}},
+        "resolved": {"features": {"bioxp": True}},
+    }
+    work_dir = tmp_path / "work"
+    results_dir = tmp_path / "results"
+    db_path = tmp_path / "biomodstack.db"
+    work_dir.mkdir()
+    results_dir.mkdir()
+    db_path.write_bytes(b"")
+    monkeypatch.setattr(system, "install_profile_snapshot", lambda profile=None: snapshot, raising=False)
+    monkeypatch.setattr(system, "get_work_dir", lambda: work_dir)
+    monkeypatch.setattr(system, "get_results_dir", lambda: results_dir)
+    monkeypatch.setattr(system, "get_db_path", lambda: db_path)
+
+    app = FastAPI()
+    app.include_router(system.router, prefix="/api")
+    with TestClient(app, client=("100.124.140.56", 50000)) as client:
+        assert client.get("/api/system/features").status_code == 200
+        for method, path in (
+            ("GET", "/api/system/disk-usage"),
+            ("POST", "/api/system/cleanup-work?days=0"),
+            ("GET", "/api/system/db-info"),
+            ("PUT", "/api/system/features"),
+        ):
+            response = client.request(method, path, json={"features": {"bioxp": False}})
+            assert response.status_code == 403, (method, path, response.text)
+
+
 def test_system_features_put_merges_feature_flags_into_install_profile(monkeypatch) -> None:
     saved_payloads: list[dict[str, object]] = []
 
