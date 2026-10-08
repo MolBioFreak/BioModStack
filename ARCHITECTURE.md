@@ -1,8 +1,8 @@
-# System Architecture: Extended ProteinDJ 2025
+# System Architecture: BioModStack
 
 ## Overview
 
-This system extends ProteinDJ's Nextflow pipeline by adding modern prediction models, ligand-aware sequence design, and new validation stages while maintaining compatibility with the original framework.
+BioModStack is a Nextflow-based computational biology platform featuring modern prediction models, ligand-aware sequence design, and physics-based validation stages.
 
 ## Pipeline Stages
 
@@ -141,14 +141,11 @@ Protein-De-Novo-Modification-and-Design-Platform/
 
 ### Profiles
 
-**Existing (ProteinDJ):**
-- Design modes: monomer_denovo, binder_denovo, etc.
+**Available:**
+- Design modes: monomer_denovo, binder_denovo, antibody_denovo, etc.
 - Execution: apptainer, singularity
-- HPC: milton (WEHI specific)
-
-**To Add:**
-- `workstation`: Local Docker execution, simplified paths
-- `experimental`: Enable Genie 2 and new features
+- `workstation`: Local execution, simplified paths
+- `experimental`: Enable experimental features
 
 ### Process Labels
 
@@ -200,7 +197,7 @@ final_pdbs = Channel of List<PDB>
 
 ### Batching
 
-ProteinDJ uses intelligent batching:
+BioModStack uses intelligent batching:
 
 **GPU-aware batching:**
 - Splits work across available GPUs
@@ -232,17 +229,16 @@ CombineMetadata(metadata_fold, metadata_fold_seq)
 
 ## Container Strategy
 
-### Current (ProteinDJ)
+### Remote Containers
 
-Containers hosted at cloud URL, pulled via Apptainer:
+Containers can be built locally or pulled via Apptainer:
 ```
-https://object-store.rc.nectar.org.au/v1/.../ContainerHub/
-├── rfdiffusion.sif
-├── dl_binder_design.sif  (contains ProteinMPNN)
-├── fampnn.sif
-├── af2.sif
-├── boltz2.sif
-└── pyrosetta_tools.sif
+apptainer/
+├── rfdiffusion.def → rfdiffusion.sif
+├── boltz2.def → boltz2.sif
+├── openmm.def → openmm.sif
+├── fampnn.def → fampnn.sif
+└── pyrosetta_tools.def → pyrosetta_tools.sif
 ```
 
 ### Extended (Workstation)
@@ -363,15 +359,14 @@ Ensures downstream stages always have input.
 
 ## Testing Strategy
 
-ProteinDJ includes test profiles:
+Test profiles are available:
 ```bash
 nextflow run main.nf -profile test,monomer_denovo
 ```
 
 Runs with minimal designs (4 designs × 2 sequences) for quick validation.
 
-For extended system:
-- Test each new module independently
+- Test each module independently
 - Test end-to-end with test profile
 - Verify GPU scaling (2, 4, 6 GPUs)
 - Verify resume works after interruption
