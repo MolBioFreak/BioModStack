@@ -2,15 +2,15 @@ import React from "react";
 import { DataTable, withSelectedEntities } from "@teselagen/ui";
 
 class Mismatches extends React.Component {
-  UNSAFE_componentWillMount() {
-    const { alignmentData, mismatches } = this.props;
-    // const { alignmentId, alignments } = this.props;
+  // React 19 compatible: use constructor instead of UNSAFE_componentWillMount
+  constructor(props) {
+    super(props);
+    const { alignmentData, mismatches } = props;
     const mismatchList = this.getMismatchList(alignmentData, mismatches);
-    // const mismatchListAll = this.getMismatchList(alignmentId, alignments);
     const schema = {
       fields: [{ path: "mismatches", type: "number" }]
     };
-    this.setState({ mismatchList, schema });
+    this.state = { mismatchList, schema };
   }
 
   getGapMap = sequence => {
