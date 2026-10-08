@@ -47,7 +47,8 @@ The API does more than submit jobs:
 - serves files and stage artifacts to the frontend
 - exposes sequence libraries, mol bio operations, framework lookup, MSA
   management, analytics, and system actions
-- proxies BioXP hardware calls to a remote daemon
+- manages BioXP runtime linkage and proxies hardware calls to the linked
+  robot-local runtime
 
 ## Workflow Families
 

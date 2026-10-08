@@ -12,6 +12,7 @@ if [ -f "$HOME/.biomodstack/env.sh" ]; then
     source "$HOME/.biomodstack/env.sh"
 fi
 
+API_MODE_RAW="${BMS_API_MODE:-dev}"
 API_RELOAD_RAW="${BMS_API_RELOAD:-1}"
 CPU_POWER_STRICT_RAW="${BMS_CPU_POWER_STRICT:-1}"
 RAPL_ENERGY_PATH="${BMS_CPU_POWER_RAPL_PATH:-/sys/class/powercap/intel-rapl:0/energy_uj}"
@@ -19,6 +20,10 @@ RAPL_ENERGY_PATH="${BMS_CPU_POWER_RAPL_PATH:-/sys/class/powercap/intel-rapl:0/en
 export BMS_HOME="$PROJECT_DIR"
 export BMS_INPUTS="${BMS_INPUTS:-$PROJECT_DIR/inputs}"
 export BMS_FAN_CONTROL_BACKEND="${BMS_FAN_CONTROL_BACKEND:-coolercontrol}"
+
+api_mode() {
+    printf '%s' "${API_MODE_RAW,,}"
+}
 
 api_reload_enabled() {
     case "${API_RELOAD_RAW,,}" in
@@ -47,15 +52,25 @@ fi
 
 cd "$PROJECT_DIR/platform/api"
 cmd=(uv run uvicorn main:app --port 8000 --host 127.0.0.1)
-if api_reload_enabled; then
-    cmd+=(
-        --reload
-        --reload-dir "$PROJECT_DIR/platform/api"
-        --reload-exclude "inputs/*"
-        --reload-exclude "*.db"
-        --reload-exclude "__pycache__/*"
-        --reload-exclude ".venv/*"
-    )
-fi
+case "$(api_mode)" in
+    dev)
+        if api_reload_enabled; then
+            cmd+=(
+                --reload
+                --reload-dir "$PROJECT_DIR/platform/api"
+                --reload-exclude "inputs/*"
+                --reload-exclude "*.db"
+                --reload-exclude "__pycache__/*"
+                --reload-exclude ".venv/*"
+            )
+        fi
+        ;;
+    prod)
+        ;;
+    *)
+        echo "Unknown BMS_API_MODE='$API_MODE_RAW' (expected dev or prod)" >&2
+        exit 1
+        ;;
+esac
 
 exec "${cmd[@]}"

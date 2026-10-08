@@ -1,5 +1,7 @@
 # BioXP Connection Revision Spec
 
+> Status note: this dated file is the transition roadmap that moved BioXP toward the current robot-local runtime + BMS linkage/proxy model. For current operator-facing behavior, prefer `docs/Lab_Automation_MolBio_and_Sequencing.md`, `docs/Workstation Set Up and Install Guide.md`, and the live router/UI under `platform/api/routers/bioxp.py` and `platform/frontend/src/components/BioXpCockpit.tsx`.
+>
 > **For Hermes:** Treat this as a phased architecture roadmap first. Do not jump straight to implementation without reconciling the live robot runtime and the existing BioModStack cockpit contract.
 
 **Goal:** Simplify BioModStack's BioXP integration so the robot owns its own API daemon lifecycle locally, while BioModStack becomes a linkage manager and HTTP proxy/client instead of a workstation-side SSH supervisor.

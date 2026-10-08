@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -50,3 +51,93 @@ async def test_get_status_without_linkage_returns_not_configured(monkeypatch: py
     assert response['hardware_connected'] is False
     assert response['linkage_configured'] is False
     assert response['recommended_url'] == f'http://{bioxp.ROBOT_SSH_HOST}:{bioxp.ROBOT_DAEMON_PORT}'
+
+
+@pytest.mark.asyncio
+async def test_daemon_status_without_linkage_reports_runtime_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bioxp, '_GLOBAL_LINKAGE_URL', None)
+
+    response = await bioxp.daemon_status()
+
+    assert response['linkage_configured'] is False
+    assert response['linked_runtime_reachable'] is False
+    assert response['hardware_connected'] is False
+    assert response['admin_control_available'] is False
+    assert response['maintenance_mode'] == 'robot-local'
+    assert response['runtime_url'] is None
+    assert response['running'] is False
+    assert response['healthy'] is False
+    assert 'linkage' in response['detail'].lower()
+
+
+@pytest.mark.asyncio
+async def test_daemon_status_uses_proxy_status_as_single_runtime_truth(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bioxp, '_GLOBAL_LINKAGE_URL', 'http://robot:8123')
+
+    async def fake_proxy_request(method: str, path: str, timeout: float = 65.0, **_: object) -> dict:
+        assert method == 'GET'
+        assert path == '/status'
+        assert timeout == 10.0
+        return {
+            'status': 'ok',
+            'transport': 'proxy',
+            'hardware_connected': True,
+            'board_status': {'door_closed': 1},
+        }
+
+    monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
+
+    response = await bioxp.daemon_status()
+
+    assert response['linkage_configured'] is True
+    assert response['linked_runtime_reachable'] is True
+    assert response['hardware_connected'] is True
+    assert response['admin_control_available'] is False
+    assert response['maintenance_mode'] == 'robot-local'
+    assert response['runtime_url'] == 'http://robot:8123'
+    assert response['running'] is True
+    assert response['healthy'] is True
+    assert response['detail']
+    assert 'ssh' not in response['detail'].lower()
+
+
+@pytest.mark.asyncio
+async def test_daemon_status_reports_runtime_unreachable_without_process_inference(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bioxp, '_GLOBAL_LINKAGE_URL', 'http://robot:8123')
+
+    async def fake_proxy_request(method: str, path: str, timeout: float = 65.0, **_: object) -> dict:
+        raise HTTPException(status_code=503, detail='Cannot connect to BioXP hardware node at http://robot:8123.')
+
+    monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
+
+    response = await bioxp.daemon_status()
+
+    assert response['linkage_configured'] is True
+    assert response['linked_runtime_reachable'] is False
+    assert response['hardware_connected'] is False
+    assert response['admin_control_available'] is False
+    assert response['maintenance_mode'] == 'robot-local'
+    assert response['running'] is False
+    assert response['healthy'] is False
+    assert response['proxy_error'] == {
+        'status_code': 503,
+        'detail': 'Cannot connect to BioXP hardware node at http://robot:8123.',
+    }
+
+
+@pytest.mark.asyncio
+async def test_daemon_start_is_disabled_in_favor_of_robot_local_supervision() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await bioxp.daemon_start()
+
+    assert exc_info.value.status_code == 409
+    assert 'robot-local' in str(exc_info.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_daemon_stop_is_disabled_in_favor_of_robot_local_supervision() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await bioxp.daemon_stop()
+
+    assert exc_info.value.status_code == 409
+    assert 'robot-local' in str(exc_info.value.detail).lower()

@@ -154,10 +154,18 @@ From the repo root:
 ./start_ui.sh
 ```
 
-`start_ui.sh` now installs and manages dedicated `systemd --user` units for
-`biomodstack-api.service` and `biomodstack-frontend.service`. The shell entrypoint
-remains stable, but the API/frontend no longer live under the launcher or GTK panel
-process scope.
+`start_ui.sh` installs and manages dedicated `systemd --user` units. In dev mode it uses
+`biomodstack-api.service` and `biomodstack-frontend.service`. For the new containerized core
+runtime, use:
+
+```bash
+./start_ui.sh start --runtime container
+./start_ui.sh status --runtime container
+./start_ui.sh stop --runtime container
+```
+
+That container mode launches `biomodstack-core-runtime.service`, which in turn runs the
+repo-native compose stack from `compose.core-runtime.yml`.
 
 Optional local desktop launcher:
 
