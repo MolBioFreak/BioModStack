@@ -812,33 +812,57 @@ async def test_contract_11_cancelled_terminal_transition_clears_lease(tmp_path: 
     assert job.completed_at is not None
 
 
-@pytest.mark.asyncio
-async def test_contract_12_publication_emits_one_pair_per_partition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    staging_root = tmp_path / "staging"
+def _publication_unit(staging_root: Path) -> tuple[Path, dict[str, int], dict[str, str]]:
     stage = staging_root / "job-1" / "attempt-1"
     outputs = stage / "outputs"
     outputs.mkdir(parents=True)
     groups = {"a" * 64: 1, "b" * 64: 2}
     routing_payload = {
         "schema": "bms.ont.raw-signal-routing.v1",
-        "groups": {group: {"blow5": f"{group}.blow5", "index": f"{group}.blow5.idx", "read_count": count} for group, count in groups.items()},
+        "groups": {
+            group: {
+                "blow5": f"{group}.blow5",
+                "index": f"{group}.blow5.idx",
+                "read_count": count,
+            }
+            for group, count in groups.items()
+        },
         "read_to_group": {"read-a": "a" * 64, "read-b": "b" * 64},
     }
     routing = stage / "routing.json"
-    routing.write_text(json.dumps(routing_payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+    routing.write_text(
+        json.dumps(routing_payload, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
     for group in groups:
         (outputs / f"{group}.blow5").write_bytes(group.encode())
         (outputs / f"{group}.blow5.idx").write_bytes(b"index")
     semantic = {
-        "status": "passed", "duplicate_read_ids": 0, "partition_counts": groups,
-        "read_count": 3, "routing_sha256": _sha256(routing),
+        "status": "passed",
+        "duplicate_read_ids": 0,
+        "partition_counts": groups,
+        "read_count": 3,
+        "routing_sha256": _sha256(routing),
     }
-    (stage / "semantic-receipt.json").write_text(json.dumps(semantic), encoding="utf-8")
+    (stage / "semantic-receipt.json").write_text(
+        json.dumps(semantic), encoding="utf-8"
+    )
+    commands = {
+        "stage": str(stage),
+        "outputs": str(outputs),
+        "routing": str(routing),
+    }
+    return stage, groups, commands
+
+
+@pytest.mark.asyncio
+async def test_contract_12_publication_emits_one_pair_per_partition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    staging_root = tmp_path / "staging"
+    stage, groups, commands = _publication_unit(staging_root)
     source_file = tmp_path / "source.pod5"
     source_file.write_bytes(b"source")
     source = _source(source_file, "acquisition")
     job, snapshot = _job(staging_root)
-    commands = {"stage": str(stage), "outputs": str(outputs), "routing": str(routing)}
     monkeypatch.setenv(ont_raw_signal.BLOW5_STAGING_ROOT_ENV, str(staging_root))
     session = _Session(job)
     representation = await ont_raw_signal.publish_derivation(session, job, source, commands)
@@ -848,6 +872,122 @@ async def test_contract_12_publication_emits_one_pair_per_partition(tmp_path: Pa
     assert kinds.count("read_routing") == 1
     assert representation.read_count == 3
     assert not stage.exists()
+
+    recovered = await ont_raw_signal.publish_derivation(
+        _Session(job), job, source, commands
+    )
+    assert [
+        (artifact["kind"], artifact["sha256"])
+        for artifact in recovered.artifact_manifest["artifacts"]
+    ] == [
+        (artifact["kind"], artifact["sha256"])
+        for artifact in representation.artifact_manifest["artifacts"]
+    ]
+    assert set(groups) == {"a" * 64, "b" * 64}
+
+
+@pytest.mark.asyncio
+async def test_publication_rejects_symlinked_destination_without_touching_outside(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    staging_root = tmp_path / "staging"
+    stage, _groups, commands = _publication_unit(staging_root)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel"
+    sentinel.write_bytes(b"outside-must-remain-unchanged")
+    (tmp_path / "ont-raw-signal").symlink_to(outside, target_is_directory=True)
+    source_file = tmp_path / "source.pod5"
+    source_file.write_bytes(b"source")
+    source = _source(source_file, "acquisition")
+    job, _snapshot = _job(staging_root)
+    monkeypatch.setenv(ont_raw_signal.BLOW5_STAGING_ROOT_ENV, str(staging_root))
+
+    with pytest.raises(ValueError, match="descriptor|symbolic|publication"):
+        await ont_raw_signal.publish_derivation(
+            _Session(job), job, source, commands
+        )
+
+    assert sentinel.read_bytes() == b"outside-must-remain-unchanged"
+    assert not (outside / job.run_id).exists()
+    assert stage.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_publication_rejects_symlinked_stage_generation_without_consuming_outside(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    staging_root = tmp_path / "staging"
+    stage, _groups, commands = _publication_unit(staging_root)
+    outside = tmp_path / "outside-stage"
+    staging_root.rename(outside)
+    staging_root.symlink_to(outside, target_is_directory=True)
+    outside_semantic = outside / "job-1" / "attempt-1" / "semantic-receipt.json"
+    before = outside_semantic.read_bytes()
+    source_file = tmp_path / "source.pod5"
+    source_file.write_bytes(b"source")
+    source = _source(source_file, "acquisition")
+    job, _snapshot = _job(staging_root)
+    monkeypatch.setenv(ont_raw_signal.BLOW5_STAGING_ROOT_ENV, str(staging_root))
+
+    with pytest.raises(ValueError, match="descriptor|symbolic|publication"):
+        await ont_raw_signal.publish_derivation(
+            _Session(job), job, source, commands
+        )
+
+    assert outside_semantic.read_bytes() == before
+    assert outside_semantic.is_file()
+    assert not (tmp_path / "ont-raw-signal" / job.run_id).exists()
+    assert stage.is_symlink() is False
+
+
+@pytest.mark.asyncio
+async def test_publication_rolls_back_when_root_identity_changes_at_atomic_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    staging_root = tmp_path / "staging"
+    stage, _groups, commands = _publication_unit(staging_root)
+    outside = tmp_path / "outside-interposition"
+    outside.mkdir()
+    sentinel = outside / "sentinel"
+    sentinel.write_bytes(b"outside-must-remain-unchanged")
+    source_file = tmp_path / "source.pod5"
+    source_file.write_bytes(b"source")
+    source = _source(source_file, "acquisition")
+    job, _snapshot = _job(staging_root)
+    monkeypatch.setenv(ont_raw_signal.BLOW5_STAGING_ROOT_ENV, str(staging_root))
+    real_rename = os.rename
+    interposed = False
+
+    def interposing_rename(*args: Any, **kwargs: Any) -> None:
+        nonlocal interposed
+        if not interposed:
+            interposed = True
+            publication_root = tmp_path / "ont-raw-signal"
+            publication_root.rename(tmp_path / "displaced-publication-root")
+            publication_root.symlink_to(outside, target_is_directory=True)
+        real_rename(*args, **kwargs)
+
+    monkeypatch.setattr(ont_raw_signal.os, "rename", interposing_rename)
+    with pytest.raises(ValueError, match="publication root.*confinement|identity changed"):
+        await ont_raw_signal.publish_derivation(
+            _Session(job), job, source, commands
+        )
+
+    assert interposed
+    assert sentinel.read_bytes() == b"outside-must-remain-unchanged"
+    assert list(outside.iterdir()) == [sentinel]
+    assert stage.is_dir()
+    assert not (
+        tmp_path
+        / "displaced-publication-root"
+        / job.run_id
+        / str(job.observed_generation)
+        / job.id
+    ).exists()
 
 
 # Validator fixture tests: 2
