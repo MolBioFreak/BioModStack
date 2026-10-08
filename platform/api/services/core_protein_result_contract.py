@@ -229,6 +229,21 @@ def retained_usable_candidate_count(rows, root) -> int:
     return count
 
 
+def _persisted_candidate_artifacts(receipt, row):
+    """One persisted candidate binding policy for publication and selected reads."""
+    artifacts = receipt['candidates'].get(row.name)
+    if not isinstance(artifacts, dict) or (row.confidence_metrics or {}).get('core_protein_candidate_artifacts') != artifacts:
+        raise CandidateIntegrityError('candidate_replay_changed', 'persisted candidate artifact evidence changed')
+    for role, evidence in artifacts.items():
+        native_extra = (receipt['summary'].get('stage_id') == 'boltz'
+                        and role in {'manifest', 'ledger', 'pae', 'plddt'})
+        native_extra = native_extra or (receipt['summary'].get('stage_id') == 'boltzgen' and role == 'native')
+        field = row.pdb_path if role == 'structure' else row.json_path
+        if not native_extra and field != evidence['path']:
+            raise CandidateIntegrityError('candidate_publication_mismatch', 'persisted artifact identity differs from declaration')
+    return artifacts
+
+
 def validate_persisted_publication(job, rows, root):
     """Exact row identity plus required artifact/hash validation; no basename join."""
     from pathlib import Path
@@ -242,19 +257,7 @@ def validate_persisted_publication(job, rows, root):
     if actual != set(expected):
         raise CandidateIntegrityError('candidate_publication_mismatch', 'persisted identities differ from expected publication')
     for row in rows:
-        artifacts = expected[row.name]
-        confidence = row.confidence_metrics or {}
-        if confidence.get('core_protein_candidate_artifacts') != artifacts:
-            raise CandidateIntegrityError('candidate_replay_changed', 'persisted candidate artifact evidence changed')
-        for role, evidence in artifacts.items():
-            # Boltz retains extra hash-bound native artifacts, without pretending
-            # that every native ledger/vector/manifest is Design.json_path.
-            native_extra = (receipt['summary'].get('stage_id') == 'boltz'
-                            and role in {'manifest', 'ledger', 'pae', 'plddt'})
-            native_extra = native_extra or (receipt['summary'].get('stage_id') == 'boltzgen' and role == 'native')
-            field = row.pdb_path if role == 'structure' else row.json_path
-            if not native_extra and field != evidence['path']:
-                raise CandidateIntegrityError('candidate_publication_mismatch', 'persisted artifact identity differs from declaration')
+        for evidence in _persisted_candidate_artifacts(receipt, row).values():
             current, _ = _artifact(Path(root), evidence['path'])
             if current != evidence:
                 raise CandidateIntegrityError('candidate_replay_changed', 'candidate artifact bytes changed')
@@ -262,3 +265,55 @@ def validate_persisted_publication(job, rows, root):
     if current != receipt['manifest']:
         raise CandidateIntegrityError('candidate_replay_changed', 'producer manifest changed')
     return receipt['summary']
+
+
+def verify_addressed_design_artifacts(job, row, root, *, verify_file):
+    """Verify exactly one retained Design, never its unrelated siblings.
+
+    The native owner selects evidence. The caller supplies its descriptor-bound
+    file verifier for the explicit trust boundary (Project attach/reverify).
+    Legacy review-only records retain their selected-structure scope and digest.
+    A native publication binds all artifacts for this candidate and its manifest.
+    """
+    from pathlib import Path
+    import re
+
+    publication = (job.provenance or {}).get('core_protein_candidate_publication')
+    manifest = row.review_artifact_manifest
+    if row.review_contract_source not in {'producer', 'review'} and publication is not None and row.source_stage is None:
+        native = _persisted_candidate_artifacts(publication, row)
+        manifest = {'artifacts': native}
+    artifacts = manifest.get('artifacts') if isinstance(manifest, dict) else None
+    if not isinstance(artifacts, dict) or len(artifacts) > 128:
+        raise CandidateIntegrityError('missing_candidate_declaration', 'design lacks bounded artifact authority')
+    roles = row.review_role_map if isinstance(row.review_role_map, dict) else {}
+    preferred = roles.get('result_role') or (manifest.get('roles') or {}).get('result_role')
+    ordered = ([artifacts[preferred]] if isinstance(artifacts.get(preferred), dict) else [])
+    ordered.extend(value for key, value in artifacts.items() if key != preferred and isinstance(value, dict))
+    selected = next((item for item in ordered
+                     if item.get('state') in {None, 'ready'}
+                     and re.fullmatch(r'[0-9a-f]{64}', str(item.get('sha256') or ''))
+                     and isinstance(item.get('path'), str)
+                     and Path(item['path']).resolve() == Path(row.pdb_path).resolve()), None)
+    if selected is None:
+        raise CandidateIntegrityError('missing_candidate_declaration', 'design has no authoritative result digest')
+    publication = (job.provenance or {}).get('core_protein_candidate_publication')
+    evidence = [selected]
+    if publication is not None and row.source_stage is None:
+        if not isinstance(publication, dict) or not isinstance(publication.get('candidates'), dict):
+            raise CandidateIntegrityError('missing_candidate_declaration', 'invalid native publication')
+        native = _persisted_candidate_artifacts(publication, row)
+        structure = native.get('structure')
+        if not isinstance(structure, dict) or structure.get('path') != row.pdb_path or structure.get('sha256') != selected['sha256']:
+            raise CandidateIntegrityError('candidate_publication_mismatch', 'selected structure differs from native authority')
+        evidence = list(native.values()) + [publication.get('manifest')]
+        evidence.extend(record['artifact'] for record in publication.get('execution_settings', []))
+    seen = set()
+    for artifact in evidence:
+        if not isinstance(artifact, dict):
+            raise CandidateIntegrityError('missing_candidate_declaration', 'invalid native artifact evidence')
+        identity = (artifact.get('path'), artifact.get('sha256'), artifact.get('bytes'))
+        if identity not in seen:
+            verify_file(*identity, canonical_root=root)
+            seen.add(identity)
+    return selected

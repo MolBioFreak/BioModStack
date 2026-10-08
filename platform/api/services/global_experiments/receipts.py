@@ -508,7 +508,22 @@ async def reverify_source_receipt(
     adapter = registry.get(str(persisted.verification_authority or ""))
     if adapter.domain_kind != payload.get("domain_kind"):
         raise ValidationFailure("source receipt adapter does not match the Domain Experiment")
-    verified = await adapter.verify(core_session, persisted.entity_id)
+    # Historical typed Job acknowledgements were all-Design closures. Never
+    # reinterpret their digest as the new declared-final-candidate scope.
+    from services.global_experiments.adapters import TypedCoreJobResultAdapter
+    if isinstance(adapter, TypedCoreJobResultAdapter):
+        try:
+            acknowledgement = json.loads(persisted.acknowledgement_json or "{}")
+            metadata = acknowledgement.get("metadata") or {}
+            scope = metadata.get("result_scope")
+        except (ValueError, AttributeError) as exc:
+            raise ValidationFailure("source receipt result scope is invalid") from exc
+        if scope not in (None, "all_design_rows", "declared_native_final_candidates"):
+            raise ValidationFailure("source receipt result scope is unsupported")
+        verified = await adapter.verify(core_session, persisted.entity_id,
+                                        legacy_all_designs=scope in (None, "all_design_rows"))
+    else:
+        verified = await adapter.verify(core_session, persisted.entity_id)
     verified_digest = verified.get("content_digest") or verified.get("contract_digest")
     expected_identity = {
         "store_id": persisted.store_id,
