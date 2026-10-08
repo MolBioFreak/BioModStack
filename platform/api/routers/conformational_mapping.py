@@ -1382,7 +1382,7 @@ async def state_landscape_analysis_rows(
 
     await _authorized_record(request_id, request, session)
     try:
-        header, rows = await paged_state_landscape_analysis_rows(
+        header, rows, has_more = await paged_state_landscape_analysis_rows(
             session,
             request_id,
             analysis_id=analysis_id,
@@ -1414,7 +1414,7 @@ async def state_landscape_analysis_rows(
             "sequence_start": sequence_start,
             "sequence_end": sequence_end,
         },
-        "next_offset": offset + len(rows) if len(rows) == limit else None,
+        "next_offset": offset + len(rows) if has_more else None,
         "rows": [
             {
                 "pair_id": row.pair_id,

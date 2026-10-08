@@ -207,3 +207,28 @@ async def test_state_analysis_rows_are_bounded_ordered_filtered_and_projection_o
     finally:
         await session.close()
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_state_analysis_rows_omit_next_offset_at_exact_terminal_boundaries(tmp_path: Path) -> None:
+    session, engine = await _session(tmp_path)
+    try:
+        token = await _seed_request(session, "request-a")
+        await _seed_analysis(session, "request-a")
+        await session.commit()
+
+        exact_total = await cm_router.state_landscape_analysis_rows(
+            "request-a", _request(token=token), offset=0, limit=3, session=session,
+        )
+        assert len(exact_total["rows"]) == 3
+        assert exact_total["next_offset"] is None
+
+        exact_filtered_total = await cm_router.state_landscape_analysis_rows(
+            "request-a", _request(token=token), pair_id="pair-a", candidate_id="candidate-b",
+            offset=0, limit=2, session=session,
+        )
+        assert [row["identity"]["sequence_index"] for row in exact_filtered_total["rows"]] == [2, 4]
+        assert exact_filtered_total["next_offset"] is None
+    finally:
+        await session.close()
+        await engine.dispose()
