@@ -5,6 +5,7 @@ Score PPIFlow maturation improvements with interface metrics and QC checks.
 import argparse
 import json
 import math
+import re
 from pathlib import Path
 
 import pyrosetta
@@ -157,7 +158,15 @@ def pair_energy_total(scorefxn, pose, resi_a, resi_b):
     return float(emap.dot(scorefxn.weights()))
 
 
-def interface_score(pose, ab_chains, ag_chains, distance_cutoff, selected_positions=None, binder_chain_remap=None):
+def interface_score(
+    pose,
+    ab_chains,
+    ag_chains,
+    distance_cutoff,
+    selected_positions=None,
+    position_groups=None,
+    binder_chain_remap=None,
+):
     scorefxn = pyrosetta.get_fa_scorefxn()
     scorefxn(pose)
     interface_pairs, interface_residues = interface_pairs_within_distance(pose, ab_chains, ag_chains, distance_cutoff)
@@ -166,6 +175,14 @@ def interface_score(pose, ab_chains, ag_chains, distance_cutoff, selected_positi
     selected_total = 0.0
     selected_negative_pair_count = 0
     selected_interface_residues = set()
+    group_scores = {
+        group_name: {
+            "score": 0.0,
+            "negative_pair_count": 0,
+            "interface_residues": set(),
+        }
+        for group_name in (position_groups or {})
+    }
     for resi_a, resi_b in interface_pairs:
         pair_score = pair_energy_total(scorefxn, pose, resi_a, resi_b)
         binder_key = get_pdb_key(pose, resi_a)
@@ -181,6 +198,13 @@ def interface_score(pose, ab_chains, ag_chains, distance_cutoff, selected_positi
                 selected_negative_pair_count += 1
                 selected_interface_residues.add(resi_a)
                 selected_interface_residues.add(resi_b)
+            for group_name, position_set in (position_groups or {}).items():
+                if binder_position not in position_set:
+                    continue
+                group_scores[group_name]["score"] += pair_score
+                group_scores[group_name]["negative_pair_count"] += 1
+                group_scores[group_name]["interface_residues"].add(resi_a)
+                group_scores[group_name]["interface_residues"].add(resi_b)
     return {
         "global_score": total,
         "global_interface_residues": interface_residues,
@@ -188,6 +212,14 @@ def interface_score(pose, ab_chains, ag_chains, distance_cutoff, selected_positi
         "selected_score": selected_total if selected_positions else None,
         "selected_interface_residues": sorted(selected_interface_residues) if selected_positions else None,
         "selected_negative_pair_count": selected_negative_pair_count if selected_positions else None,
+        "position_groups": {
+            group_name: {
+                "score": float(group_data["score"]),
+                "negative_pair_count": int(group_data["negative_pair_count"]),
+                "interface_residues": sorted(group_data["interface_residues"]),
+            }
+            for group_name, group_data in group_scores.items()
+        },
     }
 
 
@@ -323,6 +355,197 @@ def count_ca_clashes(pose, cutoff):
     return clash_count
 
 
+def load_loop_residue_map(path_str):
+    if not path_str:
+        return {}
+    try:
+        payload = json.loads(Path(path_str).read_text())
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+
+    normalized = {}
+    for loop_id, residues in payload.items():
+        loop_name = str(loop_id).strip().upper()
+        if not loop_name:
+            continue
+        residue_numbers = []
+        for residue in residues or []:
+            if isinstance(residue, int):
+                residue_numbers.append(int(residue))
+                continue
+            token = str(residue).strip().upper()
+            if not token:
+                continue
+            if token[0].isalpha():
+                token = token[1:]
+            match = re.match(r"^-?\d+", token)
+            if match:
+                residue_numbers.append(int(match.group(0)))
+        if residue_numbers:
+            normalized[loop_name] = sorted(set(residue_numbers))
+    return normalized
+
+
+def build_loop_position_sets(loop_residue_map, antibody_chains, selected_positions):
+    if not loop_residue_map:
+        return {
+            "SELECTED": {
+                "positions": set(selected_positions),
+                "selected": True,
+            }
+        } if selected_positions else {}
+
+    heavy_chain = antibody_chains[0] if antibody_chains else "H"
+    light_chain = antibody_chains[1] if len(antibody_chains) > 1 else None
+    loop_positions = {}
+    for loop_id, residues in sorted(loop_residue_map.items()):
+        chain_id = heavy_chain if loop_id.startswith("H") else light_chain
+        if not chain_id:
+            continue
+        position_set = {(chain_id, int(resnum)) for resnum in residues}
+        if not position_set:
+            continue
+        loop_positions[loop_id] = {
+            "positions": position_set,
+            "selected": bool(position_set & selected_positions) if selected_positions else True,
+        }
+    if not loop_positions and selected_positions:
+        loop_positions["SELECTED"] = {
+            "positions": set(selected_positions),
+            "selected": True,
+        }
+    return loop_positions
+
+
+def centroid_distance(coords_a, coords_b):
+    if not coords_a or not coords_b:
+        return None
+    ax = sum(coord.x for coord in coords_a.values()) / len(coords_a)
+    ay = sum(coord.y for coord in coords_a.values()) / len(coords_a)
+    az = sum(coord.z for coord in coords_a.values()) / len(coords_a)
+    bx = sum(coord.x for coord in coords_b.values()) / len(coords_b)
+    by = sum(coord.y for coord in coords_b.values()) / len(coords_b)
+    bz = sum(coord.z for coord in coords_b.values()) / len(coords_b)
+    return math.sqrt((ax - bx) ** 2 + (ay - by) ** 2 + (az - bz) ** 2)
+
+
+def contact_metrics(query_coords, target_coords, distance_cutoff):
+    if not query_coords or not target_coords:
+        return {
+            "contact_count": None,
+            "min_distance": None,
+            "centroid_distance": None,
+        }
+
+    min_distances = []
+    target_xyz = list(target_coords.values())
+    for query_xyz in query_coords.values():
+        min_distance = min(query_xyz.distance(target_xyz_entry) for target_xyz_entry in target_xyz)
+        min_distances.append(min_distance)
+
+    return {
+        "contact_count": int(sum(distance < distance_cutoff for distance in min_distances)),
+        "min_distance": float(min(min_distances)),
+        "centroid_distance": centroid_distance(query_coords, target_coords),
+    }
+
+
+def contact_delta(original_value, matured_value):
+    if original_value is None or matured_value is None:
+        return None
+    return int(matured_value - original_value)
+
+
+def distance_improvement(original_value, matured_value):
+    if original_value is None or matured_value is None:
+        return None
+    return float(original_value - matured_value)
+
+
+def _loop_signal(metric, prefix):
+    return any(metric.get(f"{prefix}_{suffix}") is not None for suffix in ("contact_delta", "distance_delta", "centroid_distance_delta"))
+
+
+def compute_loop_objective_score(metric, objective_mode):
+    mode = (objective_mode or "selected_interface").strip().lower()
+    if mode == "loop_epitope" and not _loop_signal(metric, "epitope"):
+        mode = "loop_target"
+    if mode == "balanced" and not _loop_signal(metric, "epitope"):
+        mode = "loop_target"
+
+    interface_term = metric.get("delta_interface_score")
+    if interface_term is None:
+        interface_term = 0.0
+    rmsd_penalty = metric.get("rmsd_backbone") or 0.0
+
+    target_contact_delta = metric.get("target_contact_delta") or 0.0
+    target_distance_delta = metric.get("target_distance_delta") or 0.0
+    target_centroid_delta = metric.get("target_centroid_distance_delta") or 0.0
+    epitope_contact_delta = metric.get("epitope_contact_delta") or 0.0
+    epitope_distance_delta = metric.get("epitope_distance_delta") or 0.0
+    epitope_centroid_delta = metric.get("epitope_centroid_distance_delta") or 0.0
+
+    if mode == "loop_target":
+        return float(
+            interface_term
+            - 0.75 * target_contact_delta
+            - 0.20 * target_distance_delta
+            - 0.05 * target_centroid_delta
+            + 0.10 * rmsd_penalty
+        )
+    if mode == "loop_epitope":
+        return float(
+            interface_term
+            - 1.25 * epitope_contact_delta
+            - 0.35 * epitope_distance_delta
+            - 0.10 * epitope_centroid_delta
+            + 0.10 * rmsd_penalty
+        )
+    if mode == "balanced":
+        return float(
+            interface_term
+            - 0.75 * target_contact_delta
+            - 0.20 * target_distance_delta
+            - 0.05 * target_centroid_delta
+            - 1.25 * epitope_contact_delta
+            - 0.35 * epitope_distance_delta
+            - 0.10 * epitope_centroid_delta
+            + 0.10 * rmsd_penalty
+        )
+    return float(interface_term)
+
+
+def compute_overall_objective_score(loop_metrics, objective_mode, selected_delta_interface, global_delta_interface, nonselected_rmsd, clash_count):
+    mode = (objective_mode or "selected_interface").strip().lower()
+    if mode == "selected_interface" or not loop_metrics:
+        base_score = selected_delta_interface if selected_delta_interface is not None else global_delta_interface
+        return None if base_score is None else float(base_score)
+
+    preferred_scores = [
+        metric["objective_score"]
+        for metric in loop_metrics.values()
+        if metric.get("selected") and metric.get("objective_score") is not None
+    ]
+    if not preferred_scores:
+        preferred_scores = [
+            metric["objective_score"]
+            for metric in loop_metrics.values()
+            if metric.get("objective_score") is not None
+        ]
+    if not preferred_scores:
+        base_score = selected_delta_interface if selected_delta_interface is not None else global_delta_interface
+        return None if base_score is None else float(base_score)
+
+    overall = float(sum(preferred_scores) / len(preferred_scores))
+    if nonselected_rmsd is not None:
+        overall += 0.10 * float(nonselected_rmsd)
+    if clash_count is not None:
+        overall += 0.20 * float(clash_count)
+    return overall
+
+
 def main():
     parser = argparse.ArgumentParser(description="Score PPIFlow maturation improvements")
     parser.add_argument("--original_pdb", required=True, help="Original complex PDB")
@@ -333,14 +556,23 @@ def main():
                         help="Comma-separated antigen chain IDs")
     parser.add_argument("--distance_cutoff", type=float, default=8.0,
                         help="Interface distance cutoff (A)")
+    parser.add_argument("--epitope_residues", default="",
+                        help="Comma-separated target epitope/hotspot residues (e.g. A35,A37)")
     parser.add_argument("--selected_positions", default="",
                         help="Comma-separated antibody positions iterated by PPIFlow (e.g. H27-38,H56-65)")
+    parser.add_argument("--cdr_positions_by_loop_json", default="",
+                        help="Resolved loop-position JSON emitted during PPIFlow preparation")
+    parser.add_argument("--objective_mode", default="selected_interface",
+                        choices=["selected_interface", "loop_target", "loop_epitope", "balanced"],
+                        help="Ranking objective for partial-flow outputs")
     parser.add_argument("--output", required=True, help="Output JSON file")
     args = parser.parse_args()
 
     antibody_chains = parse_chain_list(args.antibody_chains)
     antigen_chains = parse_chain_list(args.antigen_chains)
     selected_positions = parse_position_spec(args.selected_positions)
+    epitope_positions = parse_position_spec(args.epitope_residues)
+    loop_residue_map = load_loop_residue_map(args.cdr_positions_by_loop_json)
 
     pyrosetta.init("-out:levels all:error -ignore_unrecognized_res 1")
     pose_original = pyrosetta.pose_from_pdb(args.original_pdb)
@@ -365,6 +597,19 @@ def main():
         matured_chain: original_chain
         for original_chain, matured_chain in zip(antibody_chains_original, antibody_chains_matured)
     }
+    matured_target_to_original_chain_map = {
+        matured_chain: original_chain
+        for original_chain, matured_chain in zip(antigen_chains_original, antigen_chains_matured)
+    }
+    loop_position_specs = build_loop_position_sets(loop_residue_map, antibody_chains_original, selected_positions)
+    loop_position_groups = {
+        loop_id: loop_info["positions"]
+        for loop_id, loop_info in loop_position_specs.items()
+    }
+    loop_selection_map = {
+        loop_id: bool(loop_info["selected"])
+        for loop_id, loop_info in loop_position_specs.items()
+    }
 
     interface_score_orig = interface_score(
         pose_original,
@@ -372,6 +617,7 @@ def main():
         antigen_chains_original,
         args.distance_cutoff,
         selected_positions=selected_positions,
+        position_groups=loop_position_groups,
     )
     interface_score_matured = interface_score(
         pose_matured,
@@ -379,6 +625,7 @@ def main():
         antigen_chains_matured,
         args.distance_cutoff,
         selected_positions=selected_positions,
+        position_groups=loop_position_groups,
         binder_chain_remap=matured_to_original_chain_map,
     )
     delta_interface = interface_score_matured["global_score"] - interface_score_orig["global_score"]
@@ -398,6 +645,14 @@ def main():
         antibody_chains_matured,
         chain_remap=matured_to_original_chain_map,
     )
+    target_coords_orig = extract_chain_coords(pose_original, antigen_chains_original)
+    target_coords_matured = extract_chain_coords(
+        pose_matured,
+        antigen_chains_matured,
+        chain_remap=matured_target_to_original_chain_map,
+    )
+    epitope_coords_orig = filter_coords_by_position_set(target_coords_orig, epitope_positions)
+    epitope_coords_matured = filter_coords_by_position_set(target_coords_matured, epitope_positions)
     rmsd_val = rmsd(
         coords_orig,
         coords_matured,
@@ -418,6 +673,74 @@ def main():
         chain_remap_b=matured_to_original_chain_map,
     )
     clash_count = count_ca_clashes(pose_matured, cutoff=2.0)
+
+    loop_metrics = {}
+    for loop_id, position_set in loop_position_groups.items():
+        group_orig = interface_score_orig["position_groups"].get(loop_id, {})
+        group_matured = interface_score_matured["position_groups"].get(loop_id, {})
+        loop_coords_orig = filter_coords_by_position_set(coords_orig, position_set)
+        loop_coords_matured = filter_coords_by_position_set(coords_matured, position_set)
+        loop_rmsd = rmsd(loop_coords_orig, loop_coords_matured)
+        target_loop_orig = contact_metrics(loop_coords_orig, target_coords_orig, args.distance_cutoff)
+        target_loop_matured = contact_metrics(loop_coords_matured, target_coords_matured, args.distance_cutoff)
+        epitope_loop_orig = contact_metrics(loop_coords_orig, epitope_coords_orig, 8.0)
+        epitope_loop_matured = contact_metrics(loop_coords_matured, epitope_coords_matured, 8.0)
+
+        loop_metric = {
+            "loop_id": loop_id,
+            "selected": bool(loop_selection_map.get(loop_id, False)),
+            "position_count": len(position_set),
+            "positions": sorted(f"{chain}{resnum}" for chain, resnum in position_set),
+            "interface_score_original": float(group_orig.get("score", 0.0)),
+            "interface_score_matured": float(group_matured.get("score", 0.0)),
+            "delta_interface_score": float(group_matured.get("score", 0.0) - group_orig.get("score", 0.0)),
+            "negative_pair_count_original": int(group_orig.get("negative_pair_count", 0)),
+            "negative_pair_count_matured": int(group_matured.get("negative_pair_count", 0)),
+            "interface_residue_count_original": len(group_orig.get("interface_residues", [])),
+            "interface_residue_count_matured": len(group_matured.get("interface_residues", [])),
+            "rmsd_backbone": None if loop_rmsd is None else float(loop_rmsd),
+            "target_contact_count_original": None if target_loop_orig["contact_count"] is None else int(target_loop_orig["contact_count"]),
+            "target_contact_count_matured": None if target_loop_matured["contact_count"] is None else int(target_loop_matured["contact_count"]),
+            "target_contact_delta": contact_delta(target_loop_orig["contact_count"], target_loop_matured["contact_count"]),
+            "target_min_distance_original": target_loop_orig["min_distance"],
+            "target_min_distance_matured": target_loop_matured["min_distance"],
+            "target_distance_delta": distance_improvement(target_loop_orig["min_distance"], target_loop_matured["min_distance"]),
+            "target_centroid_distance_original": target_loop_orig["centroid_distance"],
+            "target_centroid_distance_matured": target_loop_matured["centroid_distance"],
+            "target_centroid_distance_delta": distance_improvement(target_loop_orig["centroid_distance"], target_loop_matured["centroid_distance"]),
+            "epitope_contact_count_original": None if epitope_loop_orig["contact_count"] is None else int(epitope_loop_orig["contact_count"]),
+            "epitope_contact_count_matured": None if epitope_loop_matured["contact_count"] is None else int(epitope_loop_matured["contact_count"]),
+            "epitope_contact_delta": contact_delta(epitope_loop_orig["contact_count"], epitope_loop_matured["contact_count"]),
+            "epitope_min_distance_original": epitope_loop_orig["min_distance"],
+            "epitope_min_distance_matured": epitope_loop_matured["min_distance"],
+            "epitope_distance_delta": distance_improvement(epitope_loop_orig["min_distance"], epitope_loop_matured["min_distance"]),
+            "epitope_centroid_distance_original": epitope_loop_orig["centroid_distance"],
+            "epitope_centroid_distance_matured": epitope_loop_matured["centroid_distance"],
+            "epitope_centroid_distance_delta": distance_improvement(epitope_loop_orig["centroid_distance"], epitope_loop_matured["centroid_distance"]),
+        }
+        loop_metric["objective_score"] = compute_loop_objective_score(loop_metric, args.objective_mode)
+        loop_metrics[loop_id] = loop_metric
+
+    primary_loop = None
+    primary_loop_metric = None
+    ranked_loops = [
+        metric
+        for metric in loop_metrics.values()
+        if metric.get("objective_score") is not None
+    ]
+    ranked_loops.sort(key=lambda metric: (0 if metric.get("selected") else 1, metric["objective_score"]))
+    if ranked_loops:
+        primary_loop_metric = ranked_loops[0]
+        primary_loop = primary_loop_metric["loop_id"]
+
+    objective_score = compute_overall_objective_score(
+        loop_metrics,
+        args.objective_mode,
+        selected_delta_interface,
+        delta_interface,
+        nonselected_rmsd_val,
+        clash_count,
+    )
 
     payload = {
         "interface_score_original": float(interface_score_orig["global_score"]),
@@ -454,6 +777,20 @@ def main():
         "selected_negative_pair_count_matured": interface_score_matured["selected_negative_pair_count"],
         "selected_position_count": len(selected_positions) if selected_positions else 0,
         "selected_positions": sorted(f"{chain}{resnum}" for chain, resnum in selected_positions) if selected_positions else [],
+        "loop_metrics": loop_metrics,
+        "loop_ids": sorted(loop_metrics.keys()),
+        "selected_loop_ids": sorted(loop_id for loop_id, selected in loop_selection_map.items() if selected),
+        "primary_loop": primary_loop,
+        "primary_loop_rmsd": primary_loop_metric.get("rmsd_backbone") if primary_loop_metric else None,
+        "primary_loop_target_contact_delta": primary_loop_metric.get("target_contact_delta") if primary_loop_metric else None,
+        "primary_loop_target_distance_delta": primary_loop_metric.get("target_distance_delta") if primary_loop_metric else None,
+        "primary_loop_epitope_contact_delta": primary_loop_metric.get("epitope_contact_delta") if primary_loop_metric else None,
+        "primary_loop_epitope_distance_delta": primary_loop_metric.get("epitope_distance_delta") if primary_loop_metric else None,
+        "objective_mode": args.objective_mode,
+        "objective_score": objective_score,
+        "target_contact_distance_cutoff": float(args.distance_cutoff),
+        "epitope_contact_distance_cutoff": 8.0,
+        "epitope_residues": sorted(f"{chain}{resnum}" for chain, resnum in epitope_positions) if epitope_positions else [],
         "interface_energy_method": "negative_interchain_pair_energy_sum",
         "distance_cutoff": float(args.distance_cutoff),
     }

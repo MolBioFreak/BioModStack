@@ -66,6 +66,7 @@ export interface QualitySettings {
     // PPIFlow stage control (backbone refinement and/or post-sequence maturation)
     run_maturation: boolean;
     ppiflow_stage_mode: PPIFlowStageMode;
+    ppiflow_tuning_profile: PPIFlowTuningProfile;
     ppiflow_start_t: number;
     ppiflow_samples_per_target: number;
     ppiflow_retry_limit: number;
@@ -75,6 +76,8 @@ export interface QualitySettings {
     ppiflow_rotamer_enrichment_enabled: boolean;
     ppiflow_require_anchors: boolean;
     ppiflow_rotamer_shell_cutoff: number;
+    ppiflow_objective_mode: PPIFlowObjectiveMode;
+    ppiflow_objective_threshold: number;
     maturation_anchor_threshold: number;
     maturation_anchor_distance_cutoff: number;
     maturation_min_improvement: number;
@@ -120,9 +123,96 @@ export interface QualitySettings {
     boltz_min_ptm_interface: number | null;   // Min interface pTM score (null = no filter)
 }
 
-export type QualityPreset = 'speed' | 'balanced' | 'quality' | 'maximum';
 export type PPIFlowStageMode = 'off' | 'post_rfantibody' | 'post_ppiflow' | 'post_fampnn' | 'both';
 export type PPIFlowRegionMode = 'selected_cdrs' | 'all_cdrs' | 'framework_only' | 'all_antibody';
+export type PPIFlowObjectiveMode = 'selected_interface' | 'loop_target' | 'loop_epitope' | 'balanced';
+export type PPIFlowTuningProfile = 'stage_optimized' | 'manual';
+
+const PRE_SEQUENCE_PPIFLOW_STAGE_MODES = new Set<PPIFlowStageMode>(['post_rfantibody', 'post_ppiflow']);
+const POST_SEQUENCE_PPIFLOW_STAGE_MODES = new Set<PPIFlowStageMode>(['post_fampnn']);
+
+const getPpiFlowOptimizationScenario = (stageMode: PPIFlowStageMode): 'pre_sequence' | 'post_sequence' | null => {
+    if (PRE_SEQUENCE_PPIFLOW_STAGE_MODES.has(stageMode)) return 'pre_sequence';
+    if (POST_SEQUENCE_PPIFLOW_STAGE_MODES.has(stageMode)) return 'post_sequence';
+    return null;
+};
+
+export const normalizePpiFlowTuningProfile = (raw: unknown): PPIFlowTuningProfile =>
+    raw === 'manual' ? 'manual' : 'stage_optimized';
+
+export const getStageOptimizedPpiFlowSettings = (stageMode: PPIFlowStageMode): Partial<QualitySettings> => {
+    const scenario = getPpiFlowOptimizationScenario(stageMode);
+    if (scenario === 'pre_sequence') {
+        return {
+            ppiflow_start_t: 0.55,
+            ppiflow_samples_per_target: 7,
+            ppiflow_require_anchors: false,
+            ppiflow_objective_mode: 'loop_epitope',
+            ppiflow_objective_threshold: 0,
+        };
+    }
+    if (scenario === 'post_sequence') {
+        return {
+            ppiflow_start_t: 0.8,
+            ppiflow_samples_per_target: 4,
+            ppiflow_require_anchors: true,
+            ppiflow_objective_mode: 'balanced',
+            ppiflow_objective_threshold: 0,
+        };
+    }
+    return {};
+};
+
+export const applyPpiFlowStageMode = (
+    settings: QualitySettings,
+    nextStageMode: PPIFlowStageMode,
+): QualitySettings => {
+    const nextSettings: QualitySettings = {
+        ...settings,
+        ppiflow_stage_mode: nextStageMode,
+        run_maturation: nextStageMode === 'post_fampnn' || nextStageMode === 'both',
+    };
+    const tuningProfile = normalizePpiFlowTuningProfile(nextSettings.ppiflow_tuning_profile);
+    if (nextStageMode === 'both' && tuningProfile === 'stage_optimized') {
+        nextSettings.ppiflow_tuning_profile = 'manual';
+        return nextSettings;
+    }
+    if (tuningProfile === 'stage_optimized') {
+        return {
+            ...nextSettings,
+            ...getStageOptimizedPpiFlowSettings(nextStageMode),
+        };
+    }
+    if (nextStageMode === 'post_ppiflow') {
+        nextSettings.ppiflow_require_anchors = false;
+    }
+    return nextSettings;
+};
+
+export const applyPpiFlowTuningProfile = (
+    settings: QualitySettings,
+    nextProfile: PPIFlowTuningProfile,
+): QualitySettings => {
+    const normalizedProfile = normalizePpiFlowTuningProfile(nextProfile);
+    const stageMode = (settings.ppiflow_stage_mode || (settings.run_maturation ? 'post_fampnn' : 'off')) as PPIFlowStageMode;
+    const nextSettings: QualitySettings = {
+        ...settings,
+        ppiflow_tuning_profile: normalizedProfile,
+    };
+    if (normalizedProfile !== 'stage_optimized') {
+        return nextSettings;
+    }
+    if (stageMode === 'both') {
+        return {
+            ...nextSettings,
+            ppiflow_tuning_profile: 'manual',
+        };
+    }
+    return {
+        ...nextSettings,
+        ...getStageOptimizedPpiFlowSettings(stageMode),
+    };
+};
 
 const normalizeProtenixModel = (model?: string) => {
     if (!model) return 'protenix_base_20250630_v1.0.0';
@@ -191,7 +281,7 @@ const FAMPNN_TEMPERATURE_PRESETS = [
     { label: 'Creative', value: 0.3 },
 ] as const;
 
-const PRESETS: Record<QualityPreset, QualitySettings> = {
+const PRESETS: Record<'speed' | 'balanced' | 'quality' | 'maximum', QualitySettings> = {
     speed: {
         msa_preset: 'fast',
         // RFantibody: Fast screening
@@ -235,6 +325,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         // PPIFlow maturation (off for speed)
         run_maturation: false,
         ppiflow_stage_mode: 'off',
+        ppiflow_tuning_profile: 'stage_optimized',
         ppiflow_start_t: 0.5,
         ppiflow_samples_per_target: 3,
         ppiflow_retry_limit: 10,
@@ -244,6 +335,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_rotamer_enrichment_enabled: true,
         ppiflow_require_anchors: true,
         ppiflow_rotamer_shell_cutoff: 20.0,
+        ppiflow_objective_mode: 'balanced',
+        ppiflow_objective_threshold: 0,
         maturation_anchor_threshold: -5.0,
         maturation_anchor_distance_cutoff: 12.0,
         maturation_min_improvement: -1.0,
@@ -329,6 +422,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         // PPIFlow maturation (off for balanced)
         run_maturation: false,
         ppiflow_stage_mode: 'off',
+        ppiflow_tuning_profile: 'stage_optimized',
         ppiflow_start_t: 0.5,
         ppiflow_samples_per_target: 3,
         ppiflow_retry_limit: 10,
@@ -338,6 +432,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_rotamer_enrichment_enabled: true,
         ppiflow_require_anchors: true,
         ppiflow_rotamer_shell_cutoff: 20.0,
+        ppiflow_objective_mode: 'balanced',
+        ppiflow_objective_threshold: 0,
         maturation_anchor_threshold: -5.0,
         maturation_anchor_distance_cutoff: 12.0,
         maturation_min_improvement: -1.0,
@@ -423,6 +519,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         // PPIFlow maturation (enabled for quality)
         run_maturation: true,
         ppiflow_stage_mode: 'post_fampnn',
+        ppiflow_tuning_profile: 'stage_optimized',
         ppiflow_start_t: 0.8,
         ppiflow_samples_per_target: 5,
         ppiflow_retry_limit: 10,
@@ -432,6 +529,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_rotamer_enrichment_enabled: true,
         ppiflow_require_anchors: true,
         ppiflow_rotamer_shell_cutoff: 20.0,
+        ppiflow_objective_mode: 'balanced',
+        ppiflow_objective_threshold: 0,
         maturation_anchor_threshold: -6.0,
         maturation_anchor_distance_cutoff: 12.0,
         maturation_min_improvement: 0.0,
@@ -517,6 +616,7 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         // PPIFlow maturation (enabled for maximum)
         run_maturation: true,
         ppiflow_stage_mode: 'post_fampnn',
+        ppiflow_tuning_profile: 'stage_optimized',
         ppiflow_start_t: 0.9,
         ppiflow_samples_per_target: 8,
         ppiflow_retry_limit: 10,
@@ -526,6 +626,8 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
         ppiflow_rotamer_enrichment_enabled: true,
         ppiflow_require_anchors: true,
         ppiflow_rotamer_shell_cutoff: 20.0,
+        ppiflow_objective_mode: 'balanced',
+        ppiflow_objective_threshold: 0,
         maturation_anchor_threshold: -7.0,
         maturation_anchor_distance_cutoff: 12.0,
         maturation_min_improvement: 0.0,
@@ -570,13 +672,6 @@ const PRESETS: Record<QualityPreset, QualitySettings> = {
     },
 };
 
-const PRESET_INFO: Record<QualityPreset, { name: string; desc: string; time: string; color: string }> = {
-    speed: { name: 'Speed', desc: 'Fast screening', time: '~5 min', color: 'cyan' },
-    balanced: { name: 'Balanced', desc: 'Default settings', time: '~15 min', color: 'blue' },
-    quality: { name: 'Quality', desc: 'Higher accuracy', time: '~45 min', color: 'purple' },
-    maximum: { name: 'Maximum', desc: 'Best possible', time: '~2+ hrs', color: 'rose' },
-};
-
 const MSA_PRESET_INFO: Record<QualitySettings['msa_preset'], { label: string; description: string }> = {
     maximum: { label: 'Maximum', description: 'Full ColabFold-style search with expansion. Highest coverage, slowest.' },
     balanced: { label: 'Balanced', description: 'Environmental search without expansion. Good default tradeoff.' },
@@ -586,10 +681,13 @@ const MSA_PRESET_INFO: Record<QualitySettings['msa_preset'], { label: string; de
 interface QualitySettingsPanelProps {
     settings: QualitySettings;
     onSettingsChange: (settings: QualitySettings) => void;
-    preset: QualityPreset;
-    onPresetChange: (preset: QualityPreset) => void;
     structureValidator?: 'boltz2' | 'protenix';
     allowPostPpiFlowRetry?: boolean;
+    showRfantibodySettings?: boolean;
+    showStructureValidationSettings?: boolean;
+    showFampnnSettings?: boolean;
+    showPreValidationFiltering?: boolean;
+    showPostValidationFiltering?: boolean;
 }
 
 interface PPIFlowSettingsFieldsProps {
@@ -628,7 +726,11 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
         }
     }, [overridesEnabled, overrideEnabled]);
 
-    const stageMode = settings.ppiflow_stage_mode || (settings.run_maturation ? 'post_fampnn' : 'off');
+    const stageMode = (settings.ppiflow_stage_mode || (settings.run_maturation ? 'post_fampnn' : 'off')) as PPIFlowStageMode;
+    const tuningProfile = normalizePpiFlowTuningProfile(settings.ppiflow_tuning_profile);
+    const optimizationScenario = getPpiFlowOptimizationScenario(stageMode);
+    const stageOptimizedAvailable = optimizationScenario !== null;
+    const managedByStageProfile = tuningProfile === 'stage_optimized' && stageOptimizedAvailable;
     const stageModeLabel: Record<PPIFlowStageMode, string> = {
         off: 'Off',
         post_rfantibody: 'Post RF backbone refine',
@@ -637,11 +739,7 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
         both: 'Both stages',
     };
     const updateStageMode = (next: PPIFlowStageMode) => {
-        updateSettings({
-            ppiflow_stage_mode: next,
-            run_maturation: next === 'post_fampnn' || next === 'both',
-            ...(next === 'post_ppiflow' ? { ppiflow_require_anchors: false } : {}),
-        });
+        onSettingsChange(applyPpiFlowStageMode(settings, next));
     };
     const backboneStageEnabled = stageMode === 'post_rfantibody' || stageMode === 'post_ppiflow' || stageMode === 'both';
     const maturationStageEnabled = stageMode === 'post_fampnn' || stageMode === 'both';
@@ -696,6 +794,50 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
 
             {stageMode !== 'off' && (
                 <div className="space-y-4">
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div className="space-y-1">
+                                <div className="text-xs text-slate-300">Stage setup strategy</div>
+                                <p className="text-[10px] text-slate-500">
+                                    Stage-optimized mode follows the repo PPIFlow guidance for the selected stage. Pre-sequence refinement lowers `start_t`, raises samples, and disables strict anchor rejection. Post-FA-MPNN maturation uses higher `start_t`, fewer samples, balanced ranking, and strict anchors.
+                                </p>
+                                {stageMode === 'both' && (
+                                    <p className="text-[10px] text-amber-300">
+                                        `Both` shares one set of core PPIFlow knobs across two different stages, so stage-optimized defaults are disabled there. Switch to `Manual` to tune the shared settings directly.
+                                    </p>
+                                )}
+                            </div>
+                            <div className="inline-flex rounded-lg border border-slate-700 bg-slate-900/70 p-1">
+                                <button
+                                    type="button"
+                                    disabled={!stageOptimizedAvailable}
+                                    onClick={() => onSettingsChange(applyPpiFlowTuningProfile(settings, 'stage_optimized'))}
+                                    className={`rounded px-3 py-1 text-xs transition-colors ${tuningProfile === 'stage_optimized'
+                                        ? 'bg-teal-500/15 text-teal-100'
+                                        : 'text-slate-300 hover:text-slate-100'
+                                        } ${!stageOptimizedAvailable ? 'cursor-not-allowed opacity-50' : ''}`}
+                                >
+                                    Stage optimized
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => onSettingsChange(applyPpiFlowTuningProfile(settings, 'manual'))}
+                                    className={`rounded px-3 py-1 text-xs transition-colors ${tuningProfile === 'manual'
+                                        ? 'bg-slate-700 text-slate-100'
+                                        : 'text-slate-300 hover:text-slate-100'
+                                        }`}
+                                >
+                                    Manual
+                                </button>
+                            </div>
+                        </div>
+                        {managedByStageProfile && (
+                            <div className="mt-2 text-[10px] text-teal-300">
+                                Core partial-flow controls below are currently managed by the selected stage strategy. Switch to `Manual` if you want to override them directly.
+                            </div>
+                        )}
+                    </div>
+
                     <div className="grid grid-cols-2 gap-4">
                 <div>
                     <label className="block text-xs text-slate-500 mb-1">
@@ -707,8 +849,9 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         max={0.95}
                         step={0.05}
                         value={settings.ppiflow_start_t}
+                        disabled={managedByStageProfile}
                         onChange={(e) => updateSetting('ppiflow_start_t', parseFloat(e.target.value))}
-                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                        className={`w-full h-2 bg-slate-700 rounded-lg appearance-none accent-teal-500 ${managedByStageProfile ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
                     />
                     <div className="flex justify-between text-[10px] text-slate-600 mt-1">
                         <span>0.3 (diverse)</span>
@@ -730,8 +873,9 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         max={10}
                         step={1}
                         value={settings.ppiflow_samples_per_target}
+                        disabled={managedByStageProfile}
                         onChange={(e) => updateSetting('ppiflow_samples_per_target', parseInt(e.target.value))}
-                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                        className={`w-full h-2 bg-slate-700 rounded-lg appearance-none accent-teal-500 ${managedByStageProfile ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
                     />
                     <div className="flex justify-between text-[10px] text-slate-600 mt-1">
                         <span>1</span>
@@ -817,26 +961,76 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                 </div>
 
                 <div>
+                    <label className="block text-xs text-slate-500 mb-1">Ranking Objective</label>
+                    <select
+                        value={settings.ppiflow_objective_mode}
+                        disabled={managedByStageProfile}
+                        onChange={(e) => updateSetting('ppiflow_objective_mode', e.target.value as PPIFlowObjectiveMode)}
+                        className={`w-full rounded border border-slate-700 px-2 py-1 text-sm ${managedByStageProfile ? 'cursor-not-allowed bg-slate-900/60 text-slate-500' : 'bg-slate-800 text-slate-300'}`}
+                    >
+                        <option value="balanced">Balanced loop-target + epitope</option>
+                        <option value="loop_epitope">Epitope-focused</option>
+                        <option value="loop_target">Whole-target-focused</option>
+                        <option value="selected_interface">Selected-interface only</option>
+                    </select>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                        Controls how partial-flow samples are ranked after generation. Loop-aware modes track per-loop contact and distance deltas against the target patch instead of only coarse interface energy.
+                    </p>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+                <div>
                     <label className="block text-xs text-slate-500 mb-1">
-                        Min Interface Improvement <span className="text-slate-600">({settings.maturation_min_improvement.toFixed(1)})</span>
+                        {settings.ppiflow_objective_mode === 'selected_interface' ? 'Min Interface Improvement' : 'Objective Threshold'} <span className="text-slate-600">({(settings.ppiflow_objective_mode === 'selected_interface' ? settings.maturation_min_improvement : settings.ppiflow_objective_threshold).toFixed(1)})</span>
                     </label>
                     <input
                         type="range"
-                        min={-5}
-                        max={0}
+                        min={settings.ppiflow_objective_mode === 'selected_interface' ? -5 : -10}
+                        max={settings.ppiflow_objective_mode === 'selected_interface' ? 0 : 10}
                         step={0.5}
-                        value={settings.maturation_min_improvement}
-                        onChange={(e) => updateSetting('maturation_min_improvement', parseFloat(e.target.value))}
-                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                        value={settings.ppiflow_objective_mode === 'selected_interface' ? settings.maturation_min_improvement : settings.ppiflow_objective_threshold}
+                        disabled={managedByStageProfile}
+                        onChange={(e) => {
+                            const nextValue = parseFloat(e.target.value);
+                            if (settings.ppiflow_objective_mode === 'selected_interface') {
+                                updateSetting('maturation_min_improvement', nextValue);
+                            } else {
+                                updateSetting('ppiflow_objective_threshold', nextValue);
+                            }
+                        }}
+                        className={`w-full h-2 bg-slate-700 rounded-lg appearance-none accent-teal-500 ${managedByStageProfile ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
                     />
                     <div className="flex justify-between text-[10px] text-slate-600 mt-1">
-                        <span>-5 (strict)</span>
-                        <span>-1</span>
-                        <span>0 (off)</span>
+                        {settings.ppiflow_objective_mode === 'selected_interface' ? (
+                            <>
+                                <span>-5 (strict)</span>
+                                <span>-1</span>
+                                <span>0 (off)</span>
+                            </>
+                        ) : (
+                            <>
+                                <span>-10</span>
+                                <span>0</span>
+                                <span>10</span>
+                            </>
+                        )}
                     </div>
                     <p className="text-[10px] text-slate-600 mt-1">
-                        Filter threshold on delta interface score (more negative is better).
+                        {settings.ppiflow_objective_mode === 'selected_interface'
+                            ? 'Legacy gate on selected delta interface score. More negative is better.'
+                            : 'Loop-aware gate on the aggregated objective score. Lower is better; values below zero usually indicate improved loop behavior against the target.'}
                     </p>
+                </div>
+
+                <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+                    <div className="text-xs text-slate-300">Objective semantics</div>
+                    <div className="mt-2 space-y-1 text-[10px] text-slate-500">
+                        <div><span className="text-slate-300">Balanced:</span> mixes loop epitope and whole-target gains with RMSD/clash penalties.</div>
+                        <div><span className="text-slate-300">Epitope:</span> prioritize loop movement toward the selected epitope patch.</div>
+                        <div><span className="text-slate-300">Whole target:</span> prioritize loop engagement anywhere on the target surface.</div>
+                        <div><span className="text-slate-300">Selected iface:</span> old coarse interface-only ranking.</div>
+                    </div>
                 </div>
             </div>
 
@@ -879,12 +1073,17 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         <input
                             type="checkbox"
                             checked={settings.ppiflow_require_anchors}
+                            disabled={managedByStageProfile}
                             onChange={(e) => updateSetting('ppiflow_require_anchors', e.target.checked)}
                             className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-teal-500 focus:ring-teal-500"
                         />
                     </label>
                     <p className="text-[10px] text-slate-600">
-                        Default paper-aligned path: repack the interface first, then fail loudly if no usable anchors remain outside the movable region.
+                        {managedByStageProfile && optimizationScenario === 'pre_sequence'
+                            ? 'Stage-optimized pre-sequence refinement still scores anchors, but it disables strict zero-anchor rejection so nearby backbones can be explored before sequence design.'
+                            : managedByStageProfile && optimizationScenario === 'post_sequence'
+                                ? 'Stage-optimized post-FA-MPNN maturation keeps strict anchor enforcement on for sequence-conditioned cleanup.'
+                                : 'Default paper-aligned path: repack the interface first, then fail loudly if no usable anchors remain outside the movable region.'}
                     </p>
                 </div>
             </div>
@@ -987,7 +1186,7 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         <span>50</span>
                     </div>
                     <p className="text-[10px] text-slate-600 mt-1">
-                        Selects top designs by partial-flow interface improvement.
+                        Selects top designs by the active partial-flow objective.
                     </p>
                 </div>
             </div>
@@ -1012,7 +1211,7 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         <span>50</span>
                     </div>
                     <p className="text-[10px] text-slate-600 mt-1">
-                        Keep only the top percentile of matured designs by score.
+                        Keep only the top percentile of matured designs by the active objective score.
                     </p>
                 </div>
 
@@ -1046,7 +1245,7 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                     <input
                         type="range"
                         min={1}
-                        max={20}
+                        max={1000}
                         step={1}
                         value={settings.maturation_designs_per_job}
                         onChange={(e) => updateSetting('maturation_designs_per_job', parseInt(e.target.value))}
@@ -1054,8 +1253,8 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                     />
                     <div className="flex justify-between text-[10px] text-slate-600 mt-1">
                         <span>1</span>
-                        <span>10</span>
-                        <span>20</span>
+                        <span>500</span>
+                        <span>1000</span>
                     </div>
                     <p className="text-[10px] text-slate-600 mt-1">
                         Controls orchestration batching only.
@@ -1264,50 +1463,16 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
 export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
     settings,
     onSettingsChange,
-    preset,
-    onPresetChange,
     structureValidator = 'boltz2',
     allowPostPpiFlowRetry = false,
+    showRfantibodySettings = true,
+    showStructureValidationSettings = true,
+    showFampnnSettings = true,
+    showPreValidationFiltering = true,
+    showPostValidationFiltering = true,
 }) => {
     const [isExpanded, setIsExpanded] = useState(false);
     const [showMsaRuntimeOverrides, setShowMsaRuntimeOverrides] = useState(false);
-
-    const handlePresetSelect = (newPreset: QualityPreset) => {
-        onPresetChange(newPreset);
-        onSettingsChange({
-            ...PRESETS[newPreset],
-            fampnn_checkpoint: settings.fampnn_checkpoint,
-            fampnn_checkpoint_path: settings.fampnn_checkpoint_path,
-            fampnn_temperature: settings.fampnn_temperature,
-            rfantibody_ckpt_override: settings.rfantibody_ckpt_override,
-            rfantibody_debug_repo_overlay: settings.rfantibody_debug_repo_overlay,
-            lock_target_chains: settings.lock_target_chains,
-            lock_antibody_framework: settings.lock_antibody_framework,
-            boltz_anchor_target: settings.boltz_anchor_target,
-            boltz_anchor_strict: settings.boltz_anchor_strict,
-            ppiflow_backbone_loop_scope: settings.ppiflow_backbone_loop_scope,
-            ppiflow_maturation_loop_scope: settings.ppiflow_maturation_loop_scope,
-            protenix_use_template: settings.protenix_use_template,
-            protenix_anchor_target: settings.protenix_anchor_target,
-            protenix_anchor_strict: settings.protenix_anchor_strict,
-            protenix_msa_backend: settings.protenix_msa_backend,
-            protenix_auto_oom_retry: settings.protenix_auto_oom_retry,
-            protenix_oom_retry_attempts: settings.protenix_oom_retry_attempts,
-            colabfold_api_host: settings.colabfold_api_host,
-            msa_use_gpu: settings.msa_use_gpu,
-            msa_local_db: settings.msa_local_db,
-            msa_cache_dir: settings.msa_cache_dir,
-            msa_threads: settings.msa_threads,
-            msa_gpu_mode: settings.msa_gpu_mode,
-            msa_gpu_threshold: settings.msa_gpu_threshold,
-            msa_preferred_gpus: settings.msa_preferred_gpus,
-            msa_excluded_gpus: settings.msa_excluded_gpus,
-            msa_gpu_server_mode: settings.msa_gpu_server_mode,
-            msa_gpu_server_wait_timeout: settings.msa_gpu_server_wait_timeout,
-            msa_gpu_server_db_load_mode: settings.msa_gpu_server_db_load_mode,
-            msa_gpu_server_startup_wait: settings.msa_gpu_server_startup_wait,
-        });
-    };
 
     const updateSetting = <K extends keyof QualitySettings>(key: K, value: QualitySettings[K]) => {
         onSettingsChange({ ...settings, [key]: value });
@@ -1317,26 +1482,6 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
     const showProtenixMsaProvider = structureValidator === 'protenix' && settings.protenix_use_msa;
     const showRemoteMsaHost = showProtenixMsaProvider && settings.protenix_msa_backend !== 'local';
     const showLocalMsaRuntime = msaEnabled && (structureValidator === 'boltz2' || settings.protenix_msa_backend !== 'colabfold_api');
-
-    // Color classes for Tailwind
-    const colorClasses: Record<string, { selected: string; unselected: string }> = {
-        cyan: {
-            selected: 'bg-cyan-600/20 border-cyan-500 text-cyan-400',
-            unselected: 'bg-slate-800 border-slate-700 text-slate-400 hover:border-cyan-600/50',
-        },
-        blue: {
-            selected: 'bg-blue-600/20 border-blue-500 text-blue-400',
-            unselected: 'bg-slate-800 border-slate-700 text-slate-400 hover:border-blue-600/50',
-        },
-        purple: {
-            selected: 'bg-accent/20 border-accent text-accent',
-            unselected: 'bg-slate-800 border-slate-700 text-slate-400 hover:border-accent/50',
-        },
-        rose: {
-            selected: 'bg-rose-600/20 border-rose-500 text-rose-400',
-            unselected: 'bg-slate-800 border-slate-700 text-slate-400 hover:border-rose-600/50',
-        },
-    };
 
     return (
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-lg overflow-hidden">
@@ -1349,7 +1494,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                     <div className="text-left">
                         <h3 className="text-sm font-medium text-slate-300">Quality Settings</h3>
                         <p className="text-xs text-slate-500">
-                            {PRESET_INFO[preset].name} mode • {PRESET_INFO[preset].time}
+                            Active workflow and model-specific controls only.
                         </p>
                     </div>
                 </div>
@@ -1361,29 +1506,8 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
             {/* Expanded Content */}
             {isExpanded && (
                 <div className="px-4 pb-4 space-y-4">
-                    {/* Preset Selector */}
-                    <div>
-                        <label className="block text-xs font-medium text-slate-500 mb-2">Quick Presets</label>
-                        <div className="grid grid-cols-4 gap-2">
-                            {(Object.keys(PRESETS) as QualityPreset[]).map((p) => {
-                                const info = PRESET_INFO[p];
-                                const colors = colorClasses[info.color];
-                                return (
-                                    <button
-                                        key={p}
-                                        onClick={() => handlePresetSelect(p)}
-                                        className={`p-2 rounded-lg border transition-all text-center ${preset === p ? colors.selected : colors.unselected
-                                            }`}
-                                    >
-                                        <div className="text-sm font-medium">{info.name}</div>
-                                        <div className="text-xs opacity-75">{info.time}</div>
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    </div>
-
                     {/* RFantibody Settings */}
+                    {showRfantibodySettings && (
                     <div className="space-y-3">
                         <div className="flex items-center gap-2 text-sm font-medium text-accent-secondary">
                             Backbone Design (RFantibody)
@@ -1506,8 +1630,11 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                             </div>
                         </div>
                     </div>
+                    )}
 
-                    <div className="space-y-3 pt-3 border-t border-slate-700/50">
+                    {showStructureValidationSettings && (
+                        <>
+                            <div className="space-y-3 pt-3 border-t border-slate-700/50">
                         {structureValidator === 'protenix' ? (
                             <>
                                 <div className="flex items-center gap-2 text-sm font-medium text-cyan-300">
@@ -1858,10 +1985,9 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 )}
                             </>
                         )}
-                    </div>
-
-                    {msaEnabled && (
-                        <div className="space-y-3 pt-3 border-t border-slate-700/50">
+                            </div>
+                            {msaEnabled && (
+                                <div className="space-y-3 pt-3 border-t border-slate-700/50">
                             <div className="flex items-center gap-2 text-sm font-medium text-sky-400">
                                 MSA Settings
                             </div>
@@ -1872,7 +1998,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                             </p>
 
                             <div>
-                                <label className="block text-xs text-slate-500 mb-2">MSA Quality Preset</label>
+                                <label className="block text-xs text-slate-500 mb-2">MSA Search Mode</label>
                                 <div className="grid grid-cols-3 gap-2">
                                     {(['maximum', 'balanced', 'fast'] as const).map((msaPreset) => {
                                         const isActive = settings.msa_preset === msaPreset;
@@ -2113,18 +2239,21 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     )}
                                 </div>
                             )}
-                        </div>
+                                </div>
+                            )}
+                        </>
                     )}
 
                     {/* FAMPNN Settings */}
-                    <div className="space-y-3 pt-3 border-t border-slate-700/50">
+                    {showFampnnSettings && (
+                        <div className="space-y-3 pt-3 border-t border-slate-700/50">
                         <div className="flex items-center gap-2 text-sm font-medium text-blue-400">
                             Sequence Design (FAMPNN)
                         </div>
 
                         <div className="grid grid-cols-2 gap-4">
                             <div>
-                                <label className="block text-xs text-slate-500 mb-1">Checkpoint Preset</label>
+                                <label className="block text-xs text-slate-500 mb-1">Checkpoint</label>
                                 <select
                                     value={settings.fampnn_checkpoint}
                                     onChange={(e) => updateSetting('fampnn_checkpoint', e.target.value)}
@@ -2136,7 +2265,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     ))}
                                 </select>
                                 <p className="mt-1 text-[10px] text-slate-600">
-                                    Defaults to FAMPNN (0.0A). Pick a different preset or override path if needed.
+                                    Defaults to FAMPNN (0.0A). Pick a different checkpoint or override path if needed.
                                 </p>
                             </div>
 
@@ -2150,7 +2279,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300 font-mono"
                                 />
                                 <p className="mt-1 text-[10px] text-slate-600">
-                                    Optional manual path. If set, this overrides the preset selection.
+                                    Optional manual path. If set, this overrides the checkpoint dropdown.
                                 </p>
                             </div>
                         </div>
@@ -2204,7 +2333,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                     })}
                                 </div>
                                 <p className="mt-2 text-[10px] text-slate-600">
-                                    Quality preset changes will not overwrite your FAMPNN temperature.
+                                    Temperature is always controlled explicitly here and will not be reset by other controls.
                                 </p>
                             </div>
 
@@ -2280,7 +2409,8 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                 </span>
                             </label>
                         </div>
-                    </div>
+                        </div>
+                    )}
 
                     {/* PPIFlow Maturation */}
                     <div className="space-y-3 pt-3 border-t border-slate-700/50">
@@ -2292,6 +2422,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                     </div>
 
                     {/* Pre-validation Filtering (Compute Savings) */}
+                    {showPreValidationFiltering && (
                     <div className="space-y-3 pt-3 border-t border-slate-700/50">
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 text-sm font-medium text-green-400">
@@ -2374,8 +2505,10 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                             </div>
                         )}
                     </div>
+                    )}
 
                     {/* Post-Boltz Validation Filtering */}
+                    {showPostValidationFiltering && (
                     <div className="space-y-3 pt-3 border-t border-slate-700/50">
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2 text-sm font-medium text-orange-400">
@@ -2483,6 +2616,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                             </div>
                         )}
                     </div>
+                    )}
 
                     {/* ThermoMPNN Stability Scoring */}
                     <div className="space-y-3 pt-3 border-t border-slate-700/50">

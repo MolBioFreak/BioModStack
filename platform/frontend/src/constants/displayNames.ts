@@ -46,6 +46,8 @@ export const MODE_DISPLAY_NAMES: Record<string, string> = {
 
     // Oligo Designer
     'oligo_design': 'Oligo Designer',
+    'protein_local_redesign': 'Protein Local Redesign',
+    'local_redesign': 'Protein Local Redesign',
     'methylation_analysis': 'Nanopore Methylation',
     'nanopore_methylation': 'Nanopore Methylation',
 };
@@ -73,6 +75,7 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
     'rfdpoly': 'RFDpoly',
     'nampnn': 'NA-MPNN',
     'oligo_design': 'Oligo Designer',
+    'protein_local_redesign': 'Protein Local Redesign',
     'nanopore': 'Nanopore Sequencing',
 };
 
@@ -96,6 +99,7 @@ export const STAGE_DISPLAY_NAMES: Record<string, string> = {
     'thermompnn': 'ThermoMPNN',
     'iggm': 'IgGM',
     'rfdiffusion': 'RFdiffusion',
+    'protein_local_redesign': 'Protein Local Redesign',
     'msa': 'MSA Generation',
     'rfdpoly': 'RFDpoly',
     'nampnn': 'NA-MPNN',

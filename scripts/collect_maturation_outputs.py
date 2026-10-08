@@ -75,7 +75,7 @@ def main():
 
     pdbs = collect_files(
         output_dirs,
-        patterns=["*.pdb"],
+        patterns=["*_ppiflow_sample*.pdb"],
         subdirs=search_subdirs,
     )
 

@@ -47,6 +47,7 @@ workflow MATURATION_CHILD_CORE {
         if (value in ['all_antibody', 'whole_antibody', 'full_antibody']) return 'all_antibody'
         return 'selected_cdrs'
     }
+    def strictAnchorRequirement = params.ppiflow_require_anchors != null ? params.ppiflow_require_anchors : true
     def parseBackboneManifest = { manifestFile ->
         if (manifestFile == null) {
             return []
@@ -60,6 +61,19 @@ workflow MATURATION_CHILD_CORE {
             .collect { entry ->
                 [file(entry.path.toString()), entry]
             }
+    }
+    def resolveAnchorCount = { anchorsJson ->
+        if (anchorsJson == null) {
+            return 0
+        }
+        try {
+            def parsed = new groovy.json.JsonSlurper().parse(new File(anchorsJson.toString()))
+            def count = parsed instanceof Map ? parsed.anchor_count : 0
+            return count instanceof Number ? count.intValue() : (count?.toString()?.isInteger() ? count.toString().toInteger() : 0)
+        }
+        catch (Throwable ignored) {
+            return 0
+        }
     }
     def selectedLoopsSpec = normalizeLoopSpec(params.ppiflow_selected_loops ?: params.maturation_selected_loops ?: params.selected_cdr_loops)
     def ppiflowRegionMode = normalizeRegionMode(params.ppiflow_region_mode ?: params.ppiflow_maturation_region_mode ?: params.ppiflow_backbone_region_mode)
@@ -81,13 +95,21 @@ workflow MATURATION_CHILD_CORE {
         }
 
     IdentifyAnchorResidues(anchor_inputs)
-    RunPartialFlow(IdentifyAnchorResidues.out.anchor_inputs)
-
-    def anchor_lookup = IdentifyAnchorResidues.out.anchor_inputs.map { meta, original_pdb, enriched_pdb, anchors_json, ppiflow_positions, cdr_positions ->
-        tuple(meta, original_pdb, enriched_pdb, anchors_json, ppiflow_positions, cdr_positions)
+    def usable_anchor_inputs = IdentifyAnchorResidues.out.anchor_inputs.filter { meta, original_pdb, enriched_pdb, anchors_json, ppiflow_positions, cdr_positions, cdr_positions_by_loop_json ->
+        def anchorCount = resolveAnchorCount(anchors_json)
+        if (strictAnchorRequirement && anchorCount <= 0) {
+            log.warn("PPIFlow skipping ${meta.id} because strict anchor selection produced zero anchors")
+            return false
+        }
+        return true
     }
-    def anchor_original_lookup = anchor_lookup.map { meta, original_pdb, _enriched_pdb, _anchors_json, _ppiflow_positions, _cdr_positions -> tuple(meta.id, original_pdb) }
-    def anchor_redesign_lookup = anchor_lookup.map { meta, _original_pdb, _enriched_pdb, anchors_json, _ppiflow_positions, cdr_positions -> tuple(meta.id, anchors_json, cdr_positions) }
+    RunPartialFlow(usable_anchor_inputs)
+
+    def anchor_lookup = usable_anchor_inputs.map { meta, original_pdb, enriched_pdb, anchors_json, ppiflow_positions, cdr_positions, cdr_positions_by_loop_json ->
+        tuple(meta, original_pdb, enriched_pdb, anchors_json, ppiflow_positions, cdr_positions, cdr_positions_by_loop_json)
+    }
+    def anchor_original_lookup = anchor_lookup.map { meta, original_pdb, _enriched_pdb, _anchors_json, _ppiflow_positions, _cdr_positions, _cdr_positions_by_loop_json -> tuple(meta.id, original_pdb) }
+    def anchor_redesign_lookup = anchor_lookup.map { meta, _original_pdb, _enriched_pdb, anchors_json, _ppiflow_positions, cdr_positions, _cdr_positions_by_loop_json -> tuple(meta.id, anchors_json, cdr_positions) }
 
     // Fan out multi-sample PPIFlow outputs so downstream tasks operate on one
     // matured backbone at a time using the explicit manifest emitted by
@@ -105,11 +127,15 @@ workflow MATURATION_CHILD_CORE {
 
     def partial_score_inputs = partial_backbones
         .map { meta, backbone_pdb -> tuple(meta.parent_id ?: meta.id, meta, backbone_pdb) }
-        .join(anchor_lookup.map { meta, original_pdb, _enriched_pdb, _anchors_json, ppiflow_positions, _cdr_positions ->
-            tuple(meta.id, original_pdb, ppiflow_positions)
-        })
-        .map { _parentId, meta, backbone_pdb, original_pdb, ppiflow_positions ->
-            tuple(meta, original_pdb, backbone_pdb, ppiflow_positions)
+        // Preserve every emitted sample from RunPartialFlow. `join` collapses
+        // duplicate parent keys here, which silently drops sample1/sample2...
+        // and only scores sample0. `combine(by: 0)` fans each sample back out
+        // against the single parent/original record.
+        .combine(anchor_lookup.map { meta, original_pdb, _enriched_pdb, _anchors_json, ppiflow_positions, _cdr_positions, cdr_positions_by_loop_json ->
+            tuple(meta.id, original_pdb, ppiflow_positions, cdr_positions_by_loop_json)
+        }, by: 0)
+        .map { _parentId, meta, backbone_pdb, original_pdb, ppiflow_positions, cdr_positions_by_loop_json ->
+            tuple(meta, original_pdb, backbone_pdb, ppiflow_positions, cdr_positions_by_loop_json)
         }
 
     ScorePartialFlowImprovement(partial_score_inputs)
@@ -141,7 +167,10 @@ workflow MATURATION_CHILD_CORE {
             def score = 0.0
             try {
                 def parsed = new groovy.json.JsonSlurper().parse(score_json)
-                score = parsed.selected_delta_interface_score
+                score = parsed.objective_score
+                if (score == null) {
+                    score = parsed.selected_delta_interface_score
+                }
                 if (score == null) {
                     score = parsed.delta_interface_score ?: 0.0
                 }
@@ -180,7 +209,7 @@ workflow MATURATION_CHILD_CORE {
     if (redesign_enabled && runRedesign) {
         def redesign_inputs = partial_selected
             .map { meta, backbone_pdb, _score_json, _score -> tuple(meta.parent_id ?: meta.id, meta, backbone_pdb) }
-            .join(anchor_redesign_lookup)
+            .combine(anchor_redesign_lookup, by: 0)
             .map { _parentId, meta, backbone_pdb, anchors_json, cdr_positions ->
                 tuple(meta.id, meta, backbone_pdb, anchors_json, cdr_positions)
             }
@@ -198,11 +227,11 @@ workflow MATURATION_CHILD_CORE {
 
         def score_inputs = RunMaturationFAMPNN.out.redesigned
             .map { meta, matured_pdb, _matured_json -> tuple(meta.parent_id ?: meta.id, meta, matured_pdb) }
-            .join(anchor_lookup.map { meta, original_pdb, _enriched_pdb, _anchors_json, ppiflow_positions, _cdr_positions ->
-                tuple(meta.id, original_pdb, ppiflow_positions)
-            })
-            .map { _parentId, meta, matured_pdb, original_pdb, ppiflow_positions ->
-                tuple(meta, original_pdb, matured_pdb, ppiflow_positions)
+            .combine(anchor_lookup.map { meta, original_pdb, _enriched_pdb, _anchors_json, ppiflow_positions, _cdr_positions, cdr_positions_by_loop_json ->
+                tuple(meta.id, original_pdb, ppiflow_positions, cdr_positions_by_loop_json)
+            }, by: 0)
+            .map { _parentId, meta, matured_pdb, original_pdb, ppiflow_positions, cdr_positions_by_loop_json ->
+                tuple(meta, original_pdb, matured_pdb, ppiflow_positions, cdr_positions_by_loop_json)
             }
 
         ScoreMaturationImprovement(score_inputs)

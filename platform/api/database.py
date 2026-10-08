@@ -308,6 +308,17 @@ class Design(Base):
     maturation_selected_interface_score = Column(Float, nullable=True)   # selected_interface_score_matured (REU)
     maturation_selected_rmsd = Column(Float, nullable=True)              # selected_rmsd_backbone (Å)
     maturation_nonselected_rmsd = Column(Float, nullable=True)           # nonselected_rmsd_backbone (Å)
+    ppiflow_primary_loop = Column(String(32), nullable=True)
+    ppiflow_primary_loop_rmsd = Column(Float, nullable=True)
+    ppiflow_primary_loop_target_contact_delta = Column(Integer, nullable=True)
+    ppiflow_primary_loop_target_distance_delta = Column(Float, nullable=True)
+    ppiflow_primary_loop_epitope_contact_delta = Column(Integer, nullable=True)
+    ppiflow_primary_loop_epitope_distance_delta = Column(Float, nullable=True)
+    ppiflow_objective_mode = Column(String(64), nullable=True)
+    ppiflow_objective_score = Column(Float, nullable=True)
+    ppiflow_filter_passed = Column(Boolean, nullable=True)
+    ppiflow_filter_reason = Column(String(255), nullable=True)
+    ppiflow_loop_metrics = Column(JSON, nullable=True)
         
     created_at = Column(DateTime, default=datetime.utcnow)
     

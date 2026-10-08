@@ -17,13 +17,17 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 import numpy as np
-from sqlalchemy import delete, select, func
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Design, Job
 from paths import get_data_root, resolve_allowed_path, to_allowed_relative
 from services.result_ingester import (
+    _design_lineage_fields,
+    _inherit_source_design_metrics,
     _parse_hlt_cdr_lengths,
+    _resolve_parent_design_lineage,
+    _job_stage_context,
     extract_plddt_from_pdb,
     parse_backbone_id,
     safe_float,
@@ -33,10 +37,47 @@ from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_ch
 from services.rfantibody_metadata import load_rfantibody_trb_summary
 from services.structure_utils import load_structure
 
-REVIEWABLE_STAGES = {"post_rfantibody", "post_fampnn"}
+REVIEWABLE_STAGES = {"post_rfantibody", "post_fampnn", "post_structure_validation"}
 STRUCTURE_PATTERNS = ("*.pdb", "*.cif")
 METRIC_PATTERNS = ("*.json", "*.csv", "*.tsv")
 NEXTFLOW_JOB_ID_RE = re.compile(r"--job_id\s+([0-9a-fA-F-]{36})")
+
+
+def _is_protein_local_redesign_job(job: Job | None, payload: Optional[dict] = None) -> bool:
+    if job is None and not payload:
+        return False
+
+    params = getattr(job, "params", None) or {}
+    current_payload = payload or getattr(job, "awaiting_payload", None) or {}
+    model_id = str(getattr(job, "model_id", "") or "").strip().lower()
+    mode = str(getattr(job, "mode", "") or "").strip().lower()
+    rfd_mode = str(params.get("rfd_mode") or "").strip().lower()
+    framework_type = str(current_payload.get("framework_type") or "").strip().lower()
+
+    return (
+        model_id == "protein_local_redesign"
+        or mode == "local_redesign"
+        or rfd_mode == "protein_local_redesign"
+        or framework_type == "protein_local_redesign"
+    )
+
+
+def _uses_rfantibody_review(stage: str | None, job: Job | None, payload: Optional[dict] = None) -> bool:
+    normalized = str(stage or "").strip().lower()
+    return normalized == "post_rfantibody" and not _is_protein_local_redesign_job(job, payload)
+
+
+def _review_stage_identity(stage: str | None, job: Job | None = None, payload: Optional[dict] = None) -> tuple[Optional[str], Optional[str]]:
+    normalized = str(stage or "").strip().lower()
+    if normalized == "post_rfantibody":
+        if _is_protein_local_redesign_job(job, payload):
+            return "protein_local_redesign", "post_rfd3"
+        return "rfantibody", normalized
+    if normalized == "post_fampnn":
+        return "fampnn", normalized
+    if normalized == "post_structure_validation":
+        return "validation", normalized
+    return None, None
 
 
 def resolve_output_dir(output_dir: str | None) -> Optional[Path]:
@@ -334,6 +375,7 @@ def resolve_rfantibody_filtered_files(
 def refresh_gate_payload(payload: Optional[dict], output_dir: str | None = None) -> dict:
     current = dict(payload or {})
     stage = str(current.get("stage") or "").strip().lower()
+    uses_rfantibody_review = stage == "post_rfantibody" and str(current.get("framework_type") or "").strip().lower() != "protein_local_redesign"
     output_path = resolve_output_dir(output_dir)
     candidate_dir = resolve_review_path(current.get("candidate_dir"), output_dir)
     raw_dir = resolve_review_path(current.get("raw_dir"), output_dir)
@@ -341,7 +383,7 @@ def refresh_gate_payload(payload: Optional[dict], output_dir: str | None = None)
     screening_by_name: dict[str, dict] = {}
     screening_by_backbone: dict[int, dict] = {}
 
-    if stage == "post_rfantibody" and output_path is not None:
+    if uses_rfantibody_review and output_path is not None:
         raw_dir = _pick_best_review_dir(raw_dir, _rfantibody_raw_dir_candidates(output_path), STRUCTURE_PATTERNS)
         filtered_dir = _pick_best_review_dir(filtered_dir, _rfantibody_filtered_dir_candidates(output_path), STRUCTURE_PATTERNS)
         screening_by_name, screening_by_backbone = _load_screening_rows(output_dir)
@@ -353,6 +395,13 @@ def refresh_gate_payload(payload: Optional[dict], output_dir: str | None = None)
                 candidate_dir = filtered_dir
             elif derived_filtered_files and raw_dir is not None:
                 candidate_dir = raw_dir
+            elif raw_dir and count_files(raw_dir, STRUCTURE_PATTERNS) > 0:
+                candidate_dir = raw_dir
+    elif stage == "post_fampnn":
+        candidate_count = count_files(candidate_dir, STRUCTURE_PATTERNS) if candidate_dir else 0
+        if candidate_count == 0:
+            if filtered_dir and count_files(filtered_dir, STRUCTURE_PATTERNS) > 0:
+                candidate_dir = filtered_dir
             elif raw_dir and count_files(raw_dir, STRUCTURE_PATTERNS) > 0:
                 candidate_dir = raw_dir
 
@@ -370,20 +419,20 @@ def refresh_gate_payload(payload: Optional[dict], output_dir: str | None = None)
 
     derived_filtered_files = (
         resolve_rfantibody_filtered_files(raw_dir, filtered_dir, screening_by_name, screening_by_backbone)
-        if stage == "post_rfantibody"
+        if uses_rfantibody_review
         else []
     )
     current["filtered_dir"] = normalize_review_path(filtered_dir)
-    current["filtered_candidate_count"] = len(derived_filtered_files) if stage == "post_rfantibody" else (count_files(filtered_dir, STRUCTURE_PATTERNS) if filtered_dir else None)
+    current["filtered_candidate_count"] = len(derived_filtered_files) if uses_rfantibody_review else (count_files(filtered_dir, STRUCTURE_PATTERNS) if filtered_dir else None)
     current["filtered_backbone_summary"] = (
         summarize_structure_files(derived_filtered_files)
-        if stage == "post_rfantibody"
+        if uses_rfantibody_review
         else (summarize_backbones(filtered_dir, STRUCTURE_PATTERNS) if filtered_dir else None)
     )
     current["filtered_metric_count"] = count_files(filtered_dir, METRIC_PATTERNS) if filtered_dir else None
 
     if (
-        stage == "post_rfantibody"
+        uses_rfantibody_review
         and current["candidate_count"] == 0
         and isinstance(current.get("raw_candidate_count"), int)
         and current["raw_candidate_count"] > 0
@@ -397,7 +446,7 @@ def refresh_gate_payload(payload: Optional[dict], output_dir: str | None = None)
         current["metric_count"] = count_files(candidate_dir, METRIC_PATTERNS)
         current["metric_preview"] = list_preview_files(candidate_dir, METRIC_PATTERNS)
 
-    current["review_grouping"] = "backbone_id" if stage == "post_rfantibody" else current.get("review_grouping")
+    current["review_grouping"] = "backbone_id" if uses_rfantibody_review else current.get("review_grouping")
     return current
 
 
@@ -711,17 +760,21 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
 
     repaired_payload = refresh_gate_payload(job.awaiting_payload or {}, job.output_dir)
     job.awaiting_payload = repaired_payload
+    uses_rfantibody_review = _uses_rfantibody_review(stage, job, repaired_payload)
 
     raw_dir = resolve_review_path(repaired_payload.get("raw_dir"), job.output_dir)
     filtered_dir = resolve_review_path(repaired_payload.get("filtered_dir"), job.output_dir)
     screening_by_name, screening_by_backbone = _load_screening_rows(job.output_dir)
 
     expected_files: list[tuple[str, Path]] = []
-    if stage == "post_rfantibody":
+    if uses_rfantibody_review:
         raw_files = _iter_matching_files(raw_dir, STRUCTURE_PATTERNS) if raw_dir else []
         filtered_files = resolve_rfantibody_filtered_files(raw_dir, filtered_dir, screening_by_name, screening_by_backbone)
         expected_files = [("raw", path) for path in raw_files]
         expected_files.extend(("filtered", path) for path in filtered_files)
+    elif stage == "post_rfantibody":
+        candidate_dir = resolve_review_path(repaired_payload.get("candidate_dir") or repaired_payload.get("raw_dir"), job.output_dir)
+        expected_files = [("candidate", path) for path in (_iter_matching_files(candidate_dir, STRUCTURE_PATTERNS) if candidate_dir else [])]
     else:
         candidate_dir = resolve_review_path(repaired_payload.get("candidate_dir"), job.output_dir)
         expected_files = [("candidate", path) for path in (_iter_matching_files(candidate_dir, STRUCTURE_PATTERNS) if candidate_dir else [])]
@@ -736,9 +789,21 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
             )
         )
     ).scalar() or 0
+    legacy_malformed_count = (
+        await session.execute(
+            select(func.count(Design.id)).where(
+                Design.job_id == job.id,
+                Design.source_stage.is_(None),
+                Design.stage_family == "refinement",
+                Design.stage_mode.in_(tuple(REVIEWABLE_STAGES)),
+            )
+        )
+    ).scalar() or 0
+    if legacy_malformed_count > 0:
+        force = True
 
     if existing_count == candidate_count and candidate_count > 0 and not force:
-        if stage == "post_rfantibody":
+        if uses_rfantibody_review:
             group_rows = (
                 await session.execute(
                     select(Design.artifact_group, func.count(Design.id))
@@ -767,6 +832,27 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
             rf_metadata_partially_populated = 0 < populated_rf_metadata < existing_count
             if has_legacy_candidate_rows or not raw_count_matches or not filtered_count_matches or rf_metadata_partially_populated:
                 force = True
+        elif stage == "post_rfantibody":
+            legacy_noncandidate_rows = (
+                await session.execute(
+                    select(func.count(Design.id)).where(
+                        Design.job_id == job.id,
+                        Design.source_stage == stage,
+                        Design.artifact_group != "candidate",
+                    )
+                )
+            ).scalar() or 0
+            legacy_rfa_family_rows = (
+                await session.execute(
+                    select(func.count(Design.id)).where(
+                        Design.job_id == job.id,
+                        Design.source_stage == stage,
+                        Design.stage_family == "rfantibody",
+                    )
+                )
+            ).scalar() or 0
+            if legacy_noncandidate_rows > 0 or legacy_rfa_family_rows > 0:
+                force = True
 
     if existing_count == candidate_count and candidate_count > 0 and not force:
         populated_binder_lengths = (
@@ -778,7 +864,7 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 )
             )
         ).scalar() or 0
-        if stage == "post_rfantibody":
+        if uses_rfantibody_review:
             missing_cdr_sample = (
                 await session.execute(
                     select(Design.pdb_path).where(
@@ -812,19 +898,55 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 ):
                     force = True
 
-        if populated_binder_lengths == existing_count and not force:
+        populated_geometry = (
+            await session.execute(
+                select(func.count(Design.id)).where(
+                    Design.job_id == job.id,
+                    Design.source_stage == stage,
+                    Design.epitope_contact_count.is_not(None),
+                    Design.target_contact_count.is_not(None),
+                )
+            )
+        ).scalar() or 0
+        populated_cdr_lengths = (
+            await session.execute(
+                select(func.count(Design.id)).where(
+                    Design.job_id == job.id,
+                    Design.source_stage == stage,
+                    Design.cdr_h1_length.is_not(None),
+                    Design.cdr_h2_length.is_not(None),
+                    Design.cdr_h3_length.is_not(None),
+                )
+            )
+        ).scalar() or 0
+
+        if (
+            populated_binder_lengths == existing_count
+            and (stage != "post_fampnn" or (populated_geometry == existing_count and populated_cdr_lengths == existing_count))
+            and not force
+        ):
             return existing_count
 
     await session.execute(
         delete(Design).where(
             Design.job_id == job.id,
-            Design.source_stage == stage,
+            or_(
+                Design.source_stage == stage,
+                and_(
+                    Design.source_stage.is_(None),
+                    Design.stage_family == "refinement",
+                    Design.stage_mode.in_(tuple(REVIEWABLE_STAGES)),
+                ),
+            ),
         )
     )
 
     if not expected_files:
         return 0
 
+    review_stage_family, review_stage_mode = _review_stage_identity(stage, job, repaired_payload)
+    job_context = _job_stage_context(job)
+    lineage_cache: dict[str, Optional[Design]] = {}
     rows: list[Design] = []
 
     for artifact_group, structure_path in expected_files:
@@ -832,8 +954,14 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
         backbone_id = parse_backbone_id(design_name)
         structure_cdr_lengths = _parse_hlt_cdr_lengths(structure_path)
         binder_length, antibody_type = _infer_binder_metrics(structure_path)
-        rfa_trb = load_rfantibody_trb_summary(structure_path) if stage == "post_rfantibody" else {}
-        if stage == "post_rfantibody":
+        lineage = await _resolve_parent_design_lineage(
+            session,
+            job_context,
+            design_name,
+            cache=lineage_cache,
+        )
+        rfa_trb = load_rfantibody_trb_summary(structure_path) if uses_rfantibody_review else {}
+        if uses_rfantibody_review:
             avg_plddt = safe_float(rfa_trb.get("plddt_overall"))
             residue_plddt = rfa_trb.get("residue_plddt")
         else:
@@ -842,11 +970,11 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
             if avg_plddt is not None and avg_plddt <= 0:
                 avg_plddt = None
                 residue_plddt = None
-        screening = screening_by_name.get(design_name)
-        if screening is None and backbone_id is not None:
+        screening = screening_by_name.get(design_name) if uses_rfantibody_review else None
+        if screening is None and backbone_id is not None and uses_rfantibody_review:
             screening = screening_by_backbone.get(backbone_id)
         antibody_ca_rog = None
-        if stage == "post_rfantibody":
+        if uses_rfantibody_review:
             antibody_ca_rog = safe_float((screening or {}).get("antibody_ca_rog"))
             if antibody_ca_rog is None:
                 antibody_ca_rog = _compute_antibody_ca_rog(
@@ -933,17 +1061,29 @@ async def ensure_stage_review_rows(session: AsyncSession, job: Job, force: bool 
                 rfa_plddt_nonselected=safe_float(rfa_trb.get("rfa_plddt_nonselected")),
                 rfa_design_loops=rfa_trb.get("rfa_design_loops"),
                 rfa_hotspots=rfa_trb.get("rfa_hotspots"),
-                confidence_metrics=(rfa_trb.get("rfa_metadata") if stage == "post_rfantibody" else None),
+                confidence_metrics=(rfa_trb.get("rfa_metadata") if uses_rfantibody_review else None),
                 cdr_h1_length=structure_cdr_lengths.get("H1"),
                 cdr_h2_length=structure_cdr_lengths.get("H2"),
                 cdr_h3_length=structure_cdr_lengths.get("H3"),
                 cdr_l1_length=structure_cdr_lengths.get("L1"),
                 cdr_l2_length=structure_cdr_lengths.get("L2"),
                 cdr_l3_length=structure_cdr_lengths.get("L3"),
+                stage_family=review_stage_family,
+                stage_mode=review_stage_mode,
                 source_stage=stage,
                 artifact_group=artifact_group,
                 created_at=datetime.utcnow(),
             )
+        )
+
+        review_row = rows[-1]
+        for field_name, field_value in _design_lineage_fields(job_context, lineage).items():
+            if getattr(review_row, field_name, None) in (None, "", [], {}, ()):
+                setattr(review_row, field_name, field_value)
+        _inherit_source_design_metrics(
+            review_row,
+            lineage.get("source_design"),
+            structure_path=structure_path,
         )
 
     session.add_all(rows)

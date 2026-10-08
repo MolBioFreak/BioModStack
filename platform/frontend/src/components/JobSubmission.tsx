@@ -12,6 +12,7 @@ import { StructurePredictionTemplate } from './StructurePredictionTemplate';
 import { BoltzGenTemplate } from './BoltzGenTemplate';
 import { BindCraftTemplate } from './BindCraftTemplate';
 import { OligoDesignerTemplate } from './OligoDesignerTemplate';
+import { ProteinLocalRedesignTemplate } from './ProteinLocalRedesignTemplate';
 import { PresetSelector } from './PresetSelector';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { StructureInput } from './StructureInput';
@@ -360,11 +361,12 @@ export function JobSubmission() {
     });
 
     // Hardcoded templates that use dedicated components instead of API-driven config
-    const hardcodedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltzgen_design', 'bindcraft', 'oligo_design'];
+    const hardcodedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltzgen_design', 'bindcraft', 'oligo_design', 'protein_local_redesign'];
     const dedicatedTemplateByModelId: Record<string, string> = {
         template_antibody_denovo: 'antibody_denovo',
         boltzgen: 'boltzgen_design',
         bindcraft: 'bindcraft',
+        protein_local_redesign: 'protein_local_redesign',
     };
 
     const routeUserTemplate = (template: any) => {
@@ -604,7 +606,7 @@ export function JobSubmission() {
     };
 
     // Dedicated templates that handle their own header/navigation
-    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltzgen_design', 'bindcraft', 'oligo_design'];
+    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltzgen_design', 'bindcraft', 'oligo_design', 'protein_local_redesign'];
     const showMainHeader = !selectedTemplateId || !dedicatedTemplates.includes(selectedTemplateId);
 
     return (
@@ -734,6 +736,11 @@ export function JobSubmission() {
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
+                            ) : selectedTemplateId === 'protein_local_redesign' ? (
+                                <ProteinLocalRedesignTemplate
+                                    onBack={handleDedicatedTemplateBack}
+                                    initialValues={clonedValues}
+                                />
                             ) : (
                                 <>
                                     <p className="text-slate-300 text-base font-medium mb-4">Choose a preset workflow for your experiment goal:</p>
@@ -822,6 +829,19 @@ export function JobSubmission() {
                                                     { tool: 'Boltz-2' },
                                                     { tool: 'Filtering' }
                                                 ]
+                                            },
+                                            {
+                                                id: 'protein_local_redesign',
+                                                name: 'Protein Local Redesign',
+                                                description: 'Use RFdiffusion3 to locally remodel a selected region of an existing structure, redesign sequence with FA-MPNN or ProteinMPNN, and optionally validate with Boltz-2.',
+                                                icon: 'cube',
+                                                color: '#22C55E',
+                                                stages: [
+                                                    { tool: 'Region Resolve' },
+                                                    { tool: 'RFdiffusion3' },
+                                                    { tool: 'FAMPNN / MPNN' },
+                                                    { tool: 'Boltz-2 (Opt.)' }
+                                                ]
                                             }
                                         ].map((template: any) => {
                                             const isSelected = selectedTemplateId === template.id;
@@ -846,7 +866,8 @@ export function JobSubmission() {
                                                                     template.icon === 'dna' ? 'MU' :
                                                                         template.icon === 'microscope' ? 'SP' :
                                                                             template.icon === 'pill' ? 'BG' :
-                                                                                template.icon === 'binder' ? 'BC' : 'OL'}
+                                                                                template.icon === 'binder' ? 'BC' :
+                                                                                    template.icon === 'cube' ? 'PL' : 'OL'}
                                                         </div>
                                                         <h3 className="font-bold text-base" style={{ color: template.color }}>{template.name}</h3>
                                                     </div>

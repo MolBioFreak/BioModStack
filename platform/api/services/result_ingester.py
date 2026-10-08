@@ -8,6 +8,7 @@ and populates the Design table in SQLite.
 import csv
 import copy
 import json
+import math
 import re
 import uuid
 from pathlib import Path
@@ -648,12 +649,18 @@ _SOURCE_LINEAGE_LOAD_ONLY_COLUMNS = (
     Design.source_pdb_path,
     Design.source_design_name,
     Design.binder_length,
+    Design.antibody_type,
+    Design.humanness_score,
     Design.cdr_h1_length,
     Design.cdr_h2_length,
     Design.cdr_h3_length,
     Design.cdr_l1_length,
     Design.cdr_l2_length,
     Design.cdr_l3_length,
+    Design.fr2_contacts,
+    Design.de_loop,
+    Design.fr3_contacts,
+    Design.fr4_contacts,
     Design.rog,
     Design.rfd_rog,
     Design.epitope_contact_count,
@@ -733,6 +740,7 @@ def _extract_stage_settings(params: Dict[str, Any], stage_family: Optional[str],
         "ppiflow": (
             "ppiflow_mode",
             "ppiflow_stage_mode",
+            "ppiflow_tuning_profile",
             "ppiflow_start_t",
             "ppiflow_samples_per_target",
             "ppiflow_retry_limit",
@@ -744,6 +752,8 @@ def _extract_stage_settings(params: Dict[str, Any], stage_family: Optional[str],
             "ppiflow_heavy_chain",
             "ppiflow_light_chain",
             "ppiflow_selected_loops",
+            "ppiflow_objective_mode",
+            "ppiflow_objective_threshold",
             "maturation_design_mode",
             "maturation_redesign_enabled",
             "maturation_redesign_temp",
@@ -1435,6 +1445,10 @@ async def ingest_job_results(
         designs_created = await ingest_published_maturation_structures(job_id, output_path, session, current_job=current_job)
 
     if designs_created == 0:
+        print(f"[Ingester] No CSV designs for job {job_id}. Trying collected PPIFlow parent outputs...")
+        designs_created = await ingest_collected_ppiflow_structures(job_id, output_path, session, current_job=current_job)
+
+    if designs_created == 0:
         print(f"[Ingester] No designs found in CSV or CSV missing. Trying loose files...")
         designs_created = await ingest_loose_files(job_id, output_path, session, current_job=current_job)
 
@@ -1721,6 +1735,86 @@ def _apply_geometry_metrics(design: "Design", metrics: Dict[str, Any], *, overwr
     return changed
 
 
+def _coerce_optional_float(value: Any) -> Optional[float]:
+    if value in (None, "", [], {}, ()):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _coerce_optional_int(value: Any) -> Optional[int]:
+    if value in (None, "", [], {}, ()):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_optional_bool(value: Any) -> Optional[bool]:
+    if value in (None, "", [], {}, ()):
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "y", "passed"}:
+            return True
+        if lowered in {"false", "0", "no", "n", "failed"}:
+            return False
+    return None
+
+
+def _apply_ppiflow_score_fields(design: "Design", score_data: Dict[str, Any]) -> bool:
+    changed = False
+    scalar_fields = {
+        "maturation_delta_interface": _coerce_optional_float(score_data.get("delta_interface_score")),
+        "maturation_interface_score": _coerce_optional_float(score_data.get("interface_score_matured") or score_data.get("interface_score_refined")),
+        "maturation_rmsd": _coerce_optional_float(score_data.get("rmsd_backbone")),
+        "maturation_selected_delta_interface": _coerce_optional_float(score_data.get("selected_delta_interface_score")),
+        "maturation_selected_interface_score": _coerce_optional_float(score_data.get("selected_interface_score_matured")),
+        "maturation_selected_rmsd": _coerce_optional_float(score_data.get("selected_rmsd_backbone")),
+        "maturation_nonselected_rmsd": _coerce_optional_float(score_data.get("nonselected_rmsd_backbone")),
+        "ppiflow_primary_loop": str(score_data.get("primary_loop")).strip() if score_data.get("primary_loop") not in (None, "") else None,
+        "ppiflow_primary_loop_rmsd": _coerce_optional_float(score_data.get("primary_loop_rmsd")),
+        "ppiflow_primary_loop_target_contact_delta": _coerce_optional_int(score_data.get("primary_loop_target_contact_delta")),
+        "ppiflow_primary_loop_target_distance_delta": _coerce_optional_float(score_data.get("primary_loop_target_distance_delta")),
+        "ppiflow_primary_loop_epitope_contact_delta": _coerce_optional_int(score_data.get("primary_loop_epitope_contact_delta")),
+        "ppiflow_primary_loop_epitope_distance_delta": _coerce_optional_float(score_data.get("primary_loop_epitope_distance_delta")),
+        "ppiflow_objective_mode": str(score_data.get("objective_mode")).strip().lower() if score_data.get("objective_mode") not in (None, "") else None,
+        "ppiflow_objective_score": _coerce_optional_float(score_data.get("objective_score")),
+    }
+    for field_name, new_value in scalar_fields.items():
+        if getattr(design, field_name, None) != new_value:
+            setattr(design, field_name, new_value)
+            changed = True
+
+    loop_metrics = score_data.get("loop_metrics") if isinstance(score_data.get("loop_metrics"), dict) else None
+    if getattr(design, "ppiflow_loop_metrics", None) != loop_metrics:
+        design.ppiflow_loop_metrics = loop_metrics
+        changed = True
+    return changed
+
+
+def _apply_ppiflow_filter_fields(design: "Design", filter_payload: Dict[str, Any]) -> bool:
+    changed = False
+    passed = _coerce_optional_bool(filter_payload.get("passed"))
+    reason = filter_payload.get("filter_reason")
+    normalized_reason = str(reason).strip() if reason not in (None, "") else None
+    if getattr(design, "ppiflow_filter_passed", None) != passed:
+        design.ppiflow_filter_passed = passed
+        changed = True
+    if getattr(design, "ppiflow_filter_reason", None) != normalized_reason:
+        design.ppiflow_filter_reason = normalized_reason
+        changed = True
+    return changed
+
+
 def _inherit_source_design_metrics(
     design: "Design",
     source_design: Optional[Design],
@@ -1732,12 +1826,18 @@ def _inherit_source_design_metrics(
     if source_design is not None:
         scalar_fields = (
             "binder_length",
+            "antibody_type",
+            "humanness_score",
             "cdr_h1_length",
             "cdr_h2_length",
             "cdr_h3_length",
             "cdr_l1_length",
             "cdr_l2_length",
             "cdr_l3_length",
+            "fr2_contacts",
+            "de_loop",
+            "fr3_contacts",
+            "fr4_contacts",
             "rfd_rog",
             "passed_screen",
             "rfa_hotspot_covered_count",
@@ -1808,6 +1908,8 @@ async def ingest_maturation_data(
     maturation_dirs = [
         output_path / "run" / "ppiflow" / "results",
         output_path / "ppiflow" / "results",
+        output_path / "collected" / "backbone_refine",
+        output_path / "collected" / "maturation",
         output_path,
     ]
     
@@ -1944,29 +2046,7 @@ async def ingest_maturation_data(
         if not design:
             continue
         
-        # Update design with maturation metrics
-        delta = score_data.get("delta_interface_score")
-        matured = score_data.get("interface_score_matured") or score_data.get("interface_score_refined")
-        rmsd_bb = score_data.get("rmsd_backbone")
-        selected_delta = score_data.get("selected_delta_interface_score")
-        selected_matured = score_data.get("selected_interface_score_matured")
-        selected_rmsd = score_data.get("selected_rmsd_backbone")
-        nonselected_rmsd = score_data.get("nonselected_rmsd_backbone")
-        
-        if delta is not None:
-            design.maturation_delta_interface = float(delta)
-        if matured is not None:
-            design.maturation_interface_score = float(matured)
-        if rmsd_bb is not None:
-            design.maturation_rmsd = float(rmsd_bb)
-        if selected_delta is not None:
-            design.maturation_selected_delta_interface = float(selected_delta)
-        if selected_matured is not None:
-            design.maturation_selected_interface_score = float(selected_matured)
-        if selected_rmsd is not None:
-            design.maturation_selected_rmsd = float(selected_rmsd)
-        if nonselected_rmsd is not None:
-            design.maturation_nonselected_rmsd = float(nonselected_rmsd)
+        _apply_ppiflow_score_fields(design, score_data)
 
         if epitope_residues and design.id not in geometry_applied_design_ids:
             try:
@@ -2060,6 +2140,7 @@ async def ingest_maturation_data(
         if filter_json.exists():
             filter_payload = _load_json_payload(filter_json)
             if filter_payload:
+                _apply_ppiflow_filter_fields(design, filter_payload)
                 provenance["ppiflow"]["maturation_filter"] = filter_payload
                 provenance["ppiflow"]["maturation_filter_json"] = str(filter_json)
                 filter_score_data = filter_payload.get("score_data") if isinstance(filter_payload, dict) else None
@@ -2276,6 +2357,146 @@ async def ingest_published_maturation_structures(
     return created
 
 
+def _discover_collected_ppiflow_structures(output_path: Path) -> list[tuple[str, Path]]:
+    discovered: list[tuple[str, Path]] = []
+    for stage_name in ("backbone_refine", "maturation"):
+        stage_dir = output_path / "collected" / stage_name
+        if not stage_dir.exists():
+            continue
+        for ext in ("*.pdb", "*.cif", "*.mmcif"):
+            for structure_path in sorted(stage_dir.glob(f"*_ppiflow_sample*{Path(ext).suffix}")):
+                discovered.append((stage_name, structure_path))
+    return discovered
+
+
+async def ingest_collected_ppiflow_structures(
+    job_id: str,
+    output_path: Path,
+    session: AsyncSession,
+    current_job: Optional[Job] = None,
+) -> int:
+    """
+    Ingest stage-only parent jobs that publish collected PPIFlow outputs under
+    ``collected/backbone_refine`` or ``collected/maturation``.
+
+    These jobs do not emit ``all_designs.csv`` and should not fall back to the
+    generic raw-PDB scanner because that will pick up intermediates and inputs.
+    """
+    structure_entries = _discover_collected_ppiflow_structures(output_path)
+    if not structure_entries:
+        return 0
+
+    existing_names = set(
+        (
+            await session.execute(
+                select(Design.name).where(Design.job_id == job_id)
+            )
+        ).scalars().all()
+    )
+
+    job_context = _job_stage_context(current_job)
+    lineage_cache: Dict[str, Optional[Design]] = {}
+    created = 0
+
+    for stage_name, structure_path in structure_entries:
+        design_name = structure_path.stem
+        if design_name in existing_names:
+            continue
+
+        fam_json_path = _find_fampnn_sidecar_path(structure_path, output_path)
+        fam_payload = _load_json_payload(fam_json_path)
+        fam_metrics = _extract_fampnn_metrics(fam_payload, structure_path)
+        fampnn_record = _build_fampnn_payload(fam_payload, fam_metrics)
+        lineage = await _resolve_parent_design_lineage(
+            session,
+            job_context,
+            design_name,
+            cache=lineage_cache,
+        )
+        structure_cdr_lengths = _coalesce_cdr_lengths(
+            _parse_hlt_cdr_lengths(structure_path),
+            _parse_source_cdr_lengths(lineage.get("source_pdb_path")),
+            lineage.get("source_cdr_lengths"),
+        )
+        sample_index = _parse_ppiflow_sample_index(design_name)
+        ppiflow_provenance = {
+            "source": "collected_ppiflow_structures",
+            "structure_path": str(structure_path),
+            "stage_name": stage_name,
+        }
+        if sample_index is not None:
+            ppiflow_provenance["sample_index"] = sample_index
+        if lineage.get("source_design_name"):
+            ppiflow_provenance["source_design_name"] = lineage["source_design_name"]
+        if lineage.get("source_pdb_path"):
+            ppiflow_provenance["source_pdb_path"] = lineage["source_pdb_path"]
+        filter_json = structure_path.with_name(f"{design_name}_maturation_filter.json")
+        filter_payload = _load_json_payload(filter_json)
+        if filter_payload:
+            ppiflow_provenance["maturation_filter"] = filter_payload
+            ppiflow_provenance["maturation_filter_json"] = str(filter_json)
+        rotamer_json = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_rotamer_enrichment.json")
+        rotamer_payload = _load_json_payload(rotamer_json)
+        if rotamer_payload:
+            ppiflow_provenance["rotamer_enrichment"] = rotamer_payload
+            ppiflow_provenance["rotamer_enrichment_json"] = str(rotamer_json)
+        enriched_pdb = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_enriched_complex.pdb")
+        if enriched_pdb.exists():
+            ppiflow_provenance["enriched_complex_pdb"] = str(enriched_pdb)
+        ppiflow_positions_path = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_ppiflow_positions.txt")
+        if ppiflow_positions_path.exists():
+            ppiflow_provenance["ppiflow_positions"] = ppiflow_positions_path.read_text().strip()
+            ppiflow_provenance["ppiflow_positions_txt"] = str(ppiflow_positions_path)
+        cdr_positions_path = structure_path.with_name(f"{design_name.split('_ppiflow_sample', 1)[0]}_cdr_positions.txt")
+        if cdr_positions_path.exists():
+            ppiflow_provenance["cdr_positions"] = cdr_positions_path.read_text().strip()
+            ppiflow_provenance["cdr_positions_txt"] = str(cdr_positions_path)
+        confidence_metrics: Dict[str, Any] = {}
+        if fampnn_record:
+            ppiflow_provenance["fampnn"] = fampnn_record
+            confidence_metrics["fampnn"] = fampnn_record
+
+        session.add(Design(
+            id=str(uuid.uuid4()),
+            job_id=job_id,
+            name=design_name,
+            pdb_path=str(structure_path),
+            json_path=str(fam_json_path) if fam_json_path and fam_json_path.exists() else None,
+            backbone_id=parse_backbone_id(design_name),
+            **_design_lineage_fields(job_context, lineage),
+            stage_family="ppiflow",
+            stage_mode=stage_name,
+            selected_loop_scope=job_context.get("selected_loop_scope"),
+            provenance={
+                **job_context.get("provenance", {}),
+                "artifact_group": "ppiflow",
+                "ppiflow": ppiflow_provenance,
+            },
+            plddt_overall=None,
+            residue_plddt=None,
+            mpnn_score=fam_metrics.get("mpnn_score"),
+            fampnn_psce=fam_metrics.get("avg_psce"),
+            binder_length=fam_metrics.get("binder_length"),
+            confidence_metrics=confidence_metrics or None,
+            cdr_h1_length=structure_cdr_lengths.get("H1"),
+            cdr_h2_length=structure_cdr_lengths.get("H2"),
+            cdr_h3_length=structure_cdr_lengths.get("H3"),
+            cdr_l1_length=structure_cdr_lengths.get("L1"),
+            cdr_l2_length=structure_cdr_lengths.get("L2"),
+            cdr_l3_length=structure_cdr_lengths.get("L3"),
+            is_favorite=False,
+            created_at=datetime.utcnow(),
+        ))
+        existing_names.add(design_name)
+        created += 1
+
+    if created > 0:
+        await session.commit()
+        print(f"[Ingester] Backfilled {created} collected PPIFlow structures for job {job_id}")
+
+    return created
+
+
 async def ingest_frustration_data(
     job_id: str,
     output_path: Path,
@@ -2426,39 +2647,55 @@ async def ingest_loose_files(
     epitope_residues = _parse_epitope_residues(
         job_params.get("epitope_residues") or job_params.get("selected_residues")
     )
-    
+
+    plr_final_candidate_dir = job_params.get("plr_final_candidate_dir")
+    plr_final_path = None
+    if current_job is not None and str(getattr(current_job, "model_id", "")).strip().lower() == "protein_local_redesign":
+        raw_final_path = str(plr_final_candidate_dir or "").strip()
+        if raw_final_path:
+            candidate = Path(raw_final_path).expanduser()
+            if not candidate.is_absolute():
+                candidate = (get_data_root() / candidate).resolve()
+            if candidate.exists():
+                plr_final_path = candidate
+
     # Locations to search for confidence/metrics JSONs
     # Boltz outputs often in pdb_files/predictions/
     # RF3 outputs in pdb_files/rf3/output/*/
-    search_paths = [
-        output_path / "pdb_files" / "predictions",
-        output_path / "pdb_files" / "validated_designs",
-        output_path / "pdb_files",
-        output_path / "collected",
-        output_path,
-    ]
+    if plr_final_path is not None:
+        search_paths = [plr_final_path]
+    else:
+        search_paths = [
+            output_path / "pdb_files" / "predictions",
+            output_path / "pdb_files" / "validated_designs",
+            output_path / "pdb_files",
+            output_path / "collected",
+            output_path,
+        ]
     
     # Also search RF3 nested output directories
-    rf3_base = output_path / "pdb_files" / "rf3" / "output"
-    if rf3_base.exists():
-        for subdir in rf3_base.iterdir():
-            if subdir.is_dir():
-                search_paths.append(subdir)
-                # Also search seed-*/sample-* subdirs
-                for sample_dir in subdir.glob("seed-*_sample-*"):
-                    if sample_dir.is_dir():
-                        search_paths.append(sample_dir)
-
-    # Protenix outputs: predictions/{design_name}/ containing .cif + confidence.json
-    protenix_base = output_path / "pdb_files" / "predictions"
-    if not protenix_base.exists():
-        protenix_base = output_path / "run" / "protenix" / "predictions"
-    protenix_run_base = output_path / "run" / "protenix_complex" / "predictions"
-    for pbase in [protenix_base, protenix_run_base]:
-        if pbase.exists():
-            for subdir in pbase.iterdir():
+    if plr_final_path is None:
+        rf3_base = output_path / "pdb_files" / "rf3" / "output"
+        if rf3_base.exists():
+            for subdir in rf3_base.iterdir():
                 if subdir.is_dir():
                     search_paths.append(subdir)
+                    # Also search seed-*/sample-* subdirs
+                    for sample_dir in subdir.glob("seed-*_sample-*"):
+                        if sample_dir.is_dir():
+                            search_paths.append(sample_dir)
+
+    # Protenix outputs: predictions/{design_name}/ containing .cif + confidence.json
+    if plr_final_path is None:
+        protenix_base = output_path / "pdb_files" / "predictions"
+        if not protenix_base.exists():
+            protenix_base = output_path / "run" / "protenix" / "predictions"
+        protenix_run_base = output_path / "run" / "protenix_complex" / "predictions"
+        for pbase in [protenix_base, protenix_run_base]:
+            if pbase.exists():
+                for subdir in pbase.iterdir():
+                    if subdir.is_dir():
+                        search_paths.append(subdir)
     
     designs_created = 0
     
@@ -3134,8 +3371,15 @@ async def ingest_loose_files(
                     print(f"[Ingester] No published maturation result structures found under {output_path}")
                     return 0
 
+            # For non-oligo jobs: prefer a caller-selected final directory when one
+            # exists, otherwise fall back to the normal output tree scan.
+            if not is_maturation_child and plr_final_path is not None:
+                structure_paths.extend(sorted(plr_final_path.glob("*.pdb")))
+                structure_paths.extend(sorted(plr_final_path.glob("*.cif")))
+                structure_paths.extend(sorted(plr_final_path.glob("*.mmcif")))
+
             # For non-oligo jobs: prefer run/rebuilt/ over raw structures
-            if not is_maturation_child:
+            if not is_maturation_child and plr_final_path is None:
                 rebuilt_dir = output_path / "run" / "rebuilt"
                 if rebuilt_dir.exists():
                     structure_paths.extend(list(rebuilt_dir.glob("*.pdb")))
@@ -3213,7 +3457,7 @@ async def ingest_loose_files(
                     job_id=job_id,
                     name=design_name,
                     pdb_path=str(structure_path),
-                    json_path=str(fam_json_path) if fam_json_path.exists() else None,
+                    json_path=str(fam_json_path) if fam_json_path and fam_json_path.exists() else None,
                     
                     backbone_id=parse_backbone_id(design_name),
                     **_design_lineage_fields(job_context, lineage),
@@ -3254,6 +3498,11 @@ async def ingest_loose_files(
                     
                     is_favorite=False,
                     created_at=datetime.utcnow()
+                )
+                _inherit_source_design_metrics(
+                    design,
+                    lineage.get("source_design"),
+                    structure_path=Path(structure_path),
                 )
                 session.add(design)
                 designs_created += 1
