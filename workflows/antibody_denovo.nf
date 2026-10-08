@@ -66,6 +66,81 @@ include { PrepBoltz ; PrepBoltzWithMSA ; RunBoltz } from '../modules/boltz'
 include { GenerateLocalMSA ; BoltzFromSequenceWithMSA } from '../modules/structure_prediction'
 include { ANARCI } from '../modules/utils/anarci'
 
+// =============================================================================
+// Process to spawn child validation jobs via API
+// This is a proper Nextflow process that BLOCKS until completion
+// Used by exploration mode for parallel GPU distribution
+// =============================================================================
+process SpawnChildJobs {
+    label 'process_low'
+    
+    publishDir "${params.out_dir}/spawn", mode: 'copy', pattern: "*.log"
+    publishDir "${params.out_dir}/spawn", mode: 'copy', pattern: "*.json"
+    
+    input:
+    path pdbs
+    path msa_file
+    val parent_job_id
+    val batch_name
+    
+    output:
+    path "spawn_result.json", emit: result
+    path "spawn.log", emit: log
+    
+    script:
+    """
+    #!/bin/bash
+    set -euo pipefail
+    
+    # Create directory for PDBs and copy them
+    mkdir -p pdb_input
+    for f in *.pdb; do
+        if [ -f "\$f" ]; then
+            cp "\$f" pdb_input/
+        fi
+    done
+    
+    PDB_COUNT=\$(ls pdb_input/*.pdb 2>/dev/null | wc -l || echo 0)
+    echo "Found \$PDB_COUNT PDB files to spawn as child jobs" | tee spawn.log
+    
+    if [ "\$PDB_COUNT" -eq 0 ]; then
+        echo '{"spawned_jobs": 0, "status": "no_pdbs_found", "error": null}' > spawn_result.json
+        echo "WARNING: No PDB files found to spawn" | tee -a spawn.log
+        exit 0
+    fi
+    
+    # Run the spawn script
+    python3 ${projectDir}/scripts/spawn_antibody_children.py \\
+        --parent_job_id "${parent_job_id}" \\
+        --pdb_dir pdb_input \\
+        --batch_name "${batch_name}" \\
+        --msa_path "${msa_file}" \\
+        --api_url "http://localhost:8000" \\
+        2>&1 | tee -a spawn.log
+    
+    SPAWN_EXIT=\${PIPESTATUS[0]}
+    
+    if [ "\$SPAWN_EXIT" -eq 0 ]; then
+        echo '{"spawned_jobs": '\$PDB_COUNT', "status": "complete", "error": null}' > spawn_result.json
+    else
+        echo '{"spawned_jobs": 0, "status": "failed", "error": "spawn script exited with '\$SPAWN_EXIT'"}' > spawn_result.json
+    fi
+    
+    echo "Spawn process complete" | tee -a spawn.log
+    """
+}
+
+
+// Initialize missing parameters with defaults to suppress warnings
+if (!params.containsKey('framework_pdb')) params.framework_pdb = null
+if (!params.containsKey('analysis_chain_id')) params.analysis_chain_id = 'all_chains'
+if (!params.containsKey('filter_immunogenic')) params.filter_immunogenic = true
+if (!params.containsKey('run_affinity_maturation')) params.run_affinity_maturation = false
+if (!params.containsKey('exploration_mode')) params.exploration_mode = false
+if (!params.containsKey('job_id')) params.job_id = "job_${new java.text.SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date())}"
+if (!params.containsKey('job_name')) params.job_name = 'antibody_batch'
+
+
 workflow ANTIBODY_DENOVO {
     take:
     target_pdb_ch // Channel: [meta, target_pdb]
@@ -91,9 +166,9 @@ workflow ANTIBODY_DENOVO {
     
     // Framework PDB - if user provided custom framework, use it; otherwise use placeholder
     // The placeholder triggers preset selection in the process script
-    framework_for_rfantibody = params.framework_pdb 
-        ? Channel.value(file(params.framework_pdb))
-        : Channel.value(file('NO_FRAMEWORK'))
+    // Use safe path resolution to avoid Channel.value() DSL2 error with undefined params
+    def framework_path = params.framework_pdb ? file(params.framework_pdb) : file("${projectDir}/lib/NO_FRAMEWORK")
+    framework_for_rfantibody = Channel.value(framework_path)
 
     RFANTIBODY(rfantibody_input, framework_for_rfantibody)
     
@@ -254,49 +329,47 @@ workflow ANTIBODY_DENOVO {
             // ═══════════════════════════════════════════════════════════════════
             // PARALLEL MODE: Spawn child jobs via API for GPU orchestrator
             // Each child job enters queue and gets assigned to available GPU
+            // Uses SpawnChildJobs process to BLOCK until spawn is complete
             // ═══════════════════════════════════════════════════════════════════
             log.info("Exploration Mode: Spawning child jobs for parallel GPU processing...")
             
-            // Collect all PDB paths and MSA, then spawn children
-            fampnn_pdbs_collected = all_sequences
+            // Collect all PDB files from sequence design into a single list
+            collected_pdbs = all_sequences
                 .flatMap { meta, files -> files instanceof List ? files : [files] }
                 .collect()
             
-            // Wait for MSA, then spawn children
-            spawn_input = fampnn_pdbs_collected.combine(msa_file_ch)
+            // Get MSA file (take first emission since it's a single-value channel)
+            msa_for_spawn = msa_file_ch.first()
             
-            spawn_input.subscribe { pdbs, msa ->
-                // Create temp directory with PDBs for spawner
-                def pdb_dir = "${params.out_dir}/fampnn_pdbs"
-                new File(pdb_dir).mkdirs()
-                pdbs.each { pdb ->
-                    def dest = new File(pdb_dir, pdb.name)
-                    dest.text = pdb.text
-                }
-                
-                // Spawn child jobs via Python script
-                def proc = [
-                    "python3", "${projectDir}/scripts/spawn_antibody_children.py",
-                    "--parent_job_id", params.job_id ?: "unknown",
-                    "--pdb_dir", pdb_dir,
-                    "--batch_name", params.job_name ?: "antibody_batch",
-                    "--msa_path", msa.toString(),
-                    "--api_url", "http://localhost:8000"
-                ].execute()
-                
-                proc.waitFor()
-                def exitCode = proc.exitValue()
-                if (exitCode == 0) {
-                    log.info("Successfully spawned child jobs for parallel validation")
-                } else {
-                    log.warn("Child job spawning failed with exit code ${exitCode}")
-                    log.warn(proc.err.text)
+            // Derive job identifiers with safe defaults
+            def parent_id = params.job_id ?: "unknown_${System.currentTimeMillis()}"
+            def batch = params.job_name ?: "antibody_batch"
+            
+            // Call the spawn process - THIS BLOCKS until complete
+            // PDBs and MSA must both be ready before this executes
+            SpawnChildJobs(
+                collected_pdbs,
+                msa_for_spawn,
+                parent_id,
+                batch
+            )
+            
+            // Report completion with actual count from spawn result
+            SpawnChildJobs.out.result.subscribe { result_file ->
+                try {
+                    def result = new groovy.json.JsonSlurper().parse(result_file)
+                    log.info("Parent job complete. ${result.spawned_jobs} child jobs queued for validation.")
+                    if (result.status != "complete") {
+                        log.warn("Spawn status: ${result.status}")
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to parse spawn result: ${e.message}")
                 }
             }
             
-            // Parent job completes here - children run independently via orchestrator
+            // Parent's job is done - no local validation needed
+            // Children run independently via GPU orchestrator
             validated_structures = channel.empty()
-            log.info("Parent job complete. ${design_sequences.count().val} child jobs queued for validation.")
         }
         else {
             // ═══════════════════════════════════════════════════════════════════
