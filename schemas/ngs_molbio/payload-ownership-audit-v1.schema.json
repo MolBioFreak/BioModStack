@@ -1,0 +1,132 @@
+{
+  "$id": "bms.payload-ownership-audit.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "content_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "no_active_jobs": {
+      "type": "boolean"
+    },
+    "outcome": {
+      "enum": [
+        "pass",
+        "fail"
+      ]
+    },
+    "rows": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "active_locations": {
+            "items": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "outcome": {
+            "enum": [
+              "pass",
+              "fail"
+            ]
+          },
+          "owner_store_or_root": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "payload_class": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "permitted_preservation_copies": {
+            "items": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "size_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stable_native_identity": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "payload_class",
+          "stable_native_identity",
+          "owner_store_or_root",
+          "sha256",
+          "size_bytes",
+          "active_locations",
+          "permitted_preservation_copies",
+          "outcome",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "maxItems": 100000,
+      "type": "array"
+    },
+    "scanner_version": {
+      "const": "1"
+    },
+    "schema": {
+      "const": "bms.payload-ownership-audit.v1"
+    },
+    "source_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "source_tree": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "manifest_sha256",
+    "scanner_version",
+    "source_commit",
+    "source_tree",
+    "no_active_jobs",
+    "rows",
+    "outcome",
+    "created_at",
+    "content_sha256"
+  ],
+  "title": "Payload ownership audit v1",
+  "type": "object"
+}

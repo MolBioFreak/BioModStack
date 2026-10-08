@@ -1,0 +1,546 @@
+{
+  "baseline_source_commit": "74d49997c4eaf54c28e5521b7e0ebf14eaaf3365",
+  "content_sha256": "394be0b62cb0f989cd3d6c4c8c59f1dd94f11839b443201ffa2fc85fa6a2a791",
+  "entries": [
+    {
+      "adapter_id": "bms.ngs-molbio.state-revision.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "dataset_authority"
+      ],
+      "allowed_local_roles": [],
+      "baseline_state": "missing",
+      "contract_class": "local_member_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "ngs_molbio_state_revision",
+      "implementation_owner": null,
+      "native_key_fields": [
+        "global_domain_experiment_id",
+        "state_revision_id"
+      ],
+      "reopen_policy": "exact_revision_or_generation",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "bms.molbio-ngs.domain-state-revision.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.ngs-molbio.sample-revision.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "sample"
+      ],
+      "allowed_local_roles": [],
+      "baseline_state": "missing",
+      "contract_class": "local_member_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "sample_revision",
+      "implementation_owner": null,
+      "native_key_fields": [
+        "global_domain_experiment_id",
+        "sample_id",
+        "sample_revision_id"
+      ],
+      "reopen_policy": "exact_revision_or_generation",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "bms.molbio-ngs.sample-revision.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.molbio.member-molecular-revision.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "molecular_expected_construct",
+        "molecular_input_fragment",
+        "molecular_assembly_product",
+        "molecular_pcr_template",
+        "molecular_pcr_product"
+      ],
+      "allowed_local_roles": [
+        "molecular_expected_construct",
+        "molecular_input_fragment",
+        "molecular_assembly_product",
+        "molecular_pcr_template",
+        "molecular_pcr_product"
+      ],
+      "baseline_state": "missing",
+      "contract_class": "local_member_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "molecular_revision",
+      "implementation_owner": null,
+      "native_key_fields": [
+        "sequence_id",
+        "revision_id"
+      ],
+      "reopen_policy": "exact_revision_or_generation",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "bms.molbio.molecular-revision.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.molbio.primer-revision.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "molecular_primer_forward",
+        "molecular_primer_reverse"
+      ],
+      "allowed_local_roles": [
+        "molecular_primer_forward",
+        "molecular_primer_reverse"
+      ],
+      "baseline_state": "missing",
+      "contract_class": "local_member_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "primer_revision",
+      "implementation_owner": null,
+      "native_key_fields": [
+        "primer_id",
+        "revision_id"
+      ],
+      "reopen_policy": "exact_revision_or_generation",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "bms.molbio.primer-revision.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.molbio.pcr-experiment-revision.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "molecular_pcr_experiment"
+      ],
+      "allowed_local_roles": [
+        "molecular_pcr_experiment"
+      ],
+      "baseline_state": "missing",
+      "contract_class": "local_member_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "pcr_experiment_revision",
+      "implementation_owner": null,
+      "native_key_fields": [
+        "experiment_id",
+        "revision_id"
+      ],
+      "reopen_policy": "exact_revision_or_generation",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "bms.molbio.pcr-experiment-revision.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.molbio.member-operation.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "molecular_operation"
+      ],
+      "allowed_local_roles": [
+        "molecular_operation"
+      ],
+      "baseline_state": "missing",
+      "contract_class": "local_member_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "molecular_operation",
+      "implementation_owner": null,
+      "native_key_fields": [
+        "operation_id"
+      ],
+      "reopen_policy": "exact_revision_or_generation",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "bms.molbio.molecular-operation.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.ngs.reference-revision.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "ngs_reference"
+      ],
+      "allowed_local_roles": [
+        "ngs_reference"
+      ],
+      "baseline_state": "missing",
+      "contract_class": "local_member_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "ngs_reference_revision",
+      "implementation_owner": null,
+      "native_key_fields": [
+        "global_domain_experiment_id",
+        "reference_id",
+        "revision_id"
+      ],
+      "reopen_policy": "exact_revision_or_generation",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "bms.molbio-ngs.reference-revision.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.ngs.comparison-panel.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "ngs_comparison_panel"
+      ],
+      "allowed_local_roles": [
+        "ngs_comparison_panel"
+      ],
+      "baseline_state": "missing",
+      "contract_class": "local_member_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "ngs_comparison_panel",
+      "implementation_owner": null,
+      "native_key_fields": [
+        "panel_id",
+        "panel_version"
+      ],
+      "reopen_policy": "exact_revision_or_generation",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "bms.ngs.approved-comparison-panel.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.ngs.ont-observation.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "ngs_instrument_run"
+      ],
+      "allowed_local_roles": [
+        "ngs_instrument_run"
+      ],
+      "baseline_state": "missing",
+      "contract_class": "local_member_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "ont_instrument_run",
+      "implementation_owner": null,
+      "native_key_fields": [
+        "run_id",
+        "observed_generation"
+      ],
+      "reopen_policy": "exact_revision_or_generation",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "bms.ont.instrument-run-observation.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.ngs.job-reference.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "ngs_analysis_job"
+      ],
+      "allowed_local_roles": [
+        "ngs_analysis_job"
+      ],
+      "baseline_state": "missing",
+      "contract_class": "local_member_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "ngs_job",
+      "implementation_owner": null,
+      "native_key_fields": [
+        "job_id"
+      ],
+      "reopen_policy": "exact_revision_or_generation",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "bms.core.ngs-job-launch.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.ngs.result-manifest.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "ngs_analysis_result_manifest"
+      ],
+      "allowed_local_roles": [
+        "ngs_analysis_result_manifest"
+      ],
+      "baseline_state": "missing",
+      "contract_class": "local_member_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "ngs_result_manifest",
+      "implementation_owner": null,
+      "native_key_fields": [
+        "job_id",
+        "manifest_identity"
+      ],
+      "reopen_policy": "exact_revision_or_generation",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "biomodstack.construct_verification.v2"
+        },
+        {
+          "artifact_schema_version": 1,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "sequence_qc.manifest.v1"
+        },
+        {
+          "artifact_schema_version": 2,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "sequence_qc.manifest.v1"
+        },
+        {
+          "artifact_schema_version": 1,
+          "normalized_schema_id": "bms.sequence-qc.manifest.v1",
+          "schema_presence": "absent",
+          "source_schema": "schemaless_sequence_qc_manifest"
+        },
+        {
+          "artifact_schema_version": 2,
+          "normalized_schema_id": "bms.sequence-qc.manifest.v2",
+          "schema_presence": "absent",
+          "source_schema": "schemaless_sequence_qc_manifest"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.ngs-molbio.evidence-assessment.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "ngs_verification_assessment"
+      ],
+      "allowed_local_roles": [
+        "ngs_verification_assessment"
+      ],
+      "baseline_state": "missing",
+      "contract_class": "local_member_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "ngs_evidence_assessment",
+      "implementation_owner": null,
+      "native_key_fields": [
+        "global_domain_experiment_id",
+        "evidence_id"
+      ],
+      "reopen_policy": "exact_revision_or_generation",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "bms.molbio-ngs.ngs-evidence-receipt.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.ngs.expected-reference-receipt.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "ngs_expected_reference"
+      ],
+      "allowed_local_roles": [],
+      "baseline_state": "present",
+      "contract_class": "direct_native_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "ngs_expected_reference_receipt",
+      "implementation_owner": "services.global_experiments.adapters.NgsExpectedReferenceReceiptAdapter",
+      "native_key_fields": [
+        "receipt_id"
+      ],
+      "reopen_policy": "direct_native_exact_identity",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "bms.molbio.ngs-receipt.v2"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.ngs.reference-set-reference.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "ngs_reference_set"
+      ],
+      "allowed_local_roles": [],
+      "baseline_state": "present",
+      "contract_class": "direct_native_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "ngs_reference_set",
+      "implementation_owner": "services.global_experiments.adapters.NgsReferenceSetAdapter",
+      "native_key_fields": [
+        "reference_set_id"
+      ],
+      "reopen_policy": "direct_native_exact_identity",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "bms.ngs.reference-set-manifest.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.ngs.pooled-assignment-release.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "ngs_pooled_assignment_release"
+      ],
+      "allowed_local_roles": [],
+      "baseline_state": "present",
+      "contract_class": "direct_native_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "ngs_pooled_assignment_release",
+      "implementation_owner": "services.global_experiments.adapters.NgsPooledAssignmentReleaseAdapter",
+      "native_key_fields": [
+        "release_id"
+      ],
+      "reopen_policy": "direct_native_exact_identity",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "bms.ngs.pooled-assignment-release.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.ngs.sequence-qc-reference.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "ngs_sequence_qc_result"
+      ],
+      "allowed_local_roles": [],
+      "baseline_state": "present",
+      "contract_class": "direct_native_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "sequence_qc_job",
+      "implementation_owner": "services.global_experiments.adapters.SequenceQcReferenceAdapter",
+      "native_key_fields": [
+        "job_id"
+      ],
+      "reopen_policy": "direct_native_exact_identity",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "sequence_qc.manifest.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.ngs.analysis-reference.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "ngs_analysis_result"
+      ],
+      "allowed_local_roles": [],
+      "baseline_state": "present",
+      "contract_class": "direct_native_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "ngs_analysis_job",
+      "implementation_owner": "services.global_experiments.adapters.NgsAnalysisReferenceAdapter",
+      "native_key_fields": [
+        "job_id"
+      ],
+      "reopen_policy": "direct_native_exact_identity",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "sequence_qc.manifest.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.ngs.alignment-viewer-reference.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [
+        "ngs_alignment_result"
+      ],
+      "allowed_local_roles": [],
+      "baseline_state": "present",
+      "contract_class": "direct_native_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "ngs_alignment_job",
+      "implementation_owner": "services.global_experiments.adapters.NgsAlignmentViewerReferenceAdapter",
+      "native_key_fields": [
+        "job_id"
+      ],
+      "reopen_policy": "direct_native_exact_identity",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "bms.ngs.alignment-viewer.v1"
+        }
+      ]
+    },
+    {
+      "adapter_id": "bms.ngs.ont-run-reference.adapter.v1",
+      "adapter_version": 1,
+      "allowed_dataset_roles": [],
+      "allowed_local_roles": [],
+      "baseline_state": "present",
+      "contract_class": "direct_native_adapter",
+      "digest_authority": "exact_native_contract",
+      "entity_kind": "ont_instrument_run",
+      "implementation_owner": "services.global_experiments.adapters.OntInstrumentRunAdapter",
+      "native_key_fields": [
+        "run_id"
+      ],
+      "reopen_policy": "direct_native_exact_identity",
+      "source_contracts": [
+        {
+          "artifact_schema_version": null,
+          "normalized_schema_id": null,
+          "schema_presence": "required",
+          "source_schema": "ont_instrument_run_v1"
+        }
+      ]
+    }
+  ],
+  "schema": "bms.ngs-molbio.adapter-registry.v1"
+}

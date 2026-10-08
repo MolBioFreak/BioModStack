@@ -1,0 +1,105 @@
+{
+  "$id": "bms.ngs-molbio.connector-acknowledgement.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "accepted_payload_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "acknowledged_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "acknowledgement_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "binding_revision_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "command_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "disposition": {
+      "enum": [
+        "applied",
+        "duplicate",
+        "retryable",
+        "conflicted",
+        "deferred_gap"
+      ]
+    },
+    "event_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "last_applied_stream_generation": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reason_code": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schema": {
+      "const": "bms.ngs-molbio.connector-acknowledgement.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "acknowledgement_id",
+    "command_id",
+    "event_id",
+    "binding_revision_id",
+    "disposition",
+    "accepted_payload_sha256",
+    "last_applied_stream_generation",
+    "reason_code",
+    "acknowledged_at"
+  ],
+  "title": "Connector acknowledgement v1",
+  "type": "object"
+}

@@ -1,0 +1,88 @@
+{
+  "baseline_source_commit": "74d49997c4eaf54c28e5521b7e0ebf14eaaf3365",
+  "content_sha256": "453f1ef6d491e9199a63963d3b53d4394a25500919195ad55d5d917339f747af",
+  "entries": [
+    {
+      "attestation": "exact_same_domain_native_authority",
+      "event_stream_template": "binding",
+      "event_type": "molbio_ngs.domain_state.initialized",
+      "payload_schema_id": "bms.molbio-ngs.domain-state-initialized.v1",
+      "payload_schema_sha256": "3bd27870118da30eef5e8912726bee69196dc6f67ea5aebbedc1296f9f097f8f",
+      "source_generation_derivation": "constant:0",
+      "stream_generation_owner": "domain_store_transaction"
+    },
+    {
+      "attestation": "exact_same_domain_native_authority",
+      "event_stream_template": "state",
+      "event_type": "molbio_ngs.domain_state.revision_saved",
+      "payload_schema_id": "bms.molbio-ngs.domain-state-revision-saved.v1",
+      "payload_schema_sha256": "092a2da70078853a3471b13287fc6512f4e7e018b9e84517eebe0505796b4faa",
+      "source_generation_derivation": "payload.state_revision_number",
+      "stream_generation_owner": "domain_store_transaction"
+    },
+    {
+      "attestation": "exact_same_domain_native_authority",
+      "event_stream_template": "sample:{payload.sample_id}",
+      "event_type": "molbio_ngs.sample.created",
+      "payload_schema_id": "bms.molbio-ngs.sample-created.v1",
+      "payload_schema_sha256": "93b516af9fd18c369fb3bd48f5849024df50cb16c9f550eb94f821802f452e85",
+      "source_generation_derivation": "verified_sample_revision.revision_number",
+      "stream_generation_owner": "domain_store_transaction"
+    },
+    {
+      "attestation": "exact_same_domain_native_authority",
+      "event_stream_template": "sample:{payload.sample_id}",
+      "event_type": "molbio_ngs.sample.revision_saved",
+      "payload_schema_id": "bms.molbio-ngs.sample-revision-saved.v1",
+      "payload_schema_sha256": "4cf4dda6df97051af887d947c82da1ada4103b266f0e44d9eff8f2c1a07aa9f9",
+      "source_generation_derivation": "verified_sample_revision.revision_number",
+      "stream_generation_owner": "domain_store_transaction"
+    },
+    {
+      "attestation": "exact_same_domain_native_authority",
+      "event_stream_template": "reference:{payload.reference_id}",
+      "event_type": "molbio_ngs.reference.created",
+      "payload_schema_id": "bms.molbio-ngs.reference-created.v1",
+      "payload_schema_sha256": "ad61ea94027bd6dca9ac5d8069f306460702074a4a99ee32d77730096b5ddf25",
+      "source_generation_derivation": "verified_reference_revision.revision_number",
+      "stream_generation_owner": "domain_store_transaction"
+    },
+    {
+      "attestation": "exact_same_domain_native_authority",
+      "event_stream_template": "reference:{payload.reference_id}",
+      "event_type": "molbio_ngs.reference.revision_saved",
+      "payload_schema_id": "bms.molbio-ngs.reference-revision-saved.v1",
+      "payload_schema_sha256": "b9511e781c5e93af482e85f4bfab0673ee31ed1cce2efef6f729e54947839fb5",
+      "source_generation_derivation": "verified_reference_revision.revision_number",
+      "stream_generation_owner": "domain_store_transaction"
+    },
+    {
+      "attestation": "exact_same_domain_native_authority",
+      "event_stream_template": "reference:{payload.reference_id}",
+      "event_type": "molbio_ngs.reference.archived",
+      "payload_schema_id": "bms.molbio-ngs.reference-archived.v1",
+      "payload_schema_sha256": "5b2a15146282beb4bf4d2545e42c30fea7d24124fcefcf6918311b2e6e5441c7",
+      "source_generation_derivation": "payload.head_generation",
+      "stream_generation_owner": "domain_store_transaction"
+    },
+    {
+      "attestation": "exact_same_domain_native_authority",
+      "event_stream_template": "member:ont_instrument_run:{payload.run_id}",
+      "event_type": "molbio_ngs.instrument_run_evidence.attached",
+      "payload_schema_id": "bms.molbio-ngs.instrument-run-evidence-attached.v1",
+      "payload_schema_sha256": "9739f2389d89ca935e75e29ae4d98d858d0084cbc319d4d0062805e6ba5d4cbb",
+      "source_generation_derivation": "payload.observed_generation",
+      "stream_generation_owner": "domain_store_transaction"
+    },
+    {
+      "attestation": "exact_same_domain_native_authority",
+      "event_stream_template": "evidence:{payload.evidence_id}",
+      "event_type": "molbio_ngs.evidence.assessed",
+      "payload_schema_id": "bms.molbio-ngs.evidence-assessed.v1",
+      "payload_schema_sha256": "d086718c714cf769d4c8f3e652c3d5a0750add02b9531001d1cecf260b25b52e",
+      "source_generation_derivation": "null",
+      "stream_generation_owner": "domain_store_transaction"
+    }
+  ],
+  "schema": "bms.ngs-molbio.event-registry.v1"
+}

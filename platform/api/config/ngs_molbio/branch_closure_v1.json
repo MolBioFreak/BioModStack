@@ -1,0 +1,49 @@
+{
+  "baseline_source_commit": "74d49997c4eaf54c28e5521b7e0ebf14eaaf3365",
+  "content_sha256": "a92f9958f439ccbfc1c62cd5b026e8a701bba4330c25f44de5eca31ddf2a420e",
+  "entries": [
+    {
+      "candidate_id": "74d49997c4eaf54c28e5521b7e0ebf14eaaf3365",
+      "decision": "preserve_target_policy",
+      "evidence": "Fetched test adds flattened Protenix structure-output binding in modules/structure_prediction.nf and one FrustraMPNN parent-wiring test. Neither file is owned by the NGS/MolBio package. The repinned baseline includes the commit without semantic porting.",
+      "required_follow_up": null
+    },
+    {
+      "candidate_id": "e3d2f52cd5cbf60253339f273834cae1c945a18d",
+      "decision": "skip_patch_equivalent",
+      "evidence": "Immutable NGS reference UI is patch-identical to landed 86a7ce3bc828ed613803c0df975df707629acaf4.",
+      "required_follow_up": null
+    },
+    {
+      "candidate_id": "5bbf484e420c72c6988c0810f495ce803ca4819c",
+      "decision": "skip_patch_equivalent",
+      "evidence": "Pooled ONT assignment is patch-identical to landed 73d0f9341543b216a78658de7e3303fb0052400c and later hardening.",
+      "required_follow_up": null
+    },
+    {
+      "candidate_id": "34bd3ba5a262ee14d3c39c297adea313c3807c3a",
+      "decision": "skip_patch_equivalent",
+      "evidence": "Firefox MolBio toolbar behavior is patch-equivalent in target.",
+      "required_follow_up": null
+    },
+    {
+      "candidate_id": "4d3028ea185e184d6bb2c19913d8d760fc2e618e+8f5138beb013413756a5a3858fd7757d74541486",
+      "decision": "preserve_target_policy",
+      "evidence": "Candidate deletes browser reconnect while target retains a later local-host-authorized reconnect with receipt-socket hardening.",
+      "required_follow_up": null
+    },
+    {
+      "candidate_id": "fix/ngs-capability-recovery-20260812@44041101d53ae60ce6e8151927b3d9e342bdd652",
+      "decision": "landed_requires_repair",
+      "evidence": "The governed reopening tranche is landed on origin/test. The inline HTML issue is fixed. Project/profile mutation authority, full hierarchy query fencing, and source-path-independent historical reopen remain blocked.",
+      "required_follow_up": "Repair authorization, authority-context query keys and cancellation, and historical source dependence in Phase N3-N5 before acceptance."
+    },
+    {
+      "candidate_id": "bms-gibson-release-20260726:staged-overlay",
+      "decision": "reconcile_semantically",
+      "evidence": "Target already contains baseline DNA Weaver planning. Narrow unabsorbed invariants are persisted-target attestation, save-time revalidation under writer lock, complete supplier/junction evidence, verified persisted-order export, and A-to-B-to-A async response fencing.",
+      "required_follow_up": "Semantically port only these invariants during MolBio operation closure; never copy stale files wholesale."
+    }
+  ],
+  "schema": "bms.ngs-molbio.branch-closure.v1"
+}

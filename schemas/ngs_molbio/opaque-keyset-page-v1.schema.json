@@ -1,0 +1,60 @@
+{
+  "$id": "bms.opaque-keyset-page.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "authority_context_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "has_more": {
+      "type": "boolean"
+    },
+    "items": {
+      "items": {},
+      "type": "array"
+    },
+    "limit": {
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "next_cursor": {
+      "anyOf": [
+        {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schema": {
+      "const": "bms.opaque-keyset-page.v1"
+    },
+    "total": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "items",
+    "next_cursor",
+    "has_more",
+    "total",
+    "limit",
+    "authority_context_sha256"
+  ],
+  "title": "Bounded opaque-keyset page v1",
+  "type": "object"
+}
