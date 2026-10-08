@@ -31,6 +31,7 @@ import type {
     VisibilityState,
     SelectionInfo,
     NucleotideSequenceListItem,
+    NucleotideSequenceResponse,
     HighlightedRegion,
     ActivePanel,
     Feature,
@@ -297,9 +298,10 @@ function normalizeFeatureRecord(feature: Partial<Feature> & Record<string, any>,
 }
 
 function normalizePrimerRecord(primer: Partial<Primer> & Record<string, any>, fallbackId: string): Primer {
+    type PrimerSite = NonNullable<Primer['sites']>[number];
     const rawSites = Array.isArray(primer.sites) ? primer.sites : [];
-    const sites: NonNullable<Primer['sites']> = rawSites
-        .map((site: any) => {
+    const sites: PrimerSite[] = rawSites
+        .map((site: any): PrimerSite | null => {
             const rawStart = Number(site?.start ?? site?.bindingSiteStart ?? primer.start ?? 0);
             const rawEnd = Number(site?.end ?? site?.bindingSiteEnd ?? primer.end ?? 0);
             const start = site?.bindingSiteStart != null && site?.start == null ? Math.max(0, rawStart - 1) : rawStart;
@@ -308,15 +310,21 @@ function normalizePrimerRecord(primer: Partial<Primer> & Record<string, any>, fa
             if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
                 return null;
             }
+            const tm = Number.isFinite(site?.tm)
+                ? Number(site.tm)
+                : Number.isFinite(site?.meltingTemperature)
+                    ? Number(site.meltingTemperature)
+                    : undefined;
+            const note = typeof site?.note === 'string' ? site.note : undefined;
             return {
                 start,
                 end,
                 strand: strand as 1 | -1,
-                tm: Number.isFinite(site?.tm) ? Number(site.tm) : Number.isFinite(site?.meltingTemperature) ? Number(site.meltingTemperature) : undefined,
-                note: typeof site?.note === 'string' ? site.note : undefined,
+                ...(tm !== undefined ? { tm } : {}),
+                ...(note !== undefined ? { note } : {}),
             };
         })
-        .filter((site): site is NonNullable<NonNullable<Primer['sites']>[number]> => Boolean(site));
+        .filter((site): site is PrimerSite => site !== null);
 
     const firstSite = sites[0] || null;
     return {

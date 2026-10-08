@@ -12,6 +12,60 @@ interface StructurePredictionTemplateProps {
     initialValues?: Record<string, any>;
 }
 
+const parseChainIdList = (value: unknown): string[] => {
+    if (typeof value !== 'string') return [];
+    return value
+        .split(/[|,]/)
+        .map((token) => token.trim())
+        .filter(Boolean);
+};
+
+const normalizeProteinSequence = (value: unknown): string => (
+    typeof value === 'string'
+        ? value.toUpperCase().replace(/[^A-Z]/g, '')
+        : ''
+);
+
+const isProteinComponent = (component: any): boolean => {
+    const type = String(component?.type || '').trim().toLowerCase();
+    return type === 'protein' || type === 'peptide';
+};
+
+const looksLikeAntibodyVariableDomain = (sequence: string): boolean => {
+    const normalized = normalizeProteinSequence(sequence);
+    if (normalized.length < 90 || normalized.length > 180) return false;
+    return ['QVQL', 'EVQL', 'QLQL', 'QVQ', 'EVQ', 'VQLA', 'DIQM', 'EIVL'].some((prefix) => normalized.startsWith(prefix));
+};
+
+const resolveInitialPrimaryProteinComponent = (initialValues?: Record<string, any>) => {
+    const components = Array.isArray(initialValues?.complex_components) ? initialValues.complex_components : [];
+    const proteinComponents = components.filter(isProteinComponent);
+    if (proteinComponents.length === 0) return null;
+
+    const preferredIds = [
+        ...parseChainIdList(initialValues?.sequence_batch_component_id),
+        ...parseChainIdList(initialValues?.binder_chains),
+        ...parseChainIdList(initialValues?.antibody_chains),
+        ...parseChainIdList(initialValues?.primary_chain_id),
+        ...parseChainIdList(initialValues?.target_chains),
+    ];
+    for (const chainId of preferredIds) {
+        const matched = proteinComponents.find((component: any) => String(component?.id || '').trim() === chainId);
+        if (matched) return matched;
+    }
+
+    const preferredSequence = normalizeProteinSequence(initialValues?.sequence || initialValues?.sequence_input);
+    if (preferredSequence) {
+        const matched = proteinComponents.find((component: any) => normalizeProteinSequence(component?.sequence) === preferredSequence);
+        if (matched) return matched;
+    }
+
+    const antibodyLike = proteinComponents.find((component: any) => looksLikeAntibodyVariableDomain(String(component?.sequence || '')));
+    if (antibodyLike) return antibodyLike;
+
+    return proteinComponents[0];
+};
+
 export function StructurePredictionTemplate({ onBack, initialValues }: StructurePredictionTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
@@ -21,19 +75,25 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         if (model === 'protenix_esm_20241211_v0.2.1') return 'protenix_mini_esm_v0.5.0';
         return model;
     };
+    const initialPrimaryProteinComponent = resolveInitialPrimaryProteinComponent(initialValues);
+    const initialPrimarySequence = initialPrimaryProteinComponent?.sequence || initialValues?.sequence || '';
+    const initialPrimaryName = initialPrimaryProteinComponent?.name || initialValues?.sequence_name || 'predicted';
+    const initialPrimaryChain = String(
+        initialPrimaryProteinComponent?.id
+        || initialValues?.primary_chain_id
+        || initialValues?.target_chains
+        || 'A'
+    ).split(',')
+        .map((token: string) => token.trim())
+        .find(Boolean) || 'A';
 
     // Core state
     const [jobName, setJobName] = useState(initialValues?.name || 'structure_prediction');
     const [pinnedGpus, setPinnedGpus] = useState<number[]>(initialValues?.pinned_gpus ?? []);
     const [lockGpus, setLockGpus] = useState(false);
-    const [sequence, setSequence] = useState(initialValues?.sequence || '');
-    const [sequenceName, setSequenceName] = useState(initialValues?.sequence_name || 'predicted');
-    const [primaryChainId, setPrimaryChainId] = useState<string>(
-        String(initialValues?.primary_chain_id || initialValues?.target_chains || 'A')
-            .split(',')
-            .map((token: string) => token.trim())
-            .find(Boolean) || 'A'
-    );
+    const [sequence, setSequence] = useState(initialPrimarySequence);
+    const [sequenceName, setSequenceName] = useState(initialPrimaryName);
+    const [primaryChainId, setPrimaryChainId] = useState<string>(initialPrimaryChain);
     const [targetSource, setTargetSource] = useState<SelectedTarget | null>((initialValues?.target_source as SelectedTarget | null) || null);
     const [targetSourcePath, setTargetSourcePath] = useState<string | null>(
         initialValues?.fixed_target_source_path || initialValues?.target_source?.path || null
@@ -129,11 +189,13 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         if (!components || !Array.isArray(components) || components.length <= 1) {
             return [];
         }
-        // First component is the primary protein (goes into sequence)
-        // Rest are ligands/DNA/RNA. Expand counted components into distinct entries so
+        const primaryId = String(initialPrimaryProteinComponent?.id || '');
+        const nonPrimaryComponents = components.filter((component: any) => String(component?.id || '') !== primaryId);
+        // Everything except the resolved primary component becomes additional context.
+        // Expand counted components into distinct entries so
         // retries and cloned jobs preserve repeated ions/cofactors in the UI.
         const expanded: LigandEntry[] = [];
-        components.slice(1).forEach((component: any) => {
+        nonPrimaryComponents.forEach((component: any) => {
             const countRaw = component?.count ?? 1;
             const count = Number.isFinite(Number(countRaw))
                 ? Math.max(1, Math.min(12, Math.floor(Number(countRaw))))

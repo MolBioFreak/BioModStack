@@ -6,11 +6,35 @@ from collections import OrderedDict
 from typing import Dict, List, Optional
 
 from sqlalchemy import bindparam, update
+from sqlalchemy import select
 
 from database import async_session, Design
 from services.cdr_annotator import batch_annotate_pdbs
 
 logger = logging.getLogger(__name__)
+
+
+def _preferred_chain_map(raw_chain_ids: Optional[str]) -> Dict[str, str]:
+    chain_ids = [chain.strip() for chain in str(raw_chain_ids or "").split(",") if chain and chain.strip()]
+    if not chain_ids:
+        return {}
+
+    preferred: Dict[str, str] = {}
+    remaining: List[str] = []
+    for chain_id in chain_ids:
+        chain_upper = chain_id.upper()
+        if chain_upper == "H" and "H" not in preferred:
+            preferred["H"] = chain_id
+        elif chain_upper in {"L", "K"} and "L" not in preferred:
+            preferred["L"] = chain_id
+        else:
+            remaining.append(chain_id)
+
+    if "H" not in preferred and remaining:
+        preferred["H"] = remaining.pop(0)
+    if "L" not in preferred and remaining:
+        preferred["L"] = remaining.pop(0)
+    return preferred
 
 
 def _build_updates(path_to_design_ids: Dict[str, List[str]], annotations) -> List[dict]:
@@ -58,8 +82,27 @@ async def annotate_and_update_designs(
             continue
         path_to_design_ids.setdefault(pdb_path, []).append(design_id)
 
+    design_preferred_chains: Dict[str, Dict[str, str]] = {}
+    async with async_session() as session:
+        rows = (
+            await session.execute(
+                select(Design.id, Design.pdb_path, Design.detected_antibody_chains).where(
+                    Design.id.in_(design_ids)
+                )
+            )
+        ).all()
+        for design_id, pdb_path, detected_antibody_chains in rows:
+            preferred = _preferred_chain_map(detected_antibody_chains)
+            if preferred and pdb_path and pdb_path not in design_preferred_chains:
+                design_preferred_chains[str(pdb_path)] = preferred
+
     unique_pdb_paths = list(path_to_design_ids.keys())
-    annotations = await asyncio.to_thread(batch_annotate_pdbs, unique_pdb_paths, batch_size=500)
+    annotations = await asyncio.to_thread(
+        batch_annotate_pdbs,
+        unique_pdb_paths,
+        batch_size=500,
+        preferred_chains_by_path=design_preferred_chains,
+    )
     updates = _build_updates(path_to_design_ids, annotations)
 
     if not updates:

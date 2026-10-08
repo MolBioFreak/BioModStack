@@ -202,6 +202,12 @@ export const fetchJobs = (params?: {
 export const fetchSystemStatus = () => api.get<SystemStatus>('/api/gpu/status');
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const fetchDesignById = (id: string) => api.get<Design>(`/api/designs/${id}`);
+export interface ProteinBaseBundleImportRequest {
+    bundle_path: string;
+    dataset_name: string;
+    job_name?: string;
+}
+export const importProteinBaseBundle = (payload: ProteinBaseBundleImportRequest) => api.post<Job>('/api/jobs/imports/proteinbase', payload);
 export const cancelJob = (id: string) => api.delete(`/api/jobs/${id}`);
 export const deleteJobPermanently = (id: string) => api.delete<{
     message: string;
@@ -219,11 +225,17 @@ export const resubmitJob = (id: string) => api.post<{
 
 
 // Upload file
+export interface FileUploadResponse {
+    filename: string;
+    path: string;
+    size: number;
+}
+
 export const uploadFile = async (path: string, file: File) => {
     const formData = new FormData();
     formData.append('path', path);
     formData.append('file', file);
-    return api.post('/api/files/upload', formData, {
+    return api.post<FileUploadResponse>('/api/files/upload', formData, {
         headers: {
             'Content-Type': 'multipart/form-data',
         },

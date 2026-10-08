@@ -39,6 +39,7 @@ import MolstarViewer from './MolstarViewer';
 import { StabilityHeatmap } from './MetricCharts';
 import { BatchComparePane } from './BatchComparePane';
 import { DesignComparePane } from './DesignComparePane';
+import { DataViewerLanding } from './DataViewerLanding';
 // ReferenceSelector and MetricOverlay - unused, kept for reference
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
@@ -835,7 +836,8 @@ const formatSequenceViewerText = (entries: StageSequenceEntry[]): string => {
     const totalLengthWidth = String(Math.max(...entries.map((entry) => entry.length))).length;
 
     return entries.map((entry) => {
-        const lines: string[] = [`Chain ${entry.chain}`];
+        const chainHeader = /^chain\s+/i.test(entry.chain) ? entry.chain : `Chain ${entry.chain}`;
+        const lines: string[] = [chainHeader];
         for (let start = 0; start < entry.sequence.length; start += residuesPerLine) {
             const chunk = entry.sequence.slice(start, start + residuesPerLine);
             const grouped = chunk.match(new RegExp(`.{1,${residuesPerGroup}}`, 'g'))?.join(' ') ?? chunk;
@@ -845,6 +847,27 @@ const formatSequenceViewerText = (entries: StageSequenceEntry[]): string => {
         }
         return lines.join('\n');
     }).join('\n\n');
+};
+
+const parseChainIdList = (value: unknown): string[] => {
+    if (typeof value !== 'string') return [];
+    return value
+        .split(/[|,]/)
+        .map((token) => token.trim())
+        .filter(Boolean);
+};
+
+const filterStageSequenceToBinderChains = (
+    sequenceValue: string,
+    chainAvgValue: unknown,
+    binderChainHint: unknown,
+): string => {
+    const binderChains = new Set(parseChainIdList(binderChainHint));
+    if (!sequenceValue || binderChains.size === 0) return '';
+    const filtered = parseStageSequenceEntries(sequenceValue, chainAvgValue)
+        .filter((entry) => binderChains.has(entry.chain));
+    if (!filtered.length) return '';
+    return filtered.map((entry) => `${entry.chain}:${entry.sequence}`).join('|');
 };
 
 const parseStageSequenceEntries = (
@@ -3126,18 +3149,38 @@ export function ResultsViewer() {
     const selectedDesignHasPpiflowLens = selectedDesignLens === 'ppiflow' || Boolean(selectedDesignPpiflowRecord);
     const selectedDesignSequenceSource = useMemo(() => {
         const stageSequence = typeof selectedDesignFampnnPayload?.sequence === 'string' ? selectedDesignFampnnPayload.sequence.trim() : '';
-        if (stageSequence) {
-            return { sequence: stageSequence, kind: 'stage' as const };
-        }
         const binderSequence = [
             selectedDesign?.binder_sequence,
             selectedDesignFampnnPayload?.binder_sequence,
         ].find((value) => typeof value === 'string' && value.trim());
+        const binderChainHint = [
+            selectedDesign?.detected_antibody_chains,
+            selectedDesignFampnnPayload?.detected_antibody_chains,
+            (activeJob?.params as Record<string, unknown> | undefined)?.antibody_chains,
+            (activeJob?.params as Record<string, unknown> | undefined)?.binder_chains,
+        ].find((value) => typeof value === 'string' && value.trim());
+
+        if (hasExplicitBinderTargetRoles(activeJob)) {
+            if (typeof binderSequence === 'string' && binderSequence.trim()) {
+                return { sequence: binderSequence.trim(), kind: 'binder' as const };
+            }
+            const binderFilteredStageSequence = filterStageSequenceToBinderChains(
+                stageSequence,
+                selectedDesignFampnnPayload?.chain_avg_psce,
+                binderChainHint,
+            );
+            if (binderFilteredStageSequence) {
+                return { sequence: binderFilteredStageSequence, kind: 'stage' as const };
+            }
+        }
+        if (stageSequence) {
+            return { sequence: stageSequence, kind: 'stage' as const };
+        }
         return {
             sequence: typeof binderSequence === 'string' ? binderSequence.trim() : '',
             kind: 'binder' as const,
         };
-    }, [selectedDesign?.binder_sequence, selectedDesignFampnnPayload]);
+    }, [activeJob, selectedDesign?.binder_sequence, selectedDesign?.detected_antibody_chains, selectedDesignFampnnPayload]);
     const selectedDesignSequenceEntries = useMemo(
         () => parseStageSequenceEntries(
             selectedDesignSequenceSource.sequence,
@@ -4694,6 +4737,7 @@ export function ResultsViewer() {
         .split('\n')
         .map((entry) => entry.trim())
         .filter(Boolean).length;
+    const showDataHubLanding = !activeJob && !(jobsLoading || (jobId && routedJobLoading));
 
     return (
         <div className="min-h-screen bg-slate-950 text-slate-200">
@@ -4709,7 +4753,7 @@ export function ResultsViewer() {
                     <div>
                         <h1 className="text-3xl font-bold text-white">Results Viewer</h1>
                         <p className="text-slate-400 text-sm mt-1">
-                            {activeJob ? `${activeJob.name} • ${activeJob.model_id}` : 'Select a job to analyze'}
+                            {activeJob ? `${activeJob.name} • ${activeJob.model_id}` : 'Import a dataset or open an existing workflow'}
                         </p>
                         {activeJob && (
                             <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-300">
@@ -4834,10 +4878,17 @@ export function ResultsViewer() {
                     </div>
                 </div>
 
-                {nonNgsJobs.length === 0 && (
-                    <div className="bg-slate-900/50 rounded-xl border border-slate-800 p-8 text-center text-slate-400">
-                        No protein workflow jobs available for Data Viewer. NGS jobs are available in NGS Data Visualization Toolkit.
-                    </div>
+                {showDataHubLanding && (
+                    <DataViewerLanding
+                        jobs={nonNgsJobs}
+                        jobsLoading={jobsLoading}
+                        onBrowseJobs={() => {
+                            setShowJobSelectorMenu(true);
+                            setJobSelectorSearch('');
+                        }}
+                        onSelectJob={handleSelectJob}
+                        onImportComplete={(job) => handleSelectJob(job.id)}
+                    />
                 )}
 
                 {activeJob && (
