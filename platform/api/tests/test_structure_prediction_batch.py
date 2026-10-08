@@ -13,6 +13,7 @@ if str(API_ROOT) not in sys.path:
 from routers.jobs import (
     _normalize_boltz_no_msa_quality_params,
     _normalize_structure_geometry_params,
+    _normalize_structure_prediction_pred_method,
     _validate_protenix_checkpoint_requirements,
     _validate_protenix_template_requirements,
 )
@@ -69,6 +70,56 @@ def test_normalize_boltz_no_msa_quality_params_leaves_msa_runs_unchanged() -> No
 
     assert params["boltz_sampling_steps"] == 10
     assert params["boltz_recycling_steps"] == 1
+
+
+def test_normalize_structure_prediction_pred_method_maps_legacy_complex_ensemble_aliases() -> None:
+    params = _normalize_structure_prediction_pred_method(
+        "boltz2",
+        "complex",
+        {
+            "pred_method": "all",
+        },
+    )
+
+    assert params["pred_method"] == "boltz_protenix"
+
+
+def test_normalize_structure_prediction_pred_method_rejects_complex_rf3_only_runs() -> None:
+    try:
+        _normalize_structure_prediction_pred_method(
+            "rf3",
+            "complex",
+            {
+                "pred_method": "rf3",
+            },
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 422
+        detail = exc.detail
+        assert isinstance(detail, dict)
+        assert "RF3" in detail["validation_errors"][0]
+        assert "predict-only" in detail["validation_errors"][0]
+    else:
+        raise AssertionError("Expected complex RF3 normalization to raise HTTPException")
+
+
+def test_build_nextflow_command_routes_boltz_protenix_template_runs_through_boltz_profile(tmp_path: Path) -> None:
+    cmd = build_nextflow_command(
+        "template_structure_prediction",
+        "structure_prediction",
+        {
+            "sequence": "ACDEFGHIK",
+            "sequence_name": "rbx1_combo",
+            "pred_method": "boltz_protenix",
+        },
+        str(tmp_path),
+        job_id="job-boltz-protenix",
+    )
+
+    joined = " ".join(cmd)
+
+    assert "-profile boltz,workstation_ryzen7960x" in joined
+    assert "--pred_method boltz_protenix" in joined
 
 
 def test_write_sequence_batch_payloads_writes_stable_names_and_csv(tmp_path: Path) -> None:
