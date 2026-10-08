@@ -1,40 +1,53 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import sys
+
+# First executable boundary, regardless of option/action ordering. Python startup
+# has already happened: callers requiring no startup bytecode must use -B.
+sys.dont_write_bytecode = True
+
 import argparse
 import json
 import subprocess
-import sys
 from pathlib import Path
-
-# Bootstrap must not create bytecode even under an empty HOME/XDG.
-if len(sys.argv) > 1 and sys.argv[1] in {"discover", "plan"}:
-    sys.dont_write_bytecode = True
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from biomodstack_services import (  # noqa: E402
-    API_LOG,
-    CORE_RUNTIME_LOG,
-    FRONTEND_LOG,
-    ServiceManagerError,
-    resolve_runtime_mode,
-    restart_all,
-    restart_api,
-    runtime_descriptor,
-    start_api,
-    start_all,
-    start_runtime_target,
-    status_lines,
-    stop_api,
-    stop_all,
-)
-from biomodstack_tailnet import (  # noqa: E402
-    TailnetEnvironmentError,
-    select_tailnet_environment,
-)
+
+def _load_lifecycle() -> None:
+    # Preserve the importable legacy CLI surface, but do not resolve lifecycle
+    # configuration during standalone bootstrap (malformed XDG must be JSON).
+    global API_LOG, CORE_RUNTIME_LOG, FRONTEND_LOG, ServiceManagerError
+    global resolve_runtime_mode, restart_all, restart_api, runtime_descriptor
+    global start_api, start_all, start_runtime_target, status_lines, stop_api, stop_all
+    global TailnetEnvironmentError, select_tailnet_environment
+    from biomodstack_services import (  # noqa: E402
+        API_LOG,
+        CORE_RUNTIME_LOG,
+        FRONTEND_LOG,
+        ServiceManagerError,
+        resolve_runtime_mode,
+        restart_all,
+        restart_api,
+        runtime_descriptor,
+        start_api,
+        start_all,
+        start_runtime_target,
+        status_lines,
+        stop_api,
+        stop_all,
+    )
+    from biomodstack_tailnet import (  # noqa: E402
+        TailnetEnvironmentError,
+        select_tailnet_environment,
+    )
+
+
+if __name__ != "__main__":
+    _load_lifecycle()
 
 
 NOTIFY_ICON = "applications-science"
@@ -79,6 +92,9 @@ def main() -> int:
                                   runtime=args.runtime, models=tuple(args.model))
         print(json.dumps(report, indent=2, sort_keys=True) if args.json_output else render_report(report))
         return 0 if report["ready"] else BLOCKED_EXIT
+    if __name__ == "__main__":
+        _load_lifecycle()
+
     if args.model:
         parser.error("--model is only supported with discover/plan")
 

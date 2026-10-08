@@ -13,7 +13,10 @@ if [ "$#" -gt 0 ]; then
 fi
 
 case "$ACTION" in
-    start|start-api|start-target|stop|stop-api|status|restart|restart-api|discover|plan)
+    discover|plan)
+        exec python3 -B "$MANAGER" "$ACTION" "$@"
+        ;;
+    start|start-api|start-target|stop|stop-api|status|restart|restart-api)
         exec python3 "$MANAGER" "$ACTION" "$@"
         ;;
     *)

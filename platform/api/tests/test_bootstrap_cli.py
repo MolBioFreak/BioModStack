@@ -39,7 +39,7 @@ def snapshot(root):
 def test_real_cli_read_only_json(isolated, action, shell):
     before = snapshot(isolated)
     command = ([str(ROOT / 'start_ui.sh')] if shell else
-               [sys.executable, str(ROOT / 'scripts/manage_desktop_services.py')])
+               [sys.executable, '-B', str(ROOT / 'scripts/manage_desktop_services.py')])
     result = subprocess.run(command + [action, '--json', '--model', 'frustrampnn'],
                             text=True, capture_output=True, check=False)
     assert result.returncode == 3, result.stderr
