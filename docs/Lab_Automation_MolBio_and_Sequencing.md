@@ -67,8 +67,33 @@ The canonical sequencing model config is:
 
 The workflow logic lives in:
 - [ngs.nf](../ngs.nf), which dispatches the nanopore workflow entrypoint
-- [workflows/nanopore_methylation.nf](../workflows/nanopore_methylation.nf)
+- [workflows/ngs/ont_methylation_analysis.nf](../workflows/ngs/ont_methylation_analysis.nf)
 - the Dorado/modkit modules under `modules/`
+
+### ONT Read and Signal Workbench
+
+The `/ngs` result surface includes the **Read and Signal Workbench** for one
+persisted run generation. It keeps IGV as the alignment authority and can show:
+
+- one governed acquired-signal waveform from the exact retained indexed BLOW5;
+- reusable signal-to-read and signal-to-reference mappings;
+- bounded read, reference, and pileup views rendered by the separately pinned,
+  network-denied Squigualiser runtime; and
+- saved viewer state that reopens the same read, locus, mapping, and render job.
+
+Acquired signal remains authoritative only when it resolves through the exact
+run, generation, raw representation, retained partition, and index. Derived
+plots and simulated artifacts never satisfy an instrument raw-signal lookup.
+Historical metadata with missing device/profile evidence remains
+`legacy_unknown`; it is not silently relabeled compatible.
+
+The source tree contains the gated Squigulator ideal-reference comparison lane
+and manual trace-review ledger. Squigulator output is explicitly
+model-derived—not acquired signal—and uses a runtime identity separate from the
+Squigualiser comparison renderer. This lane must not be described as a live
+operator capability until both OCI identities, bounded execution, visible
+synchronized tracks, and artifact/review behavior pass live acceptance in the
+Development service.
 
 ## BioXP Robotics Surface
 

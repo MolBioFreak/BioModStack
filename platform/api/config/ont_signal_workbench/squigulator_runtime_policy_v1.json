@@ -1,0 +1,17 @@
+{
+  "schema": "bms.ont-squigulator-runtime-policy.v1",
+  "runtime_id": "sha256:459449503326b4f72f184aaf9333560e581034098e21b75524a46822a8ac608f",
+  "oci_digest": "sha256:459449503326b4f72f184aaf9333560e581034098e21b75524a46822a8ac608f",
+  "upstream": {
+    "name": "Squigulator",
+    "version": "0.5.0",
+    "commit": "c5f0c619a28b9532388877096acb7568c34b9c4b"
+  },
+  "source_asset": {
+    "name": "squigulator-v0.5.0-release.tar.gz",
+    "sha256": "f8b428655d586427c6e0c939d4a0383fa8569523234e3c21951edcd23372a66a"
+  },
+  "licenses": {"squigulator": "MIT", "slow5lib": "MIT", "streamvbyte": "Apache-2.0"},
+  "wrapper": "scripts/ont_squigulator_runtime.py",
+  "network": "none"
+}

@@ -76,6 +76,7 @@ from migrations.seal_ont_external_move_bam_receipt_binding import migrate as sea
 from migrations.seal_ont_raw_signal_lookup_terminal_immutability import (
     migrate as seal_ont_raw_signal_lookup_terminal_immutability,
 )
+from migrations.add_ont_signal_comparisons import migrate as migrate_ont_signal_comparisons
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -140,6 +141,7 @@ MIGRATIONS: List[Migration] = [
         "add_frustrampnn_statistics_analyses",
         migrate_frustrampnn_statistics_analyses,
     ),
+    Migration(42, "add_ont_signal_comparisons", migrate_ont_signal_comparisons),
 ]
 
 

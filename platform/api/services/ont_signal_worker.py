@@ -30,6 +30,9 @@ from database import (
     OntRawSignalRepresentation,
     OntSignalCalibrationArtifact,
     OntSignalCalibrationJob,
+    OntSignalComparisonArtifact,
+    OntSignalComparisonEvent,
+    OntSignalComparisonJob,
     OntSignalMappingArtifact,
     OntSignalMappingEvent,
     OntSignalMappingJob,
@@ -70,6 +73,16 @@ FILE_SIZE_LIMITS = {
     "calibration": 1536 * 1024 * 1024,
     "mapping": 1536 * 1024 * 1024,
     "view": 48 * 1024 * 1024,
+}
+SQUIGULATOR_POLICY_PATH = Path(__file__).resolve().parents[1] / "config" / "ont_signal_workbench" / "squigulator_runtime_policy_v1.json"
+COMPARISON_RENDER_POLICY_PATH = Path(__file__).resolve().parents[1] / "config" / "ont_signal_workbench" / "comparison_render_runtime_policy_v1.json"
+COMPARISON_ARTIFACT_AUTHORITY = {
+    "simulation_input_fasta": "comparison_derived", "simulation_coordinate_map": "comparison_derived",
+    "simulated_blow5": "simulated_derived", "simulated_blow5_index": "simulated_derived",
+    "simulated_read_fasta": "simulated_derived", "simulated_read_id_map": "simulated_derived",
+    "simulated_source_paf": "simulated_derived", "simulated_normalized_paf": "comparison_derived",
+    "simulated_source_sam": "simulated_derived", "simulated_normalized_sam": "comparison_derived",
+    "comparison_html": "comparison_derived", "comparison_manifest": "comparison_derived",
 }
 
 
@@ -620,6 +633,54 @@ class OntSignalWorker:
             "--socket", "/broker/parents.sock", "--timeout-seconds", "30",
         ]
         return command
+
+    @staticmethod
+    def _comparison_runtime_identity(stage: str) -> dict[str, str]:
+        stages = {
+            "squigulator_producer": (
+                SQUIGULATOR_POLICY_PATH, "BMS_ONT_SQUIGULATOR_IMAGE",
+                "BMS_ONT_SQUIGULATOR_IMAGE_DIGEST",
+            ),
+            "squigualiser_comparison_renderer": (
+                COMPARISON_RENDER_POLICY_PATH, "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE",
+                "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST",
+            ),
+        }
+        try:
+            policy_path, image_env, digest_env = stages[stage]
+        except KeyError as exc:
+            raise RuntimeError("unknown comparison runtime stage") from exc
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        image = os.environ.get(image_env, "").strip()
+        digest = os.environ.get(digest_env, "").strip().lower()
+        if (
+            policy.get("network") != "none"
+            or image != policy.get("runtime_id")
+            or digest != str(policy.get("oci_digest", "")).removeprefix("sha256:")
+            or not HEX64.fullmatch(digest)
+        ):
+            raise RuntimeError(f"configured {stage} identity diverges from approved policy")
+        return {"stage": stage, "image": image, "image_digest": digest,
+                "policy_sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest()}
+
+    def _comparison_container_command(self, stage: str, output_dir: Path) -> list[str]:
+        identity = self._comparison_runtime_identity(stage)
+        runtime = os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
+        if runtime not in {"podman", "docker"}:
+            raise RuntimeError("unsupported container runtime")
+        self._assert_local_runtime_image(runtime, identity["image"])
+        uid, gid = self._container_user_identity()
+        common = [runtime, "run", "--pull=never", "--network", "none", "--read-only",
+                  "--user", f"{uid}:{gid}", "--cap-drop", "ALL", "--label", WORKER_LABEL,
+                  "--security-opt", "no-new-privileges", "--mount",
+                  f"type=bind,src={output_dir.resolve()},dst=/output"]
+        if stage == "squigulator_producer":
+            return [*common, "--pids-limit", "64", "--memory", "1g", "--cpus", "1",
+                    "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=256m", identity["image"],
+                    "python3", "/opt/bms/ont_squigulator_runtime.py"]
+        return [*common, "--pids-limit", "128", "--memory", "4g", "--cpus", "4",
+                "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=512m", identity["image"],
+                "python3", "/opt/bms/ont_signal_comparison_runtime.py"]
 
     @staticmethod
     def _stable_file_identity(path: Path) -> tuple[str, int]:
@@ -1230,6 +1291,7 @@ class OntSignalWorker:
             (OntSignalCalibrationJob, "state"),
             (OntSignalMappingJob, "state"),
             (OntSquigualiserViewJob, "state"),
+            (OntSignalComparisonJob, "state"),
         ):
             await self._recover_expired_table(table, state_field, now)
 
@@ -1339,6 +1401,8 @@ class OntSignalWorker:
                 return
             if isinstance(row, OntSignalMappingJob):
                 session.add(OntSignalMappingEvent(id=f"ont-signal-event-{uuid.uuid4().hex}", job_id=row.id, state="failed", reason_code="runtime_validation_failed", receipt={"error_class": exc.__class__.__name__}, created_at=self._now()))
+            if isinstance(row, OntSignalComparisonJob):
+                session.add(OntSignalComparisonEvent(id=f"ont-comparison-event-{uuid.uuid4().hex}", comparison_job_id=row.id, state="failed", reason_code="runtime_validation_failed", receipt={"error_class": exc.__class__.__name__}, created_at=self._now()))
             await session.commit()
 
     @staticmethod
@@ -2137,6 +2201,98 @@ class OntSignalWorker:
             parents.assert_unbroken()
             await session.commit()
 
+    async def _process_comparison(self, item_id: str, token: str) -> None:
+        """Run the separately pinned producer before the comparison renderer."""
+        output = self._output_root() / "comparisons" / item_id
+        self._prepare_output_directory(output, item_id)
+        async with self._session_factory() as session:
+            job = await session.get(OntSignalComparisonJob, item_id)
+            if job is None or job.claim_token != token or job.state != "running":
+                raise TerminalFenceLost("comparison lease was lost before orchestration")
+            settings = job.simulation_settings if isinstance(job.simulation_settings, dict) else {}
+            operator = settings.get("operator_owned", {}) if isinstance(settings.get("operator_owned"), dict) else {}
+            profile_id, seed = operator.get("profile_id"), operator.get("seed")
+            if not isinstance(profile_id, str) or isinstance(seed, bool) or not isinstance(seed, int):
+                raise RuntimeError("comparison effective simulation settings are malformed")
+        stages = (
+            ("squigulator_producer", ["--profile-id", profile_id, "--seed", str(seed)]),
+            ("squigualiser_comparison_renderer", [
+                "--real-html", "/output/real_track.html", "--simulated-html", "/output/simulated_track.html",
+                "--output-html", "/output/comparison.html", "--real-read-id", job.selected_read_id,
+                "--profile-id", profile_id,
+            ]),
+        )
+        stage_receipts: dict[str, Any] = {}
+        for stage, stage_argv in stages:
+            command = [*self._comparison_container_command(stage, output), *stage_argv]
+            deadline = 5 * 60 if stage == "squigulator_producer" else 15 * 60
+            log_limit = 4 * 1024 * 1024 if stage == "squigulator_producer" else 8 * 1024 * 1024
+            process = await asyncio.create_subprocess_exec(
+                *command, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, start_new_session=True,
+                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=deadline)
+            except asyncio.TimeoutError as exc:
+                process.kill(); await process.wait()
+                raise TimeoutError(f"{stage} deadline exceeded") from exc
+            if len(stdout) + len(stderr) > log_limit:
+                raise OutputLimitExceeded(f"{stage} combined log ceiling exceeded")
+            stage_receipts[stage] = {
+                "argv_sha256": hashlib.sha256("\0".join(command).encode()).hexdigest(),
+                "returncode": process.returncode,
+                "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+                "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+                "runtime_identity": self._comparison_runtime_identity(stage),
+            }
+            if process.returncode != 0:
+                raise RuntimeError(stderr[-MAX_FAILURE:].decode("utf-8", "replace") or f"{stage} failed")
+        manifest_path = output / "comparison_manifest.json"
+        manifest = self._read_json_report(manifest_path)
+        raw_artifacts = manifest.get("artifacts")
+        if not isinstance(raw_artifacts, list):
+            raise RuntimeError("comparison manifest artifact inventory is malformed")
+        artifacts: list[OntSignalComparisonArtifact] = []
+        for item in raw_artifacts:
+            if not isinstance(item, dict) or item.get("kind") not in COMPARISON_ARTIFACT_AUTHORITY:
+                raise RuntimeError("comparison manifest contains an unsupported artifact")
+            kind = str(item["kind"]); relative = Path(str(item.get("filename", "")))
+            if relative.is_absolute() or len(relative.parts) != 1:
+                raise RuntimeError("comparison artifact path is invalid")
+            path = output / relative
+            sha256, size = await self._stable_file_identity_async(path)
+            if sha256 != item.get("sha256") or size != item.get("size_bytes"):
+                raise RuntimeError("comparison artifact diverged from manifest")
+            artifacts.append(OntSignalComparisonArtifact(
+                id=f"ont-comparison-artifact-{uuid.uuid4().hex}", comparison_job_id=item_id,
+                kind=kind, authority_class=COMPARISON_ARTIFACT_AUTHORITY[kind],
+                managed_relative_path=relative.as_posix(), media_type=str(item.get("media_type")),
+                sha256=sha256, size_bytes=size, parent_identities=manifest.get("parents", {}),
+                squigulator_runtime_identity=stage_receipts["squigulator_producer"]["runtime_identity"] if kind.startswith("simulated") else None,
+                squigualiser_runtime_identity=stage_receipts["squigualiser_comparison_renderer"]["runtime_identity"] if kind in {"comparison_html", "comparison_manifest"} else None,
+                validation_receipt=item.get("validation_receipt", {}), created_at=self._now(),
+            ))
+        async with self._session_factory() as session:
+            current = await session.get(OntSignalComparisonJob, item_id)
+            if current is None or current.claim_token != token or current.cancel_requested_at is not None:
+                raise asyncio.CancelledError()
+            session.add_all(artifacts)
+            now = self._now()
+            result = await session.execute(update(OntSignalComparisonJob).where(
+                OntSignalComparisonJob.id == item_id, OntSignalComparisonJob.claim_token == token,
+                OntSignalComparisonJob.state == "running", OntSignalComparisonJob.cancel_requested_at.is_(None),
+                OntSignalComparisonJob.lease_expires_at > now,
+            ).values(state="ready", reason_code="ideal_comparison_ready", claim_token=None,
+                lease_expires_at=None, stage_receipts=stage_receipts, output_manifest=manifest,
+                updated_at=now, completed_at=now))
+            if result.rowcount != 1:
+                await session.rollback(); raise TerminalFenceLost("comparison publication fence was lost")
+            session.add(OntSignalComparisonEvent(id=f"ont-comparison-event-{uuid.uuid4().hex}",
+                comparison_job_id=item_id, state="ready", reason_code="ideal_comparison_ready",
+                receipt={"stage_receipts": stage_receipts}, created_at=now))
+            await session.commit()
+
     async def _cancel_claim(self, table: Any, state_field: str, item_id: str, token: str) -> None:
         async with self._session_factory() as session:
             now = self._now()
@@ -2168,6 +2324,7 @@ class OntSignalWorker:
                 (OntSignalCalibrationJob, "state", "calibration", self._process_calibration),
                 (OntSignalMappingJob, "state", "mapping", self._process_mapping),
                 (OntSquigualiserViewJob, "state", "view", self._process_view),
+                (OntSignalComparisonJob, "state", "comparison", self._process_comparison),
             ):
                 claimed = await self._claim(table, field)
                 if claimed is None: continue

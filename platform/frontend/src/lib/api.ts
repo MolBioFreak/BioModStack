@@ -5085,12 +5085,142 @@ export interface OntSignalViewerIgvUpdateState {
     reads_track_loaded: boolean;
 }
 
+export type OntSignalComparisonProfileId = 'dna-r9-min' | 'dna-r9-prom' | 'rna-r9-min' | 'rna-r9-prom' | 'dna-r10-min' | 'dna-r10-prom' | 'rna004-min';
+export type OntSignalComparisonCompatibility = 'compatible' | 'compatible_with_warning' | 'incompatible' | 'legacy_unknown';
+
+export interface OntSignalComparisonSimulationSettings {
+    profile_id: OntSignalComparisonProfileId;
+    seed: number;
+    dwell_mean?: number | null;
+    dwell_std?: number | null;
+    noise_std?: number | null;
+    noise_frequency?: number | null;
+    amp_noise?: number | null;
+    ideal_mode?: boolean | null;
+    random_signal?: 'none' | 'dna' | 'rna' | null;
+}
+
+export interface OntSignalComparisonProfile {
+    profile_id: OntSignalComparisonProfileId;
+    molecule_type: 'dna' | 'rna';
+    pore_family: 'r9' | 'r10' | 'rna004';
+    model_id: string;
+    sample_rate_hz: number;
+    nucleotide_type: 'dna' | 'rna';
+    full_contigs: true;
+    output_format: 'blow5';
+    source_profile_id: string;
+    approximation: boolean;
+}
+
+export interface OntSignalComparisonWarning { code: string; message: string }
+export interface OntSignalComparisonBlocker { code: string; message: string }
+
+export interface OntSignalComparisonRequest {
+    viewer_session_id: string;
+    expected_viewer_session_revision: number;
+    selected_read_id: string;
+    reference_contig: string;
+    reference_start: number;
+    reference_end: number;
+    simulation_settings: OntSignalComparisonSimulationSettings;
+    render_params: OntSignalRenderParams;
+}
+export interface OntSignalComparisonCreateRequest extends OntSignalComparisonRequest { preview_digest: string }
+
+export interface OntSignalComparisonPreview {
+    viewer_session_id: string;
+    viewer_session_revision: number;
+    run_id: string;
+    observed_generation: number;
+    raw_representation_id: string;
+    raw_manifest_sha256: string;
+    move_source_id: string;
+    mapping_profile_id: string;
+    signal_to_read_mapping_job_id: string;
+    signal_to_reference_mapping_job_id: string;
+    reference_revision_id: string;
+    reference_artifact_id: string;
+    reference_fasta_sha256: string;
+    selected_read_id: string;
+    selected_read_inventory_sha256: string;
+    contig: string;
+    requested_start: number;
+    requested_end: number;
+    derived_start: number;
+    derived_end: number;
+    orientation: 'forward' | 'reverse';
+    profile: OntSignalComparisonProfile;
+    effective_simulation_settings: OntSignalComparisonSimulationSettings;
+    effective_render_params: OntSignalRenderParams;
+    warnings: OntSignalComparisonWarning[];
+    blockers: OntSignalComparisonBlocker[];
+    compatibility: OntSignalComparisonCompatibility;
+    preview_digest: string;
+}
+
+export interface OntSignalComparisonArtifact {
+    artifact_id: string;
+    kind: string;
+    authority_class: 'real_acquired' | 'simulated_derived' | 'comparison_derived';
+    sha256: string;
+    size_bytes: number;
+    media_type: string;
+    url: string;
+}
+export interface OntSignalComparisonReview {
+    review_id: string;
+    comparison_job_id: string;
+    reviewer_identity: string;
+    criterion_outcome: 'meets_criterion' | 'does_not_meet_criterion' | 'uncertain';
+    note: string | null;
+    revision: number;
+    predecessor_review_id: string | null;
+    created_at: string;
+}
+export interface OntSignalComparisonJob {
+    comparison_job_id: string;
+    predecessor_comparison_job_id: string | null;
+    attempt_number: number;
+    viewer_session_id: string;
+    viewer_session_revision: number;
+    run_id: string;
+    observed_generation: number;
+    raw_representation_id: string;
+    move_source_id: string;
+    mapping_profile_id: string;
+    signal_to_read_mapping_job_id: string;
+    signal_to_reference_mapping_job_id: string;
+    reference_revision_id: string;
+    selected_read_id: string;
+    contig: string;
+    requested_start: number;
+    requested_end: number;
+    simulation_settings: OntSignalComparisonSimulationSettings;
+    render_params: OntSignalRenderParams;
+    request_fingerprint: string;
+    state: OntSignalJobState;
+    reason_code: string;
+    stage_receipts: Record<string, unknown>;
+    output_manifest: Record<string, unknown>;
+    failure_code: string | null;
+    failure_message: string | null;
+    cancel_requested_at: string | null;
+    artifacts: OntSignalComparisonArtifact[];
+    reviews: OntSignalComparisonReview[];
+    created_at: string;
+    updated_at: string;
+    completed_at: string | null;
+}
+
 export interface OntSignalViewerSignalUpdateState {
-    mode: OntSignalViewMode | 'raw_waveform';
+    mode: OntSignalViewMode | 'raw_waveform' | 'ideal_comparison';
     render_params: OntSignalRenderParams;
     view_job_id: string | null;
     read_mapping_job_id: string | null;
     reference_mapping_job_id: string | null;
+    comparison_job_id?: string | null;
+    comparison_review_id?: string | null;
 }
 
 export interface OntSignalViewerIgvState extends Partial<OntSignalViewerIgvUpdateState> {
@@ -5247,6 +5377,24 @@ export const fetchOntSignalViewArtifact = (viewJobId: string, artifactId: string
         responseType: 'blob',
         withCredentials: false,
     }));
+export const previewOntSignalIdealComparison = (request: OntSignalComparisonRequest) =>
+    apiData(api.post<OntSignalComparisonPreview>(`${signalWorkbenchRoot}/comparisons/preview`, request));
+export const createOntSignalIdealComparison = (request: OntSignalComparisonCreateRequest) =>
+    apiData(api.post<OntSignalComparisonJob>(`${signalWorkbenchRoot}/comparisons`, request));
+export const fetchOntSignalIdealComparison = (comparisonJobId: string, signal?: AbortSignal) =>
+    apiData(api.get<OntSignalComparisonJob>(`${signalWorkbenchRoot}/comparisons/${encodeURIComponent(comparisonJobId)}`, { signal }));
+export const cancelOntSignalIdealComparison = (comparisonJobId: string) =>
+    apiData(api.post<OntSignalComparisonJob>(`${signalWorkbenchRoot}/comparisons/${encodeURIComponent(comparisonJobId)}/cancel`));
+export const createFreshOntSignalIdealComparisonAttempt = (comparisonJobId: string) =>
+    apiData(api.post<OntSignalComparisonJob>(`${signalWorkbenchRoot}/comparisons/${encodeURIComponent(comparisonJobId)}/fresh-attempt`));
+export const fetchOntSignalComparisonArtifact = (comparisonJobId: string, artifactId: string) =>
+    apiData(api.get<Blob>(`${signalWorkbenchRoot}/comparisons/${encodeURIComponent(comparisonJobId)}/artifacts/${encodeURIComponent(artifactId)}`, {
+        responseType: 'blob', withCredentials: false,
+    }));
+export const createOntSignalComparisonReview = (comparisonJobId: string, request: {
+    criterion_outcome: OntSignalComparisonReview['criterion_outcome']; note: string | null; predecessor_review_id: string | null;
+}) => apiData(api.post<OntSignalComparisonReview>(`${signalWorkbenchRoot}/comparisons/${encodeURIComponent(comparisonJobId)}/reviews`, request));
+
 export const createOntSignalViewerSession = (request: OntSignalViewerSessionCreate) =>
     apiData(api.post<OntSignalViewerSession>(`${signalWorkbenchRoot}/viewer-sessions`, request));
 export const fetchOntSignalViewerSession = (viewerSessionId: string) =>

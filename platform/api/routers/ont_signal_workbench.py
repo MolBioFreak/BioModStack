@@ -112,6 +112,160 @@ class RenderParams(ClosedModel):
         return value
 
 
+class ComparisonSimulationSettings(ClosedModel):
+    profile_id: Literal[
+        "dna-r9-min", "dna-r9-prom", "rna-r9-min", "rna-r9-prom",
+        "dna-r10-min", "dna-r10-prom", "rna004-min", "rna004-prom",
+    ]
+    seed: int = Field(default=1, ge=1, le=2_147_483_647)
+
+
+class ComparisonRenderParams(ClosedModel):
+    scale: Literal["none", "medmad", "znorm"] = "none"
+    point_size: float = Field(default=0.5, ge=0.5, le=10)
+    fixed_width: StrictBool = False
+    base_width: int = Field(default=10, ge=1, le=100)
+    base_limit: int = Field(default=1000, ge=1, le=1000)
+    signal_sample_limit: int = Field(default=100_000, ge=1, le=2_000_000)
+    show_samples: StrictBool = True
+    show_base_colours: StrictBool = True
+    remove_signal_outliers: StrictBool = False
+
+
+class ComparisonPreviewCreate(ClosedModel):
+    viewer_session_id: str
+    expected_viewer_revision: int = Field(ge=1)
+    mapping_artifact_id: str
+    selected_read_id: str
+    reference_contig: str
+    reference_start: int = Field(ge=1)
+    reference_end: int = Field(ge=1)
+    simulation_settings: ComparisonSimulationSettings
+    render_params: ComparisonRenderParams
+
+    @model_validator(mode="after")
+    def closed_interval(self):
+        if self.reference_end < self.reference_start:
+            raise ValueError("reference interval must be 1-based closed")
+        if self.reference_end - self.reference_start + 1 > 1000:
+            raise ValueError("comparison interval exceeds 1000 bases")
+        return self
+
+
+class ComparisonCreate(ComparisonPreviewCreate):
+    preview_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ComparisonReviewCreate(ClosedModel):
+    predecessor_review_id: str | None = None
+    review_question: str = Field(min_length=1, max_length=1000)
+    required_outcome: Literal["approve", "reject", "record_only"]
+    note: str = Field(min_length=1, max_length=4000)
+    reviewed_start: int = Field(ge=1)
+    reviewed_end: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def closed_review_interval(self):
+        if self.reviewed_end < self.reviewed_start:
+            raise ValueError("reviewed interval must be 1-based closed")
+        return self
+
+
+class ComparisonPreviewResponse(ClosedModel):
+    viewer_session_id: str
+    viewer_session_revision: int
+    run_id: str
+    observed_generation: int
+    raw_representation_id: str
+    raw_manifest_sha256: str
+    mapping_artifact_id: str
+    mapping_artifact_sha256: str
+    mapping_job_id: str
+    mapping_profile_id: str
+    reference_revision_id: str
+    reference_artifact_id: str
+    reference_fasta_sha256: str
+    reference_topology: str
+    coordinate_contract: str
+    selected_read_id: str
+    selected_read_span: dict[str, Any]
+    simulation_orientation: Literal["forward", "reverse"]
+    derived_window: dict[str, Any]
+    compatibility_disposition: Literal["matched_profile", "approximate_profile", "legacy_unknown", "incompatible"]
+    warnings: list[str]
+    effective_request: dict[str, Any]
+    preview_digest: str
+
+
+class ComparisonArtifactResponse(ClosedModel):
+    artifact_id: str
+    kind: str
+    authority_class: Literal["simulated_derived", "comparison_derived"]
+    media_type: str
+    sha256: str
+    size_bytes: int
+    parent_identities: dict[str, Any]
+    squigulator_runtime_identity: dict[str, Any] | None
+    squigualiser_runtime_identity: dict[str, Any] | None
+    validation_receipt: dict[str, Any]
+    created_at: str
+
+
+class ComparisonJobResponse(ClosedModel):
+    comparison_job_id: str
+    viewer_session_id: str
+    viewer_session_revision: int
+    run_id: str
+    observed_generation: int
+    raw_representation_id: str
+    mapping_artifact_id: str
+    reference_revision_id: str
+    selected_read_id: str
+    reference_contig: str
+    reference_start: int
+    reference_end: int
+    simulation_orientation: Literal["forward", "reverse"]
+    simulation_settings: dict[str, Any]
+    sequence_basis: Literal["managed_reference"]
+    generated_read_id: str | None
+    render_params: dict[str, Any]
+    preview_digest: str
+    request_fingerprint: str
+    attempt_number: int
+    predecessor_job_id: str | None
+    state: Literal["requested", "running", "ready", "failed", "cancelled"]
+    reason_code: str
+    resource_snapshot: dict[str, Any]
+    stage_receipts: dict[str, Any]
+    output_manifest: dict[str, Any]
+    failure_code: str | None
+    failure_message: str | None
+    artifacts: list[ComparisonArtifactResponse]
+    created_at: str
+    updated_at: str
+    completed_at: str | None
+
+
+class ComparisonReviewResponse(ClosedModel):
+    review_id: str
+    comparison_job_id: str
+    predecessor_review_id: str | None
+    review_question: str
+    required_outcome: Literal["approve", "reject", "record_only"]
+    note: str
+    reviewed_start: int
+    reviewed_end: int
+    comparison_html_artifact_id: str
+    comparison_html_sha256: str
+    comparison_request_fingerprint: str
+    reviewer_identity: str
+    created_at: str
+
+
+class ComparisonReviewListResponse(ClosedModel):
+    items: list[ComparisonReviewResponse]
+
+
 class ViewCreate(ClosedModel):
     mapping_artifact_id: str
     mode: Literal["read", "reference", "pileup"]
@@ -144,11 +298,15 @@ class ViewerIgvStateUpdate(ClosedModel):
 
 
 class ViewerSignalStateUpdate(ClosedModel):
-    mode: Literal["raw_waveform", "read", "reference", "pileup"]
+    mode: Literal["raw_waveform", "read", "reference", "pileup", "ideal_comparison"]
     render_params: RenderParams
     view_job_id: str | None
     read_mapping_job_id: str | None
     reference_mapping_job_id: str | None
+    comparison_job_id: str | None = None
+    comparison_preview_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    comparison_settings: dict[str, Any] | None = None
+    comparison_review_id: str | None = None
 
 
 class ViewerSessionCreate(ClosedModel):
@@ -433,13 +591,17 @@ class ViewerIgvStateResponse(ClosedModel):
 
 
 class ViewerSignalStateResponse(ClosedModel):
-    mode: Literal["raw_waveform", "read", "reference", "pileup"] | None = None
+    mode: Literal["raw_waveform", "read", "reference", "pileup", "ideal_comparison"] | None = None
     render_params: RenderParams | None = None
     view_job_id: str | None = None
     read_mapping_job_id: str | None = None
     reference_mapping_job_id: str | None = None
     selected_read_id: str | None = None
     capabilities: WorkbenchModesResponse | None = None
+    comparison_job_id: str | None = None
+    comparison_preview_digest: str | None = None
+    comparison_settings: dict[str, Any] | None = None
+    comparison_review_id: str | None = None
 
 
 class ViewerSessionResponse(ClosedModel):
@@ -705,7 +867,12 @@ async def get_view_artifact(view_job_id: str, artifact_id: str, session: AsyncSe
 @router.post("/viewer-sessions", status_code=201, response_model=ViewerSessionResponse, response_model_exclude_unset=True)
 async def create_viewer_session(request: ViewerSessionCreate, session: AsyncSession = Depends(get_session)) -> ViewerSessionResponse:
     try:
-        value = await service.create_viewer_session(session, **request.model_dump()); await session.commit(); return ViewerSessionResponse.model_validate(value)
+        payload = request.model_dump()
+        signal_state = payload["signal_state"]
+        for key in ("comparison_job_id", "comparison_review_id", "comparison_preview_digest", "comparison_settings"):
+            if signal_state.get(key) is None:
+                signal_state.pop(key, None)
+        value = await service.create_viewer_session(session, **payload); await session.commit(); return ViewerSessionResponse.model_validate(value)
     except (KeyError, service.OntSignalError) as exc:
         await session.rollback(); raise _error(exc) from exc
 
@@ -719,6 +886,86 @@ async def get_viewer_session(viewer_session_id: str, session: AsyncSession = Dep
 @router.patch("/viewer-sessions/{viewer_session_id}", response_model=ViewerSessionResponse, response_model_exclude_unset=True)
 async def update_viewer_session(viewer_session_id: str, request: ViewerSessionUpdate, session: AsyncSession = Depends(get_session)) -> ViewerSessionResponse:
     try:
-        value = await service.update_viewer_session(session, viewer_session_id, **request.model_dump()); await session.commit(); return ViewerSessionResponse.model_validate(value)
+        payload = request.model_dump()
+        signal_state = payload["signal_state"]
+        for key in ("comparison_job_id", "comparison_review_id", "comparison_preview_digest", "comparison_settings"):
+            if signal_state.get(key) is None:
+                signal_state.pop(key, None)
+        value = await service.update_viewer_session(session, viewer_session_id, **payload); await session.commit(); return ViewerSessionResponse.model_validate(value)
+    except (KeyError, service.OntSignalError) as exc:
+        await session.rollback(); raise _error(exc) from exc
+
+
+@router.post("/comparisons/preview", response_model=ComparisonPreviewResponse)
+async def preview_comparison(request: ComparisonPreviewCreate, session: AsyncSession = Depends(get_session), domain_session: AsyncSession = Depends(get_molbio_ngs_session)) -> ComparisonPreviewResponse:
+    try:
+        value = await service.preview_signal_comparison(session, domain_session, **request.model_dump(exclude={"simulation_settings", "render_params"}), simulation_settings=request.simulation_settings.model_dump(), render_params=request.render_params.model_dump())
+        return ComparisonPreviewResponse.model_validate(value)
+    except (KeyError, service.OntSignalError) as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/comparisons", status_code=202, response_model=ComparisonJobResponse)
+async def create_comparison(request: ComparisonCreate, session: AsyncSession = Depends(get_session), domain_session: AsyncSession = Depends(get_molbio_ngs_session)) -> ComparisonJobResponse:
+    try:
+        value = await service.create_signal_comparison(session, domain_session, **request.model_dump(exclude={"simulation_settings", "render_params"}), simulation_settings=request.simulation_settings.model_dump(), render_params=request.render_params.model_dump())
+        await session.commit(); return ComparisonJobResponse.model_validate(value)
+    except (KeyError, service.OntSignalError) as exc:
+        await session.rollback(); raise _error(exc) from exc
+
+
+@router.get("/comparisons/{comparison_job_id}", response_model=ComparisonJobResponse)
+async def get_comparison(comparison_job_id: str, session: AsyncSession = Depends(get_session)) -> ComparisonJobResponse:
+    try:
+        return ComparisonJobResponse.model_validate(await service.get_signal_comparison(session, comparison_job_id))
+    except (KeyError, service.OntSignalError) as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/comparisons/{comparison_job_id}/cancel", status_code=202, response_model=ComparisonJobResponse)
+async def cancel_comparison(comparison_job_id: str, session: AsyncSession = Depends(get_session)) -> ComparisonJobResponse:
+    try:
+        value = await service.cancel_signal_comparison(session, comparison_job_id)
+        await session.commit(); return ComparisonJobResponse.model_validate(value)
+    except (KeyError, service.OntSignalError) as exc:
+        await session.rollback(); raise _error(exc) from exc
+
+
+@router.post("/comparisons/{comparison_job_id}/fresh-attempt", status_code=202, response_model=ComparisonJobResponse)
+async def fresh_comparison_attempt(comparison_job_id: str, session: AsyncSession = Depends(get_session)) -> ComparisonJobResponse:
+    try:
+        value = await service.fresh_signal_comparison_attempt(session, comparison_job_id)
+        await session.commit(); return ComparisonJobResponse.model_validate(value)
+    except (KeyError, service.OntSignalError) as exc:
+        await session.rollback(); raise _error(exc) from exc
+
+
+@router.get("/comparisons/{comparison_job_id}/artifacts/{artifact_id}", response_class=Response)
+async def get_comparison_artifact(comparison_job_id: str, artifact_id: str, session: AsyncSession = Depends(get_session)) -> Response:
+    try:
+        body, metadata = await service.resolve_signal_comparison_artifact(session, comparison_job_id, artifact_id)
+        return Response(body, media_type=str(metadata["media_type"]), headers={
+            "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts",
+            "Cross-Origin-Resource-Policy": "same-origin", "Referrer-Policy": "no-referrer",
+            "Cache-Control": "private, no-store", "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff",
+        })
+    except (KeyError, service.OntSignalError) as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/comparisons/{comparison_job_id}/reviews", response_model=ComparisonReviewListResponse)
+async def comparison_reviews(comparison_job_id: str, session: AsyncSession = Depends(get_session)) -> ComparisonReviewListResponse:
+    try:
+        return ComparisonReviewListResponse.model_validate({"items": await service.list_signal_comparison_reviews(session, comparison_job_id)})
+    except (KeyError, service.OntSignalError) as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/comparisons/{comparison_job_id}/reviews", status_code=201, response_model=ComparisonReviewResponse)
+async def create_comparison_review(comparison_job_id: str, request: ComparisonReviewCreate, http_request: Request, session: AsyncSession = Depends(get_session)) -> ComparisonReviewResponse:
+    reviewer = str(getattr(http_request.state, "user_id", "authenticated_operator"))[:255]
+    try:
+        value = await service.create_signal_comparison_review(session, comparison_job_id, reviewer_identity=reviewer, **request.model_dump())
+        await session.commit(); return ComparisonReviewResponse.model_validate(value)
     except (KeyError, service.OntSignalError) as exc:
         await session.rollback(); raise _error(exc) from exc
