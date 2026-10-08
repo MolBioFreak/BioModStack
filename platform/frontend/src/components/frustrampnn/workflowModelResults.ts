@@ -1,5 +1,6 @@
 export interface WorkflowModelResultJob {
     readonly model_id: string;
+    readonly mode?: string | null;
     readonly params?: Record<string, unknown> | null;
 }
 
@@ -44,7 +45,9 @@ export const buildWorkflowModelResults = ({
     designs: readonly WorkflowModelResultDesign[];
     frustraMpnnAvailable: boolean;
 }): WorkflowModelResultSibling[] => {
-    const primaryModelId = job.model_id.trim().toLowerCase();
+    const jobModelId = job.model_id.trim().toLowerCase();
+    const jobMode = job.mode?.trim().toLowerCase() ?? '';
+    const primaryModelId = jobMode === 'structure_prediction' ? 'structure_prediction' : jobModelId;
     const validator = typeof job.params?.structure_validator === 'string'
         ? job.params.structure_validator.trim().toLowerCase()
         : '';

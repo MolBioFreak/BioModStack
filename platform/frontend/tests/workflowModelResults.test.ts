@@ -34,6 +34,20 @@ test('structure workflow exposes primary and persisted real-model siblings in st
     assert.deepEqual(filterDesignsForResultModel(designs, 'thermompnn').map((item) => item.id), ['other-1']);
 });
 
+test('Boltz2 structure-prediction jobs keep the workflow result primary and expose only persisted model siblings', () => {
+    const hierarchy = buildWorkflowModelResults({
+        job: { model_id: 'boltz2', mode: 'structure_prediction', params: {} },
+        designs: [{ id: 'boltz-structure', provenance: { model_id: 'boltz2' }, artifact_class: 'predicted_complex' }],
+        frustraMpnnAvailable: true,
+    });
+    assert.deepEqual(hierarchy.map(({ modelId, label, kind }) => ({ modelId, label, kind })), [
+        { modelId: 'structure_prediction', label: 'Structure Prediction', kind: 'primary' },
+        { modelId: 'frustrampnn', label: 'FrustraMPNN', kind: 'frustrampnn' },
+        { modelId: 'boltz2', label: 'Boltz-2', kind: 'model' },
+    ]);
+});
+
+
 test('result_model selects an available real model and defaults to the workflow primary', () => {
     const availableModelIds = ['structure_prediction', 'protenix', 'frustrampnn'];
     assert.equal(parseWorkflowResultViewState('?result_model=protenix', {
