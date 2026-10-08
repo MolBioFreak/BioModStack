@@ -12,7 +12,7 @@ import copy
 import stat
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Annotated, Any, Literal, Mapping
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
@@ -50,6 +50,7 @@ from services.conformational_mapping.import_snapshot import (
 )
 from services.conformational_mapping.persistence import (
     ConformationalPersistenceError,
+    MAX_STATE_LANDSCAPE_ANALYSIS_PAGE_OFFSET,
     StateLandscapeAnalysisProjectionAbsent,
     StateLandscapeAnalysisProjectionAmbiguous,
     capability_matches,
@@ -1374,12 +1375,14 @@ async def state_landscape_analysis_rows(
     auth_asym_id: str | None = None,
     sequence_start: int | None = None,
     sequence_end: int | None = None,
-    offset: int = 0,
+    offset: Annotated[int, Query(ge=0, le=MAX_STATE_LANDSCAPE_ANALYSIS_PAGE_OFFSET)] = 0,
     limit: int = 200,
     session: AsyncSession = Depends(get_session),
 ):
     """Page normalized state-analysis rows; all values are persisted artifact projections."""
 
+    if offset > MAX_STATE_LANDSCAPE_ANALYSIS_PAGE_OFFSET:
+        raise HTTPException(status_code=422, detail="invalid state landscape analysis page")
     await _authorized_record(request_id, request, session)
     try:
         header, rows, has_more = await paged_state_landscape_analysis_rows(

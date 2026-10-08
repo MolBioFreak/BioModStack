@@ -261,8 +261,63 @@ def test_state_analysis_projection_migration_is_ordered_and_idempotent(tmp_path:
 
     runner = importlib.import_module("migrations.runner")
     assert [(migration.version, migration.name) for migration in runner.MIGRATIONS][-1] == (
-        13, "enforce_state_landscape_analysis_pair_row_integrity",
+        14, "add_state_landscape_analysis_page_order_index",
     )
+
+
+def test_state_analysis_projection_page_index_matches_canonical_order_without_sqlite_sort(
+    tmp_path: Path,
+) -> None:
+    """The unfiltered 100k-row page query must seek and emit canonical order from one index."""
+
+    import sqlite3
+
+    page_index_name = "ix_cm_state_analysis_rows_page_order"
+    page_columns = [
+        "request_id", "analysis_id", "pair_id", "target_id", "entity_instance_id",
+        "auth_asym_id", "auth_seq_id", "insertion_code", "sequence_index", "validated_wt", "id",
+    ]
+    metadata_index = next(
+        index for index in ConformationalMappingStateLandscapeAnalysisRow.__table__.indexes
+        if index.name == page_index_name
+    )
+    assert [column.name for column in metadata_index.columns] == page_columns
+
+    database = tmp_path / "projection-page-index.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE conformational_mapping_requests (request_id VARCHAR(36) PRIMARY KEY NOT NULL)"
+        )
+    importlib.import_module("migrations.add_state_landscape_analysis_projection").migrate(str(database))
+    importlib.import_module("migrations.enforce_state_landscape_analysis_pair_row_integrity").migrate(
+        str(database)
+    )
+    page_migration = importlib.import_module("migrations.add_state_landscape_analysis_page_order_index")
+    page_migration.migrate(str(database))
+    page_migration.migrate(str(database))
+
+    with sqlite3.connect(database) as connection:
+        index_columns = [
+            row[2] for row in connection.execute(
+                f"PRAGMA index_info({page_index_name})"
+            )
+        ]
+        assert index_columns == page_columns
+        plan = connection.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT *
+            FROM conformational_mapping_state_landscape_analysis_rows
+            WHERE request_id = ? AND analysis_id = ?
+            ORDER BY pair_id, target_id, entity_instance_id, auth_asym_id, auth_seq_id,
+                     insertion_code, sequence_index, validated_wt, id
+            LIMIT ? OFFSET ?
+            """,
+            ("request-1", "analysis-1", 201, 0),
+        ).fetchall()
+    details = [row[3] for row in plan]
+    assert any(page_index_name in detail for detail in details)
+    assert not any("TEMP B-TREE" in detail for detail in details)
 
 
 def test_state_analysis_projection_pair_row_migration_rejects_orphan_and_candidate_mismatch(
