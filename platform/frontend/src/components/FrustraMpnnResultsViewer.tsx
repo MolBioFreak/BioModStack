@@ -479,7 +479,7 @@ export default function FrustraMpnnResultsViewer({
             </header>
             <main className="mx-auto max-w-[1800px] space-y-4 p-6">
                 <section aria-label="FrustraMPNN data scope" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3">
-                    <div><h2 className="text-sm font-semibold">Data scope</h2><p className="mt-1 text-xs text-slate-500">This job is the default. Whole experiment requires exact Project Manager lineage.</p></div>
+                    <div><h2 className="text-sm font-semibold">Data scope</h2><p className="mt-1 text-xs text-slate-500">Compare this job or its experiment.</p></div>
                     <div className="flex gap-2" role="group" aria-label="FrustraMPNN data scope choices">
                         <button type="button" aria-pressed={scope === 'this-job'} onClick={() => onScopeChange?.('this-job')} className={`rounded-lg border px-3 py-1.5 text-xs ${scope === 'this-job' ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-300'}`}>This job</button>
                         <button type="button" aria-pressed={scope === 'whole-experiment'} disabled={!onScopeChange} onClick={() => onScopeChange?.('whole-experiment')} className={`rounded-lg border px-3 py-1.5 text-xs disabled:opacity-40 ${scope === 'whole-experiment' ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-300'}`}>Whole experiment</button>
@@ -536,7 +536,7 @@ export default function FrustraMpnnResultsViewer({
                     ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-800 bg-slate-900/60 p-3"><div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{label}</div><div className="mt-1 break-words text-sm text-slate-200">{value}</div></div>)}
                 </section>
                 </details>
-                {detail.data?.failure_class && <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100"><span className="font-semibold">Failure class persisted:</span> {detail.data.failure_class}. Unsafe runtime internals are not exposed by this response.</div>}
+                {detail.data?.failure_class && <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100"><span className="font-semibold">Analysis failure:</span> {detail.data.failure_class}.</div>}
 
                 {statisticsAnalysis.isError && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(statisticsAnalysis.error, 'Derived statistics lifecycle is unavailable.')}</div>}
                 {statistics.isError && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(statistics.error, 'Completed derived statistics are unavailable.')}</div>}
@@ -551,7 +551,7 @@ export default function FrustraMpnnResultsViewer({
 
                 {resultContext.canReanalyzePersistedInputs && detail.data && <details aria-label="FrustraMPNN reanalysis settings" className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
                     <summary className="cursor-pointer font-semibold">Reanalysis settings</summary>
-                    <p className="mt-1 text-xs text-slate-500">Edit a complete requested-settings document for the next governed child.</p>
+                    <p className="mt-1 text-xs text-slate-500">Settings for the next analysis.</p>
                     <FrustraMpnnSettingsPanel
                         value={frustrampnnSettings}
                         onChange={setFrustrampnnSettings}
@@ -701,7 +701,7 @@ export default function FrustraMpnnResultsViewer({
                     parentInvocationId={handoffSource.invocation_id}
                     parentLandscapeSha256={handoffSource.summary.landscape_sha256}
                     onOpenJob={onOpenJob}
-                /> : <p role="status" className="text-xs text-slate-400">External candidate reanalysis requires an available selected parent landscape.</p>}
+                /> : <p role="status" className="text-xs text-slate-400">Select an available result to analyze another structure.</p>}
                 </details>
                 {comparisonIdentityError && <div role="alert">Comparison reference does not match the exact requested job and invocation.</div>}
                 {detail.data && !canonicalSucceeded && <div role={canonicalAuthorityError ? 'alert' : 'status'} className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 text-sm text-amber-100">{detail.data.status === 'failed' ? 'Failed: the selected persisted invocation has no canonical result matrix.' : detail.data.status === 'not_run' ? 'Not run: the selected invocation was explicitly skipped and has no canonical result matrix.' : `Typed result missingness: ${canonicalAuthorityError ?? 'canonical_result_unavailable'}`}</div>}

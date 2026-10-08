@@ -247,7 +247,7 @@ describe('uploaded FrustraMPNN operator analysis', () => {
             const textInputs = container.querySelectorAll<HTMLInputElement>('input[type="text"], input:not([type])');
             await act(async () => {
                 const candidate = Array.from(textInputs).find((input) => input.placeholder === 'variant-1')!;
-                const producer = Array.from(textInputs).find((input) => input.placeholder === 'external-redesign')!;
+                const producer = Array.from(textInputs).find((input) => input.placeholder === 'structure-source')!;
                 const setValue = (input: HTMLInputElement, value: string) => {
                     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
                     setter.call(input, value);
@@ -268,7 +268,7 @@ describe('uploaded FrustraMPNN operator analysis', () => {
                 '/api/frustrampnn/sources/inspect/upload',
                 '/api/frustrampnn/settings/validate/upload',
             ]);
-            const launch = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Queue FrustraMPNN reanalysis'))!;
+            const launch = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Run FrustraMPNN analysis'))!;
             await act(async () => launch.click());
             await settle();
             expect(container.querySelector('[role="alert"]')?.textContent).toContain('handoff validation denied');
@@ -322,7 +322,7 @@ describe('uploaded FrustraMPNN operator analysis', () => {
             };
             await act(async () => {
                 setValue(inputs.find((input) => input.placeholder === 'variant-1')!, 'candidate-1');
-                setValue(inputs.find((input) => input.placeholder === 'external-redesign')!, 'producer-1');
+                setValue(inputs.find((input) => input.placeholder === 'structure-source')!, 'producer-1');
             });
             const fileInput = inputs.find((input) => input.type === 'file')!;
             Object.defineProperty(fileInput, 'files', {
@@ -331,7 +331,7 @@ describe('uploaded FrustraMPNN operator analysis', () => {
             });
             await act(async () => fileInput.dispatchEvent(new Event('change', { bubbles: true })));
             await settle(250);
-            const launch = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Queue FrustraMPNN reanalysis'))!;
+            const launch = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Run FrustraMPNN analysis'))!;
             await act(async () => launch.click());
             await settle();
 
