@@ -363,9 +363,10 @@ export async function runRegression(x: number[], y: number[]) {
 // qPCR Analysis
 // ============================================================================
 
-export async function uploadQpcrFile(file: File) {
+export async function uploadQpcrFile(file: File, options: { persist?: boolean } = {}) {
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('persist', String(options.persist ?? true));
 
     const ext = file.name.toLowerCase().split('.').pop();
     let endpoint: string;
@@ -385,6 +386,22 @@ export async function uploadQpcrFile(file: File) {
         signal: AbortSignal.timeout(ASSAY_UPLOAD_TIMEOUT_MS),
     });
     if (!response.ok) await throwAssayHttpError(response, 'qPCR instrument upload');
+    return response.json();
+}
+
+export async function listQpcrImports(limit = 25) {
+    const response = await fetch(`${API_URL}/analysis/qpcr/imports?limit=${encodeURIComponent(String(limit))}`, {
+        signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) await throwAssayHttpError(response, 'qPCR analytical import list');
+    return response.json();
+}
+
+export async function loadQpcrImport(analyticalImportId: string) {
+    const response = await fetch(`${API_URL}/analysis/qpcr/imports/${encodeURIComponent(analyticalImportId)}`, {
+        signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) await throwAssayHttpError(response, 'qPCR analytical import load');
     return response.json();
 }
 

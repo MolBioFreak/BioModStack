@@ -92,6 +92,7 @@ export interface BoltzCpSubmitParamsInput {
     shardPlanId: BoltzCpShardPlanId;
     outputFormat: 'mmcif' | 'pdb';
     writeFullPae: boolean;
+    contextQueryTileTokens?: number | string | null;
     seed?: string | null;
     gpuIds?: string | null;
 }
@@ -115,6 +116,7 @@ export const DEFAULT_STRUCTURE_MSA_TARGET_SHARDS = 4;
 export const DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB = 1;
 
 export const BOLTZ_CP_DEFAULT_SHARD_PLAN_ID: BoltzCpShardPlanId = '2x2';
+export const DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS = 512;
 const BOLTZ_CP_LOGICAL_SIZE_CP_BY_ID: Record<BoltzCpShardPlanId, number> = {
     '1x1': 1,
     '2x2': 4,
@@ -320,6 +322,7 @@ export const buildBoltzCpSubmitParams = ({
     shardPlanId,
     outputFormat,
     writeFullPae,
+    contextQueryTileTokens,
     seed,
     gpuIds,
 }: BoltzCpSubmitParamsInput): BoltzCpSubmitParams => {
@@ -330,7 +333,12 @@ export const buildBoltzCpSubmitParams = ({
         bcp_shard_plan_id: normalizeBoltzCpShardPlanId(shardPlanId),
         bcp_output_format: outputFormat,
         bcp_write_full_pae: writeFullPae,
+        bcp_context_query_tile_tokens: DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS,
     };
+    const parsedContextQueryTileTokens = Number.parseInt(String(contextQueryTileTokens ?? ''), 10);
+    if (Number.isFinite(parsedContextQueryTileTokens) && parsedContextQueryTileTokens > 0) {
+        params.bcp_context_query_tile_tokens = parsedContextQueryTileTokens;
+    }
     if (gpuIds && gpuIds.trim()) {
         params.bcp_gpu_ids = gpuIds.trim();
     }

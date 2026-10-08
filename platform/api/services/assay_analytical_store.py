@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, inspect, text, select
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, JSON, LargeBinary, String, Text, inspect, text, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base, relationship
@@ -149,11 +149,14 @@ class AnalyticalImport(AnalyticalBase):
     assay_type = Column(String(64), nullable=False, index=True)
     source_filename = Column(String(512), nullable=True)
     source_file_hash = Column(String(128), nullable=True, index=True)
+    source_fingerprint = Column(String(128), nullable=True, index=True)
+    dataset_label = Column(String(512), nullable=True, index=True)
     parser_engine = Column(String(128), nullable=False)
     parser_version = Column(String(128), nullable=True)
     instrument_format = Column(String(128), nullable=True, index=True)
     imported_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     imported_by = Column(String(255), nullable=True)
+    status = Column(String(64), nullable=True, default="imported", index=True)
     notes = Column(Text, nullable=True)
     metadata_json = Column(JSON, nullable=False, default=dict)
 
@@ -167,9 +170,12 @@ class AnalyticalSourceFile(AnalyticalBase):
     id = Column(String(36), primary_key=True)
     import_id = Column(String(36), ForeignKey("analytical_imports.id", ondelete="CASCADE"), nullable=False, index=True)
     filename = Column(String(512), nullable=False)
+    original_relative_path = Column(String(1024), nullable=True, index=True)
+    file_extension = Column(String(32), nullable=True, index=True)
     content_type = Column(String(255), nullable=True)
     sha256 = Column(String(128), nullable=False, index=True)
     storage_uri = Column(String(1024), nullable=False)
+    content_bytes = Column(LargeBinary, nullable=True)
     size_bytes = Column(Integer, nullable=False)
     role = Column(String(128), nullable=False, index=True)
     metadata_json = Column(JSON, nullable=False, default=dict)
@@ -188,7 +194,62 @@ class AnalyticalArchiveMember(AnalyticalBase):
     sha256 = Column(String(128), nullable=True, index=True)
     size_bytes = Column(Integer, nullable=True)
     storage_uri = Column(String(1024), nullable=True)
+    content_bytes = Column(LargeBinary, nullable=True)
+    content_text = Column(Text, nullable=True)
     metadata_json = Column(JSON, nullable=False, default=dict)
+
+
+class AnalyticalDataset(AnalyticalBase):
+    __tablename__ = "analytical_datasets"
+
+    id = Column(String(36), primary_key=True)
+    assay_type = Column(String(64), nullable=False, index=True)
+    dataset_label = Column(String(512), nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    primary_import_id = Column(String(36), ForeignKey("analytical_imports.id", ondelete="SET NULL"), nullable=True, index=True)
+    primary_assay_run_id = Column(String(36), ForeignKey("assay_runs.id", ondelete="SET NULL"), nullable=True, index=True)
+    project_id = Column(String(255), nullable=True, index=True)
+    batch_id = Column(String(255), nullable=True, index=True)
+    construct_id = Column(String(255), nullable=True, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    archived = Column(Boolean, nullable=False, default=False, index=True)
+    tags_json = Column(JSON, nullable=False, default=list)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+
+
+class AnalyticalDatasetMember(AnalyticalBase):
+    __tablename__ = "analytical_dataset_members"
+
+    id = Column(String(36), primary_key=True)
+    dataset_id = Column(String(36), ForeignKey("analytical_datasets.id", ondelete="CASCADE"), nullable=False, index=True)
+    import_id = Column(String(36), ForeignKey("analytical_imports.id", ondelete="CASCADE"), nullable=True, index=True)
+    assay_run_id = Column(String(36), ForeignKey("assay_runs.id", ondelete="CASCADE"), nullable=True, index=True)
+    role = Column(String(128), nullable=False, default="primary", index=True)
+    order_index = Column(Integer, nullable=False, default=0)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+
+
+class AnalyticalAnalysisRun(AnalyticalBase):
+    __tablename__ = "analytical_analysis_runs"
+
+    id = Column(String(36), primary_key=True)
+    import_id = Column(String(36), ForeignKey("analytical_imports.id", ondelete="SET NULL"), nullable=True, index=True)
+    dataset_id = Column(String(36), ForeignKey("analytical_datasets.id", ondelete="SET NULL"), nullable=True, index=True)
+    assay_run_id = Column(String(36), ForeignKey("assay_runs.id", ondelete="SET NULL"), nullable=True, index=True)
+    assay_type = Column(String(64), nullable=False, index=True)
+    analysis_kind = Column(String(128), nullable=False, index=True)
+    analysis_engine = Column(String(128), nullable=False)
+    engine_package = Column(String(128), nullable=True)
+    engine_version = Column(String(128), nullable=True)
+    parameters_json = Column(JSON, nullable=False, default=dict)
+    input_selection_json = Column(JSON, nullable=False, default=dict)
+    status = Column(String(64), nullable=False, default="completed", index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    completed_at = Column(DateTime, nullable=True)
+    result_summary_json = Column(JSON, nullable=False, default=dict)
+    plotly_json = Column(JSON, nullable=True)
+    report_uri = Column(String(1024), nullable=True)
 
 
 class SampleRegistryEntry(AnalyticalBase):
@@ -498,6 +559,24 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _file_extension(filename: str | None) -> str | None:
+    if not filename or "." not in filename:
+        return None
+    ext = filename.rsplit(".", 1)[-1].lower().strip()
+    return ext or None
+
+
+def _decode_text_maybe(data: bytes) -> str | None:
+    for encoding in ("utf-8", "utf-8-sig", "utf-16", "latin-1"):
+        try:
+            text_value = data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        if "\x00" not in text_value[:1000]:
+            return text_value
+    return None
+
+
 def _as_float(value: Any) -> float | None:
     try:
         number = float(value)
@@ -553,18 +632,41 @@ async def persist_qpcr_import_response(
     import_id = _new_id()
     source_file_id = _new_id()
     run_id = _new_id()
+    dataset_id = _new_id()
     filename = filename or "qpcr-upload"
     digest = _sha256(source_bytes)
     session_factory = create_analytical_session_factory()
     async with session_factory() as session:
+        existing = (
+            await session.execute(
+                select(AnalyticalImport, AssayRun, AnalyticalDataset)
+                .join(AssayRun, AssayRun.import_id == AnalyticalImport.id)
+                .join(AnalyticalDataset, AnalyticalDataset.primary_import_id == AnalyticalImport.id)
+                .where(AnalyticalImport.assay_type == "qpcr", AnalyticalImport.source_fingerprint == digest)
+                .limit(1)
+            )
+        ).first()
+        if existing is not None:
+            imp, run, dataset = existing
+            return {
+                "analytical_import_id": imp.id,
+                "assay_run_id": run.id,
+                "analytical_source_file_id": (await session.execute(select(AnalyticalSourceFile.id).where(AnalyticalSourceFile.import_id == imp.id).limit(1))).scalar_one_or_none(),
+                "dataset_id": dataset.id,
+                "duplicate_detected": True,
+                "action": "loaded_existing",
+            }
         import_record = AnalyticalImport(
             id=import_id,
             assay_type="qpcr",
             source_filename=filename,
             source_file_hash=digest,
+            source_fingerprint=digest,
+            dataset_label=filename,
             parser_engine=str(response.get("import_engine") or "unknown"),
             instrument_format=response.get("instrument_format"),
             imported_by=imported_by,
+            status="imported",
             notes=notes,
             metadata_json={
                 "n_wells": response.get("n_wells"),
@@ -577,13 +679,19 @@ async def persist_qpcr_import_response(
                 "amplification_plotly_json": response.get("amplification_plotly_json"),
             },
         )
+        session.add(import_record)
+        await session.flush()
+
         source_file = AnalyticalSourceFile(
             id=source_file_id,
             import_id=import_id,
             filename=filename,
+            original_relative_path=filename,
+            file_extension=_file_extension(filename),
             content_type=content_type,
             sha256=digest,
             storage_uri=f"sha256:{digest}",
+            content_bytes=source_bytes,
             size_bytes=len(source_bytes),
             role="source_qpcr_import",
             metadata_json={"instrument_format": response.get("instrument_format")},
@@ -596,7 +704,32 @@ async def persist_qpcr_import_response(
             instrument=response.get("instrument_format"),
             metadata_json={"import_engine": response.get("import_engine"), "available_data": response.get("available_data", [])},
         )
-        session.add_all([import_record, source_file, run])
+        session.add(source_file)
+        session.add(run)
+        await session.flush()
+
+        dataset = AnalyticalDataset(
+            id=dataset_id,
+            assay_type="qpcr",
+            dataset_label=filename,
+            primary_import_id=import_id,
+            primary_assay_run_id=run_id,
+            metadata_json={"source_fingerprint": digest, "instrument_format": response.get("instrument_format")},
+        )
+        session.add(dataset)
+        await session.flush()
+
+        dataset_member = AnalyticalDatasetMember(
+            id=_new_id(),
+            dataset_id=dataset_id,
+            import_id=import_id,
+            assay_run_id=run_id,
+            role="primary",
+            order_index=0,
+            metadata_json={},
+        )
+        session.add(dataset_member)
+        await session.flush()
 
         if zipfile.is_zipfile(io.BytesIO(source_bytes)):
             with zipfile.ZipFile(io.BytesIO(source_bytes)) as archive:
@@ -616,6 +749,8 @@ async def persist_qpcr_import_response(
                             sha256=_sha256(member_bytes),
                             size_bytes=len(member_bytes),
                             storage_uri=f"sha256:{_sha256(member_bytes)}",
+                            content_bytes=member_bytes,
+                            content_text=_decode_text_maybe(member_bytes),
                             metadata_json={},
                         )
                     )
@@ -724,7 +859,14 @@ async def persist_qpcr_import_response(
                 )
             )
         await session.commit()
-    return {"analytical_import_id": import_id, "assay_run_id": run_id, "analytical_source_file_id": source_file_id}
+    return {
+        "analytical_import_id": import_id,
+        "assay_run_id": run_id,
+        "analytical_source_file_id": source_file_id,
+        "dataset_id": dataset_id,
+        "duplicate_detected": False,
+        "action": "created",
+    }
 
 
 async def persist_empower_import_response(response: dict[str, Any]) -> dict[str, str]:
@@ -753,6 +895,7 @@ async def persist_empower_import_response(response: dict[str, Any]) -> dict[str,
             metadata_json={"sst_summary": response.get("sst_summary")},
         )
         session.add_all([import_record, run])
+        await session.flush()
         for injection in response.get("injections", []) or []:
             if not isinstance(injection, dict):
                 continue
@@ -807,6 +950,159 @@ async def persist_empower_import_response(response: dict[str, Any]) -> dict[str,
                 )
         await session.commit()
     return {"analytical_import_id": import_id, "assay_run_id": run_id}
+
+
+async def list_analytical_datasets(assay_type: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    await init_analytical_store()
+    session_factory = create_analytical_session_factory()
+    async with session_factory() as session:
+        stmt = select(AnalyticalDataset).where(AnalyticalDataset.archived == False)  # noqa: E712
+        if assay_type:
+            stmt = stmt.where(AnalyticalDataset.assay_type == assay_type)
+        rows = (await session.execute(stmt.order_by(AnalyticalDataset.created_at.desc()).limit(limit))).scalars().all()
+        return [
+            {
+                "dataset_id": row.id,
+                "assay_type": row.assay_type,
+                "dataset_label": row.dataset_label,
+                "description": row.description,
+                "primary_import_id": row.primary_import_id,
+                "primary_assay_run_id": row.primary_assay_run_id,
+                "project_id": row.project_id,
+                "batch_id": row.batch_id,
+                "construct_id": row.construct_id,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                "tags": row.tags_json or [],
+                "metadata": row.metadata_json or {},
+            }
+            for row in rows
+        ]
+
+
+async def load_analytical_dataset(dataset_id: str) -> dict[str, Any] | None:
+    await init_analytical_store()
+    session_factory = create_analytical_session_factory()
+    async with session_factory() as session:
+        dataset = (await session.execute(select(AnalyticalDataset).where(AnalyticalDataset.id == dataset_id, AnalyticalDataset.archived == False))).scalar_one_or_none()  # noqa: E712
+        if dataset is None:
+            return None
+        members = (await session.execute(select(AnalyticalDatasetMember).where(AnalyticalDatasetMember.dataset_id == dataset.id).order_by(AnalyticalDatasetMember.order_index))).scalars().all()
+        sources = []
+        if dataset.primary_import_id:
+            source_rows = (await session.execute(select(AnalyticalSourceFile).where(AnalyticalSourceFile.import_id == dataset.primary_import_id))).scalars().all()
+            sources = [
+                {
+                    "source_file_id": source.id,
+                    "filename": source.filename,
+                    "original_relative_path": source.original_relative_path,
+                    "file_extension": source.file_extension,
+                    "content_type": source.content_type,
+                    "sha256": source.sha256,
+                    "size_bytes": source.size_bytes,
+                    "role": source.role,
+                    "stored_in_db": source.content_bytes is not None,
+                }
+                for source in source_rows
+            ]
+        chromatography_injections: list[dict[str, Any]] = []
+        chromatography_summary: dict[str, Any] | None = None
+        analysis_runs: list[dict[str, Any]] = []
+        if dataset.primary_assay_run_id:
+            analysis_rows = (
+                await session.execute(
+                    select(AnalyticalAnalysisRun)
+                    .where(AnalyticalAnalysisRun.assay_run_id == dataset.primary_assay_run_id)
+                    .order_by(AnalyticalAnalysisRun.created_at.desc())
+                )
+            ).scalars().all()
+            analysis_runs = [
+                {
+                    "analysis_run_id": row.id,
+                    "analysis_kind": row.analysis_kind,
+                    "analysis_engine": row.analysis_engine,
+                    "engine_package": row.engine_package,
+                    "status": row.status,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                    "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+                    "result_summary": row.result_summary_json or {},
+                    "has_plotly_json": row.plotly_json is not None,
+                }
+                for row in analysis_rows
+            ]
+        if dataset.assay_type == "chromatography" and dataset.primary_assay_run_id:
+            chrom_rows = (
+                await session.execute(
+                    select(ChromInjection)
+                    .where(ChromInjection.run_id == dataset.primary_assay_run_id)
+                    .order_by(ChromInjection.injection_index, ChromInjection.injection_name)
+                )
+            ).scalars().all()
+            peak_rows = []
+            if chrom_rows:
+                peak_rows = (await session.execute(select(ChromPeak).where(ChromPeak.injection_id.in_([row.id for row in chrom_rows])))).scalars().all()
+            peaks_by_injection: dict[str, list[ChromPeak]] = {}
+            for peak in peak_rows:
+                peaks_by_injection.setdefault(peak.injection_id, []).append(peak)
+            chromatography_injections = [
+                {
+                    "chrom_injection_id": row.id,
+                    "injection_name": row.injection_name,
+                    "sample_id": row.sample_id,
+                    "sample_name": row.sample_name,
+                    "sample_type": row.sample_type,
+                    "injection_index": row.injection_index,
+                    "injection_time": row.injection_time.isoformat() if row.injection_time else None,
+                    "injection_volume": row.injection_volume,
+                    "system_name": row.system_name,
+                    "method": row.method,
+                    "channel": row.channel,
+                    "detector_unit": row.detector_unit,
+                    "retention_unit": row.retention_unit,
+                    "trace_point_count": row.chromatogram_point_count,
+                    "chromatogram_sha256": row.chromatogram_sha256,
+                    "peak_count": len(peaks_by_injection.get(row.id, [])),
+                    "primary_peak_area": (row.metadata_json or {}).get("primary_peak_area"),
+                    "primary_peak_percent": (row.metadata_json or {}).get("primary_peak_percent"),
+                    "primary_peak_rt": (row.metadata_json or {}).get("primary_peak_rt"),
+                }
+                for row in chrom_rows
+            ]
+            chromatography_summary = {
+                "n_injections": len(chrom_rows),
+                "n_peaks": len(peak_rows),
+                "n_trace_points": sum(int(row.chromatogram_point_count or 0) for row in chrom_rows),
+                "sample_types": sorted({row.sample_type for row in chrom_rows if row.sample_type}),
+                "methods": sorted({row.method for row in chrom_rows if row.method}),
+            }
+        payload = {
+            "dataset_id": dataset.id,
+            "assay_type": dataset.assay_type,
+            "dataset_label": dataset.dataset_label,
+            "description": dataset.description,
+            "primary_import_id": dataset.primary_import_id,
+            "primary_assay_run_id": dataset.primary_assay_run_id,
+            "created_at": dataset.created_at.isoformat() if dataset.created_at else None,
+            "tags": dataset.tags_json or [],
+            "metadata": dataset.metadata_json or {},
+            "members": [
+                {
+                    "dataset_member_id": member.id,
+                    "import_id": member.import_id,
+                    "assay_run_id": member.assay_run_id,
+                    "role": member.role,
+                    "order_index": member.order_index,
+                    "metadata": member.metadata_json or {},
+                }
+                for member in members
+            ],
+            "source_files": sources,
+            "analysis_runs": analysis_runs,
+        }
+        if chromatography_summary is not None:
+            payload["chromatography_summary"] = chromatography_summary
+            payload["chromatography_injections"] = chromatography_injections
+        return payload
 
 
 async def list_qpcr_imports(limit: int = 50) -> list[dict[str, Any]]:
@@ -888,6 +1184,10 @@ async def load_qpcr_import(import_id: str) -> dict[str, Any] | None:
 
 
 Index("ix_qpcr_wells_run_target_sample", QpcrWell.run_id, QpcrWell.target, QpcrWell.sample_id)
+Index("ix_analytical_imports_assay_fingerprint", AnalyticalImport.assay_type, AnalyticalImport.source_fingerprint)
+Index("ix_analytical_datasets_assay_created", AnalyticalDataset.assay_type, AnalyticalDataset.created_at)
+Index("ix_analytical_dataset_members_dataset_role", AnalyticalDatasetMember.dataset_id, AnalyticalDatasetMember.role)
+Index("ix_analytical_analysis_runs_dataset_kind", AnalyticalAnalysisRun.dataset_id, AnalyticalAnalysisRun.analysis_kind)
 Index("ix_archive_members_source_role_ext", AnalyticalArchiveMember.source_file_id, AnalyticalArchiveMember.member_role, AnalyticalArchiveMember.extension)
 Index("ix_assay_run_settings_run_category_key", AssayRunSetting.run_id, AssayRunSetting.category, AssayRunSetting.setting_key)
 Index("ix_qpcr_amp_points_run_well_cycle", QpcrAmplificationPoint.run_id, QpcrAmplificationPoint.well, QpcrAmplificationPoint.cycle)

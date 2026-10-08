@@ -10,9 +10,12 @@ import {
   buildQpcrChannelAnalytics,
   buildQpcrDilutionWorksheetRows,
   buildQpcrPlateMap,
+  buildQpcrReplicateGroupAnalytics,
   buildSelectedQpcrWellAnalytics,
   makeQpcrDilutionGroupKey,
+  makeQpcrManualReplicateGroupFromSelection,
   normalizeQpcrWellPosition,
+  toggleQpcrWellSelection,
 } from '../src/components/qpcr/plateMap.js';
 
 const root = process.cwd();
@@ -82,6 +85,44 @@ test('qPCR plate map normalizes wells and summarizes multiplex Ct/task labels pe
   assert.ok(b2);
   assert.equal(b2.status, 'review');
   assert.equal(b2.ctMeanLabel, 'Undet.');
+});
+
+test('qPCR plate multi-selection supports click replacement and additive toggles without losing the last selected well', () => {
+  assert.deepEqual(toggleQpcrWellSelection(['A1'], 'B02', false), ['B2']);
+  assert.deepEqual(toggleQpcrWellSelection(['A1'], 'A2', true), ['A1', 'A2']);
+  assert.deepEqual(toggleQpcrWellSelection(['A1', 'A2'], 'A1', true), ['A2']);
+  assert.deepEqual(toggleQpcrWellSelection(['A1'], 'A1', true), ['A1']);
+});
+
+test('qPCR selected wells can be saved as a manual triplicate group and analyzed for Ct and quantity CV', () => {
+  const group = makeQpcrManualReplicateGroupFromSelection('manual-1', 'Sample A triplicate', ['C1', 'C2', 'C3'], 'E coli');
+  assert.ok(group);
+  assert.deepEqual(group.wellPositions, ['C1', 'C2', 'C3']);
+
+  const analytics = buildQpcrReplicateGroupAnalytics([
+    { well_position: 'C1', sample_name: 'Sample A', target_name: 'E coli', task: 'UNKNOWN', ct: 24.6, quantity: 100 },
+    { well_position: 'C2', sample_name: 'Sample A', target_name: 'E coli', task: 'UNKNOWN', ct: 24.8, quantity: 100 },
+    { well_position: 'C3', sample_name: 'Sample A', target_name: 'E coli', task: 'UNKNOWN', ct: 24.7, quantity: 100 },
+    { well_position: 'C1', sample_name: 'Sample A', target_name: 'IPC', task: 'UNKNOWN', ct: 27.4, quantity: 50 },
+  ], [group], {
+    assaySummary: {
+      quantities: [
+        { well_position: 'C1', sample_name: 'Sample A', target_name: 'E coli', estimated_quantity: 94 },
+        { well_position: 'C2', sample_name: 'Sample A', target_name: 'E coli', estimated_quantity: 101 },
+        { well_position: 'C3', sample_name: 'Sample A', target_name: 'E coli', estimated_quantity: 105 },
+      ],
+    },
+  });
+
+  assert.equal(analytics.length, 1);
+  assert.equal(analytics[0].status, 'ok');
+  assert.equal(analytics[0].n, 3);
+  assert.equal(analytics[0].ctMeanLabel, '24.700');
+  assert.equal(analytics[0].ctSdLabel, '0.100');
+  assert.equal(analytics[0].ctCvPercentLabel, '0.40%');
+  assert.equal(analytics[0].quantityMeanLabel, '100.000');
+  assert.equal(analytics[0].quantityCvPercentLabel, '5.57%');
+  assert.equal(analytics[0].recoveryPercentLabel, '100.00%');
 });
 
 test('qPCR selected-well analytics exposes labels, Ct summary, replicate QC, standard-curve quantity, and per-target rows', () => {
@@ -210,6 +251,12 @@ test('qPCR raw import renders a fit-to-panel compact circular plate map with sel
 
   assert.match(source, /96-well Plate Map/);
   assert.match(source, /Selected well analytics/);
+  assert.match(source, /Selected wells \/ manual triplicate analytics/);
+  assert.match(source, /data-qpcr-manual-triplicate-workbench="true"/);
+  assert.match(source, /Ctrl\/Shift-click plate wells/);
+  assert.match(source, /Save selected wells as triplicate group/);
+  assert.match(source, /toggleQpcrWellSelection/);
+  assert.match(source, /buildQpcrReplicateGroupAnalytics/);
   assert.match(source, /buildQpcrPlateMap/);
   assert.match(source, /buildSelectedQpcrWellAnalytics/);
   assert.match(source, /rounded-full/);

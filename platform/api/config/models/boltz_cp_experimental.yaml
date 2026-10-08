@@ -35,6 +35,7 @@ modes:
       - triattn_backend
       - context_store_mode
       - context_store_root
+      - context_query_tile_tokens
       - input_format
       - output_format
       - write_full_pae
@@ -118,6 +119,17 @@ params:
       If omitted, the Nextflow task writes true_cp_context_store under the task
       root and publishes it with the other true_cp_* diagnostics.
     required: false
+
+  - name: context_query_tile_tokens
+    type: integer
+    description: >
+      Enable predictor-owned REFERENCE triangle-attention query tiling inside
+      the live distributed Pairformer data-plane. This reduces only reference
+      triangle-attention score materialization; it is not output tiling or a
+      control-plane cache.
+    required: false
+    default: 512
+    minimum: 1
 
   - name: input_format
     type: string
