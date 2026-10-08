@@ -76,6 +76,7 @@ process PrepBindCraftInput {
     def pyRemoveUnrelaxedComplex = remove_unrelaxed_complex ? "True" : "False"
     def pyRemoveBinderMonomer = remove_binder_monomer ? "True" : "False"
     def pySaveTrajectoryPickle = save_trajectory_pickle ? "True" : "False"
+    def pyOptimiseBeta = (design_algorithm ?: "4stage") == "4stage" ? "True" : "False"
     """
     #!/usr/bin/env python3
     import json
@@ -85,6 +86,20 @@ process PrepBindCraftInput {
     # Generate settings_target.json
     design_mode = "${design_mode}" or "denovo"
     scaffold_pdb_name = "${scaffold_pdb}"
+    
+    def parse_lengths(raw_lengths):
+        text = str(raw_lengths or "").strip()
+        if not text:
+            return [80, 120]
+        if "-" in text:
+            left, right = text.split("-", 1)
+            return [int(left.strip()), int(right.strip())]
+        if "," in text:
+            parsed = [int(v.strip()) for v in text.split(",") if v.strip()]
+            if parsed:
+                return parsed
+        value = int(text)
+        return [value, value]
     
     # Use scaffold PDB for redesign mode, target PDB for de novo
     if design_mode == "scaffold_redesign" and scaffold_pdb_name != "null":
@@ -98,7 +113,7 @@ process PrepBindCraftInput {
         "starting_pdb": input_pdb,
         "chains": "${chains}" or "A",
         "target_hotspot_residues": ${pyHotspotResidues},
-        "lengths": "${binder_lengths}" or "80-120",
+        "lengths": parse_lengths("${binder_lengths}"),
         "number_of_final_designs": ${num_final_designs}
     }
     
@@ -129,6 +144,10 @@ process PrepBindCraftInput {
         "max_mpnn_sequences": 4,
         "sampling_temp": 0.1,
         "mpnn_fix_interface": False,
+        "save_mpnn_fasta": False,
+        "backbone_noise": 0.0,
+        "model_path": "v_48_020",
+        "force_reject_AA": False,
         # Template settings (Phase 3: from UI)
         "rm_template_seq_design": ${pyRmTemplateSeqDesign},
         "rm_template_seq_predict": False,
@@ -162,9 +181,17 @@ process PrepBindCraftInput {
         "weights_rg": 0.1,
         "use_termini_distance_loss": ${pyUseTerminiDistanceLoss},
         "weights_termini_loss": 0.1 if ${pyUseTerminiDistanceLoss} else 0,
+        # Beta optimization controls expected by upstream BindCraft
+        "optimise_beta": ${pyOptimiseBeta},
+        "optimise_beta_extra_soft": 0,
+        "optimise_beta_extra_temp": 0,
+        "optimise_beta_recycles_design": ${num_recycles_design},
+        "optimise_beta_recycles_valid": ${num_recycles_validation},
         # Storage optimization (from UI)
+        "save_design_animations": ${pyZipAnimations},
         "zip_animations": ${pyZipAnimations},
         "zip_plots": ${pyZipPlots},
+        "save_design_trajectory_plots": ${pyZipPlots},
         "remove_unrelaxed_trajectory": ${pyRemoveUnrelaxedTrajectory},
         "remove_unrelaxed_complex": ${pyRemoveUnrelaxedComplex},
         "remove_binder_monomer": ${pyRemoveBinderMonomer},
@@ -248,8 +275,8 @@ process RunBindCraft {
 
     // Container with AF2 weights mounted
     container "${params.container_dir}/bindcraft.sif"
-    def weightsRoot = params.weights_root
-    containerOptions { "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${task.ext.gpu_id ?: 0} --bind ${weightsRoot}/alphafold:/app/params --writable-tmpfs" }
+    def afParamsDir = params.alphafold_params ?: "${params.weights_root}/alphafold/params"
+    containerOptions { "--nv --env CUDA_DEVICE_ORDER=PCI_BUS_ID --env CUDA_VISIBLE_DEVICES=${task.ext.gpu_id ?: 0} --bind ${afParamsDir}:/app/params --writable-tmpfs" }
 
     input:
     path target_settings
@@ -278,19 +305,23 @@ process RunBindCraft {
     # Copy target PDB to expected location
     mkdir -p input
     cp ${target_pdb} input/
+    mkdir -p output .cache .config .mplconfig
     
     # Update target settings with absolute path
     python3 -c "
 import json
 with open('${target_settings}') as f:
     settings = json.load(f)
-settings['starting_pdb'] = 'input/${target_pdb}'
-settings['design_path'] = 'output'
+settings['starting_pdb'] = '\${OLDPWD}/input/${target_pdb}'
+settings['design_path'] = '\${OLDPWD}/output'
 with open('settings_target.json', 'w') as f:
     json.dump(settings, f, indent=2)
 "
     
     # Run BindCraft
+    export XDG_CONFIG_HOME="\${OLDPWD}/.config"
+    export XDG_CACHE_HOME="\${OLDPWD}/.cache"
+    export MPLCONFIGDIR="\${OLDPWD}/.mplconfig"
     cd /app/bindcraft
     
     python3 bindcraft.py \\
@@ -300,11 +331,6 @@ with open('settings_target.json', 'w') as f:
         2>&1 | tee -a \${OLDPWD}/bindcraft_${job_id}.log
     
     cd \${OLDPWD}
-    
-    # Move outputs to expected location
-    if [ -d "/app/bindcraft/output" ]; then
-        mv /app/bindcraft/output/* output/ 2>/dev/null || true
-    fi
     
     echo "=== BindCraft Complete ===" | tee -a bindcraft_${job_id}.log
     ls -la output/ 2>/dev/null | tee -a bindcraft_${job_id}.log || echo "No output directory"

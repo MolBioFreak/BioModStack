@@ -101,8 +101,8 @@ export function Layout({ children }: LayoutProps) {
                             {/* Eco Mode Toggle */}
                             <EcoModeToggle />
 
-                            {/* Persistent MSA Server Toggle */}
-                            <MSAServerToggle />
+                            {/* Persistent MSA Server Settings */}
+                            <MSAServerSettingsMenu />
 
                             {/* Debug Menu */}
                             <DebugMenu />
@@ -286,79 +286,217 @@ function EcoModeToggle() {
     );
 }
 
-function MSAServerToggle() {
-    const [loading, setLoading] = useState(false);
-    const [enabled, setEnabled] = useState(false);
-    const [gpuId, setGpuId] = useState<number | null>(null);
-    const [allRunning, setAllRunning] = useState(false);
+function MSAServerSettingsMenu() {
+    const [isOpen, setIsOpen] = useState(false);
+    const [loading, setLoading] = useState<string | null>(null);
+    const [status, setStatus] = useState<any>(null);
+    const [settings, setSettings] = useState({
+        include_envdb_on_start: false,
+        auto_stop_idle_enabled: false,
+        auto_stop_idle_minutes: 10
+    });
 
-    const fetchStatus = async () => {
+    const fetchState = async () => {
         try {
-            const res = await fetch('/api/msa/server/status');
-            if (!res.ok) return;
-            const data = await res.json();
-            setEnabled(Boolean(data.running));
-            setAllRunning(Boolean(data.all_running));
-            setGpuId(typeof data.effective_gpu_id === 'number' ? data.effective_gpu_id : null);
+            const [statusRes, settingsRes] = await Promise.all([
+                fetch('/api/msa/server/status'),
+                fetch('/api/msa/server/settings')
+            ]);
+
+            if (statusRes.ok) {
+                const statusData = await statusRes.json();
+                setStatus(statusData);
+                if (statusData?.settings) {
+                    setSettings((prev) => ({ ...prev, ...statusData.settings }));
+                }
+            }
+
+            if (settingsRes.ok) {
+                const settingsData = await settingsRes.json();
+                if (settingsData?.settings) {
+                    setSettings((prev) => ({ ...prev, ...settingsData.settings }));
+                }
+            }
         } catch (error) {
-            console.error('Failed to fetch MSA server status:', error);
+            console.error('Failed to fetch MSA server state:', error);
         }
     };
 
     useEffect(() => {
-        fetchStatus();
-        const interval = setInterval(fetchStatus, 5000);
+        fetchState();
+        const interval = setInterval(fetchState, 5000);
         return () => clearInterval(interval);
     }, []);
 
-    const toggleServer = async () => {
-        setLoading(true);
+    const saveSettings = async (patch: Partial<typeof settings>) => {
+        const next = { ...settings, ...patch };
+        setSettings(next);
+        setLoading('save');
         try {
-            const endpoint = allRunning ? '/api/msa/server/stop' : '/api/msa/server/start';
-            const res = await fetch(endpoint, {
+            await fetch('/api/msa/server/settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(patch)
+            });
+            await fetchState();
+        } catch (error) {
+            console.error('Failed to save MSA server settings:', error);
+        } finally {
+            setLoading(null);
+        }
+    };
+
+    const startServers = async () => {
+        setLoading('start');
+        try {
+            await fetch('/api/msa/server/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ include_envdb: settings.include_envdb_on_start })
+            });
+            await fetchState();
+        } catch (error) {
+            console.error('Failed to start MSA server:', error);
+        } finally {
+            setLoading(null);
+        }
+    };
+
+    const stopServers = async () => {
+        setLoading('stop');
+        try {
+            await fetch('/api/msa/server/stop', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({})
             });
-            if (res.ok) {
-                await fetchStatus();
-            }
+            await fetchState();
         } catch (error) {
-            console.error('Failed to toggle MSA server:', error);
+            console.error('Failed to stop MSA server:', error);
         } finally {
-            setLoading(false);
+            setLoading(null);
         }
     };
 
-    const buttonClass = allRunning
-        ? 'bg-blue-500/20 text-blue-300 border-blue-500/40 hover:bg-blue-500/30'
-        : enabled
-            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
-            : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-slate-600';
-
-    const dotClass = allRunning
-        ? 'bg-blue-400'
-        : enabled
-            ? 'bg-amber-400'
-            : 'bg-slate-600';
-
-    const label = allRunning ? 'MSA SRV ON' : enabled ? 'MSA SRV PARTIAL' : 'MSA SRV OFF';
-    const title = gpuId !== null ? `Persistent MMseqs server (GPU ${gpuId})` : 'Persistent MMseqs server';
+    const running = Boolean(status?.running);
+    const allRunning = Boolean(status?.all_running);
+    const indicatorClass = allRunning ? 'bg-blue-400' : running ? 'bg-amber-400' : 'bg-slate-600';
+    const serverLines = Array.isArray(status?.servers)
+        ? status.servers.map((srv: any) => {
+            const state = srv?.running ? 'RUNNING' : 'STOPPED';
+            const alias = srv?.db_alias || 'unknown';
+            const pid = srv?.pid ?? 'n/a';
+            const gpu = srv?.cuda_visible_devices ?? 'n/a';
+            return `${alias.padEnd(7)} ${state.padEnd(8)} pid=${pid} gpu=${gpu}`;
+        })
+        : [];
+    const summary = [
+        `GPU: ${status?.effective_gpu_id ?? 'n/a'}`,
+        `Running: ${running ? 'yes' : 'no'} | Full target set: ${allRunning ? 'yes' : 'no'}`,
+        `Expected DBs: ${(status?.expected_aliases || []).join(', ') || 'n/a'}`,
+        `Include EnvDB on start: ${settings.include_envdb_on_start ? 'yes' : 'no'}`,
+        `Idle auto-stop: ${settings.auto_stop_idle_enabled ? `enabled (${settings.auto_stop_idle_minutes} min)` : 'disabled'}`,
+        `Idle seconds: ${typeof status?.idle_seconds === 'number' ? Math.round(status.idle_seconds) : 'n/a'}`,
+        `Last query: ${status?.query_activity?.updated_at || 'n/a'}`,
+        status?.auto_stop_reason ? `Auto-stop note: ${status.auto_stop_reason}` : '',
+        '',
+        'Servers:',
+        ...(serverLines.length > 0 ? serverLines : ['none'])
+    ].filter(Boolean).join('\n');
 
     return (
-        <button
-            onClick={toggleServer}
-            disabled={loading}
-            title={title}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border ${buttonClass}`}
-        >
-            {loading ? (
-                <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
-            ) : (
-                <div className={`w-2 h-2 rounded-full ${dotClass}`} />
+        <div className="relative">
+            <button
+                onClick={() => setIsOpen(!isOpen)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all border bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-500"
+            >
+                <div className={`w-2 h-2 rounded-full ${indicatorClass}`} />
+                MSA SERVER SETTINGS
+            </button>
+
+            {isOpen && (
+                <>
+                    <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
+
+                    <div className="absolute right-0 top-full mt-2 w-[460px] bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 p-3 space-y-3">
+                        <div className="flex items-center justify-between border-b border-slate-700 pb-2">
+                            <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider">MSA Server Settings</p>
+                            <button
+                                onClick={fetchState}
+                                disabled={loading !== null}
+                                className="px-2 py-1 text-xs rounded border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+                            >
+                                Refresh
+                            </button>
+                        </div>
+
+                        <div className="flex gap-2">
+                            <button
+                                onClick={startServers}
+                                disabled={loading !== null}
+                                className="flex-1 px-3 py-2 text-xs font-semibold rounded border border-blue-500/50 text-blue-300 hover:bg-blue-500/20 disabled:opacity-50"
+                            >
+                                {loading === 'start' ? 'Starting...' : 'Start Server'}
+                            </button>
+                            <button
+                                onClick={stopServers}
+                                disabled={loading !== null}
+                                className="flex-1 px-3 py-2 text-xs font-semibold rounded border border-rose-500/50 text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
+                            >
+                                {loading === 'stop' ? 'Stopping...' : 'Stop Server'}
+                            </button>
+                        </div>
+
+                        <label className="flex items-center gap-2 text-sm text-slate-300">
+                            <input
+                                type="checkbox"
+                                checked={settings.include_envdb_on_start}
+                                onChange={(e) => saveSettings({ include_envdb_on_start: e.target.checked })}
+                                disabled={loading !== null}
+                                className="rounded border-slate-500 bg-slate-700"
+                            />
+                            Start EnvDB server with UniRef (higher VRAM/IO)
+                        </label>
+
+                        <div className="space-y-2 border border-slate-700 rounded-lg p-2">
+                            <label className="flex items-center gap-2 text-sm text-slate-300">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.auto_stop_idle_enabled}
+                                    onChange={(e) => saveSettings({ auto_stop_idle_enabled: e.target.checked })}
+                                    disabled={loading !== null}
+                                    className="rounded border-slate-500 bg-slate-700"
+                                />
+                                Auto-stop when idle
+                            </label>
+                            <div className="flex items-center gap-2 text-xs text-slate-400">
+                                <span>Idle threshold (minutes):</span>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    value={settings.auto_stop_idle_minutes}
+                                    disabled={!settings.auto_stop_idle_enabled || loading !== null}
+                                    onChange={(e) => {
+                                        const val = parseInt(e.target.value || '10', 10);
+                                        if (!Number.isNaN(val)) {
+                                            setSettings((prev) => ({ ...prev, auto_stop_idle_minutes: val }));
+                                        }
+                                    }}
+                                    onBlur={() => saveSettings({ auto_stop_idle_minutes: settings.auto_stop_idle_minutes })}
+                                    className="w-20 px-2 py-1 rounded bg-slate-900 border border-slate-600 text-slate-100"
+                                />
+                            </div>
+                        </div>
+
+                        <textarea
+                            readOnly
+                            value={summary}
+                            className="w-full h-44 p-2 rounded-lg border border-slate-700 bg-slate-900 text-slate-200 text-xs font-mono resize-none"
+                        />
+                    </div>
+                </>
             )}
-            {label}
-        </button>
+        </div>
     );
 }
 

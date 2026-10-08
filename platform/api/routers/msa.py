@@ -19,9 +19,12 @@ from database import Job, NucleotideSequence, get_session
 from services.gpu_orchestrator import estimate_vram
 from services.msa_server import (
     ensure_server_for_db,
+    read_server_settings,
     resolve_msa_gpu_id,
     server_status,
     stop_servers,
+    touch_query_activity,
+    write_server_settings,
 )
 from paths import get_results_dir
 
@@ -116,7 +119,7 @@ async def create_msa_job(request: MSARequest, session: AsyncSession = Depends(ge
 
 class MSAServerStartRequest(BaseModel):
     gpu_id: Optional[int] = None
-    include_envdb: bool = True
+    include_envdb: Optional[bool] = None
     max_seqs: int = 300
     prefilter_mode: int = 1
     db_load_mode: int = 0
@@ -127,10 +130,16 @@ class MSAServerStopRequest(BaseModel):
     gpu_id: Optional[int] = None
 
 
+class MSAServerSettingsUpdate(BaseModel):
+    include_envdb_on_start: Optional[bool] = None
+    auto_stop_idle_enabled: Optional[bool] = None
+    auto_stop_idle_minutes: Optional[int] = None
+
+
 @router.get("/server/status")
 async def get_msa_server_status(
     gpu_id: Optional[int] = None,
-    include_envdb: bool = True,
+    include_envdb: Optional[bool] = None,
     max_seqs: int = 300,
     prefilter_mode: int = 1,
     db_load_mode: int = 0,
@@ -148,15 +157,43 @@ async def get_msa_server_status(
         raise HTTPException(status_code=500, detail=f"Failed to read MSA server status: {exc}")
 
 
+@router.get("/server/settings")
+async def get_msa_server_settings():
+    """Get persisted MSA server settings."""
+    try:
+        return {"success": True, "settings": read_server_settings()}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read MSA server settings: {exc}")
+
+
+@router.put("/server/settings")
+async def update_msa_server_settings(request: MSAServerSettingsUpdate):
+    """Update persisted MSA server settings."""
+    try:
+        current = read_server_settings()
+        patch = request.model_dump(exclude_none=True)
+        merged = {**current, **patch}
+        settings = write_server_settings(merged)
+        return {"success": True, "settings": settings}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to update MSA server settings: {exc}")
+
+
 @router.post("/server/start")
 async def start_msa_server(request: MSAServerStartRequest):
     """
     Start persistent MMseqs gpuserver(s) for local MSA.
 
-    By default this starts both UniRef and EnvDB servers on the scheduler-preferred
-    MSA GPU (e.g., 5060 Ti when configured as preferred).
+    By default this starts UniRef only on the scheduler-preferred MSA GPU.
+    EnvDB startup follows persisted server settings unless explicitly requested.
     """
     try:
+        settings = read_server_settings()
+        include_envdb = (
+            bool(request.include_envdb)
+            if request.include_envdb is not None
+            else bool(settings.get("include_envdb_on_start", False))
+        )
         gpu_id = resolve_msa_gpu_id(request.gpu_id)
         started = [
             ensure_server_for_db(
@@ -168,7 +205,7 @@ async def start_msa_server(request: MSAServerStartRequest):
                 startup_wait_seconds=request.startup_wait_seconds,
             )
         ]
-        if request.include_envdb:
+        if include_envdb:
             started.append(
                 ensure_server_for_db(
                     db_alias="envdb",
@@ -179,9 +216,17 @@ async def start_msa_server(request: MSAServerStartRequest):
                     startup_wait_seconds=request.startup_wait_seconds,
                 )
             )
+        touch_query_activity(
+            {
+                "event": "manual_server_start",
+                "gpu_id": gpu_id,
+                "include_envdb": include_envdb,
+            }
+        )
         return {
             "success": True,
             "gpu_id": gpu_id,
+            "include_envdb": include_envdb,
             "servers": started,
             "message": f"MSA server ready on GPU {gpu_id}",
         }

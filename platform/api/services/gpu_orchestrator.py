@@ -85,6 +85,12 @@ VRAM_PROFILES = {
     'thermompnn': {'base': 2000, 'scale': 5},   # ThermoMPNN (stability-focused)
     'frustrampnn': {'base': 2500, 'scale': 8},  # FrustraMPNN (frustration analysis)
     # ──────────────────────────────────────────────────────────────────────────
+    # PROTENIX VARIANTS - measured from docs: 6GB@500tok → 78GB@4000tok
+    # ──────────────────────────────────────────────────────────────────────────
+    'protenix': {'base': 4000, 'scale': 55},          # Protenix base (MSA mode)
+    'protenix_esm': {'base': 6000, 'scale': 60},      # Protenix ESM2-3B (no-MSA, heavier)
+    'protenix_mini_esm': {'base': 5000, 'scale': 50}, # Protenix mini ESM (lighter no-MSA)
+    # ──────────────────────────────────────────────────────────────────────────
     'diffdock': {'base': 4000, 'scale': 12},    # DiffDock
     'unidock': {'base': 3000, 'scale': 8},      # Uni-Dock
     'msa_batch': {'base': 3000, 'scale': 2},    # MSA Generation (GPU streaming, LOW VRAM)

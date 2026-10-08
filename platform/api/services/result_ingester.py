@@ -370,6 +370,17 @@ async def ingest_loose_files(
                 for sample_dir in subdir.glob("seed-*_sample-*"):
                     if sample_dir.is_dir():
                         search_paths.append(sample_dir)
+
+    # Protenix outputs: predictions/{design_name}/ containing .cif + confidence.json
+    protenix_base = output_path / "pdb_files" / "predictions"
+    if not protenix_base.exists():
+        protenix_base = output_path / "run" / "protenix" / "predictions"
+    protenix_run_base = output_path / "run" / "protenix_complex" / "predictions"
+    for pbase in [protenix_base, protenix_run_base]:
+        if pbase.exists():
+            for subdir in pbase.iterdir():
+                if subdir.is_dir():
+                    search_paths.append(subdir)
     
     designs_created = 0
     
@@ -618,6 +629,105 @@ async def ingest_loose_files(
                 
             except Exception as e:
                 print(f"[Ingester] Error parsing RF3 file {json_file}: {e}")
+
+        # PROTENIX: Look for confidence.json (bare filename, in per-prediction subdirs)
+        protenix_jsons = []
+        if search_dir.name not in {"pdb_files", "predictions", "validated_designs", "collected"}:
+            # In per-design subdirectory, check for bare confidence.json
+            conf_json = search_dir / "confidence.json"
+            if conf_json.exists():
+                protenix_jsons.append(conf_json)
+        else:
+            # In a parent directory, scan subdirs for confidence.json
+            for sub in search_dir.iterdir():
+                if sub.is_dir():
+                    conf_json = sub / "confidence.json"
+                    if conf_json.exists():
+                        protenix_jsons.append(conf_json)
+
+        for json_file in protenix_jsons:
+            try:
+                # Design name from parent directory name (e.g. predictions/predicted_seed42_sample0/)
+                design_name = json_file.parent.name
+
+                if design_name in ingested_names:
+                    continue
+
+                # Find corresponding CIF structure (Protenix outputs mmCIF)
+                cif_files = list(json_file.parent.glob("*.cif"))
+                if not cif_files:
+                    print(f"[Ingester] No CIF found for Protenix design {design_name}")
+                    continue
+                structure_path = cif_files[0]
+
+                # Read Protenix confidence metrics
+                with open(json_file, 'r') as f:
+                    metrics = json.load(f)
+
+                # Protenix format maps to BioModStack fields:
+                #   ptm, iptm, ranking_score, complex_plddt, complex_pde,
+                #   protein_iptm, ligand_iptm, complex_iplddt, complex_ipde,
+                #   chains_ptm, pair_chains_iptm, has_clash
+                plddt = metrics.get('complex_plddt') or metrics.get('plddt')
+                if plddt is not None and plddt <= 1.0:
+                    plddt = plddt * 100.0
+
+                conf_score = metrics.get('ranking_score') or metrics.get('confidence_score')
+                ptm = metrics.get('ptm')
+                iptm = metrics.get('iptm')
+                protein_iptm = metrics.get('protein_iptm')
+                ligand_iptm = metrics.get('ligand_iptm')
+                complex_iplddt = metrics.get('complex_iplddt')
+                complex_ipde = metrics.get('complex_ipde')
+                chains_ptm = metrics.get('chains_ptm')
+                pair_chains_iptm = metrics.get('pair_chains_iptm')
+                has_clash = metrics.get('has_clash')
+
+                pae = metrics.get('complex_pae') or metrics.get('pae')
+                if pae is None:
+                    pde = metrics.get('complex_pde')
+                    if pde is not None:
+                        pae = pde
+
+                # Extract per-residue pLDDT from CIF B-factors
+                _, residue_plddt = extract_plddt_from_pdb(structure_path)
+
+                design = Design(
+                    id=str(uuid.uuid4()),
+                    job_id=job_id,
+                    name=design_name,
+                    pdb_path=str(structure_path),
+                    json_path=str(json_file),
+
+                    backbone_id=parse_backbone_id(design_name),
+
+                    plddt_overall=safe_float(plddt),
+                    pae_overall=safe_float(pae),
+                    ptm=safe_float(ptm),
+                    iptm=safe_float(iptm),
+                    protein_iptm=safe_float(protein_iptm),
+                    conf_score=safe_float(conf_score),
+                    ligand_iptm=safe_float(ligand_iptm),
+                    complex_iplddt=safe_float(complex_iplddt),
+                    complex_ipde=safe_float(complex_ipde),
+                    chains_ptm=chains_ptm,
+                    pair_chains_iptm=pair_chains_iptm,
+                    residue_plddt=residue_plddt,
+
+                    is_favorite=False,
+                    created_at=datetime.utcnow()
+                )
+
+                # Store clash info in notes if present
+                if has_clash:
+                    design.notes = 'steric_clash_detected'
+
+                session.add(design)
+                designs_created += 1
+                ingested_names.add(design_name)
+
+            except Exception as e:
+                print(f"[Ingester] Error parsing Protenix file {json_file}: {e}")
                 
     # If still no designs, try just finding raw structures (e.g. valid job but missing metadata)
     if designs_created == 0:
