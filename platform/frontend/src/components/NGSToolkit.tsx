@@ -68,6 +68,12 @@ interface MultimerArtifacts {
     dimerJunctionRotationSummaryUrl: string | null;
     dimerBreakpointScreenPath: string | null;
     dimerBreakpointScreenUrl: string | null;
+    dimerBreakpointSequencesPath: string | null;
+    dimerBreakpointSequencesUrl: string | null;
+    dimerSecondaryAnomaliesPath: string | null;
+    dimerSecondaryAnomaliesUrl: string | null;
+    dimerSecondarySummaryPath: string | null;
+    dimerSecondarySummaryUrl: string | null;
     dimerReadsPath: string | null;
     dimerReadsUrl: string | null;
     dimerReadLedgerPath: string | null;
@@ -147,6 +153,8 @@ interface DimerBreakpointScreenRow {
     splitToSeamRatio: number | null;
     artifactFlag: boolean | null;
     confidence: string | null;
+    junctionWindowLabel: string | null;
+    junctionWindowSeq: string | null;
 }
 
 interface MultimerReportData {
@@ -647,6 +655,12 @@ function resolveMultimerArtifacts(job: Job | null, stageOutputs: StageOutputsMap
             dimerJunctionRotationSummaryUrl: null,
             dimerBreakpointScreenPath: null,
             dimerBreakpointScreenUrl: null,
+            dimerBreakpointSequencesPath: null,
+            dimerBreakpointSequencesUrl: null,
+            dimerSecondaryAnomaliesPath: null,
+            dimerSecondaryAnomaliesUrl: null,
+            dimerSecondarySummaryPath: null,
+            dimerSecondarySummaryUrl: null,
             dimerReadsPath: null,
             dimerReadsUrl: null,
             dimerReadLedgerPath: null,
@@ -697,14 +711,25 @@ function resolveMultimerArtifacts(job: Job | null, stageOutputs: StageOutputsMap
     const dimerConsensusPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_consensus\.fasta$/i, /(^|\/)dimer_consensus\.fasta$/i]);
     const dominantDimerConsensusPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dominant_dimer_consensus\.fasta$/i, /(^|\/)dominant_dimer_consensus\.fasta$/i]);
     const dominantDimerConsensusMetadataPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dominant_dimer_consensus_metadata\.tsv$/i, /(^|\/)dominant_dimer_consensus_metadata\.tsv$/i]);
-    const dimerJunctionPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_junction_profile\.tsv$/i, /(^|\/)dimer_junction_profile\.tsv$/i]);
-    const dimerJunctionEventsPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_junction_events\.tsv$/i, /(^|\/)dimer_junction_events\.tsv$/i]);
-    const dimerJunctionClustersPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_junction_clusters\.tsv$/i, /(^|\/)dimer_junction_clusters\.tsv$/i]);
-    const dimerJunctionHotspotsPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_junction_hotspots\.tsv$/i, /(^|\/)dimer_junction_hotspots\.tsv$/i]);
+    const dimerCanonicalEvidencePath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_evidence_by_position\.tsv$/i, /(^|\/)dimer_evidence_by_position\.tsv$/i]);
+    const dimerCanonicalReadEventsPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_read_events\.tsv$/i, /(^|\/)dimer_read_events\.tsv$/i]);
+    const dimerJunctionPathLegacy = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_junction_profile\.tsv$/i, /(^|\/)dimer_junction_profile\.tsv$/i]);
+    const dimerJunctionEventsPathLegacy = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_junction_events\.tsv$/i, /(^|\/)dimer_junction_events\.tsv$/i]);
+    const dimerJunctionClustersPathLegacy = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_junction_clusters\.tsv$/i, /(^|\/)dimer_junction_clusters\.tsv$/i]);
+    const dimerJunctionHotspotsPathLegacy = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_junction_hotspots\.tsv$/i, /(^|\/)dimer_junction_hotspots\.tsv$/i]);
+    const dimerJunctionPath = dimerJunctionPathLegacy || dimerCanonicalEvidencePath;
+    const dimerJunctionEventsPath = dimerJunctionEventsPathLegacy || dimerCanonicalReadEventsPath;
+    const dimerJunctionClustersPath = dimerJunctionClustersPathLegacy || dimerCanonicalEvidencePath;
+    const dimerJunctionHotspotsPath = dimerJunctionHotspotsPathLegacy || dimerCanonicalEvidencePath;
     const dimerJunctionRotatedPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_junction_rotated_profile\.tsv$/i, /(^|\/)dimer_junction_rotated_profile\.tsv$/i]);
     const dimerJunctionRotationSummaryPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_junction_rotation_summary\.tsv$/i, /(^|\/)dimer_junction_rotation_summary\.tsv$/i]);
-    const dimerBreakpointScreenPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_breakpoint_screen\.tsv$/i, /(^|\/)dimer_breakpoint_screen\.tsv$/i]);
-    const dimerReadsPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_read_junctions\.tsv$/i, /(^|\/)dimer_read_junctions\.tsv$/i]);
+    const dimerBreakpointScreenPathLegacy = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_breakpoint_screen\.tsv$/i, /(^|\/)dimer_breakpoint_screen\.tsv$/i]);
+    const dimerBreakpointScreenPath = dimerBreakpointScreenPathLegacy || dimerCanonicalEvidencePath;
+    const dimerBreakpointSequencesPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_breakpoint_sequences\.tsv$/i, /(^|\/)dimer_breakpoint_sequences\.tsv$/i]);
+    const dimerSecondaryAnomaliesPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_secondary_anomalies\.tsv$/i, /(^|\/)dimer_secondary_anomalies\.tsv$/i]);
+    const dimerSecondarySummaryPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_secondary_summary\.tsv$/i, /(^|\/)dimer_secondary_summary\.tsv$/i]);
+    const dimerReadsPathLegacy = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_read_junctions\.tsv$/i, /(^|\/)dimer_read_junctions\.tsv$/i]);
+    const dimerReadsPath = dimerReadsPathLegacy || dimerCanonicalReadEventsPath;
     const dimerReadLedgerPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_read_ledger\.tsv$/i, /(^|\/)dimer_read_ledger\.tsv$/i]);
     const dimerBreakpointReadsPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_breakpoint_reads\.tsv$/i, /(^|\/)dimer_breakpoint_reads\.tsv$/i]);
     const dimerRotatedRemapSummaryPath = findFirstMatchingPath(candidates, [/\/multimer_qc\/dimer_rotated_remap_summary\.tsv$/i, /(^|\/)dimer_rotated_remap_summary\.tsv$/i]);
@@ -733,6 +758,9 @@ function resolveMultimerArtifacts(job: Job | null, stageOutputs: StageOutputsMap
     const dimerJunctionRotatedUrl = dimerJunctionRotatedPath ? toStreamHref(dimerJunctionRotatedPath, cacheKey) : null;
     const dimerJunctionRotationSummaryUrl = dimerJunctionRotationSummaryPath ? toStreamHref(dimerJunctionRotationSummaryPath, cacheKey) : null;
     const dimerBreakpointScreenUrl = dimerBreakpointScreenPath ? toStreamHref(dimerBreakpointScreenPath, cacheKey) : null;
+    const dimerBreakpointSequencesUrl = dimerBreakpointSequencesPath ? toStreamHref(dimerBreakpointSequencesPath, cacheKey) : null;
+    const dimerSecondaryAnomaliesUrl = dimerSecondaryAnomaliesPath ? toStreamHref(dimerSecondaryAnomaliesPath, cacheKey) : null;
+    const dimerSecondarySummaryUrl = dimerSecondarySummaryPath ? toStreamHref(dimerSecondarySummaryPath, cacheKey) : null;
     const dimerReadsUrl = dimerReadsPath ? toStreamHref(dimerReadsPath, cacheKey) : null;
     const dimerReadLedgerUrl = dimerReadLedgerPath ? toStreamHref(dimerReadLedgerPath, cacheKey) : null;
     const dimerBreakpointReadsUrl = dimerBreakpointReadsPath ? toStreamHref(dimerBreakpointReadsPath, cacheKey) : null;
@@ -760,6 +788,9 @@ function resolveMultimerArtifacts(job: Job | null, stageOutputs: StageOutputsMap
         && !dimerJunctionRotatedUrl
         && !dimerJunctionRotationSummaryUrl
         && !dimerBreakpointScreenUrl
+        && !dimerBreakpointSequencesUrl
+        && !dimerSecondaryAnomaliesUrl
+        && !dimerSecondarySummaryUrl
         && !dimerConsensusUrl
         && !dimerReadsUrl
         && !dimerReadLedgerUrl
@@ -807,6 +838,12 @@ function resolveMultimerArtifacts(job: Job | null, stageOutputs: StageOutputsMap
         dimerJunctionRotationSummaryUrl,
         dimerBreakpointScreenPath,
         dimerBreakpointScreenUrl,
+        dimerBreakpointSequencesPath,
+        dimerBreakpointSequencesUrl,
+        dimerSecondaryAnomaliesPath,
+        dimerSecondaryAnomaliesUrl,
+        dimerSecondarySummaryPath,
+        dimerSecondarySummaryUrl,
         dimerReadsPath,
         dimerReadsUrl,
         dimerReadLedgerPath,
@@ -1222,6 +1259,8 @@ function parseDimerBreakpointScreen(
     const splitToSeamRatioIdx = findTsvColumnIndex(header, ['split_to_seam_ratio', 'split_seam_ratio']);
     const artifactFlagIdx = findTsvColumnIndex(header, ['artifact_flag', 'artifact_likely']);
     const confidenceIdx = findTsvColumnIndex(header, ['confidence', 'confidence_tier', 'screen_confidence']);
+    const windowLabelIdx = findTsvColumnIndex(header, ['junction_window_label', 'window_label', 'window_coords']);
+    const windowSeqIdx = findTsvColumnIndex(header, ['junction_window_seq', 'junction_sequence', 'window_sequence', 'junction_window']);
 
     const rows: DimerBreakpointScreenRow[] = [];
     for (const cols of parsed.rows) {
@@ -1242,6 +1281,8 @@ function parseDimerBreakpointScreen(
             splitToSeamRatio: parseOptionalNumber(cols[splitToSeamRatioIdx]),
             artifactFlag: parseOptionalBoolean(cols[artifactFlagIdx]),
             confidence: parseOptionalText(cols[confidenceIdx]),
+            junctionWindowLabel: parseOptionalText(cols[windowLabelIdx]),
+            junctionWindowSeq: parseOptionalText(cols[windowSeqIdx]),
         });
         if (rows.length >= maxRows) break;
     }
@@ -2213,7 +2254,7 @@ export function NGSToolkit() {
     const selectedReferenceFastaPath = typeof selectedJobParams.reference_fasta === 'string'
         ? selectedJobParams.reference_fasta
         : null;
-    const selectedReferenceFastaUrl = selectedReferenceFastaPath
+    const selectedReferenceFastaUrlParam = selectedReferenceFastaPath
         ? toStreamHref(selectedReferenceFastaPath, selectedJob?.id || undefined)
         : null;
     const hasFastqInput = hasMeaningfulValue(selectedJobParams.fastq_path);
@@ -2234,6 +2275,10 @@ export function NGSToolkit() {
         () => resolveMethylationArtifacts(selectedJob, stageOutputs),
         [selectedJob, stageOutputs]
     );
+    const selectedReferenceFastaUrl = selectedReferenceFastaUrlParam
+        || igvArtifacts.fastaUrl
+        || multimerArtifacts.dimerReferenceUrl
+        || null;
     const igvReady = !igvArtifacts.missingReason;
     const igvReadinessChecks = useMemo(
         () => [
@@ -2325,6 +2370,15 @@ export function NGSToolkit() {
         : null;
     const dimerBreakpointScreenDownloadHref = multimerArtifacts.dimerBreakpointScreenPath
         ? toDownloadHref(multimerArtifacts.dimerBreakpointScreenPath, selectedJob?.id || undefined)
+        : null;
+    const dimerBreakpointSequencesDownloadHref = multimerArtifacts.dimerBreakpointSequencesPath
+        ? toDownloadHref(multimerArtifacts.dimerBreakpointSequencesPath, selectedJob?.id || undefined)
+        : null;
+    const dimerSecondaryAnomaliesDownloadHref = multimerArtifacts.dimerSecondaryAnomaliesPath
+        ? toDownloadHref(multimerArtifacts.dimerSecondaryAnomaliesPath, selectedJob?.id || undefined)
+        : null;
+    const dimerSecondarySummaryDownloadHref = multimerArtifacts.dimerSecondarySummaryPath
+        ? toDownloadHref(multimerArtifacts.dimerSecondarySummaryPath, selectedJob?.id || undefined)
         : null;
     const dimerReadsDownloadHref = multimerArtifacts.dimerReadsPath
         ? toDownloadHref(multimerArtifacts.dimerReadsPath, selectedJob?.id || undefined)
@@ -2786,8 +2840,25 @@ export function NGSToolkit() {
         [dimerHotspots, multimerReport?.referenceSequence, dimerCandidateReads]
     );
     const dimerBreakpointScreenTopRows = useMemo(
-        () => (multimerReport?.dimerBreakpointScreenRows || []).slice(0, 20),
-        [multimerReport?.dimerBreakpointScreenRows]
+        () => (multimerReport?.dimerBreakpointScreenRows || []).slice(0, 20).map((row) => {
+            const parsedWindow = row.junctionWindowSeq
+                ? {
+                    text: row.junctionWindowSeq,
+                    label: row.junctionWindowLabel || null,
+                }
+                : null;
+            const derivedWindow = (!parsedWindow && multimerReport?.referenceSequence && row.positionModRef > 0)
+                ? formatCircularJunctionWindow(multimerReport.referenceSequence, row.positionModRef, 50)
+                : null;
+            const windowText = parsedWindow?.text || derivedWindow?.text || null;
+            const windowLabel = parsedWindow?.label || derivedWindow?.label || null;
+            return {
+                ...row,
+                junctionWindowSeq: windowText,
+                junctionWindowLabel: windowLabel,
+            };
+        }),
+        [multimerReport?.dimerBreakpointScreenRows, multimerReport?.referenceSequence]
     );
     const dimerReferenceSequenceRows = useMemo(
         () => buildSequenceRows(multimerReport?.referenceSequence || '', REFERENCE_SEQUENCE_LINE_WIDTH),
@@ -3921,6 +3992,13 @@ export function NGSToolkit() {
                     </div>
                     <div className="flex items-center gap-2">
                         <button
+                            onClick={() => navigate('/designer')}
+                            className="px-4 py-2 rounded-lg text-sm font-medium border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
+                            title="Open Molecular Biology Toolkit"
+                        >
+                            Mol Bio Toolkit
+                        </button>
+                        <button
                             onClick={() => setView('launch')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'launch'
                                 ? 'text-white'
@@ -4369,6 +4447,30 @@ export function NGSToolkit() {
                                                             Download breakpoint screen
                                                         </a>
                                                     )}
+                                                    {dimerBreakpointSequencesDownloadHref && (
+                                                        <a
+                                                            href={dimerBreakpointSequencesDownloadHref}
+                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                                                        >
+                                                            Download breakpoint sequences
+                                                        </a>
+                                                    )}
+                                                    {dimerSecondaryAnomaliesDownloadHref && (
+                                                        <a
+                                                            href={dimerSecondaryAnomaliesDownloadHref}
+                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                                                        >
+                                                            Download secondary anomalies
+                                                        </a>
+                                                    )}
+                                                    {dimerSecondarySummaryDownloadHref && (
+                                                        <a
+                                                            href={dimerSecondarySummaryDownloadHref}
+                                                            className="px-2.5 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                                                        >
+                                                            Download secondary summary
+                                                        </a>
+                                                    )}
                                                     {dimerReadsDownloadHref && (
                                                         <a
                                                             href={dimerReadsDownloadHref}
@@ -4425,6 +4527,9 @@ export function NGSToolkit() {
                                                     || multimerArtifacts.dimerJunctionRotatedPath
                                                     || multimerArtifacts.dimerJunctionRotationSummaryPath
                                                     || multimerArtifacts.dimerBreakpointScreenPath
+                                                    || multimerArtifacts.dimerBreakpointSequencesPath
+                                                    || multimerArtifacts.dimerSecondaryAnomaliesPath
+                                                    || multimerArtifacts.dimerSecondarySummaryPath
                                                     || multimerArtifacts.dimerReadsPath
                                                     || multimerArtifacts.dimerReadLedgerPath
                                                     || multimerArtifacts.dimerBreakpointReadsPath
@@ -4445,6 +4550,9 @@ export function NGSToolkit() {
                                                         {multimerArtifacts.dimerJunctionRotatedPath && <div>dimer rotated profile: {multimerArtifacts.dimerJunctionRotatedPath}</div>}
                                                         {multimerArtifacts.dimerJunctionRotationSummaryPath && <div>dimer rotation summary: {multimerArtifacts.dimerJunctionRotationSummaryPath}</div>}
                                                         {multimerArtifacts.dimerBreakpointScreenPath && <div>dimer breakpoint screen: {multimerArtifacts.dimerBreakpointScreenPath}</div>}
+                                                        {multimerArtifacts.dimerBreakpointSequencesPath && <div>dimer breakpoint sequences: {multimerArtifacts.dimerBreakpointSequencesPath}</div>}
+                                                        {multimerArtifacts.dimerSecondaryAnomaliesPath && <div>dimer secondary anomalies: {multimerArtifacts.dimerSecondaryAnomaliesPath}</div>}
+                                                        {multimerArtifacts.dimerSecondarySummaryPath && <div>dimer secondary summary: {multimerArtifacts.dimerSecondarySummaryPath}</div>}
                                                         {multimerArtifacts.dimerReadsPath && <div>dimer read junctions: {multimerArtifacts.dimerReadsPath}</div>}
                                                         {multimerArtifacts.dimerReadLedgerPath && <div>dimer read ledger: {multimerArtifacts.dimerReadLedgerPath}</div>}
                                                         {multimerArtifacts.dimerBreakpointReadsPath && <div>dimer breakpoint reads: {multimerArtifacts.dimerBreakpointReadsPath}</div>}
@@ -4778,6 +4886,7 @@ export function NGSToolkit() {
                                                                                 <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Boundary</th>
                                                                                 <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Artifact</th>
                                                                                 <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">Confidence</th>
+                                                                                <th className="text-left font-medium text-[var(--text-secondary)] px-2 py-1">~100 bp window</th>
                                                                             </tr>
                                                                         </thead>
                                                                         <tbody>
@@ -4795,6 +4904,11 @@ export function NGSToolkit() {
                                                                                     <td className="px-2 py-1 text-[var(--text-primary)]">{row.inBoundaryWindow == null ? '—' : (row.inBoundaryWindow ? 'yes' : 'no')}</td>
                                                                                     <td className="px-2 py-1 text-[var(--text-primary)]">{row.artifactFlag == null ? '—' : (row.artifactFlag ? 'yes' : 'no')}</td>
                                                                                     <td className="px-2 py-1 text-[var(--text-primary)]">{row.confidence || '—'}</td>
+                                                                                    <td className="px-2 py-1 text-[var(--text-primary)] font-mono">
+                                                                                        {row.junctionWindowSeq
+                                                                                            ? `${row.junctionWindowLabel || ''} ${row.junctionWindowSeq}`.trim()
+                                                                                            : 'n/a'}
+                                                                                    </td>
                                                                                 </tr>
                                                                             ))}
                                                                         </tbody>

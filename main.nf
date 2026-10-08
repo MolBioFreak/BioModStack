@@ -29,28 +29,21 @@ include { structure_prediction_wf ; complex_prediction_wf } from './modules/stru
 include { OpenMMRelaxation ; OpenMMScore } from './modules/openmm.nf'
 include { ANARCII } from './modules/utils/anarci'
 include { FrustrampnnQC ; AggregateFrustrationReports } from './modules/frustrampnn.nf'
-include { DoradoBasecall ; DoradoAlign ; PrepareBamForAnalysis ; ValidateMappedBam ; PrepareReferenceForIGV ; ModkitPileup ; ModkitSummary ; FastqAlign ; FastqMultimerQC ; FastqDimerAnalysis ; RunCloneValidation } from './modules/dorado.nf'
+include { DoradoBasecall ; DoradoAlign ; PrepareBamForAnalysis ; ValidateMappedBam ; PrepareReferenceForIGV ; ModkitPileup ; ModkitSummary ; FastqAlign ; FastqMultimerQC ; FastqDimerAnalysis ; BuildDimerCanonicalOutputs ; RunCloneValidation } from './modules/dorado.nf'
 
-// Oligo Designer (RFDpoly multi-polymer design)
 include { OLIGO_DESIGNER } from './workflows/oligo_design.nf'
 
-// Antibody Design Subworkflow
 include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'
 
-// De Novo Antibody Pipeline (RFantibody -> FAMPNN/AntiFold -> Boltz2 -> AntiBERTy -> ThermoMPNN -> IgGM)
 include { ANTIBODY_DENOVO } from './workflows/antibody_denovo.nf'
 
-// Antibody Child Workflow (single design validation - spawned by parent in exploration mode)
 include { ANTIBODY_CHILD } from './workflows/antibody_child.nf'
 
-// BindCraft Workflow (de novo minibinder design via AF2 backpropagation)
 include { BINDCRAFT_DESIGN } from './workflows/bindcraft_design.nf'
 
-// RFantibody module for standalone backbone generation
 include { RFANTIBODY } from './modules/rfantibody'
 
 workflow {
-    // Permit use of topic channels in Nextflow v24 by enabling preview features
     try {
         nextflow.preview.topic = true
     }
@@ -66,7 +59,6 @@ workflow {
         error("Cannot use --run_rfd_only with --skip_rfd. These options are contradictory.")
     }
 
-    // Calculate batch size based on maximum GPUs
     def num_batches = Math.min(params.gpus, params.rfd_num_designs).intValue()
     def batch_size = Math.ceil(params.rfd_num_designs / num_batches).intValue()
     def num_designs = num_batches * batch_size
@@ -77,20 +69,15 @@ workflow {
     println("Output Directory: ${outputDirectory}")
 
 
-    // Create output directory for copy of config files used in run
     def configDir = file("${outputDirectory}/configs")
     configDir.mkdirs()
     workflow.configFiles.each { configFile ->
         configFile.copyTo("${configDir}/${configFile.getName()}")
     }
 
-    // Create output directory for copy of input files used in run
     def inputsDir = file("${outputDirectory}/inputs")
     inputsDir.mkdirs()
 
-    /////////////////////////////
-    // NANOPORE METHYLATION    //
-    /////////////////////////////
     if (params.nanopore_enabled || params.rfd_mode == 'nanopore_methylation') {
         println("Running Nanopore Methylation Workflow")
         println("* POD5 dir: ${params.pod5_dir}")
@@ -104,7 +91,6 @@ workflow {
         println("* Rotation scan step (bp): ${params.rotation_scan_step_bp ?: 1}")
         println("* Run assembly: ${params.run_assembly ?: false}")
 
-        // Stage reporting helper (writes completed_stages + stage_outputs to API).
         def reportNanoporeStage = { String stageName, List outputs ->
             if (!params.job_id) {
                 return
@@ -269,29 +255,35 @@ workflow {
                         Channel.of(fastq_input),
                         Channel.of(reference_file)
                     )
-                    FastqDimerAnalysis.out.summary.subscribe { _ ->
+                    BuildDimerCanonicalOutputs(
+                        FastqDimerAnalysis.out.summary,
+                        FastqDimerAnalysis.out.junction_events,
+                        FastqDimerAnalysis.out.single_ref_split_events,
+                        FastqDimerAnalysis.out.single_ref_split_profile,
+                        FastqDimerAnalysis.out.breakpoint_screen,
+                        Channel.of(reference_file)
+                    )
+                    BuildDimerCanonicalOutputs.out.breakpoint_call.subscribe { _ ->
                         reportNanoporeStage("dimer_analysis", [
                             "${params.out_dir}/multimer_qc/dimer_candidates.fastq",
                             "${params.out_dir}/multimer_qc/dimer_candidates.fasta",
                             "${params.out_dir}/multimer_qc/dimer_read_lengths.tsv",
                             "${params.out_dir}/multimer_qc/dimer_analysis_summary.tsv",
                             "${params.out_dir}/multimer_qc/dimer_analysis.log",
+                            "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
+                            "${params.out_dir}/multimer_qc/dimer_evidence_by_position.tsv",
+                            "${params.out_dir}/multimer_qc/dimer_read_events.tsv",
+                            "${params.out_dir}/multimer_qc/dimer_breakpoint_sequences.tsv",
+                            "${params.out_dir}/multimer_qc/dimer_secondary_anomalies.tsv",
+                            "${params.out_dir}/multimer_qc/dimer_secondary_summary.tsv",
+                            "${params.out_dir}/multimer_qc/dimer_diagnostics.tar.gz",
                             "${params.out_dir}/multimer_qc/dimer_candidates.aligned.bam",
                             "${params.out_dir}/multimer_qc/dimer_candidates.aligned.bam.bai",
                             "${params.out_dir}/multimer_qc/dimer_reference.fasta",
                             "${params.out_dir}/multimer_qc/dimer_reference.fasta.fai",
-                            "${params.out_dir}/multimer_qc/dimer_consensus.fasta",
-                            "${params.out_dir}/multimer_qc/dimer_consensus.log",
-                            "${params.out_dir}/multimer_qc/dimer_junction_profile.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_read_junctions.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_junction_events.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_junction_clusters.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_junction_hotspots.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_junction_rotated_profile.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_junction_rotation_summary.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_breakpoint_screen.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_breakpoint_start_counts.tsv",
-                            "${params.out_dir}/multimer_qc/dimer_alignment.log",
+                            "${params.out_dir}/multimer_qc/dominant_dimer_consensus.fasta",
+                            "${params.out_dir}/multimer_qc/dominant_dimer_consensus.log",
+                            "${params.out_dir}/multimer_qc/dominant_dimer_consensus_metadata.tsv",
                         ])
                     }
                 } else {
