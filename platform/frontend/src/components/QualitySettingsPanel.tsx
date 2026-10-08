@@ -310,7 +310,7 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                             <div className="space-y-1">
                                 <div className="text-xs text-slate-300">Stage setup strategy</div>
                                 <p className="text-[10px] text-slate-500">
-                                    Stage-optimized mode follows the repo PPIFlow guidance for the selected stage. Pre-sequence refinement lowers `start_t`, raises samples, and disables strict anchor rejection. Post-FA-MPNN maturation uses higher `start_t`, fewer samples, balanced ranking, and strict anchors.
+                                    Stage presets tune start_t, samples, ranking, and anchor strictness.
                                 </p>
                                 {stageMode === 'both' && (
                                     <p className="text-[10px] text-amber-300">
@@ -344,7 +344,7 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                         </div>
                         {managedByStageProfile && (
                             <div className="mt-2 text-[10px] text-teal-300">
-                                Core partial-flow controls below are currently managed by the selected stage strategy. Switch to `Manual` if you want to override them directly.
+                                Stage preset owns these controls. Switch to Manual to override.
                             </div>
                         )}
                     </div>

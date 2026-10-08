@@ -3416,7 +3416,7 @@ export const BioXpCockpit = () => {
                         {usbSniffPanel}
                     </div>
                     <div className="space-y-6">
-                        <SectionCard title="USB Observability Scope" subtitle="BMS/workstation side is staged now; handler-local endpoints own actual usbmon capture when powered.">
+                        <SectionCard title="USB Observability Scope" subtitle="Capture-only. No motion.">
                             <div className="space-y-2 text-xs text-content-muted">
                                 <div>Priority 1: capture every USB bulk IN/OUT packet and correlate with driver TX/RX ledger.</div>
                                 <div>Priority 2: compare alternate Linux USB handling mechanisms after capture completeness is proven.</div>
@@ -3424,10 +3424,10 @@ export const BioXpCockpit = () => {
                                 <div className="text-warning">Safety: this tab must never home, arm, recover motion, or move axes.</div>
                             </div>
                         </SectionCard>
-                        <SectionCard title="Capture Completeness Contract" subtitle="What the handler-side implementation must return before we trust a run.">
+                        <SectionCard title="Capture Completeness Contract" subtitle="Required artifacts before trust.">
                             <div className="grid grid-cols-1 gap-2 text-xs text-content-muted">
                                 <div>• usbmon/tshark pcapng with every URB on Novo USB-to-CAN endpoints.</div>
-                                <div>• driver ledger with monotonic timestamps, sequence IDs, OUT hex, IN hex, decode, timeout, drain, and mismatch entries.</div>
+                                <div>• driver ledger: timestamps, seq IDs, OUT/IN hex, decode, timeout, mismatch.</div>
                                 <div>• run manifest linking pcap ↔ ledger ↔ operator reason ↔ robot service log window.</div>
                                 <div>• explicit packet counts and unmatched-frame accounting before conclusions.</div>
                             </div>
