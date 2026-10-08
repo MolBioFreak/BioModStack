@@ -2519,6 +2519,18 @@ async def launch_nextflow_job(
 
             while True:
                 cmd = build_job_nextflow_command(job, launch_params, output_dir)
+                if uses_native_parent_components(cmd):
+                    if launch_params.get('run_frustrampnn') is True and gpu_id is None:
+                        raise ExecutionOwnershipError('Native FrustraMPNN requires the parent GPU reservation')
+                    from services.execution_ownership import latest_started_execution_attempt
+                    owner = latest_started_execution_attempt(job.params)
+                    if owner is None:
+                        raise ExecutionOwnershipError('Native parent requires its started execution owner')
+                    component_attempt = str(uuid.uuid5(uuid.NAMESPACE_URL, canonical_json_bytes({
+                        'job_id': str(job.id), 'unit': owner['unit'],
+                        'invocation_id': owner['invocation_id'], 'launch_attempt': attempt,
+                    }).decode('utf-8')))
+                    cmd.extend(['--component_attempt_id', component_attempt])
                 cmd = await _persist_boltz_launch_authority(session, job, cmd)
                 from services import rf_filter_task_roster
                 await rf_filter_task_roster.begin_command(session, job, cmd)
@@ -3321,12 +3333,28 @@ def compile_controller_protenix_input(params: Dict[str, Any]) -> list:
              'sequences': [{'proteinChain': {'sequence': sequence, 'count': 1}}]}]
 
 
+NATIVE_PARENT_WORKFLOWS = frozenset({
+    'protein_design.nf', 'conformational_mapping.nf', 'boltz_cp_experimental.nf',
+})
+
+
+def uses_native_parent_components(command: list[str]) -> bool:
+    """Identify the DAG already selected by the shared command compiler."""
+    return any(Path(value).name in NATIVE_PARENT_WORKFLOWS
+               for value in command if value.endswith('.nf'))
+
+
 def build_job_nextflow_command(job, params, output_dir):
     """All launch/rebuild paths join request origin from their owning persisted Job."""
     from services.core_protein_scientific_contract import workflow_params
     requested = (job.provenance or {}).get('core_protein_requested_params')
     command = build_nextflow_command(job.model_id, job.mode, workflow_params(job, params),
         output_dir, job_id=job.id, requested_params=requested)
+    if uses_native_parent_components(command) and params.get('run_frustrampnn') is True:
+        from paths import get_container_dir
+        from services.remote_execution.images import resolve_image
+        image = resolve_image('frustrampnn.sif', get_container_dir())
+        command.extend(['--frustrampnn_container_path', str(image)])
     for key in ('protenix_prepared_msa_dir', 'protenix_prepared_msa_sha256'):
         if params.get(key):
             command.extend(['--' + key, str(params[key])])
@@ -3353,6 +3381,11 @@ def build_nextflow_command(
     # Controller execution metadata is not a scientific Nextflow parameter.
     params.pop("remote_result_policy", None)
     params.pop("execution_policy", None)
+    # Native component placement/attempt identity is injected only by the launch
+    # owner after scientific compilation, never replayed from request parameters.
+    params.pop("component_attempt_id", None)
+    params.pop("frustrampnn_container_path", None)
+    params.pop("frustrampnn_physical_gpu_id", None)
     # Only the persisted launch owner may add this transport after compilation.
     params.pop('protenix_prepared_msa_dir', None)
     params.pop('protenix_prepared_msa_sha256', None)

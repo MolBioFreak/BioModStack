@@ -312,6 +312,24 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tu
         container_names.add("fampnn.sif")
     if params.get("run_frustrampnn") is True:
         container_names.add("frustrampnn.sif")
+    # Native campaigns use the existing BoltzGen runner and native preparation /
+    # filter image. Helpers themselves travel in the full committed source tree.
+    if normalized_model in {"boltzgen", "boltzgen_child"} or params.get("diffusion_method") == "boltzgen":
+        container_names.update({"boltzgen.sif", "pyrosetta_tools.sif"})
+    if normalized_model == "boltz_cp_experimental" and not params.get("bcp_container_path"):
+        container_names.add("fold-cp.sif")
+    if normalized_model == "conformational_mapping":
+        from services.conformational_mapping.contracts import validate_schema
+        request_path = Path(str(params.get("cm_request_path") or ""))
+        if request_path.is_symlink() or not request_path.is_file():
+            raise RemoteBundleError("Canonical CM request is unavailable for dependency binding")
+        request = json.loads(request_path.read_bytes())
+        validate_schema("cm_request_v1", request)
+        if request["backend"] == "protenix_v2_ensemble":
+            container_names.add("protenix.sif")
+            weight_names.add("protenix")
+        elif request["backend"] == "confornets":
+            container_names.add("confornets-canonical.sif")
     if normalized_model == "molecular_dynamics":
         if normalized_mode in {"simulate", "replica"}:
             container_names.update(
@@ -408,17 +426,30 @@ def _input_assets(
         if store_index >= len(command):
             raise RemoteBundleError("runtime image store destination is missing")
         system_roots.add(Path(command[store_index]).resolve())
+    cm_request = None
+    if '--cm_request_path' in command:
+        index = command.index('--cm_request_path') + 1
+        if index >= len(command):
+            raise RemoteBundleError('Canonical CM request path is missing')
+        cm_request = Path(command[index]).expanduser()
+        if cm_request.name != 'cm_request_v1.json' or cm_request.is_symlink() or not cm_request.is_file():
+            raise RemoteBundleError('Canonical CM request path is not its regular request authority')
     candidates = [*_flatten_strings(params), *(str(value) for value in command[1:])]
     for raw in candidates:
         if not raw.startswith("/"):
             continue
         candidate = Path(raw).expanduser()
+        if cm_request is not None and candidate == cm_request:
+            # CM consumes its whole immutable request-root closure (snapshots,
+            # runtime registry and registered_import), not just the request leaf.
+            # Bind only this outer directory; never rewrite canonical JSON bytes.
+            candidate = cm_request.parent
         path = candidate.resolve()
         if path in system_roots or path in runtime_paths or any(_under(path, root) for root in runtime_roots):
             continue
         if any(part.is_symlink() for part in (candidate, *candidate.parents)):
             raise RemoteBundleError(f"Input path traverses a symlink: {candidate}")
-        if path == output_dir.resolve() or _under(path, repo_root):
+        if (path == output_dir.resolve() and (cm_request is None or path != cm_request.parent.resolve())) or _under(path, repo_root):
             continue
         if not path.exists():
             raise RemoteBundleError(f"Declared input is unavailable: {candidate}")
@@ -454,7 +485,6 @@ def compile_remote_dependencies(model_id: str, mode: str, command: list[str]) ->
     # These current workflows still require controller-side child orchestration.
     # Reject rather than silently dropping required stages or falling back locally.
     callback_workflows = {
-        'conformational_mapping.nf', 'protein_design.nf', 'boltz_cp_experimental.nf',
         'antibody_denovo.nf', 'protein_local_redesign.nf', 'ppiflow_generator_design.nf',
     }
     selected_workflows = {Path(value).name for value in command if value.endswith('.nf')}
@@ -672,7 +702,24 @@ def prepare_remote_bundle(
 
     # Byte-addressed cache objects are shared; runnable trees never are.
     remote_source = f"{remote_attempt}/materialized/source"
+    from services.nextflow import uses_native_parent_components
+    native = uses_native_parent_components(command)
+    if native:
+        # The full committed archive carries native modules/helpers and their
+        # import closure; support-python remains the existing frozen runtime.
+        if '--component_attempt_id' in command:
+            raise RemoteBundleError('Remote component attempt must be bound by the bundle owner')
+        command = [*command, '--component_attempt_id', attempt_id]
     command, effective_params = compile_remote_dependencies(str(job.model_id), str(job.mode), command)
+    if native and effective_params.get('run_frustrampnn') is True:
+        assignment = dict((job.provenance or {}).get('remote_execution_assignment') or {})
+        indices = assignment.get('gpu_indices')
+        physical = job.assigned_gpu
+        if (type(physical) is not int or physical < 0 or not isinstance(indices, list)
+                or not indices or any(type(index) is not int or index < 0 for index in indices)
+                or physical not in indices
+                or str(effective_params.get('frustrampnn_physical_gpu_id')) != str(physical)):
+            raise RemoteBundleError('Native FrustraMPNN GPU differs from the parent worker reservation')
     # Preparation is controller-owned and happens before command compilation in
     # nextflow.launch_nextflow_job, identically for local and remote execution.
     # Never start a provider search while materializing a remote worker bundle.
@@ -773,6 +820,13 @@ def prepare_remote_bundle(
             path_map[command[command.index(flag) + 1]] = destination
     nextflow_executable = str(command[0]) if command else ""
     translated_command = [_rewrite(str(value), path_map) for value in command]
+    if '--cm_request_path' in command:
+        index = command.index('--cm_request_path') + 1
+        request = Path(command[index]).resolve()
+        bound_root = input_path_map.get(str(request.parent))
+        if bound_root is None:
+            raise RemoteBundleError('Canonical CM request-root closure was not staged')
+        translated_command[index] = str(PurePosixPath(bound_root) / request.name)
     if translated_command and Path(nextflow_executable).name == "nextflow":
         translated_command[0] = f"{remote_root}/runner/nextflow"
     elif translated_command and Path(nextflow_executable).name in {"python", "python3"}:

@@ -640,6 +640,12 @@ async def release_job_gpu(job_id: str, session: AsyncSession = Depends(get_sessi
             detail="Remote Jobs release their GPU only through remote terminal reconciliation",
         )
 
+    if job.status == 'running' or job.queue_status in {'running', 'preparing'}:
+        raise HTTPException(
+            status_code=409,
+            detail='Active workflow GPU ownership can only be released after terminal reconciliation; '
+                   'native components execute inside the parent reservation',
+        )
     released_gpu = job.assigned_gpu
     job.assigned_gpu = None
     await session.commit()
