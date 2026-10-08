@@ -69,6 +69,9 @@ from migrations.add_scientific_artifact_receipts import migrate as migrate_scien
 from migrations.add_frustrampnn_landscape_index_slimming import migrate as migrate_frustrampnn_landscape_index_slimming
 from migrations.seal_ont_move_source_terminal_immutability import migrate as seal_ont_move_source_terminal_immutability
 from migrations.seal_ont_external_move_bam_receipt_binding import migrate as seal_ont_external_move_bam_receipt_binding
+from migrations.seal_ont_raw_signal_lookup_terminal_immutability import (
+    migrate as seal_ont_raw_signal_lookup_terminal_immutability,
+)
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -126,6 +129,7 @@ MIGRATIONS: List[Migration] = [
     Migration(36, "add_frustrampnn_landscape_index_slimming", migrate_frustrampnn_landscape_index_slimming),
     Migration(37, "seal_ont_move_source_terminal_immutability", seal_ont_move_source_terminal_immutability),
     Migration(38, "seal_ont_external_move_bam_receipt_binding", seal_ont_external_move_bam_receipt_binding),
+    Migration(39, "seal_ont_raw_signal_lookup_terminal_immutability", seal_ont_raw_signal_lookup_terminal_immutability),
 ]
 
 

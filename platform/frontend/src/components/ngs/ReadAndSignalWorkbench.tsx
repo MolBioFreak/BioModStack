@@ -1040,6 +1040,7 @@ export function ReadAndSignalWorkbench({
                         <div key={item.move_source_id} className="flex flex-wrap items-center gap-1 break-all text-[10px] text-[var(--text-secondary)]">
                             <span>External source <code>{item.move_source_id}</code> · <span className={`rounded px-1 ${stateBadge(item.state)}`}>{item.state}</span> · {item.reason_code}</span>
                             {item.state === 'failed'
+                                && item.attempt_number < 3
                                 && !moveSources.some((candidate) => candidate.predecessor_move_source_id === item.move_source_id)
                                 && (
                                     <button

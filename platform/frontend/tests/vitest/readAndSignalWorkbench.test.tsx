@@ -713,6 +713,31 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(container.textContent).toContain('external_move_source_validated');
     });
 
+    it('does not offer a fourth external move-source attempt', async () => {
+        const failedAttemptThree: OntMoveTableSource = {
+            ...moveSource,
+            move_source_id: 'external-moves-attempt-3-failed',
+            attempt_number: 3,
+            predecessor_move_source_id: 'external-moves-attempt-2-failed',
+            source_job_id: null,
+            external_registration_receipt_id: 'ont-external-move-receipt-1',
+            state: 'failed',
+            reason_code: 'external_move_source_validation_failed',
+        };
+        apiMocks.fetchMoveSources.mockResolvedValue({ items: [failedAttemptThree] });
+
+        await renderWorkbench({ viewerSession: null });
+        await settlePromises();
+        await waitUntil(() => {
+            expect(container.textContent).toContain('external-moves-attempt-3-failed');
+        });
+
+        const freshAttemptButton = Array.from(container.querySelectorAll('button')).find(
+            (candidate) => candidate.textContent?.trim() === 'Create fresh attempt',
+        );
+        expect(freshAttemptButton).toBeUndefined();
+    });
+
     it('polls a requested external move source through running and refreshes capabilities after ready', async () => {
         const requestedExternalSource: OntMoveTableSource = {
             ...moveSource,
@@ -1104,6 +1129,54 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             'blow5-persisted',
             'persisted-read',
         );
+    });
+
+    it('keeps polling until a bounded waveform can finish after poll thirty', async () => {
+        const requestedWaveform = {
+            ...rawWaveform,
+            state: 'requested' as const,
+            reason_code: 'indexed_waveform_requested',
+            sample_count: null,
+            samples: null,
+        };
+        let pollCount = 0;
+        apiMocks.requestRawWaveform.mockResolvedValue(requestedWaveform);
+        apiMocks.fetchRawWaveform.mockImplementation(async () => {
+            pollCount += 1;
+            if (pollCount <= 30) {
+                return {
+                    ...requestedWaveform,
+                    state: 'running' as const,
+                    reason_code: 'indexed_waveform_running',
+                };
+            }
+            return rawWaveform;
+        });
+        vi.useFakeTimers();
+
+        await renderWorkbench({
+            viewerSession: viewerSession({
+                selected_read_id: 'read-42',
+                signal_state: {
+                    mode: 'raw_waveform',
+                    read_mapping_job_id: null,
+                    reference_mapping_job_id: null,
+                },
+            }),
+        });
+        await act(async () => {
+            button('Inspect raw waveform').click();
+            await Promise.resolve();
+        });
+        await settlePromises();
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(31_000);
+        });
+        await settlePromises();
+
+        expect(apiMocks.fetchRawWaveform).toHaveBeenCalledTimes(31);
+        expect(container.textContent).toContain('4 source samples');
+        expect(container.querySelector('[aria-label="Raw electrical signal waveform"]')).not.toBeNull();
     });
 
     it('does not publish a refreshAuthorities rejection from an older mounted identity', async () => {

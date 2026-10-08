@@ -2076,6 +2076,10 @@ def _verified_external_descriptor_identity(
 
 def pin_external_blow5_descriptors(commands: Mapping[str, Any]) -> list[int]:
     """Hold descriptor authority for external BLOW5/index container consumption."""
+    if threading.current_thread() is not threading.main_thread():
+        raise RuntimeError("external BLOW5 source leases require the main service thread")
+    register_lease_break_listener(_record_source_lease_break)
+    _SOURCE_LEASE_BREAK.clear()
     authorities = commands.get("source_authorities")
     if not isinstance(authorities, list) or len(authorities) != 2 or commands.get("source_fd_count") != 4:
         raise ValueError("external BLOW5 descriptor authority is incomplete")
@@ -2096,6 +2100,14 @@ def pin_external_blow5_descriptors(commands: Mapping[str, Any]) -> list[int]:
                     file_fd, root_fd, expected=expected,
                     authority=f"external {authority.get('kind', 'source')}",
                 )
+                try:
+                    fcntl.fcntl(file_fd, fcntl.F_SETLEASE, fcntl.F_RDLCK)
+                except OSError as exc:
+                    if exc.errno in {errno.EAGAIN, errno.EWOULDBLOCK}:
+                        raise SourceLeaseUnavailable(
+                            "external BLOW5 source read lease is temporarily unavailable"
+                        ) from exc
+                    raise RuntimeError("external BLOW5 source read lease is unavailable") from exc
             except BaseException:
                 os.close(file_fd)
                 os.close(root_fd)
@@ -2887,6 +2899,10 @@ async def claim_next_waveform_lookup(
                 receipt={
                     "schema": "bms.ont.waveform-output-authority.v1",
                     "output_identity": output_identity,
+                    "runtime_identity": {
+                        "image_digest": runtime_identity["digest"],
+                        "runtime_policy_sha256": runtime_identity["policy_sha256"],
+                    },
                 },
                 updated_at=now,
             )
@@ -2912,6 +2928,10 @@ async def claim_next_waveform_lookup(
     lookup.receipt = {
         "schema": "bms.ont.waveform-output-authority.v1",
         "output_identity": output_identity,
+        "runtime_identity": {
+            "image_digest": runtime_identity["digest"],
+            "runtime_policy_sha256": runtime_identity["policy_sha256"],
+        },
     }
     lookup.updated_at = now
     try:
@@ -2923,6 +2943,33 @@ async def claim_next_waveform_lookup(
     return lookup, command, output, {
         "fd_socket": str(fd_socket),
         "source_fds": source_fds,
+    }
+
+
+def _waveform_terminal_receipt(
+    output_authority: Mapping[str, Any],
+    command_receipt: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    source_identity: Mapping[str, Any],
+    output_identity: Mapping[str, Any],
+) -> dict[str, Any]:
+    runtime_identity = output_authority.get("runtime_identity")
+    if (
+        not isinstance(runtime_identity, dict)
+        or not _is_sha256(runtime_identity.get("image_digest"))
+        or not _is_sha256(runtime_identity.get("runtime_policy_sha256"))
+    ):
+        raise ValueError("waveform runtime authority receipt is missing")
+    return {
+        **dict(command_receipt),
+        "runtime_identity": dict(runtime_identity),
+        "waveform_schema": payload["schema"],
+        "read_id": payload["read_id"],
+        "sample_count": payload["sample_count"],
+        "returned_sample_count": payload["returned_sample_count"],
+        "stride": payload["stride"],
+        "source_identity": dict(source_identity),
+        "output_identity": dict(output_identity),
     }
 
 
@@ -2982,16 +3029,13 @@ async def finish_waveform_lookup(session: AsyncSession, lookup_id: str, claim_to
             reason_code="indexed_blow5_lookup_ready",
             sample_count=payload["sample_count"],
             samples=samples,
-            receipt={
-                **receipt,
-                "waveform_schema": payload["schema"],
-                "read_id": payload["read_id"],
-                "sample_count": payload["sample_count"],
-                "returned_sample_count": payload["returned_sample_count"],
-                "stride": payload["stride"],
-                "source_identity": source_identity,
-                "output_identity": output_identity,
-            },
+            receipt=_waveform_terminal_receipt(
+                output_authority,
+                receipt,
+                payload,
+                source_identity,
+                output_identity,
+            ),
             claim_token=None,
             lease_expires_at=None,
             completed_at=completed_at,

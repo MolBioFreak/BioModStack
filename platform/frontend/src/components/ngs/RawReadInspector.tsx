@@ -12,6 +12,8 @@ import {
     type AlignmentRead,
 } from '../../lib/ngsAlignmentSession';
 
+const RAW_WAVEFORM_POLL_ATTEMPTS = 130;
+
 interface ReadLocus {
     contig: string;
     start: number;
@@ -78,7 +80,7 @@ export function GovernedRawSignalWaveform({ runId, observedGeneration, represent
         setError(null);
         try {
             let current = await requestOntRawSignalWaveform(runId, observedGeneration, representationId, exactReadId);
-            for (let attempt = 0; attempt < 30 && (current.state === 'requested' || current.state === 'running'); attempt += 1) {
+            for (let attempt = 0; attempt < RAW_WAVEFORM_POLL_ATTEMPTS && (current.state === 'requested' || current.state === 'running'); attempt += 1) {
                 await new Promise((resolve) => window.setTimeout(resolve, 1000));
                 if (requestGeneration !== requestGenerationRef.current) return;
                 current = await fetchOntRawSignalWaveform(current.lookup_id);
@@ -254,7 +256,7 @@ export function RawReadInspector({ jobId, sessionId, currentLocus = null, rawSig
                     rawSignalBinding.representationId,
                     readId,
                 );
-                for (let attempt = 0; attempt < 30 && (current.state === 'requested' || current.state === 'running'); attempt += 1) {
+                for (let attempt = 0; attempt < RAW_WAVEFORM_POLL_ATTEMPTS && (current.state === 'requested' || current.state === 'running'); attempt += 1) {
                     await new Promise((resolve) => window.setTimeout(resolve, 1000));
                     if (!detailGuardRef.current.isCurrent(requestToken)) return;
                     current = await fetchOntRawSignalWaveform(current.lookup_id);

@@ -28,6 +28,8 @@ import {
 import { jobPollingInterval } from '../../lib/queryPolling';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
 
+const RAW_WAVEFORM_POLL_ATTEMPTS = 130;
+
 interface OntInstrumentPanelProps {
     onAnalyzeExistingData: () => void;
 }
@@ -382,7 +384,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                 representationId,
                 waveformReadId.trim(),
             );
-            for (let attempt = 0; attempt < 30 && (current.state === 'requested' || current.state === 'running'); attempt += 1) {
+            for (let attempt = 0; attempt < RAW_WAVEFORM_POLL_ATTEMPTS && (current.state === 'requested' || current.state === 'running'); attempt += 1) {
                 await new Promise((resolve) => window.setTimeout(resolve, 1000));
                 current = await fetchOntRawSignalWaveform(current.lookup_id);
             }
