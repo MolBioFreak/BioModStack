@@ -4,10 +4,63 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def _nextflow_env(tmp_path: Path) -> dict[str, str]:
+    """Use an installed framework only; never reuse historical task/cache state."""
+    # Parse the unchanged root config directly: Nextflow's legacy parser
+    # cannot resolve script methods when this file is nested via includeConfig.
+    shutil.copyfile(ROOT / "nextflow.config", tmp_path / "nextflow.config")
+    env = os.environ.copy()
+    version = env.get("NXF_VER", "25.10.0")
+    home = tmp_path / "nxf-home"
+    jar_name = f"nextflow-{version}-one.jar"
+    distribution = Path(env.get("NXF_DIST", str(Path.home() / ".nextflow/framework")))
+    jar = distribution / version / jar_name
+    if not jar.is_file():
+        pytest.skip(f"installed offline Nextflow framework unavailable: {jar}")
+    destination = home / "framework" / version / jar_name
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(jar, destination)
+    env.update(NXF_HOME=str(home), NXF_DIST=str(home / "framework"),
+               NXF_VER=version, NXF_OFFLINE="true", NXF_DISABLE_CHECK_LATEST="true")
+    for name in ("NXF_TEMP", "NXF_CACHE_DIR", "APPTAINER_CACHEDIR", "APPTAINER_TMPDIR",
+                 "SINGULARITY_CACHEDIR", "SINGULARITY_TMPDIR", "XDG_CACHE_HOME", "TMPDIR"):
+        directory = tmp_path / name.lower()
+        directory.mkdir(exist_ok=True)
+        env[name] = str(directory)
+    return env
+
+
+def _ngs_container_config() -> str:
+    """Run native tools in the image with the genuine API Python installation.
+
+    The old image supplies samtools/modkit but not the Python path expected by
+    the current validator. Bind the actual interpreter and environment, never a
+    fake command, alternate parser, or synthetic producer identity.
+    """
+    image = Path(os.environ.get("BMS_DORADO_SIF", "/mnt/BioModStack/apptainer/dorado.sif"))
+    if not shutil.which("apptainer") or not image.is_file():
+        pytest.skip(f"real NGS container runtime unavailable: {image}")
+    python_base = Path(sys.executable).resolve().parents[2]
+    binds = f"--bind {ROOT} --bind {sys.prefix}:/opt/igv-reports:ro --bind {python_base}:{python_base}:ro"
+    return (
+        "apptainer.enabled = true\n"
+        "apptainer.autoMounts = true\n"
+        "process {\n"
+        "  executor = 'local'\n"
+        "  withLabel: dorado_cpu {\n"
+        f"    container = '{image}'\n"
+        f"    containerOptions = '{binds}'\n"
+        "    cpus = 1; memory = '1 GB'\n"
+        "  }\n"
+        "}\n"
+    )
 
 
 def _runtime_tools() -> tuple[Path, Path]:
@@ -50,7 +103,7 @@ def test_bam_workflow_runs_without_reference_when_modkit_is_disabled(tmp_path: P
         encoding="utf-8",
     )
     out_dir = tmp_path / "out"
-    env = os.environ.copy()
+    env = _nextflow_env(tmp_path)
     env["PATH"] = f"{samtools.parent}:{env.get('PATH', '')}"
     for key in ("SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"):
         env.pop(key, None)
@@ -73,7 +126,7 @@ def test_bam_workflow_runs_without_reference_when_modkit_is_disabled(tmp_path: P
             "-ansi-log",
             "false",
         ],
-        cwd=ROOT,
+        cwd=tmp_path,
         env=env,
         text=True,
         capture_output=True,
@@ -116,12 +169,12 @@ def test_bam_workflow_runs_without_reference_when_modkit_is_disabled(tmp_path: P
             [
                 "read1\t4\t*\t0\t0\t*\t*\t0\t0\tCCCCCCCCCCCC\tIIIIIIIIIIII\tMM:Z:C+m,0;\tML:B:C,255",
             ],
-            False,
+            True,
         ),
     ],
-    ids=["paired-tags", "malformed-mm", "tags-split-across-records", "tagged-but-unmapped"],
+    ids=["paired-tags", "cardinality-mismatch", "tags-split-across-records", "tagged-but-unmapped"],
 )
-def test_modified_base_tag_validation_requires_meaningful_pair_on_same_record(
+def test_modified_base_tag_validation_enforces_sam_semantics(
     tmp_path: Path,
     records: list[str],
     expected_success: bool,
@@ -169,15 +222,9 @@ def test_modified_base_tag_validation_requires_meaningful_pair_on_same_record(
         encoding="utf-8",
     )
     config = tmp_path / "local.config"
-    config.write_text(
-        "process {\n"
-        "  executor = 'local'\n"
-        "  withLabel: dorado_cpu { container = null; cpus = 1; memory = '1 GB' }\n"
-        "}\n",
-        encoding="utf-8",
-    )
+    config.write_text(_ngs_container_config(), encoding="utf-8")
     out_dir = tmp_path / "out"
-    env = os.environ.copy()
+    env = _nextflow_env(tmp_path)
     env["PATH"] = f"{samtools.parent}:{nextflow.parent}:{env.get('PATH', '')}"
     for key in ("SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"):
         env.pop(key, None)
@@ -200,7 +247,7 @@ def test_modified_base_tag_validation_requires_meaningful_pair_on_same_record(
             "-ansi-log",
             "false",
         ],
-        cwd=ROOT,
+        cwd=tmp_path,
         env=env,
         check=False,
         text=True,
@@ -217,7 +264,11 @@ def test_modified_base_tag_validation_requires_meaningful_pair_on_same_record(
         assert "modified_base_tagged_records=1" in log_text
     else:
         assert completed.returncode != 0
-        assert "Error executing process > 'ValidateModifiedBaseBam" in completed.stdout
+        errors = completed.stdout + "".join(
+            path.read_text() for path in (tmp_path / "work").rglob(".command.err")
+        )
+        assert "malformed_modified_base_tags" in errors, errors
+        assert not (out_dir / "methylation/modified_base_input.bam").exists()
 
 
 def test_tagged_bam_runs_real_modkit_pileup_and_summary(tmp_path: Path) -> None:
@@ -256,16 +307,6 @@ def test_tagged_bam_runs_real_modkit_pileup_and_summary(tmp_path: Path) -> None:
         text=True,
     )
 
-    wrapper_dir = tmp_path / "bin"
-    wrapper_dir.mkdir()
-    modkit_wrapper = wrapper_dir / "modkit"
-    modkit_wrapper.write_text(
-        "#!/bin/sh\n"
-        f"exec {apptainer} exec {dorado_sif} modkit \"$@\"\n",
-        encoding="utf-8",
-    )
-    modkit_wrapper.chmod(0o755)
-
     harness = tmp_path / "modkit_harness.nf"
     harness.write_text(
         "nextflow.enable.dsl=2\n"
@@ -285,16 +326,10 @@ def test_tagged_bam_runs_real_modkit_pileup_and_summary(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     config = tmp_path / "local.config"
-    config.write_text(
-        "process {\n"
-        "  executor = 'local'\n"
-        "  withLabel: dorado_cpu { container = null; cpus = 1; memory = '1 GB' }\n"
-        "}\n",
-        encoding="utf-8",
-    )
+    config.write_text(_ngs_container_config(), encoding="utf-8")
     out_dir = tmp_path / "out"
-    env = os.environ.copy()
-    env["PATH"] = f"{wrapper_dir}:{samtools.parent}:{nextflow.parent}:{env.get('PATH', '')}"
+    env = _nextflow_env(tmp_path)
+    env["PATH"] = f"{samtools.parent}:{nextflow.parent}:{env.get('PATH', '')}"
     for key in ("SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"):
         env.pop(key, None)
     completed = subprocess.run(
@@ -317,7 +352,7 @@ def test_tagged_bam_runs_real_modkit_pileup_and_summary(tmp_path: Path) -> None:
             "-ansi-log",
             "false",
         ],
-        cwd=ROOT,
+        cwd=tmp_path,
         env=env,
         check=False,
         text=True,
@@ -340,6 +375,10 @@ def test_tagged_bam_runs_real_modkit_pileup_and_summary(tmp_path: Path) -> None:
     for name in required:
         assert (methylation_dir / name).is_file(), name
     assert (methylation_dir / "methylation.bed").stat().st_size > 0
+    rows = [line.split("\t") for line in (methylation_dir / "methylation.bed").read_text().splitlines()]
+    modified = next(row for row in rows if row[:4] == ["plasmid", "0", "1", "m"])
+    assert modified[5] == "+"
+    assert modified[9:13] == ["1", "100.00", "1", "0"]
     assert (methylation_dir / "modkit_summary.tsv").stat().st_size > 0
     assert "modified_base_tagged_records=1" in (
         methylation_dir / "modified_base_tag_check.log"

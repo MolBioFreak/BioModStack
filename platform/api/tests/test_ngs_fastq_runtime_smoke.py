@@ -21,6 +21,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from test_ont_ngs_runtime_controls import _nextflow_env
+
 
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = API_ROOT.parent.parent
@@ -75,28 +77,25 @@ def _detect_execution_mode() -> str:
     if has_container_engine and SIF_PATH.exists():
         return "container"
 
+    missing = [name for name in ("minimap2", "samtools", "create_report") if _which(name) is None]
     pytest.skip(
-        "No apptainer/singularity (container mode) and no minimap2/samtools on PATH "
-        "(local mode) — cannot run runtime smoke test"
+        f"local FASTQ runtime missing {missing}; container runtime image unavailable: {SIF_PATH}"
     )
 
 
 def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
     """Run tiny FASTQ+reference through Nextflow and assert advertised outputs."""
-    nextflow_bin = Path("/usr/local/bin/nextflow")
+    nextflow_bin = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
     if not (nextflow_bin.is_file() and os.access(nextflow_bin, os.X_OK)):
         pytest.skip(f"direct Nextflow launcher is unavailable: {nextflow_bin}")
-    configured_nextflow = str(nextflow_bin)
 
     mode = _detect_execution_mode()
     assert mode in ("container", "local"), f"unexpected mode: {mode}"
     if mode == "local":
         _require_runtime_command("create_report")
 
-    # Explicit worktree-safe launchers can use pytest's disposable directory.
-    # The legacy container wrapper only mounts /tmp and its configured checkout,
-    # so retain the repository fixture path for that compatibility mode.
-    fixture_dir = tmp_path if configured_nextflow else REPO_ROOT / "platform/api/tests/ngs_runtime_fixtures"
+    # Inputs, logs, Nextflow state, and outputs stay in the disposable test root.
+    fixture_dir = tmp_path
     fixture_dir.mkdir(parents=True, exist_ok=True)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -136,9 +135,8 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
         "core",
     ]
 
-    env = os.environ.copy()
+    env = _nextflow_env(tmp_path)
     env.update({
-        "NXF_VER": "25.10.1",
         "NXF_OFFLINE": "true",
         "NXF_DISABLE_CHECK_LATEST": "true",
         "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
@@ -220,7 +218,7 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
     try:
         completed = subprocess.run(
             cmd,
-            cwd=REPO_ROOT,
+            cwd=tmp_path,
             env=env,
             text=True,
             stdout=subprocess.PIPE,

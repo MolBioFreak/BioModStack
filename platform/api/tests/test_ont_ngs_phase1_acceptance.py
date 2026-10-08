@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+from test_ont_ngs_runtime_controls import _nextflow_env, _ngs_container_config
 from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -108,16 +110,16 @@ def test_real_registry_rejects_shell_syntax_in_dorado_model() -> None:
 
 
 @pytest.mark.parametrize(
-    ("param_name", "payload"),
+    ("param_name", "valid_value"),
     [
-        ("min_qscore", "1; touch /tmp/biomodstack-ngs-shell-injection-proof"),
-        ("dorado_batch_size", "64; touch /tmp/biomodstack-ngs-batch-injection-proof"),
+        ("min_qscore", "1"),
+        ("dorado_batch_size", "64"),
     ],
 )
 def test_dorado_direct_nextflow_rejects_noninteger_command_fragments(
     tmp_path: Path,
     param_name: str,
-    payload: str,
+    valid_value: str,
 ) -> None:
     nextflow = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
     if not (nextflow.is_file() and os.access(nextflow, os.X_OK)):
@@ -125,8 +127,8 @@ def test_dorado_direct_nextflow_rejects_noninteger_command_fragments(
 
     pod5_dir = tmp_path / "pod5"
     pod5_dir.mkdir()
-    proof = Path(payload.rsplit(" ", 1)[-1])
-    proof.unlink(missing_ok=True)
+    proof = tmp_path / "shell-injection-proof"
+    payload = f"{valid_value}; touch {proof}"
     harness = tmp_path / "dorado-validation-harness.nf"
     harness.write_text(
         "nextflow.enable.dsl=2\n"
@@ -143,7 +145,7 @@ def test_dorado_direct_nextflow_rejects_noninteger_command_fragments(
         "}\n",
         encoding="utf-8",
     )
-    env = os.environ.copy()
+    env = _nextflow_env(tmp_path)
     env["NXF_OFFLINE"] = "true"
     for key in ("SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"):
         env.pop(key, None)
@@ -179,7 +181,7 @@ def test_dorado_direct_nextflow_rejects_noninteger_command_fragments(
             "-ansi-log",
             "false",
         ],
-        cwd=ROOT,
+        cwd=tmp_path,
         env=env,
         text=True,
         capture_output=True,
@@ -455,13 +457,18 @@ def test_nextflow_contracts_forbid_reference_consensus_and_guard_bam_modkit() ->
     assert "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_EMPTY" in plasmid_qc
     assert "mpileup" not in plasmid_qc
     assert "create_report" in plasmid_qc
-    assert 'samtools quickcheck -v "${bam}"' in bam_prepare
+    assert 'samtools quickcheck -v source.snapshot.bam' in bam_prepare
     assert "samtools index" in bam_prepare and "aligned.bam.bai" in bam_prepare
     assert "stageAs: 'source.bam'" in bam_prepare
     assert "BAM @SQ M5 does not match expected reference" in bam_prepare
     assert "bam_reference_sha256" in bam_prepare
-    assert "MM:Z:" in modkit and "ML:B:" in modkit
-    assert "no meaningful paired MM/ML modified-base tags" in modkit
+    validator = (ROOT / "scripts/validate_modified_base_bam.py").read_text(encoding="utf-8")
+    assert 'scripts/validate_modified_base_bam.py" "${bam}" > modified_base_tag_check.log' in modkit
+    assert 'scripts/validate_modified_base_bam.py -- samtools python=' in modkit
+    assert 'read.get_tags(with_value_type=True)' in validator
+    assert 'MM/ML cardinality mismatch' in validator
+    assert 'ML has no corresponding MM tag' in validator
+    assert 'valid_no_informative_tags' in validator
 
 
 @pytest.mark.parametrize(
@@ -519,7 +526,7 @@ def test_bam_prepare_runtime_handles_output_and_arbitrary_input_basenames(
         encoding="utf-8",
     )
     out_dir = tmp_path / "out"
-    env = os.environ.copy()
+    env = _nextflow_env(tmp_path)
     env["PATH"] = f"{samtools.parent}:{nextflow.parent}:{env.get('PATH', '')}"
     completed = subprocess.run(
         [
@@ -537,7 +544,7 @@ def test_bam_prepare_runtime_handles_output_and_arbitrary_input_basenames(
             "-ansi-log",
             "false",
         ],
-        cwd=ROOT,
+        cwd=tmp_path,
         env=env,
         check=False,
         text=True,
@@ -568,13 +575,13 @@ def test_bam_prepare_runtime_handles_output_and_arbitrary_input_basenames(
     assert record_count == "1"
 
 
-def test_nextflow_runtime_rejects_wrong_reference_and_untagged_modkit_bam(tmp_path: Path) -> None:
+def test_nextflow_runtime_rejects_wrong_reference_and_reports_untagged_no_evidence(tmp_path: Path) -> None:
     nextflow_bin = Path(os.environ.get("BMS_NEXTFLOW_BIN", "/usr/local/bin/nextflow"))
     samtools_bin = Path(os.environ.get("BMS_SAMTOOLS_BIN", "/home/dalab/micromamba/bin/samtools"))
     if not nextflow_bin.is_file() or not samtools_bin.is_file():
         pytest.skip("Nextflow runtime gate requires executable Nextflow and samtools")
 
-    env = os.environ.copy()
+    env = _nextflow_env(tmp_path)
     env["PATH"] = f"{samtools_bin.parent}:{nextflow_bin.parent}:{env.get('PATH', '')}"
     env.pop("SSL_CERT_FILE", None)
     env.pop("CURL_CA_BUNDLE", None)
@@ -602,23 +609,19 @@ def test_nextflow_runtime_rejects_wrong_reference_and_untagged_modkit_bam(tmp_pa
     subprocess.run([str(samtools_bin), "index", str(bam), str(bai)], check=True)
 
     config = tmp_path / "local.config"
-    config.write_text(
-        "process {\n"
-        "  executor = 'local'\n"
-        "  withLabel: dorado_cpu { container = null; cpus = 1; memory = '1 GB' }\n"
-        "}\n",
-        encoding="utf-8",
-    )
+    config.write_text(_ngs_container_config(), encoding="utf-8")
 
     validate_harness = tmp_path / "validate-mapped-bam.nf"
     validate_harness.write_text(
         "nextflow.enable.dsl=2\n"
-        f"include {{ ValidateMappedBam }} from '{(ROOT / 'modules/ngs/bam_prepare.nf').as_posix()}'\n"
+        f"include {{ PrepareBamForAnalysis; ValidateMappedBam }} from '{(ROOT / 'modules/ngs/bam_prepare.nf').as_posix()}'\n"
         "params.bam=null; params.bai=null; params.reference=null; params.out_dir=null\n"
         "workflow {\n"
+        "  PrepareBamForAnalysis(Channel.of(file(params.bam)))\n"
         "  ValidateMappedBam(\n"
-        "    Channel.of(tuple(file(params.bam), file(params.bai))),\n"
-        "    Channel.of(file(params.reference))\n"
+        "    PrepareBamForAnalysis.out.aligned,\n"
+        "    Channel.of(file(params.reference)),\n"
+        "    PrepareBamForAnalysis.out.log\n"
         "  )\n"
         "}\n",
         encoding="utf-8",
@@ -643,7 +646,7 @@ def test_nextflow_runtime_rejects_wrong_reference_and_untagged_modkit_bam(tmp_pa
             "-ansi-log",
             "false",
         ],
-        cwd=ROOT,
+        cwd=tmp_path,
         env=env,
         text=True,
         capture_output=True,
@@ -680,7 +683,7 @@ def test_nextflow_runtime_rejects_wrong_reference_and_untagged_modkit_bam(tmp_pa
             "-ansi-log",
             "false",
         ],
-        cwd=ROOT,
+        cwd=tmp_path,
         env=env,
         text=True,
         capture_output=True,
@@ -692,10 +695,11 @@ def test_nextflow_runtime_rejects_wrong_reference_and_untagged_modkit_bam(tmp_pa
     modkit_harness = tmp_path / "validate-modified-base-bam.nf"
     modkit_harness.write_text(
         "nextflow.enable.dsl=2\n"
-        f"include {{ ValidateModifiedBaseBam }} from '{(ROOT / 'modules/ngs/modkit_pileup.nf').as_posix()}'\n"
-        "params.bam=null; params.bai=null; params.out_dir=null\n"
+        f"include {{ ValidateModifiedBaseBam; ModkitPileup }} from '{(ROOT / 'modules/ngs/modkit_pileup.nf').as_posix()}'\n"
+        "params.bam=null; params.bai=null; params.out_dir=null; params.reference=null\n"
         "workflow {\n"
         "  ValidateModifiedBaseBam(Channel.of(tuple(file(params.bam), file(params.bai))))\n"
+        "  ModkitPileup(ValidateModifiedBaseBam.out.bam, Channel.of(file(params.reference)))\n"
         "}\n",
         encoding="utf-8",
     )
@@ -714,24 +718,29 @@ def test_nextflow_runtime_rejects_wrong_reference_and_untagged_modkit_bam(tmp_pa
             str(bai),
             "--out_dir",
             str(tmp_path / "modkit-out"),
+            "--reference", str(matching_reference),
             "-ansi-log",
             "false",
         ],
-        cwd=ROOT,
+        cwd=tmp_path,
         env=env,
         text=True,
         capture_output=True,
         timeout=180,
         check=False,
     )
-    assert untagged.returncode != 0
-    combined_output = untagged.stdout + untagged.stderr
-    combined_output += "".join(
-        path.read_text(encoding="utf-8", errors="replace")
-        for path in (tmp_path / "modkit-work").rglob(".command.err")
-    )
-    assert "no meaningful paired MM/ML modified-base tags" in combined_output
-    assert not (tmp_path / "modkit-out/methylation/methylation.bed").exists()
+    assert untagged.returncode == 0, untagged.stdout + untagged.stderr
+    admission = (tmp_path / "modkit-out/methylation/modified_base_tag_check.log").read_text()
+    assert "tag_evidence_state=valid_no_informative_tags" in admission
+    assert "modified_base_tagged_records=0" in admission
+    # Native modkit accepts source-valid absence of tags and emits no sites.
+    # An empty result is not methylation evidence and must not be fabricated.
+    bed = tmp_path / "modkit-out/methylation/methylation.bed"
+    assert bed.is_file()
+    assert bed.read_text() == ""
+    pileup_log = (bed.parent / "pileup.log").read_text()
+    assert "processed 0 rows" in pileup_log
+    assert "bms_output_sha256=" + hashlib.sha256(b"").hexdigest() in pileup_log
 
 
 def test_fastq_runtime_fails_closed_without_fake_consensus_or_manifest(tmp_path: Path) -> None:
@@ -790,7 +799,7 @@ def test_fastq_runtime_fails_closed_without_fake_consensus_or_manifest(tmp_path:
         encoding="utf-8",
     )
     out_dir = tmp_path / "out"
-    env = os.environ.copy()
+    env = _nextflow_env(tmp_path)
     env["PATH"] = f"{samtools.parent}:{env.get('PATH', '')}"
     for key in ("SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"):
         env.pop(key, None)
@@ -802,7 +811,7 @@ def test_fastq_runtime_fails_closed_without_fake_consensus_or_manifest(tmp_path:
             "--out_dir", str(out_dir), "--code_root", str(ROOT),
             "-ansi-log", "false",
         ],
-        cwd=ROOT,
+        cwd=tmp_path,
         env=env,
         text=True,
         capture_output=True,
