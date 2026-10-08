@@ -60,9 +60,13 @@ process RFDPolyDesign {
         : ""
 
     // Hotspot residues for binding guidance (per polymer-pair type keys)
-    // Supported keys: inference.protein_dna_hotspot_res, inference.protein_rna_hotspot_res, etc.
+    // Dynamically select correct hotspot key based on first chain type
+    def first_chain = polymer_chains.tokenize(',')[0]?.trim()?.toLowerCase()
+    def hotspot_key = first_chain == 'rna' ? 'inference.protein_rna_hotspot_res'
+                    : first_chain == 'dna' ? 'inference.protein_dna_hotspot_res'
+                    : 'inference.protein_protein_hotspot_res'
     def hotspot_arg = params.hotspot_residues && use_target_pdb
-        ? "inference.protein_dna_hotspot_res=[${params.hotspot_residues}]"
+        ? "${hotspot_key}=[${params.hotspot_residues}]"
         : ""
 
     // Note: noise_schedule is not a valid RFDpoly config key (causes Hydra error)
