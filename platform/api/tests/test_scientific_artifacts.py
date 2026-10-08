@@ -33,6 +33,10 @@ from services.scientific_artifacts import (
 from services.scientific_artifacts.writer import (
     ScientificArtifactError,
 )
+from tests.ngs_resource_fixture import ngs_resources
+
+
+pytestmark = pytest.mark.usefixtures("ngs_resources")
 
 
 def _publish_same_artifact(root, barrier, results) -> None:
