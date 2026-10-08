@@ -767,11 +767,10 @@ class MutagenesisRequest(SequenceInput):
     new_name: Optional[str] = None
 
 
-class NucleotideSequenceResponse(BaseModel):
+class SavedSequenceMetadata(BaseModel):
     id: str
     name: str
     description: Optional[str]
-    sequence: str
     sequence_type: str
     is_circular: bool
     length: int
@@ -789,6 +788,10 @@ class NucleotideSequenceResponse(BaseModel):
     updated_at: Optional[datetime]
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class NucleotideSequenceResponse(SavedSequenceMetadata):
+    sequence: str
 
 
 class PCRProductResponse(BaseModel):
@@ -932,7 +935,7 @@ class AssemblyProductResponse(BaseModel):
 
 class AssemblyOperationResponse(BaseModel):
     product: AssemblyProductResponse
-    saved_sequence: Optional[NucleotideSequenceResponse] = None
+    saved_sequence: NucleotideSequenceResponse | SavedSequenceMetadata | None = None
     message: str
 
 
@@ -1065,7 +1068,7 @@ class GibsonDesignResponse(BaseModel):
     selected_product: AssemblyProductResponse
     warnings: List[str] = Field(default_factory=list)
     source_provenance: List[dict[str, Any]] = Field(default_factory=list)
-    saved_sequence: Optional[NucleotideSequenceResponse] = None
+    saved_sequence: NucleotideSequenceResponse | SavedSequenceMetadata | None = None
     message: str
 
 
@@ -1403,7 +1406,7 @@ def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductR
 def gibson_design_to_response(
     result: GibsonDesignResult,
     *,
-    saved_sequence: Optional[NucleotideSequence] = None,
+    saved_sequence: NucleotideSequence | SavedSequenceMetadata | None = None,
     message: str = "Designed Gibson assembly",
 ) -> GibsonDesignResponse:
     if not result.selected_candidate_checksum:
@@ -1521,6 +1524,16 @@ async def persist_assembly_product(
 
     input_revisions = []
     inline_inputs = []
+    # Transaction-local immutable source authority, never a cross-request cache.
+    resolved_sources = {}
+    source_keys = {(f.source_sequence_id, f.source_revision) for f in product.fragments if f.source_sequence_id}
+    # Resolve heads first so an explicit reference to the same revision reuses it,
+    # regardless of part order. Historical revisions remain distinct.
+    for source_key in sorted(source_keys, key=lambda key: (key[0], key[1] is not None, key[1] or 0)):
+        if source_key not in resolved_sources:
+            resolved = await _assembly_source_revision(session, *source_key)
+            resolved_sources[source_key] = resolved
+            resolved_sources[(source_key[0], resolved[0].revision_number)] = resolved
     for fragment in product.fragments:
         fragment_snapshot = {
             "fragment": {
@@ -1540,9 +1553,8 @@ async def persist_assembly_product(
             }
         }
         if fragment.source_sequence_id:
-            source_revision, source = await _assembly_source_revision(
-                session, fragment.source_sequence_id, fragment.source_revision
-            )
+            source_key = (fragment.source_sequence_id, fragment.source_revision)
+            source_revision, source = resolved_sources[source_key]
             start = fragment.source_start
             end = fragment.source_end
             if (start is None) != (end is None):
@@ -2322,6 +2334,7 @@ async def simulate_ligation_assembly(request: LigationAssemblyRequest):
 async def save_ligation_assembly(
     request: LigationAssemblyRequest,
     session: AsyncSession = Depends(get_molbio_session),
+    response_view: Literal["full", "compact"] = "full",
 ):
     try:
         product = await run_in_threadpool(simulate_ligation,
@@ -2340,7 +2353,7 @@ async def save_ligation_assembly(
     )
     return AssemblyOperationResponse(
         product=assembly_product_to_response(product),
-        saved_sequence=saved,
+        saved_sequence=(SavedSequenceMetadata.model_validate(saved) if response_view == "compact" else saved),
         message=f"Saved ligation product '{saved.name}'",
     )
 
@@ -2759,6 +2772,7 @@ async def design_gibson_assembly(
 async def save_designed_gibson_assembly(
     request: GibsonDesignRequest,
     session: AsyncSession = Depends(get_molbio_session),
+    response_view: Literal["full", "compact"] = "full",
 ):
     if not request.selected_candidate_checksum:
         raise HTTPException(
@@ -2810,7 +2824,7 @@ async def save_designed_gibson_assembly(
         )
         response = gibson_design_to_response(
             result,
-            saved_sequence=saved,
+            saved_sequence=(SavedSequenceMetadata.model_validate(saved) if response_view == "compact" else saved),
             message="Saved the computed Gibson assembly without replanning",
         )
         response.computation_id = computation_id
@@ -2842,6 +2856,7 @@ async def simulate_gibson_assembly(request: GibsonAssemblyRequest):
 async def save_gibson_assembly(
     request: GibsonAssemblyRequest,
     session: AsyncSession = Depends(get_molbio_session),
+    response_view: Literal["full", "compact"] = "full",
 ):
     try:
         product = await run_in_threadpool(simulate_gibson,
@@ -2862,7 +2877,7 @@ async def save_gibson_assembly(
     )
     return AssemblyOperationResponse(
         product=assembly_product_to_response(product),
-        saved_sequence=saved,
+        saved_sequence=(SavedSequenceMetadata.model_validate(saved) if response_view == "compact" else saved),
         message=f"Saved Gibson product '{saved.name}'",
     )
 
@@ -2931,6 +2946,7 @@ async def simulate_golden_gate_assembly(request: GoldenGateAssemblyRequest):
 async def save_golden_gate_assembly(
     request: GoldenGateAssemblyRequest,
     session: AsyncSession = Depends(get_molbio_session),
+    response_view: Literal["full", "compact"] = "full",
 ):
     try:
         enzyme = resolve_golden_gate_enzyme(
@@ -2971,7 +2987,7 @@ async def save_golden_gate_assembly(
     )
     return AssemblyOperationResponse(
         product=assembly_product_to_response(product),
-        saved_sequence=saved,
+        saved_sequence=(SavedSequenceMetadata.model_validate(saved) if response_view == "compact" else saved),
         message=f"Saved Golden Gate product '{saved.name}'",
     )
 

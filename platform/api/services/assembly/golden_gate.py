@@ -14,7 +14,7 @@ from services.restriction_catalog import (
 )
 
 from .common import orient_fragment
-from .ligation import simulate_ligation
+from .ligation import _ligate_oriented_fragments
 from .types import (
     AssemblyError,
     AssemblyFragment,
@@ -173,7 +173,7 @@ def simulate_golden_gate(
                     f"{enzyme.name} requires {enzyme.overhang_length} nt overhangs"
                 )
 
-    product = simulate_ligation(fragments, circular=circular, mode="golden_gate")
+    product = _ligate_oriented_fragments(oriented, circular=circular, mode="golden_gate")
     warnings = list(product.warnings)
     # Advisory classes only: do not reinterpret end metadata or alter ligation.
     # A sequence and its reverse complement describe the same cohesive-end class.
