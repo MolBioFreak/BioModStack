@@ -964,3 +964,70 @@ input[type="range"]::-webkit-slider-runnable-track {
 [class*="seqviz"] svg text[style*="font-size"] {
   fill: var(--text-primary) !important;
 }
+
+/* ============================================
+   MOL BIO HEADER + SEQUENCE OVERVIEW INTERACTION
+   ============================================ */
+
+.sequence-header-scroll {
+  cursor: grab;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-primary) color-mix(in srgb, var(--bg-primary) 70%, transparent);
+  touch-action: pan-y;
+  user-select: none;
+}
+
+.sequence-header-scroll:active {
+  cursor: grabbing;
+}
+
+.sequence-header-scroll button,
+.sequence-header-scroll [role="button"],
+.sequence-header-scroll input,
+.sequence-header-scroll select {
+  user-select: none;
+}
+
+.sequence-header-scroll::-webkit-scrollbar {
+  height: 8px;
+}
+
+.sequence-header-scroll::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
+  border-radius: 9999px;
+}
+
+.sequence-header-scroll::-webkit-scrollbar-thumb {
+  background: var(--accent-primary);
+  border-radius: 9999px;
+}
+
+.sequence-header-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--link-hover);
+}
+
+.sequence-viewer {
+  --bms-seq-track-bg: color-mix(in srgb, var(--bg-primary) 76%, black 24%);
+  --bms-seq-track-border: color-mix(in srgb, var(--accent-primary) 36%, var(--border-primary));
+}
+
+/* SeqViz's compact linear overview is important navigation, but the default
+   dark-theme rendering was too low-contrast and read like a throwaway strip. */
+.sequence-viewer svg[width][height] {
+  shape-rendering: geometricPrecision;
+}
+
+.sequence-viewer svg rect[fill="#fff"],
+.sequence-viewer svg rect[fill="white"],
+.sequence-viewer svg rect[fill="transparent"] {
+  stroke: var(--bms-seq-track-border) !important;
+  stroke-width: 0.75px !important;
+}
+
+.sequence-viewer svg text {
+  paint-order: stroke;
+  stroke: color-mix(in srgb, var(--bg-primary) 82%, transparent);
+  stroke-width: 2px;
+  stroke-linejoin: round;
+}
