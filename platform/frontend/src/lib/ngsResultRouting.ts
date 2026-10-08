@@ -86,7 +86,7 @@ export function ngsToolkitViewFromSearch(search: string): NgsToolkitView {
     if (section === 'analyses' || section === 'evidence') return 'runs';
     if ((params.get('view') || '').trim().toLowerCase() === 'workbench') return 'runs';
     if (section === 'instrument') return 'instrument';
-    if ((params.get('job_id') || '').trim()) return 'runs';
+    if ((params.get('job_id') || '').trim() || (params.get('viewer_session_id') || '').trim()) return 'runs';
     return 'launch';
 }
 
@@ -98,6 +98,8 @@ export function ngsToolkitSearchForView(search: string, view: NgsToolkitView): s
         params.delete('job_id');
         params.delete('view');
         params.delete('viewer_session_id');
+        params.delete('native_member_receipt_id');
+        params.delete('member_receipt_sha256');
         if (view === 'instrument') params.set('section', 'instrument');
         else params.delete('section');
     }

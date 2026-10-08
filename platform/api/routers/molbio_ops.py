@@ -361,9 +361,10 @@ async def get_sequence_revision(
     revision_id: str,
     molbio_session: AsyncSession = Depends(get_molbio_session),
 ) -> dict[str, Any]:
-    sequence = await molbio_session.get(NucleotideSequence, sequence_id)
     revision = await molbio_session.get(MolecularRevision, revision_id)
-    if sequence is None or revision is None or revision.document_id != sequence_id:
+    # The immutable revision owns historical content. A deleted mutable list
+    # projection must not invalidate an exact, document-bound revision read.
+    if revision is None or revision.document_id != sequence_id:
         raise HTTPException(status_code=404, detail="Saved molecular sequence revision not found")
     document = await molbio_session.get(MolecularDocument, sequence_id)
     detail = _revision_summary(

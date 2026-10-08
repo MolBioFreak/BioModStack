@@ -94,6 +94,11 @@ export interface ReadyPreview {
     job_id: string; session_id: string; catalog_authority_sha256: string;
     preview_request_id: string; preview_authority_sha256: string;
     selected_read_count: number; selected_record_count: number;
+    population: {
+        eligible_read_count: number; target_read_count: number; excluded_long_cigar_reads: number;
+        population_state: 'empty' | 'reduced' | 'capped' | 'complete';
+        population_reasons: ('no_mapped_primary_reads' | 'read_limit' | 'long_cigar_exclusion' | 'record_limit' | 'byte_limit' | 'admission_limit_not_recorded')[];
+    };
     bam: { url: string; sha256: string; size_bytes: number; mime_type: string; range_capable: true };
     index: ReadyPreview["bam"];
 }
@@ -121,7 +126,7 @@ export async function fetchReadyPreview(session: import("./ngsAlignmentSession")
         `/api/jobs/${encodeURIComponent(session.job_id)}/alignment-sessions/${session.session_id}/preview-product`,
         { signal, params: { preview_request_id: status.preview.state === "ready" ? status.preview.request_id : null } }));
     const row = exact(response.data, ["schema", "job_id", "session_id", "source", "catalog_authority_sha256", "preview_request_id",
-        "preview_authority_sha256", "policy", "selected_read_count", "selected_record_count", "bam", "index"]);
+        "preview_authority_sha256", "policy", "population", "selected_read_count", "selected_record_count", "bam", "index"]);
     if (row.schema !== "bms.ngs.alignment-preview.v6" || row.job_id !== session.job_id || row.session_id !== session.session_id
         || row.catalog_authority_sha256 !== status.catalog.authority_sha256 || row.preview_request_id !== status.preview.request_id
         || row.preview_authority_sha256 !== status.preview.authority_sha256) throw new Error("Preview publication changed.");
@@ -150,6 +155,17 @@ export async function fetchReadyPreview(session: import("./ngsAlignmentSession")
     for (const key of ["selected_read_count", "selected_record_count"]) {
         if (!Number.isSafeInteger(row[key]) || Number(row[key]) < 0) throw new Error("Invalid preview counts.");
     }
+    const population = exact(row.population, ['eligible_read_count', 'target_read_count', 'excluded_long_cigar_reads', 'population_state', 'population_reasons']);
+    for (const key of ['eligible_read_count', 'target_read_count', 'excluded_long_cigar_reads']) {
+        if (!Number.isSafeInteger(population[key]) || Number(population[key]) < 0) throw new Error('Invalid preview population.');
+    }
+    const target = Math.min(5000, Number(population.eligible_read_count));
+    const selected = Number(row.selected_read_count);
+    const disposition = selected === 0 ? 'empty' : selected < target ? 'reduced' : Number(population.eligible_read_count) > target ? 'capped' : 'complete';
+    if (population.target_read_count !== target || selected > target || population.population_state !== disposition
+        || !Array.isArray(population.population_reasons)
+        || population.population_reasons.some((reason) => !['no_mapped_primary_reads', 'read_limit', 'long_cigar_exclusion', 'record_limit', 'byte_limit', 'admission_limit_not_recorded'].includes(reason))
+        || new Set(population.population_reasons).size !== population.population_reasons.length) throw new Error('Preview population changed.');
     if (Number(row.selected_read_count) > 5000 || Number(row.selected_record_count) > 20000
         || Number(row.selected_read_count) > Number(row.selected_record_count)) throw new Error("Preview limits changed.");
     for (const key of ["bam", "index"]) {

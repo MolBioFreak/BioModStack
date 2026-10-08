@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_session as get_core_session
@@ -488,6 +488,15 @@ async def _native_rows(session: AsyncSession, model: Any, *, domain_id: str, ide
     return list((await session.scalars(statement)).all())
 
 
+def _linked_receipt_kind_filter(kinds):
+    # Connector-delivered native members keep their real wrapper identity. Their
+    # verified native kind participates in eligibility BEFORE pagination.
+    return or_(ExperimentExternalEntityReceipt.entity_kind.in_(kinds), and_(
+        ExperimentExternalEntityReceipt.entity_kind == "ngs_molbio_member_receipt",
+        func.json_extract(ExperimentExternalEntityReceipt.acknowledgement_json, "$.metadata.receipt_kind").in_(kinds & {"ngs_job", "ngs_result_manifest"}),
+    ))
+
+
 async def _project_hub_linked_receipts(
     session: AsyncSession,
     *,
@@ -503,7 +512,7 @@ async def _project_hub_linked_receipts(
             ExperimentExternalEntityReceipt.workspace_id == project_id,
             ExperimentLineageEdge.workspace_id == project_id,
             ExperimentLineageEdge.source_resource_id == domain_id,
-            ExperimentExternalEntityReceipt.entity_kind.in_(kinds),
+            _linked_receipt_kind_filter(kinds),
         )
         .order_by(ExperimentExternalEntityReceipt.created_at.desc(), ExperimentExternalEntityReceipt.id.desc())
         .limit(limit)
@@ -516,6 +525,17 @@ def _hub_acknowledgement(row: ExperimentExternalEntityReceipt) -> dict[str, Any]
     except (TypeError, ValueError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _native_member_reopen_href(row, domain_id):
+    ack = _hub_acknowledgement(row)
+    metadata = ack.get("metadata") or {}
+    if row.entity_kind == "ngs_molbio_member_receipt" and metadata.get("receipt_kind") in {"ngs_job", "ngs_result_manifest"}:
+        # Render historical wrapper links through the same exact native owner;
+        # do not edit old acknowledgements or replace their content digest.
+        return "/ngs?" + urlencode({"domain_experiment_id": domain_id,
+            "native_member_receipt_id": row.entity_id, "member_receipt_sha256": row.content_digest})
+    return ack.get("reopen_uri")
 
 
 def _hub_href(value: Any) -> str | None:
@@ -815,20 +835,21 @@ async def project_hub(
             metadata = {}
         sequence_id = str(metadata.get("plasmid_sequence_id") or "")
         plasmid_name = names_by_sequence.get(sequence_id, str(metadata.get("plasmid_name") or "Unassigned plasmid"))
-        if row.entity_kind in sequence_kinds:
+        native_kind = metadata.get("receipt_kind") if row.entity_kind == "ngs_molbio_member_receipt" else row.entity_kind
+        if native_kind in sequence_kinds:
             sequence_items.append({
                 "id": row.entity_id, "plasmid_sequence_id": sequence_id, "plasmid_name": plasmid_name,
-                "kind": "run" if row.entity_kind in {"ont_instrument_run", "ngs_job"} else "read_set" if row.entity_kind == "ngs_read_set" else "alignment",
-                "title": str(metadata.get("title") or row.entity_kind.replace("_", " ").title()),
+                "kind": "run" if native_kind in {"ont_instrument_run", "ngs_job"} else "read_set" if native_kind == "ngs_read_set" else "alignment",
+                "title": str(metadata.get("title") or str(native_kind).replace("_", " ").title()),
                 "summary": str(metadata.get("summary") or ""), "status": str(metadata.get("status") or row.availability),
-                "created_at": row.created_at, "reopen_href": ack.get("reopen_uri"),
+                "created_at": row.created_at, "reopen_href": _native_member_reopen_href(row, domain_id),
             })
-        if row.entity_kind in result_kinds:
+        if native_kind in result_kinds:
             result_items.append({
                 "id": row.entity_id, "plasmid_sequence_id": sequence_id, "plasmid_name": plasmid_name,
-                "type": str(metadata.get("title") or row.entity_kind.replace("_", " ").title()),
+                "type": str(metadata.get("title") or str(native_kind).replace("_", " ").title()),
                 "status": str(metadata.get("status") or row.availability), "owner": str(metadata.get("owner") or row.entity_id),
-                "created_at": row.created_at, "summary": metadata.get("summary"), "reopen_href": ack.get("reopen_uri"),
+                "created_at": row.created_at, "summary": metadata.get("summary"), "reopen_href": _native_member_reopen_href(row, domain_id),
             })
 
     activities = list((await session.scalars(
@@ -1112,11 +1133,11 @@ async def evidence(project_id: str, experiment_id: str, domain_id: str, cursor: 
 
 async def _receipt_collection(session: AsyncSession, *, project_id: str, domain_id: str, kinds: set[str], cursor: str | None, limit: int, scope: str) -> dict[str, Any]:
     anchor = decode_cursor(cursor, scope=scope, limit=limit)
-    statement = select(ExperimentExternalEntityReceipt).join(ExperimentLineageEdge, ExperimentLineageEdge.target_resource_id == ExperimentExternalEntityReceipt.id).where(ExperimentExternalEntityReceipt.workspace_id == project_id, ExperimentLineageEdge.workspace_id == project_id, ExperimentLineageEdge.source_resource_id == domain_id, ExperimentExternalEntityReceipt.entity_kind.in_(kinds)).order_by(ExperimentExternalEntityReceipt.created_at.desc(), ExperimentExternalEntityReceipt.id.desc()).limit(limit + 1)
+    statement = select(ExperimentExternalEntityReceipt).join(ExperimentLineageEdge, ExperimentLineageEdge.target_resource_id == ExperimentExternalEntityReceipt.id).where(ExperimentExternalEntityReceipt.workspace_id == project_id, ExperimentLineageEdge.workspace_id == project_id, ExperimentLineageEdge.source_resource_id == domain_id, _linked_receipt_kind_filter(kinds)).order_by(ExperimentExternalEntityReceipt.created_at.desc(), ExperimentExternalEntityReceipt.id.desc()).limit(limit + 1)
     if anchor:
         statement = statement.where(or_(ExperimentExternalEntityReceipt.created_at < anchor[0], (ExperimentExternalEntityReceipt.created_at == anchor[0]) & (ExperimentExternalEntityReceipt.id < anchor[1])))
     rows = list((await session.scalars(statement)).unique().all())
-    return _native_page(rows, scope=scope, limit=limit, identity="id", document=lambda row: {"receipt_id": row.id, "entity_kind": row.entity_kind, "entity_id": row.entity_id, "native_revision_or_generation": row.generation_or_revision, "content_digest": row.content_digest, "availability": row.availability, "reopen_uri": json.loads(row.acknowledgement_json or "{}").get("reopen_uri"), "created_at": row.created_at})
+    return _native_page(rows, scope=scope, limit=limit, identity="id", document=lambda row: {"receipt_id": row.id, "entity_kind": row.entity_kind, "entity_id": row.entity_id, "native_revision_or_generation": row.generation_or_revision, "content_digest": row.content_digest, "availability": row.availability, "reopen_uri": _native_member_reopen_href(row, domain_id), "created_at": row.created_at})
 
 
 @router.get(D + "/operations")

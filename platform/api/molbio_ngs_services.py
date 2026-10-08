@@ -1063,6 +1063,20 @@ def _require_resolved_receipt_authority(
         )
 
 
+async def _state_ancestor(session, domain_id, ancestor_id, parent_id):
+    """Prove an immutable chain; do not reinterpret launch at current head."""
+    seen = set()
+    while parent_id and parent_id not in seen:
+        seen.add(parent_id)
+        revision = await session.get(MolBioNGSDomainStateRevision, parent_id)
+        if revision is None or revision.global_domain_experiment_id != domain_id:
+            return False
+        if revision.id == ancestor_id:
+            return True
+        parent_id = revision.parent_revision_id
+    return False
+
+
 async def _validate_domain_owned_receipts(
     session: AsyncSession,
     core_session: AsyncSession | None,
@@ -1136,7 +1150,7 @@ async def _validate_domain_owned_receipts(
                     or assessment.global_domain_experiment_id
                     != global_domain_experiment_id
                     or parent_revision_id is None
-                    or assessment.state_revision_id != parent_revision_id
+                    or not await _state_ancestor(session, global_domain_experiment_id, assessment.state_revision_id, parent_revision_id)
                 ):
                     raise StateValidationError(
                         "evidence assessment receipt is not owned by this Domain Experiment or exact parent state"
@@ -1184,7 +1198,7 @@ async def _validate_domain_owned_receipts(
                     not isinstance(bound_state_revision_id, str)
                     or not bound_state_revision_id
                     or parent_revision_id is None
-                    or bound_state_revision_id != parent_revision_id
+                    or not await _state_ancestor(session, global_domain_experiment_id, bound_state_revision_id, parent_revision_id)
                 ):
                     raise StateValidationError(
                         "NGS job receipt lacks an exact state binding to the target state revision"
@@ -1278,7 +1292,7 @@ async def _validate_domain_owned_receipts(
                 != global_domain_experiment_id
                 or (
                     parent_revision_id is not None
-                    and association_state.id != parent_revision_id
+                    and not await _state_ancestor(session, global_domain_experiment_id, association_state.id, parent_revision_id)
                 )
             ):
                 raise StateValidationError(

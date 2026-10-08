@@ -16,6 +16,7 @@ from starlette.concurrency import run_in_threadpool
 from services import ngs_alignment_sessions
 from services.job_result_roots import resolve_persisted_job_result_root
 from services.ont_ngs_completion import OntNgsCompletionError
+from services.ont_ngs_native_settings import seal_native_settings
 from services.ont_ngs_contract import DORADO_LOCK_PATH, ont_workflow_identity_values
 from services.ont_ngs_native_completion import _digest, _identity, _document, _require, validate_pooled_producer
 from services.ont_pooled_reference_assignment import (
@@ -214,7 +215,9 @@ def _validate_native(job, manifest_row, targets):
                          for name, (digest, size) in sorted(ids.items())]
             artifacts.append({"path": "pooled_reference_assignment/intended_pool.igv_session.json", "sha256": igv_sha,
                               "size_bytes": _identity(root / "intended_pool.igv_session.json")[1]})
-            return {"result_kind": "ont_native_pooled_assignment", "state": "validated",
+            return {"result_kind": "ont_native_pooled_assignment", "state": "validated", "partial": False,
+                    "workflow_id": "ont_pooled_reference_assignment", "input_mode": "fastq",
+                    **seal_native_settings(job.params),
                     "scientific_status": "REVIEW", "release_state": "awaiting_operator_release",
                     "reference_set_id": str(manifest_row.id), "manifest_sha256": manifest_row.manifest_sha256,
                     "assignment_summary_sha256": context["summary_sha256"], "record_count": count,

@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     archiveMolBioNgsReference,
     assessMolBioNgsEvidence,
     attachMolBioNgsInstrumentRunEvidence,
     attachMolBioNgsJobEvidence,
+    fetchMolBioNgsJobEvidenceIdentities,
+    fetchMolBioNgsAttachmentDelivery,
     createMolBioNgsReference,
     createMolBioNgsReferenceRevision,
     createMolBioNgsSample,
@@ -361,6 +363,28 @@ export function DomainEvidenceMutationPanel({
 }) {
     const queryClient = useQueryClient();
     const [jobId, setJobId] = useState('');
+    const [manifestIdentity, setManifestIdentity] = useState('');
+    const retryKeys = useRef(new Map<string, string>());
+    const [savedAttachment, setAttachment] = useState<{ domain: string; revision: string; receipt: string; selection: string | null } | null>(null);
+    const attachedReceipt = memberReceipt(members, 'ngs_analysis_result_manifest');
+    const attachment = savedAttachment?.domain === domainExperimentId && savedAttachment.selection === stateRevisionId
+        ? savedAttachment : stateRevisionId && attachedReceipt
+            ? { domain: domainExperimentId, revision: stateRevisionId, receipt: attachedReceipt } : null;
+    const identitiesQuery = useQuery({
+        queryKey: ['molbio-ngs-job-identities', domainExperimentId, jobId.trim()],
+        queryFn: () => fetchMolBioNgsJobEvidenceIdentities(domainExperimentId, jobId.trim()),
+        enabled: Boolean(jobId.trim()), retry: false,
+    });
+    const deliveryQuery = useQuery({
+        queryKey: ['molbio-ngs-attachment-delivery', attachment],
+        queryFn: () => fetchMolBioNgsAttachmentDelivery(attachment!.domain, attachment!.revision, attachment!.receipt),
+        enabled: attachment?.domain === domainExperimentId, retry: false,
+        refetchInterval: (query) => query.state.data?.project_delivery === 'pending' ? 2500 : false,
+    });
+    const identity = manifestIdentity || (identitiesQuery.data?.identities.length === 1 ? identitiesQuery.data.identities[0] : '');
+    const attachmentOwner = useRef('');
+    attachmentOwner.current = JSON.stringify([domainExperimentId, jobId.trim(), identity]);
+    useEffect(() => { setManifestIdentity(''); }, [domainExperimentId, jobId]);
     const [runId, setRunId] = useState('');
     const [observedGeneration, setObservedGeneration] = useState('1');
     const [stateId, setStateId] = useState(stateRevisionId ?? '');
@@ -387,11 +411,28 @@ export function DomainEvidenceMutationPanel({
     }, [members, stateRevisionId, stateRevisions]);
 
     const jobAttachMutation = useMutation({
-        mutationFn: () => {
+        mutationFn: async () => {
             if (!jobId.trim()) throw new Error('Enter a job ID.');
-            return attachMolBioNgsJobEvidence(domainExperimentId, { job_id: jobId.trim(), idempotency_key: crypto.randomUUID() });
+            if (!stateId || !identity || !identitiesQuery.data?.identities.includes(identity)) throw new Error('Select an exact state and produced result identity.');
+            const operation = JSON.stringify([domainExperimentId, jobId.trim(), identity, stateId]);
+            if (!retryKeys.current.has(operation)) retryKeys.current.set(operation, crypto.randomUUID());
+            const owner = attachmentOwner.current;
+            const result = await attachMolBioNgsJobEvidence(domainExperimentId, { job_id: jobId.trim(),
+                manifest_identity: identity, state_revision_id: stateId, idempotency_key: retryKeys.current.get(operation)! });
+            return { result, owner };
         },
-        onSuccess: (result) => { setJobReceiptId(result.ngs_job.receipt_id); setManifestReceiptId(result.ngs_result_manifest.receipt_id); setNotice('Job and result-manifest receipts attached.'); setError(null); void queryClient.invalidateQueries({ queryKey: ['molbio-ngs-evidence', domainExperimentId] }); },
+        onSuccess: ({ result, owner }) => {
+            if (attachmentOwner.current !== owner) return;
+            setJobReceiptId(result.ngs_job.receipt_id);
+            // Native evidence is not a QC assessment input. Keep assessment
+            // bound to the original scientific launch state, not membership head.
+            setManifestReceiptId(result.ngs_result_manifest.source_schema === 'bms.ngs.native-scientific-result.v1' ? '' : result.ngs_result_manifest.receipt_id);
+            setAttachment({ domain: domainExperimentId, revision: result.state_revision_id, receipt: result.ngs_result_manifest.receipt_id, selection: stateRevisionId });
+            setNotice(`Native receipts and Domain membership saved at ${result.state_revision_id}. Project delivery: ${result.project_delivery}. QC assessment is a separate operation.`);
+            setError(null);
+            void queryClient.invalidateQueries({ queryKey: ['molbio-ngs-state-revisions', domainExperimentId] });
+            void queryClient.invalidateQueries({ queryKey: ['molbio-ngs-evidence', domainExperimentId] });
+        },
         onError: (value: unknown) => { setError(value instanceof Error ? value.message : 'Job evidence attachment failed.'); setNotice(null); },
     });
     const runAttachMutation = useMutation({
@@ -407,9 +448,10 @@ export function DomainEvidenceMutationPanel({
     });
     const assessmentMutation = useMutation({
         mutationFn: () => {
+            if (identity === 'native-scientific-result') throw new Error('Native scientific evidence cannot be assessed as sequence QC. Select an actual QC manifest.');
             if (!stateId || !jobReceiptId || !manifestReceiptId || !referenceReceiptId) throw new Error('State, job, result-manifest, and reference receipts are required.');
             const payload: EvidenceAssessmentRequest = {
-                state_revision_id: stateId,
+                state_revision_id: identitiesQuery.data?.launch_state_revision_id || stateId,
                 sample_revision_id: sampleRevisionId || null,
                 ngs_job_receipt_id: jobReceiptId,
                 ngs_result_manifest_receipt_id: manifestReceiptId,
@@ -435,8 +477,17 @@ export function DomainEvidenceMutationPanel({
                 <Field label="Assessment rule"><input className={`${INPUT} mt-1`} value={assessmentRuleId} onChange={(event) => setAssessmentRuleId(event.target.value)} disabled={!canMutate} /></Field>
             </div>
             <div className="mt-3 grid gap-3 rounded-md border border-border-primary bg-surface-secondary p-3 md:grid-cols-[1fr_auto]">
+                <Field label="Produced result identity"><select className={`${INPUT} mt-1`} value={identity} onChange={(event) => setManifestIdentity(event.target.value)} disabled={!canMutate || identitiesQuery.isFetching}>
+                    <option value="">Select a produced identity</option>
+                    {identitiesQuery.data?.identities.map((value) => <option key={value} value={value}>{value === 'native-scientific-result' ? 'Native scientific result (not QC)' : 'Sequence QC manifest'}</option>)}
+                </select></Field>
+                {identitiesQuery.error && <p role="alert">{identitiesQuery.error instanceof Error ? identitiesQuery.error.message : 'Result identities unavailable.'}</p>}
+                {attachment?.domain === domainExperimentId && <div role="status">Project delivery: {deliveryQuery.data?.project_delivery ?? 'loading'}.
+                    {deliveryQuery.error && <p role="alert">Delivery status unavailable; membership remains saved.</p>}
+                    <button type="button" className={BUTTON} onClick={() => { void deliveryQuery.refetch(); }}>Refresh delivery</button>
+                </div>}
                 <Field label="NGS job ID"><input className={`${INPUT} mt-1`} value={jobId} onChange={(event) => setJobId(event.target.value)} disabled={!canMutate} placeholder="Attach job receipts before assessment" /></Field>
-                <div className="flex items-end"><button type="button" className={BUTTON} onClick={() => jobAttachMutation.mutate()} disabled={!canMutate || jobAttachMutation.isPending}>{jobAttachMutation.isPending ? 'Attaching…' : 'Attach job receipts'}</button></div>
+                <div className="flex items-end"><button type="button" className={BUTTON} onClick={() => jobAttachMutation.mutate()} disabled={!canMutate || !identity || jobAttachMutation.isPending}>{jobAttachMutation.isPending ? 'Attaching…' : 'Attach job receipts'}</button></div>
                 <Field label="ONT run ID"><input className={`${INPUT} mt-1`} value={runId} onChange={(event) => setRunId(event.target.value)} disabled={!canMutate} /></Field>
                 <Field label="Observed generation"><input className={`${INPUT} mt-1`} type="number" min="1" step="1" value={observedGeneration} onChange={(event) => setObservedGeneration(event.target.value)} disabled={!canMutate} /></Field>
                 <div className="flex items-end"><button type="button" className={BUTTON} onClick={() => runAttachMutation.mutate()} disabled={!canMutate || runAttachMutation.isPending}>{runAttachMutation.isPending ? 'Attaching…' : 'Attach run receipt'}</button></div>
@@ -452,7 +503,7 @@ export function DomainEvidenceMutationPanel({
                 <Field label="Notes" wide><textarea className={`${INPUT} mt-1 min-h-16`} value={notes} onChange={(event) => setNotes(event.target.value)} disabled={!canMutate} /></Field>
             </div>
             {memberOptions.length > 0 && <p className="mt-3 text-[11px] text-content-muted">Current state receipts: {memberOptions.join(' · ')}</p>}
-            <button type="button" className={`${PRIMARY} mt-3`} onClick={() => assessmentMutation.mutate()} disabled={!canMutate || assessmentMutation.isPending}>{assessmentMutation.isPending ? 'Persisting…' : 'Create immutable evidence assessment'}</button>
+            <button type="button" className={`${PRIMARY} mt-3`} onClick={() => assessmentMutation.mutate()} disabled={!canMutate || identity === 'native-scientific-result' || !manifestReceiptId || assessmentMutation.isPending}>{assessmentMutation.isPending ? 'Persisting…' : 'Create immutable evidence assessment'}</button>
             <Notice message={notice} />
             <Notice message={error} error />
         </MutationBox>

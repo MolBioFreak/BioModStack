@@ -11,6 +11,7 @@ import {
     fetchGlobalExperiments,
     fetchGlobalWorkspaces,
     fetchMolBioNgsProjectExperiments,
+    fetchMolBioNgsDomainExperiment,
     VisibleApiError,
     type DomainExperimentView,
     type GlobalAggregateHead,
@@ -77,10 +78,22 @@ export function GlobalExperimentProvider({ children }: { children: ReactNode }) 
     const navigate = useNavigate();
     const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
 
-    const workspaceId = cleanQueryValue(params.get('workspace_id'));
-    const globalExperimentId = cleanQueryValue(params.get('global_experiment_id'));
+    const requestedWorkspaceId = cleanQueryValue(params.get('workspace_id'));
+    const requestedGlobalExperimentId = cleanQueryValue(params.get('global_experiment_id'));
     const domainExperimentId = cleanQueryValue(params.get('domain_experiment_id'));
     const stateRevisionId = cleanQueryValue(params.get('state_revision_id'));
+
+    const ownerQuery = useQuery({
+        queryKey: ['molbio-ngs-domain-owner', domainExperimentId],
+        queryFn: () => fetchMolBioNgsDomainExperiment(domainExperimentId as string),
+        enabled: domainExperimentId !== null,
+        retry: false,
+    });
+    // Resolve only omitted parents. Supplied conflicts remain visible failures,
+    // never silently rewritten URLs. Query-key ownership fences late responses.
+    const owner = ownerQuery.data;
+    const workspaceId = requestedWorkspaceId ?? owner?.project_id ?? null;
+    const globalExperimentId = requestedGlobalExperimentId ?? owner?.global_experiment_id ?? null;
 
     const workspaceQuery = useQuery({
         queryKey: ['global-workspaces'],
@@ -140,9 +153,12 @@ export function GlobalExperimentProvider({ children }: { children: ReactNode }) 
 
     const workspaceError = visibleError(workspaceQuery.error);
     const experimentError = visibleError(globalExperimentQuery.error);
-    const domainError = visibleError(domainExperimentQuery.error);
+    const domainError = visibleError(ownerQuery.error ?? domainExperimentQuery.error)
+        ?? (owner && (owner.project_id !== workspaceId || owner.global_experiment_id !== globalExperimentId)
+            ? new VisibleApiError('Domain Experiment owner conflicts with the supplied Project context.', null, 'Domain owner mismatch') : null);
     const bindingError = visibleError(bindingQuery.error);
     const isLoading = workspaceQuery.isLoading
+        || (domainExperimentId !== null && ownerQuery.isLoading)
         || (workspaceId !== null && globalExperimentQuery.isLoading)
         || (workspaceId !== null && domainExperimentQuery.isLoading)
         || (workspaceId !== null && globalExperimentId !== null && domainExperimentId !== null && bindingQuery.isLoading);

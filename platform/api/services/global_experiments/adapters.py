@@ -2350,101 +2350,30 @@ async def _exact_member_domain_owner(
 
 
 async def _exact_local_member_authority(
-    session: AsyncSession,
-    *,
-    member: ExternalMemberReceipt,
+    session: AsyncSession, *, member: ExternalMemberReceipt,
     expected_domain_id: str | None = None,
 ) -> tuple[str, str]:
-    """Resolve one persisted native receipt and its sole Domain owner.
-
-    Native resolvers issue a fresh wrapper receipt on each call, so ownership
-    cannot be proved from that transient receipt ID.  Resolve instead by the
-    complete immutable native identity and digest, then verify the persisted
-    canonical body before following its state-membership edge.
-    """
-
-    canonical_reopen = json.dumps(
-        member.reopen_destination,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    )
-    rows = list((await session.scalars(
-        select(MolBioNGSMemberReceipt)
-        .where(
-            MolBioNGSMemberReceipt.source_store_id == member.source_store_id,
-            MolBioNGSMemberReceipt.entity_kind == member.entity_kind,
-            MolBioNGSMemberReceipt.entity_id == member.entity_id,
-            MolBioNGSMemberReceipt.source_generation_or_revision
-            == str(member.source_generation_or_revision),
-            MolBioNGSMemberReceipt.content_digest == member.content_digest,
-            MolBioNGSMemberReceipt.availability == member.availability,
-            MolBioNGSMemberReceipt.reopen_destination == canonical_reopen,
-        )
-        .order_by(MolBioNGSMemberReceipt.receipt_id)
-        .limit(2)
-    )).all())
-    if len(rows) != 1:
-        raise AdapterError(
-            "source_contract_invalid",
-            "native immutable identity and digest do not resolve to one local member receipt",
-        )
-    row = rows[0]
+    """One immutable authority and sole Domain owner, not one random wrapper."""
+    from services.molbio_ngs_member_receipts import exact_native_member_rows
     try:
-        authority = serialize_external_member_receipt(row)
+        rows = await exact_native_member_rows(session, member)
     except ValueError as exc:
         raise AdapterError("source_digest_mismatch", str(exc)) from exc
-    expected = {
-        "source_store_id": member.source_store_id,
-        "entity_kind": member.entity_kind,
-        "entity_id": member.entity_id,
-        "source_generation_or_revision": str(member.source_generation_or_revision),
-        "content_digest": member.content_digest,
-        "source_schema": member.source_schema,
-        "availability": member.availability,
-        "reopen_destination": member.reopen_destination,
-    }
-    if any(authority.get(key) != value for key, value in expected.items()):
-        raise AdapterError(
-            "source_digest_mismatch",
-            "persisted local member receipt diverges from native immutable authority",
-        )
-    persisted_receipt_id = str(row.receipt_id)
-    canonical_receipt_id = authority.get("receipt_id")
-    if not isinstance(canonical_receipt_id, str) or canonical_receipt_id != persisted_receipt_id:
-        raise AdapterError(
-            "source_digest_mismatch",
-            "persisted local member receipt ID diverges from its canonical body",
-        )
-
-    def canonical_timestamp(value: Any) -> str:
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError("member receipt timestamp is invalid")
-        candidate = value.strip()
-        if candidate.endswith("Z"):
-            candidate = f"{candidate[:-1]}+00:00"
-        parsed = datetime.fromisoformat(candidate)
-        if parsed.tzinfo is None or parsed.utcoffset() is None:
-            raise ValueError("member receipt timestamp must be timezone-aware")
-        return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds")
-
-    try:
-        canonical_created_at = canonical_timestamp(authority.get("created_at"))
-        persisted_created_at = canonical_timestamp(row.created_at)
-    except (TypeError, ValueError) as exc:
-        raise AdapterError("source_digest_mismatch", str(exc)) from exc
-    if canonical_created_at != persisted_created_at:
-        raise AdapterError(
-            "source_digest_mismatch",
-            "persisted local member receipt timestamp diverges from its canonical body",
-        )
-
-    domain_id = await _exact_member_domain_owner(
-        session,
-        receipt_id=canonical_receipt_id,
-        expected_domain_id=expected_domain_id,
-    )
-    return domain_id, canonical_receipt_id
+    ownership = list((await session.execute(select(
+        MolBioNGSDomainStateRevision.global_domain_experiment_id,
+        MolBioNGSDomainStateMember.receipt_id,
+    ).join(MolBioNGSDomainStateMember,
+        MolBioNGSDomainStateMember.state_revision_id == MolBioNGSDomainStateRevision.id)
+     .where(MolBioNGSDomainStateMember.receipt_id.in_([row.receipt_id for row in rows]))
+     .distinct())).all())
+    domains = {domain for domain, _receipt in ownership}
+    if len(domains) != 1 or expected_domain_id is not None and domains != {expected_domain_id}:
+        raise AdapterError("source_contract_invalid", "native immutable authority does not resolve to one Domain owner")
+    # Equivalent historical wrappers may coexist. Choose a deterministic owned
+    # wrapper only after every canonical body and the complete owner union agree.
+    owned_ids = {receipt_id for _domain, receipt_id in ownership}
+    receipt_id = member.receipt_id if member.receipt_id in owned_ids else min(owned_ids)
+    return next(iter(domains)), receipt_id
 
 
 class ExactMolecularRevisionMemberAdapter:
@@ -3070,8 +2999,8 @@ def _ngs_discovery_metadata(job: Any) -> dict[str, Any]:
 
 
 def _ngs_discovery_statement():
-    model = func.lower(func.trim(Job.model_id))
-    return select(Job).where(or_(model.in_(NGS_MODEL_IDS), Job.model_id.is_(None), model == ""))
+    from services.molbio_ngs_member_receipts import ngs_job_eligibility
+    return select(Job).where(ngs_job_eligibility())
 
 
 class ExactNgsJobAdapter:
@@ -3093,7 +3022,7 @@ class ExactNgsJobAdapter:
         if normalized:
             pattern = f"%{normalized}%"
             statement = statement.where(or_(Job.id.ilike(pattern), Job.name.ilike(pattern)))
-        rows = list((await core_session.scalars(statement.order_by(Job.created_at.desc()).limit(limit))).all())
+        rows = list((await core_session.scalars(statement.order_by(Job.created_at.desc(), Job.id.desc()).limit(limit))).all())
         return [EntityProjection(row.id, self.entity_kind, _bounded_label(row.name, row.id), str(row.status), _ngs_discovery_metadata(row)) for row in rows if is_ngs_job_identity(row)]
 
     async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
@@ -3160,12 +3089,12 @@ class ExactNgsResultManifestAdapter:
         if normalized:
             pattern = f"%{normalized}%"
             statement = statement.where(or_(Job.id.ilike(pattern), Job.name.ilike(pattern)))
-        rows = list((await core_session.scalars(statement.order_by(Job.created_at.desc()).limit(limit))).all())
+        rows = list((await core_session.scalars(statement.order_by(Job.created_at.desc(), Job.id.desc()).limit(limit))).all())
         return [EntityProjection(
             urlencode({"job_id": row.id, "manifest_identity": identity}), self.entity_kind,
             _bounded_label(row.name, row.id), str(row.status),
             {"job_id": row.id, "manifest_identity": identity, **_ngs_discovery_metadata(row)},
-        ) for row in rows if is_ngs_job_identity(row) for identity in ngs_result_manifest_identities(row)]
+        ) for row in rows if is_ngs_job_identity(row) for identity in ngs_result_manifest_identities(row)][:limit]
 
     async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
         identity = _parse_composite_identity(entity_id, ("job_id", "manifest_identity"))

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, B
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, or_
 from sqlalchemy.exc import OperationalError
 from typing import Optional, List, Dict, Any, Callable, Mapping, NoReturn, cast
 from dataclasses import dataclass
@@ -5083,6 +5083,7 @@ async def list_jobs(
     mode: Optional[str] = None,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    ngs_only: bool = False,
     include_children: bool = False,  # New param: show child jobs if True
     summary: bool = False,  # Mobile/list views: omit heavyweight detail fields until a job is opened
     session: AsyncSession = Depends(get_session)
@@ -5136,6 +5137,9 @@ async def list_jobs(
         Job.awaiting_input,
         Job.awaiting_stage,
     )
+    if summary and ngs_only:
+        summary_columns += tuple(Job.params[key].as_string().label(key)
+            for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id"))
     selected_entities = summary_columns if summary else (Job,)
     design_counts = (
         select(
@@ -5168,9 +5172,12 @@ async def list_jobs(
         query = query.where(Job.mode == mode)
     
     if q:
-        query = query.where(Job.name.ilike(f"%{q}%"))
+        query = query.where(or_(Job.name.ilike(f"%{q}%"), Job.id.ilike(f"%{q}%")))
     
-    query = query.limit(limit).offset(offset)
+    if ngs_only:
+        from services.molbio_ngs_member_receipts import ngs_job_eligibility
+        query = query.where(ngs_job_eligibility())
+    query = query.order_by(Job.id.desc()).limit(limit).offset(offset)
     result = await session.execute(query)
     if summary:
         rows = [
@@ -5230,7 +5237,9 @@ async def list_jobs(
     if mode:
         count_query = count_query.where(Job.mode == mode)
     if q:
-        count_query = count_query.where(Job.name.ilike(f"%{q}%"))
+        count_query = count_query.where(or_(Job.name.ilike(f"%{q}%"), Job.id.ilike(f"%{q}%")))
+    if ngs_only:
+        count_query = count_query.where(ngs_job_eligibility())
     total = (await session.execute(count_query)).scalar()
 
     
@@ -5254,7 +5263,8 @@ async def list_jobs(
             status=job.status,
             model_id=job.model_id,
             mode=job.mode,
-            params={} if summary else _public_job_params(job),
+            params=({key: getattr(job, key) for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
+                     if getattr(job, key, None) is not None} if ngs_only else {}) if summary else _public_job_params(job),
             created_at=job.created_at,
             started_at=job.started_at,
             completed_at=job.completed_at,

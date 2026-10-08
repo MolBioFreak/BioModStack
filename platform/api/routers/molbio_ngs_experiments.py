@@ -62,6 +62,8 @@ from services.molbio_ngs_member_receipts import (
     resolve_sample_revision_receipt,
     resolve_state_revision_receipt,
     serialize_external_member_receipt,
+    is_ngs_job_identity,
+    ngs_result_manifest_identities,
 )
 from services.molbio_ngs_references import (
     append_reference_revision,
@@ -78,6 +80,9 @@ from services.molbio_ngs_references import (
 from services.molbio_ngs_evidence import (
     attach_instrument_run_evidence,
     attach_job_evidence,
+    attach_job_membership,
+    job_attachment_delivery,
+    reopen_job_member,
     create_evidence_assessment,
     get_evidence_assessment,
     list_evidence_assessments,
@@ -531,6 +536,8 @@ class ComparisonPanelReceiptRequest(StrictModel):
 
 class AttachJobEvidenceRequest(StrictModel):
     job_id: str = Field(min_length=1, max_length=128)
+    manifest_identity: Literal["sequence-qc-manifest", "native-scientific-result"] | None = None
+    state_revision_id: str | None = Field(default=None, min_length=1, max_length=128)
     idempotency_key: str = Field(min_length=1, max_length=255)
 
 
@@ -585,6 +592,8 @@ class ExternalMemberReceiptResponse(StrictModel):
 class AttachJobEvidenceResponse(StrictModel):
     ngs_job: ExternalMemberReceiptResponse
     ngs_result_manifest: ExternalMemberReceiptResponse
+    state_revision_id: str
+    project_delivery: Literal["pending", "delivered", "conflict"]
 
 
 class EvidenceReceiptIdsResponse(StrictModel):
@@ -1401,6 +1410,40 @@ async def issue_evidence_assessment_member_receipt(
         raise _member_receipt_http_error(exc) from exc
 
 
+@router.get("/experiments/{global_domain_experiment_id}/evidence/member-receipts/{receipt_id}/reopen")
+async def reopen_ngs_member(global_domain_experiment_id: str, receipt_id: str, session: DomainSession, core_session: CoreSession):
+    try:
+        return await reopen_job_member(session, core_session, domain_id=global_domain_experiment_id, receipt_id=receipt_id)
+    except (KeyError, ValueError, OSError, DomainStateNotFound, StateIntegrityError, StateValidationError) as exc:
+        raise _service_http_error(exc) from exc
+
+
+@router.get("/experiments/{global_domain_experiment_id}/evidence/jobs/{job_id}/identities")
+async def job_evidence_identities(global_domain_experiment_id: str, job_id: str, core_session: CoreSession):
+    from database import Job
+    job = await core_session.get(Job, job_id)
+    if (job is None or not is_ngs_job_identity(job) or not isinstance(job.params, dict)
+            or job.params.get("global_domain_experiment_id") != global_domain_experiment_id):
+        raise HTTPException(status_code=404, detail="Domain-owned NGS job was not found")
+    return {"job_id": job_id, "identities": ngs_result_manifest_identities(job),
+            "launch_state_revision_id": job.params.get("molbio_ngs_state_revision_id")}
+
+
+@router.get("/experiments/{global_domain_experiment_id}/evidence/attachments/{state_revision_id}/{receipt_id}")
+async def job_evidence_delivery(global_domain_experiment_id: str, state_revision_id: str, receipt_id: str, session: DomainSession):
+    from molbio_ngs_services import list_revision_members
+    try:
+        revision = await get_state_revision(session, global_domain_experiment_id, state_revision_id)
+        await verify_state_revision_integrity(session, revision)
+        members = await list_revision_members(session, revision.id)
+        if not any(m.receipt_id == receipt_id and m.role == "ngs_analysis_result_manifest" for m in members):
+            raise DomainStateNotFound("exact result membership was not found")
+        return {"state_revision_id": revision.id, "receipt_id": receipt_id,
+                "project_delivery": await job_attachment_delivery(session, revision.id, receipt_id)}
+    except (DomainStateNotFound, StateIntegrityError) as exc:
+        raise _service_http_error(exc) from exc
+
+
 @router.post(
     "/experiments/{global_domain_experiment_id}/evidence/attach-job",
     response_model=AttachJobEvidenceResponse,
@@ -1419,9 +1462,17 @@ async def attach_molbio_ngs_job_evidence(
             global_domain_experiment_id=global_domain_experiment_id,
             job_id=request.job_id,
             idempotency_key=request.idempotency_key,
+            manifest_identity=request.manifest_identity,
+            membership_parent_revision_id=request.state_revision_id,
         )
+        membership = await attach_job_membership(session, core_session,
+            domain_id=global_domain_experiment_id, job_receipt=job_receipt,
+            manifest_receipt=manifest_receipt, parent_revision_id=request.state_revision_id)
+        delivery = await job_attachment_delivery(session, membership.id, manifest_receipt.receipt_id)
         await session.commit()
         return AttachJobEvidenceResponse(
+            state_revision_id=membership.id,
+            project_delivery=delivery,
             ngs_job=ExternalMemberReceiptResponse.model_validate(
                 serialize_external_member_receipt(job_receipt)
             ),
@@ -1429,7 +1480,7 @@ async def attach_molbio_ngs_job_evidence(
                 serialize_external_member_receipt(manifest_receipt)
             ),
         )
-    except (KeyError, ValueError, OSError, DomainStateNotFound, IdempotencyConflict, StateIntegrityError, StateValidationError) as exc:
+    except (KeyError, ValueError, OSError, DomainStateNotFound, IdempotencyConflict, StateIntegrityError, StateValidationError, RevisionConflict, GlobalBindingError) as exc:
         await session.rollback()
         raise _service_http_error(exc) from exc
 
@@ -1457,7 +1508,7 @@ async def attach_molbio_ngs_instrument_run_evidence(
         )
         await session.commit()
         return serialize_external_member_receipt(receipt)
-    except (KeyError, ValueError, OSError, DomainStateNotFound, IdempotencyConflict, StateIntegrityError, StateValidationError) as exc:
+    except (KeyError, ValueError, OSError, DomainStateNotFound, IdempotencyConflict, StateIntegrityError, StateValidationError, RevisionConflict, GlobalBindingError) as exc:
         await session.rollback()
         raise _service_http_error(exc) from exc
 
@@ -1484,7 +1535,7 @@ async def assess_molbio_ngs_evidence(
         )
         await session.commit()
         return _evidence_response(assessment)
-    except (KeyError, ValueError, OSError, DomainStateNotFound, IdempotencyConflict, StateIntegrityError, StateValidationError) as exc:
+    except (KeyError, ValueError, OSError, DomainStateNotFound, IdempotencyConflict, StateIntegrityError, StateValidationError, RevisionConflict, GlobalBindingError) as exc:
         await session.rollback()
         raise _service_http_error(exc) from exc
 

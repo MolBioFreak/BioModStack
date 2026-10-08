@@ -301,6 +301,36 @@ def parse_canonical_member_receipt(canonical_receipt: str) -> dict[str, Any]:
     return parsed
 
 
+async def exact_native_member_rows(session, receipt):
+    """Normalize equivalent historical wrappers, never conflicting authorities."""
+    rows = list((await session.scalars(select(MolBioNGSMemberReceipt).where(
+        MolBioNGSMemberReceipt.source_store_id == receipt.source_store_id,
+        MolBioNGSMemberReceipt.entity_kind == receipt.entity_kind,
+        MolBioNGSMemberReceipt.entity_id == receipt.entity_id,
+        MolBioNGSMemberReceipt.source_generation_or_revision == str(receipt.source_generation_or_revision),
+    ).order_by(MolBioNGSMemberReceipt.receipt_id))).all())
+    expected = {key: getattr(receipt, key) for key in (
+        "source_store_id", "entity_kind", "entity_id", "content_digest", "source_schema", "availability", "reopen_destination")}
+    expected["source_generation_or_revision"] = str(receipt.source_generation_or_revision)
+    def timestamp(value):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("member receipt timestamp is invalid")
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("member receipt timestamp must be timezone-aware")
+        return parsed.astimezone(timezone.utc)
+    for row in rows:
+        body = serialize_external_member_receipt(row)
+        if (any(body.get(key) != value for key, value in expected.items())
+                or body["receipt_id"] != row.receipt_id or timestamp(body["created_at"]) != timestamp(row.created_at)
+                or any(getattr(row, key) != body[key] for key in (
+                    "source_store_id", "entity_kind", "entity_id", "source_generation_or_revision", "content_digest", "availability"))
+                or row.reopen_destination != _canonical(body["reopen_destination"])
+                or row.schema_name != RECEIPT_SCHEMA_NAME or row.schema_version != RECEIPT_SCHEMA_VERSION):
+            raise ValueError("native immutable identity has conflicting persisted authority")
+    return rows
+
+
 async def persist_member_receipt(
     session: AsyncSession,
     receipt: ExternalMemberReceipt,
@@ -569,6 +599,19 @@ NATIVE_NGS_RESULT_SCHEMA = "bms.ngs.native-scientific-result.v1"
 NATIVE_NGS_RESULT_IDENTITY = "native-scientific-result"
 
 
+def ngs_job_eligibility():
+    """SQL counterpart of is_ngs_job_identity; filter before count/page limits."""
+    from sqlalchemy import and_, or_, func
+    model = func.lower(func.trim(func.coalesce(Job.model_id, "")))
+    workflow = func.lower(func.trim(func.coalesce(
+        func.nullif(Job.params["ont_workflow_id"].as_string(), ""),
+        Job.params["workflow_id"].as_string(), "")))
+    mode = func.lower(func.trim(func.coalesce(Job.mode, "")))
+    supported = {*CANONICAL_ONT_WORKFLOWS, *ONT_WORKFLOW_ALIASES}
+    return or_(model.in_(NGS_MODEL_IDS), and_(model == "",
+        or_(workflow.in_(supported), mode.in_(supported | {"nanopore_methylation"}))))
+
+
 def is_ngs_job_identity(job: Any) -> bool:
     # Discovery compatibility only; receipt resolution proves authority separately.
     model = str(job.model_id or "").strip().lower()
@@ -611,9 +654,9 @@ def ngs_job_workflow_identity(job: Any) -> str:
 
 def ngs_result_manifest_identities(job: Any) -> tuple[str, ...]:
     # The native receipt is its own identity, never a fabricated QC file.
-    from services.ngs_native_alignment_sources import is_native
+    from services.ngs_native_alignment_sources import is_native_result
 
-    if not is_native(job):
+    if not is_native_result(job):
         return ("sequence-qc-manifest",)
     receipt = job.provenance["result_integrity"]
     artifacts = receipt.get("artifacts")

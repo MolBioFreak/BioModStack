@@ -14,6 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import Job
 from molbio_ngs_models import (
     MolBioNGSDomainStateMember,
+    MolBioNGSDomainStateRevision,
+    MolBioNGSIdempotencyClaim,
+    MolBioNGSOutboxEvent,
+    MolBioNGSGlobalBinding,
     MolBioNGSEvidenceAssessment,
     MolBioNGSMemberReceipt,
     MolBioNGSSampleRevision,
@@ -30,6 +34,10 @@ from molbio_ngs_services import (
     _now,
     _reserve_idempotency,
     get_state_revision,
+    get_domain_state,
+    list_revision_members,
+    save_state_revision,
+    StateMember,
     verify_state_revision_integrity,
 )
 from services.molbio_authority import SERVER_OWNED_ACTOR
@@ -39,9 +47,11 @@ from services.molbio_ngs_member_receipts import (
     build_external_member_receipt,
     parse_canonical_member_receipt,
     persist_member_receipt,
+    exact_native_member_rows,
     resolve_approved_comparison_panel_receipt,
     resolve_molecular_revision_receipt,
     is_ngs_job_identity,
+    ngs_result_manifest_identities,
     resolve_ngs_job_receipt,
     resolve_ngs_result_manifest_receipt,
     resolve_ont_instrument_run_receipt,
@@ -236,6 +246,21 @@ def _derived_receipt_id(primary_receipt_id: str, label: str) -> str:
     )
 
 
+async def _owned_receipt_candidates(session, receipt, domain_id):
+    rows = await exact_native_member_rows(session, receipt)
+    owners = list((await session.execute(select(
+        MolBioNGSDomainStateRevision.global_domain_experiment_id,
+        MolBioNGSDomainStateMember.receipt_id,
+    ).join(MolBioNGSDomainStateMember,
+        MolBioNGSDomainStateMember.state_revision_id == MolBioNGSDomainStateRevision.id)
+     .where(MolBioNGSDomainStateMember.receipt_id.in_([row.receipt_id for row in rows]))
+     .distinct())).all()) if rows else []
+    if any(owner != domain_id for owner, _receipt_id in owners):
+        raise StateIntegrityError("native immutable receipt is already owned by another Domain")
+    owned = {receipt_id for _owner, receipt_id in owners}
+    return sorted(rows, key=lambda row: (row.receipt_id not in owned, row.receipt_id))
+
+
 async def attach_job_evidence(
     session: AsyncSession,
     core_session: AsyncSession,
@@ -243,6 +268,8 @@ async def attach_job_evidence(
     global_domain_experiment_id: str,
     job_id: str,
     idempotency_key: str,
+    manifest_identity: str | None = None,
+    membership_parent_revision_id: str | None = None,
 ) -> tuple[MolBioNGSMemberReceipt, MolBioNGSMemberReceipt]:
     """Persist exact job-launch and raw-manifest receipts as one idempotent attachment."""
 
@@ -263,18 +290,28 @@ async def attach_job_evidence(
         raise StateIntegrityError(
             "core NGS job state is not owned by the requested Domain Experiment"
         ) from exc
+    identities = ngs_result_manifest_identities(job)
+    if manifest_identity is None and len(identities) != 1:
+        raise StateValidationError("select the exact QC or native result identity for this mixed result")
+    if manifest_identity is not None and manifest_identity not in identities:
+        raise StateValidationError("selected result identity was not produced by this job")
     resolved_job = await resolve_ngs_job_receipt(core_session, job_id=job_id)
-    resolved_manifest = await resolve_ngs_result_manifest_receipt(core_session, job_id=job_id)
+    resolved_manifest = await resolve_ngs_result_manifest_receipt(core_session, job_id=job_id, manifest_identity=manifest_identity)
     request_sha256 = _digest(
         _canonical(
             {
                 "global_domain_experiment_id": global_domain_experiment_id,
                 "job_id": job_id,
+                **({"manifest_identity": manifest_identity} if manifest_identity is not None else {}),
+                **({"state_revision_id": membership_parent_revision_id} if membership_parent_revision_id is not None else {}),
             }
         )
     )
     scope = f"attach-job-evidence:{global_domain_experiment_id}"
-    job_receipt_id = _id("member_receipt")
+    # Immutable native identity, not a click key, owns the receipt.
+    job_rows = await _owned_receipt_candidates(session, resolved_job, global_domain_experiment_id)
+    manifest_rows = await _owned_receipt_candidates(session, resolved_manifest, global_domain_experiment_id)
+    job_receipt_id = job_rows[0].receipt_id if job_rows else resolved_job.receipt_id
     replay_id = await _reserve_idempotency(
         session,
         scope=scope,
@@ -283,7 +320,9 @@ async def attach_job_evidence(
         result_resource_id=job_receipt_id,
     )
     if replay_id is not None:
-        manifest_receipt_id = _derived_receipt_id(replay_id, "result-manifest")
+        claim = await session.get(MolBioNGSIdempotencyClaim, (scope, idempotency_key))
+        response = json.loads(claim.response_json)
+        manifest_receipt_id = response["ngs_result_manifest_receipt_id"]
         job_row = await session.get(MolBioNGSMemberReceipt, replay_id)
         manifest_row = await session.get(MolBioNGSMemberReceipt, manifest_receipt_id)
         if job_row is None or manifest_row is None:
@@ -292,20 +331,12 @@ async def attach_job_evidence(
         _receipt_row_authority(manifest_row)
         return job_row, manifest_row
 
-    manifest_receipt_id = _derived_receipt_id(job_receipt_id, "result-manifest")
-    created_at = _now()
-    job_row = await persist_member_receipt(
-        session,
-        _copy_receipt_with_identity(
-            resolved_job, receipt_id=job_receipt_id, created_at=created_at
-        ),
-    )
-    manifest_row = await persist_member_receipt(
-        session,
-        _copy_receipt_with_identity(
-            resolved_manifest, receipt_id=manifest_receipt_id, created_at=created_at
-        ),
-    )
+    # The reservation is the transaction's first write; re-read after competing
+    # request keys serialize so the deterministic primary key is reused.
+    job_rows = await _owned_receipt_candidates(session, resolved_job, global_domain_experiment_id)
+    manifest_rows = await _owned_receipt_candidates(session, resolved_manifest, global_domain_experiment_id)
+    job_row = job_rows[0] if job_rows else await persist_member_receipt(session, resolved_job)
+    manifest_row = manifest_rows[0] if manifest_rows else await persist_member_receipt(session, resolved_manifest)
     await _complete_idempotency(
         session,
         scope=scope,
@@ -319,6 +350,106 @@ async def attach_job_evidence(
     )
     await session.flush()
     return job_row, manifest_row
+
+
+async def reopen_job_member(session, core_session, *, domain_id, receipt_id):
+    row = await session.get(MolBioNGSMemberReceipt, receipt_id)
+    if row is None:
+        raise DomainStateNotFound("attached native receipt was not found")
+    authority = _receipt_row_authority(row)
+    kind = authority["entity_kind"]
+    if kind not in {"ngs_job", "ngs_result_manifest"}:
+        raise StateValidationError("member receipt is not an NGS job or native result")
+    job_id = authority["entity_id"] if kind == "ngs_job" else authority["reopen_destination"]["params"].get("job_id")
+    identity = None if kind == "ngs_job" else authority["entity_id"].removeprefix(f"{job_id}:")
+    resolved = (await resolve_ngs_job_receipt(core_session, job_id=job_id) if kind == "ngs_job"
+        else await resolve_ngs_result_manifest_receipt(core_session, job_id=job_id, manifest_identity=identity))
+    rows = await _owned_receipt_candidates(session, resolved, domain_id)
+    if not any(candidate.receipt_id == receipt_id for candidate in rows):
+        raise StateIntegrityError("attached native receipt changed authority")
+    membership = (await session.scalars(select(MolBioNGSDomainStateRevision)
+        .join(MolBioNGSDomainStateMember, MolBioNGSDomainStateMember.state_revision_id == MolBioNGSDomainStateRevision.id)
+        .where(MolBioNGSDomainStateMember.receipt_id == receipt_id,
+               MolBioNGSDomainStateRevision.global_domain_experiment_id == domain_id)
+        .order_by(MolBioNGSDomainStateRevision.revision_number).limit(1))).first()
+    if membership is None:
+        raise DomainStateNotFound("receipt has no exact Domain membership")
+    await verify_state_revision_integrity(session, membership)
+    return {"member_receipt_id": receipt_id, "receipt_sha256": row.receipt_sha256,
+            "content_digest": resolved.content_digest, "job_id": job_id,
+            "manifest_identity": identity, "state_revision_id": membership.id}
+
+
+async def job_attachment_delivery(session, state_revision_id, receipt_id):
+    events = list((await session.scalars(select(MolBioNGSOutboxEvent).where(
+        MolBioNGSOutboxEvent.state_revision_id == state_revision_id,
+        MolBioNGSOutboxEvent.event_type == "molbio_ngs.member_receipt.published",
+    ))).all())
+    exact = []
+    for event in events:
+        if _digest(event.payload_json) != event.payload_sha256:
+            raise StateIntegrityError("attachment outbox payload changed")
+        payload = json.loads(event.payload_json)
+        if payload.get("receipt_id") == receipt_id:
+            exact.append(event)
+    if len(exact) != 1:
+        raise StateIntegrityError("attachment lacks its exact publication event")
+    event = exact[0]
+    if event.status == "conflict":
+        return "conflict"
+    if event.status == "acknowledged" and event.acknowledgement_json:
+        if _digest(event.acknowledgement_json) != event.acknowledgement_sha256:
+            raise StateIntegrityError("attachment delivery acknowledgement changed")
+        ack = json.loads(event.acknowledgement_json)
+        if (ack.get("event_id") != event.id or ack.get("accepted_payload_sha256") != event.payload_sha256
+                or ack.get("binding_revision_id") != event.binding_revision_id):
+            raise StateIntegrityError("attachment delivery acknowledgement has foreign authority")
+        if ack.get("disposition") in {"applied", "duplicate"}:
+            return "delivered"
+    return "pending"
+
+
+async def attach_job_membership(session, core_session, *, domain_id, job_receipt,
+                                manifest_receipt, parent_revision_id):
+    """Append via the state owner and its outbox; never manufacture QC science.
+
+    Repeated/lost-response attachment returns its first immutable membership.
+    Project delivery remains independent and owned by the managed connector.
+    """
+    existing = list((await session.scalars(select(MolBioNGSDomainStateRevision)
+        .join(MolBioNGSDomainStateMember, MolBioNGSDomainStateMember.state_revision_id == MolBioNGSDomainStateRevision.id)
+        .where(MolBioNGSDomainStateMember.receipt_id == manifest_receipt.receipt_id,
+               MolBioNGSDomainStateMember.role == "ngs_analysis_result_manifest",
+               MolBioNGSDomainStateRevision.global_domain_experiment_id == domain_id)
+        .order_by(MolBioNGSDomainStateRevision.revision_number))).all())
+    for revision in existing:
+        await verify_state_revision_integrity(session, revision)
+        members = await list_revision_members(session, revision.id)
+        if any(m.receipt_id == job_receipt.receipt_id and m.role == "ngs_analysis_job" for m in members):
+            return revision
+    state = await get_domain_state(session, domain_id)
+    parent_id = parent_revision_id or state.current_state_revision_id
+    if parent_id != state.current_state_revision_id:
+        from molbio_ngs_services import RevisionConflict
+        raise RevisionConflict("attachment target is historical; refresh the current state before adding membership")
+    parent = await get_state_revision(session, domain_id, parent_id)
+    binding = await session.get(MolBioNGSGlobalBinding, state.current_binding_revision_id)
+    if binding is None:
+        raise StateIntegrityError("attachment has no current Domain binding")
+    payload, _graph = await verify_state_revision_integrity(session, parent)
+    members = [StateMember(receipt_id=m.receipt_id, role=m.role, ordinal=m.ordinal,
+                           sample_revision_id=m.sample_revision_id)
+               for m in await list_revision_members(session, parent.id)]
+    for receipt, role in ((job_receipt, "ngs_analysis_job"), (manifest_receipt, "ngs_analysis_result_manifest")):
+        if not any(m.receipt_id == receipt.receipt_id for m in members):
+            members.append(StateMember(receipt_id=receipt.receipt_id, role=role,
+                                       ordinal=max((m.ordinal for m in members), default=-1) + 1))
+    return await save_state_revision(session, core_session=core_session,
+        global_domain_experiment_id=domain_id,
+        global_domain_experiment_revision_id=binding.global_domain_experiment_revision_id,
+        payload=payload, members=members, expected_head_generation=state.head_generation,
+        parent_revision_id=parent.id,
+        idempotency_key="attach-members:" + _digest(_canonical([domain_id, parent.id, job_receipt.receipt_id, manifest_receipt.receipt_id])))
 
 
 async def attach_instrument_run_evidence(

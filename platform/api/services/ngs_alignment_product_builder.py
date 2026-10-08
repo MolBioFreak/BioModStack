@@ -346,7 +346,8 @@ def _preview_plan(directory, catalog, bam, policy, source_sha, checkpoint, alloc
             database.commit()
             strata = database.execute("SELECT contig, tile, strand, COUNT(*) FROM candidates "
                                       "GROUP BY contig, tile, strand ORDER BY contig, tile, strand").fetchall()
-            target = min(policy["target_reads"], sum(row[3] for row in strata))
+            eligible_read_count = sum(row[3] for row in strata)
+            target = min(policy["target_reads"], eligible_read_count)
             base = int(target >= len(strata))
             quotas = {tuple(row[:3]): base for row in strata}
             capacity = sum(row[3] - base for row in strata)
@@ -392,17 +393,20 @@ def _preview_plan(directory, catalog, bam, policy, source_sha, checkpoint, alloc
         if bound > policy["max_bytes"]:
             raise Failure("resource_limit", message="preview header exceeds the BAM ceiling")
         retained = []
+        limiting_reason = None
         database.execute("CREATE TABLE admitted (read_id TEXT PRIMARY KEY)")
         for name in ranked:
             checkpoint()
             database.execute("INSERT INTO admitted VALUES (?)", (name,))
             count = database.execute("SELECT COUNT(*) FROM sizes JOIN admitted USING(read_id)").fetchone()[0]
             if count > policy["max_records"]:
+                limiting_reason = "record_limit"
                 database.execute("DELETE FROM admitted WHERE read_id=?", (name,))
                 break
             candidate_bound = bgzf_bound(header_bytes, (row[0] for row in database.execute(
                 "SELECT bytes FROM sizes JOIN admitted USING(read_id) ORDER BY ref, start0, ordinal")))
             if candidate_bound > policy["max_bytes"]:
+                limiting_reason = "byte_limit"
                 database.execute("DELETE FROM admitted WHERE read_id=?", (name,))
                 break
             retained.append(name)
@@ -410,6 +414,13 @@ def _preview_plan(directory, catalog, bam, policy, source_sha, checkpoint, alloc
         metadata = database.execute("SELECT ref, start0, ordinal, read_id, offset, bytes, fingerprint "
                                     "FROM sizes JOIN admitted USING(read_id) ORDER BY ref, start0, ordinal").fetchall()
         return header, metadata, retained, {
+            "eligible_read_count": eligible_read_count,
+            "target_read_count": target,
+            "population_state": "empty" if not retained else "reduced" if len(retained) < target else "capped" if eligible_read_count > target else "complete",
+            "population_reasons": (["no_mapped_primary_reads"] if not eligible_read_count else [])
+                + (["read_limit"] if eligible_read_count > target else [])
+                + (["long_cigar_exclusion"] if excluded else [])
+                + ([limiting_reason] if limiting_reason else []),
             "selected_read_count": len(retained), "selected_record_count": len(metadata),
             "preview_complete_to_target": len(retained) == policy["target_reads"],
             "excluded_long_cigar_reads": len(excluded), "bgzf_bound_bytes": bound, "header_raw_bytes": header_bytes}

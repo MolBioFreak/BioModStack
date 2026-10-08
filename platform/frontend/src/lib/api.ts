@@ -647,6 +647,7 @@ export const fetchJobs = (params?: {
     limit?: number;
     offset?: number;
     include_children?: boolean;
+    ngs_only?: boolean;
     summary?: boolean;
 }) => api.get<{ jobs: Job[]; total: number }>('/api/jobs', {
     params: {
@@ -4757,10 +4758,20 @@ export interface EvidenceAssessmentRequest {
     idempotency_key: string;
 }
 
+export const fetchMolBioNgsNativeMemberReopen = (domainId: string, receiptId: string, signal?: AbortSignal) => apiData(api.get<{
+    member_receipt_id: string; receipt_sha256: string; content_digest: string;
+    job_id: string; manifest_identity: string | null; state_revision_id: string;
+}>(`/api/molbio-ngs/experiments/${encodeURIComponent(domainId)}/evidence/member-receipts/${encodeURIComponent(receiptId)}/reopen`, { signal }));
+export const fetchMolBioNgsJobEvidenceIdentities = (domainId: string, jobId: string) => apiData(api.get<{
+    job_id: string; identities: string[]; launch_state_revision_id: string;
+}>(`/api/molbio-ngs/experiments/${encodeURIComponent(domainId)}/evidence/jobs/${encodeURIComponent(jobId)}/identities`));
+export const fetchMolBioNgsAttachmentDelivery = (domainId: string, revisionId: string, receiptId: string) => apiData(api.get<{
+    state_revision_id: string; receipt_id: string; project_delivery: 'pending' | 'delivered' | 'conflict';
+}>(`/api/molbio-ngs/experiments/${encodeURIComponent(domainId)}/evidence/attachments/${encodeURIComponent(revisionId)}/${encodeURIComponent(receiptId)}`));
 export const attachMolBioNgsJobEvidence = (
     domainExperimentId: string,
-    payload: { job_id: string; idempotency_key: string },
-) => apiData(api.post<{ ngs_job: ExternalMemberReceipt; ngs_result_manifest: ExternalMemberReceipt }>(
+    payload: { job_id: string; idempotency_key: string; manifest_identity?: string; state_revision_id?: string },
+) => apiData(api.post<{ ngs_job: ExternalMemberReceipt; ngs_result_manifest: ExternalMemberReceipt; state_revision_id: string; project_delivery: 'pending' | 'delivered' | 'conflict' }>(
     `/api/molbio-ngs/experiments/${encodeURIComponent(domainExperimentId)}/evidence/attach-job`, payload,
 ));
 export const attachMolBioNgsInstrumentRunEvidence = (

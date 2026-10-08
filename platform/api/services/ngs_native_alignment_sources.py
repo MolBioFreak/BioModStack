@@ -26,9 +26,16 @@ ARTIFACTS = {"alignment": "align/aligned.bam", "alignment_index": "align/aligned
 
 
 def is_native(job):
+    """Single-reference catalog lane, not the native-result denominator."""
     provenance = job.provenance if isinstance(job.provenance, dict) else {}
     receipt = provenance.get("result_integrity")
     return isinstance(receipt, dict) and receipt.get("result_kind") in KINDS
+
+
+def is_native_result(job):
+    provenance = job.provenance if isinstance(job.provenance, dict) else {}
+    receipt = provenance.get("result_integrity")
+    return isinstance(receipt, dict) and receipt.get("result_kind") in KINDS | {"ont_native_pooled_assignment"}
 
 
 @contextmanager
@@ -40,19 +47,29 @@ def result_root(job):
 
 def accepted_artifacts(job):
     """Shared accepted receipt inventory for catalog and original delivery."""
-    if not is_native(job):
+    if not is_native_result(job):
         raise storage.AlignmentSessionError("unsupported native scientific receipt")
     receipt = job.provenance["result_integrity"]
     params = job.params if isinstance(job.params, dict) else {}
-    if receipt.get("state") != "validated" or receipt.get("partial") is not False:
+    pooled = receipt.get("result_kind") == "ont_native_pooled_assignment"
+    if receipt.get("state") != "validated" or (receipt.get("partial") is not False and not (pooled and "partial" not in receipt)):
         raise storage.AlignmentSessionError("native scientific receipt is not validated")
     artifacts = receipt.get("artifacts")
     if not isinstance(artifacts, list) or hashlib.sha256(rfc8785.dumps(artifacts)).hexdigest() != receipt.get("artifact_set_sha256"):
         raise storage.AlignmentSessionError("native artifact-set integrity mismatch")
-    if (ont_workflow_identity_values(params) != {receipt.get("workflow_id")}
+    if not pooled and (ont_workflow_identity_values(params) != {receipt.get("workflow_id")}
             or receipt.get("input_mode") != params.get("ont_input_mode")
             or params.get("input_mode", receipt.get("input_mode")) != receipt.get("input_mode")):
         raise storage.AlignmentSessionError("native workflow/input authority mismatch")
+    if pooled and (ont_workflow_identity_values(params) != {"ont_pooled_reference_assignment"}
+            or re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("manifest_sha256"))) is None
+            or not isinstance(params.get("reference_set_binding"), dict)
+            or receipt.get("reference_set_id") != params["reference_set_binding"].get("reference_set_id")
+            or receipt.get("manifest_sha256") != params["reference_set_binding"].get("manifest_sha256")
+            or receipt.get("manifest_sha256") != params.get("reference_set_manifest_sha256")
+            or receipt.get("scientific_status") != "REVIEW"
+            or receipt.get("release_state") != "awaiting_operator_release"):
+        raise storage.AlignmentSessionError("pooled native reference/review authority mismatch")
     by_path = {}
     for artifact in artifacts:
         if not isinstance(artifact, dict) or set(artifact) != {"path", "sha256", "size_bytes"}:
@@ -65,7 +82,10 @@ def accepted_artifacts(job):
             raise storage.AlignmentSessionError("native artifact identity is unsafe or ambiguous")
         by_path[name] = artifact
     try:
-        accepted_native_settings(params, receipt)
+        # Historical pooled admission did not claim an effective-settings digest.
+        # Preserve its actual accepted contract, never manufacture that field.
+        if not pooled or "effective_params_sha256" in receipt:
+            accepted_native_settings(params, receipt)
     except (ValueError, TypeError) as exc:
         raise storage.AlignmentSessionError("native effective settings authority changed") from exc
     return receipt, by_path

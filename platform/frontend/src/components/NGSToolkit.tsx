@@ -6,7 +6,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import type { IGV as IgvLibrary } from 'igv';
-import { api, createOntSignalViewerSession, updateOntSignalViewerSession, DEFAULT_ONT_SIGNAL_RENDER_PARAMS, fetchFullJob, fetchJobLogs, fetchJobStages, fetchJobs, fetchOntRawSignalCapabilities, fetchOntSignalViewerSession, fetchPooledAssignmentManifest, type Job, type JobLogs, type OntSignalViewerAlignmentColorBy, type OntSignalViewerAlignmentDisplayMode, type OntSignalViewerAlignmentGroupBy, type OntSignalViewerSession } from '../lib/api';
+import { api, createOntSignalViewerSession, updateOntSignalViewerSession, DEFAULT_ONT_SIGNAL_RENDER_PARAMS, fetchFullJob, fetchMolBioNgsNativeMemberReopen, fetchJobLogs, fetchJobStages, fetchJobs, fetchOntRawSignalCapabilities, fetchOntSignalViewerSession, fetchPooledAssignmentManifest, type Job, type JobLogs, type OntSignalViewerAlignmentColorBy, type OntSignalViewerAlignmentDisplayMode, type OntSignalViewerAlignmentGroupBy, type OntSignalViewerSession } from '../lib/api';
 import {
     buildAlignmentTrackConfig,
     loadOwnedReadOverlay,
@@ -2178,10 +2178,48 @@ export function AlignmentAccessPageLifetime({
 
 export function NGSToolkit() {
     const location = useLocation();
+    // Project receipts resolve through their native owner before choosing a job.
+    if (new URLSearchParams(location.search).get('native_member_receipt_id')) return <NativeMemberDestination />;
     // Dispatch without rewriting the exact context or auxiliary query keys.
     return hasNgsDomainSection(location.search)
         ? <DomainExperimentWorkspace />
         : <NativeNGSToolkit />;
+}
+
+function NativeMemberDestination() {
+    const location = useLocation();
+    const navigate = useNavigate();
+    const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
+    const domainId = params.get('domain_experiment_id');
+    const receiptId = params.get('native_member_receipt_id');
+    const expectedDigest = params.get('member_receipt_sha256');
+    const requestedJob = params.get('job_id');
+    const query = useQuery({
+        queryKey: ['ngs-native-member-reopen', domainId, receiptId, expectedDigest],
+        queryFn: async ({ signal }) => {
+            if (!domainId || !receiptId) throw new Error('Exact Domain and native receipt identities are required.');
+            const response = await fetchMolBioNgsNativeMemberReopen(domainId, receiptId, signal);
+            if (response.member_receipt_id !== receiptId || !response.job_id
+                || expectedDigest && response.receipt_sha256 !== expectedDigest) throw new Error('Project native receipt authority changed.');
+            return response;
+        }, retry: false,
+    });
+    const conflict = requestedJob && query.data && requestedJob !== query.data.job_id;
+    useEffect(() => {
+        if (!query.data || query.isFetching || query.isError || conflict) return;
+        if (!requestedJob || params.has('section')) {
+            const next = new URLSearchParams(location.search);
+            next.set('job_id', query.data.job_id);
+            // Native receipt URLs keep all authority/context keys, but must not
+            // dispatch back into a Domain section instead of the native viewer.
+            next.delete('section');
+            navigate({ pathname: location.pathname, search: next.toString() }, { replace: true });
+        }
+    }, [query.data, query.isFetching, query.isError, conflict, requestedJob, params, location.pathname, location.search, navigate]);
+    if (query.isError || conflict) return <div role="alert" className="p-4">Native Project result could not be reopened: {conflict ? 'the supplied job conflicts with the attached receipt.' : query.error instanceof Error ? query.error.message : 'receipt authority unavailable.'}
+        <button type="button" onClick={() => { void query.refetch(); }}>Retry reopen</button></div>;
+    if (!query.data || query.isFetching || !requestedJob || params.has('section')) return <div role="status" className="p-4">Resolving exact attached native result…</div>;
+    return <NativeNGSToolkit />;
 }
 
 function NativeNGSToolkit() {
@@ -2195,10 +2233,16 @@ function NativeNGSToolkit() {
     const requestedReferenceSetId = searchParams.get('reference_set_id');
     const requestedAssignmentId = searchParams.get('assignment_id');
     const requestedViewerSessionId = searchParams.get('viewer_session_id')?.trim() || null;
-    const signalWorkbenchRequested = searchParams.get('view') === 'workbench';
+    const signalWorkbenchRequested = searchParams.get('view') === 'workbench' || Boolean(requestedViewerSessionId);
     const requestedViewerSessionQuery = useQuery({
         queryKey: ['ont-signal-viewer-session', requestedViewerSessionId],
-        queryFn: () => fetchOntSignalViewerSession(requestedViewerSessionId as string),
+        queryFn: async () => {
+            const saved = await fetchOntSignalViewerSession(requestedViewerSessionId as string);
+            if (saved.viewer_session_id !== requestedViewerSessionId || !saved.alignment_job_id?.trim()) {
+                throw new Error('Saved view does not bind the requested viewer identity and an alignment job.');
+            }
+            return saved;
+        },
         enabled: Boolean(requestedViewerSessionId),
         retry: false,
     });
@@ -2363,30 +2407,18 @@ function NativeNGSToolkit() {
         };
     }, []);
 
+    const [jobsOffset, setJobsOffset] = useState(0);
+    useEffect(() => { setJobsOffset(0); }, [search, statusFilter]);
     const {
         data: jobsData,
         isLoading,
         isError: jobsQueryIsError,
         error: jobsQueryError,
     } = useQuery({
-        queryKey: ['jobs', 'ngs'],
-        queryFn: async () => {
-            // Missing-model historical rows need their persisted workflow params.
-            // Use the same predicate as direct reopen, not a narrower model list.
-            const jobs = new Map<string, Job>();
-            let offset = 0;
-            let total = 0;
-            do {
-                const response = await fetchJobs({ include_children: true, limit: 500, offset, summary: false });
-                for (const job of response.data.jobs) {
-                    if (isNgsJob(job)) jobs.set(job.id, job);
-                }
-                total = response.data.total;
-                if (response.data.jobs.length === 0) break;
-                offset += response.data.jobs.length;
-            } while (offset < total);
-            return { data: { jobs: Array.from(jobs.values()), total: jobs.size } };
-        },
+        queryKey: ['jobs', 'ngs', search, statusFilter, jobsOffset],
+        queryFn: () => fetchJobs({ include_children: true, ngs_only: true, summary: true,
+            limit: 100, offset: jobsOffset, q: search.trim() || undefined,
+            status: statusFilter === 'all' ? undefined : statusFilter }),
         refetchInterval: (query) => jobPollingInterval(5000, query),
     });
 
@@ -2424,13 +2456,13 @@ function NativeNGSToolkit() {
     const selectedJob = fullJobQuery.data && isNgsJob(fullJobQuery.data) ? fullJobQuery.data : null;
 
     useEffect(() => {
-        if (view !== 'runs' || requestedJobId) {
+        if (view !== 'runs' || requestedJobId || requestedViewerSessionId) {
             return;
         }
         if (!selectedJobId && filteredJobs.length > 0) {
             updateQueryParams({ job_id: filteredJobs[0].id }, { replace: true });
         }
-    }, [filteredJobs, requestedJobId, selectedJobId, updateQueryParams, view]);
+    }, [filteredJobs, requestedJobId, requestedViewerSessionId, selectedJobId, updateQueryParams, view]);
 
     useEffect(() => {
         setShowRawTopLoci(false);
@@ -2849,7 +2881,7 @@ function NativeNGSToolkit() {
         ? selectedPreviewQuery.data : null;
     const previewMessage = selectedDerivedQuery.error || selectedPreviewQuery.error
         ? describeNgsError(selectedDerivedQuery.error || selectedPreviewQuery.error, "Optional preview could not be opened. Complete reads remain independent.")
-        : readyPreview ? `${readyPreview.selected_read_count.toLocaleString()} preview reads; optional tags are in the original BAM.`
+        : readyPreview ? `${readyPreview.population.population_state} preview: ${readyPreview.selected_read_count.toLocaleString()} of ${readyPreview.population.eligible_read_count.toLocaleString()} eligible reads (target ${readyPreview.population.target_read_count.toLocaleString()}). ${readyPreview.population.population_reasons.join(', ').replaceAll('_', ' ')}. Complete catalog access is independent; optional tags remain in the original BAM.`
         : `Optional preview: ${selectedDerivedQuery.data?.preview.state ?? "loading"}. Complete reads and Detail do not require a preview.`;
     const activeIgvBamPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment` : null;
     const browserAlignmentTrack: BrowserAlignmentTrackSource | null = selectedJob
@@ -4757,7 +4789,7 @@ function NativeNGSToolkit() {
                                                 <td className="px-4 py-2">
                                                     <div className="flex gap-2">
                                                         <button
-                                                            onClick={() => updateQueryParams({ job_id: job.id, viewer_session_id: null })}
+                                                            onClick={() => updateQueryParams({ job_id: job.id, viewer_session_id: null, native_member_receipt_id: null, member_receipt_sha256: null })}
                                                             className="px-2 py-1 text-xs rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] text-[var(--text-primary)]"
                                                         >
                                                             Inspect
@@ -4773,6 +4805,8 @@ function NativeNGSToolkit() {
                                                                 section: 'analyses',
                                                                 job_id: job.id,
                                                                 viewer_session_id: null,
+                                                                native_member_receipt_id: null,
+                                                                member_receipt_sha256: null,
                                                             }))}
                                                             className="px-2 py-1 text-xs rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] text-[var(--text-primary)]"
                                                         >
@@ -4807,6 +4841,11 @@ function NativeNGSToolkit() {
                         </div>
                     </div>
 
+                    <nav aria-label="NGS result pages" className="flex flex-wrap items-center gap-3 text-xs">
+                        <button type="button" disabled={isLoading || jobsOffset === 0} onClick={() => setJobsOffset((value) => Math.max(0, value - 100))}>Previous results</button>
+                        <span>{jobsData?.data.total ?? 0} matching results · offset {jobsOffset}</span>
+                        <button type="button" disabled={isLoading || jobsOffset + 100 >= (jobsData?.data.total ?? 0)} onClick={() => setJobsOffset((value) => value + 100)}>Next results</button>
+                    </nav>
                     <div
                         ref={runInspectorRef}
                         data-testid="ngs-run-inspector"

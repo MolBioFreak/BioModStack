@@ -1232,11 +1232,18 @@ def _event_authority_spec(
             "reopen_uri": f"/api/molbio-ngs/experiments/{domain_id}/evidence/{payload['evidence_id']}",
         }
     if event_type == "molbio_ngs.member_receipt.published":
+        # Keep the exact wrapper receipt/digest as Project authority. Native
+        # reopen resolves that receipt through its owner before selecting a job.
+        from urllib.parse import urlencode
+        reopen_uri = ("/ngs?" + urlencode({"domain_experiment_id": domain_id,
+            "native_member_receipt_id": payload["receipt_id"], "member_receipt_sha256": payload["receipt_sha256"]})
+            if payload["receipt_kind"] in {"ngs_job", "ngs_result_manifest"}
+            else f"/molbio-ngs/domain-experiments/{domain_id}?member_receipt_id={payload['receipt_id']}")
         return {
             "entity_kind": "ngs_molbio_member_receipt", "entity_id": str(payload["receipt_id"]),
             "entity_revision_id": str(payload["native_generation"]), "content_digest": str(payload["receipt_sha256"]),
             "availability": "available", "edge_mode": "produces",
-            "reopen_uri": f"/molbio-ngs/domain-experiments/{domain_id}?member_receipt_id={payload['receipt_id']}",
+            "reopen_uri": reopen_uri,
         }
     raise ConnectorConflict(f"event type {event_type!r} has no global authority materializer")
 

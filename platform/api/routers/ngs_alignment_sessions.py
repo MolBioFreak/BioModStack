@@ -2990,6 +2990,15 @@ class OntPreviewArtifactV6(BaseModel):
     range_capable: Literal[True]
 
 
+class OntPreviewPopulationV6(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    eligible_read_count: int = Field(ge=0)
+    target_read_count: int = Field(ge=0, le=5000)
+    excluded_long_cigar_reads: int = Field(ge=0, le=5000)
+    population_state: Literal["empty", "reduced", "capped", "complete"]
+    population_reasons: list[Literal["no_mapped_primary_reads", "read_limit", "long_cigar_exclusion", "record_limit", "byte_limit", "admission_limit_not_recorded"]]
+
+
 class OntReadyPreviewV6(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     schema_version: Literal["bms.ngs.alignment-preview.v6"] = Field(alias="schema")
@@ -3000,6 +3009,7 @@ class OntReadyPreviewV6(BaseModel):
     preview_request_id: str
     preview_authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     policy: OntPreviewPolicyV6
+    population: OntPreviewPopulationV6
     selected_read_count: int = Field(ge=0, le=5000)
     selected_record_count: int = Field(ge=0, le=20000)
     bam: OntPreviewArtifactV6
