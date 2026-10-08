@@ -12,7 +12,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
 
 sys.modules.setdefault("pyrosetta", types.SimpleNamespace())
 
-from score_maturation import reconcile_chain_groups_with_selected_positions
+from score_maturation import build_rosetta_interface_payload, reconcile_chain_groups_with_selected_positions
 
 
 def test_reconcile_chain_groups_prefers_selected_position_chain_when_split_is_wrong() -> None:
@@ -39,3 +39,23 @@ def test_reconcile_chain_groups_preserves_existing_antibody_assignment_when_sele
 
     assert antibody == ["A", "B"]
     assert antigen == []
+
+
+def test_rosetta_interface_payload_records_raw_reu_sign_convention() -> None:
+    data = types.SimpleNamespace(
+        dG={1: -42.5},
+        dSASA={1: 1337.0},
+        packstat=0.61,
+        sc_value=0.73,
+        interface_hbonds=9,
+    )
+
+    payload = build_rosetta_interface_payload("HL_A", data)
+
+    assert payload["rosetta_interface_score"] == -42.5
+    assert payload["rosetta_interface_dg"] == -42.5
+    assert payload["rosetta_interface_dsasa"] == 1337.0
+    assert payload["rosetta_interface_score_unit"] == "REU"
+    assert payload["rosetta_interface_score_direction"] == "more_negative_is_better"
+    assert payload["rosetta_interface_analyzer_used"] is True
+    assert payload["rosetta_interface_id"] == "HL_A"

@@ -915,6 +915,17 @@ export interface Design {
     ppiflow_filter_passed?: boolean | null;
     ppiflow_filter_reason?: string | null;
     ppiflow_loop_metrics?: Record<string, unknown> | null;
+    rosetta_interface_score?: number | null;
+    rosetta_interface_dg?: number | null;
+    rosetta_interface_dsasa?: number | null;
+    rosetta_interface_packstat?: number | null;
+    rosetta_interface_shape_complementarity?: number | null;
+    rosetta_interface_hbond_count?: number | null;
+    rosetta_interface_id?: string | null;
+    rosetta_interface_score_unit?: string | null;
+    rosetta_interface_score_direction?: string | null;
+    rosetta_interface_analyzer_used?: boolean | null;
+    rosetta_interface_warning?: string | null;
     is_favorite: boolean;
     notes: string | null;
     created_at: string;

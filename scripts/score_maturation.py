@@ -131,6 +131,80 @@ def pose_residue_map(pose):
     return mapping
 
 
+def build_rosetta_interface_payload(interface_id, data):
+    """Normalize Rosetta InterfaceAnalyzerMover output for downstream ranking.
+
+    Rosetta reports interface energy as raw REU; for interface scores, more
+    negative is better. Keep this separate from the BMS-local pair-energy
+    objective so ranking can distinguish paper-style Rosetta evidence from
+    local maturation heuristics.
+    """
+    def safe_float(value):
+        try:
+            val = float(value)
+        except (TypeError, ValueError):
+            return None
+        return val if math.isfinite(val) else None
+
+    def index_or_attr(obj, attr, idx=None):
+        if obj is None:
+            return None
+        if hasattr(obj, attr):
+            return getattr(obj, attr)
+        if idx is not None:
+            try:
+                return obj[idx]
+            except Exception:
+                return None
+        return None
+
+    d_g = index_or_attr(data, "dG", 1)
+    d_sasa = index_or_attr(data, "dSASA", 1)
+    rosetta_dg = d_g[1] if hasattr(d_g, "__getitem__") else d_g
+    rosetta_dsasa = d_sasa[1] if hasattr(d_sasa, "__getitem__") else d_sasa
+    return {
+        "rosetta_interface_score": safe_float(rosetta_dg),
+        "rosetta_interface_dg": safe_float(rosetta_dg),
+        "rosetta_interface_dsasa": safe_float(rosetta_dsasa),
+        "rosetta_interface_packstat": safe_float(getattr(data, "packstat", None)),
+        "rosetta_interface_shape_complementarity": safe_float(getattr(data, "sc_value", None)),
+        "rosetta_interface_hbond_count": getattr(data, "interface_hbonds", None),
+        "rosetta_interface_id": interface_id,
+        "rosetta_interface_score_unit": "REU",
+        "rosetta_interface_score_direction": "more_negative_is_better",
+        "rosetta_interface_analyzer_used": True,
+        "rosetta_interface_formula": "Rosetta InterfaceAnalyzerMover dG for antibody-vs-antigen chain groups",
+    }
+
+
+def calculate_rosetta_interface_analyzer_metrics(pose, antibody_chains, antigen_chains):
+    antibody_group = "".join(chain for chain in antibody_chains if chain)
+    antigen_group = "".join(chain for chain in antigen_chains if chain)
+    if not antibody_group or not antigen_group:
+        return {
+            "rosetta_interface_analyzer_used": False,
+            "rosetta_interface_warning": "missing_antibody_or_antigen_chain_group",
+        }
+    interface_id = f"{antibody_group}_{antigen_group}"
+    try:
+        iam = pyrosetta.rosetta.protocols.analysis.InterfaceAnalyzerMover()
+        iam.set_interface(interface_id)
+        iam.set_scorefunction(pyrosetta.get_fa_scorefxn())
+        iam.set_compute_packstat(True)
+        iam.set_pack_separated(True)
+        iam.set_compute_interface_energy(True)
+        iam.set_calc_hbond_sasaE(True)
+        iam.set_compute_interface_sc(True)
+        iam.apply(pose)
+        return build_rosetta_interface_payload(interface_id, iam.get_all_data())
+    except Exception as exc:
+        return {
+            "rosetta_interface_analyzer_used": False,
+            "rosetta_interface_id": interface_id,
+            "rosetta_interface_warning": f"interface_analyzer_failed: {type(exc).__name__}: {exc}",
+        }
+
+
 def detect_interface_residues(pose, ab_chains, ag_chains, distance_cutoff):
     pdb_info = pose.pdb_info()
     ab_residues = []
@@ -790,6 +864,11 @@ def main():
         nonselected_rmsd_val,
         clash_count,
     )
+    rosetta_interface_metrics = calculate_rosetta_interface_analyzer_metrics(
+        pose_matured,
+        antibody_chains_matured,
+        antigen_chains_matured,
+    )
 
     payload = {
         "interface_score_original": float(interface_score_orig["global_score"]),
@@ -848,6 +927,7 @@ def main():
         "interface_energy_method": "negative_interchain_pair_energy_sum",
         "distance_cutoff": float(args.distance_cutoff),
     }
+    payload.update(rosetta_interface_metrics)
 
     Path(args.output).write_text(json.dumps(payload, indent=2))
 

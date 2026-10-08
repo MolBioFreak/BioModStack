@@ -27,6 +27,14 @@ test('PPIFlow objective descriptor is explicitly BMS-local not paper rank', () =
     assert.match(getMetricTooltip('ppiflow_objective_score'), /not upstream PPIFlow paper final rank/i);
 });
 
+test('Rosetta descriptor preserves raw REU sign convention', () => {
+    const descriptor = getMetricDescriptor('rosetta_interface_score');
+
+    assert.equal(descriptor?.label, 'Rosetta interface score');
+    assert.equal(descriptor?.direction, 'more_negative_is_better');
+    assert.match(getMetricTooltip('rosetta_interface_score'), /Raw Rosetta InterfaceAnalyzerMover dG/i);
+});
+
 test('metric completeness resolver exposes partial rows and missing metrics', () => {
     const status = resolveDesignMetricCompletenessStatus({
         metric_completeness: {
