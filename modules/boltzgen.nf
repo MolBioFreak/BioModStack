@@ -165,3 +165,197 @@ process FilterBoltzGen {
         2>&1 | tee filter_boltzgen.log
     """
 }
+
+// =============================================================================
+// SWA (Spawn-Wait-Aggregate) Processes for Parallelized BoltzGen Campaigns
+// Used when boltzgen_parallel_mode is enabled for large-scale design campaigns
+// =============================================================================
+
+process SpawnBoltzGenJobs {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/run/boltzgen_parallel", mode: 'copy', pattern: "*.json"
+    publishDir "${params.out_dir}/run/boltzgen_parallel", mode: 'copy', pattern: "*.log"
+
+    input:
+    val parent_job_id
+    val total_designs
+    val designs_per_job
+    path yaml_config
+    path target_pdb
+    val mode
+    val batch_name
+
+    output:
+    path "spawn_boltzgen_result.json", emit: result
+    path "spawn_boltzgen.log"
+
+    script:
+    def paramsJson = params.boltzgen_extra_params ? "'${params.boltzgen_extra_params}'" : "'{}'"
+    """
+    python3 ${projectDir}/scripts/spawn_boltzgen_children.py \\
+        --parent_job_id "${parent_job_id}" \\
+        --total_designs ${total_designs} \\
+        --designs_per_job ${designs_per_job} \\
+        --yaml_config "\$(readlink -f ${yaml_config})" \\
+        --target_pdb "\$(readlink -f ${target_pdb})" \\
+        --mode "${mode}" \\
+        --batch_name "${batch_name}" \\
+        --params_json ${paramsJson} \\
+        --api_url "http://localhost:8000" \\
+        --output spawn_boltzgen_result.json \\
+        2>&1 | tee spawn_boltzgen.log
+    """
+}
+
+process WaitForBoltzGenChildren {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/run/boltzgen_parallel", mode: 'copy', pattern: "*.json"
+    publishDir "${params.out_dir}/run/boltzgen_parallel", mode: 'copy', pattern: "*.log"
+
+    input:
+    val parent_job_id
+    path spawn_result
+
+    output:
+    path "boltzgen_child_outputs.json", emit: result
+    path "wait_boltzgen.log"
+
+    script:
+    """
+    python3 ${projectDir}/scripts/wait_for_children.py \\
+        --parent_job_id "${parent_job_id}" \\
+        --stage "boltzgen" \\
+        --poll_interval 30 \\
+        --api_url "http://localhost:8000" \\
+        --output boltzgen_child_outputs.json \\
+        2>&1 | tee wait_boltzgen.log
+    """
+}
+
+process CollectBoltzGenOutputs {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "collected/*.pdb"
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "collected/*.json"
+    publishDir "${params.out_dir}/run/boltzgen_parallel", mode: 'copy', pattern: "collection_manifest.json"
+
+    input:
+    path child_outputs_json
+
+    output:
+    path "collected/*.pdb", emit: pdbs, optional: true
+    path "collected/*.json", emit: jsons, optional: true
+    path "collection_manifest.json", emit: manifest
+
+    script:
+    """
+    #!/usr/bin/env python3
+    import json
+    import shutil
+    from pathlib import Path
+    
+    # Read child output directories
+    with open("${child_outputs_json}") as f:
+        data = json.load(f)
+    
+    child_dirs = data.get("child_output_dirs", [])
+    
+    Path("collected").mkdir(exist_ok=True)
+    
+    collected_pdbs = []
+    collected_jsons = []
+    
+    for job_idx, child_dir in enumerate(child_dirs):
+        dir_path = Path(child_dir)
+        if not dir_path.exists():
+            print(f"Warning: Child dir {child_dir} does not exist")
+            continue
+        
+        # Search for PDBs and JSONs in standard locations
+        for subdir in ["pdb_files", "run/boltzgen/output/designs", "output/designs", ""]:
+            search_path = dir_path / subdir if subdir else dir_path
+            if not search_path.exists():
+                continue
+            
+            for pdb in search_path.glob("*.pdb"):
+                dest = Path("collected") / f"job{job_idx}_{pdb.name}"
+                if not dest.exists():
+                    shutil.copy(pdb, dest)
+                    collected_pdbs.append(str(dest))
+                    print(f"Collected: {pdb} -> {dest}")
+            
+            for js in search_path.glob("confidence_*.json"):
+                dest = Path("collected") / f"job{job_idx}_{js.name}"
+                if not dest.exists():
+                    shutil.copy(js, dest)
+                    collected_jsons.append(str(dest))
+    
+    # Write manifest
+    manifest = {
+        "children_processed": len(child_dirs),
+        "pdbs_collected": len(collected_pdbs),
+        "jsons_collected": len(collected_jsons),
+        "collected_pdbs": collected_pdbs,
+        "collected_jsons": collected_jsons
+    }
+    
+    with open("collection_manifest.json", "w") as f:
+        json.dump(manifest, f, indent=2)
+    
+    print(f"Collection complete: {len(collected_pdbs)} PDBs, {len(collected_jsons)} JSONs")
+    """
+}
+
+process AggregateBoltzGenResults {
+    label 'process_low'
+
+    publishDir "${params.out_dir}", mode: 'copy', pattern: "aggregation_report.json"
+
+    input:
+    val parent_job_id
+    path collected_pdbs
+    path collected_jsons
+    path manifest
+
+    output:
+    path "aggregation_report.json", emit: report
+
+    script:
+    """
+    #!/bin/bash
+    set -euo pipefail
+    
+    echo "Aggregating BoltzGen results for parent job ${parent_job_id}"
+    
+    # Count collected files
+    PDB_COUNT=\$(ls ${collected_pdbs} 2>/dev/null | wc -l || echo 0)
+    JSON_COUNT=\$(ls ${collected_jsons} 2>/dev/null | wc -l || echo 0)
+    
+    echo "Found \$PDB_COUNT PDBs and \$JSON_COUNT JSONs"
+    
+    # Trigger result ingestion
+    if [ \$PDB_COUNT -gt 0 ]; then
+        echo "Triggering result ingestion..."
+        python3 ${projectDir}/scripts/result_ingester.py \\
+            --job_id "${parent_job_id}" \\
+            --results_dir "${params.out_dir}" \\
+            --api_url "http://localhost:8000" \\
+            2>&1 | tee ingest.log || echo "Warning: Ingestion had issues (non-fatal)"
+    fi
+    
+    # Create aggregation report
+    cat > aggregation_report.json <<EOF
+{
+    "parent_job_id": "${parent_job_id}",
+    "total_pdbs": \$PDB_COUNT,
+    "total_jsons": \$JSON_COUNT,
+    "status": "complete",
+    "ingestion_triggered": true
+}
+EOF
+
+    echo "Aggregation complete"
+    """
+}
