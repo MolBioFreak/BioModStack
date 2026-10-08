@@ -287,7 +287,7 @@ export const buildMolecularDynamicsJobSpec = (
     ];
     if (errors.length) throw new Error(errors.join(' '));
     if (automaticPreparation && !chemistryProfile) throw new Error('A chemistry profile is required for automatic preparation.');
-    if (automaticPreparation && !/^[0-9a-f]{64}$/.test(catalogDigest || '')) {
+    if (automaticPreparation && !chemistryProfile!.legacy && !/^[0-9a-f]{64}$/.test(catalogDigest || '')) {
         throw new Error('A valid deployed chemistry catalog digest is required for automatic preparation.');
     }
     const stages: MolecularDynamicsJobSpecV1['stages'] = {
@@ -305,6 +305,29 @@ export const buildMolecularDynamicsJobSpec = (
             energy_interval_steps: stepsFromPs(form.energyIntervalPs, form.timestepFs),
         },
     };
+    if (automaticPreparation && chemistryProfile!.legacy) {
+        return {
+            schema: 'bms.md.job.v1',
+            job_id: 'assigned-by-bms',
+            engine: form.engine,
+            replicas: form.replicas,
+            random_seed: form.randomSeed,
+            input: { structure: form.structurePath.trim() },
+            preparation: {
+                chemistry_assurance: 'smoke_fixture',
+                chemistry_profile_id: chemistryProfile!.id,
+                chemistry_profile_sha256: chemistryProfile!.profile_sha256,
+                chemistry_profile_scope: chemistryProfile!.scientific_validation.scope.launch_scope,
+                force_field: chemistryProfile!.v1_preparation.force_field,
+                water_model: chemistryProfile!.v1_preparation.water_model,
+                box_type: 'dodecahedron', padding_nm: form.paddingNm,
+                salt_molar: form.saltMolar, positive_ion: 'NA', negative_ion: 'CL',
+                solvent_group: 'SOL', solvent_coordinates: 'spc216.gro', neutralize: true,
+            },
+            stages,
+            execution: { gpu_id: '0', ntmpi: 1, ntomp: form.ntomp, gpu_offload: 'full', pin: 'on' },
+        };
+    }
     if (automaticPreparation) {
         return {
             schema: 'bms.md.job.v2',
