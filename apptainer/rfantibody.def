@@ -33,14 +33,15 @@ From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     git clone https://github.com/RosettaCommons/RFantibody.git /opt/RFantibody
     cd /opt/RFantibody
 
-    # Install RFantibody and all dependencies with UV
-    # Poetry install often fails in containers, so we use uv pip directly
-    uv pip install icecream e3nn hydra-core omegaconf pyyaml biopython
+    # Install ALL RFantibody dependencies from pyproject.toml with UV
+    # Core deps: torch, numpy, hydra-core, icecream, opt-einsum, e3nn, pyrsistent
+    # Runtime deps (not listed but needed): pandas, scipy
+    uv pip install numpy pandas scipy hydra-core icecream opt-einsum e3nn pyrsistent pyyaml biopython
     
-    # Install RFantibody as editable package
+    # Install RFantibody as editable package from src/
     uv pip install -e /opt/RFantibody 2>/dev/null || true
     
-    # SE3-Transformer (required for RF tools)
+    # SE3-Transformer / DGL (required for RF tools)
     uv pip install dgl -f https://data.dgl.ai/wheels/cu124/repo.html
 
     # Cleanup
