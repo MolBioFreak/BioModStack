@@ -5,6 +5,7 @@ and selecting antibody anchor residues from Rosetta-style interchain pair energi
 
 Outputs:
 - enriched_complex.pdb: sidechain-repacked complex used as the partial-flow seed
+  (backbone shell movement only when --relax_antibody_backbone_shell is explicit)
 - anchors.json: effective fixed anchors after excluding movable-region residues
 - interface_score.json: baseline and enriched interface metrics
 - rotamer_enrichment.json: enrichment shell / anchor-candidate details
@@ -97,6 +98,7 @@ def _run_interface_rotamer_enrichment(
     shell_residues: Sequence[int],
     antibody_chains: Sequence[str],
     repeats: int = 2,
+    relax_antibody_backbone_shell: bool = False,
 ) -> None:
     scorefxn = pyrosetta.get_fa_scorefxn()
     shell_set = set(int(value) for value in shell_residues)
@@ -108,7 +110,7 @@ def _run_interface_rotamer_enrichment(
         chain = pdb_info.chain(resi)
         if resi in shell_set:
             move_map.set_chi(resi, True)
-        if resi in shell_set and chain in antibody_chains:
+        if relax_antibody_backbone_shell and resi in shell_set and chain in antibody_chains:
             move_map.set_bb(resi, True)
     relax = rosetta.protocols.relax.FastRelax(scorefxn, int(repeats))
     relax.set_movemap(move_map)
@@ -225,6 +227,7 @@ def _build_anchor_payload(
         anchor_candidates.append(record)
         if record["movable_region_member"]:
             movable_anchor_candidates.append(record)
+            continue
         effective_anchors.append(record)
 
     return {
@@ -232,6 +235,8 @@ def _build_anchor_payload(
         "anchor_count": len(effective_anchors),
         "anchor_candidate_count": len(anchor_candidates),
         "movable_anchor_candidate_count": len(movable_anchor_candidates),
+        "excluded_movable_anchor_count": len(movable_anchor_candidates),
+        "anchors_include_movable_positions": False,
         "interface_residue_count": len(interface_set),
         "energy_threshold": float(energy_threshold),
         "region_mode": region_mode,
@@ -278,6 +283,11 @@ def main() -> None:
     parser.add_argument("--output_cdr_positions_by_loop", required=True, help="Path to write resolved loop-position JSON")
     parser.add_argument("--rotamer_enrichment", action="store_true", help="Enable interface rotamer enrichment repacking")
     parser.add_argument("--rotamer_shell_distance", type=float, default=20.0, help="Shell distance (A) around interface residues to repack")
+    parser.add_argument(
+        "--relax_antibody_backbone_shell",
+        action="store_true",
+        help="Allow FastRelax backbone movement for antibody residues in the enrichment shell. Default is side-chain-only enrichment.",
+    )
     parser.add_argument("--require_anchors", action="store_true", help="Fail if no non-movable anchors are found")
     args = parser.parse_args()
 
@@ -338,7 +348,12 @@ def main() -> None:
     enriched_pose.assign(input_pose)
     repack_shell_residues = _detect_shell_residues(enriched_pose, original_interface_residues, args.rotamer_shell_distance)
     if args.rotamer_enrichment and repack_shell_residues:
-        _run_interface_rotamer_enrichment(enriched_pose, repack_shell_residues, antibody_chains)
+        _run_interface_rotamer_enrichment(
+            enriched_pose,
+            repack_shell_residues,
+            antibody_chains,
+            relax_antibody_backbone_shell=bool(args.relax_antibody_backbone_shell),
+        )
 
     enriched_interface_score, enriched_interface_residues, enriched_binder_scores, enriched_pair_scores = _compute_interface_pair_energy_breakdown(
         enriched_pose,
@@ -376,6 +391,9 @@ def main() -> None:
     }
     enrichment_payload = {
         "rotamer_enrichment_enabled": bool(args.rotamer_enrichment),
+        "enrichment_method": "pyrosetta_fastrelax_chi_shell",
+        "relax_antibody_backbone_shell": bool(args.relax_antibody_backbone_shell),
+        "backbone_movement_allowed": bool(args.relax_antibody_backbone_shell),
         "anchor_selection_method": anchor_payload["anchor_selection_method"],
         "repack_shell_distance": float(args.rotamer_shell_distance),
         "repacked_residue_count": len(repack_shell_residues),

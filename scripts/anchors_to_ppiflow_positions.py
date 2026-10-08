@@ -24,10 +24,12 @@ def group_consecutive(numbers):
     return ranges
 
 
-def build_positions(anchors):
+def build_positions(anchors, *, include_movable_anchors=False):
     by_chain = {}
     icode_positions = []
     for anchor in anchors:
+        if anchor.get("movable_region_member") is True and not include_movable_anchors:
+            continue
         chain = anchor.get("chain")
         resnum = anchor.get("resnum")
         icode = (anchor.get("icode") or "").strip()
@@ -54,13 +56,18 @@ def main():
     parser = argparse.ArgumentParser(description="Generate PPIFlow fixed_positions from anchors JSON")
     parser.add_argument("--anchors_json", required=True, help="Path to anchors.json")
     parser.add_argument("--output", required=True, help="Path to output positions string")
+    parser.add_argument(
+        "--include_movable_anchors",
+        action="store_true",
+        help="Include anchors tagged as movable_region_member=true. Default excludes them to avoid fixed/movable mask overlap.",
+    )
     args = parser.parse_args()
 
     with open(args.anchors_json, "r") as f:
         data = json.load(f)
 
     anchors = data.get("anchors", [])
-    positions = build_positions(anchors)
+    positions = build_positions(anchors, include_movable_anchors=args.include_movable_anchors)
     Path(args.output).write_text(positions + "\n")
 
 
