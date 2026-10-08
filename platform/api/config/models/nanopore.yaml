@@ -84,7 +84,7 @@ sequence_qc_contract:
 modes:
   - id: basecall_dna
     name: ONT DNA Basecalling
-    description: Dorado DNA basecalling from existing POD5/FAST5 run outputs.
+    description: Dorado DNA basecalling from existing POD5 run outputs. Legacy FAST5 must be converted and model-qualified outside this workflow.
     params:
       - pod5_dir
       - reference_fasta
