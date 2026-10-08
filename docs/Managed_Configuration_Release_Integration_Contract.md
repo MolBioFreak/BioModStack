@@ -1,101 +1,121 @@
-# Managed configuration → first release: remaining integration contract
+# Managed configuration → first release integration
 
-Status: **not implemented; first-install release remains blocked**. Configuration
-is recorded, not a usable released installation. The acquisition workstream must
-not advertise ready/setup-complete until this contract is implemented and tested.
+Status: **implemented for one first-install release receipt transition**. This
+connects configured installations to the existing production release orchestrator;
+it is not scientific acquisition/qualification or proof of a running installation.
+No services, jobs, browsers, ingress or host configuration were changed during
+implementation. General managed profile migration remains deliberately blocked.
 
-## Concrete obstruction
+## Supported entrypoints
 
-- `scripts/biomodstack_release.py:ProductionReleaseBackend.__init__` calls
-  `reject_managed_write()` even with `allow_first_install=True`.
-- `commit_known_good()` appends/replaces five receipt keys in `runtime_env_file`
-  using `_atomic_text_write()`, which independently rejects managed writes.
-  The constructor currently resolves the publication symlink to its committed
-  generation file. Removing either guard is not an integration implementation.
-- `biomodstack_configuration._verify()` compares all three files to the original
-  journal and recomputes env exports from the profile. Appending release metadata
-  breaks that invariant even if journal hashes were updated. Desktop independently
-  checks those original hashes. Journal and active pointer cannot be replaced as
-  two writes and called an atomic generation switch.
-- `run_release_transaction()` invokes `commit_known_good()` **outside** its
-  rollback try/except. A commit interruption must be recoverable without rebuilding
-  or assuming the running candidate was stopped. `known-good.json` is on the state
-  filesystem, so its publication and configuration activation are not one rename.
+After `start_ui.sh configure --document <install.json> --json`, the existing
+`scripts/biomodstack_release.py deploy --allow-first-install
+--confirm-runtime-activation` path can consume the committed managed configuration.
+The runtime activation authorization is still mandatory. Construction and
+configuration are not readiness. Existing build, provenance, running-image,
+readiness, listener and ownership checks still precede acceptance.
 
-## Minimal supported scope (separate integration worker)
-
-Implement a release-receipt-only immutable generation transition, not a general
-profile migration. Keep existing arbitrary managed-write guards in place.
-
-Suggested public interfaces in `biomodstack_configuration.py`:
+For an interrupted recorded acceptance, use:
 
 ```
-managed_release_base(project_root) -> {operation_id, generation_id, hashes}
-commit_managed_release(project_root, expected_base, release_id, receipt) -> result
-recover_managed_release(project_root, release_id) -> result
+python3 scripts/biomodstack_release.py recover-managed \
+  --release-id <recorded-build-id> --confirm-runtime-activation
 ```
 
-1. Read-only base discovery verifies an activated, committed first-install
-   configuration and canonical HOME/XDG/source context. The release backend may
-   construct in this case only through the supported managed path; an incomplete
-   configuration, override env path, stale base, or foreign source stays blocked.
-   Do not cache the `.resolve()` result of `core-runtime.env` as a write target.
-2. Receipt input has an exact closed key set: `BMS_BUILD_SHA`, `BMS_BUILD_ID`,
-   `BMS_BUILD_TIME`, `BMS_MANAGED_API_IMAGE_ID`, `BMS_MANAGED_WEB_IMAGE_ID`.
-   Reuse release `BuildIdentity` validation; require immutable `sha256:` image IDs.
-   No profile, runtime/storage paths, ports, ingress, scientific parameters, shell
-   fragments, or arbitrary extra env keys are accepted.
-3. Under `configuration_lock()`, compare operation/generation/hash expectations
-   and re-verify the old generation. Persist an operation-bound recovery record
-   with old/new identities and receipt. Stage a new, uniquely named directory
-   containing all three immutable files **and its own manifest**. Profile and
-   compatibility export remain byte-identical; core export is the canonical
-   renderer output plus the validated five-key receipt. Validate that exact rule.
-4. Extend Python and desktop readers to support the versioned active-generation
-   manifest before enabling this writer. Keep the original v1 installation journal
-   as immutable audit input. A new active target must bind its own manifest/hashes
-   and the original operation identity; do not change the original committed
-   `generation/*` files or separately mutate original journal hashes. Continue
-   accepting the initial v1 `active -> generation` layout. Reject unknown targets,
-   symlinks escaping the transaction root, and manifest/file mismatches.
-5. fsync files and directories before switching the single `active` symlink by
-   atomic rename. All public destination links continue targeting `active/<key>`.
-   Readers capture the active identity before reading and recheck it on every
-   exit; either return a verified single generation or fail/retry, never a mixture
-   or legacy fallback. Existing shell/Python guards must exercise this same rule.
-6. A post-activation crash must recover idempotently by verifying the intended
-   active generation and completing the release receipt, not by restaging from
-   current environment or rerunning first-install empty-state checks. Runtime
-   databases now legitimately exist; the allowlisted receipt transition may not
-   adopt or change their configured identities.
-7. Integrate `ProductionReleaseBackend.commit_known_good()` with this API instead
-   of `_atomic_text_write()` only for managed configurations. Bind
-   `known-good.json` to release ID and generation ID. Persist enough information
-   before activation to recover the cross-filesystem known-good publication; only
-   report accepted once both are durable and verified. A failure between activation
-   and known-good publication must produce explicit recovery-required status.
-   Unmanaged release behavior remains unchanged. Keep readiness/identity/image/
-   ownership validation before acceptance; construction is not readiness.
+Recovery revalidates the candidate and running image identities before completing
+metadata. It does not rebuild, restart, mutate settings, or rerun empty-state
+checks. A stopped or unhealthy candidate is not accepted by this command. The
+low-level `recover_managed_release()` API completes metadata only; it is not a
+runtime-readiness assertion. Subsequent releases/profile migrations remain blocked.
+A repeated deploy with a recorded operation directs the operator to recovery,
+rather than rebuilding over an interrupted candidate.
 
-## Required disposable acceptance/fault tests
+## Immutable generation protocol
 
-- Real `start_ui.sh configure --json` then construct the backend with
-  `allow_first_install=True`; exercise existing release orchestration with fixture
-  subprocess/service adapters (never host services). Prove accepted generation,
-  Python/env/desktop parity, receipt identities, and known-good binding.
-- Interrupt before/after recovery-record fsync, each staged file/manifest fsync,
-  directory fsync, active rename, activation fsync, known-good publication, and
-  final recovery acknowledgement. Recover with the same release ID twice.
-- Interleave Python and desktop readers at each switch boundary, including missing
-  and invalid legacy-profile returns. Assert no unrelated state or mixed generation.
-- Two release writers, stale expected base, changed HOME/XDG/source, malformed or
-  extra receipt keys, corrupt staged bytes/manifest, dangling/foreign links,
-  pre-existing temp paths, and fsync errors all fail closed without clobbering.
-- Snapshot original generation bytes/inodes and all public links; demonstrate
-  original files and unrelated state survive success, every fault, and recovery.
-- Existing first-install failure rollback remains stopped/not ready; failures
-  after acceptance activation require explicit recoverable receipt completion.
+- `managed_release_base(project_root)` verifies the committed install journal,
+  canonical HOME/XDG/source context, public links and active bytes. Override env
+  paths and state destinations are rejected. The backend retains the public env
+  symlink path, not its resolved generation write target.
+- Receipt keys are exactly `BMS_BUILD_SHA`, `BMS_BUILD_ID`, `BMS_BUILD_TIME`,
+  `BMS_MANAGED_API_IMAGE_ID`, `BMS_MANAGED_WEB_IMAGE_ID`. BuildIdentity validation,
+  shell-safe literal export validation, and immutable SHA256 image IDs are required.
+- `commit_managed_release()` holds the configuration lock, compares the expected
+  operation/generation/hashes, and persists `release.json` acceptance intent before
+  staging. It includes the intended known-good payload and its canonical state
+  destination so recovery does not reconstruct acceptance from process environment.
+- A new `release-<sha256(release-id)>` directory contains the original profile and
+  compatibility export byte-for-byte, the canonical original core export plus the
+  five sorted receipt fields, and `manifest.json` (`bms.configuration-release.v1`).
+  The manifest binds original operation/hashes, release ID, receipt and new hashes.
+- Original `generation/*`, original journal and public destination links are never
+  rewritten. New release-file publication uses Linux `renameat2(RENAME_NOREPLACE)`
+  so a crash cannot leave an extra temporary hardlink; unsupported filesystems
+  fail closed. Files and directories are synced before atomically replacing the
+  single `active` symlink. Stale/corrupt/foreign files are rejected, not repaired.
+- Known-good publication on the state filesystem follows verified activation.
+  Its release ID/generation ID are bound to the manifest. Files and directory
+  entries are synced before recording committed acknowledgement. Repeated recovery
+  verifies the same payload and is idempotent.
+- Python, shell and desktop readers accept original and release generations,
+  validate the applicable hashes and recheck the active identity around reads.
+  A generation change fails the read instead of returning mixed data or falling
+  back to a legacy profile. General-purpose managed-write guards remain in place.
+- The release execution lock covers the whole managed service transaction and
+  recovery; the configuration lock separately serializes receipt writers. The
+  backend uses configured exports for subprocesses and configured validation ports,
+  rejecting conflicting inherited base export settings.
 
-The current regression `test_first_install_release_remains_explicitly_blocked`
-records this unresolved gate. Replace it with the positive integration test only
-when the supported transition and the above crash semantics actually exist.
+## Failure policy
+
+`commit_known_good` now runs inside the release transaction's exception boundary.
+Failures before acceptance intent use the existing rollback path (a first install
+remains stopped with no known-good runtime to restart). After intent publication,
+errors return `managed_release_recovery_required`, not a misleading rollback or
+accepted status. This preserves the validated candidate for explicit recovery.
+Recovery verifies both generations and the intended payload; existing runtime
+storage is allowed but its configured identity cannot change. Corrupt metadata or
+a conflicting known-good file fails closed and requires operator investigation.
+
+## Disposable validation and limitations
+
+Validation commands (run locally, without runtime authorization bypass):
+
+```
+cd platform/api
+uv run --frozen --group dev python -m pytest \
+  tests/test_managed_release_configuration.py \
+  tests/test_transactional_configuration.py tests/test_configuration_preview.py \
+  tests/test_phase5_release_transaction.py -q -s
+
+cd ../desktop-electron
+pnpm run build && node --test dist/tests/shellPaths.test.js
+```
+
+Tests exercise the real disposable configure CLI and real release orchestrator,
+receipt writer and recovery. Service/build boundaries use fixture adapters; a test
+also exercises actual unit rendering/publication and start orchestration with the
+external service boundary mocked. Coverage includes every acceptance checkpoint,
+before/after all 22 acceptance fsync positions, process death at each checkpoint,
+repeated recovery, original file byte/inode and public-link preservation, runtime
+state preservation, stale/context/override rejection, corrupt staged files,
+manifest corruption, writer locking, foreign symlinks and activation-temp conflicts.
+Python/shell/desktop interleaving tests reject a switch during reading. Recovery
+readiness failure and the CLI authorization gate are tested independently.
+
+The release regression contained a stale 8000 proxy assertion although production
+code and port authority already use 18000; that assertion is corrected to 18000.
+The full Electron suite additionally imports its binary in unrelated menu/tray
+modules. Installing locked dependencies with `--ignore-scripts` leaves that binary
+uninstalled: those two tests cannot run in this setup. TypeScript compilation and
+the focused shell-path suite run without launching Electron. API pytest reports
+pre-existing garbage-directory cleanup permission warnings from other runs.
+
+Final local results: **274 API tests passed** (2 unrelated cleanup warnings),
+**TypeScript compilation passed**, and **19 desktop shell-path tests passed**.
+The broader Electron run had 64 passes and two import failures caused by the
+uninstalled Electron binary; it is not claimed as a passing full desktop suite.
+
+These tests do not certify real Docker/systemd operation, physical power-loss
+behavior of storage hardware, scientific models, acquisition, or a full live first
+installation. Runtime qualification remains a separate authorized task. This is a
+first-receipt-only transition, not a general upgrade/rollback migration framework.
