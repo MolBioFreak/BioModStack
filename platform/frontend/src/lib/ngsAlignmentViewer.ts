@@ -1,3 +1,5 @@
+import type { AlignmentLocusSlice, AlignmentPresentation } from './ngsAlignmentSession.js';
+
 export type AlignmentViewerMode = 'primary' | 'dimer_candidates';
 
 export interface AlignmentViewerFile {
@@ -186,7 +188,13 @@ export function alignmentTrackAutoLoadDisposition(sizeBytes: number | null | und
     autoLoad: boolean;
     reason: string | null;
 } {
-    if (!Number.isFinite(sizeBytes) || !sizeBytes || sizeBytes <= MAX_BROWSER_ALIGNMENT_BYTES) {
+    if (typeof sizeBytes !== 'number' || !Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+        return {
+            autoLoad: false,
+            reason: 'Alignment size is unknown or invalid; full-source browser loading is disabled. A bounded presentation is required.',
+        };
+    }
+    if (sizeBytes <= MAX_BROWSER_ALIGNMENT_BYTES) {
         return { autoLoad: true, reason: null };
     }
     return {
@@ -201,33 +209,86 @@ export interface BrowserAlignmentTrackInput {
     alignmentUrl: string;
     alignmentIndexUrl: string;
     alignmentSizeBytes: number | null | undefined;
+    presentation?: AlignmentPresentation | null;
+    locusSlice?: AlignmentLocusSlice | null;
 }
 
-export function resolveBrowserAlignmentTrackUrls(input: BrowserAlignmentTrackInput): {
+export interface BrowserAlignmentTrackSource {
+    kind: 'full' | 'preview' | 'locus';
+    name: 'Full alignment' | 'Primary-read preview' | 'Bounded full-source locus slice';
     bamUrl: string;
     baiUrl: string;
-    preview: boolean;
-} {
-    if (alignmentTrackAutoLoadDisposition(input.alignmentSizeBytes).autoLoad) {
-        return { bamUrl: input.alignmentUrl, baiUrl: input.alignmentIndexUrl, preview: false };
+    byteSize: number;
+    selectedReadCount: number | null;
+    availableReadCount: number | null;
+    policyVersion: string | null;
+    capped: boolean;
+    fullSourceDownload: { url: string; sizeBytes: number | null };
+}
+
+export function resolveBrowserAlignmentTrackSource(input: BrowserAlignmentTrackInput): BrowserAlignmentTrackSource | null {
+    const fullSourceDownload = {
+        url: input.alignmentUrl,
+        sizeBytes: typeof input.alignmentSizeBytes === 'number' && Number.isFinite(input.alignmentSizeBytes)
+            ? input.alignmentSizeBytes : null,
+    };
+    if (input.locusSlice) {
+        return {
+            kind: 'locus', name: 'Bounded full-source locus slice', bamUrl: input.locusSlice.bam.url,
+            baiUrl: input.locusSlice.index.url, byteSize: input.locusSlice.bam.size_bytes,
+            selectedReadCount: input.locusSlice.selected_read_count,
+            availableReadCount: input.locusSlice.overlapping_read_count,
+            policyVersion: input.locusSlice.policy.version, capped: input.locusSlice.capped, fullSourceDownload,
+        };
     }
-    const base = `/api/jobs/${encodeURIComponent(input.jobId)}/alignment-sessions/${encodeURIComponent(input.sessionId)}/preview`;
-    return { bamUrl: `${base}/bam`, baiUrl: `${base}/bai`, preview: true };
+    if (alignmentTrackAutoLoadDisposition(input.alignmentSizeBytes).autoLoad) {
+        return {
+            kind: 'full', name: 'Full alignment', bamUrl: input.alignmentUrl, baiUrl: input.alignmentIndexUrl,
+            byteSize: input.alignmentSizeBytes as number, selectedReadCount: null, availableReadCount: null,
+            policyVersion: null, capped: false, fullSourceDownload,
+        };
+    }
+    if (!input.presentation || input.presentation.job_id !== input.jobId || input.presentation.session_id !== input.sessionId) return null;
+    return {
+        kind: 'preview', name: 'Primary-read preview', bamUrl: input.presentation.preview.bam.url,
+        baiUrl: input.presentation.preview.index.url, byteSize: input.presentation.preview.bam.size_bytes,
+        selectedReadCount: input.presentation.preview.selected_read_count,
+        availableReadCount: input.presentation.source.primary_read_count,
+        policyVersion: input.presentation.policy.version, capped: false, fullSourceDownload,
+    };
+}
+
+export function buildAlignmentTrackConfig(
+    source: BrowserAlignmentTrackSource,
+    height: number,
+    options: { displayMode?: string; colorBy?: string; groupBy?: string } = {},
+): Record<string, unknown> {
+    return {
+        name: source.name, type: 'alignment', format: 'bam', url: source.bamUrl, indexURL: source.baiUrl,
+        showSoftClips: true, showCoverage: true, showMismatches: true, showAllBases: true,
+        showInsertionText: true, autoHeight: false, height, displayMode: options.displayMode || 'EXPANDED',
+        visibilityWindow: -1, samplingWindowSize: 40, samplingDepth: 10000, maxRows: 500,
+        alignmentRowHeight: 9, squishedRowHeight: 4,
+        ...(options.colorBy && options.colorBy !== 'none' ? { colorBy: options.colorBy } : {}),
+        ...(options.groupBy && options.groupBy !== 'none' ? { groupBy: options.groupBy } : {}),
+    };
+}
+
+export function buildFullSourceCoverageTrackConfig(presentation: AlignmentPresentation): Record<string, unknown> {
+    return {
+        name: 'Full-source primary-read coverage', type: 'wig', format: 'bedgraph',
+        url: presentation.coverage.artifact.url, autoscale: true, graphType: 'bar', height: 72,
+    };
 }
 
 export function buildLocalIgvConfig(input: LocalIgvConfigInput): Record<string, unknown> {
-    const alignmentTracks = input.bamUrl && input.baiUrl
-        ? [{
-            name: 'Aligned Reads',
-            type: 'alignment',
-            format: 'bam',
-            url: input.bamUrl,
-            indexURL: input.baiUrl,
-            height: 420,
-            displayMode: 'EXPANDED',
-            colorBy: 'strand',
-        }]
-        : [];
+    const sequenceTrack = {
+        name: 'Reference bases',
+        type: 'sequence',
+        fastaURL: input.fastaUrl,
+        ...(input.faiUrl ? { indexURL: input.faiUrl } : {}),
+        order: -1000,
+    };
     return {
         loadDefaultGenomes: false,
         genomeList: [],
@@ -243,7 +304,7 @@ export function buildLocalIgvConfig(input: LocalIgvConfigInput): Record<string, 
         },
         ...(input.initialLocus ? { locus: input.initialLocus } : {}),
         tracks: [
-            ...alignmentTracks,
+            sequenceTrack,
             ...input.auxiliaryTracks,
         ],
     };

@@ -9,6 +9,8 @@ import { api, createOntSignalViewerSession, DEFAULT_ONT_SIGNAL_RENDER_PARAMS, fe
 import {
     awaitCurrentGeneration,
     alignmentTrackAutoLoadDisposition,
+    buildAlignmentTrackConfig,
+    buildFullSourceCoverageTrackConfig,
     buildLocalIgvConfig,
     createGenerationBoundResourceWithTimeout,
     ownsIgvLoadTerminalState,
@@ -16,21 +18,26 @@ import {
     removeIgvBrowser,
     resolveAlignmentViewerArtifacts,
     resolveBoundSessionLocus,
-    resolveBrowserAlignmentTrackUrls,
+    resolveBrowserAlignmentTrackSource,
     resolveIgvReadLocus,
     resolvePendingSessionLocus,
     resolveSessionAuxiliaryTracks,
     type AlignmentReadLocus,
+    type BrowserAlignmentTrackSource,
     type PendingSessionNavigation,
 } from '../lib/ngsAlignmentViewer';
 import {
     bindAlignmentSessionsToResultAuthority,
+    createAlignmentLocusSlice,
     disposeAlignmentAccess,
     describeNgsError,
     fetchAlignmentSessions,
+    fetchAlignmentPresentation,
     isAlignmentAccessDenied,
     rotateAlignmentAccess,
     type AlignmentRead,
+    type AlignmentLocusSlice,
+    type AlignmentPresentation,
     type AlignmentSession,
 } from '../lib/ngsAlignmentSession';
 import {
@@ -51,6 +58,7 @@ import { BarcodeUnitsPanel } from './ngs/BarcodeUnitsPanel';
 import { PooledAssignmentReviewPanel } from './ngs/PooledAssignmentReviewPanel';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
 import { OntFastqQcResultPanel } from './ngs/OntFastqQcResultPanel';
+import { AlignmentPresentationStatus } from './ngs/AlignmentPresentationStatus';
 import { useOntFastqQcResult } from './ngs/useOntFastqQcResult';
 import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
 import { useThemeColors, useThemePlotlyLayout } from './useThemeColors';
@@ -2266,9 +2274,18 @@ export function NGSToolkit() {
     const [igvCurrentLocus, setIgvCurrentLocus] = useState<AlignmentReadLocus | null>(null);
     const [igvReadsTrackLoaded, setIgvReadsTrackLoaded] = useState(false);
     const [igvReadsTrackLoading, setIgvReadsTrackLoading] = useState(false);
+    const [igvPresentation, setIgvPresentation] = useState<AlignmentPresentation | null>(null);
+    const [igvLocusSlice, setIgvLocusSlice] = useState<AlignmentLocusSlice | null>(null);
+    const [igvPresentationLoading, setIgvPresentationLoading] = useState(false);
+    const [igvLocusSliceLoading, setIgvLocusSliceLoading] = useState(false);
+    const igvPresentationGenerationRef = useRef(0);
     const [signalViewerSession, setSignalViewerSession] = useState<OntSignalViewerSession | null>(null);
     const themeColors = useThemeColors();
     const basePlotlyLayout = useThemePlotlyLayout();
+
+    useEffect(() => () => {
+        igvPresentationGenerationRef.current += 1;
+    }, []);
 
     useEffect(() => {
         setSignalViewerSession(requestedViewerSessionQuery.data || null);
@@ -2788,25 +2805,30 @@ export function NGSToolkit() {
             igvNavigationOwnerRef.current = null;
         }
         setIgvCurrentLocus(null);
+        setIgvPresentation(null);
+        setIgvLocusSlice(null);
+        setIgvPresentationLoading(false);
+        setIgvLocusSliceLoading(false);
+        igvPresentationGenerationRef.current += 1;
     }, [selectedAlignmentSession?.session_id]);
     const activeIgvBamPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment` : null;
-    const browserAlignmentTrack = selectedJob
+    const igvAlignmentLoadDisposition = alignmentTrackAutoLoadDisposition(selectedAlignmentSession?.artifacts.alignment?.size_bytes);
+    const browserAlignmentTrack: BrowserAlignmentTrackSource | null = selectedJob
         && selectedAlignmentSession?.artifacts.alignment
         && selectedAlignmentSession.artifacts.alignment_index
-        ? resolveBrowserAlignmentTrackUrls({
+        ? resolveBrowserAlignmentTrackSource({
             jobId: selectedJob.id,
             sessionId: selectedAlignmentSession.session_id,
             alignmentUrl: selectedAlignmentSession.artifacts.alignment.url,
             alignmentIndexUrl: selectedAlignmentSession.artifacts.alignment_index.url,
             alignmentSizeBytes: selectedAlignmentSession.artifacts.alignment.size_bytes,
+            presentation: igvPresentation,
+            locusSlice: igvLocusSlice,
         })
         : null;
-    const activeIgvBamUrl = browserAlignmentTrack?.bamUrl || null;
-    const igvAlignmentLoadDisposition = browserAlignmentTrack?.preview
-        ? { autoLoad: true, reason: 'Showing a governed 2,000-read preview of the full alignment.' }
-        : alignmentTrackAutoLoadDisposition(selectedAlignmentSession?.artifacts.alignment?.size_bytes);
+    const activeIgvBamUrl = selectedAlignmentSession?.artifacts.alignment?.url || null;
     const activeIgvBaiPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment-index` : null;
-    const activeIgvBaiUrl = browserAlignmentTrack?.baiUrl || null;
+    const activeIgvBaiUrl = selectedAlignmentSession?.artifacts.alignment_index?.url || null;
     const activeIgvFastaPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:reference` : null;
     const activeIgvFastaUrl = selectedAlignmentSession?.artifacts.reference?.url || null;
     const activeIgvFaiPath = selectedAlignmentSession?.artifacts.reference_index
@@ -4076,6 +4098,26 @@ export function NGSToolkit() {
         selectedAlignmentSession?.session_id,
     ]);
 
+    useEffect(() => {
+        if (!igvModalOpen || igvLoading || !igvReady || igvAlignmentLoadDisposition.autoLoad
+            || igvPresentation || igvPresentationLoading || !selectedJob || !selectedAlignmentSession?.ready) return;
+        const generation = ++igvPresentationGenerationRef.current;
+        const sessionId = selectedAlignmentSession.session_id;
+        setIgvPresentationLoading(true);
+        void fetchAlignmentPresentation(selectedJob.id, sessionId).then((receipt) => {
+            if (igvPresentationGenerationRef.current !== generation
+                || selectedAlignmentSessionIdRef.current !== sessionId) return;
+            setIgvPresentation(receipt);
+        }).catch((reason: unknown) => {
+            if (igvPresentationGenerationRef.current !== generation
+                || selectedAlignmentSessionIdRef.current !== sessionId) return;
+            setIgvError(describeNgsError(reason, 'Bounded alignment presentation is unavailable.').slice(0, 512));
+        }).finally(() => {
+            if (igvPresentationGenerationRef.current === generation
+                && selectedAlignmentSessionIdRef.current === sessionId) setIgvPresentationLoading(false);
+        });
+    }, [igvAlignmentLoadDisposition.autoLoad, igvLoading, igvModalOpen, igvPresentation, igvPresentationLoading, igvReady, selectedAlignmentSession, selectedJob]);
+
     const handleLoadIgvReadsTrack = useCallback(async () => {
         if (igvReadsTrackLoading) return;
         const browser = igvBrowserRef.current;
@@ -4083,8 +4125,8 @@ export function NGSToolkit() {
             setIgvError('IGV browser is not ready yet.');
             return;
         }
-        if (!activeIgvBamUrl || !activeIgvBaiUrl) {
-            setIgvError('Aligned BAM and index are required to load reads track.');
+        if (!browserAlignmentTrack) {
+            setIgvError('A validated full, preview, or locus alignment track source is required.');
             return;
         }
         setIgvReadsTrackLoading(true);
@@ -4099,7 +4141,7 @@ export function NGSToolkit() {
         );
         try {
             if (typeof browser.findTracks === 'function' && typeof browser.removeTrack === 'function') {
-                const existingTracks = browser.findTracks((track: UntypedApiValue) => track && track.type !== 'ruler');
+                const existingTracks = browser.findTracks((track: UntypedApiValue) => track?.type === 'alignment');
                 if (Array.isArray(existingTracks)) {
                     for (const track of existingTracks) {
                         try {
@@ -4111,41 +4153,20 @@ export function NGSToolkit() {
                 }
             }
 
-            const auxiliaryTracks = resolveSessionAuxiliaryTracks(selectedAlignmentSession?.artifacts || {});
+            const auxiliaryTracks = [
+                ...(igvPresentation ? [buildFullSourceCoverageTrackConfig(igvPresentation)] : []),
+                ...resolveSessionAuxiliaryTracks(selectedAlignmentSession?.artifacts || {}),
+            ];
 
             const auxiliaryTrackHeightPx = auxiliaryTracks.reduce((sum, track) => (
                 sum + (typeof track.height === 'number' ? track.height : 0)
             ), 0);
             const readsTrackHeight = resolveIgvReadsTrackHeight(igvContainerRef.current, auxiliaryTrackHeightPx);
-            const alignmentTrack: Record<string, unknown> = {
-                name: 'Aligned Reads',
-                type: 'alignment',
-                format: 'bam',
-                url: activeIgvBamUrl,
-                indexURL: activeIgvBaiUrl,
-                showSoftClips: true,
-                showCoverage: true,
-                showMismatches: true,
-                showAllBases: false,
-                showInsertionText: true,
-                autoHeight: false,
-                height: readsTrackHeight,
+            const alignmentTrack = buildAlignmentTrackConfig(browserAlignmentTrack, readsTrackHeight, {
                 displayMode: igvAlignmentDisplayMode,
-                // FASTQ/dimer runs are typically small enough to render across full plasmids.
-                // A tiny visibilityWindow can make tracks appear "empty" until deep zoom.
-                visibilityWindow: -1,
-                samplingWindowSize: 40,
-                samplingDepth: 10000,
-                maxRows: 500,
-                alignmentRowHeight: 9,
-                squishedRowHeight: 4,
-            };
-            if (igvAlignmentColorBy !== 'none') {
-                alignmentTrack.colorBy = igvAlignmentColorBy;
-            }
-            if (igvAlignmentGroupBy !== 'none') {
-                alignmentTrack.groupBy = igvAlignmentGroupBy;
-            }
+                colorBy: igvAlignmentColorBy,
+                groupBy: igvAlignmentGroupBy,
+            });
             const loadedAlignmentTrack = await awaitCurrentGeneration(
                 Promise.resolve(browser.loadTrack(alignmentTrack)),
                 isCurrentTrackLoad,
@@ -4188,14 +4209,64 @@ export function NGSToolkit() {
         }
     }, [
         igvReadsTrackLoading,
-        activeIgvBamUrl,
-        activeIgvBaiUrl,
+        browserAlignmentTrack,
         activeIgvSourceKey,
         selectedAlignmentSession,
+        igvPresentation,
         igvAlignmentDisplayMode,
         igvAlignmentColorBy,
         igvAlignmentGroupBy,
     ]);
+
+    const handleLoadIgvLocusSlice = useCallback(async () => {
+        if (igvLocusSliceLoading || !selectedJob || !selectedAlignmentSession?.ready || !igvCurrentLocus) return;
+        const alignment = selectedAlignmentSession.artifacts.alignment;
+        const alignmentIndex = selectedAlignmentSession.artifacts.alignment_index;
+        const browser = igvBrowserRef.current;
+        if (!alignment || !alignmentIndex || !browser || typeof browser.loadTrack !== 'function') {
+            setIgvError('The authoritative locus and alignment browser must be ready before loading a bounded locus slice.');
+            return;
+        }
+        const loadToken = igvLoadTokenRef.current;
+        const sessionId = selectedAlignmentSession.session_id;
+        const generation = ++igvPresentationGenerationRef.current;
+        const isCurrent = () => igvPresentationGenerationRef.current === generation
+            && igvLoadTokenRef.current === loadToken && igvBrowserRef.current === browser
+            && selectedAlignmentSessionIdRef.current === sessionId;
+        setIgvLocusSliceLoading(true);
+        setIgvError(null);
+        try {
+            const slice = await createAlignmentLocusSlice(selectedJob.id, sessionId, igvCurrentLocus);
+            if (!isCurrent()) return;
+            const source = resolveBrowserAlignmentTrackSource({
+                jobId: selectedJob.id, sessionId, alignmentUrl: alignment.url,
+                alignmentIndexUrl: alignmentIndex.url, alignmentSizeBytes: alignment.size_bytes,
+                presentation: igvPresentation, locusSlice: slice,
+            });
+            if (!source) throw new Error('Locus slice did not resolve to a validated track source.');
+            if (typeof browser.findTracks === 'function' && typeof browser.removeTrack === 'function') {
+                const existing = browser.findTracks((track: UntypedApiValue) => track?.type === 'alignment');
+                if (Array.isArray(existing)) for (const track of existing) browser.removeTrack(track);
+            }
+            const loaded = await awaitCurrentGeneration(Promise.resolve(browser.loadTrack(buildAlignmentTrackConfig(
+                source,
+                resolveIgvReadsTrackHeight(igvContainerRef.current),
+                { displayMode: igvAlignmentDisplayMode, colorBy: igvAlignmentColorBy, groupBy: igvAlignmentGroupBy },
+            ))), isCurrent);
+            if (loaded === null || !isCurrent()) return;
+            applyIgvAlignmentOptionsToTrack(loaded, {
+                displayMode: igvAlignmentDisplayMode, colorBy: igvAlignmentColorBy, groupBy: igvAlignmentGroupBy,
+            });
+            setIgvLocusSlice(slice);
+            setIgvReadsTrackLoaded(true);
+            resizeIgvAlignmentTrackToContainer(browser, igvContainerRef.current);
+            // Replacing only the alignment track preserves the current authoritative locus.
+        } catch (reason) {
+            if (isCurrent()) setIgvError(describeNgsError(reason, 'Bounded locus slice could not be loaded.').slice(0, 512));
+        } finally {
+            if (isCurrent()) setIgvLocusSliceLoading(false);
+        }
+    }, [igvAlignmentColorBy, igvAlignmentDisplayMode, igvAlignmentGroupBy, igvCurrentLocus, igvLocusSliceLoading, igvPresentation, selectedAlignmentSession, selectedJob]);
 
     useEffect(() => {
         if (!igvModalOpen || !igvReadsTrackLoaded) return;
@@ -4248,7 +4319,7 @@ export function NGSToolkit() {
     useEffect(() => {
         if (!igvModalOpen) return;
         if (!igvReady || igvLoading) return;
-        if (!igvAlignmentLoadDisposition.autoLoad) return;
+        if (!browserAlignmentTrack) return;
         if (igvReadsTrackLoading || igvReadsTrackLoaded) return;
         if (igvAutoLoadAttempted) return;
         if (!igvBrowserRef.current) return;
@@ -4258,7 +4329,7 @@ export function NGSToolkit() {
         igvModalOpen,
         igvReady,
         igvLoading,
-        igvAlignmentLoadDisposition.autoLoad,
+        browserAlignmentTrack,
         igvReadsTrackLoading,
         igvReadsTrackLoaded,
         igvAutoLoadAttempted,
@@ -5577,13 +5648,28 @@ export function NGSToolkit() {
                             <button
                                 type="button"
                                 onClick={() => void handleLoadIgvReadsTrack()}
-                                disabled={igvLoading || igvReadsTrackLoading || !activeIgvBamUrl || !activeIgvBaiUrl || !igvAlignmentLoadDisposition.autoLoad}
+                                disabled={igvLoading || igvReadsTrackLoading || !browserAlignmentTrack}
                                 className="px-2 py-0.5 text-[11px] rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                {igvAlignmentLoadDisposition.autoLoad
-                                    ? igvReadsTrackLoading ? 'Loading tracks...' : igvReadsTrackLoaded ? 'Reload tracks' : 'Load tracks'
-                                    : 'Alignment too large for browser'}
+                                {igvReadsTrackLoading ? 'Loading tracks...' : igvReadsTrackLoaded ? 'Reload tracks' : 'Load tracks'}
                             </button>
+                            <button
+                                type="button"
+                                onClick={() => void handleLoadIgvLocusSlice()}
+                                disabled={igvLoading || igvLocusSliceLoading || !igvCurrentLocus || !selectedAlignmentSession?.ready}
+                                className="px-2 py-0.5 text-[11px] rounded border border-[var(--accent-primary)]/60 text-[var(--accent-primary)] disabled:opacity-50"
+                            >
+                                {igvLocusSliceLoading ? 'Loading bounded locus...' : 'Load full-source reads for this locus'}
+                            </button>
+                            {selectedAlignmentSession?.artifacts.alignment && (
+                                <a
+                                    href={selectedAlignmentSession.artifacts.alignment.url}
+                                    download
+                                    className="px-2 py-0.5 text-[11px] rounded border border-[var(--border-primary)] text-[var(--text-primary)]"
+                                >
+                                    Download complete BAM ({(selectedAlignmentSession.artifacts.alignment.size_bytes / 1_048_576).toFixed(1)} MiB)
+                                </a>
+                            )}
                             <button
                                 type="button"
                                 onClick={() => {
@@ -5617,6 +5703,17 @@ export function NGSToolkit() {
                                 ×
                             </button>
                         </div>
+                        {browserAlignmentTrack && (
+                            <AlignmentPresentationStatus status={{
+                                kind: browserAlignmentTrack.kind,
+                                sourceSizeBytes: browserAlignmentTrack.fullSourceDownload.sizeBytes,
+                                selectedReadCount: browserAlignmentTrack.selectedReadCount,
+                                availableReadCount: browserAlignmentTrack.availableReadCount,
+                                byteSize: browserAlignmentTrack.byteSize,
+                                policyVersion: browserAlignmentTrack.policyVersion,
+                                capped: browserAlignmentTrack.capped,
+                            }} />
+                        )}
                         {igvRangeError && (
                             <div role="alert" className="border-b border-amber-400/30 bg-amber-500/10 px-3 py-1 text-[11px] text-amber-200">
                                 {igvRangeError}
@@ -5639,7 +5736,7 @@ export function NGSToolkit() {
                                         {igvError}
                                     </div>
                                 )}
-                                {!igvLoading && !igvError && !igvReadsTrackLoaded && (
+                                {!igvLoading && !igvError && !browserAlignmentTrack && (
                                     <div className="absolute bottom-2 left-2 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)]/85 text-[var(--text-secondary)] text-xs px-2 py-1.5">
                                         {igvAlignmentLoadDisposition.reason || 'Reference loaded; tracks autoload or use Load tracks.'}
                                     </div>
