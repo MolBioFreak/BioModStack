@@ -48,11 +48,15 @@ From: nvcr.io/nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
     # PyTorch (CUDA 12.1 stable - required for OpenMM-ML/MACE)
     uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
     
-    # OpenMM Core + PDBFixer (structure preparation)
-    uv pip install openmm pdbfixer
+    # OpenMM Core (requires Cython for compilation)
+    uv pip install cython
+    uv pip install openmm
+    
+    # PDBFixer (only available via GitHub, not PyPI)
+    uv pip install git+https://github.com/openmm/pdbfixer.git
     
     # OpenMM-ML (Neural Network Force Field integration)
-    uv pip install openmm-ml
+    uv pip install openmmml
     
     # Neural Network Force Fields
     # MACE-OFF: Equivariant message-passing for organic molecules
