@@ -267,9 +267,178 @@ function DragScrollRail({
 }
 
 const TOPBAR_NAV_ITEM_CLASSNAME = 'shrink-0 whitespace-nowrap rounded-lg px-[clamp(0.65rem,0.45rem+0.5vw,0.9rem)] py-2 text-[clamp(0.68rem,0.58rem+0.24vw,0.8125rem)] font-medium transition-all';
+const TOPBAR_MOBILE_QUERY = '(max-width: 767px)';
+
+function readIsCompactCordovaShell(): boolean {
+    if (typeof document === 'undefined') {
+        return false;
+    }
+    return document.documentElement.classList.contains('bms-cordova-compact');
+}
+
+function readIsMobileTopbar(): boolean {
+    if (readIsCompactCordovaShell()) {
+        return true;
+    }
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+        return false;
+    }
+    return window.matchMedia(TOPBAR_MOBILE_QUERY).matches;
+}
+
+function useIsMobileTopbar(): boolean {
+    const [isMobileTopbar, setIsMobileTopbar] = useState(() => readIsMobileTopbar());
+
+    useEffect(() => {
+        if (typeof window === 'undefined') {
+            return;
+        }
+
+        const updateMobileTopbar = () => setIsMobileTopbar(readIsMobileTopbar());
+        const mediaQuery = typeof window.matchMedia === 'function'
+            ? window.matchMedia(TOPBAR_MOBILE_QUERY)
+            : null;
+        const classObserver = typeof MutationObserver === 'function'
+            ? new MutationObserver(updateMobileTopbar)
+            : null;
+
+        updateMobileTopbar();
+        classObserver?.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+
+        if (mediaQuery && typeof mediaQuery.addEventListener === 'function') {
+            mediaQuery.addEventListener('change', updateMobileTopbar);
+            return () => {
+                mediaQuery.removeEventListener('change', updateMobileTopbar);
+                classObserver?.disconnect();
+            };
+        }
+
+        mediaQuery?.addListener(updateMobileTopbar);
+        return () => {
+            mediaQuery?.removeListener(updateMobileTopbar);
+            classObserver?.disconnect();
+        };
+    }, []);
+
+    return isMobileTopbar;
+}
+
+interface TopbarUtilityControlsProps {
+    showSystemMenus: boolean;
+    showSystemAnalyticsTab: boolean;
+    onSetShowSystemAnalyticsTab: (enabled: boolean) => void;
+}
+
+function TopbarUtilityControls({
+    showSystemMenus,
+    showSystemAnalyticsTab,
+    onSetShowSystemAnalyticsTab,
+}: TopbarUtilityControlsProps) {
+    return (
+        <>
+            <ThemeSelector />
+            <BioXpInterlinkMenu />
+            {showSystemMenus && <PowerControlMenu />}
+            {showSystemMenus && <DbServiceMenu />}
+            {showSystemMenus && <StatsToolsMenu />}
+            {showSystemMenus && <MSAServerSettingsMenu />}
+            <DebugMenu
+                showSystemAnalyticsTab={showSystemAnalyticsTab}
+                onSetShowSystemAnalyticsTab={onSetShowSystemAnalyticsTab}
+            />
+        </>
+    );
+}
+
+function MobileTopbarTools({
+    showSystemMenus,
+    showSystemAnalyticsTab,
+    onSetShowSystemAnalyticsTab,
+}: TopbarUtilityControlsProps) {
+    const [isOpen, setIsOpen] = useState(false);
+    const containerRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+        if (!isOpen) {
+            return;
+        }
+
+        const handlePointerDown = (event: PointerEvent) => {
+            if (containerRef.current?.contains(event.target as Node)) {
+                return;
+            }
+            setIsOpen(false);
+        };
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setIsOpen(false);
+            }
+        };
+
+        document.addEventListener('pointerdown', handlePointerDown);
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('pointerdown', handlePointerDown);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [isOpen]);
+
+    return (
+        <div ref={containerRef} className="relative" data-bms-mobile-topbar-tools="true">
+            <button
+                type="button"
+                aria-label="Open top-bar controls"
+                aria-expanded={isOpen}
+                onClick={() => setIsOpen((value) => !value)}
+                className="flex min-h-9 items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold tracking-wide transition-colors"
+                style={{
+                    backgroundColor: isOpen ? 'color-mix(in srgb, var(--accent-primary) 18%, transparent)' : 'var(--bg-tertiary)',
+                    borderColor: isOpen ? 'var(--accent-primary)' : 'var(--border-primary)',
+                    color: isOpen ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                }}
+            >
+                TOOLS
+                <span aria-hidden="true" className="text-[10px] leading-none">{isOpen ? '▲' : '▼'}</span>
+            </button>
+
+            {isOpen && (
+                <div
+                    className="fixed right-2 top-14 z-[80] max-h-[calc(100vh-4rem)] w-[min(94vw,22rem)] overflow-y-auto rounded-xl border p-2 shadow-2xl backdrop-blur-md"
+                    style={{
+                        backgroundColor: 'color-mix(in srgb, var(--bg-secondary) 95%, transparent)',
+                        borderColor: 'var(--border-primary)',
+                    }}
+                    data-bms-mobile-topbar-tools-panel="true"
+                >
+                    <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.2em]" style={{ color: 'var(--text-muted)' }}>
+                            Controls
+                        </span>
+                        <button
+                            type="button"
+                            onClick={() => setIsOpen(false)}
+                            className="rounded-md px-2 py-1 text-[11px] font-medium transition-colors hover:bg-white/10"
+                            style={{ color: 'var(--text-secondary)' }}
+                        >
+                            Close
+                        </button>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 overflow-visible [&>div]:w-full [&>div>button]:w-full [&>div>button]:justify-center [&>button]:w-full [&>button]:justify-center">
+                        <TopbarUtilityControls
+                            showSystemMenus={showSystemMenus}
+                            showSystemAnalyticsTab={showSystemAnalyticsTab}
+                            onSetShowSystemAnalyticsTab={onSetShowSystemAnalyticsTab}
+                        />
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
 
 export function Layout({ children }: LayoutProps) {
     const location = useLocation();
+    const isMobileTopbar = useIsMobileTopbar();
     const [showSystemAnalyticsTab, setShowSystemAnalyticsTab] = useState<boolean>(() => readShowSystemAnalyticsTab());
 
     const isActive = (path: string) => location.pathname === path;
@@ -308,25 +477,41 @@ export function Layout({ children }: LayoutProps) {
             >
                 <div className="w-full px-2 sm:px-3 lg:px-4">
                     <div className="flex min-w-0 flex-wrap items-center gap-2 py-2 sm:gap-3 2xl:flex-nowrap">
-                        <div className="order-1 flex items-center gap-2 shrink-0" data-bms-topbar-left="true">
-                            <DiagnosticsMenu />
-                            {/* Logo / Brand */}
-                            <Link to="/" className="flex items-center shrink-0">
-                                <span
-                                    className="font-bold whitespace-nowrap text-[clamp(1rem,0.92rem+0.35vw,1.2rem)]"
-                                    style={{
-                                        color: 'var(--accent-primary)'
-                                    }}
-                                >
-                                    <span className="inline md:hidden">BMS</span>
-                                    <span className="hidden md:inline">BioModStack</span>
-                                </span>
-                            </Link>
+                        <div
+                            className={isMobileTopbar
+                                ? 'order-1 flex w-full items-center justify-between gap-2'
+                                : 'order-1 flex w-full items-center justify-between gap-2 md:w-auto md:shrink-0 md:justify-start'}
+                            data-bms-topbar-left="true"
+                        >
+                            <div className="flex min-w-0 items-center gap-2">
+                                <DiagnosticsMenu />
+                                {/* Logo / Brand */}
+                                <Link to="/" className="flex items-center shrink-0">
+                                    <span
+                                        className="font-bold whitespace-nowrap text-[clamp(1rem,0.92rem+0.35vw,1.2rem)]"
+                                        style={{
+                                            color: 'var(--accent-primary)'
+                                        }}
+                                    >
+                                        <span className="inline md:hidden">BMS</span>
+                                        <span className="hidden md:inline">BioModStack</span>
+                                    </span>
+                                </Link>
+                            </div>
+                            {isMobileTopbar && (
+                                <MobileTopbarTools
+                                    showSystemMenus={showSystemMenus}
+                                    showSystemAnalyticsTab={showSystemAnalyticsTab}
+                                    onSetShowSystemAnalyticsTab={handleSetShowSystemAnalyticsTab}
+                                />
+                            )}
                         </div>
 
                         {/* Navigation Links */}
                         <DragScrollRail
-                            className="order-3 min-w-0 w-full overflow-x-auto overscroll-x-contain cursor-grab active:cursor-grabbing select-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden 2xl:order-2 2xl:w-auto 2xl:flex-1 2xl:max-w-full"
+                            className={isMobileTopbar
+                                ? 'order-2 min-w-0 w-full overflow-x-auto overscroll-x-contain cursor-grab active:cursor-grabbing select-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
+                                : 'order-2 min-w-0 w-full overflow-x-auto overscroll-x-contain cursor-grab active:cursor-grabbing select-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:order-3 2xl:order-2 2xl:w-auto 2xl:flex-1 2xl:max-w-full'}
                             contentClassName="flex w-max items-center gap-1.5 pr-1"
                             data-bms-primary-nav-rail="true"
                         >
@@ -429,34 +614,18 @@ export function Layout({ children }: LayoutProps) {
                             </>
                         </DragScrollRail>
 
-                        <div
-                            className="order-2 ml-auto flex max-w-[calc(100vw-1rem)] shrink-0 flex-wrap items-center justify-end gap-1.5 overflow-visible 2xl:order-3 2xl:max-w-full"
-                            data-bms-topbar-utilities="true"
-                        >
-                            {/* Theme Selector */}
-                            <ThemeSelector />
-
-                            {/* Governed BioXP robot interlink */}
-                            <BioXpInterlinkMenu />
-
-                            {/* GPU Power Control */}
-                            {showSystemMenus && <PowerControlMenu />}
-
-                            {/* Optional BMS DB service lifecycle */}
-                            {showSystemMenus && <DbServiceMenu />}
-
-                            {/* Optional stats/assay tools container lifecycle */}
-                            {showSystemMenus && <StatsToolsMenu />}
-
-                            {/* Persistent MSA Server Settings */}
-                            {showSystemMenus && <MSAServerSettingsMenu />}
-
-                            {/* Debug Menu */}
-                            <DebugMenu
-                                showSystemAnalyticsTab={showSystemAnalyticsTab}
-                                onSetShowSystemAnalyticsTab={handleSetShowSystemAnalyticsTab}
-                            />
-                        </div>
+                        {!isMobileTopbar && (
+                            <div
+                                className="order-2 ml-auto flex max-w-[calc(100vw-1rem)] shrink-0 flex-wrap items-center justify-end gap-1.5 overflow-visible md:flex 2xl:order-3 2xl:max-w-full"
+                                data-bms-topbar-utilities="true"
+                            >
+                                <TopbarUtilityControls
+                                    showSystemMenus={showSystemMenus}
+                                    showSystemAnalyticsTab={showSystemAnalyticsTab}
+                                    onSetShowSystemAnalyticsTab={handleSetShowSystemAnalyticsTab}
+                                />
+                            </div>
+                        )}
                     </div>
                 </div>
             </nav>

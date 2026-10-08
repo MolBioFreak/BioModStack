@@ -2,13 +2,32 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
+import crypto from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import { createRequire } from 'node:module'
+import os from 'node:os'
 import path from 'path'
 
 const require = createRequire(import.meta.url)
 const utilShimPath = path.resolve(__dirname, 'src/shims/util.ts')
 const stablePdbeMolstarPath = path.dirname(require.resolve('pdbe-molstar-stable/package.json'))
+
+function resolveViteCacheDir(): string {
+  const explicitCacheDir = process.env.BMS_VITE_CACHE_DIR?.trim()
+  if (explicitCacheDir) return path.resolve(explicitCacheDir)
+
+  const uid = typeof process.getuid === 'function' ? process.getuid().toString() : 'unknown'
+  const repoKey = crypto.createHash('sha1').update(__dirname).digest('hex').slice(0, 12)
+
+  if (uid === '0') {
+    return path.join(os.tmpdir(), 'biomodstack-vite-cache', `uid-${uid}`, repoKey)
+  }
+
+  const xdgCacheHome = process.env.XDG_CACHE_HOME?.trim()
+  const homeCacheDir = process.env.HOME?.trim() ? path.join(process.env.HOME, '.cache') : undefined
+  const cacheBase = xdgCacheHome || homeCacheDir || path.resolve(__dirname, '.cache')
+  return path.join(cacheBase, 'biomodstack', 'frontend-vite', `uid-${uid}`, repoKey)
+}
 
 const isExpectedPdbeMolstarEvalWarning = (warning: { code?: string; id?: string; message?: string }) =>
   warning.code === 'EVAL' &&
@@ -89,6 +108,7 @@ function manualChunks(id: string): string | undefined {
 export default defineConfig(({ mode }) => ({
   // Use /bms/ for production (Tailscale Serve proxy), but / for dev mode
   base: mode === 'production' ? '/bms/' : '/',
+  cacheDir: resolveViteCacheDir(),
   plugins: [react(), tailwindcss()],
   optimizeDeps: {
     include: [
