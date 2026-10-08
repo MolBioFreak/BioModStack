@@ -4,9 +4,9 @@
  * Clean rewrite replacing OVE with modern component architecture.
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useLocation } from 'react-router-dom';
-import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ngsResultHref } from '../../lib/ngsResultRouting';
 import { createLatestAsyncResourceController } from '../../lib/latestAsyncResource';
 import {
@@ -21,7 +21,6 @@ import {
     type RestrictionRecord,
     type RestrictionSource,
 } from '../../lib/restrictionAnalysis';
-import { anyToJson } from '@teselagen/bio-parsers';
 import { SequenceViewer, type ColorPaletteName } from './SequenceViewer';
 import { DEFAULT_VISIBILITY } from './sequenceViewerConstants';
 import { SequenceHeader } from './SequenceHeader';
@@ -36,7 +35,6 @@ import { createHistoryState, reconcileSavedHistory, useSequenceHistory, type His
 import { useSequenceOperations } from './hooks/useSequenceOperations';
 import { AlignmentPanel, AssemblyPanel, DigestPanel, HistoryPanel, PCRPanel, PrimerPanel, RnaStructurePanel, FeaturePanel, EditPanel, SearchPanel } from './panels';
 import { AutoAnnotatePanel, type AutoAnnotateSettings } from './AutoAnnotatePanel';
-import { GCContentTrack } from './GCContentTrack';
 import {
     SelectionActionDialog,
     type SelectionActionKind,
@@ -76,7 +74,6 @@ import {
     fetchPrimerTmOptions,
     type MolecularRevision,
     type SequenceAnalysisTrack,
-    type PrimerTmOptionsResponse,
     type PrimerTmSettings,
     type RnaStructureResult,
     type NucleotideSequenceCreate,
@@ -157,6 +154,8 @@ import {
     type MolBioMobileSurface,
 } from './utils/mobileLayout';
 import { useMolBioBodyScrollLock } from './useMolBioBodyScrollLock';
+
+const GCContentTrack = lazy(() => import('./GCContentTrack').then(module => ({ default: module.GCContentTrack })));
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SEQUENCE LIBRARY SIDEBAR WITH IMPORT
@@ -1581,6 +1580,7 @@ export function MolBioToolkitV2() {
         const ownsCompletion = captureEditableOwner();
         if (exactMolecularAuthorityRef.current) return;
         try {
+            const { anyToJson } = await import('@teselagen/bio-parsers');
             const result = await anyToJson(file, {
                 fileName: file.name,
                 parseOptions: { inclusive1BasedStart: false, jsonType: 'json' }
@@ -2347,7 +2347,14 @@ export function MolBioToolkitV2() {
 
     // GC track visibility state
     const [showGCTrack, setShowGCTrack] = useState(false);
-    const [primerTmOptions, setPrimerTmOptions] = useState<PrimerTmOptionsResponse | null>(null);
+    const primerTmOptionsQuery = useQuery({
+        queryKey: ['molbio-primer-tm-options'],
+        queryFn: async ({ signal }) => (await fetchPrimerTmOptions(signal)).data,
+        staleTime: 300_000,
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: false,
+    });
+    const primerTmOptions = primerTmOptionsQuery.data ?? null;
     const [primerTmSettings, setPrimerTmSettings] = useState<PrimerTmSettings>(DEFAULT_DNA_TM_SETTINGS);
     const viewerLayout = useMemo(() => resolveMolBioViewerLayout({
         activePanel,
@@ -2368,26 +2375,8 @@ export function MolBioToolkitV2() {
     ]);
 
     useEffect(() => {
-        let cancelled = false;
-
-        const loadPrimerTmOptions = async () => {
-            try {
-                const response = await queryClient.fetchQuery({ queryKey: ['molbio-primer-tm-options'], queryFn: fetchPrimerTmOptions, staleTime: 300_000 });
-                if (cancelled) {
-                    return;
-                }
-                setPrimerTmOptions(response.data);
-            } catch (tmError) {
-                console.error('Failed to load primer Tm options:', tmError);
-                if (!cancelled) setWorkspaceRestoreNotice('Primer Tm options unavailable. Reload to retry.');
-            }
-        };
-
-        loadPrimerTmOptions();
-        return () => {
-            cancelled = true;
-        };
-    }, [queryClient]);
+        if (primerTmOptionsQuery.error) setWorkspaceRestoreNotice('Primer Tm options unavailable. Reload to retry.');
+    }, [primerTmOptionsQuery.error]);
 
     useEffect(() => {
         if (!primerTmOptions) {
@@ -2577,6 +2566,7 @@ export function MolBioToolkitV2() {
             assertAnnotationArtifactChecksum(publishedSource, sourceFileSha256);
         }
 
+        const { anyToJson } = await import('@teselagen/bio-parsers');
         const result = await anyToJson(file, {
             fileName: file.name,
             inclusive1BasedStart: false,
@@ -3475,20 +3465,22 @@ export function MolBioToolkitV2() {
                             <>
                                 {/* GC Content Track */}
                                 {!isViewerFullscreen && showGCTrack && (
-                                    <GCContentTrack
-                                        onRestrictionAnalysisRequested={requestDiagnosticRestrictionAnalysis}
-                                        sequence={sequenceData.sequence}
-                                        sequenceType={sequenceData.sequenceType === 'rna' ? 'rna' : 'dna'}
-                                        reverseCoordinates={sourceDisplayStrand !== activeDisplayStrand}
-                                        circular={sequenceData.circular}
-                                        selectedEnzymes={selectedEnzymes}
-                                        restrictionOccurrences={restrictionAnalysis?.analysis.occurrences ?? []}
-                                        selection={selection}
-                                        onSelectionChange={handleSelection}
-                                        onClearSelection={() => setSelection(null)}
-                                        windowSize={Math.max(20, Math.min(100, Math.floor(sequenceData.sequence.length / 50)))}
-                                        height={108}
-                                    />
+                                    <Suspense fallback={<div role="status">Loading GC track…</div>}>
+                                        <GCContentTrack
+                                            onRestrictionAnalysisRequested={requestDiagnosticRestrictionAnalysis}
+                                            sequence={sequenceData.sequence}
+                                            sequenceType={sequenceData.sequenceType === 'rna' ? 'rna' : 'dna'}
+                                            reverseCoordinates={sourceDisplayStrand !== activeDisplayStrand}
+                                            circular={sequenceData.circular}
+                                            selectedEnzymes={selectedEnzymes}
+                                            restrictionOccurrences={restrictionAnalysis?.analysis.occurrences ?? []}
+                                            selection={selection}
+                                            onSelectionChange={handleSelection}
+                                            onClearSelection={() => setSelection(null)}
+                                            windowSize={Math.max(20, Math.min(100, Math.floor(sequenceData.sequence.length / 50)))}
+                                            height={108}
+                                        />
+                                    </Suspense>
                                 )}
 
                                 {/* Sequence Viewer */}
