@@ -2778,7 +2778,7 @@ class GPUOrchestrator:
                                     if job.model_id == "molecular_dynamics" and job.mode == "simulate":
                                         from services.md.completion import validate_and_finalize_md_job
 
-                                        validate_and_finalize_md_job(job)
+                                        validate_and_finalize_md_job(job, session)
                                     else:
                                         from services.result_state_integrity import finalize_successful_job
 
