@@ -170,7 +170,7 @@ def test_later_failure_preserves_partial_model_outcomes(cli, monkeypatch, fault)
     run, handler, root, env, fixture = cli
     for key in ('HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME'):
         monkeypatch.setenv(key, env[key])
-    plan = {'plan_digest': 'd' * 64, 'store_roots': {'container_dir': str(root / 'images'),
+    plan = {'plan_digest': 'd' * 64, 'store_roots': {'runtime_image_store': str(root / 'images/.image-store'),
             'weights_root': str(root / 'weights')}, 'models': [
             {'model_id': name, 'artifacts': [], 'blockers': [], 'plan_digest': 'a' * 64}
             for name in ('first', 'second')]}
