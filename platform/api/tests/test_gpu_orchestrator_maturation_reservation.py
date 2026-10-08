@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from types import SimpleNamespace
 from datetime import datetime
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from services.gpu_orchestrator import (  # noqa: E402
     GPUState,
     JobInfo,
     _pending_job_reservation_mb,
+    _running_job_reservation_mb,
     pack_jobs_to_gpus,
 )
 
@@ -36,6 +38,12 @@ def test_maturation_child_reserves_formulaic_fraction_not_startup_sliver() -> No
     job = _maturation_job(1)
 
     assert _pending_job_reservation_mb(job, {}) == 14044
+
+
+def test_maturation_child_running_reservation_keeps_fractional_floor_with_low_live_vram() -> None:
+    job = SimpleNamespace(mode="maturation_child", vram_estimate_mb=18725, started_at=datetime(2026, 1, 1))
+
+    assert _running_job_reservation_mb(job, live_vram_mb=1200) == 14044
 
 
 def test_maturation_child_pack_does_not_fit_four_x8_children_on_one_5090() -> None:
