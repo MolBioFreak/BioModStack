@@ -503,6 +503,12 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     normalized["dorado_lock_sha256"] = current_lock_sha256
     normalized["dorado_device"] = ONT_QUALITY_MODE_CONTRACT["default_device"]
     normalized["manifest_contract"] = MANIFEST_SCHEMA
+    raw_emit_moves = normalized.get("emit_moves", basecall_mode == "simplex")
+    if not isinstance(raw_emit_moves, bool):
+        raise ValueError("emit_moves must be boolean")
+    if basecall_mode == "duplex" and raw_emit_moves:
+        raise ValueError("emit_moves is unavailable for duplex until move-tag semantics are qualified")
+    normalized["emit_moves"] = raw_emit_moves
 
     if canonical_id == "wf_clone_validation":
         normalized.pop("wf_clone_analyse_unclassified", None)

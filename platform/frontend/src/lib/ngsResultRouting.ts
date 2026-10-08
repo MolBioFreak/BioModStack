@@ -75,6 +75,7 @@ export function ngsToolkitViewFromSearch(search: string): NgsToolkitView {
     const params = new URLSearchParams(search);
     const section = (params.get('section') || '').trim().toLowerCase();
     if (section === 'analyses' || section === 'evidence') return 'runs';
+    if ((params.get('view') || '').trim().toLowerCase() === 'workbench') return 'runs';
     if (section === 'instrument') return 'instrument';
     if ((params.get('job_id') || '').trim()) return 'runs';
     return 'launch';
@@ -86,6 +87,8 @@ export function ngsToolkitSearchForView(search: string, view: NgsToolkitView): s
         params.set('section', 'analyses');
     } else {
         params.delete('job_id');
+        params.delete('view');
+        params.delete('viewer_session_id');
         if (view === 'instrument') params.set('section', 'instrument');
         else params.delete('section');
     }

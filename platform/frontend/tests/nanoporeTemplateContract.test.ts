@@ -191,7 +191,10 @@ test('NGS instrument control uses only opaque intent handles and has no browser 
     const ngsToolkit = readSource('src/components/NGSToolkit.tsx');
     const api = readSource('src/lib/api.ts');
     const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
-    const ontApi = api.slice(api.indexOf('// ONT INSTRUMENT CONTROL API'));
+    const ontApi = api.slice(
+        api.indexOf('// ONT INSTRUMENT CONTROL API'),
+        api.indexOf('// ONT SIGNAL WORKBENCH API'),
+    );
 
     assert.match(ngsToolkit, /type ToolkitView = NgsToolkitView/u);
     assert.match(ngsToolkit, /Instrument intent/u);
@@ -222,7 +225,10 @@ test('NGS instrument control uses only opaque intent handles and has no browser 
 test('NGS instrument panel renders only safe device truth and an intent status', () => {
     const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
     const api = readSource('src/lib/api.ts');
-    const ontApi = api.slice(api.indexOf('// ONT INSTRUMENT CONTROL API'));
+    const ontApi = api.slice(
+        api.indexOf('// ONT INSTRUMENT CONTROL API'),
+        api.indexOf('// ONT SIGNAL WORKBENCH API'),
+    );
 
     assert.match(panel, /Instrument positions/u);
     assert.match(panel, /Flow cell: \{device\.flow_cell\.present \? 'present' : 'absent'\}/u);

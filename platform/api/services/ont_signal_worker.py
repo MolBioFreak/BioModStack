@@ -1,0 +1,1902 @@
+from __future__ import annotations
+
+import asyncio
+import array
+from dataclasses import dataclass
+import fcntl
+import hashlib
+import json
+import logging
+import os
+import re
+import shutil
+import socket
+import stat
+import time
+import tempfile
+import uuid
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy import or_, select, update
+
+from database import (
+    InputFile,
+    Job,
+    OntMoveTableSource,
+    OntRawSignalRepresentation,
+    OntSignalCalibrationArtifact,
+    OntSignalCalibrationJob,
+    OntSignalMappingArtifact,
+    OntSignalMappingEvent,
+    OntSignalMappingJob,
+    OntSignalMappingProfile,
+    OntSquigualiserViewJob,
+)
+from molbio_ngs_models import MolBioNGSReferenceArtifact, MolBioNGSReferenceRevision
+from paths import get_allowed_roots, get_molbio_ngs_reference_root, get_results_dir
+from services import ngs_alignment_sessions, ont_raw_signal
+from services.file_lease_signals import lease_break_generation
+
+logger = logging.getLogger(__name__)
+LEASE_SECONDS = 300
+MAX_FAILURE = 4000
+MOVE_SOURCE_MAX_ATTEMPTS = 3
+SIGNAL_JOB_MAX_ATTEMPTS = 3
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+WORKER_LABEL = "io.biomodstack.owner=ont-signal-worker"
+RUNTIME_POLICY_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "config"
+    / "ont_signal_workbench"
+    / "runtime_policy_v1.json"
+)
+RUNTIME_POLICY_SHA256 = "c61d92636f7d556773e82e892f06e1b79ef6d7d8286c3c1ac2e85561bc07bdc8"
+APPROVED_OCI_DIGEST = "sha256:98172ff92d41e234d028cf985b7deb9ac5e090391581016d8aebf1671fde4392"
+APPROVED_UPSTREAM_COMMIT = "5a2404f1f43bc3227a85475c59b2b77970078b2e"
+MAX_CONTAINER_LOG_BYTES = 8 * 1024 * 1024
+COMMAND_DEADLINES = {"move": 2 * 60 * 60, "calibration": 2 * 60 * 60, "mapping": 4 * 60 * 60, "view": 15 * 60}
+TOTAL_OUTPUT_LIMITS = {
+    "move": 2 * 1024 * 1024 * 1024,
+    "calibration": 2 * 1024 * 1024 * 1024,
+    "mapping": 2 * 1024 * 1024 * 1024,
+    "view": 64 * 1024 * 1024,
+}
+FILE_SIZE_LIMITS = {
+    "move": 1536 * 1024 * 1024,
+    "calibration": 1536 * 1024 * 1024,
+    "mapping": 1536 * 1024 * 1024,
+    "view": 48 * 1024 * 1024,
+}
+
+
+class ContainerCleanupError(RuntimeError):
+    pass
+
+
+class OutputLimitExceeded(RuntimeError):
+    pass
+
+
+class TerminalFenceLost(RuntimeError):
+    pass
+
+
+def _effective_base_shift(params: dict[str, Any]) -> int:
+    source = params.get("base_shift_source")
+    value = int(params.get("base_shift_value", 0))
+    if source == "profile":
+        profile_id = params.get("base_shift_profile_id")
+        profile_sha256 = params.get("base_shift_profile_sha256")
+        effective_value = params.get("base_shift_effective_value")
+        if (
+            value != 0
+            or not isinstance(profile_id, str)
+            or not profile_id
+            or not isinstance(profile_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", profile_sha256) is None
+            or isinstance(effective_value, bool)
+            or not isinstance(effective_value, int)
+            or not -64 <= effective_value <= 64
+        ):
+            raise RuntimeError("profile-sourced base shift lacks bound profile authority")
+        return effective_value
+    if source == "explicit":
+        return value
+    raise RuntimeError("render base-shift source is invalid")
+
+
+def _mapping_profile_render_args(profile: Any) -> list[str]:
+    kmer_length = getattr(profile, "kmer_length", None)
+    if (
+        isinstance(kmer_length, bool)
+        or not isinstance(kmer_length, int)
+        or not 1 <= kmer_length <= 9
+    ):
+        raise RuntimeError("render mapping-profile k-mer length is invalid")
+    return ["--kmer-length", str(kmer_length)]
+
+
+def _identity_from_descriptor(descriptor: int) -> tuple[str, int, tuple[int, int, int, int]]:
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode) or before.st_size <= 0:
+        raise RuntimeError("governed parent must be a non-empty retained regular file")
+    digest = hashlib.sha256()
+    offset = 0
+    while chunk := os.pread(descriptor, 1024 * 1024, offset):
+        digest.update(chunk)
+        offset += len(chunk)
+    after = os.fstat(descriptor)
+    identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    if identity != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+        raise RuntimeError("governed parent changed while hashing")
+    return digest.hexdigest(), offset, identity
+
+
+def _lexical_absolute(path: Path) -> Path:
+    raw = str(path)
+    if not os.path.isabs(raw) or any(part in {"", ".", ".."} for part in raw.split(os.sep)[1:]):
+        raise RuntimeError("retained parent path is not lexical absolute authority")
+    return Path(os.path.abspath(raw))
+
+
+def _open_beneath_governed_root(path: Path, governed_roots: tuple[Path, ...]) -> int:
+    candidate = _lexical_absolute(path)
+    matches: list[tuple[int, Path, Path]] = []
+    for raw_root in governed_roots:
+        try:
+            root = _lexical_absolute(Path(raw_root))
+            relative = candidate.relative_to(root)
+        except (RuntimeError, ValueError):
+            continue
+        if relative.parts:
+            matches.append((len(root.parts), root, relative))
+    if not matches:
+        raise RuntimeError("retained parent is outside approved governed roots")
+    _depth, root, relative = max(matches, key=lambda item: item[0])
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    descriptor = os.open(os.sep, flags)
+    try:
+        for component in root.parts[1:]:
+            child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        for component in relative.parts[:-1]:
+            child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        file_descriptor = os.open(
+            relative.parts[-1],
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=descriptor,
+        )
+        if not stat.S_ISREG(os.fstat(file_descriptor).st_mode):
+            os.close(file_descriptor)
+            raise RuntimeError("governed parent must be a retained regular file")
+        return file_descriptor
+    except RuntimeError:
+        raise
+    except OSError as exc:
+        raise RuntimeError(
+            "retained parent cannot be traversed beneath its governed root without symbolic links"
+        ) from exc
+    finally:
+        os.close(descriptor)
+
+
+@dataclass(frozen=True)
+class RetainedParent:
+    fd: int
+    alias: str
+    sha256: str
+    size_bytes: int
+    identity: tuple[int, int, int, int]
+
+
+class RetainedParentSet:
+    """Own read-leased descriptors until OCI cleanup and publication finish."""
+
+    def __init__(self, governed_roots: tuple[Path, ...] | None = None) -> None:
+        self._opened_at_generation = lease_break_generation()
+        self._parents: list[RetainedParent] = []
+        self._closed = False
+        self._governed_roots = governed_roots
+
+    @property
+    def parents(self) -> tuple[RetainedParent, ...]:
+        return tuple(self._parents)
+
+    def pin(
+        self,
+        path: Path,
+        *,
+        alias: str,
+        expected_sha256: str,
+        expected_size: int,
+    ) -> RetainedParent:
+        if self._closed:
+            raise RuntimeError("retained-parent set is closed")
+        if (
+            not alias
+            or alias in {".", ".."}
+            or "/" in alias
+            or "\\" in alias
+            or len(alias) > 128
+            or any(parent.alias == alias for parent in self._parents)
+        ):
+            raise RuntimeError("retained-parent alias is invalid or duplicated")
+        governed_roots = self._governed_roots or (path.parent,)
+        descriptor = _open_beneath_governed_root(path, governed_roots)
+        leased = False
+        try:
+            if not hasattr(fcntl, "F_SETLEASE"):
+                raise RuntimeError("Linux file leases are unavailable")
+            fcntl.fcntl(descriptor, fcntl.F_SETOWN, os.getpid())
+            fcntl.fcntl(descriptor, fcntl.F_SETLEASE, fcntl.F_RDLCK)
+            leased = True
+            digest, size, identity = _identity_from_descriptor(descriptor)
+            if digest != expected_sha256 or size != expected_size:
+                raise RuntimeError("retained parent diverged from immutable hash/size authority")
+            parent = RetainedParent(descriptor, alias, digest, size, identity)
+            self._parents.append(parent)
+            self.assert_unbroken()
+            return parent
+        except BaseException:
+            if leased:
+                try:
+                    fcntl.fcntl(descriptor, fcntl.F_SETLEASE, fcntl.F_UNLCK)
+                except OSError:
+                    pass
+            os.close(descriptor)
+            raise
+
+    async def pin_async(
+        self,
+        path: Path,
+        *,
+        alias: str,
+        expected_sha256: str,
+        expected_size: int,
+    ) -> RetainedParent:
+        if self._closed:
+            raise RuntimeError("retained-parent set is closed")
+        if (
+            not alias
+            or alias in {".", ".."}
+            or "/" in alias
+            or "\\" in alias
+            or len(alias) > 128
+            or any(parent.alias == alias for parent in self._parents)
+        ):
+            raise RuntimeError("retained-parent alias is invalid or duplicated")
+        governed_roots = self._governed_roots or (path.parent,)
+        descriptor = _open_beneath_governed_root(path, governed_roots)
+        leased = False
+        try:
+            if not hasattr(fcntl, "F_SETLEASE"):
+                raise RuntimeError("Linux file leases are unavailable")
+            fcntl.fcntl(descriptor, fcntl.F_SETOWN, os.getpid())
+            fcntl.fcntl(descriptor, fcntl.F_SETLEASE, fcntl.F_RDLCK)
+            leased = True
+            digest, size, identity = await asyncio.to_thread(_identity_from_descriptor, descriptor)
+            if digest != expected_sha256 or size != expected_size:
+                raise RuntimeError("retained parent diverged from immutable hash/size authority")
+            parent = RetainedParent(descriptor, alias, digest, size, identity)
+            self._parents.append(parent)
+            self.assert_unbroken()
+            return parent
+        except BaseException:
+            if leased:
+                try:
+                    fcntl.fcntl(descriptor, fcntl.F_SETLEASE, fcntl.F_UNLCK)
+                except OSError:
+                    pass
+            os.close(descriptor)
+            raise
+
+    def assert_unbroken(self) -> None:
+        if self._closed or lease_break_generation() != self._opened_at_generation:
+            raise RuntimeError("retained-parent read lease was broken")
+        for parent in self._parents:
+            current = os.fstat(parent.fd)
+            if (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns) != parent.identity:
+                raise RuntimeError("retained-parent descriptor identity changed")
+
+    def metadata(self, operation_argv: list[str]) -> dict[str, Any]:
+        self.assert_unbroken()
+        return {
+            "schema": "bms.ont-signal-fd-broker.v1",
+            "operation_argv": operation_argv,
+            "parents": [
+                {"alias": parent.alias, "sha256": parent.sha256, "size_bytes": parent.size_bytes}
+                for parent in self._parents
+            ],
+        }
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        for parent in reversed(self._parents):
+            try:
+                fcntl.fcntl(parent.fd, fcntl.F_SETLEASE, fcntl.F_UNLCK)
+            except OSError:
+                pass
+            try:
+                os.close(parent.fd)
+            except OSError:
+                pass
+        self._closed = True
+
+    def __enter__(self) -> "RetainedParentSet":
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        self.close()
+
+
+class OntSignalWorker:
+    """Single-owner leased worker for move validation, reusable mapping, and bounded renders."""
+
+    def __init__(self, session_factory: Any, domain_session_factory: Any, *, poll_interval: float = 5.0):
+        self._session_factory = session_factory
+        self._domain_session_factory = domain_session_factory
+        self._poll_interval = max(1.0, poll_interval)
+        self._task: asyncio.Task[None] | None = None
+        self._stop = asyncio.Event()
+        self._child: asyncio.subprocess.Process | None = None
+        self._active_container: tuple[str, str] | None = None
+
+    async def start(self) -> None:
+        if self._task is not None and not self._task.done():
+            return
+        await self._recover_stale_containers()
+        await self._recover_expired()
+        self._stop.clear()
+        self._task = asyncio.create_task(self._run(), name="ont-signal-workbench-worker")
+
+    async def stop(self) -> None:
+        self._stop.set()
+        task, self._task = self._task, None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        await self._remove_active_container()
+        if self._child is not None and self._child.returncode is None:
+            self._child.terminate()
+            await self._child.wait()
+        self._child = None
+
+    @staticmethod
+    def _now() -> datetime:
+        return datetime.now(UTC).replace(tzinfo=None)
+
+    @staticmethod
+    def _output_root() -> Path:
+        return get_results_dir() / "ont_signal_workbench"
+
+    @staticmethod
+    def _container_user_identity() -> tuple[int, int]:
+        uid, gid = os.getuid(), os.getgid()
+        if uid != 0 and gid != 0:
+            return uid, gid
+
+        def outer_identity(path: str) -> int:
+            fields = Path(path).read_text(encoding="ascii").splitlines()[0].split()
+            if len(fields) != 3 or fields[0] != "0" or fields[2] != "1":
+                return 0
+            return int(fields[1])
+
+        mapped_uid = outer_identity("/proc/self/uid_map")
+        mapped_gid = outer_identity("/proc/self/gid_map")
+        if mapped_uid <= 0 or mapped_gid <= 0:
+            raise RuntimeError("SCM_RIGHTS broker requires a non-root host uid/gid")
+        return mapped_uid, mapped_gid
+
+    @staticmethod
+    def _prepare_output_directory(path: Path, owner_id: str) -> None:
+        if path.exists():
+            owner = path / ".owner"
+            if not owner.is_file() or owner.read_text(encoding="utf-8") != owner_id:
+                raise RuntimeError("signal-workbench recovery output ownership is invalid")
+            shutil.rmtree(path)
+        path.mkdir(parents=True, exist_ok=False)
+        (path / ".owner").write_text(owner_id, encoding="utf-8")
+
+    @staticmethod
+    def _runtime_identity() -> dict[str, str]:
+        image = os.environ.get("BMS_ONT_SQUIGUALISER_IMAGE", "").strip()
+        digest = os.environ.get("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", "").strip().lower()
+        descriptor = os.open(
+            RUNTIME_POLICY_PATH,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
+        try:
+            raw = os.read(descriptor, 8193)
+            if len(raw) > 8192 or os.read(descriptor, 1):
+                raise RuntimeError("approved runtime policy manifest exceeds its bound")
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode):
+                raise RuntimeError("approved runtime policy manifest is not a regular file")
+        finally:
+            os.close(descriptor)
+        policy_sha256 = hashlib.sha256(raw).hexdigest()
+        try:
+            policy = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("approved runtime policy manifest is invalid") from exc
+        expected_policy = {
+            "schema": "bms.ont-squigualiser-runtime-policy.v1",
+            "runtime_id": APPROVED_OCI_DIGEST,
+            "oci_digest": APPROVED_OCI_DIGEST,
+            "upstream": {
+                "name": "Squigualiser",
+                "version": "0.7.0",
+                "commit": APPROVED_UPSTREAM_COMMIT,
+            },
+            "network": "none",
+        }
+        if policy_sha256 != RUNTIME_POLICY_SHA256 or policy != expected_policy:
+            raise RuntimeError("approved runtime policy manifest identity diverged")
+        if (
+            image != policy["runtime_id"]
+            or digest != policy["oci_digest"].removeprefix("sha256:")
+            or not HEX64.fullmatch(digest)
+        ):
+            raise RuntimeError("configured Squigualiser identity does not equal approved runtime policy")
+        return {
+            "image": image,
+            "image_digest": digest,
+            "upstream_version": policy["upstream"]["version"],
+            "upstream_commit": policy["upstream"]["commit"],
+            "network": "none",
+            "policy_manifest_sha256": policy_sha256,
+        }
+
+    def _container_command(
+        self,
+        output_dir: Path,
+        broker_dir: Path,
+        *,
+        kind: str,
+    ) -> list[str]:
+        identity = self._runtime_identity()
+        runtime = os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
+        if runtime not in {"podman", "docker"}:
+            raise RuntimeError("unsupported container runtime")
+        uid, gid = self._container_user_identity()
+        output = Path(os.path.abspath(output_dir))
+        broker = Path(os.path.abspath(broker_dir))
+        if not output.is_dir() or output.is_symlink() or not broker.is_dir() or broker.is_symlink():
+            raise RuntimeError("container output or broker directory is invalid")
+        command = [
+            runtime, "run", "--network", "none", "--read-only", "--user", f"{uid}:{gid}",
+            "--pids-limit", "128", "--memory", "4g", "--cpus", "4", "--cap-drop", "ALL",
+            "--label", WORKER_LABEL,
+            "--ulimit", f"fsize={FILE_SIZE_LIMITS[kind]}:{FILE_SIZE_LIMITS[kind]}",
+            "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=512m",
+            "--mount", f"type=bind,src={output},dst=/output",
+            "--mount", f"type=bind,src={broker},dst=/broker",
+            identity["image"],
+            "python3", "/opt/bms/ont_signal_runtime.py", "broker",
+            "--socket", "/broker/parents.sock", "--timeout-seconds", "30",
+        ]
+        return command
+
+    @staticmethod
+    def _stable_file_identity(path: Path) -> tuple[str, int]:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            digest, size, _identity = _identity_from_descriptor(descriptor)
+            return digest, size
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    async def _stable_file_identity_async(path: Path) -> tuple[str, int]:
+        return await asyncio.to_thread(OntSignalWorker._stable_file_identity, path)
+
+    @staticmethod
+    async def _pin_parent_async(
+        parents: RetainedParentSet,
+        path: Path,
+        *,
+        alias: str,
+        expected_sha256: str,
+        expected_size: int,
+    ) -> RetainedParent:
+        return await parents.pin_async(
+            path,
+            alias=alias,
+            expected_sha256=expected_sha256,
+            expected_size=expected_size,
+        )
+
+    @staticmethod
+    async def _resolve_session_alignment_bundle_async(
+        alignment_job_id: str,
+        alignment_session_id: str,
+        authority: dict[str, str],
+        job_output_dir: str | None,
+    ) -> tuple[Path, dict[str, Any], Path, dict[str, Any]]:
+        return await asyncio.to_thread(
+            ngs_alignment_sessions.resolve_session_alignment_bundle,
+            alignment_job_id,
+            alignment_session_id,
+            **authority,
+            job_output_dir=job_output_dir,
+        )
+
+    @staticmethod
+    def _require_hash_contract(label: str, expected: Any, actual: Any) -> None:
+        if expected != actual:
+            raise RuntimeError(f"{label} diverged from the immutable parent hash contract")
+
+    @classmethod
+    def _read_json_report(cls, path: Path) -> dict[str, Any]:
+        value, _digest, _size = cls._read_json_report_identity(path)
+        return value
+
+    @staticmethod
+    def _read_json_report_identity(path: Path) -> tuple[dict[str, Any], str, int]:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or opened.st_size > 1024 * 1024:
+                raise RuntimeError("runtime JSON report violates the bounded regular-file policy")
+            chunks: list[bytes] = []
+            digest = hashlib.sha256()
+            size = 0
+            while chunk := os.read(descriptor, 64 * 1024):
+                size += len(chunk)
+                if size > 1024 * 1024:
+                    raise RuntimeError("runtime JSON report exceeds the 1 MiB policy")
+                digest.update(chunk)
+                chunks.append(chunk)
+            after = os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+        if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+        ):
+            raise RuntimeError("runtime JSON report changed while reading")
+        value = json.loads(b"".join(chunks))
+        if not isinstance(value, dict):
+            raise RuntimeError("runtime JSON report must be an object")
+        return value, digest.hexdigest(), size
+
+    @classmethod
+    def _resolve_selected_raw_partitions(
+        cls,
+        representation: OntRawSignalRepresentation,
+        read_ids: list[str] | None,
+    ) -> tuple[list[tuple[Path, Path]], dict[str, Any]]:
+        manifest = representation.artifact_manifest if isinstance(representation.artifact_manifest, dict) else {}
+        manifest_sha256 = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+        if manifest_sha256 != getattr(representation, "manifest_sha256", None):
+            raise RuntimeError("raw artifact manifest digest authority diverged")
+        artifacts = manifest.get("artifacts") if isinstance(manifest.get("artifacts"), list) else []
+        by_path: dict[Path, dict[str, Any]] = {}
+        routing_sha256: str | None = None
+        routing_path: Path | None = None
+        for item in artifacts:
+            if not isinstance(item, dict) or not item.get("path"):
+                continue
+            path = Path(str(item["path"])).expanduser()
+            if not path.is_absolute() or any(part in {".", ".."} for part in path.parts):
+                raise RuntimeError("raw artifact manifest path is not absolute and lexical")
+            by_path[path] = item
+            if item.get("kind") == "read_routing":
+                if routing_path is not None:
+                    raise RuntimeError("raw artifact manifest contains ambiguous routing authority")
+                routing_sha256 = str(item.get("sha256") or "")
+                routing_path = path
+        if routing_path is not None:
+            routing_item = by_path[routing_path]
+            routing_actual, routing_size = cls._stable_file_identity(routing_path)
+            if routing_actual != routing_sha256 or routing_size != routing_item.get("bytes"):
+                raise RuntimeError("raw routing manifest diverged from immutable artifact authority")
+        if read_ids is None:
+            blow5_paths = sorted(
+                (path for path, item in by_path.items() if item.get("kind") == "blow5"),
+                key=str,
+            )
+            selected = [(path, Path(f"{path}.idx")) for path in blow5_paths]
+        else:
+            if routing_path is None:
+                raise RuntimeError("selected-read partition resolution requires governed routing authority")
+            selected = []
+            for read_id in read_ids:
+                blow5, index = ont_raw_signal._validated_blow5_paths(representation, read_id)
+                pair = (blow5, index)
+                if pair not in selected:
+                    selected.append(pair)
+        if not selected:
+            raise RuntimeError("no governed BLOW5 partitions were selected")
+        identities: list[dict[str, str]] = []
+        for blow5, index in selected:
+            blow5_item, index_item = by_path.get(blow5), by_path.get(index)
+            if blow5_item is None or index_item is None or index != Path(f"{blow5}.idx"):
+                raise RuntimeError("selected BLOW5 partition/index lacks immutable manifest authority")
+            blow5_actual, blow5_size = cls._stable_file_identity(blow5)
+            index_actual, index_size = cls._stable_file_identity(index)
+            if (
+                blow5_actual != blow5_item.get("sha256")
+                or blow5_size != blow5_item.get("bytes")
+                or index_actual != index_item.get("sha256")
+                or index_size != index_item.get("bytes")
+            ):
+                raise RuntimeError("selected BLOW5 partition/index diverged from immutable artifact authority")
+            identities.append({"sha256": blow5_actual, "index_sha256": index_actual})
+        return selected, {"routing_sha256": routing_sha256, "blow5": identities}
+
+    @staticmethod
+    def _pin_raw_partitions(
+        parents: RetainedParentSet,
+        representation: OntRawSignalRepresentation,
+        selected: list[tuple[Path, Path]],
+    ) -> list[dict[str, str]]:
+        manifest = representation.artifact_manifest if isinstance(representation.artifact_manifest, dict) else {}
+        artifacts_value: Any = manifest.get("artifacts")
+        artifacts: list[Any] = artifacts_value if isinstance(artifacts_value, list) else []
+        by_path = {
+            Path(str(item["path"])): item
+            for item in artifacts
+            if isinstance(item, dict) and item.get("path")
+        }
+        identities: list[dict[str, str]] = []
+        for index, (blow5, adjacent) in enumerate(selected):
+            blow5_item = by_path.get(blow5)
+            adjacent_item = by_path.get(adjacent)
+            if blow5_item is None or adjacent_item is None:
+                raise RuntimeError("selected raw partition lacks manifest authority")
+            retained_blow5 = parents.pin(
+                blow5,
+                alias=f"raw-{index}.blow5",
+                expected_sha256=str(blow5_item.get("sha256") or ""),
+                expected_size=int(blow5_item.get("bytes") or 0),
+            )
+            retained_index = parents.pin(
+                adjacent,
+                alias=f"raw-{index}.blow5.idx",
+                expected_sha256=str(adjacent_item.get("sha256") or ""),
+                expected_size=int(adjacent_item.get("bytes") or 0),
+            )
+            identities.append({
+                "sha256": retained_blow5.sha256,
+                "index_sha256": retained_index.sha256,
+            })
+        return identities
+
+    @classmethod
+    async def _resolve_selected_raw_partitions_async(
+        cls,
+        representation: OntRawSignalRepresentation,
+        read_ids: list[str] | None,
+    ) -> tuple[list[tuple[Path, Path]], dict[str, Any]]:
+        return await asyncio.to_thread(cls._resolve_selected_raw_partitions, representation, read_ids)
+
+    @staticmethod
+    async def _pin_raw_partitions_async(
+        parents: RetainedParentSet,
+        representation: OntRawSignalRepresentation,
+        selected: list[tuple[Path, Path]],
+    ) -> list[dict[str, str]]:
+        manifest = representation.artifact_manifest if isinstance(representation.artifact_manifest, dict) else {}
+        artifacts_value: Any = manifest.get("artifacts")
+        artifacts: list[Any] = artifacts_value if isinstance(artifacts_value, list) else []
+        by_path = {
+            Path(str(item["path"])): item
+            for item in artifacts
+            if isinstance(item, dict) and item.get("path")
+        }
+        identities: list[dict[str, str]] = []
+        for index, (blow5, adjacent) in enumerate(selected):
+            blow5_item = by_path.get(blow5)
+            adjacent_item = by_path.get(adjacent)
+            if blow5_item is None or adjacent_item is None:
+                raise RuntimeError("selected raw partition lacks manifest authority")
+            retained_blow5 = await OntSignalWorker._pin_parent_async(
+                parents,
+                blow5,
+                alias=f"raw-{index}.blow5",
+                expected_sha256=str(blow5_item.get("sha256") or ""),
+                expected_size=int(blow5_item.get("bytes") or 0),
+            )
+            retained_index = await OntSignalWorker._pin_parent_async(
+                parents,
+                adjacent,
+                alias=f"raw-{index}.blow5.idx",
+                expected_sha256=str(adjacent_item.get("sha256") or ""),
+                expected_size=int(adjacent_item.get("bytes") or 0),
+            )
+            identities.append({
+                "sha256": retained_blow5.sha256,
+                "index_sha256": retained_index.sha256,
+            })
+        return identities
+
+    @staticmethod
+    def _output_tree_size(root: Path, limit: int) -> int:
+        total = 0
+        for directory, names, filenames in os.walk(root, followlinks=False):
+            names.sort(); filenames.sort()
+            for name in names:
+                info = (Path(directory) / name).lstat()
+                if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                    raise OutputLimitExceeded("runtime output contains an unexpected directory entry")
+            for name in filenames:
+                path = Path(directory) / name
+                info = path.lstat()
+                if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                    raise OutputLimitExceeded("runtime output contains a non-regular file")
+                total += info.st_size
+                if total > limit:
+                    raise OutputLimitExceeded("runtime total output limit exceeded")
+        return total
+
+    @staticmethod
+    def _assert_expected_outputs(root: Path, kind: str, allowed_extra: set[str] | None = None) -> None:
+        entries = list(root.iterdir())
+        if any(path.is_dir() or path.is_symlink() for path in entries):
+            raise RuntimeError("runtime produced an unexpected output tree entry")
+        names = {path.name for path in entries if path.is_file()}
+        common = {".owner"}
+        allowed = {
+            "move": common | {"filtered_moves.bam", "read_inventory.txt", "validation.json"},
+            "calibration": common | {"sample.bam", "sample.fasta", "sample.blow5", "sample.blow5.idx", "baseline.paf", "calibration.json"},
+            "mapping": common | {"reform.paf", "realign.paf.gz", "realign.paf.gz.tbi", "validation.json"},
+        }
+        if kind == "view":
+            extras = allowed_extra or set()
+            unexpected = {name for name in names if name != "render_manifest.json" and name not in extras and Path(name).suffix.lower() not in {".html", ".svg"} and name != ".owner"}
+        else:
+            unexpected = names - allowed[kind]
+        if unexpected:
+            raise RuntimeError(f"runtime produced unexpected output files: {sorted(unexpected)}")
+
+    async def _remove_active_container(self) -> None:
+        active = self._active_container
+        if active is None:
+            return
+        runtime, name = active
+        cleanup = await asyncio.create_subprocess_exec(
+            runtime, "rm", "-f", name,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+        )
+        try:
+            _stdout, stderr = await asyncio.wait_for(cleanup.communicate(), timeout=30)
+        except asyncio.TimeoutError:
+            cleanup.kill()
+            await cleanup.wait()
+            self._stop.set()
+            raise ContainerCleanupError("timed out while removing the bounded Squigualiser container")
+        if cleanup.returncode != 0:
+            self._stop.set()
+            raise ContainerCleanupError(stderr[-MAX_FAILURE:].decode("utf-8", "replace") or "bounded container cleanup failed")
+        self._active_container = None
+
+    async def _recover_stale_containers(self) -> None:
+        runtime = os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
+        if runtime not in {"podman", "docker"}:
+            raise RuntimeError("unsupported container runtime")
+        process = await asyncio.create_subprocess_exec(
+            runtime, "ps", "-aq", "--filter", f"label={WORKER_LABEL}",
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+        except asyncio.TimeoutError as exc:
+            process.kill(); await process.wait(); self._stop.set()
+            raise ContainerCleanupError("timed out while discovering stale signal-worker containers") from exc
+        if process.returncode != 0:
+            self._stop.set()
+            raise ContainerCleanupError(stderr[-MAX_FAILURE:].decode("utf-8", "replace") or "stale container discovery failed")
+        for name in stdout.decode("utf-8", "strict").splitlines():
+            if not name.strip():
+                continue
+            self._active_container = (runtime, name.strip())
+            await self._remove_active_container()
+
+    @staticmethod
+    async def _drain_stream(stream: asyncio.StreamReader, stream_name: str) -> dict[str, Any]:
+        digest = hashlib.sha256()
+        tail = bytearray()
+        size = 0
+        while chunk := await stream.read(64 * 1024):
+            size += len(chunk)
+            digest.update(chunk)
+            tail.extend(chunk)
+            if len(tail) > MAX_FAILURE:
+                del tail[:-MAX_FAILURE]
+            if size > MAX_CONTAINER_LOG_BYTES:
+                raise OutputLimitExceeded(f"container {stream_name} log output limit exceeded")
+        return {"sha256": digest.hexdigest(), "size_bytes": size, "tail": bytes(tail).decode("utf-8", "replace")}
+
+    async def _send_fd_request(
+        self,
+        socket_path: Path,
+        parents: RetainedParentSet,
+        operation_argv: list[str],
+    ) -> None:
+        payload = json.dumps(
+            parents.metadata(operation_argv),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        if len(payload) > 256 * 1024:
+            raise RuntimeError("SCM_RIGHTS broker request exceeds its bound")
+        deadline = time.monotonic() + 30
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.setblocking(False)
+        try:
+            while True:
+                parents.assert_unbroken()
+                try:
+                    await asyncio.get_running_loop().sock_connect(connection, str(socket_path))
+                    break
+                except (FileNotFoundError, ConnectionRefusedError):
+                    if self._child is not None and self._child.returncode is not None:
+                        raise RuntimeError("SCM_RIGHTS broker exited before descriptor transfer")
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("SCM_RIGHTS broker socket did not become ready")
+                    await asyncio.sleep(0.01)
+            connection.setblocking(True)
+            ancillary = [(
+                socket.SOL_SOCKET,
+                socket.SCM_RIGHTS,
+                array.array("i", [parent.fd for parent in parents.parents]).tobytes(),
+            )]
+            sent = connection.sendmsg([payload], ancillary)
+            if sent != len(payload):
+                raise RuntimeError("SCM_RIGHTS broker request was only partially transferred")
+        finally:
+            connection.close()
+
+    async def _invoke(
+        self,
+        parents: RetainedParentSet,
+        operation_argv: list[str],
+        kind: str,
+        item_id: str,
+        claim_token: str,
+        output_dir: Path,
+        allowed_output_names: set[str] | None = None,
+    ) -> dict[str, Any]:
+        broker_dir = Path(tempfile.mkdtemp(prefix=f"bms-ont-{kind}-", dir="/tmp"))
+        os.chmod(broker_dir, 0o700)
+        try:
+            command = self._container_command(output_dir, broker_dir, kind=kind)
+            return await self._execute(
+                command,
+                kind,
+                item_id,
+                claim_token,
+                output_dir,
+                allowed_output_names,
+                parents=parents,
+                operation_argv=operation_argv,
+                broker_socket=broker_dir / "parents.sock",
+            )
+        finally:
+            shutil.rmtree(broker_dir, ignore_errors=True)
+
+    async def _execute(
+        self,
+        command: list[str],
+        kind: str,
+        item_id: str,
+        claim_token: str,
+        output_dir: Path,
+        allowed_output_names: set[str] | None = None,
+        *,
+        parents: RetainedParentSet,
+        operation_argv: list[str],
+        broker_socket: Path,
+    ) -> dict[str, Any]:
+        table = {"move": OntMoveTableSource, "calibration": OntSignalCalibrationJob, "mapping": OntSignalMappingJob, "view": OntSquigualiserViewJob}[kind]
+        state_field = "validation_state" if kind == "move" else "state"
+        async with self._session_factory() as session:
+            conditions = [table.id == item_id, table.claim_token == claim_token, getattr(table, state_field) == "running"]
+            if hasattr(table, "cancel_requested_at"):
+                conditions.append(table.cancel_requested_at.is_(None))
+            guarded = await session.execute(update(table).where(*conditions).values(
+                lease_expires_at=self._now() + timedelta(seconds=LEASE_SECONDS),
+                **({"updated_at": self._now()} if hasattr(table, "updated_at") else {}),
+            ))
+            if guarded.rowcount != 1:
+                await session.rollback()
+                current = await session.get(table, item_id)
+                if current is not None and getattr(current, "cancel_requested_at", None) is not None:
+                    raise asyncio.CancelledError()
+                raise TerminalFenceLost(f"{kind} execution lease was lost before launch")
+            await session.commit()
+        runtime = command[0]
+        container_name = f"bms-ont-signal-{kind}-{hashlib.sha256(f'{item_id}:{claim_token}'.encode()).hexdigest()[:24]}"
+        command = [*command[:2], "--name", container_name, *command[2:]]
+        self._active_container = (runtime, container_name)
+        drains: list[asyncio.Task[dict[str, Any]]] = []
+        try:
+            self._child = await asyncio.create_subprocess_exec(
+                *command, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+                start_new_session=True,
+            )
+            await self._send_fd_request(broker_socket, parents, operation_argv)
+            assert self._child.stdout is not None and self._child.stderr is not None
+            drains = [
+                asyncio.create_task(self._drain_stream(self._child.stdout, "stdout")),
+                asyncio.create_task(self._drain_stream(self._child.stderr, "stderr")),
+            ]
+            deadline = time.monotonic() + COMMAND_DEADLINES[kind]
+            next_lease_check = time.monotonic()
+            while self._child.returncode is None:
+                parents.assert_unbroken()
+                for task in drains:
+                    if task.done() and task.exception() is not None:
+                        raise task.exception()  # type: ignore[misc]
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"{kind} runtime deadline exceeded")
+                self._output_tree_size(output_dir, TOTAL_OUTPUT_LIMITS[kind])
+                try:
+                    await asyncio.wait_for(self._child.wait(), timeout=1)
+                except asyncio.TimeoutError:
+                    pass
+                if time.monotonic() >= next_lease_check:
+                    async with self._session_factory() as session:
+                        conditions = [table.id == item_id, table.claim_token == claim_token, getattr(table, state_field) == "running"]
+                        if hasattr(table, "cancel_requested_at"):
+                            conditions.append(table.cancel_requested_at.is_(None))
+                        result = await session.execute(
+                            update(table).where(*conditions).values(lease_expires_at=self._now() + timedelta(seconds=LEASE_SECONDS))
+                        )
+                        if result.rowcount != 1:
+                            await session.rollback()
+                            row = await session.get(table, item_id)
+                            if row is not None and getattr(row, "cancel_requested_at", None) is not None:
+                                raise asyncio.CancelledError()
+                            raise TerminalFenceLost("signal-workbench lease was lost")
+                        await session.commit()
+                    next_lease_check = time.monotonic() + 30
+            stream_receipts = await asyncio.gather(*drains)
+            parents.assert_unbroken()
+            self._output_tree_size(output_dir, TOTAL_OUTPUT_LIMITS[kind])
+            self._assert_expected_outputs(output_dir, kind, allowed_output_names)
+            returncode = self._child.returncode
+            receipt = {
+                "argv_sha256": hashlib.sha256("\0".join(command).encode()).hexdigest(),
+                "returncode": returncode,
+                "stdout_sha256": stream_receipts[0]["sha256"],
+                "stdout_size_bytes": stream_receipts[0]["size_bytes"],
+                "stderr_sha256": stream_receipts[1]["sha256"],
+                "stderr_size_bytes": stream_receipts[1]["size_bytes"],
+                "stderr_tail": stream_receipts[1]["tail"],
+                "container_name_sha256": hashlib.sha256(container_name.encode()).hexdigest(),
+            }
+            if returncode != 0:
+                raise RuntimeError(receipt["stderr_tail"] or "Squigualiser runtime failed")
+            return receipt
+        finally:
+            if self._child is not None and self._child.returncode is None:
+                self._child.kill()
+                await self._child.wait()
+            for task in drains:
+                if not task.done():
+                    task.cancel()
+            if drains:
+                await asyncio.gather(*drains, return_exceptions=True)
+            await self._remove_active_container()
+            self._child = None
+
+    async def _recover_expired_table(self, table: Any, state_field: str, now: datetime) -> None:
+        async with self._session_factory() as session:
+            rows = list((await session.execute(select(table).where(
+                getattr(table, state_field) == "running",
+                table.lease_expires_at.is_not(None),
+                table.lease_expires_at < now,
+            ))).scalars())
+            for row in rows:
+                observed_token = row.claim_token
+                observed_expiry = row.lease_expires_at
+                cancelled = getattr(row, "cancel_requested_at", None) is not None
+                values: dict[str, Any] = {
+                    state_field: "cancelled" if cancelled else "requested",
+                    "reason_code": "cancelled_after_expired_lease" if cancelled else "expired_lease_recovered",
+                    "claim_token": None,
+                    "lease_expires_at": None,
+                }
+                if isinstance(
+                    row,
+                    (OntSignalCalibrationJob, OntSignalMappingJob, OntSquigualiserViewJob),
+                ):
+                    receipt_field = (
+                        "render_receipt"
+                        if isinstance(row, OntSquigualiserViewJob)
+                        else "stage_receipts"
+                    )
+                    receipts = dict(getattr(row, receipt_field, {}) or {})
+                    values[receipt_field] = {
+                        **receipts,
+                        "lease_recovery": {
+                            "recovered_at": now.isoformat(),
+                            "expired_attempt": row.attempt,
+                            "max_attempts": SIGNAL_JOB_MAX_ATTEMPTS,
+                        },
+                    }
+                    if not cancelled and row.attempt >= SIGNAL_JOB_MAX_ATTEMPTS:
+                        values.update(
+                            {
+                                state_field: "failed",
+                                "reason_code": "expired_lease_retry_exhausted",
+                                "failure_code": "ExpiredLeaseRetryExhausted",
+                                "failure_message": "expired worker lease exhausted bounded attempt policy",
+                                "completed_at": now,
+                            }
+                        )
+                if isinstance(row, OntMoveTableSource) and not cancelled:
+                    receipt = row.validation_receipt if isinstance(row.validation_receipt, dict) else {}
+                    retry_value: Any = receipt.get("retry")
+                    retry: dict[str, Any] = retry_value if isinstance(retry_value, dict) else {}
+                    prior_value: Any = retry.get("failures")
+                    prior: list[Any] = prior_value if isinstance(prior_value, list) else []
+                    failures = [*prior, {
+                        "attempt": len(prior) + 1,
+                        "failed_at": now.isoformat(),
+                        "failure_code": "ExpiredLease",
+                        "message_sha256": hashlib.sha256(b"move-source worker lease expired").hexdigest(),
+                    }]
+                    values["validation_receipt"] = {
+                        **receipt,
+                        "retry": {
+                            "max_attempts": MOVE_SOURCE_MAX_ATTEMPTS,
+                            "failures": failures,
+                        },
+                    }
+                    if len(failures) >= MOVE_SOURCE_MAX_ATTEMPTS:
+                        values[state_field] = "failed"
+                        values["reason_code"] = "expired_lease_retry_exhausted"
+                        values["validated_at"] = now
+                    else:
+                        values["reason_code"] = "move_source_retry_requested_after_expired_lease"
+                if hasattr(row, "updated_at"):
+                    values["updated_at"] = now
+                if cancelled and hasattr(row, "completed_at"):
+                    values["completed_at"] = now
+                result = await session.execute(
+                    update(table).where(
+                        table.id == row.id,
+                        getattr(table, state_field) == "running",
+                        table.claim_token == observed_token,
+                        table.lease_expires_at == observed_expiry,
+                        table.lease_expires_at < now,
+                    ).values(**values)
+                )
+                if result.rowcount not in {0, 1}:
+                    await session.rollback()
+                    raise RuntimeError("expired lease recovery CAS affected an invalid row count")
+            await session.commit()
+
+    async def _recover_expired(self) -> None:
+        now = self._now()
+        for table, state_field in (
+            (OntMoveTableSource, "validation_state"),
+            (OntSignalCalibrationJob, "state"),
+            (OntSignalMappingJob, "state"),
+            (OntSquigualiserViewJob, "state"),
+        ):
+            await self._recover_expired_table(table, state_field, now)
+
+    @staticmethod
+    async def _verify_managed_bed_parent(
+        session: Any,
+        render_params: dict[str, Any],
+    ) -> tuple[Path, dict[str, Any]]:
+        from services import ont_signal_workbench
+
+        bed_id = render_params.get("managed_bed_artifact_id")
+        if not bed_id:
+            raise RuntimeError("managed BED immutable parent identity is absent")
+        try:
+            path, identity = await ont_signal_workbench.resolve_managed_bed_authority(
+                session, str(bed_id)
+            )
+        except (KeyError, ont_signal_workbench.OntSignalError) as exc:
+            raise RuntimeError("managed BED immutable parent authority is unavailable") from exc
+        expected = {
+            "artifact_id": str(bed_id),
+            "source_job_id": render_params.get("managed_bed_source_job_id"),
+            "sha256": render_params.get("managed_bed_sha256"),
+            "size_bytes": render_params.get("managed_bed_size_bytes"),
+        }
+        if identity != expected:
+            raise RuntimeError("managed BED diverged from the immutable parent contract")
+        return path, identity
+
+    async def _claim(self, table: Any, state_field: str) -> tuple[str, str] | None:
+        token = uuid.uuid4().hex
+        async with self._session_factory() as session:
+            row = (await session.execute(select(table).where(
+                getattr(table, state_field) == "requested",
+                table.claim_token.is_(None),
+                *((table.cancel_requested_at.is_(None),) if hasattr(table, "cancel_requested_at") else ()),
+            ).order_by(table.created_at, table.id).limit(1))).scalar_one_or_none()
+            if row is None:
+                return None
+            claim_conditions = [table.id == row.id, getattr(table, state_field) == "requested", table.claim_token.is_(None)]
+            if hasattr(table, "cancel_requested_at"):
+                claim_conditions.append(table.cancel_requested_at.is_(None))
+            result = await session.execute(update(table).where(*claim_conditions).values(**{
+                state_field: "running", "reason_code": "worker_claimed", "claim_token": token,
+                "lease_expires_at": self._now() + timedelta(seconds=LEASE_SECONDS),
+                **({"attempt": row.attempt + 1, "updated_at": self._now()} if hasattr(row, "attempt") else {}),
+            }))
+            if result.rowcount != 1:
+                await session.rollback()
+                return None
+            await session.commit()
+            return str(row.id), token
+
+    async def _fail(self, table: Any, state_field: str, item_id: str, token: str, exc: Exception) -> None:
+        async with self._session_factory() as session:
+            row = await session.get(table, item_id)
+            if row is None or row.claim_token != token:
+                return
+            if hasattr(table, "cancel_requested_at") and row.cancel_requested_at is not None:
+                await session.rollback()
+                await self._cancel_claim(table, state_field, item_id, token)
+                return
+            values: dict[str, Any] = {
+                state_field: "failed", "reason_code": "runtime_validation_failed",
+                "claim_token": None, "lease_expires_at": None,
+            }
+            if hasattr(table, "failure_code"): values["failure_code"] = exc.__class__.__name__
+            if hasattr(table, "failure_message"): values["failure_message"] = str(exc)[:MAX_FAILURE]
+            if hasattr(table, "updated_at"): values["updated_at"] = self._now()
+            if hasattr(table, "completed_at"): values["completed_at"] = self._now()
+            if isinstance(row, OntMoveTableSource):
+                receipt = row.validation_receipt if isinstance(row.validation_receipt, dict) else {}
+                retry_value: Any = receipt.get("retry")
+                retry: dict[str, Any] = retry_value if isinstance(retry_value, dict) else {}
+                failures_value: Any = retry.get("failures")
+                prior_failures: list[Any] = failures_value if isinstance(failures_value, list) else []
+                failures = [*prior_failures, {
+                    "attempt": len(prior_failures) + 1,
+                    "failed_at": self._now().isoformat(),
+                    "failure_code": exc.__class__.__name__,
+                    "message_sha256": hashlib.sha256(str(exc).encode()).hexdigest(),
+                }]
+                values["validation_receipt"] = {
+                    **receipt,
+                    "retry": {
+                        "max_attempts": MOVE_SOURCE_MAX_ATTEMPTS,
+                        "failures": failures,
+                    },
+                }
+                if len(failures) < MOVE_SOURCE_MAX_ATTEMPTS:
+                    values[state_field] = "requested"
+                    values["reason_code"] = "move_source_retry_requested"
+                else:
+                    values["reason_code"] = "runtime_validation_failed_retry_exhausted"
+            if isinstance(row, OntSignalCalibrationJob):
+                values["stage_receipts"] = {**(row.stage_receipts or {}), "failure": {"failed_at": self._now().isoformat(), "failure_code": exc.__class__.__name__, "message_sha256": hashlib.sha256(str(exc).encode()).hexdigest()}}
+            conditions = [table.id == item_id, table.claim_token == token, getattr(table, state_field) == "running"]
+            if hasattr(table, "cancel_requested_at"):
+                conditions.append(table.cancel_requested_at.is_(None))
+            result = await session.execute(update(table).where(*conditions).values(**values))
+            if result.rowcount != 1:
+                await session.rollback()
+                return
+            if isinstance(row, OntSignalMappingJob):
+                session.add(OntSignalMappingEvent(id=f"ont-signal-event-{uuid.uuid4().hex}", job_id=row.id, state="failed", reason_code="runtime_validation_failed", receipt={"error_class": exc.__class__.__name__}, created_at=self._now()))
+            await session.commit()
+
+    @staticmethod
+    def _raw_paths(representation: OntRawSignalRepresentation) -> list[Path]:
+        pairs, _identities = OntSignalWorker._resolve_selected_raw_partitions(representation, None)
+        return [path for path, _index in pairs]
+
+    @staticmethod
+    def _validate_move_source_producer_authority(
+        source: OntMoveTableSource,
+        report: dict[str, Any],
+    ) -> dict[str, Any]:
+        identity = source.source_runtime_identity if isinstance(source.source_runtime_identity, dict) else {}
+        counts = report.get("tag_counts") if isinstance(report.get("tag_counts"), dict) else {}
+        record_count = report.get("record_count")
+        unique_count = report.get("unique_read_count")
+        inventory_sha256 = report.get("read_inventory_sha256")
+        if (
+            identity.get("schema") != "bms.ont-move-source-producer-runtime.v1"
+            or identity.get("source_job_id") != source.source_job_id
+            or identity.get("source_bam_sha256") != source.artifact_sha256
+            or isinstance(record_count, bool)
+            or not isinstance(record_count, int)
+            or record_count <= 0
+            or unique_count != record_count
+            or counts != {"mv": record_count, "ts": record_count, "ns": record_count}
+            or not isinstance(inventory_sha256, str)
+            or not HEX64.fullmatch(inventory_sha256)
+        ):
+            raise RuntimeError("move report lacks exhaustive independent move-tag/model/read-set validation")
+        state = identity.get("authority_state")
+        if state == "legacy_unknown":
+            if (
+                identity.get("reason_code") != "producer_runtime_provenance_unavailable"
+                or identity.get("requires_independent_move_validation") is not True
+            ):
+                raise RuntimeError("legacy move-source authority is incomplete")
+            return {
+                "authority_state": "legacy_unknown",
+                "basecall_model_id": report["basecall_model_id"],
+                "emit_moves": "validated_from_bam_tags",
+                "independent_move_validation": True,
+            }
+        if state != "known":
+            raise RuntimeError("move-source producer runtime authority state is invalid")
+        if identity.get("emit_moves") is not True:
+            raise RuntimeError("known producer emit-moves authority is not true")
+        if identity.get("basecall_model_id") != report.get("basecall_model_id"):
+            raise RuntimeError("validated BAM basecall model diverges from known producer authority")
+        if (
+            identity.get("read_count") != record_count
+            or identity.get("read_inventory_sha256") != inventory_sha256
+            or identity.get("move_tag_counts") != counts
+        ):
+            raise RuntimeError("validated BAM move/read-set evidence diverges from known producer authority")
+        return {
+            "authority_state": "known",
+            "basecall_model_id": report["basecall_model_id"],
+            "emit_moves": True,
+            "independent_move_validation": True,
+        }
+
+    @staticmethod
+    def _move_registration_authority(source: OntMoveTableSource) -> dict[str, Any]:
+        runtime_identity = source.source_runtime_identity
+        return {
+            "source_job_id": source.source_job_id,
+            "external_registration_receipt_id": source.external_registration_receipt_id,
+            "source_runtime_identity": json.loads(json.dumps(runtime_identity, sort_keys=True)),
+        }
+
+    @staticmethod
+    def _move_publication_fence(
+        item_id: str,
+        token: str,
+        authority: dict[str, Any],
+    ) -> tuple[Any, ...]:
+        return (
+            OntMoveTableSource.id == item_id,
+            OntMoveTableSource.claim_token == token,
+            OntMoveTableSource.validation_state == "running",
+            OntMoveTableSource.source_job_id == authority["source_job_id"],
+            OntMoveTableSource.external_registration_receipt_id
+            == authority["external_registration_receipt_id"],
+            OntMoveTableSource.source_runtime_identity == authority["source_runtime_identity"],
+        )
+
+    async def _process_move(self, item_id: str, token: str) -> None:
+        with RetainedParentSet(tuple(Path(value) for value in get_allowed_roots().values())) as parents:
+            await self._process_move_retained(item_id, token, parents)
+
+    async def _process_move_retained(
+        self, item_id: str, token: str, parents: RetainedParentSet
+    ) -> None:
+        async with self._session_factory() as session:
+            source = await session.get(OntMoveTableSource, item_id)
+            if source is None or source.claim_token != token: return
+            registration_authority = self._move_registration_authority(source)
+            representation = await session.get(OntRawSignalRepresentation, source.raw_representation_id)
+            tracked = await session.get(InputFile, source.input_file_id)
+            if representation is None or tracked is None: raise RuntimeError("move-source parents disappeared")
+            bam = Path(tracked.directory) / tracked.filename
+            retained_bam = await self._pin_parent_async(
+                parents,
+                bam,
+                alias="moves.bam",
+                expected_sha256=source.artifact_sha256,
+                expected_size=source.artifact_size_bytes,
+            )
+            raw_manifest_sha = (source.validation_receipt or {}).get("raw_manifest_sha256")
+            self._require_hash_contract("raw manifest", raw_manifest_sha, representation.manifest_sha256)
+            raw_pairs, raw_identities = await self._resolve_selected_raw_partitions_async(representation, None)
+            raw_identities["blow5"] = await self._pin_raw_partitions_async(parents, representation, raw_pairs)
+            output = self._output_root() / "move-sources" / source.id
+            self._prepare_output_directory(output, source.id)
+            arguments = ["validate-moves", "--bam", "/parents/moves.bam", "--molecule-type", source.molecule_type, "--filtered-bam", "/output/filtered_moves.bam", "--inventory", "/output/read_inventory.txt", "--report", "/output/validation.json"]
+            for index, _pair in enumerate(raw_pairs):
+                arguments.extend(["--blow5", f"/parents/raw-{index}.blow5"])
+        command_receipt = await self._invoke(parents, arguments, "move", item_id, token, output)
+        report = self._read_json_report(output / "validation.json")
+        producer_validation = self._validate_move_source_producer_authority(source, report)
+        expected_parents = {"original_move_bam_sha256": retained_bam.sha256, "blow5": raw_identities["blow5"]}
+        self._require_hash_contract("move runtime parents", expected_parents, report.get("parent_sha256s"))
+        filtered_path, inventory_path = output / "filtered_moves.bam", output / "read_inventory.txt"
+        filtered_sha, filtered_size = await self._stable_file_identity_async(filtered_path)
+        inventory_sha, inventory_size = await self._stable_file_identity_async(inventory_path)
+        self._require_hash_contract("filtered move BAM", {"sha256": filtered_sha, "size_bytes": filtered_size}, report.get("filtered_move_bam"))
+        self._require_hash_contract("move inventory", inventory_sha, report.get("read_inventory_sha256"))
+        async with self._session_factory() as session:
+            parents.assert_unbroken()
+            source = await session.get(OntMoveTableSource, item_id)
+            if source is None: raise TerminalFenceLost("move-source disappeared before publication")
+            receipt = {**report, "producer_runtime_authority_validation": producer_validation, "command": command_receipt, "managed_outputs": {"filtered_move_bam": str(filtered_path), "read_inventory": str(inventory_path)}, "managed_output_sha256s": {"filtered_move_bam_sha256": filtered_sha, "filtered_move_bam_size_bytes": filtered_size, "read_inventory_sha256": inventory_sha, "read_inventory_size_bytes": inventory_size}}
+            result = await session.execute(update(OntMoveTableSource).where(
+                *self._move_publication_fence(item_id, token, registration_authority),
+            ).values(
+                bam_header_sha256=report["move_bam_header_sha256"], record_count=report["record_count"],
+                unique_read_count=report["unique_read_count"], mv_tag_count=report["tag_counts"]["mv"],
+                ts_tag_count=report["tag_counts"]["ts"], ns_tag_count=report["tag_counts"]["ns"],
+                basecall_model_id=report["basecall_model_id"], read_inventory_sha256=report["read_inventory_sha256"],
+                validation_receipt=receipt, validation_state="ready", reason_code="move_source_exact_read_set_ready",
+                claim_token=None, lease_expires_at=None, validated_at=self._now(),
+            ))
+            if result.rowcount != 1:
+                await session.rollback()
+                raise TerminalFenceLost("move-source terminal publication fence was lost")
+            parents.assert_unbroken()
+            await session.commit()
+
+    async def _process_calibration(self, item_id: str, token: str) -> None:
+        with RetainedParentSet(tuple(Path(value) for value in get_allowed_roots().values())) as parents:
+            await self._process_calibration_retained(item_id, token, parents)
+
+    async def _process_calibration_retained(
+        self, item_id: str, token: str, parents: RetainedParentSet
+    ) -> None:
+        async with self._session_factory() as session:
+            job = await session.get(OntSignalCalibrationJob, item_id)
+            if job is None or job.claim_token != token: return
+            if job.cancel_requested_at is not None: raise asyncio.CancelledError()
+            source = await session.get(OntMoveTableSource, job.move_source_id)
+            representation = await session.get(OntRawSignalRepresentation, job.raw_representation_id)
+            if source is None or representation is None or source.validation_state != "ready" or representation.state != "ready":
+                raise RuntimeError("calibration parents are not ready")
+            tracked = await session.get(InputFile, source.input_file_id)
+            if tracked is None: raise RuntimeError("original move BAM authority disappeared")
+            original_bam = Path(tracked.directory) / tracked.filename
+            outputs = source.validation_receipt.get("managed_outputs", {}) if isinstance(source.validation_receipt, dict) else {}
+            filtered_bam = Path(str(outputs.get("filtered_move_bam", "")))
+            inventory = Path(str(outputs.get("read_inventory", "")))
+            managed_hashes = source.validation_receipt.get("managed_output_sha256s", {})
+            retained_original = await self._pin_parent_async(
+                parents,
+                original_bam,
+                alias="original_moves.bam",
+                expected_sha256=source.artifact_sha256,
+                expected_size=source.artifact_size_bytes,
+            )
+            retained_filtered = await self._pin_parent_async(
+                parents,
+                filtered_bam,
+                alias="filtered_moves.bam",
+                expected_sha256=str(managed_hashes.get("filtered_move_bam_sha256") or ""),
+                expected_size=int(managed_hashes.get("filtered_move_bam_size_bytes") or 0),
+            )
+            retained_inventory = await self._pin_parent_async(
+                parents,
+                inventory,
+                alias="read_inventory.txt",
+                expected_sha256=str(source.read_inventory_sha256 or ""),
+                expected_size=int(managed_hashes.get("read_inventory_size_bytes") or 0),
+            )
+            original_sha, original_size = retained_original.sha256, retained_original.size_bytes
+            filtered_sha, filtered_size = retained_filtered.sha256, retained_filtered.size_bytes
+            inventory_sha, inventory_size = retained_inventory.sha256, retained_inventory.size_bytes
+            raw_pairs, raw_identities = await self._resolve_selected_raw_partitions_async(representation, None)
+            raw_identities["blow5"] = await self._pin_raw_partitions_async(parents, representation, raw_pairs)
+            output = self._output_root() / "calibrations" / job.id
+            self._prepare_output_directory(output, job.id)
+            args = [
+                "calibrate", "--original-bam", "/parents/original_moves.bam", "--filtered-bam", "/parents/filtered_moves.bam", "--inventory", "/parents/read_inventory.txt", "--molecule-type", source.molecule_type, "--sample-count", str(job.sample_count),
+                "--raw-manifest-sha256", representation.manifest_sha256, "--move-artifact-sha256", source.artifact_sha256,
+                "--move-inventory-sha256", str(source.read_inventory_sha256), "--basecall-model-id", str(source.basecall_model_id),
+                "--output-dir", "/output", "--report", "/output/calibration.json",
+            ]
+            for index, _pair in enumerate(raw_pairs):
+                args.extend(["--blow5", f"/parents/raw-{index}.blow5"])
+            snapshot_parents = job.resource_snapshot.get("parents", {})
+        command_receipt = await self._invoke(parents, args, "calibration", item_id, token, output)
+        report_path = output / "calibration.json"
+        report, artifact_sha, artifact_size = self._read_json_report_identity(report_path)
+        recommendation = report.get("recommendation", {})
+        selected = report.get("sample_selection", {})
+        tool = report.get("tool_identity", {})
+        score_evidence = report.get("score_evidence")
+        selected_ids = selected.get("read_ids")
+        selection_sha = hashlib.sha256(json.dumps(selected_ids, sort_keys=True, separators=(",", ":")).encode()).hexdigest() if isinstance(selected_ids, list) else None
+        if (
+            report.get("schema") != "bms.ont-signal-calibration.v1"
+            or report.get("parent_sha256s", {}).get("raw_manifest_sha256") != snapshot_parents.get("raw_manifest_sha256")
+            or report.get("parent_sha256s", {}).get("move_bam_sha256") != snapshot_parents.get("move_bam_sha256")
+            or report.get("parent_sha256s", {}).get("filtered_move_bam_sha256") != filtered_sha
+            or report.get("parent_sha256s", {}).get("move_inventory_actual_sha256") != snapshot_parents.get("move_read_inventory_sha256")
+            or report.get("parent_sha256s", {}).get("blow5") != raw_identities["blow5"]
+            or report.get("basecall_model_id") != snapshot_parents.get("basecall_model_id")
+            or selected.get("requested_count") != job.sample_count or selected.get("selected_count") != job.sample_count
+            or not isinstance(selected_ids, list) or len(selected_ids) != job.sample_count
+            or len(set(selected_ids)) != job.sample_count or any(not isinstance(read_id, str) or not read_id for read_id in selected_ids)
+            or selected.get("selection_sha256") != selection_sha
+            or tool.get("version") != "0.7.0" or tool.get("commit") != "5a2404f1f43bc3227a85475c59b2b77970078b2e"
+            or recommendation.get("kmer_length") not in range(1, 10)
+            or recommendation.get("signal_move_offset") not in range(0, 9)
+            or recommendation.get("kmer_length") != recommendation.get("signal_move_offset") + 1
+            or not isinstance(score_evidence, list) or len(score_evidence) != 9
+            or [item.get("candidate_signal_move_offset") for item in score_evidence if isinstance(item, dict)] != list(range(9))
+            or any(not isinstance(item, dict) or item.get("read_count") != job.sample_count or not isinstance(item.get("score"), (int, float)) for item in score_evidence)
+        ):
+            raise RuntimeError("calibration report failed governed validation")
+        async with self._session_factory() as session:
+            parents.assert_unbroken()
+            job = await session.get(OntSignalCalibrationJob, item_id)
+            if job is not None and job.claim_token == token and job.cancel_requested_at is not None:
+                raise asyncio.CancelledError()
+            if job is None or job.claim_token != token or job.calibration_artifact_id is not None:
+                raise RuntimeError("calibration lease or single-publication invariant was lost")
+            artifact = OntSignalCalibrationArtifact(
+                id=f"ont-signal-calibration-artifact-{uuid.uuid4().hex}", raw_representation_id=job.raw_representation_id,
+                move_source_id=job.move_source_id, basecall_model_id=report["basecall_model_id"],
+                sample_selection=report["sample_selection"], recommended_kmer_length=recommendation["kmer_length"],
+                recommended_signal_move_offset=recommendation["signal_move_offset"], score_evidence=report["score_evidence"],
+                runtime_identity={**self._runtime_identity(), **tool}, parent_sha256s=report["parent_sha256s"],
+                artifact_sha256=artifact_sha, created_at=self._now(),
+            )
+            session.add(artifact); await session.flush()
+            result = await session.execute(update(OntSignalCalibrationJob).where(
+                OntSignalCalibrationJob.id == item_id,
+                OntSignalCalibrationJob.claim_token == token,
+                OntSignalCalibrationJob.state == "running",
+                OntSignalCalibrationJob.cancel_requested_at.is_(None),
+                OntSignalCalibrationJob.calibration_artifact_id.is_(None),
+            ).values(
+                calibration_artifact_id=artifact.id, state="ready", reason_code="validated_calibration_ready",
+                claim_token=None, lease_expires_at=None, updated_at=self._now(), completed_at=self._now(),
+                stage_receipts={**(job.stage_receipts or {}), "runtime": command_receipt, "report_sha256": artifact_sha, "report_size_bytes": artifact_size, "validation": report.get("validation", {})},
+            ))
+            if result.rowcount != 1:
+                await session.rollback()
+                current = await session.get(OntSignalCalibrationJob, item_id)
+                if current is not None and current.cancel_requested_at is not None:
+                    raise asyncio.CancelledError()
+                raise TerminalFenceLost("calibration terminal publication fence was lost")
+            parents.assert_unbroken()
+            await session.commit()
+
+    @staticmethod
+    def _alignment_authority(job: Job) -> dict[str, str]:
+        params = job.params if isinstance(job.params, dict) else {}
+        values = {"source_reference_sha256": params.get("reference_sequence_sha256"), "workflow_id": params.get("ont_workflow_id") or params.get("workflow_id"), "input_mode": params.get("ont_input_mode") or params.get("input_mode")}
+        if not all(isinstance(value, str) and value for value in values.values()): raise RuntimeError("alignment job authority is incomplete")
+        return {key: str(value) for key, value in values.items()}
+
+    async def _process_mapping(self, item_id: str, token: str) -> None:
+        with RetainedParentSet(tuple(Path(value) for value in get_allowed_roots().values())) as parents:
+            await self._process_mapping_retained(item_id, token, parents)
+
+    async def _process_mapping_retained(
+        self, item_id: str, token: str, parents: RetainedParentSet
+    ) -> None:
+        async with self._session_factory() as session:
+            job = await session.get(OntSignalMappingJob, item_id)
+            if job is None or job.claim_token != token: return
+            if job.cancel_requested_at is not None: raise asyncio.CancelledError()
+            source = await session.get(OntMoveTableSource, job.move_source_id)
+            profile = await session.get(OntSignalMappingProfile, job.mapping_profile_id)
+            representation = await session.get(OntRawSignalRepresentation, job.raw_representation_id)
+            if source is None or profile is None or representation is None or source.validation_state != "ready": raise RuntimeError("mapping parents are not ready")
+            tracked = await session.get(InputFile, source.input_file_id)
+            if tracked is None: raise RuntimeError("original move BAM authority disappeared")
+            original_bam = Path(tracked.directory) / tracked.filename
+            outputs = source.validation_receipt.get("managed_outputs", {})
+            filtered_bam = Path(str(outputs.get("filtered_move_bam", ""))); inventory = Path(str(outputs.get("read_inventory", "")))
+            managed_hashes = source.validation_receipt.get("managed_output_sha256s", {})
+            retained_original = await self._pin_parent_async(
+                parents,
+                original_bam,
+                alias="original_moves.bam",
+                expected_sha256=source.artifact_sha256,
+                expected_size=source.artifact_size_bytes,
+            )
+            retained_filtered = await self._pin_parent_async(
+                parents,
+                filtered_bam,
+                alias="filtered_moves.bam",
+                expected_sha256=str(managed_hashes.get("filtered_move_bam_sha256") or ""),
+                expected_size=int(managed_hashes.get("filtered_move_bam_size_bytes") or 0),
+            )
+            retained_inventory = await self._pin_parent_async(
+                parents,
+                inventory,
+                alias="read_inventory.txt",
+                expected_sha256=str(source.read_inventory_sha256 or ""),
+                expected_size=int(managed_hashes.get("read_inventory_size_bytes") or 0),
+            )
+            original_sha, original_size = retained_original.sha256, retained_original.size_bytes
+            filtered_sha, filtered_size = retained_filtered.sha256, retained_filtered.size_bytes
+            inventory_sha, inventory_size = retained_inventory.sha256, retained_inventory.size_bytes
+            raw_pairs, raw_identities = await self._resolve_selected_raw_partitions_async(representation, None)
+            raw_identities["blow5"] = await self._pin_raw_partitions_async(parents, representation, raw_pairs)
+            output = self._output_root() / "mappings" / job.id
+            self._prepare_output_directory(output, job.id)
+            alignment_sha: str | None = None
+            alignment_index_sha: str | None = None
+            reference_sha: str | None = None
+            if job.mode == "signal_to_read":
+                args = ["reform", "--original-bam", "/parents/original_moves.bam", "--filtered-bam", "/parents/filtered_moves.bam", "--inventory", "/parents/read_inventory.txt", "--molecule-type", source.molecule_type, "--kmer-length", str(profile.kmer_length), "--signal-move-offset", str(profile.signal_move_offset), "--output", "/output/reform.paf", "--report", "/output/validation.json"]
+                for index, _pair in enumerate(raw_pairs): args.extend(["--blow5", f"/parents/raw-{index}.blow5"])
+                artifact_kind, artifact_path, media = "reform_paf", output / "reform.paf", "text/plain"
+                expected_runtime_parents = {"original_move_bam_sha256": original_sha, "filtered_move_bam_sha256": filtered_sha, "move_inventory_sha256": inventory_sha, "blow5": raw_identities["blow5"]}
+            else:
+                parent_artifact = (await session.execute(select(OntSignalMappingArtifact).where(OntSignalMappingArtifact.mapping_job_id == job.parent_mapping_job_id, OntSignalMappingArtifact.kind == "reform_paf"))).scalar_one()
+                alignment_job = await session.get(Job, job.alignment_job_id)
+                if alignment_job is None: raise RuntimeError("alignment job disappeared")
+                alignment_bam, alignment_meta, alignment_index, alignment_index_meta = await self._resolve_session_alignment_bundle_async(
+                    alignment_job.id,
+                    str(job.alignment_session_id),
+                    self._alignment_authority(alignment_job),
+                    getattr(alignment_job, "child_output_dir", None) or alignment_job.output_dir,
+                )
+                parent_reform = Path(parent_artifact.managed_relative_path)
+                retained_reform = await self._pin_parent_async(
+                    parents,
+                    parent_reform,
+                    alias="reform.paf",
+                    expected_sha256=parent_artifact.sha256,
+                    expected_size=parent_artifact.size_bytes,
+                )
+                retained_alignment = await self._pin_parent_async(
+                    parents,
+                    alignment_bam,
+                    alias="alignment.bam",
+                    expected_sha256=str(alignment_meta.get("sha256") or ""),
+                    expected_size=int(alignment_meta.get("size_bytes") or 0),
+                )
+                retained_alignment_index = await self._pin_parent_async(
+                    parents,
+                    alignment_index,
+                    alias="alignment.bam.bai",
+                    expected_sha256=str(alignment_index_meta.get("sha256") or ""),
+                    expected_size=int(alignment_index_meta.get("size_bytes") or 0),
+                )
+                parent_reform_sha = retained_reform.sha256
+                alignment_sha, alignment_size = retained_alignment.sha256, retained_alignment.size_bytes
+                alignment_index_sha, alignment_index_size = retained_alignment_index.sha256, retained_alignment_index.size_bytes
+                async with self._domain_session_factory() as domain_session:
+                    revision = await domain_session.get(MolBioNGSReferenceRevision, job.reference_revision_id)
+                    artifact = None if revision is None else await domain_session.get(MolBioNGSReferenceArtifact, revision.artifact_id)
+                    if revision is None or artifact is None: raise RuntimeError("managed reference authority disappeared")
+                    reference = get_molbio_ngs_reference_root() / artifact.managed_relative_path
+                    retained_reference = await self._pin_parent_async(
+                        parents,
+                        reference,
+                        alias="reference.fasta",
+                        expected_sha256=artifact.sha256,
+                        expected_size=artifact.size_bytes,
+                    )
+                    reference_sha, reference_size = retained_reference.sha256, retained_reference.size_bytes
+                args = ["realign", "--original-bam", "/parents/original_moves.bam", "--filtered-bam", "/parents/filtered_moves.bam", "--inventory", "/parents/read_inventory.txt", "--reform-paf", "/parents/reform.paf", "--alignment-bam", "/parents/alignment.bam", "--alignment-index", "/parents/alignment.bam.bai", "--reference-fasta", "/parents/reference.fasta", "--molecule-type", source.molecule_type, "--kmer-length", str(profile.kmer_length), "--signal-move-offset", str(profile.signal_move_offset), "--output", "/output/realign.paf", "--report", "/output/validation.json"]
+                for index, _pair in enumerate(raw_pairs): args.extend(["--blow5", f"/parents/raw-{index}.blow5"])
+                artifact_kind, artifact_path, media = "realign_paf", output / "realign.paf.gz", "application/gzip"
+                expected_runtime_parents = {"original_move_bam_sha256": original_sha, "filtered_move_bam_sha256": filtered_sha, "move_inventory_sha256": inventory_sha, "blow5": raw_identities["blow5"], "parent_reform_sha256": parent_reform_sha, "managed_reference_sha256": reference_sha, "alignment_bam_sha256": alignment_sha, "alignment_index_sha256": alignment_index_sha}
+            parent_identities = job.resource_snapshot.get("parents", {})
+            self._require_hash_contract("mapping original move snapshot", parent_identities.get("move_bam_sha256"), original_sha)
+            self._require_hash_contract("mapping inventory snapshot", parent_identities.get("move_read_inventory_sha256"), inventory_sha)
+            self._require_hash_contract("mapping raw manifest snapshot", parent_identities.get("raw_manifest_sha256"), representation.manifest_sha256)
+            if job.mode == "signal_to_reference":
+                if alignment_sha is None or alignment_index_sha is None or reference_sha is None:
+                    raise RuntimeError("mapping reference runtime hash evidence is incomplete")
+                alignment_snapshot = parent_identities.get("alignment_artifacts")
+                if not isinstance(alignment_snapshot, dict):
+                    raise RuntimeError("mapping alignment resource snapshot is incomplete")
+                self._require_hash_contract("mapping alignment BAM snapshot", alignment_snapshot.get("alignment", {}).get("sha256"), alignment_sha)
+                self._require_hash_contract("mapping alignment index snapshot", alignment_snapshot.get("alignment_index", {}).get("sha256"), alignment_index_sha)
+                self._require_hash_contract("mapping managed reference snapshot", parent_identities.get("reference_fasta_sha256"), reference_sha)
+        command_receipt = await self._invoke(parents, args, "mapping", item_id, token, output)
+        validation = self._read_json_report(output / "validation.json")
+        self._require_hash_contract("mapping runtime parents", expected_runtime_parents, validation.get("parent_sha256s"))
+        digest, artifact_size = await self._stable_file_identity_async(artifact_path)
+        if validation.get("output_sha256") != digest:
+            raise RuntimeError("mapping artifact digest does not match the runtime validation receipt")
+        if artifact_kind == "realign_paf":
+            adjacent_index = Path(f"{artifact_path}.tbi")
+            index_digest, index_size = await self._stable_file_identity_async(adjacent_index)
+            if validation.get("index_sha256") != index_digest:
+                raise RuntimeError("realignment index does not match the runtime validation receipt")
+            validation = {**validation, "index_size_bytes": index_size}
+        async with self._session_factory() as session:
+            parents.assert_unbroken()
+            job = await session.get(OntSignalMappingJob, item_id)
+            if job is None or job.claim_token != token: raise RuntimeError("mapping lease lost before publication")
+            artifact = OntSignalMappingArtifact(
+                id=f"ont-signal-artifact-{uuid.uuid4().hex}", mapping_job_id=job.id, kind=artifact_kind,
+                managed_relative_path=str(artifact_path), media_type=media, sha256=digest, size_bytes=artifact_size,
+                parent_identities=parent_identities, runtime_identity=self._runtime_identity(), validation_receipt=validation,
+                created_at=self._now(),
+            )
+            session.add(artifact)
+            await session.flush()
+            reason = f"validated_{job.mode}_mapping_ready"
+            result = await session.execute(update(OntSignalMappingJob).where(
+                OntSignalMappingJob.id == item_id,
+                OntSignalMappingJob.claim_token == token,
+                OntSignalMappingJob.state == "running",
+                OntSignalMappingJob.cancel_requested_at.is_(None),
+            ).values(
+                state="ready", reason_code=reason, claim_token=None, lease_expires_at=None,
+                stage_receipts={**(job.stage_receipts or {}), "runtime": command_receipt, "validation": validation},
+                updated_at=self._now(), completed_at=self._now(),
+            ))
+            if result.rowcount != 1:
+                await session.rollback()
+                current = await session.get(OntSignalMappingJob, item_id)
+                if current is not None and current.cancel_requested_at is not None: raise asyncio.CancelledError()
+                raise TerminalFenceLost("mapping terminal publication fence was lost")
+            session.add(OntSignalMappingEvent(id=f"ont-signal-event-{uuid.uuid4().hex}", job_id=job.id, state="ready", reason_code=reason, receipt={"artifact_sha256": digest, "runtime": self._runtime_identity()}, created_at=self._now()))
+            parents.assert_unbroken()
+            await session.commit()
+
+    async def _process_view(self, item_id: str, token: str) -> None:
+        with RetainedParentSet(tuple(Path(value) for value in get_allowed_roots().values())) as parents:
+            await self._process_view_retained(item_id, token, parents)
+
+    async def _process_view_retained(
+        self, item_id: str, token: str, parents: RetainedParentSet
+    ) -> None:
+        async with self._session_factory() as session:
+            view = await session.get(OntSquigualiserViewJob, item_id)
+            if view is None or view.claim_token != token: return
+            if view.cancel_requested_at is not None: raise asyncio.CancelledError()
+            artifact = await session.get(OntSignalMappingArtifact, view.mapping_artifact_id)
+            mapping = None if artifact is None else await session.get(OntSignalMappingJob, artifact.mapping_job_id)
+            representation = None if mapping is None else await session.get(OntRawSignalRepresentation, mapping.raw_representation_id)
+            if artifact is None or mapping is None or representation is None or mapping.state != "ready": raise RuntimeError("render parents are not ready")
+            source = await session.get(OntMoveTableSource, mapping.move_source_id)
+            if source is None or source.validation_state != "ready": raise RuntimeError("render move-source authority is not ready")
+            profile = await session.get(
+                OntSignalMappingProfile, mapping.mapping_profile_id
+            )
+            if profile is None:
+                raise RuntimeError("render mapping-profile authority is unavailable")
+            if view.render_params.get("base_shift_source") == "profile":
+                from services import ont_signal_workbench
+
+                authority = ont_signal_workbench._mapping_profile_base_shift_authority(
+                    profile
+                )
+                if (
+                    view.render_params.get("base_shift_profile_id")
+                    != authority["mapping_profile_id"]
+                    or view.render_params.get("base_shift_profile_sha256")
+                    != authority["profile_sha256"]
+                    or view.render_params.get("base_shift_effective_value")
+                    != authority["effective_value"]
+                ):
+                    raise RuntimeError("render mapping-profile authority diverged")
+            mapping_parents = artifact.parent_identities if isinstance(artifact.parent_identities, dict) else {}
+            self._require_hash_contract("render raw manifest snapshot", mapping_parents.get("raw_manifest_sha256"), representation.manifest_sha256)
+            self._require_hash_contract("render original move snapshot", mapping_parents.get("move_bam_sha256"), source.artifact_sha256)
+            self._require_hash_contract("render move inventory snapshot", mapping_parents.get("move_read_inventory_sha256"), source.read_inventory_sha256)
+            source_outputs = source.validation_receipt.get("managed_outputs", {}) if isinstance(source.validation_receipt, dict) else {}
+            filtered_moves = Path(str(source_outputs.get("filtered_move_bam", "")))
+            mapping_path = Path(artifact.managed_relative_path)
+            mapping_alias = "mapping.paf.gz" if artifact.kind == "realign_paf" else "mapping.paf"
+            retained_mapping = await self._pin_parent_async(
+                parents,
+                mapping_path,
+                alias=mapping_alias,
+                expected_sha256=artifact.sha256,
+                expected_size=artifact.size_bytes,
+            )
+            mapping_sha, mapping_size = retained_mapping.sha256, retained_mapping.size_bytes
+            mapping_index_sha: str | None = None
+            if artifact.kind == "realign_paf":
+                mapping_index = Path(f"{mapping_path}.tbi")
+                retained_mapping_index = await self._pin_parent_async(
+                    parents,
+                    mapping_index,
+                    alias=f"{mapping_alias}.tbi",
+                    expected_sha256=str(artifact.validation_receipt.get("index_sha256") or ""),
+                    expected_size=int(artifact.validation_receipt.get("index_size_bytes") or 0),
+                )
+                mapping_index_sha = retained_mapping_index.sha256
+            params = view.render_params
+            output = self._output_root() / "views" / view.id
+            self._prepare_output_directory(output, view.id)
+            mapping_target = "/parents/mapping.paf.gz" if artifact.kind == "realign_paf" else "/parents/mapping.paf"
+            selection_receipt: dict[str, Any] | None = None
+            if view.mode == "read":
+                selected_ids = [str(view.read_id)]
+            else:
+                candidate_limit = min(params["pileup_read_limit"], 5) if view.mode == "reference" else params["pileup_read_limit"]
+                selection_args = [
+                    "select-region", "--mapping", mapping_target,
+                    "--region", f"{view.reference_contig}:{view.reference_start}-{view.reference_end}",
+                    "--limit", str(candidate_limit), "--strand", params["strand"],
+                    "--molecule-type", source.molecule_type, "--report", "/output/selection.json",
+                ]
+                selection_receipt = await self._invoke(
+                    parents,
+                    selection_args,
+                    "view", item_id, token, output, {"selection.json"},
+                )
+                selection_path = output / "selection.json"
+                selection = self._read_json_report(selection_path)
+                self._require_hash_contract(
+                    "render region-selection parents",
+                    {"mapping_sha256": mapping_sha, "mapping_index_sha256": mapping_index_sha},
+                    selection.get("parent_sha256s"),
+                )
+                selected_ids = selection.get("selected_read_ids")
+                if (
+                    selection.get("schema") != "bms.ont-signal-region-selection.v1"
+                    or not isinstance(selected_ids, list)
+                    or not 1 <= len(selected_ids) <= candidate_limit
+                    or len(set(selected_ids)) != len(selected_ids)
+                    or any(not isinstance(read_id, str) or not read_id for read_id in selected_ids)
+                ):
+                    raise RuntimeError("runtime region selection report is invalid")
+                selection_path.unlink()
+            blow5_paths, raw_identities = await self._resolve_selected_raw_partitions_async(representation, selected_ids)
+            raw_identities["blow5"] = await self._pin_raw_partitions_async(parents, representation, blow5_paths)
+            args = ["render", "--mode", view.mode, "--mapping", mapping_target, "--molecule-type", source.molecule_type, "--output-dir", "/output", "--report", "/output/render_manifest.json"]
+            args.extend(_mapping_profile_render_args(profile))
+            for index, _pair in enumerate(blow5_paths):
+                args.extend(["--blow5", f"/parents/raw-{index}.blow5"])
+            if view.mode == "read":
+                expected_hashes = source.validation_receipt.get("managed_output_sha256s", {}) or {}
+                retained_sequence = await self._pin_parent_async(
+                    parents,
+                    filtered_moves,
+                    alias="filtered_moves.bam",
+                    expected_sha256=str(expected_hashes.get("filtered_move_bam_sha256") or ""),
+                    expected_size=int(expected_hashes.get("filtered_move_bam_size_bytes") or 0),
+                )
+                args.extend(["--read-id", str(view.read_id), "--sequence-bam", "/parents/filtered_moves.bam"])
+                filtered_sha = retained_sequence.sha256
+                reference_sha = None
+            else:
+                async with self._domain_session_factory() as domain_session:
+                    revision = await domain_session.get(MolBioNGSReferenceRevision, mapping.reference_revision_id)
+                    reference_artifact = None if revision is None else await domain_session.get(MolBioNGSReferenceArtifact, revision.artifact_id)
+                    if revision is None or reference_artifact is None: raise RuntimeError("render reference authority disappeared")
+                    reference = get_molbio_ngs_reference_root() / reference_artifact.managed_relative_path
+                    retained_reference = await self._pin_parent_async(
+                        parents,
+                        reference,
+                        alias="reference.fasta",
+                        expected_sha256=reference_artifact.sha256,
+                        expected_size=reference_artifact.size_bytes,
+                    )
+                    reference_sha = retained_reference.sha256
+                args.extend(["--reference-fasta", "/parents/reference.fasta", "--region", f"{view.reference_contig}:{view.reference_start}-{view.reference_end}"])
+                for read_id in selected_ids: args.extend(["--selected-read-id", read_id])
+                filtered_sha = None
+            args.extend(["--strand", params["strand"], "--signal-units", params["signal_units"], "--scale", params["scale"], "--base-shift", str(_effective_base_shift(params)), "--point-size", str(params["point_size"]), "--base-width", str(params["base_width"]), "--base-limit", str(params["base_limit"]), "--signal-sample-limit", str(params["signal_sample_limit"]), "--pileup-read-limit", str(params["pileup_read_limit"])])
+            for key, flag in (("fixed_width", "--fixed-width"), ("loose_bound", "--loose-bound"), ("show_samples", "--show-samples"), ("show_base_colours", "--show-base-colours"), ("remove_signal_outliers", "--remove-signal-outliers")):
+                if params.get(key): args.append(flag)
+            managed_bed_id = params.get("managed_bed_artifact_id")
+            managed_bed_identity: dict[str, Any] | None = None
+            if managed_bed_id:
+                bed_path, managed_bed_identity = await self._verify_managed_bed_parent(
+                    session, params
+                )
+                await self._pin_parent_async(
+                    parents,
+                    bed_path,
+                    alias="annotation.bed",
+                    expected_sha256=str(managed_bed_identity["sha256"]),
+                    expected_size=int(managed_bed_identity["size_bytes"]),
+                )
+                args.extend(["--bed", "/parents/annotation.bed"])
+            expected_runtime_parents = {
+                "mapping_sha256": mapping_sha,
+                "mapping_index_sha256": mapping_index_sha,
+                "blow5": raw_identities["blow5"],
+                "sequence_bam_sha256": filtered_sha,
+                "managed_reference_sha256": reference_sha,
+                "managed_bed": None if managed_bed_identity is None else {
+                    "sha256": managed_bed_identity["sha256"],
+                    "size_bytes": managed_bed_identity["size_bytes"],
+                },
+            }
+        command_receipt = await self._invoke(parents, args, "view", item_id, token, output)
+        manifest = self._read_json_report(output / "render_manifest.json")
+        self._require_hash_contract("render runtime parents", expected_runtime_parents, manifest.get("command", {}).get("parent_sha256s"))
+        self._require_hash_contract("render selected read inventory", selected_ids, manifest.get("command", {}).get("selected_read_ids"))
+        governed_root = self._output_root().resolve()
+        for item in manifest["artifacts"]:
+            artifact_path = (output / item.pop("filename")).resolve()
+            if governed_root not in artifact_path.parents:
+                raise RuntimeError("render artifact escaped the governed output root")
+            actual_sha, actual_size = await self._stable_file_identity_async(artifact_path)
+            self._require_hash_contract("render artifact", {"sha256": item.get("sha256"), "size_bytes": item.get("size_bytes")}, {"sha256": actual_sha, "size_bytes": actual_size})
+            item["managed_relative_path"] = artifact_path.relative_to(governed_root).as_posix()
+        async with self._session_factory() as session:
+            parents.assert_unbroken()
+            view = await session.get(OntSquigualiserViewJob, item_id)
+            if view is None or view.claim_token != token: raise RuntimeError("view lease lost before publication")
+            if managed_bed_identity is not None:
+                _bed_path, publication_bed_identity = await self._verify_managed_bed_parent(
+                    session, view.render_params
+                )
+                self._require_hash_contract(
+                    "managed BED publication parent",
+                    managed_bed_identity,
+                    publication_bed_identity,
+                )
+            result = await session.execute(update(OntSquigualiserViewJob).where(
+                OntSquigualiserViewJob.id == item_id,
+                OntSquigualiserViewJob.claim_token == token,
+                OntSquigualiserViewJob.state == "running",
+                OntSquigualiserViewJob.cancel_requested_at.is_(None),
+            ).values(
+                output_manifest=manifest,
+                render_receipt={**(view.render_receipt or {}), "runtime": self._runtime_identity(), "selection_command": selection_receipt, "command": command_receipt, "parent_sha256s": expected_runtime_parents},
+                state="ready", reason_code="bounded_squigualiser_view_ready", claim_token=None, lease_expires_at=None,
+                updated_at=self._now(), completed_at=self._now(),
+            ))
+            if result.rowcount != 1:
+                await session.rollback()
+                current = await session.get(OntSquigualiserViewJob, item_id)
+                if current is not None and current.cancel_requested_at is not None: raise asyncio.CancelledError()
+                raise TerminalFenceLost("view terminal publication fence was lost")
+            parents.assert_unbroken()
+            await session.commit()
+
+    async def _cancel_claim(self, table: Any, state_field: str, item_id: str, token: str) -> None:
+        async with self._session_factory() as session:
+            row = await session.get(table, item_id)
+            if row is None or row.claim_token != token or not hasattr(table, "cancel_requested_at"):
+                return
+            values: dict[str, Any] = {state_field: "cancelled", "reason_code": "cancelled", "claim_token": None, "lease_expires_at": None}
+            if isinstance(row, OntSignalCalibrationJob):
+                values["stage_receipts"] = {**(row.stage_receipts or {}), "cancellation": {**((row.stage_receipts or {}).get("cancellation", {})), "completed_at": self._now().isoformat(), "disposition": "cancelled"}}
+            if hasattr(table, "updated_at"): values["updated_at"] = self._now()
+            if hasattr(table, "completed_at"): values["completed_at"] = self._now()
+            result = await session.execute(update(table).where(
+                table.id == item_id,
+                table.claim_token == token,
+                getattr(table, state_field) == "running",
+                table.cancel_requested_at.is_not(None),
+            ).values(**values))
+            if result.rowcount != 1:
+                await session.rollback()
+                return
+            await session.commit()
+
+    async def _run(self) -> None:
+        while not self._stop.is_set():
+            work = None
+            for table, field, kind, handler in (
+                (OntMoveTableSource, "validation_state", "move", self._process_move),
+                (OntSignalCalibrationJob, "state", "calibration", self._process_calibration),
+                (OntSignalMappingJob, "state", "mapping", self._process_mapping),
+                (OntSquigualiserViewJob, "state", "view", self._process_view),
+            ):
+                claimed = await self._claim(table, field)
+                if claimed is None: continue
+                work = True; item_id, token = claimed
+                try:
+                    await handler(item_id, token)
+                except asyncio.CancelledError:
+                    if self._stop.is_set(): raise
+                    await self._cancel_claim(table, field, item_id, token)
+                except ContainerCleanupError:
+                    logger.critical("ONT signal worker stopped after unreconciled container cleanup failure", exc_info=True)
+                    self._stop.set()
+                    return
+                except Exception as exc:
+                    logger.exception("ONT signal workbench %s failed: %s", kind, item_id)
+                    await self._fail(table, field, item_id, token, exc)
+                break
+            if work is None:
+                try: await asyncio.wait_for(self._stop.wait(), timeout=self._poll_interval)
+                except asyncio.TimeoutError: pass

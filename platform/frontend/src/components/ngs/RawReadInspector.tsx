@@ -23,6 +23,7 @@ interface RawReadInspectorProps {
     sessionId: string;
     currentLocus?: ReadLocus | null;
     rawSignalBinding?: { runId: string; observedGeneration: number; representationId: string } | null;
+    onOpenRawSignal?: (read: AlignmentRead) => void;
 }
 
 function requestWasAborted(reason: unknown): boolean {
@@ -30,7 +31,106 @@ function requestWasAborted(reason: unknown): boolean {
     return name === 'AbortError' || name === 'CanceledError';
 }
 
-export function RawReadInspector({ jobId, sessionId, currentLocus = null, rawSignalBinding = null }: RawReadInspectorProps) {
+interface GovernedRawSignalWaveformProps {
+    runId: string;
+    observedGeneration: number;
+    representationId: string;
+    readId: string;
+}
+
+export function GovernedRawSignalWaveform({ runId, observedGeneration, representationId, readId }: GovernedRawSignalWaveformProps) {
+    const requestGenerationRef = useRef(0);
+    const [waveform, setWaveform] = useState<OntRawSignalWaveform | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const identityKey = `${runId}:${observedGeneration}:${representationId}:${readId.trim()}`;
+
+    useEffect(() => {
+        requestGenerationRef.current += 1;
+        setWaveform(null);
+        setLoading(false);
+        setError(null);
+    }, [identityKey]);
+
+    useEffect(() => () => {
+        requestGenerationRef.current += 1;
+    }, []);
+
+    const waveformPoints = useMemo(() => {
+        const samples = waveform?.state === 'ready' ? waveform.samples : null;
+        if (!samples?.length) return '';
+        const min = Math.min(...samples);
+        const max = Math.max(...samples);
+        return samples.map((value, index) => {
+            const x = samples.length > 1 ? (index * 600) / (samples.length - 1) : 0;
+            const y = max > min ? 118 - ((value - min) * 116) / (max - min) : 60;
+            return `${x},${y}`;
+        }).join(' ');
+    }, [waveform]);
+
+    const inspectWaveform = async () => {
+        const exactReadId = readId.trim();
+        if (!exactReadId) return;
+        const requestGeneration = requestGenerationRef.current + 1;
+        requestGenerationRef.current = requestGeneration;
+        setLoading(true);
+        setWaveform(null);
+        setError(null);
+        try {
+            let current = await requestOntRawSignalWaveform(runId, observedGeneration, representationId, exactReadId);
+            for (let attempt = 0; attempt < 30 && (current.state === 'requested' || current.state === 'running'); attempt += 1) {
+                await new Promise((resolve) => window.setTimeout(resolve, 1000));
+                if (requestGeneration !== requestGenerationRef.current) return;
+                current = await fetchOntRawSignalWaveform(current.lookup_id);
+            }
+            if (requestGeneration !== requestGenerationRef.current) return;
+            if (
+                current.run_id !== runId
+                || current.observed_generation !== observedGeneration
+                || current.representation_id !== representationId
+                || current.read_id !== exactReadId
+            ) {
+                throw new Error('Raw waveform response did not match the exact requested run generation and read.');
+            }
+            setWaveform(current);
+            if (current.state !== 'ready') setError(current.reason_code);
+        } catch (reason) {
+            if (requestGeneration === requestGenerationRef.current && !requestWasAborted(reason)) {
+                setError(reason instanceof Error ? reason.message : String(reason));
+            }
+        } finally {
+            if (requestGeneration === requestGenerationRef.current) setLoading(false);
+        }
+    };
+
+    return (
+        <div className="space-y-2 rounded border border-emerald-500/40 bg-emerald-500/5 p-3 text-[10px]">
+            <div className="font-semibold text-[var(--text-primary)]">Governed raw waveform</div>
+            <div className="break-all text-[var(--text-secondary)]">
+                Run <code>{runId}</code> generation {observedGeneration} · representation <code>{representationId}</code>
+            </div>
+            <button
+                type="button"
+                onClick={() => void inspectWaveform()}
+                disabled={!readId.trim() || loading}
+                className="rounded border border-emerald-500/50 px-2 py-1 font-semibold text-emerald-200 disabled:opacity-40"
+            >
+                {loading ? 'Inspecting…' : 'Inspect raw waveform'}
+            </button>
+            {error && <div role="alert" className="text-amber-200">Waveform unavailable: {error}</div>}
+            {waveform?.state === 'ready' && waveformPoints && (
+                <div className="space-y-1">
+                    <div>Read <code>{waveform.read_id}</code> · {waveform.sample_count ?? waveform.samples?.length ?? 0} source samples · {waveform.samples?.length ?? 0} displayed · pA</div>
+                    <svg aria-label="Raw electrical signal waveform" viewBox="0 0 600 120" className="h-36 w-full rounded bg-slate-950" preserveAspectRatio="none">
+                        <polyline points={waveformPoints} fill="none" stroke="rgb(52 211 153)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                    </svg>
+                </div>
+            )}
+        </div>
+    );
+}
+
+export function RawReadInspector({ jobId, sessionId, currentLocus = null, rawSignalBinding = null, onOpenRawSignal }: RawReadInspectorProps) {
     const [query, setQuery] = useState('');
     const [debouncedQuery, setDebouncedQuery] = useState('');
     const [contig, setContig] = useState('');
@@ -278,6 +378,15 @@ export function RawReadInspector({ jobId, sessionId, currentLocus = null, rawSig
                                 <div className="rounded bg-amber-500/10 p-2 text-amber-300">Quality unavailable; FASTQ export is disabled.</div>
                             )}
                             <div className="flex gap-2 mt-2">
+                                <button
+                                    type="button"
+                                    onClick={() => onOpenRawSignal?.(selected)}
+                                    disabled={!rawSignalBinding || !onOpenRawSignal}
+                                    title={rawSignalBinding ? 'Open this exact read in the coordinated signal panel' : 'This read has no exact indexed-BLOW5 run binding.'}
+                                    className="rounded border border-[var(--accent-secondary)]/50 px-2 py-1 text-[var(--accent-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                    Open raw signal
+                                </button>
                                 <button type="button" onClick={() => void copySequence()} className="rounded border border-[var(--border-primary)] px-2 py-1">Copy sequence</button>
                                 <button type="button" onClick={downloadRead} disabled={!buildFastqDownload(selected)} className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40">Download FASTQ</button>
                             </div>
