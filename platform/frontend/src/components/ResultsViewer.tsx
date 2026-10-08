@@ -5417,13 +5417,12 @@ export function ResultsViewer() {
                     />
                 )}
 
+                {activeJob && isProteinLocalRedesignResultJob(activeJob) && !isRFD3LocalRedesignResultJob(activeJob) && <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />}
                 {activeJob && (
                     isRFD3GenerationResultJob(activeJob) ? (
                         <RFD3GenerationResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : isRFD3LocalRedesignResultJob(activeJob) ? (
                         <RFD3LocalRedesignResultsPane key={activeJob.id} jobId={activeJob.id} />
-                    ) : isProteinLocalRedesignResultJob(activeJob) ? (
-                        <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                     ) : activeJob.model_id === 'molecular_dynamics' ? (
                         <MDResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : designsError ? (

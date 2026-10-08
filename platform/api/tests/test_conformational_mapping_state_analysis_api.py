@@ -264,3 +264,53 @@ async def test_state_analysis_rows_omit_next_offset_at_exact_terminal_boundaries
     finally:
         await session.close()
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_results_isolate_missing_ancillary_artifact_and_preserve_normalized_state(tmp_path: Path, monkeypatch) -> None:
+    """Generated TEST artifacts: exercise real publication, SQL read and resolver."""
+    from database import ConformationalMappingRecord
+    from services.scientific_artifacts.persistence import publish_json_payload
+    from services.scientific_artifacts.writer import artifact_root
+
+    monkeypatch.setenv("BMS_SCIENTIFIC_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    session, engine = await _session(tmp_path)
+    try:
+        token = await _seed_request(session, "request-a")
+        await _seed_analysis(session, "request-a")
+        session.add(ConformationalMappingArtifact(
+            artifact_id="state-export-test", request_id="request-a", candidate_id=None,
+            role="state_landscape_analysis", relative_path="derived/state.json", storage_path="/not-read/state.json",
+            content_sha256="a" * 64, size_bytes=123, media_type="application/json", metadata_json={},
+        ))
+        reference = await publish_json_payload(
+            session, owner_kind="conformational_mapping", owner_id="request-a", role="support",
+            schema_id="cm_support", payload={"schema_name": "cm_support", "schema_version": 1, "records": []},
+        )
+        session.add(ConformationalMappingRecord(
+            id="support-test", request_id="request-a", record_type="support", record_key="primary",
+            content_sha256="a" * 64, payload_json=reference,
+        ))
+        session.add(ConformationalMappingRecord(
+            id="ensemble-test", request_id="request-a", record_type="ensemble", record_key="primary",
+            content_sha256="b" * 64, payload_json={"schema_name": "cm_ensemble", "test_fixture": True},
+        ))
+        await session.commit()
+        before = await cm_router.request_results("request-a", _request(token=token), session)
+        assert before["section_errors"] == []
+        (artifact_root() / reference["relative_path"]).unlink()
+        after = await cm_router.request_results("request-a", _request(token=token), session)
+        assert [(row["type"], row["key"]) for row in after["records"]] == [("ensemble", "primary")]
+        assert after["section_errors"] == [{
+            "type": "support", "key": "primary", "status": "unavailable",
+            "detail": "CM scientific result artifact is unavailable or invalid",
+        }]
+        summary = await cm_router.state_landscape_analysis_summary("request-a", _request(token=token), session)
+        assert summary["analysis_id"] == "analysis-a"
+        assert summary["counts"]["rows"] == 3
+        with pytest.raises(HTTPException) as denied:
+            await cm_router.request_results("request-a", _request(principal="bob"), session)
+        assert denied.value.status_code == 404
+    finally:
+        await session.close()
+        await engine.dispose()
