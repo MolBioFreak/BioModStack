@@ -1,0 +1,690 @@
+{
+  "$defs": {
+    "DonorPreparation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "donor",
+          "default": "donor",
+          "title": "Kind",
+          "type": "string"
+        },
+        "retained_fragment_index": {
+          "minimum": 0,
+          "title": "Retained Fragment Index",
+          "type": "integer"
+        },
+        "removed_fragment_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Removed Fragment Indices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "retained_fragment_index",
+        "removed_fragment_indices"
+      ],
+      "title": "DonorPreparation",
+      "type": "object"
+    },
+    "EnzymeBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "enzyme_id": {
+          "title": "Enzyme Id",
+          "type": "string"
+        },
+        "catalog_id": {
+          "title": "Catalog Id",
+          "type": "string"
+        },
+        "catalog_sha256": {
+          "title": "Catalog Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "enzyme_id",
+        "catalog_id",
+        "catalog_sha256"
+      ],
+      "title": "EnzymeBinding",
+      "type": "object"
+    },
+    "Feature": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        },
+        "name": {
+          "default": "",
+          "title": "Name",
+          "type": "string"
+        },
+        "segments": {
+          "items": {
+            "$ref": "#/$defs/Region"
+          },
+          "title": "Segments",
+          "type": "array"
+        },
+        "strand": {
+          "default": 1,
+          "enum": [
+            -1,
+            0,
+            1
+          ],
+          "title": "Strand",
+          "type": "integer"
+        },
+        "qualifiers": {
+          "additionalProperties": true,
+          "title": "Qualifiers",
+          "type": "object"
+        },
+        "codon_start": {
+          "anyOf": [
+            {
+              "enum": [
+                1,
+                2,
+                3
+              ],
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Codon Start"
+        },
+        "status": {
+          "default": "intact",
+          "enum": [
+            "intact",
+            "truncated",
+            "disrupted"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "frame_preserved": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frame Preserved"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "segments"
+      ],
+      "title": "Feature",
+      "type": "object"
+    },
+    "FragmentEnd": {
+      "properties": {
+        "type": {
+          "enum": [
+            "blunt",
+            "sticky_5",
+            "sticky_3"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "overhang": {
+          "default": "",
+          "title": "Overhang",
+          "type": "string"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
+        "protruding_strand": {
+          "anyOf": [
+            {
+              "enum": [
+                "top",
+                "bottom"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Protruding Strand"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "FragmentEnd",
+      "type": "object"
+    },
+    "InlineSource": {
+      "additionalProperties": false,
+      "properties": {
+        "sequence": {
+          "title": "Sequence",
+          "type": "string"
+        },
+        "topology": {
+          "enum": [
+            "linear",
+            "circular"
+          ],
+          "title": "Topology",
+          "type": "string"
+        },
+        "features": {
+          "items": {
+            "$ref": "#/$defs/Feature"
+          },
+          "title": "Features",
+          "type": "array"
+        },
+        "kind": {
+          "const": "inline",
+          "default": "inline",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sequence",
+        "topology"
+      ],
+      "title": "InlineSource",
+      "type": "object"
+    },
+    "PCRPreparation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "pcr",
+          "default": "pcr",
+          "title": "Kind",
+          "type": "string"
+        },
+        "region": {
+          "$ref": "#/$defs/Region"
+        },
+        "left": {
+          "$ref": "#/$defs/Tail"
+        },
+        "right": {
+          "$ref": "#/$defs/Tail"
+        },
+        "forward_anneal_length": {
+          "minimum": 8,
+          "title": "Forward Anneal Length",
+          "type": "integer"
+        },
+        "reverse_anneal_length": {
+          "minimum": 8,
+          "title": "Reverse Anneal Length",
+          "type": "integer"
+        },
+        "qc_min_binding_anneal_length": {
+          "default": 12,
+          "minimum": 1,
+          "title": "Qc Min Binding Anneal Length",
+          "type": "integer"
+        },
+        "removed_fragment_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Removed Fragment Indices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "region",
+        "left",
+        "right",
+        "forward_anneal_length",
+        "reverse_anneal_length"
+      ],
+      "title": "PCRPreparation",
+      "type": "object"
+    },
+    "Part": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
+        },
+        "slot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Slot"
+        },
+        "orientation": {
+          "default": "forward",
+          "enum": [
+            "forward",
+            "reverse"
+          ],
+          "title": "Orientation",
+          "type": "string"
+        },
+        "preparation": {
+          "discriminator": {
+            "mapping": {
+              "donor": "#/$defs/DonorPreparation",
+              "pcr": "#/$defs/PCRPreparation",
+              "prepared": "#/$defs/PreparedPreparation",
+              "synthesis": "#/$defs/SynthesisPreparation"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PCRPreparation"
+            },
+            {
+              "$ref": "#/$defs/SynthesisPreparation"
+            },
+            {
+              "$ref": "#/$defs/DonorPreparation"
+            },
+            {
+              "$ref": "#/$defs/PreparedPreparation"
+            }
+          ],
+          "title": "Preparation"
+        }
+      },
+      "required": [
+        "id",
+        "source_id",
+        "name",
+        "preparation"
+      ],
+      "title": "Part",
+      "type": "object"
+    },
+    "PreparedPreparation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "prepared",
+          "default": "prepared",
+          "title": "Kind",
+          "type": "string"
+        },
+        "left_end": {
+          "$ref": "#/$defs/FragmentEnd"
+        },
+        "right_end": {
+          "$ref": "#/$defs/FragmentEnd"
+        }
+      },
+      "required": [
+        "left_end",
+        "right_end"
+      ],
+      "title": "PreparedPreparation",
+      "type": "object"
+    },
+    "Region": {
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "integer"
+        },
+        "end": {
+          "minimum": 0,
+          "title": "End",
+          "type": "integer"
+        },
+        "wraps_origin": {
+          "default": false,
+          "title": "Wraps Origin",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "Region",
+      "type": "object"
+    },
+    "RevisionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "molecular_revision",
+          "default": "molecular_revision",
+          "title": "Kind",
+          "type": "string"
+        },
+        "revision_id": {
+          "minLength": 1,
+          "title": "Revision Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "revision_id"
+      ],
+      "title": "RevisionSource",
+      "type": "object"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "source": {
+          "discriminator": {
+            "mapping": {
+              "inline": "#/$defs/InlineSource",
+              "molecular_revision": "#/$defs/RevisionSource"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/InlineSource"
+            },
+            {
+              "$ref": "#/$defs/RevisionSource"
+            }
+          ],
+          "title": "Source"
+        }
+      },
+      "required": [
+        "id",
+        "source"
+      ],
+      "title": "Source",
+      "type": "object"
+    },
+    "SynthesisPreparation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "synthesis",
+          "default": "synthesis",
+          "title": "Kind",
+          "type": "string"
+        },
+        "region": {
+          "$ref": "#/$defs/Region"
+        },
+        "left": {
+          "$ref": "#/$defs/Tail"
+        },
+        "right": {
+          "$ref": "#/$defs/Tail"
+        },
+        "removed_fragment_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Removed Fragment Indices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "region",
+        "left",
+        "right"
+      ],
+      "title": "SynthesisPreparation",
+      "type": "object"
+    },
+    "Tail": {
+      "additionalProperties": false,
+      "properties": {
+        "clamp": {
+          "title": "Clamp",
+          "type": "string"
+        },
+        "spacer": {
+          "title": "Spacer",
+          "type": "string"
+        },
+        "fusion": {
+          "title": "Fusion",
+          "type": "string"
+        }
+      },
+      "required": [
+        "clamp",
+        "spacer",
+        "fusion"
+      ],
+      "title": "Tail",
+      "type": "object"
+    },
+    "Target": {
+      "additionalProperties": false,
+      "properties": {
+        "topology": {
+          "enum": [
+            "linear",
+            "circular"
+          ],
+          "title": "Topology",
+          "type": "string"
+        },
+        "display_origin": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Display Origin",
+          "type": "integer"
+        },
+        "exact_sequence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exact Sequence"
+        }
+      },
+      "required": [
+        "topology"
+      ],
+      "title": "Target",
+      "type": "object"
+    },
+    "Thermodynamics": {
+      "additionalProperties": false,
+      "description": "Same fields/defaults/ranges as the global Tm contract; reject typos.",
+      "properties": {
+        "algorithm": {
+          "default": "nn_santalucia_hicks_2004",
+          "title": "Algorithm",
+          "type": "string"
+        },
+        "salt_correction": {
+          "default": "owczarzy_2008",
+          "title": "Salt Correction",
+          "type": "string"
+        },
+        "primer_concentration_nM": {
+          "default": 250.0,
+          "exclusiveMinimum": 0,
+          "title": "Primer Concentration Nm",
+          "type": "number"
+        },
+        "template_concentration_nM": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Template Concentration Nm",
+          "type": "number"
+        },
+        "na_mM": {
+          "default": 50.0,
+          "minimum": 0,
+          "title": "Na Mm",
+          "type": "number"
+        },
+        "k_mM": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "K Mm",
+          "type": "number"
+        },
+        "tris_mM": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Tris Mm",
+          "type": "number"
+        },
+        "mg_mM": {
+          "default": 1.5,
+          "minimum": 0,
+          "title": "Mg Mm",
+          "type": "number"
+        },
+        "dntps_mM": {
+          "default": 0.6,
+          "minimum": 0,
+          "title": "Dntps Mm",
+          "type": "number"
+        },
+        "dmso_percent": {
+          "default": 0.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Dmso Percent",
+          "type": "number"
+        },
+        "formamide_percent": {
+          "default": 0.0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Formamide Percent",
+          "type": "number"
+        },
+        "self_complementary": {
+          "default": false,
+          "title": "Self Complementary",
+          "type": "boolean"
+        }
+      },
+      "title": "Thermodynamics",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "bms.golden-gate-design.v1",
+      "default": "bms.golden-gate-design.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "task": {
+      "const": "assemble_parts",
+      "default": "assemble_parts",
+      "title": "Task",
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/Source"
+      },
+      "title": "Sources",
+      "type": "array"
+    },
+    "parts": {
+      "items": {
+        "$ref": "#/$defs/Part"
+      },
+      "title": "Parts",
+      "type": "array"
+    },
+    "target": {
+      "$ref": "#/$defs/Target"
+    },
+    "enzyme": {
+      "$ref": "#/$defs/EnzymeBinding"
+    },
+    "primer_settings": {
+      "$ref": "#/$defs/Thermodynamics"
+    }
+  },
+  "required": [
+    "sources",
+    "parts",
+    "target",
+    "enzyme"
+  ],
+  "title": "GoldenGateDesignRequest",
+  "type": "object"
+}
