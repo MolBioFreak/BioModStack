@@ -135,6 +135,36 @@ class PrerequisitesTest(unittest.TestCase):
         for key in ("PIP_INDEX_URL", "UV_INDEX", "PYTHONPATH", "VIRTUAL_ENV"):
             self.assertNotIn(key, env)
 
+    def test_legacy_without_manifests(self):
+        synthetic = self.base / "synthetic-config"
+        synthetic.mkdir()
+        self.assertIsNone(p.resolve_python_environment(synthetic))
+        self.external.mkdir()
+        self.assertIsNone(p.resolve_python_environment(synthetic))
+
+    def test_malformed_state_object(self):
+        self.external.mkdir()
+        (self.external / "state.json").write_text("[]")
+        report = p.prerequisite_report("python-bootstrap", project_root=self.source)
+        self.assertEqual(report["errors"][0]["code"], "state_invalid")
+        self.assertEqual((self.external / "state.json").read_text(), "[]")
+
+    def test_state_and_child_symlinks_never_clobber(self):
+        self.external.mkdir()
+        victim = self.source / "important"
+        victim.write_text("preserve")
+        for name in ("state.json", "operation.lock", "pinned-uv.log", "toolchain"):
+            link = self.external / name
+            link.symlink_to(victim)
+            result = p.prerequisite_report("python-bootstrap", project_root=self.source)
+            self.assertEqual(result["errors"][0]["code"], "unsafe_path")
+            self.assertEqual(victim.read_text(), "preserve")
+            link.unlink()
+        nested = self.external / "cache"
+        nested.mkdir()
+        (nested / "escape").symlink_to(self.source, target_is_directory=True)
+        self.assertEqual(p.prerequisite_report("python-bootstrap", project_root=self.source)["errors"][0]["code"], "unsafe_path")
+
     def test_shell_and_direct_cli_plan(self):
         for command in (["bash", str(ROOT / "start_ui.sh"), "python-plan", "--json"],
                         [sys.executable, "-B", str(ROOT / "scripts/manage_desktop_services.py"), "--json", "python-plan"]):

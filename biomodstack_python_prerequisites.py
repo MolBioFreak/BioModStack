@@ -51,13 +51,39 @@ def identity(project_root: Path) -> dict:
         "policy": "frozen-no-dev-no-build-no-install-project-v1"}
 
 
+def validate_owned_paths(root: Path) -> None:
+    """Reject redirected installer files; never follow alien state/lock links."""
+    for name in ("state.json", "operation.lock", "manifests", "toolchain", "cache", "environment",
+                 "pinned-uv.log", "locked-sync.log"):
+        if (root / name).is_file() and (root / name).stat().st_nlink > 1:
+            raise PrerequisiteError("unsafe_path", f"Managed control file has multiple hard links: {root / name}")
+        if (root / name).is_symlink():
+            raise PrerequisiteError("unsafe_path", f"Managed path is a symlink: {root / name}")
+    for name in MANIFESTS:
+        if (root / "manifests" / name).is_symlink() or ((root / "manifests" / name).is_file() and (root / "manifests" / name).stat().st_nlink > 1):
+            raise PrerequisiteError("unsafe_path", "Staged manifest must not be a symlink or hard link")
+    if root.exists():
+        for path in root.rglob("*"):
+            if not path.is_symlink():
+                continue
+            target = path.resolve()
+            if target.is_relative_to(root):
+                continue
+            if path.parent == root / "environment/bin" and path.name in {"python", "python3", f"python{sys.version_info.major}.{sys.version_info.minor}"} and target.is_relative_to(Path(sys.base_prefix).resolve()):
+                continue  # uv's base-interpreter links, not writable state.
+            raise PrerequisiteError("unsafe_path", f"Managed link escapes the external environment: {path}")
+
+
 def read_state(root: Path, expected: dict) -> dict | None:
+    validate_owned_paths(root)
     path = root / "state.json"
     if not path.exists():
         if root.exists() and any(p.name != "operation.lock" for p in root.iterdir()):
             raise PrerequisiteError("state_missing", "Nonempty prerequisite root has no state; select a new external BMS_PYTHON_ROOT (nothing was deleted)")
         return None
     state = json.loads(path.read_text())
+    if not isinstance(state, dict):
+        raise PrerequisiteError("state_invalid", "Python prerequisite state must be a JSON object")
     if state.get("schema_version") != SCHEMA or state.get("identity") != expected:
         raise PrerequisiteError("identity_mismatch", "Source, manifests, Python or policy changed; select a new external BMS_PYTHON_ROOT. Existing environment is preserved, never downgraded or silently reused")
     return state
@@ -216,6 +242,11 @@ def resolve_python_environment(project_root: Path) -> dict | None:
     callers must not catch that error and fall back to an unmanaged environment.
     """
     root = location(project_root)
+    # Legacy consumers may use synthetic configuration roots without manifests.
+    if not root.exists():
+        return None
+    if not (root / "state.json").exists() and not any(root.iterdir()):
+        return None
     state = read_state(root, identity(project_root))
     if state is None:
         return None
