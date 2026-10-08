@@ -12,7 +12,7 @@ from services.remote_execution.contracts import ExecutionTargetActivateRequest, 
 from test_vast_inventory_reconciliation import store, inventory
 from test_remote_telemetry import fixture
 
-BLOCKER = 'Mount namespaces unavailable; use a compatible VM'
+BLOCKER = 'Remote setup failed during checking; retry Attach'
 
 
 def connection_double(monkeypatch, *, runtime=None, authenticate=None):

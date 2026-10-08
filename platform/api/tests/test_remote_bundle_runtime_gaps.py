@@ -117,7 +117,7 @@ def package(tmp_path, monkeypatch):
     (roots['repo']/'main.nf').write_text('workflow {}\n')
     # Critical projection consumes the actual source runtime, not a fake CLI.
     source_root = Path(__file__).resolve().parents[3]
-    for name in ('platform/api/tools/bms_container.py', 'platform/api/tools/bms_nextflow.sh',
+    for name in ('nextflow.config', 'platform/api/tools/bms_container.py', 'platform/api/tools/bms_nextflow.sh',
                  'platform/api/tools/bms_nextflow_singularity.py', 'scripts/lib/__init__.py',
                  'scripts/lib/shared_runtime_images.py', 'scripts/lib/runtime_image_lifecycle.py',
                  'scripts/lib/runtime_image_views.py', 'scripts/lib/container_runtime.py'):

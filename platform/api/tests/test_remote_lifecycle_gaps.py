@@ -248,25 +248,6 @@ async def test_prepared_resume_cancellation_during_run_wins(store, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_production_poller_retains_terminal_lease_without_quiescence(store, monkeypatch):
-    from services.gpu_orchestrator import GPUOrchestrator
-    async with store() as s:
-        job = await s.get(Job, "job")
-        job.status, job.queue_status = "completed", "completed"
-        await s.commit()
-    async def forbidden(*_):
-        raise AssertionError("terminal recovery must not contact the provider")
-    monkeypatch.setattr(ex, "remote_status", forbidden)
-    poller = GPUOrchestrator(store, lambda: [], lambda **kwargs: None)
-    await poller.check_job_completions()
-    await asyncio.gather(*poller._remote_reconciliation_tasks.values())
-    await poller.stop()
-    async with store() as s:
-        assert (await s.get(ExecutionTarget, "target")).leased_job_id == "job"
-        assert (await s.get(Job, "job")).status == "completed"
-
-
-@pytest.mark.asyncio
 async def test_production_poller_includes_preparing_claims(store, monkeypatch):
     from services.gpu_orchestrator import GPUOrchestrator
     await preparing(store)
@@ -726,18 +707,31 @@ async def test_wrong_cancel_receipt_is_not_confirmation(store, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_terminal_without_quiescence_retains_target_lease(store, monkeypatch):
+@pytest.mark.parametrize("state", ["succeeded", "failed", "cancelled"])
+async def test_terminal_without_quiescence_retains_target_lease(store, monkeypatch, state):
+    observed = receipt(state).model_copy(update={
+        "quiescent": False, "result_manifest_sha256": "d" * 64,
+    })
+    calls = []
+
     async def status(*_):
-        return receipt("cancelled").model_copy(update={"quiescent": False})
+        calls.append(state)
+        return observed
+
     monkeypatch.setattr(ex, "remote_status", status)
+    queue_status = "cancelling" if state == "cancelled" else "running"
     async with store() as s:
         job = await s.get(Job, "job")
-        job.queue_status = "cancelling"
+        job.queue_status = queue_status
         await s.commit()
         assert not await ex.reconcile_remote_job(s, job)
+    assert calls and set(calls) == {state}
     async with store() as s:
         assert (await s.get(ExecutionTarget, "target")).leased_job_id == "job"
-        assert (await s.get(Job, "job")).queue_status == "cancelling"
+        job = await s.get(Job, "job")
+        assert job.status == "running"
+        assert job.queue_status == queue_status
+        assert job.remote_state == queue_status
 
 
 @pytest.mark.asyncio

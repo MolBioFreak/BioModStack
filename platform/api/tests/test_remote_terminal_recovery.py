@@ -23,6 +23,8 @@ def attempt(tmp_path, state='running', *, reboot=True):
         command=['never-run-science'], environment={'API_TOKEN': 'private-fixture-value'})
     worker.atomic_json(worker.envelope_path(tmp_path), envelope)
     value = worker.base_status(envelope, state)
+    if state != 'prepared':
+        value['started_at'] = worker.utc_now()
     if reboot:
         value['boot_id'] = 'previous-boot'
     worker.atomic_json(worker.status_path(tmp_path), value)

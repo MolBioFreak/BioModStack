@@ -429,12 +429,11 @@ def test_historical_typed_native_probe_remains_projectable(outcome):
     assert rebooted.probe is None
 
 
-def test_removed_download_probe_keeps_native_task_script():
+def test_native_diagnostic_is_not_automatic_admission():
     assert not hasattr(mi, 'run_native_readiness_check')
     root = Path(__file__).resolve().parents[3]
     native = (root / 'modules/rfantibody.nf').read_text()
     assert 'check_rfantibody_runtime.py' not in native  # Optional diagnostic, not production admission.
-    assert (root / 'scripts/check_rfantibody_runtime.py').is_file()
 
 
 def test_helper_rejects_unsafe_manifest_and_symlink_parent(tmp_path):

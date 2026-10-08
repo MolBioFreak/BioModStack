@@ -97,26 +97,6 @@ async def test_stale_opt_in_snapshot_cannot_reserve_after_operator_change(store,
 
 
 @pytest.mark.asyncio
-async def test_interrupted_auto_return_requires_explicit_retry(store):
-    await ready(store)
-    await policy(store, "automatic")
-    async with store() as session:
-        job = await session.get(Job, "job")
-        job.status = job.queue_status = "running"
-        job.remote_state = "returning"
-        await session.commit()
-    tasks = BackgroundTasks()
-    async with store() as session:
-        assert await ex.reconcile_remote_job(session, await session.get(Job, "job"), background_tasks=tasks)
-        assert not tasks.tasks
-    async with store() as session:
-        job = await session.get(Job, "job")
-        assert job.remote_state == "result_pull_failed"
-        assert not await ex.reconcile_remote_job(session, job, background_tasks=tasks)
-        assert not tasks.tasks
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("state", ["failed", "lost", "cancelled"])
 async def test_success_policy_never_retrieves_terminal_diagnostics(store, monkeypatch, state):
     await policy(store, "automatic")

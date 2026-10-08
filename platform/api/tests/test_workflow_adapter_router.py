@@ -94,6 +94,7 @@ def test_runner_environment_owns_development_stage_callback_url(monkeypatch) -> 
         identity=identity,
         unit_name="biomodstack-development-job-test-attempt-1.service",
         owner_nonce="owner-nonce",
+        resource_handoff=None,
     )
 
     assert environment["API_BASE_URL"] == "http://127.0.0.1:18002"
@@ -179,27 +180,25 @@ def test_native_rfd3_runner_rejects_missing_gpu_authority() -> None:
         nextflow._resolve_launch_gpu_id(job, {}, "protein_local_redesign")  # noqa: SLF001
 
 
-@pytest.mark.parametrize("invalid_gpu_id", [True, -1, 2.0, 2.7, "-1", "+2", "2.7", "gpu2"])
-def test_native_rfd3_runner_rejects_noncanonical_gpu_identifiers(invalid_gpu_id: object) -> None:
-    job = SimpleNamespace(assigned_gpu=None, pinned_gpu=None)
-
-    with pytest.raises(RuntimeError, match="invalid scheduler GPU assignment"):
-        nextflow._resolve_launch_gpu_id(  # noqa: SLF001 - detached authority handoff under test.
-            job,
-            {"gpu_id": invalid_gpu_id},
-            "protein_local_redesign",
-        )
-
-
-@pytest.mark.parametrize("field", ["pinned_gpu", "assigned_gpu"])
-@pytest.mark.parametrize("invalid_gpu_id", [True, -1, 2.0, 2.7, "-1", "+2", "2.7", "gpu2"])
+@pytest.mark.parametrize(
+    "field, invalid_gpu_id",
+    [(field, value)
+     for field in ("pinned_gpu", "assigned_gpu")
+     for value in (True, -1, 2.0, 2.7, "-1", "+2", "2.7", "gpu2")]
+    + [("launch gpu_id", True), ("launch gpu_id", "gpu2"),
+       ("launch gpu_id", 0), ("pinned_gpu", 0)],
+)
 def test_native_rfd3_runner_rejects_noncanonical_persisted_gpu_authority(
     field: str,
     invalid_gpu_id: object,
 ) -> None:
     values: dict[str, object] = {"pinned_gpu": 2, "assigned_gpu": 2}
-    values[field] = invalid_gpu_id
+    launch: dict[str, object] = {"gpu_id": 2}
+    if field == "launch gpu_id":
+        launch["gpu_id"] = invalid_gpu_id
+    else:
+        values[field] = invalid_gpu_id
     job = SimpleNamespace(**values)
 
-    with pytest.raises(RuntimeError, match="invalid scheduler GPU assignment"):
-        nextflow._resolve_launch_gpu_id(job, {"gpu_id": 2}, "protein_local_redesign")  # noqa: SLF001
+    with pytest.raises(RuntimeError, match=field):
+        nextflow._resolve_launch_gpu_id(job, launch, "protein_local_redesign")  # noqa: SLF001

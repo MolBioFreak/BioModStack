@@ -211,6 +211,7 @@ async def test_resume_job_rejects_workflow_launches_in_core_runtime_mode(monkeyp
         await jobs.resume_job(
             "job-123",
             request_context=Request({"type": "http", "method": "POST", "scheme": "http", "path": "/"}),
+            request=None,
             response=Response(),
             session=_ExplodingSession(),
         )
@@ -263,27 +264,150 @@ async def test_lifespan_skips_gpu_orchestrator_start_in_core_runtime_mode(monkey
         async def stop(self) -> None:
             events.append("orchestrator-stop")
 
-    class FakeAnalysisWorker:
-        def __init__(self, *args, **kwargs) -> None:
-            events.append("analysis-init")
+    # These collaborators are inert: this case only owns core-runtime routing,
+    # not analysis-worker execution or any excluded feature's lifecycle.
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from services.remote_execution import targets, preloading, telemetry
 
-        async def start(self) -> None:
-            events.append("analysis-start")
+    async def background(_factory, stop):
+        await stop.wait()
 
-        async def stop(self) -> None:
-            events.append("analysis-stop")
+    class Session:
+        async def __aenter__(self):
+            return self
 
+        async def __aexit__(self, *_):
+            pass
+
+        async def commit(self):
+            pass
+
+    def inert_worker(*_, **__):
+        return SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+
+    def inert_controller(*_, **__):
+        return SimpleNamespace(recover=AsyncMock(), close=AsyncMock())
+
+    def unavailable_signal():
+        raise RuntimeError("excluded runtime not configured")
+
+    monkeypatch.setattr(api_main.catalog_authority, "require", lambda: None)
     monkeypatch.setattr(api_main, "init_db", fake_init_db)
     monkeypatch.setattr(api_main, "init_molbio_db", fake_init_molbio_db)
+    for name in ("init_experiment_db", "init_molbio_ngs_db", "reconcile_startup_admissions"):
+        monkeypatch.setattr(api_main, name, AsyncMock(return_value=None))
+    for name in ("async_session", "experiment_session_factory"):
+        monkeypatch.setattr(api_main, name, Session)
+    for name in ("AnalysisWorker", "FrustraMPNNStatisticsWorker", "ExternalImportWorker", "BoltzApiJobWorker"):
+        monkeypatch.setattr(api_main, name, inert_worker)
+    monkeypatch.setattr(targets, "AttachmentController", inert_controller)
+    monkeypatch.setattr(preloading, "PreloadController", inert_controller)
+    monkeypatch.setattr(targets, "invalidate_vast_inventory", AsyncMock())
+    monkeypatch.setattr(targets, "run_vast_inventory_refresh", background)
+    monkeypatch.setattr(telemetry.remote_telemetry, "run", background)
+    monkeypatch.setattr(api_main.OntSignalWorker, "_runtime_identity", unavailable_signal)
+    monkeypatch.setattr(api_main, "install_feature_enabled", lambda _: False)
+    monkeypatch.delenv("BMS_ONT_SLOW5TOOLS_IMAGE", raising=False)
     monkeypatch.setattr(api_main, "GPUOrchestrator", FakeGPUOrchestrator)
-    monkeypatch.setattr(api_main, "AnalysisWorker", FakeAnalysisWorker)
-    monkeypatch.setattr(api_main, "_orchestrator", None)
-    monkeypatch.setattr(api_main, "_analysis_worker", None)
+    for name in ("_orchestrator", "_analysis_worker", "_external_import_worker", "_boltz_api_job_worker",
+                 "_md_reconciler", "_global_experiment_worker", "_ont_raw_signal_worker",
+                 "_ont_signal_worker", "_frustrampnn_statistics_worker"):
+        monkeypatch.setattr(api_main, name, None)
 
     async with api_main.lifespan(api_main.app):
         assert "db-init" in events
         assert "molbio-db-init" in events
-        assert "analysis-start" in events
 
     assert "orchestrator-init" not in events
-    assert "analysis-stop" in events
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["cross-class-backlog", "preparation-failure"])
+async def test_analysis_worker_real_loop_preserves_progress_and_cleanup(monkeypatch, tmp_path, scenario):
+    from datetime import datetime, timedelta
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from database import AnalysisRun, Base
+    from services import analysis_worker
+    from services.analysis_runs import build_artifact_manifest_for_run
+    from paths import resolve_allowed_path
+
+    monkeypatch.setenv("BMS_ANALYSIS_CACHE", str(tmp_path / "analysis"))
+    monkeypatch.setenv("BMS_ANALYSIS_MAX_CONCURRENT_HEAVY", "1")
+    monkeypatch.setenv("BMS_ANALYSIS_MAX_CONCURRENT_LIGHT", "4")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'analysis.db'}")
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    worker = analysis_worker.AnalysisWorker(factory, poll_interval=0.001)
+    children = []
+
+    class Child:
+        terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+    def spawn(*_, **__):
+        child = Child()
+        children.append(child)
+        return child
+
+    def run(identity, resource_class, order):
+        row = AnalysisRun(
+            id=identity, subject_kind="job", subject_id="subject", analysis_type="job_aa_composition",
+            resource_class=resource_class, status="queued", params_hash=identity,
+            input_signature=identity, code_version="1", cache_key=identity,
+            queued_at=datetime(2026, 1, 1) + timedelta(seconds=order),
+        )
+        row.artifact_manifest = build_artifact_manifest_for_run(row)
+        return row
+
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        if scenario == "cross-class-backlog":
+            rows = [run(f"heavy-{i}", "cpu_heavy", i) for i in range(65)]
+            rows.append(run("light", "cpu_light", 100))
+        else:
+            rows = [run("good", "cpu_light", 0), run("bad", "cpu_light", 1)]
+            # Valid producer manifests; a real filesystem failure after first spawn.
+            resolve_allowed_path(rows[1].artifact_manifest["stderr_log"]).mkdir(parents=True)
+        async with factory() as session:
+            session.add_all(rows)
+            await session.commit()
+
+        cycles = 0
+        launch = worker._launch_available_runs
+
+        async def bounded_launch():
+            nonlocal cycles
+            await launch()
+            cycles += 1
+            if cycles == 3:
+                worker._stop_event.set()
+
+        monkeypatch.setattr(worker, "_launch_available_runs", bounded_launch)
+        monkeypatch.setattr(analysis_worker.subprocess, "Popen", spawn)
+        await worker.start()
+        # Exercise the task itself, not merely the start/stop calls. Current
+        # preparation failure is intentionally an effective, un-xfailed regression.
+        await asyncio.wait_for(asyncio.shield(worker._task), timeout=5)
+        await worker.stop()
+        async with factory() as session:
+            if scenario == "cross-class-backlog":
+                assert (await session.get(AnalysisRun, "light")).status == "running"
+            else:
+                assert (await session.get(AnalysisRun, "bad")).status == "failed"
+        assert children and all(child.terminated for child in children)
+        assert not worker._running
+    finally:
+        worker._stop_event.set()
+        if worker._task is not None:
+            if not worker._task.done():
+                worker._task.cancel()
+            await asyncio.gather(worker._task, return_exceptions=True)
+        # Test cleanup must not conceal whether normal stop owned the children.
+        await worker._terminate_running_processes()
+        await engine.dispose()
