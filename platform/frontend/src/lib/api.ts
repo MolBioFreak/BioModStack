@@ -537,6 +537,40 @@ export interface ExecutionTarget {
     activated_at: string | null;
 }
 
+/** Server-published admission predicate for new work on a target.
+ *
+ * `capabilities.scheduling` is produced by the execution-targets API
+ * (`new_work_ready` = active, ready, no active preload, fresh inventory,
+ * present, running, and not leased). Deliverables must read that verdict
+ * instead of re-deriving a weaker `active && state === 'ready'` one.
+ * Payloads that predate the projection fall back to the raw flags.
+ */
+export const executionTargetAdmitsNewWork = (target: ExecutionTarget): boolean => {
+    const scheduling = (target.capabilities || {}) as {
+        scheduling?: { new_work_ready?: boolean };
+    };
+    return typeof scheduling.scheduling?.new_work_ready === 'boolean'
+        ? scheduling.scheduling.new_work_ready
+        : target.active && target.state === 'ready';
+};
+
+/** Human-readable reason a target cannot take new work, from the same payload.
+ *
+ * The published projection distinguishes a lease and stale inventory; anything
+ * else is reported as the server's own recorded error, never as a re-derived
+ * guess at the failing predicate.
+ */
+export const executionTargetIneligibilityReason = (target: ExecutionTarget): string => {
+    const scheduling = (target.capabilities || {}) as {
+        scheduling?: { inventory_fresh?: boolean; leased_job_id?: string | null };
+    };
+    if (scheduling.scheduling?.leased_job_id) return `leased by Job ${scheduling.scheduling.leased_job_id}`;
+    if (scheduling.scheduling?.inventory_fresh === false) return 'provider inventory is stale';
+    if (target.last_error) return `last server error: ${target.last_error}`;
+    if (target.setup?.message) return target.setup.message;
+    return 'the server is not admitting new work on it';
+};
+
 export interface DiscoveredExecutionTarget {
     provider: 'vast';
     provider_instance_id: string;

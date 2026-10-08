@@ -4,6 +4,8 @@ import { WorkflowProvisionPanel } from './dashboard/IndependentProvisionPanel';
 
 import {
     EXECUTION_TARGET_STORAGE_KEY,
+    executionTargetAdmitsNewWork,
+    executionTargetIneligibilityReason,
     fetchExecutionTargets,
     prepareJobSubmission, prepareExecutionPlacement, type WorkflowProvisionRequest,
 } from '../lib/api';
@@ -43,11 +45,13 @@ export function ExecutionTargetPicker({ value, onChange, disabled = false, workf
     });
 
     const targets = targetsQuery.isError ? [] : (targetsQuery.data?.data ?? []);
-    const readyTargets = useMemo(
-        () => targets.filter((target) => target.active && target.state === 'ready'),
+    const targetsLoaded = targetsQuery.data !== undefined && !targetsQuery.isError;
+    // The API publishes the admission verdict in capabilities.scheduling; the picker
+    // must read it instead of re-deriving a weaker active && state === 'ready' one.
+    const admittingTargets = useMemo(
+        () => targets.filter((target) => executionTargetAdmitsNewWork(target)),
         [targets],
     );
-
 
     const selectTarget = (targetId: string) => {
         if (controlled) { onChange?.(targetId || null); return; }
@@ -81,30 +85,59 @@ export function ExecutionTargetPicker({ value, onChange, disabled = false, workf
                 >
                     Local
                 </button>
-                {targets.filter(target => target.active).map((target) => (
-                    <button
-                        key={target.id}
-                        type="button"
-                        onClick={() => selectTarget(target.id)}
-                        aria-pressed={selectedTargetId === target.id}
-                        disabled={disabled || target.state !== 'ready'}
-                        title={target.state !== 'ready' ? target.last_error || target.setup?.message || 'Runtime not ready' : undefined}
-                        className={`rounded-lg border px-3 py-2 text-sm ${selectedTargetId === target.id
-                            ? 'border-emerald-400 bg-emerald-500/15 text-emerald-100'
-                            : 'border-slate-700 bg-slate-950 text-slate-300'}`}
-                    >
-                        Vast · {target.name ?? target.provider_instance_id}
-                        {target.state !== 'ready' && <span className="block text-xs">Runtime not ready: {target.last_error || target.setup?.message || 'Setup required'}</span>}
-                    </button>
-                ))}
+                {targets.filter(target => target.active).map((target) => {
+                    const admitsNewWork = executionTargetAdmitsNewWork(target);
+                    const reason = admitsNewWork ? null : executionTargetIneligibilityReason(target);
+                    return (
+                        <button
+                            key={target.id}
+                            type="button"
+                            onClick={() => selectTarget(target.id)}
+                            aria-pressed={selectedTargetId === target.id}
+                            disabled={disabled || !admitsNewWork}
+                            title={reason ?? undefined}
+                            className={`rounded-lg border px-3 py-2 text-sm ${selectedTargetId === target.id
+                                ? 'border-emerald-400 bg-emerald-500/15 text-emerald-100'
+                                : 'border-slate-700 bg-slate-950 text-slate-300'}`}
+                        >
+                            Vast · {target.name ?? target.provider_instance_id}
+                            {reason && <span className="block text-xs">Cannot accept new work: {reason}</span>}
+                        </button>
+                    );
+                })}
             </div>
 
             {selectedTargetId && (() => {
-                const selected = readyTargets.find((target) => target.id === selectedTargetId);
-                return selected ? (
-                    <p className="mt-3 text-xs text-slate-300">{String(selected.capabilities.gpu_count ?? '?')} × {String(selected.capabilities.gpu_name ?? 'GPU')}</p>
-                ) : (
-                    <p role="alert" className="mt-3 text-xs text-red-300">Selected worker {selectedTargetId} is unavailable. Choose Local or a ready worker, or wait for inventory recovery.</p>
+                const selected = admittingTargets.find((target) => target.id === selectedTargetId);
+                if (selected) {
+                    return (
+                        <p className="mt-3 text-xs text-slate-300">
+                            {String(selected.capabilities.gpu_count ?? '?')} × {String(selected.capabilities.gpu_name ?? 'GPU')}
+                        </p>
+                    );
+                }
+                const listed = targets.find((target) => target.id === selectedTargetId);
+                const reason = !targetsLoaded
+                    ? 'the execution-target inventory could not be refreshed'
+                    : listed
+                        ? `the server no longer offers it for new work (${executionTargetIneligibilityReason(listed)})`
+                        : 'it is not in the current execution-target inventory';
+                return (
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <p role="alert" className="text-xs text-red-300">
+                            Selected worker {selectedTargetId} is unavailable: {reason}, so this saved placement blocks submission.
+                            {listed ? '' : ' Clear it to launch locally or on a ready worker.'}
+                        </p>
+                        {!controlled && (
+                            <button
+                                type="button"
+                                onClick={() => selectTarget('')}
+                                className="rounded-lg border border-slate-600 bg-slate-950 px-2 py-1 text-xs text-slate-300"
+                            >
+                                Clear saved selection
+                            </button>
+                        )}
+                    </div>
                 );
             })()}
             {targetsQuery.error && (

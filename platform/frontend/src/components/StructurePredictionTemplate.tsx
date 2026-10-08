@@ -6,9 +6,9 @@ import { ColabfoldMsaControls } from './ColabfoldMsaControls';
 import { NeurosnapMsaControls } from './NeurosnapMsaControls';
 import { MSA_POLICY } from '../lib/msaPolicy';
 import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
-import { completeCurrentLaunchContext, submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchMsaCacheInfo, fetchUserSequence, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus, type MsaCacheInfo } from '../lib/api';
+import { completeCurrentLaunchContext, submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchMsaCacheInfo, fetchUserSequence, fetchExecutionTargets, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus, type ExecutionTarget, type MsaCacheInfo } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { parseMolecularDynamicsHandoffUserSequence } from './gen2StartingStructureState';
 import { SequenceManager } from './SequenceManager';
@@ -148,6 +148,31 @@ const clampBoltzSamplingSteps = (value: unknown, useMsa: boolean): number => {
     const min = useMsa ? 10 : MIN_BOLTZ_NO_MSA_SAMPLING_STEPS;
     if (!Number.isFinite(parsed)) return MIN_BOLTZ_NO_MSA_SAMPLING_STEPS;
     return Math.max(min, Math.min(1000, parsed));
+};
+
+// Render a rejected Job submission verbatim: FastAPI detail is either a string or
+// {message, blockers}. Nothing is dropped and nothing is prettified.
+const describeRejectedDetail = (detail: unknown): string | null => {
+    if (typeof detail === 'string' && detail.trim()) return detail.trim();
+    if (detail && typeof detail === 'object') {
+        const record = detail as Record<string, unknown>;
+        const message = typeof record.message === 'string' && record.message.trim() ? record.message.trim() : null;
+        const blockers = Array.isArray(record.blockers) && record.blockers.length > 0
+            ? record.blockers.map((blocker) => (typeof blocker === 'string' ? blocker : JSON.stringify(blocker))).join('; ')
+            : null;
+        if (message && blockers) return `${message} — blockers: ${blockers}`;
+        if (blockers) return `blockers: ${blockers}`;
+        if (message) return message;
+        return JSON.stringify(detail);
+    }
+    return null;
+};
+
+const describeSubmitRejection = (error: UntypedApiValue): string => {
+    const status = typeof error?.response?.status === 'number' ? error.response.status : null;
+    const detail = describeRejectedDetail(error?.response?.data?.detail);
+    const message = detail ?? (typeof error?.message === 'string' && error.message ? error.message : 'The server rejected this Job submission.');
+    return status === null ? message : `HTTP ${status}: ${message}`;
 };
 
 export function StructurePredictionTemplate({ onBack, initialValues, onDraftChange, onOpenTemplateManager, sourceSequenceId = null, mdDraftId = null, returnTemplate = null }: StructurePredictionTemplateProps) {
@@ -409,6 +434,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const [boltzApiEstimateError, setBoltzApiEstimateError] = useState<string | null>(null);
     const [boltzApiEstimating, setBoltzApiEstimating] = useState(false);
     const [boltzApiClientRequestId, setBoltzApiClientRequestId] = useState(() => crypto.randomUUID());
+    const [submitError, setSubmitError] = useState<string | null>(null);
 
     const navigateAfterSubmission = async (jobResponse: unknown) => {
         const launchContextActive = Boolean(new URLSearchParams(window.location.search).get('launch_context_id'));
@@ -422,9 +448,14 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const submitMutation = useMutation({
         mutationFn: async (data: UntypedApiValue) => submitJob(data),
         onSuccess: async (response) => {
+            setSubmitError(null);
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             await navigateAfterSubmission(response.data);
-        }
+        },
+        onError: (error: UntypedApiValue) => {
+            // A rejected preview/POST must never be silent: the launcher has no other channel.
+            setSubmitError(describeSubmitRejection(error));
+        },
     });
 
     const boltzApiSubmitMutation = useMutation({
@@ -704,12 +735,53 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         requestedSizeCp: bcpRequestedSizeCp,
         fallbackGpuIds: boltzCpFallbackGpuIds,
     });
-    const boltzCpPlacementError = isBoltzCpLaunch ? (
-        executionTargetId && (!gpuOptions.length || boltzCpGpuSettings.gpuIds.split(',')
-            .some(id => !gpuOptions.some(gpu => gpu.index === Number(id))))
-            ? 'Selected worker GPU telemetry is unavailable or does not contain the selected GPUs. Refresh or select compatible GPUs.'
-            : boltzCpGpuSettings.error
-    ) : undefined;
+    // The launcher needs the same inventory the picker shows, but only to explain a
+    // Fold-CP placement refusal; the shared query key keeps this to one request.
+    const executionTargetsQuery = useQuery({
+        queryKey: ['execution-targets'],
+        queryFn: fetchExecutionTargets,
+        refetchInterval: 15_000,
+        enabled: isBoltzCpLaunch && Boolean(executionTargetId),
+    });
+    const executionTargetsReady = executionTargetsQuery.data !== undefined && !executionTargetsQuery.isError;
+    const selectedExecutionTarget = executionTargetsReady
+        ? (executionTargetsQuery.data?.data as ExecutionTarget[] | undefined)?.find((target) => target.id === executionTargetId)
+        : undefined;
+    const boltzCpGpuIdsNotEnumerated = boltzCpGpuSettings.gpuIds
+        .split(',')
+        .filter(Boolean)
+        .filter((id) => !gpuOptions.some((gpu) => gpu.index === Number(id)));
+    // Fail-closed placement gate: CP is never reduced automatically and GPUs the
+    // scheduler cannot see are never chosen here. Each real cause gets its own text.
+    const boltzCpPlacementError = !isBoltzCpLaunch ? undefined : (() => {
+        if (!executionTargetId) {
+            if (gpuOptions.length) return boltzCpGpuSettings.error;
+            return 'Fold-CP requires an enumerated GPU selection because CP is never reduced automatically. '
+                + 'No GPUs are enumerated for this placement; select GPUs, or select a ready worker whose live telemetry reports them.';
+        }
+        if (executionTargetsQuery.isError) {
+            return `Selected worker ${executionTargetId} could not be confirmed against the execution-target inventory, so this saved placement blocks submission. `
+                + 'Refresh, or select Local or a ready worker.';
+        }
+        if (executionTargetsQuery.isPending || executionTargetsQuery.data === undefined) {
+            return gpuOptions.length && boltzCpGpuIdsNotEnumerated.length === 0 ? undefined
+                : `No GPU placement is available for the selected worker ${executionTargetId}: its live telemetry reports no GPUs (or is unavailable). `
+                + 'Select a worker whose telemetry reports GPUs; CP is never reduced automatically.';
+        }
+        if (!selectedExecutionTarget) {
+            return `Selected worker ${executionTargetId} is no longer present in the execution-target inventory, so this stale saved selection blocks submission. `
+                + 'Select Local or a ready worker.';
+        }
+        if (!gpuOptions.length) {
+            return `No GPU placement is available for the selected worker ${executionTargetId}: its live telemetry reports no GPUs (or is unavailable). `
+                + 'Select a worker whose telemetry reports GPUs; CP is never reduced automatically.';
+        }
+        if (boltzCpGpuIdsNotEnumerated.length) {
+            return `Selected GPUs ${boltzCpGpuIdsNotEnumerated.join(',')} are not enumerated by the selected worker ${executionTargetId} `
+                + `(worker devices: ${gpuOptions.map((gpu) => gpu.index).join(',')}). Select the worker's devices; CP is never reduced automatically.`;
+        }
+        return boltzCpGpuSettings.error;
+    })();
     const boltzQualityState = getBoltzQualitySliderState({
         samplingSteps: boltzSamplingSteps,
         recyclingSteps: boltzRecyclingSteps,
@@ -1234,6 +1306,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             return;
         }
 
+        setSubmitError(null);
         submitMutation.mutate(submission.jobRequest);
 
         // Treat force-refresh as a one-shot action to avoid accidental cache-bypass on reruns.
@@ -2683,21 +2756,28 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                     </div>}
 
                     {/* Right side: Submit button */}
-                    <button
-                        onClick={handleSubmit}
-                        disabled={!resolvedPredictorSelection.valid || !sequence.trim() || submitMutation.isPending || boltzApiSubmitMutation.isPending || boltzApiEstimating || (isBoltzApi && (!boltzApiStatus || boltzApiStatus.available === false))}
-                        className="px-6 py-3 bg-gradient-to-r from-blue-600 to-accent-secondary hover:from-blue-500 hover:to-accent disabled:opacity-50 disabled:grayscale text-white font-bold rounded-lg shadow-lg shadow-accent/20 transition-all transform active:scale-95"
-                    >
-                        {isBoltzApi
-                            ? (boltzApiSubmitMutation.isPending
-                                ? 'Queueing Boltz API job...'
-                                : boltzApiEstimating
-                                    ? 'Estimating API cost...'
-                                    : boltzApiEstimate
-                                        ? 'Queue Boltz API job'
-                                        : 'Estimate API cost')
-                            : (submitMutation.isPending ? 'Submitting...' : 'Launch Prediction')}
-                    </button>
+                    <div className="flex flex-col items-end gap-2">
+                        {submitError && (
+                            <p role="alert" className="max-w-lg text-right text-xs text-red-300">
+                                Launch failed: {submitError}
+                            </p>
+                        )}
+                        <button
+                            onClick={handleSubmit}
+                            disabled={!resolvedPredictorSelection.valid || !sequence.trim() || submitMutation.isPending || boltzApiSubmitMutation.isPending || boltzApiEstimating || (isBoltzApi && (!boltzApiStatus || boltzApiStatus.available === false))}
+                            className="px-6 py-3 bg-gradient-to-r from-blue-600 to-accent-secondary hover:from-blue-500 hover:to-accent disabled:opacity-50 disabled:grayscale text-white font-bold rounded-lg shadow-lg shadow-accent/20 transition-all transform active:scale-95"
+                        >
+                            {isBoltzApi
+                                ? (boltzApiSubmitMutation.isPending
+                                    ? 'Queueing Boltz API job...'
+                                    : boltzApiEstimating
+                                        ? 'Estimating API cost...'
+                                        : boltzApiEstimate
+                                            ? 'Queue Boltz API job'
+                                            : 'Estimate API cost')
+                                : (submitMutation.isPending ? 'Submitting...' : 'Launch Prediction')}
+                        </button>
+                    </div>
                 </div>
             </div>
 

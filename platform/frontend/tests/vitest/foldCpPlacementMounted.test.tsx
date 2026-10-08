@@ -10,12 +10,21 @@ vi.mock('../../src/components/MolstarViewer', () => ({ default: () => null }));
 vi.mock('../../src/components/dashboard/IndependentProvisionPanel', () => ({ WorkflowProvisionPanel: () => null }));
 vi.mock('../../src/components/ModelIntegrationControl', () => ({ ModelIntegrationControl: () => null,
     useModelIntegrationConfig: () => ({ data: { workflows: { structure_prediction: { default_enabled: false } } } }) }));
-vi.mock('../../src/lib/useSystemStatus', () => ({ useSystemStatus: () => ({ data: { data: { gpus: [
+const localCatalog = vi.hoisted(() => ({ gpus: [
     { index: 8, name: 'Local GPU', memory_total_mb: 24000 }, { index: 9, name: 'Local GPU', memory_total_mb: 24000 },
-] } }, dataUpdatedAt: Date.now(), isError: false, isLoading: false }) }));
+] as Array<{ index: number; name: string; memory_total_mb: number }> }));
+vi.mock('../../src/lib/useSystemStatus', () => ({ useSystemStatus: () => ({ data: { data: { gpus: localCatalog.gpus } },
+    dataUpdatedAt: Date.now(), isError: false, isLoading: false }) }));
 const text = (n: ReactTestInstance): string => n.children.map(c => typeof c === 'string' ? c : text(c)).join('');
 const flush = async () => { await act(async () => { await new Promise(r => setTimeout(r, 5)); }); };
-const targets = ['one', 'two'].map(id => ({ id: `vast:${id}`, name: id, active: true, state: 'ready', capabilities: { gpu_count: 4, gpu_name: 'RTX 5060 Ti' } }));
+const admittedScheduling: Record<string, unknown> = { policy: 'exclusive_target', max_concurrent_root_attempts: 1,
+    new_work_ready: true, inventory_fresh: true, leased_job_id: null };
+const targets = ['one', 'two'].map(id => ({ id: `vast:${id}`, name: id, active: true, state: 'ready',
+    capabilities: { gpu_count: 4, gpu_name: 'RTX 5060 Ti', scheduling: admittedScheduling } }));
+// Ready and active, but the server's own verdict refuses new work (leased): the old
+// picker predicate would have offered it.
+targets.push({ id: 'vast:leased', name: 'leased', active: true, state: 'ready', capabilities: { gpu_count: 4,
+    gpu_name: 'RTX 5060 Ti', scheduling: { ...admittedScheduling, new_work_ready: false, leased_job_id: 'leased-job' } } });
 const telemetry = (id: string, indices = [0, 1, 2, 3]) => ({ source: 'active_vast', available: true,
     observed_at: new Date().toISOString(), target: targets.find(t => t.id === id), gpus: indices.map(index => ({
         id: `${id}:gpu:${index}`, execution_target_id: id, index, uuid: `GPU-${index}`, name: 'RTX 5060 Ti',
@@ -25,17 +34,25 @@ const telemetry = (id: string, indices = [0, 1, 2, 3]) => ({ source: 'active_vas
 let renderer: ReactTestRenderer;
 let client: QueryClient;
 let posts: any[];
+let requestUrls: string[];
 let reads: string[];
+let postRejection: { status: number; detail: unknown } | null = null;
 const adapter = api.defaults.adapter;
 const fixture = { pred_method: 'fold_cp', sequence: 'MKTIIALSYIFCLVFADYKDDDDA', bcp_size_cp: 4,
     boltz_num_samples: 1, boltz_use_msa: false, run_frustrampnn: false };
 async function mount(initialValues: any = fixture, target: string | null = null) {
-    posts = []; reads = [];
+    posts = []; reads = []; requestUrls = []; postRejection = null;
     window.history.replaceState({}, '', '/submit');
     if (target) sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, target); else sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
     vi.spyOn(window, 'alert').mockImplementation(() => {});
     api.defaults.adapter = async config => {
-        if (config.method === 'post') { posts.push(JSON.parse(config.data)); throw new Error('fixture captured; no launch'); }
+        if (config.method === 'post') {
+            posts.push(JSON.parse(config.data));
+            requestUrls.push(config.url || '');
+            if (postRejection) throw Object.assign(new Error(`Request failed with status code ${postRejection.status}`),
+                { response: { status: postRejection.status, data: { detail: postRejection.detail }, config } });
+            throw new Error('fixture captured; no launch');
+        }
         let data: any;
         if (config.url === '/api/execution-targets') data = targets;
         else if (config.url === '/api/execution-targets/active/telemetry') {
@@ -59,7 +76,8 @@ async function click(label: string) {
 async function sample(data: any) {
     await act(async () => { client.setQueryData(['active-remote-gpu-telemetry', 'vast:one'], { data }); }); await flush();
 }
-afterEach(async () => { if (renderer) await act(async () => renderer.unmount()); client?.clear(); api.defaults.adapter = adapter; sessionStorage.clear(); vi.restoreAllMocks(); });
+afterEach(async () => { if (renderer) await act(async () => renderer.unmount()); client?.clear(); api.defaults.adapter = adapter; sessionStorage.clear(); vi.restoreAllMocks();
+    localCatalog.gpus = [{ index: 8, name: 'Local GPU', memory_total_mb: 24000 }, { index: 9, name: 'Local GPU', memory_total_mb: 24000 }]; });
 
 it('actual Structure picker replaces local saved placement and sends four remote devices unchanged in preview/submit', async () => {
     await mount({ ...fixture, pinned_gpus: [8, 9], bcp_gpu_ids: '8,9', lock_gpus: true });
@@ -119,4 +137,79 @@ it('local explicit GPU selection is preserved', async () => {
     await mount({ ...fixture, bcp_size_cp: 1, pinned_gpus: [9], bcp_gpu_ids: '9' });
     expect(preview().params).toMatchObject({ bcp_gpu_ids: '9', bcp_size_cp: 1, pinned_gpus: [9] });
     expect(reads).toEqual([]);
+});
+
+// D2: the launcher's server verdicts must be visible. submitJob previews before POSTing,
+// so both endpoints have to reach the same block next to the Launch button.
+it('renders a rejected execution-plan preview verbatim next to the Launch button', async () => {
+    await mount(fixture, 'vast:one');
+    postRejection = { status: 422, detail: 'execution_target_id is not an active ready execution target' };
+    await click('Launch Prediction');
+    expect(requestUrls).toEqual(['/api/jobs/execution-plan/preview']);
+    expect(posts).toHaveLength(1);
+    const launchButton = renderer.root.findAllByType('button').find(n => text(n).includes('Launch Prediction'))!;
+    expect(text(launchButton.parent!)).toContain('HTTP 422: execution_target_id is not an active ready execution target');
+});
+it('renders a rejected Job POST message and blockers verbatim next to the Launch button', async () => {
+    await mount({ ...fixture, bcp_size_cp: 1, pinned_gpus: [9], bcp_gpu_ids: '9' });
+    postRejection = { status: 422, detail: { message: 'Selected execution plan is unsupported',
+        blockers: ['boltz_cp_experimental:msa authority is unavailable'] } };
+    await click('Launch Prediction');
+    expect(requestUrls).toEqual(['/api/jobs']);
+    const launchButton = renderer.root.findAllByType('button').find(n => text(n).includes('Launch Prediction'))!;
+    expect(text(launchButton.parent!)).toContain(
+        'HTTP 422: Selected execution plan is unsupported — blockers: boltz_cp_experimental:msa authority is unavailable');
+});
+
+// D3: the placement gate must name the real cause for each case and stay fail-closed.
+it('gate names the missing enumerated local GPU selection and still blocks submission', async () => {
+    localCatalog.gpus = [];
+    await mount(fixture);
+    const rendered = text(renderer.root);
+    expect(rendered).toContain('Fold-CP requires an enumerated GPU selection because CP is never reduced automatically');
+    expect(rendered).not.toContain('no longer present in the execution-target inventory');
+    expect(rendered).not.toContain('No GPU placement is available for the selected worker');
+    await click('Launch Prediction');
+    expect(posts).toHaveLength(0);
+});
+it('gate names the stale saved worker selection and still blocks submission', async () => {
+    await mount(fixture, 'vast:gone');
+    const rendered = text(renderer.root);
+    expect(rendered).toContain('Selected worker vast:gone is no longer present in the execution-target inventory');
+    expect(rendered).toContain('stale saved selection blocks submission');
+    expect(rendered).not.toContain('No GPU placement is available for the selected worker');
+    expect(rendered).not.toContain('requires an enumerated GPU selection');
+    await click('Launch Prediction');
+    expect(posts).toHaveLength(0);
+});
+it('gate names the selected worker with no telemetry GPUs and still blocks submission', async () => {
+    await mount(fixture, 'vast:one');
+    await sample({ ...telemetry('vast:one'), gpus: [] });
+    const rendered = text(renderer.root);
+    expect(rendered).toContain('No GPU placement is available for the selected worker vast:one: its live telemetry reports no GPUs');
+    expect(rendered).not.toContain('no longer present in the execution-target inventory');
+    expect(rendered).not.toContain('requires an enumerated GPU selection');
+    await click('Launch Prediction');
+    expect(posts).toHaveLength(0);
+});
+
+// D3: the picker consumes the server's published verdict instead of recomputing it.
+it('offers only targets the server admits for new work and reports the published reason', async () => {
+    await mount(fixture, 'vast:leased');
+    const leasedButton = renderer.root.findAllByType('button').find(n => text(n).includes('Vast · leased'))!;
+    expect(leasedButton.props.disabled).toBe(true); // active && state==='ready', but leased per the server
+    expect(text(leasedButton)).toContain('Cannot accept new work: leased by Job leased-job');
+    expect(text(renderer.root)).toContain('Selected worker vast:leased is unavailable');
+    expect(text(renderer.root)).toContain('the server no longer offers it for new work (leased by Job leased-job)');
+    await click('Clear saved selection');
+    expect(sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+    expect(text(renderer.root)).not.toContain('Selected worker vast:leased is unavailable');
+});
+it('marks a saved selection that is absent from the inventory and clears it on request', async () => {
+    await mount(fixture, 'vast:gone');
+    expect(text(renderer.root)).toContain('Selected worker vast:gone is unavailable: it is not in the current execution-target inventory, '
+        + 'so this saved placement blocks submission. Clear it to launch locally or on a ready worker.');
+    await click('Clear saved selection');
+    expect(sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+    expect(text(renderer.root)).not.toContain('Selected worker vast:gone is unavailable');
 });
