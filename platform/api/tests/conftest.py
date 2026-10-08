@@ -399,7 +399,11 @@ def isolated_native_loopback(request, _bioxp_live_network_opt_in):
         "test_ngs_alignment_presentation_worker.py", "test_ont_ngs_submission.py",
         "test_ont_ngs_native_authority.py", "test_ont_ngs_native_completion.py",
         "test_ont_ngs_native_reference_completion.py",
-        "test_ont_ngs_native_summary_completion.py",
+        "test_ont_ngs_native_summary_completion.py", "test_ont_ngs_completion.py",
+        "test_ont_ngs_native_modified_completion.py",
+        "test_ont_ngs_native_methylation_completion.py",
+        "test_ont_ngs_native_external_methylation.py",
+        "test_ont_ngs_native_duplex_completion.py", "test_ont_ngs_native_demux_completion.py",
     }
     if (Path(str(request.node.path)).resolve().parent != API_ROOT / "tests"
             or Path(str(request.node.path)).name not in qualified_modules
