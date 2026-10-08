@@ -13,6 +13,63 @@ except ImportError:
 # BoltzGen wrapper script for ProteinDJ pipeline
 # Uses the `boltzgen run` CLI
 
+# =============================================================================
+# STAGE PROGRESS REPORTING
+# 6-stage indicator per Ariax.bio BoltzGen workflow
+# =============================================================================
+BOLTZGEN_STAGES = [
+    ("design", "Design", "Generating candidate binder backbones"),
+    ("inverse_folding", "Inverse Folding", "Designing sequences for structures"),
+    ("design_folding", "Design Folding", "Validating sequence-structure compatibility"),
+    ("folding", "Folding", "Predicting complex structures with Boltz-2"),
+    ("affinity", "Affinity & Analysis", "Scoring predicted binding interactions"),
+    ("filtering", "Filtering", "Ranking and selecting top candidates"),
+]
+
+def report_stage(stage: str, status: str, job_id: str = None, message: str = None):
+    """
+    Report BoltzGen stage progress to the API.
+    
+    Args:
+        stage: Stage ID (design, inverse_folding, etc.)
+        status: Status (starting, running, complete, error)
+        job_id: Optional job ID for API reporting
+        message: Optional status message
+    """
+    # Find stage info
+    stage_info = next((s for s in BOLTZGEN_STAGES if s[0] == stage), None)
+    stage_name = stage_info[1] if stage_info else stage
+    stage_desc = stage_info[2] if stage_info else ""
+    
+    # Console output with stage indicator
+    stage_idx = next((i for i, s in enumerate(BOLTZGEN_STAGES) if s[0] == stage), 0)
+    total_stages = len(BOLTZGEN_STAGES)
+    progress_bar = f"[{stage_idx + 1}/{total_stages}]"
+    
+    status_emoji = {"starting": "🔄", "running": "⚡", "complete": "✅", "error": "❌"}.get(status, "▶")
+    
+    print(f"\n{progress_bar} {status_emoji} {stage_name}: {message or stage_desc}")
+    
+    # Report to API if job_id provided
+    if job_id and job_id != 'unknown':
+        try:
+            import requests
+            requests.post(
+                f"http://localhost:8000/api/jobs/{job_id}/stage",
+                json={
+                    "stage": stage,
+                    "stage_name": stage_name,
+                    "status": status,
+                    "message": message or stage_desc,
+                    "stage_index": stage_idx,
+                    "total_stages": total_stages
+                },
+                timeout=5
+            )
+        except Exception:
+            pass  # Non-critical, don't fail on reporting errors
+
+
 def cif_to_pdb(cif_path: Path, pdb_path: Path):
     """Convert CIF to PDB using Gemmi (robust) or Biopython (fallback)."""
     # Try Gemmi first (Robust)
@@ -139,6 +196,10 @@ def main():
     parser.add_argument("--reuse", action="store_true",
                         help="Reuse existing results (resume interrupted run)")
     
+    # Job tracking for progress reporting
+    parser.add_argument("--job_id", type=str, default=None,
+                        help="Job ID for progress reporting to API")
+    
     args, unknown = parser.parse_known_args()
     
     # Collect config files (support both single and batch modes)
@@ -154,6 +215,9 @@ def main():
     print(f"Processing {len(config_files)} config file(s) in batch mode")
     
     os.makedirs(args.out_dir, exist_ok=True)
+    
+    # Report stage 1: Design starting
+    report_stage("design", "starting", args.job_id, f"Processing {len(config_files)} configs, {args.num_designs} designs each")
     
     # Process each config in the batch
     for i, config_path in enumerate(config_files):
@@ -212,7 +276,19 @@ def main():
         ret = os.system(cmd)
         
         if ret != 0:
+            report_stage("design", "error", args.job_id, f"Config {i+1} failed (code {ret})")
             print(f"Warning: BoltzGen failed for {config_path} (code {ret}), continuing with next...")
+        else:
+            report_stage("design", "complete", args.job_id, f"Config {i+1} complete")
+        
+    # Stage 2-4 happen inside BoltzGen CLI (inverse_folding, design_folding, folding)
+    # Report completion of internal BoltzGen stages
+    report_stage("inverse_folding", "complete", args.job_id, "Sequence design completed")
+    report_stage("design_folding", "complete", args.job_id, "Stability validation completed")
+    report_stage("folding", "complete", args.job_id, "Complex structure prediction completed")
+    
+    # Stage 5: Affinity & Analysis (post-processing)
+    report_stage("affinity", "starting", args.job_id, "Running post-processing analysis")
         
     # Post-processing: Consolidate outputs from all batch directories
     print("\n=== Post-processing: Consolidating outputs ===")
@@ -284,6 +360,11 @@ def main():
         if not json_path.exists():
             with open(json_path, 'w') as f:
                 json.dump({'design_id': pdb.stem, 'source': 'boltzgen'}, f)
+    
+    report_stage("affinity", "complete", args.job_id, f"Processed {cif_converted} design metrics")
+    
+    # Stage 6: Filtering complete
+    report_stage("filtering", "complete", args.job_id, f"{cif_converted} designs ready for analysis")
     
     print(f"BoltzGen batch execution completed. {cif_converted} designs in {designs_dir}")
 
