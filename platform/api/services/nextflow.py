@@ -2023,11 +2023,14 @@ def build_nextflow_command(
         ('oligo_design', 'oligo_design'): 'oligo_design',
         # Protein local redesign with constrained RFD3 remodeling
         ('protein_local_redesign', 'local_redesign'): 'protein_local_redesign',
+        ('protein_cad_experimental', 'design'): 'protein_cad_experimental',
         # Nanopore basecalling + methylation analysis
         ('nanopore', 'methylation_analysis'): 'nanopore_methylation',
         # Protenix structure prediction
         ('protenix', 'predict'): 'protenix',
         ('protenix', 'complex'): 'protenix',
+        # Seeded PPIFlow generator
+        ('ppiflow', 'generator_backbone_refine'): 'boltz',
     }
 
     def resolve_antibody_validation_profile(default_profile: str) -> str:
@@ -2451,6 +2454,11 @@ def build_nextflow_command(
         for src_key, dest_key in boltzgen_mappings.items():
             if src_key in params:
                 params[dest_key] = params.pop(src_key)
+    elif model_id == 'ppiflow':
+        if not params.get('rfd_mode'):
+            params['rfd_mode'] = 'ppiflow_generator'
+        params.setdefault('stage_family', 'ppiflow')
+        params.setdefault('stage_mode', 'generator_backbone_refine')
     elif model_id == 'protein_local_redesign':
         protein_local_mappings = {
             'input_pdb': 'plr_input_pdb',
@@ -2488,6 +2496,48 @@ def build_nextflow_command(
             params['seq_method'] = params['plr_seq_method']
         if not params.get('rfd_mode'):
             params['rfd_mode'] = 'protein_local_redesign'
+    elif model_id == 'protein_cad_experimental':
+        protein_cad_mappings = {
+            'backend': 'pcad_backend',
+            'design_task': 'pcad_task',
+            'num_designs': 'pcad_num_designs',
+            'target_lengths': 'pcad_target_lengths',
+            'laproteina_preset': 'pcad_laproteina_preset',
+            'laproteina_samples_per_length': 'pcad_laproteina_samples_per_length',
+            'laproteina_num_steps': 'pcad_laproteina_num_steps',
+            'laproteina_motif_task_name': 'pcad_laproteina_motif_task_name',
+            'laproteina_motif_pdb': 'pcad_laproteina_motif_pdb',
+            'laproteina_contig_string': 'pcad_laproteina_contig_string',
+            'laproteina_segment_order': 'pcad_laproteina_segment_order',
+            'laproteina_atom_selection_mode': 'pcad_laproteina_atom_selection_mode',
+            'laproteina_motif_min_length': 'pcad_laproteina_motif_min_length',
+            'laproteina_motif_max_length': 'pcad_laproteina_motif_max_length',
+            'laproteina_checkpoint_dir': 'pcad_laproteina_checkpoint_dir',
+            'laproteina_data_path': 'pcad_laproteina_data_path',
+            'disco_experiment': 'pcad_disco_experiment',
+            'disco_effort': 'pcad_disco_effort',
+            'disco_num_inference_seeds': 'pcad_disco_num_inference_seeds',
+            'disco_seeds': 'pcad_disco_seeds',
+            'disco_input_json_path': 'pcad_disco_input_json_path',
+            'disco_ligand_sdf': 'pcad_disco_ligand_sdf',
+            'disco_ligand_name': 'pcad_disco_ligand_name',
+            'disco_na_sequence': 'pcad_disco_na_sequence',
+            'disco_checkpoint_path': 'pcad_disco_checkpoint_path',
+            'disco_use_deepspeed_evo_attention': 'pcad_disco_use_deepspeed_evo_attention',
+            'disco_cutlass_path': 'pcad_disco_cutlass_path',
+        }
+        for src_key, dest_key in protein_cad_mappings.items():
+            if src_key == dest_key:
+                continue
+            if src_key in params:
+                if dest_key not in params:
+                    params[dest_key] = params[src_key]
+                params.pop(src_key, None)
+
+        if 'pcad_num_designs' in params and 'rfd_num_designs' not in params:
+            params['rfd_num_designs'] = params['pcad_num_designs']
+        if not params.get('rfd_mode'):
+            params['rfd_mode'] = 'protein_cad_experimental'
     elif model_id == 'bindcraft':
         # BindCraft YAML schema uses unprefixed keys, but Nextflow expects bindcraft_*.
         bindcraft_mappings = {

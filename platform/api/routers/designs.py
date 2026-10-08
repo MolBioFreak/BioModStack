@@ -1427,9 +1427,12 @@ async def list_designs(
         'ppiflow_primary_loop_epitope_distance_delta': Design.ppiflow_primary_loop_epitope_distance_delta,
         'fr2_contacts': Design.fr2_contacts,
         'is_favorite': Design.is_favorite,
-        'binding_tier': func.coalesce(Design.iptm, 0.0) + case(
-            (Design.epitope_contact_count >= 5, 0.05),
-            else_=0.0,
+        'binding_tier': case(
+            (Design.ipsae.is_not(None), Design.ipsae),
+            else_=func.coalesce(Design.iptm, 0.0) + case(
+                (Design.epitope_contact_count >= 5, 0.05),
+                else_=0.0,
+            ),
         ),
     }
     

@@ -744,7 +744,7 @@ def _review_candidate_count(job: Job) -> Optional[int]:
     if stage not in REVIEWABLE_STAGES:
         return None
     payload = refresh_gate_payload(job.awaiting_payload or {}, job.output_dir)
-    if stage == "post_fampnn":
+    if stage in {"post_fampnn", "post_boltzgen", "post_ppiflow_generator"}:
         filtered_count = payload.get("filtered_candidate_count")
         if isinstance(filtered_count, int) and filtered_count > 0:
             return filtered_count
@@ -761,7 +761,7 @@ def _review_candidate_count_cached(job: Job) -> Optional[int]:
     if stage not in REVIEWABLE_STAGES:
         return None
     payload = job.awaiting_payload if isinstance(job.awaiting_payload, dict) else {}
-    if stage == "post_fampnn":
+    if stage in {"post_fampnn", "post_boltzgen", "post_ppiflow_generator"}:
         filtered_count = payload.get("filtered_candidate_count")
         if isinstance(filtered_count, int) and filtered_count > 0:
             return filtered_count
@@ -839,7 +839,7 @@ def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str
         normalized_gate_stage = gate_stage.strip().lower()
         if normalized_gate_stage == "post_boltz_validation":
             normalized_gate_stage = "post_structure_validation"
-        if normalized_gate_stage not in {"post_rfantibody", "post_fampnn", "post_structure_validation"}:
+        if normalized_gate_stage not in {"post_rfantibody", "post_boltzgen", "post_ppiflow_generator", "post_fampnn", "post_structure_validation"}:
             normalized_gate_stage = "post_fampnn"
         normalized["interactive_gate_stage"] = normalized_gate_stage
 
@@ -1362,11 +1362,30 @@ def _review_stage_to_canonical_stage(stage: Any) -> tuple[Optional[str], Optiona
     normalized = _normalize_stage_family(stage)
     if normalized == "post_rfantibody":
         return "rfantibody", "post_rfantibody"
+    if normalized == "post_boltzgen":
+        return "boltzgen", "post_boltzgen"
+    if normalized == "post_ppiflow_generator":
+        return "ppiflow", "generator_backbone_refine"
     if normalized == "post_fampnn":
         return "fampnn", "post_fampnn"
     if normalized == "post_structure_validation":
         return "validation", "post_structure_validation"
     return None, None
+
+
+def _awaiting_stage_to_resume_hint(stage: Any) -> Optional[str]:
+    normalized = _normalize_stage_family(stage)
+    if normalized == "post_rfantibody":
+        return "rfantibody"
+    if normalized == "post_boltzgen":
+        return "boltzgen"
+    if normalized == "post_ppiflow_generator":
+        return "ppiflow"
+    if normalized == "post_fampnn":
+        return "fampnn"
+    if normalized in {"post_structure_validation", "pre_protenix_msa"}:
+        return "structure_validation"
+    return None
 
 
 def _resolve_design_stage_metadata(design: Any) -> tuple[Optional[str], Optional[str]]:
@@ -1516,6 +1535,14 @@ def _derive_job_stage_tags(model_id: str, mode: str, params: Dict[str, Any], chi
     if model_normalized == "boltzgen":
         boltzgen_mode = str(params.get("boltzgen_mode") or mode_normalized or "").strip().lower()
         return "boltzgen", boltzgen_mode or "generation"
+    if model_normalized == "ppiflow":
+        ppiflow_mode = str(
+            params.get("stage_mode")
+            or params.get("ppiflow_stage_mode")
+            or mode_normalized
+            or ""
+        ).strip().lower()
+        return "ppiflow", ppiflow_mode or "generator_backbone_refine"
     if "fampnn" in model_normalized:
         return "fampnn", mode_normalized or "sequence_design"
     if model_normalized in {"protenix", "boltz2", "rf3"} and mode_normalized in {"predict", "complex"}:
@@ -1687,6 +1714,18 @@ def _looks_like_antibody_job(job: Optional[Job]) -> bool:
         or has_antibody_params
         or is_boltzgen_nanobody
     )
+
+
+def _should_spawn_antibody_refinement_on_resume(job: Optional[Job]) -> bool:
+    if job is None or not getattr(job, "awaiting_input", False):
+        return False
+    awaiting_stage = str(getattr(job, "awaiting_stage", "") or "").strip().lower()
+    model_id = str(getattr(job, "model_id", "") or "").strip().lower()
+    if awaiting_stage == "post_boltzgen" and model_id == "boltzgen":
+        return _looks_like_antibody_job(job)
+    if awaiting_stage == "post_ppiflow_generator" and model_id == "ppiflow":
+        return _looks_like_antibody_job(job)
+    return False
 
 
 async def _resolve_antibody_root_job(session: AsyncSession, source_job_id: str) -> tuple[Job, Job]:
@@ -6044,6 +6083,7 @@ async def resume_job(
     job_id: str,
     from_stage: str = None,
     request: Optional[ResumeJobRequest] = Body(default=None),
+    background_tasks: BackgroundTasks = None,
     session: AsyncSession = Depends(get_session)
 ):
     """
@@ -6126,19 +6166,90 @@ async def resume_job(
                 param_overrides.setdefault("rfantibody_input_pdbs", candidate_dir)
             if candidate_dir and job.awaiting_stage == "post_fampnn":
                 param_overrides.setdefault("fampnn_collected_pdbs", candidate_dir)
-        if job.awaiting_stage in {"post_rfantibody", "post_fampnn", "post_structure_validation"}:
+        if job.awaiting_stage in {"post_rfantibody", "post_ppiflow_generator", "post_fampnn", "post_structure_validation"}:
             param_overrides.setdefault("interactive_gate_continue", True)
             param_overrides.setdefault("interactive_swa", _to_bool((job.params or {}).get("interactive_swa")))
             param_overrides.setdefault("interactive_gating", _to_bool((job.params or {}).get("interactive_gating")))
-        if not effective_from_stage and job.awaiting_stage == "post_rfantibody":
-            effective_from_stage = "rfantibody"
-        elif not effective_from_stage and job.awaiting_stage == "post_fampnn":
-            effective_from_stage = "fampnn"
-        elif not effective_from_stage and job.awaiting_stage == "post_structure_validation":
-            effective_from_stage = "structure_validation"
-        elif not effective_from_stage and job.awaiting_stage == "pre_protenix_msa":
-            effective_from_stage = "structure_validation"
-    
+        if not effective_from_stage:
+            effective_from_stage = _awaiting_stage_to_resume_hint(job.awaiting_stage)
+
+    if _should_spawn_antibody_refinement_on_resume(job):
+        if background_tasks is None:
+            background_tasks = BackgroundTasks()
+
+        source_job, root_job = await _resolve_antibody_root_job(session, job.id)
+        stage_design_result = await session.execute(
+            select(Design)
+            .where(
+                Design.job_id == job.id,
+                Design.source_stage == job.awaiting_stage,
+            )
+            .order_by(Design.created_at.asc(), Design.name.asc())
+        )
+        selected_designs = stage_design_result.scalars().all()
+        resume_source_hint = _awaiting_stage_to_resume_hint(job.awaiting_stage) or "generator"
+        resume_source_label = "BoltzGen" if resume_source_hint == "boltzgen" else "PPIFlow"
+
+        if not selected_designs:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{resume_source_label} review outputs are not materialized yet. "
+                    "Open the job in Results Viewer once review rows appear, or retry after the gate payload refreshes."
+                ),
+            )
+
+        design_ids = [design.id for design in selected_designs]
+        selection_dir = _materialize_antibody_selection(root_job, source_job, selected_designs, "continue_review")
+        launch_request = _build_antibody_iteration_job(
+            root_job=root_job,
+            source_job=source_job,
+            action="ui_refinement",
+            selection_dir=selection_dir,
+            design_ids=design_ids,
+            name_suffix=requested_name_suffix or "continued",
+            param_overrides=param_overrides,
+            selected_designs=selected_designs,
+        )
+        if isinstance(launch_request.params, dict):
+            source_stage_payload = _derive_source_stage_payload(source_job, selected_designs, selection_dir)
+            launch_request.params.update({
+                "lineage_root_job_id": root_job.id,
+                "stage_family": launch_request.params.get("stage_family"),
+                "stage_mode": launch_request.params.get("stage_mode"),
+                "selection_source_type": "review_gate",
+                "selection_source_job_id": source_job.id,
+                "selection_dataset_name": None,
+                "selected_loop_scope": _build_selected_loop_scope(launch_request.params),
+                "interactive_gate_continue": True,
+                **source_stage_payload,
+            })
+
+        launched_job = await create_job(launch_request, background_tasks, session)
+        history = list(job.decision_history or [])
+        history.append({
+            "stage": job.awaiting_stage,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "new_job_id": launched_job.id,
+            "from_stage": resume_source_hint,
+            "applied_overrides": sorted(param_overrides.keys()),
+            "resume_mode": "spawn_refinement",
+        })
+        job.decision_history = history
+        await session.commit()
+
+        return {
+            "message": f"{resume_source_label} review resumed into Antibody Refinement.",
+            "original_job_id": job_id,
+            "new_job_id": launched_job.id,
+            "new_job_name": launched_job.name,
+            "resume_from_stage": resume_source_hint,
+            "resume_stage_mode": "spawn_refinement",
+            "resume_stage_note": f"Paused {resume_source_label} review launches a refinement-compatible follow-on job using the filtered review cohort.",
+            "preserved_stages": [],
+            "applied_overrides": sorted(param_overrides.keys()),
+        }
+
     # Determine work directory for resumption
     # We use the shared 'work' directory in project root by default
     # This allows Nextflow to find cached tasks from the previous run
