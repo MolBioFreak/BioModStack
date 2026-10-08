@@ -6,6 +6,7 @@
 
 import { SeqViz } from "seqviz";
 import {
+    useCallback,
     useEffect,
     useMemo,
     useRef,
@@ -403,6 +404,8 @@ export function SequenceViewer({
     const viewerRef = useRef<HTMLDivElement | null>(null);
     const previousSelectionRef = useRef<SelectionInfo | null | undefined>(selection);
     const selectionPointerButtonRef = useRef<number | null>(null);
+    const pendingPointerSelectionRef = useRef<SelectionInfo | null>(null);
+    const selectionCommitFrameRef = useRef<number | null>(null);
     const [selectionResetVersion, setSelectionResetVersion] = useState(0);
     const activePaletteColors = COLOR_PALETTES[colorPalette].colors as Record<string, string>;
 
@@ -477,6 +480,21 @@ export function SequenceViewer({
         && sequenceData.circular
         && resolvedViewerMode !== 'linear';
 
+    const flushPendingPointerSelection = useCallback(() => {
+        selectionCommitFrameRef.current = null;
+        const pendingSelection = pendingPointerSelectionRef.current;
+        pendingPointerSelectionRef.current = null;
+        if (pendingSelection) {
+            onSelection?.(pendingSelection);
+        }
+    }, [onSelection]);
+
+    useEffect(() => () => {
+        if (selectionCommitFrameRef.current !== null) {
+            window.cancelAnimationFrame(selectionCommitFrameRef.current);
+        }
+    }, []);
+
     useEffect(() => {
         if (!touchBridgeEnabled || !viewerRef.current) {
             return undefined;
@@ -512,7 +530,12 @@ export function SequenceViewer({
         <div
             ref={viewerRef}
             className={`sequence-viewer ${className || ''}`}
-            style={{ height: '100%', width: '100%', position: 'relative' }}
+            style={{
+                height: '100%',
+                width: '100%',
+                position: 'relative',
+                overflowY: resolvedViewerMode === 'both' ? 'auto' : 'hidden',
+            }}
             tabIndex={0}
             aria-label="Molecular sequence viewer. Use Shift+F10 or the Menu key for selection actions."
             onContextMenu={onContextMenu}
@@ -523,13 +546,23 @@ export function SequenceViewer({
             }}
             onPointerDownCapture={(event) => {
                 selectionPointerButtonRef.current = event.button;
+                if (event.button === 0) {
+                    pendingPointerSelectionRef.current = null;
+                }
             }}
             onPointerUpCapture={() => {
+                if (selectionPointerButtonRef.current === 0 && pendingPointerSelectionRef.current) {
+                    if (selectionCommitFrameRef.current !== null) {
+                        window.cancelAnimationFrame(selectionCommitFrameRef.current);
+                    }
+                    selectionCommitFrameRef.current = window.requestAnimationFrame(flushPendingPointerSelection);
+                }
                 window.setTimeout(() => {
                     selectionPointerButtonRef.current = null;
                 }, 0);
             }}
             onPointerCancelCapture={() => {
+                pendingPointerSelectionRef.current = null;
                 selectionPointerButtonRef.current = null;
             }}
         >
@@ -592,7 +625,11 @@ export function SequenceViewer({
                             selectionPointerButtonRef.current,
                         );
                         if (sourceSelection) {
-                            onSelection(sourceSelection);
+                            if (selectionPointerButtonRef.current === 0) {
+                                pendingPointerSelectionRef.current = sourceSelection;
+                            } else {
+                                onSelection(sourceSelection);
+                            }
                         }
                     }
                 }}

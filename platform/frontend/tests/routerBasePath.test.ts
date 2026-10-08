@@ -6,12 +6,20 @@ import {
     getRouterBasename,
     isAppPath,
     joinBrowserUrl,
+    resolveRouterBasenameForLocation,
 } from '../src/runtime/navigation.js';
 
 test('router basename resolution prefers injected values and normalizes slash shape', () => {
     assert.equal(getRouterBasename({ injectedBasename: 'bms', envBaseUrl: '/ignored/' }), '/bms/');
     assert.equal(getRouterBasename({ envBaseUrl: '/bms/' }), '/bms/');
     assert.equal(getRouterBasename({ envBaseUrl: '' }), '/');
+});
+
+test('direct Vite access accepts both root and stable /bms route shapes', () => {
+    assert.equal(resolveRouterBasenameForLocation('/designer', { envBaseUrl: '/' }), '/');
+    assert.equal(resolveRouterBasenameForLocation('/bms/designer', { envBaseUrl: '/' }), '/bms/');
+    assert.equal(resolveRouterBasenameForLocation('/bms/results', { envBaseUrl: '/' }), '/bms/');
+    assert.equal(resolveRouterBasenameForLocation('/designer', { injectedBasename: '/bms/', envBaseUrl: '/' }), '/bms/');
 });
 
 test('current app path normalizes dev and container routes to the same app-relative path', () => {
