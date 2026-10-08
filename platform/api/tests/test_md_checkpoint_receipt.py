@@ -102,7 +102,7 @@ def test_write_checkpoint_receipt_rejects_checkpoint_older_than_pause(tmp_path: 
         )
 
 
-def test_checkpointing_runner_waits_for_gromacs_grandchild_flush(tmp_path: Path) -> None:
+def test_checkpointing_runner_observes_pause_boundary_and_waits_for_gromacs_grandchild_flush(tmp_path: Path) -> None:
     output = tmp_path / "replica_0"
     output.mkdir()
     stale = output / "periodic.cpt"
@@ -152,8 +152,15 @@ def test_checkpointing_runner_waits_for_gromacs_grandchild_flush(tmp_path: Path)
     ], cwd=ROOT, env=env)
     time.sleep(0.25)
     started = time.monotonic()
-    process.send_signal(signal.SIGTERM)
-    assert process.wait(timeout=10) == 128 + signal.SIGTERM
+    (output / ".bms-pause-boundary.json").write_text(
+        json.dumps({"idempotency_key": "pause:boundary"}), encoding="utf-8"
+    )
+    try:
+        assert process.wait(timeout=3) == 128 + signal.SIGTERM
+    finally:
+        if process.poll() is None:
+            process.send_signal(signal.SIGTERM)
+            process.wait(timeout=10)
     assert time.monotonic() - started >= 0.30
     receipt = json.loads((output / "md-checkpoint-receipt.json").read_text(encoding="utf-8"))
     assert receipt["checkpoint_path"] == "signal.cpt"

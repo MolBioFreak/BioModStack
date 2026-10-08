@@ -58,7 +58,18 @@ def run_checkpointable_command(
     previous_term = signal.signal(signal.SIGTERM, request_checkpoint)
     previous_int = signal.signal(signal.SIGINT, request_checkpoint)
     try:
-        returncode = process.wait()
+        pause_boundary = output_dir / ".bms-pause-boundary.json"
+        while True:
+            returncode = process.poll()
+            if returncode is not None:
+                break
+            if pause_requested_at_ns is None and pause_boundary.is_file():
+                pause_requested_at_ns = pause_boundary.stat().st_mtime_ns
+                try:
+                    os.killpg(process_group, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            time.sleep(0.05)
         if pause_requested_at_ns is None:
             return returncode
         _wait_for_process_group_exit(process_group, timeout_seconds=stop_timeout_seconds)
