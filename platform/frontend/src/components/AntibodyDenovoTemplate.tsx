@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob } from '../lib/api';
+import { submitJob, uploadFile } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 
 interface AntibodyDenovoTemplateProps {
@@ -15,6 +15,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [seqDesigner, setSeqDesigner] = useState<'fampnn' | 'antifold' | 'proteinmpnn'>('fampnn');
     const [useAntiberty, setUseAntiberty] = useState(true);
     const [useThermoMPNN, setUseThermoMPNN] = useState(true);
+    const [isUploading, setIsUploading] = useState(false);
+    const [uploadedPath, setUploadedPath] = useState<string | null>(null);
 
     const navigate = useNavigate();
     const queryClient = useQueryClient();
@@ -27,31 +29,53 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
     });
 
+    const handleFileUpload = async (file: File) => {
+        setIsUploading(true);
+        try {
+            // Upload to inputs/antibody directory
+            const response = await uploadFile('inputs/antibody', file);
+            const path = `inputs/antibody/${file.name}`;
+            setUploadedPath(path);
+            console.log('[ANTIBODY_DENOVO] File uploaded:', path, response);
+            return path;
+        } catch (error) {
+            console.error('[ANTIBODY_DENOVO] Upload failed:', error);
+            alert('Failed to upload PDB file. Please try again.');
+            throw error;
+        } finally {
+            setIsUploading(false);
+        }
+    };
+
     const handleSubmit = async () => {
         if (!targetPdb) {
             alert('Please upload a target PDB file');
             return;
         }
         if (!epitopeResidues.trim()) {
-            alert('Please specify epitope residues (e.g., A:45-60,A:100-115)');
+            alert('Please specify epitope residues (e.g., A45,A46,A52)');
             return;
         }
 
-        // Submit with antibody_denovo model config
         try {
+            // Step 1: Upload PDB file if not already uploaded
+            let pdbPath = uploadedPath;
+            if (!pdbPath) {
+                pdbPath = await handleFileUpload(targetPdb);
+            }
+
+            // Step 2: Submit job with uploaded file path
             await submitMutation.mutateAsync({
                 name: jobName,
-                model_id: 'antibody_denovo',  // Must match backend config id
-                mode: 'default',  // Uses workflow_type: pipeline from config
+                model_id: 'antibody_denovo',
+                mode: 'default',
                 params: {
-                    target_pdb: targetPdb.name, // TODO: Proper file upload
+                    target_pdb: pdbPath,
                     epitope_residues: epitopeResidues,
                     rfantibody_num_designs: numDesigns,
-                    // Sequence designers
                     seq_design_fampnn: seqDesigner === 'fampnn',
                     seq_design_antifold: seqDesigner === 'antifold',
                     seq_design_proteinmpnn: seqDesigner === 'proteinmpnn',
-                    // Validation toggles
                     run_immunogenicity_scoring: useAntiberty,
                     run_stability_scoring: useThermoMPNN,
                     run_structure_validation: true,
@@ -135,11 +159,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         <input
                             type="file"
                             accept=".pdb,.cif"
-                            onChange={(e) => setTargetPdb(e.target.files?.[0] || null)}
+                            onChange={(e) => {
+                                const file = e.target.files?.[0] || null;
+                                setTargetPdb(file);
+                                setUploadedPath(null); // Reset uploaded path when file changes
+                            }}
                             className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none file:mr-4 file:py-1 file:px-4 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:cursor-pointer"
                         />
                         {targetPdb && (
-                            <span className="text-sm text-emerald-400">✓ {targetPdb.name}</span>
+                            <span className="text-sm text-emerald-400">
+                                {uploadedPath ? '✓ Uploaded' : '📎'} {targetPdb.name}
+                            </span>
                         )}
                     </div>
                     <p className="mt-1 text-xs text-slate-500">Upload the antigen structure you want to design antibodies against</p>
@@ -153,9 +183,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         value={epitopeResidues}
                         onChange={(e) => setEpitopeResidues(e.target.value)}
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:ring-2 focus:ring-blue-500 outline-none"
-                        placeholder="A:45-60,A:100-115"
+                        placeholder="A45,A46,A52"
                     />
-                    <p className="mt-1 text-xs text-slate-500">Specify residues on the antigen to target (format: Chain:Start-End)</p>
+                    <p className="mt-1 text-xs text-slate-500">Comma-separated residues on the antigen to target (e.g., A45,A46,A52)</p>
                 </div>
 
                 {/* Number of Designs */}
@@ -220,10 +250,15 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             <div className="mt-8 flex justify-end">
                 <button
                     onClick={handleSubmit}
-                    disabled={submitMutation.isPending || !targetPdb}
+                    disabled={submitMutation.isPending || isUploading || !targetPdb}
                     className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
                 >
-                    {submitMutation.isPending ? (
+                    {isUploading ? (
+                        <>
+                            <span className="animate-spin">⏳</span>
+                            Uploading PDB...
+                        </>
+                    ) : submitMutation.isPending ? (
                         <>
                             <span className="animate-spin">⚙️</span>
                             Submitting...
