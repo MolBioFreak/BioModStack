@@ -133,6 +133,48 @@ def test_md_inventory_is_opaque_job_owned_and_checksum_enforced(tmp_path: Path, 
         resolve_artifact(job, trajectory_id, verify=True)
 
 
+def test_summary_admits_one_checksum_bound_xtc_frame_map_for_playback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BMS_MD_RESULT_ROOT", str(tmp_path))
+    raw_job, manifest_path, trajectory = _md_job_tree(tmp_path)
+    replica_root = manifest_path.parent
+    xtc = trajectory.with_suffix(".xtc")
+    trajectory.rename(xtc)
+    trajectory = xtc
+    frame_map = replica_root / "trajectory-frame-map.json"
+    frame_map.write_text(json.dumps({
+        "schema": "bms.md.trajectory-frame-map.v1",
+        "replica": 0,
+        "trajectory_sha256": hashlib.sha256(trajectory.read_bytes()).hexdigest(),
+        "frames": [
+            {"display_frame": 0, "source_frame": 0, "time_ps": 0.0, "step": 0},
+            {"display_frame": 1, "source_frame": 10, "time_ps": 20.0, "step": 1000},
+        ],
+    }), encoding="utf-8")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["trajectory"] = _record(
+        trajectory, replica_root, semantic_role="analysis_trajectory",
+        atom_order_identity=manifest["artifacts"]["trajectory"]["atom_order_identity"],
+    )
+    manifest["artifacts"]["trajectory_frame_map"] = _record(
+        frame_map, replica_root, semantic_role="trajectory_frame_map",
+        source_trajectory_sha256=hashlib.sha256(trajectory.read_bytes()).hexdigest(),
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    playback = summary(cast(MDJobRecord, raw_job))["trajectory_playback"]
+
+    assert playback["supported"] is True
+    replica = playback["replicas"][0]
+    assert replica["replica"] == 0
+    assert replica["trajectory_sha256"] == hashlib.sha256(trajectory.read_bytes()).hexdigest()
+    assert isinstance(replica["frame_map_artifact_id"], str)
+    assert replica["frame_count"] == 2
+    assert replica["first_source_frame"] == 0
+    assert replica["last_source_frame"] == 10
+    assert replica["first_time_ps"] == 0.0
+    assert replica["last_time_ps"] == 20.0
+
+
 def test_final_structure_provenance_must_match_governed_trajectory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

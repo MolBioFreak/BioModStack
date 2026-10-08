@@ -43,6 +43,7 @@ MAX_REPLICAS = 64
 MAX_ARTIFACTS = 1024
 MAX_ANALYSIS_POINTS = 10_000
 MAX_RESIDUE_METRICS = 10_000
+MAX_TRAJECTORY_PLAYBACK_FRAMES = 10_000
 
 
 class MDResultError(RuntimeError):
@@ -637,6 +638,59 @@ def apply_completion_barrier(job: MDJobRecord) -> dict[str, Any]:
     return snapshot
 
 
+def _trajectory_playback(inventory: list[ResolvedMDArtifact]) -> dict[str, Any]:
+    by_replica: dict[int, list[ResolvedMDArtifact]] = {}
+    for artifact in inventory:
+        by_replica.setdefault(artifact.replica_index, []).append(artifact)
+    replicas: list[dict[str, Any]] = []
+    for replica_index, artifacts in sorted(by_replica.items()):
+        trajectories = [item for item in artifacts if item.semantic_role == "analysis_trajectory" and item.path.suffix.lower() == ".xtc"]
+        topologies = [item for item in artifacts if item.semantic_role == "analysis_topology"]
+        frame_maps = [item for item in artifacts if item.semantic_role == "trajectory_frame_map"]
+        if not trajectories and not frame_maps:
+            continue
+        if len(trajectories) != 1 or len(topologies) != 1 or len(frame_maps) != 1:
+            raise MDResultError("MD_TRAJECTORY_PLAYBACK_MANIFEST_INVALID", "MD playback requires one XTC trajectory, topology, and frame map per replica")
+        trajectory, topology, frame_map = trajectories[0], topologies[0], frame_maps[0]
+        if not trajectory.atom_order_identity or topology.atom_order_identity != trajectory.atom_order_identity:
+            raise MDResultError("MD_TRAJECTORY_PLAYBACK_ATOM_ORDER_INVALID", "MD playback topology and trajectory atom order are not identical")
+        if frame_map.source_trajectory_sha256 != trajectory.sha256:
+            raise MDResultError("MD_TRAJECTORY_PLAYBACK_PROVENANCE_INVALID", "MD playback frame map is not bound to the governed trajectory")
+        if frame_map.path.stat().st_size != frame_map.bytes or _digest(frame_map.path) != frame_map.sha256:
+            raise MDResultError("MD_TRAJECTORY_PLAYBACK_FRAME_MAP_CHECKSUM_MISMATCH", "MD playback frame map no longer matches its immutable manifest", 409)
+        payload = _load_json(frame_map.path, "MD_TRAJECTORY_PLAYBACK_FRAME_MAP_INVALID")
+        if payload.get("schema") != "bms.md.trajectory-frame-map.v1" or payload.get("replica") != replica_index or payload.get("trajectory_sha256") != trajectory.sha256:
+            raise MDResultError("MD_TRAJECTORY_PLAYBACK_FRAME_MAP_INVALID", "MD playback frame map identity is invalid")
+        frames = payload.get("frames")
+        if not isinstance(frames, list) or not frames or len(frames) > MAX_TRAJECTORY_PLAYBACK_FRAMES:
+            raise MDResultError("MD_TRAJECTORY_PLAYBACK_FRAME_MAP_INVALID", "MD playback frame map is empty or exceeds its bound")
+        previous_source_frame = -1
+        previous_time_ps = -1.0
+        for display_frame, frame in enumerate(frames):
+            if not isinstance(frame, Mapping) or frame.get("display_frame") != display_frame:
+                raise MDResultError("MD_TRAJECTORY_PLAYBACK_FRAME_MAP_INVALID", "MD playback display-frame mapping is invalid")
+            source_frame, time_ps, step = frame.get("source_frame"), frame.get("time_ps"), frame.get("step")
+            if (
+                type(source_frame) is not int or source_frame < 0 or source_frame <= previous_source_frame
+                or type(step) is not int or step < 0
+                or not isinstance(time_ps, (int, float)) or isinstance(time_ps, bool)
+            ):
+                raise MDResultError("MD_TRAJECTORY_PLAYBACK_FRAME_MAP_INVALID", "MD playback source-frame, time, or step mapping is invalid")
+            time_value = float(time_ps)
+            if not math.isfinite(time_value) or time_value < previous_time_ps:
+                raise MDResultError("MD_TRAJECTORY_PLAYBACK_FRAME_MAP_INVALID", "MD playback source-frame, time, or step mapping is invalid")
+            previous_source_frame, previous_time_ps = source_frame, time_value
+        replicas.append({
+            "replica": replica_index, "trajectory_sha256": trajectory.sha256,
+            "frame_map_artifact_id": frame_map.artifact_id, "frame_count": len(frames),
+            "first_source_frame": frames[0]["source_frame"], "last_source_frame": frames[-1]["source_frame"],
+            "first_time_ps": float(frames[0]["time_ps"]), "last_time_ps": float(frames[-1]["time_ps"]),
+        })
+    if not replicas:
+        return {"supported": False, "reason": "No checksum-bound XTC trajectory, topology, and authoritative frame map are available"}
+    return {"supported": True, "replicas": replicas}
+
+
 def summary(job: MDJobRecord) -> dict[str, Any]:
     root, aggregate, inventory = _load_inventory(job)
     analysis = analysis_report(job)
@@ -661,9 +715,7 @@ def summary(job: MDJobRecord) -> dict[str, Any]:
         "aggregate_manifest_sha256": _digest(root / "manifest.json"),
         "replica_count": len(aggregate["replicas"]), "artifact_count": len(inventory),
         "replicas": replica_summaries,
-        "analysis_status": analysis["status"], "trajectory_playback": {
-            "supported": False, "reason": "Molstar 4.5 XTC/DCD playback has not been proven against a real job artifact",
-        },
+        "analysis_status": analysis["status"], "trajectory_playback": _trajectory_playback(inventory),
     }
 
 
