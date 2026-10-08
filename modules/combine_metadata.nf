@@ -14,6 +14,7 @@ process CombineMetadata {
     script:
     """
     #!/bin/bash
+    set -euo pipefail
     
     python /scripts/metadata_converter.py \
         --input_files ${metadata_fold} ${metadata_fold_seq} \

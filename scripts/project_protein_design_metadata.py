@@ -222,7 +222,11 @@ def project_csv(
     for field in _LINEAGE_FIELDS:
         if field not in output_fields:
             output_fields.append(field)
-    projected = [_merge_lineage(row, manifests[row["candidate_id"]]) for row in rows]
+    rows_by_candidate = {row['candidate_id']: row for row in rows}
+    ordered_manifests = sorted(manifests.values(), key=lambda manifest: (
+        manifest['producer_candidate_key'], manifest['candidate_id']))
+    projected = [_merge_lineage(rows_by_candidate[manifest['candidate_id']], manifest)
+                 for manifest in ordered_manifests]
     temporary = output.with_name(f".{output.name}.tmp")
     try:
         with temporary.open("w", encoding="utf-8", newline="") as handle:

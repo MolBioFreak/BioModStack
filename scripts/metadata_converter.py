@@ -759,6 +759,7 @@ def main():
                 print(f"Conversion to csv successful. Output written to {args.output_file}")
             else:
                 print("Conversion to csv failed.")
+                raise SystemExit(1)
 
 if __name__ == "__main__":
     main()
