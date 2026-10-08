@@ -156,38 +156,45 @@ export function EpitopeSelector({
             {/* Residue Grid per Chain */}
             {displayChains.map(chain => {
                 const colors = getChainColors(chain.id);
+                const firstResNum = chain.residues[0]?.resNum ?? 1;
                 return (
                     <div key={chain.id} className="space-y-2">
-                        <div className={`text-xs font-medium ${colors.text}`}>Chain {chain.id}</div>
-                        <div className="flex flex-wrap gap-1 font-mono text-sm leading-none bg-slate-900/50 p-4 rounded-lg border border-slate-800 max-h-[300px] overflow-y-auto">
+                        <div className={`text-xs font-medium ${colors.text} flex items-center gap-2`}>
+                            Chain {chain.id}
+                            <span className="text-slate-500 font-normal">
+                                (residues {firstResNum}–{chain.residues[chain.residues.length - 1]?.resNum ?? firstResNum})
+                            </span>
+                        </div>
+                        <div className="flex flex-wrap gap-x-1 gap-y-6 font-mono text-sm leading-none bg-slate-900/50 pt-6 pb-4 px-4 rounded-lg border border-slate-800 max-h-[350px] overflow-y-auto">
                             {chain.residues.map((residue, idx) => {
                                 const key = getResKey(residue);
                                 const isSelected = selectedResidues.has(key);
-                                const showNumber = idx % 10 === 0;
+                                // Show number every 10 residues OR at the start
+                                const showNumber = idx === 0 || idx % 10 === 0;
 
                                 return (
                                     <div key={key} className="relative group">
-                                        {/* Position Marker (every 10) - shows PDB residue number */}
+                                        {/* Position Marker - shows PDB residue number */}
                                         {showNumber && (
-                                            <div className="absolute -top-4 left-1/2 -translate-x-1/2 text-[9px] text-slate-600 select-none">
+                                            <div className="absolute -top-5 left-1/2 -translate-x-1/2 text-[10px] text-slate-500 font-semibold select-none whitespace-nowrap">
                                                 {residue.resNum}
                                             </div>
                                         )}
 
                                         <button
                                             onClick={(e) => handleResidueClick(residue, e)}
-                                            className={`w-8 h-8 flex items-center justify-center rounded transition-all border ${isSelected
-                                                ? `${colors.bg} ${colors.border} ${colors.text} scale-105 shadow-lg`
+                                            className={`w-7 h-7 flex items-center justify-center rounded text-xs transition-all border ${isSelected
+                                                ? `${colors.bg} ${colors.border} ${colors.text} scale-110 shadow-lg ring-2 ring-current/30`
                                                 : 'bg-slate-800 border-transparent text-slate-400 hover:bg-slate-700 hover:border-slate-600'
                                                 }`}
-                                            title={`${chain.id}:${residue.resNum} (${residue.resName}) - ${residue.aa}`}
+                                            title={`${chain.id}${residue.resNum} (${residue.resName})`}
                                         >
                                             {residue.aa}
                                         </button>
 
                                         {/* Selection indicator */}
                                         {isSelected && (
-                                            <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-current" />
+                                            <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-current" />
                                         )}
                                     </div>
                                 );
