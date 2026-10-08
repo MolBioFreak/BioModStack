@@ -83,10 +83,37 @@ test('keeps native validation outputs tagged as validation', () => {
             ranking_score: 0.82,
         },
         provenance: {
+            model_id: 'protenix',
             source: 'workflow',
         },
     };
 
     assert.equal(inferDesignOutputSource(validationDesign), 'validation');
     assert.equal(getOutputSourceLabel(validationDesign), 'Protenix');
+});
+
+test('keeps boltz2 prediction rows tagged as validation even when pSCE metrics are present', () => {
+    const boltzPredictionDesign = {
+        name: 'gb1_canary_model_0',
+        pdb_path: '/mnt/BioModStack/bms_results/boltz2_community_canary_gb1_20260417_20260417_212106/pdb_files/predictions/gb1_canary_model_0.pdb',
+        confidence_metrics: {
+            confidence_score: 0.4704,
+            ptm: 0.3989,
+            iptm: 0,
+            complex_plddt: 0.4883,
+            fampnn: {
+                fampnn_avg_psce: 49.05,
+            },
+        },
+        provenance: {
+            model_id: 'boltz2',
+            mode: 'predict',
+            source: 'fampnn',
+        },
+        fampnn_psce: 49.05,
+    };
+
+    assert.equal(inferDesignOutputSource(boltzPredictionDesign), 'validation');
+    assert.equal(inferDesignAnalysisLens(boltzPredictionDesign), 'validation');
+    assert.equal(getOutputSourceLabel(boltzPredictionDesign), 'Boltz-2');
 });

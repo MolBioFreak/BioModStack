@@ -74,6 +74,14 @@ process RunProteinHunter {
     path 'design_manifest.json', emit: manifest
     path '*.log'
 
+    script:
+    """
+    python3 ${params.code_root}/scripts/run_protein_hunter_inference.py \\
+        --request ${request_json} \\
+        --input-dir ${input_dir} \\
+        --output-dir .
+    """
+
     stub:
     """
     mkdir -p raw/pdbs raw/metadata
@@ -92,14 +100,6 @@ EOF
 [{"design_id":"protein_hunter_stub_0001","sequence":"G","structure_path":"raw/pdbs/protein_hunter_stub_0001.pdb","metadata_path":"raw/metadata/generator_protein_hunter_stub_0001.json"}]
 EOF
     echo "Protein Hunter stub run" > protein_hunter.log
-    """
-
-    script:
-    """
-    python3 ${params.code_root}/scripts/run_protein_hunter_inference.py \\
-        --request ${request_json} \\
-        --input-dir ${input_dir} \\
-        --output-dir .
     """
 }
 

@@ -46,6 +46,7 @@ rcsb/
 # IDE
 .idea/
 .vscode/
+.hermes/
 *.swp
 *.swo
 
@@ -159,6 +160,7 @@ platform/api/inputs/
 # Scratch test scripts
 test_*.nf
 spawn_result.json
+platform/api/tmp_import_*.py
 
 # Recovery artifacts (local only)
 inputs/recovered_rfantibody/

@@ -10,6 +10,13 @@ import { GpuSchedulerControls } from './dashboard/SystemResources';
 import { DashboardTelemetry } from './dashboard/DashboardTelemetry';
 import { JobQueueTable } from './dashboard/JobQueueTable';
 import { JobFilters } from './dashboard/JobFilters';
+import { StructureReorchestratePanel } from './dashboard/StructureReorchestratePanel';
+import {
+    buildStructureReorchestrateOverrides,
+    deriveStructureReorchestrateSettings,
+    isStructureReorchestrateJob,
+    type StructureReorchestrateSettings,
+} from './dashboard/reorchestrateStructureSettings';
 
 const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
     const modelId = (job.model_id || '').toLowerCase();
@@ -141,6 +148,8 @@ export function Dashboard() {
     const [resumeSettingsFromStage, setResumeSettingsFromStage] = useState<string>('auto');
     const [resumeSettingsNameSuffix, setResumeSettingsNameSuffix] = useState<string>('retuned');
     const [resumeSettingsForm, setResumeSettingsForm] = useState<ResumeSettingsForm>(DEFAULT_RESUME_SETTINGS_FORM);
+    const [structureReorchestrateSettings, setStructureReorchestrateSettings] = useState<StructureReorchestrateSettings | null>(null);
+    const [resumeDialogMode, setResumeDialogMode] = useState<'resume' | 'reorchestrate'>('resume');
     const [resumeSettingsError, setResumeSettingsError] = useState<string | null>(null);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
@@ -153,6 +162,13 @@ export function Dashboard() {
             return false;
         }
     })();
+
+    const closeResumeSettingsModal = () => {
+        setResumeSettingsJob(null);
+        setResumeSettingsError(null);
+        setStructureReorchestrateSettings(null);
+        setResumeDialogMode('resume');
+    };
 
     const { data: jobsData, isLoading: jobsLoading } = useQuery({
         queryKey: ['jobs'],
@@ -220,18 +236,20 @@ export function Dashboard() {
         }) => resumeJob(jobId, fromStage, paramOverrides, nameSuffix),
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            setResumeSettingsJob(null);
-            setResumeSettingsError(null);
+            const successPrefix = resumeDialogMode === 'reorchestrate' ? 'Job re-orchestrated!' : 'Job resumed!';
+            closeResumeSettingsModal();
             const note = response.data.resume_stage_note ? `\nNote: ${response.data.resume_stage_note}` : '';
-            alert(`Job resumed! New job: ${response.data.new_job_name}\nResuming from: ${response.data.resume_from_stage}${note}`);
+            alert(`${successPrefix} New job: ${response.data.new_job_name}\nResuming from: ${response.data.resume_from_stage}${note}`);
         },
         onError: (error: any) => {
-            alert(`Resume failed: ${error.response?.data?.detail || error.message}`);
+            const failurePrefix = resumeDialogMode === 'reorchestrate' ? 'Re-orchestrate failed' : 'Resume failed';
+            alert(`${failurePrefix}: ${error.response?.data?.detail || error.message}`);
         }
     });
 
     const handleResume = (job: Job) => {
         if (job.status === 'awaiting_input' && job.awaiting_payload?.resume_direct) {
+            setResumeDialogMode('resume');
             resumeMutation.mutate({ jobId: job.id });
             return;
         }
@@ -243,15 +261,19 @@ export function Dashboard() {
         const resumePoint = completed.length > 0 ? `after ${completed[completed.length - 1]}` : 'from start (using cache)';
 
         if (confirm(`Resume job "${job.name}" ${resumePoint}?`)) {
+            setResumeDialogMode('resume');
             resumeMutation.mutate({ jobId: job.id });
         }
     };
 
     const handleResumeWithSettings = (job: Job) => {
         const p = job.params || {};
+        const structureRetryJob = isStructureReorchestrateJob(job);
+        setResumeDialogMode(structureRetryJob ? 'reorchestrate' : 'resume');
         setResumeSettingsJob(job);
         setResumeSettingsFromStage(mapAwaitingStageToResumeStage(job.awaiting_stage));
-        setResumeSettingsNameSuffix(job.status === 'awaiting_input' ? 'continued' : 'retuned');
+        setResumeSettingsNameSuffix(job.status === 'awaiting_input' ? 'continued' : structureRetryJob ? 'reorchestrated' : 'retuned');
+        setStructureReorchestrateSettings(structureRetryJob ? deriveStructureReorchestrateSettings(job) : null);
         setResumeSettingsForm({
             rfantibodyNumDesigns: clamp(Math.round(toNumber(p.rfantibody_num_designs, DEFAULT_RESUME_SETTINGS_FORM.rfantibodyNumDesigns)), 1, 64),
             seqsPerDesign: clamp(Math.round(toNumber(p.seqs_per_design, DEFAULT_RESUME_SETTINGS_FORM.seqsPerDesign)), 1, 32),
@@ -302,34 +324,43 @@ export function Dashboard() {
     const submitResumeWithSettings = () => {
         if (!resumeSettingsJob) return;
         setResumeSettingsError(null);
-        const p = resumeSettingsJob.params || {};
-        const parsedOverrides: Record<string, unknown> = {};
-        const maybeSetNumber = (key: string, nextValue: number) => {
-            const prevRaw = p[key];
-            const prevValue = Number(prevRaw);
-            if (prevRaw === undefined || !Number.isFinite(prevValue) || Math.abs(prevValue - nextValue) > 1e-9) {
-                parsedOverrides[key] = nextValue;
-            }
-        };
-        const maybeSetBool = (key: string, nextValue: boolean) => {
-            const prevRaw = p[key];
-            if (prevRaw === undefined || toBoolean(prevRaw) !== nextValue) {
-                parsedOverrides[key] = nextValue;
-            }
-        };
 
-        maybeSetNumber('rfantibody_num_designs', Math.round(resumeSettingsForm.rfantibodyNumDesigns));
-        maybeSetNumber('seqs_per_design', Math.round(resumeSettingsForm.seqsPerDesign));
-        maybeSetNumber('rfantibody_diffusion_steps', Math.round(resumeSettingsForm.rfantibodyDiffusionSteps));
-        maybeSetNumber('rfantibody_guide_scale', Math.round(resumeSettingsForm.rfantibodyGuideScale));
-        maybeSetNumber('fampnn_max_psce', Number(resumeSettingsForm.fampnnMaxPsce.toFixed(2)));
-        maybeSetNumber('fampnn_max_residue_psce', Number(resumeSettingsForm.fampnnMaxResiduePsce.toFixed(2)));
-        maybeSetNumber('boltz_max_binder_rmsd', Number(resumeSettingsForm.boltzMaxBinderRmsd.toFixed(2)));
-        maybeSetNumber('boltz_min_ptm_interface', Number(resumeSettingsForm.boltzMinPtmInterface.toFixed(2)));
-        maybeSetBool('run_maturation', resumeSettingsForm.runMaturation);
-        maybeSetBool('run_thermompnn', resumeSettingsForm.runThermoMPNN);
-        maybeSetBool('run_stability_scoring', resumeSettingsForm.runThermoMPNN);
-        maybeSetBool('run_anarcii_post', resumeSettingsForm.runAnarciiPost);
+        let parsedOverrides: Record<string, unknown> = {};
+        if (isStructureReorchestrateJob(resumeSettingsJob)) {
+            if (!structureReorchestrateSettings) {
+                setResumeSettingsError('Structure retry settings are missing. Close and reopen the re-orchestrate dialog.');
+                return;
+            }
+            parsedOverrides = buildStructureReorchestrateOverrides(resumeSettingsJob, structureReorchestrateSettings);
+        } else {
+            const p = resumeSettingsJob.params || {};
+            const maybeSetNumber = (key: string, nextValue: number) => {
+                const prevRaw = p[key];
+                const prevValue = Number(prevRaw);
+                if (prevRaw === undefined || !Number.isFinite(prevValue) || Math.abs(prevValue - nextValue) > 1e-9) {
+                    parsedOverrides[key] = nextValue;
+                }
+            };
+            const maybeSetBool = (key: string, nextValue: boolean) => {
+                const prevRaw = p[key];
+                if (prevRaw === undefined || toBoolean(prevRaw) !== nextValue) {
+                    parsedOverrides[key] = nextValue;
+                }
+            };
+
+            maybeSetNumber('rfantibody_num_designs', Math.round(resumeSettingsForm.rfantibodyNumDesigns));
+            maybeSetNumber('seqs_per_design', Math.round(resumeSettingsForm.seqsPerDesign));
+            maybeSetNumber('rfantibody_diffusion_steps', Math.round(resumeSettingsForm.rfantibodyDiffusionSteps));
+            maybeSetNumber('rfantibody_guide_scale', Math.round(resumeSettingsForm.rfantibodyGuideScale));
+            maybeSetNumber('fampnn_max_psce', Number(resumeSettingsForm.fampnnMaxPsce.toFixed(2)));
+            maybeSetNumber('fampnn_max_residue_psce', Number(resumeSettingsForm.fampnnMaxResiduePsce.toFixed(2)));
+            maybeSetNumber('boltz_max_binder_rmsd', Number(resumeSettingsForm.boltzMaxBinderRmsd.toFixed(2)));
+            maybeSetNumber('boltz_min_ptm_interface', Number(resumeSettingsForm.boltzMinPtmInterface.toFixed(2)));
+            maybeSetBool('run_maturation', resumeSettingsForm.runMaturation);
+            maybeSetBool('run_thermompnn', resumeSettingsForm.runThermoMPNN);
+            maybeSetBool('run_stability_scoring', resumeSettingsForm.runThermoMPNN);
+            maybeSetBool('run_anarcii_post', resumeSettingsForm.runAnarciiPost);
+        }
 
         const effectiveStage = resumeSettingsFromStage === 'auto' ? undefined : resumeSettingsFromStage;
         const effectiveSuffix = resumeSettingsNameSuffix.trim() || undefined;
@@ -390,9 +421,7 @@ export function Dashboard() {
         forceRunMutation.mutate(jobId);
     };
 
-
-
-
+    const isStructureReorchestrateModal = !!resumeSettingsJob && isStructureReorchestrateJob(resumeSettingsJob);
 
     return (
         <div className="min-h-screen bg-slate-950 px-6 pt-3 pb-6">
@@ -436,16 +465,15 @@ export function Dashboard() {
                     <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
                         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700">
                             <div>
-                                <h2 className="text-xl font-semibold text-slate-100">Resume With Settings</h2>
+                                <h2 className="text-xl font-semibold text-slate-100">
+                                    {isStructureReorchestrateModal ? 'Re-orchestrate Job' : 'Resume With Settings'}
+                                </h2>
                                 <p className="text-sm text-slate-400 mt-1">
                                     {resumeSettingsJob.name}
                                 </p>
                             </div>
                             <button
-                                onClick={() => {
-                                    setResumeSettingsJob(null);
-                                    setResumeSettingsError(null);
-                                }}
+                                onClick={closeResumeSettingsModal}
                                 className="text-slate-400 hover:text-slate-200 text-2xl font-light transition-colors"
                                 disabled={resumeMutation.isPending}
                             >
@@ -456,7 +484,7 @@ export function Dashboard() {
                         <div className="p-6 overflow-auto space-y-4">
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <label className="text-sm text-slate-300">
-                                    Resume Stage Hint
+                                    {isStructureReorchestrateModal ? 'Re-orchestrate From' : 'Resume Stage Hint'}
                                     <select
                                         value={resumeSettingsFromStage}
                                         onChange={(e) => setResumeSettingsFromStage(e.target.value)}
@@ -474,7 +502,9 @@ export function Dashboard() {
                                         </p>
                                     )}
                                     <p className="mt-1 text-xs text-slate-500">
-                                        Cache-based resume reuses matching tasks; this hint does not strictly force stage restart yet.
+                                        {isStructureReorchestrateModal
+                                            ? 'Cache-based re-orchestration still reuses matching tasks; this hint does not strictly force a stage restart yet.'
+                                            : 'Cache-based resume reuses matching tasks; this hint does not strictly force stage restart yet.'}
                                     </p>
                                 </label>
                                 <label className="text-sm text-slate-300">
@@ -483,14 +513,28 @@ export function Dashboard() {
                                         type="text"
                                         value={resumeSettingsNameSuffix}
                                         onChange={(e) => setResumeSettingsNameSuffix(e.target.value)}
-                                        placeholder="retuned"
+                                        placeholder={isStructureReorchestrateModal ? 'reorchestrated' : 'retuned'}
                                         className="mt-1 w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-100"
                                         disabled={resumeMutation.isPending}
                                     />
                                 </label>
                             </div>
 
-                            <div>
+                            {isStructureReorchestrateModal && structureReorchestrateSettings && (
+                                <>
+                                    <StructureReorchestratePanel
+                                        settings={structureReorchestrateSettings}
+                                        onChange={setStructureReorchestrateSettings}
+                                        disabled={resumeMutation.isPending}
+                                    />
+                                    {resumeSettingsError && (
+                                        <p className="text-sm text-red-400">{resumeSettingsError}</p>
+                                    )}
+                                </>
+                            )}
+
+                            {!isStructureReorchestrateModal && (
+                                <div>
                                 <div className="flex items-center justify-between mb-3">
                                     <p className="text-sm text-slate-300">Tuning Controls</p>
                                     <div className="flex items-center gap-2">
@@ -777,15 +821,13 @@ export function Dashboard() {
                                 {resumeSettingsError && (
                                     <p className="mt-2 text-sm text-red-400">{resumeSettingsError}</p>
                                 )}
-                            </div>
+                                </div>
+                            )}
                         </div>
 
                         <div className="flex justify-end gap-2 px-6 py-4 border-t border-slate-700">
                             <button
-                                onClick={() => {
-                                    setResumeSettingsJob(null);
-                                    setResumeSettingsError(null);
-                                }}
+                                onClick={closeResumeSettingsModal}
                                 className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors"
                                 disabled={resumeMutation.isPending}
                             >
@@ -796,7 +838,9 @@ export function Dashboard() {
                                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors disabled:opacity-50"
                                 disabled={resumeMutation.isPending}
                             >
-                                {resumeMutation.isPending ? 'Resuming...' : 'Resume Job'}
+                                {resumeMutation.isPending
+                                    ? (isStructureReorchestrateModal ? 'Re-orchestrating...' : 'Resuming...')
+                                    : (isStructureReorchestrateModal ? 'Re-orchestrate Job' : 'Resume Job')}
                             </button>
                         </div>
                     </div>

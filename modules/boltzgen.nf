@@ -1,34 +1,3 @@
-[
-    boltzgen_nanobody_scaffold_specs: null,
-    boltzgen_num_designs: 10,
-    boltzgen_diffusion_batch_size: null,
-    boltzgen_batch_size: null,
-    boltzgen_protocol: 'protein-anything',
-    boltzgen_step_scale: null,
-    boltzgen_noise_scale: null,
-    boltzgen_inverse_fold_avoid: null,
-    boltzgen_inverse_fold_num_sequences: null,
-    boltzgen_checkpoint_mode: null,
-    boltzgen_skip_inverse_folding: false,
-    boltzgen_reuse: false,
-    boltzgen_extra_config: null,
-    boltzgen_min_plddt: null,
-    boltzgen_min_conf_score: null,
-    boltzgen_refolding_rmsd_threshold: null,
-    boltzgen_max_rmsd: null,
-    boltzgen_budget: null,
-    boltzgen_alpha: '0.01',
-    boltzgen_filter_biased: true,
-    boltzgen_metrics_override: null,
-    boltzgen_additional_filters: null,
-    boltzgen_size_buckets: null,
-    boltzgen_extra_params: null,
-].each { key, value ->
-    if (!params.containsKey(key)) {
-        params[key] = value
-    }
-}
-
 process PrepBoltzGenInput {
     label 'pyrosetta_tools'
 

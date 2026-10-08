@@ -7,7 +7,7 @@ import ChainDetailsPanel from './ChainDetailsPanel';
 import ReferenceSelector, { type ReferenceStructure } from './ReferenceSelector';
 import { useThemeColors } from './useThemeColors';
 import { buildFileDownloadUrl, buildFileStreamUrl, fetchDesignAnalysis, triggerDesignAnalysis, type ChainMetric, type Design, type FampnnPsceChainMetric, type FampnnPsceProfile, type Job, type PAEData, type PersistedAnalysisRun, type RfLoopMetric, type RfLoopMetrics, type RfScopeHeadlineMetrics, type RfScreeningScope, type StructureAnalysis } from '../lib/api';
-import { inferDesignAnalysisLens, inferDesignOutputSource } from './designOutputSource';
+import { inferDesignAnalysisLens, inferDesignOutputSource, getValidationOutputLabel } from './designOutputSource';
 
 interface Selection {
     chain_id?: string;
@@ -112,7 +112,8 @@ const getRfLoopEntries = (design: Design | null | undefined): Array<{ loopId: st
 function getDesignOriginLabel(design: Design | null | undefined): string | null {
     const source = inferDesignOutputSource(design || {});
     if (source === 'validation') {
-        return 'Protenix Validation';
+        const validationLabel = getValidationOutputLabel(design || {});
+        return validationLabel === 'Validation' ? 'Validation' : `${validationLabel} Validation`;
     }
     if (source === 'boltzgen') {
         return 'BoltzGen Candidate';

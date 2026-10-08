@@ -66,6 +66,23 @@ const resolveInitialPrimaryProteinComponent = (initialValues?: Record<string, an
     return proteinComponents[0];
 };
 
+const MIN_BOLTZ_NO_MSA_RECYCLING_STEPS = 3;
+const MIN_BOLTZ_NO_MSA_SAMPLING_STEPS = 50;
+
+const clampBoltzRecyclingSteps = (value: unknown, useMsa: boolean): number => {
+    const parsed = Number.parseInt(String(value), 10);
+    const min = useMsa ? 1 : MIN_BOLTZ_NO_MSA_RECYCLING_STEPS;
+    if (!Number.isFinite(parsed)) return MIN_BOLTZ_NO_MSA_RECYCLING_STEPS;
+    return Math.max(min, Math.min(10, parsed));
+};
+
+const clampBoltzSamplingSteps = (value: unknown, useMsa: boolean): number => {
+    const parsed = Number.parseInt(String(value), 10);
+    const min = useMsa ? 10 : MIN_BOLTZ_NO_MSA_SAMPLING_STEPS;
+    if (!Number.isFinite(parsed)) return MIN_BOLTZ_NO_MSA_SAMPLING_STEPS;
+    return Math.max(min, Math.min(1000, parsed));
+};
+
 export function StructurePredictionTemplate({ onBack, initialValues }: StructurePredictionTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
@@ -116,9 +133,14 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [predictor, setPredictor] = useState<'boltz' | 'rf3' | 'protenix' | 'both' | 'all'>(initialValues?.pred_method || 'boltz');
 
     // Boltz-2 parameters
-    const [boltzUseMsa, setBoltzUseMsa] = useState(initialValues?.boltz_use_msa ?? true);
-    const [boltzRecyclingSteps, setBoltzRecyclingSteps] = useState(initialValues?.boltz_recycling_steps ?? 3);
-    const [boltzSamplingSteps, setBoltzSamplingSteps] = useState(initialValues?.boltz_sampling_steps ?? 50);
+    const initialBoltzUseMsa = initialValues?.boltz_use_msa ?? true;
+    const [boltzUseMsa, setBoltzUseMsa] = useState(initialBoltzUseMsa);
+    const [boltzRecyclingSteps, setBoltzRecyclingSteps] = useState(
+        clampBoltzRecyclingSteps(initialValues?.boltz_recycling_steps ?? 3, initialBoltzUseMsa)
+    );
+    const [boltzSamplingSteps, setBoltzSamplingSteps] = useState(
+        clampBoltzSamplingSteps(initialValues?.boltz_sampling_steps ?? 50, initialBoltzUseMsa)
+    );
     const [boltzNumSamples, setBoltzNumSamples] = useState(initialValues?.boltz_num_samples ?? 1);
     const [boltzUsePotentials, setBoltzUsePotentials] = useState(initialValues?.boltz_use_potentials ?? false);
     const [boltzMethod, setBoltzMethod] = useState(initialValues?.boltz_method || '');
@@ -1175,7 +1197,12 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                 <label className="text-xs text-slate-400 block mb-1">Use MSA</label>
                                 <select
                                     value={boltzUseMsa ? 'true' : 'false'}
-                                    onChange={(e) => setBoltzUseMsa(e.target.value === 'true')}
+                                    onChange={(e) => {
+                                        const nextUseMsa = e.target.value === 'true';
+                                        setBoltzUseMsa(nextUseMsa);
+                                        setBoltzRecyclingSteps((prev) => clampBoltzRecyclingSteps(prev, nextUseMsa));
+                                        setBoltzSamplingSteps((prev) => clampBoltzSamplingSteps(prev, nextUseMsa));
+                                    }}
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                 >
                                     <option value="true">Yes</option>
@@ -1187,8 +1214,8 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                 <input
                                     type="number"
                                     value={boltzRecyclingSteps}
-                                    onChange={(e) => setBoltzRecyclingSteps(Math.max(1, Math.min(10, parseInt(e.target.value) || 3)))}
-                                    min={1}
+                                    onChange={(e) => setBoltzRecyclingSteps(clampBoltzRecyclingSteps(e.target.value, boltzUseMsa))}
+                                    min={boltzUseMsa ? 1 : MIN_BOLTZ_NO_MSA_RECYCLING_STEPS}
                                     max={10}
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                 />
@@ -1198,8 +1225,8 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                 <input
                                     type="number"
                                     value={boltzSamplingSteps}
-                                    onChange={(e) => setBoltzSamplingSteps(Math.max(10, Math.min(1000, parseInt(e.target.value) || 50)))}
-                                    min={10}
+                                    onChange={(e) => setBoltzSamplingSteps(clampBoltzSamplingSteps(e.target.value, boltzUseMsa))}
+                                    min={boltzUseMsa ? 10 : MIN_BOLTZ_NO_MSA_SAMPLING_STEPS}
                                     max={1000}
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                 />
@@ -1228,6 +1255,12 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                 />
                             </div>
                         </div>
+
+                        {!boltzUseMsa && (
+                            <p className="text-xs text-amber-300/90 mt-3">
+                                No-MSA Boltz-2 runs are held to at least 50 sampling steps and 3 recycling steps to avoid malformed geometry.
+                            </p>
+                        )}
 
                         <div>
                             <label className="text-xs text-slate-400 block mb-1">Conditioning Method</label>
