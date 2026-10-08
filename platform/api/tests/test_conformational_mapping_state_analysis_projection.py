@@ -12,13 +12,18 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from database import (
+    ConformationalMappingArtifact,
     ConformationalMappingLandscapeRow,
     ConformationalMappingRecord,
+    ConformationalMappingStateLandscapeAnalysisHeader,
+    ConformationalMappingStateLandscapeAnalysisPair,
+    ConformationalMappingStateLandscapeAnalysisRow,
 )
 from services.conformational_mapping.contracts import canonical_sha256
 from services.conformational_mapping.persistence import (
     ConformationalPersistenceError,
     ingest_result_bundle,
+    rollback_request_records,
 )
 from test_conformational_mapping_ingester_state_compatibility import (
     _coherent_state_bundle,
@@ -133,6 +138,50 @@ async def test_state_analysis_projection_replay_is_idempotent_without_duplicate_
         assert len(await _projection_rows(session, "conformational_mapping_state_landscape_analysis_headers")) == 1
         assert len(await _projection_rows(session, "conformational_mapping_state_landscape_analysis_pairs")) == len(artifact["resolved_pairs"])
         assert len(await _projection_rows(session, "conformational_mapping_state_landscape_analysis_rows")) == len(artifact["rows"])
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_rollback_request_records_removes_state_analysis_projection_transactionally(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "result"
+    root.mkdir()
+    request, bundle, artifact = _coherent_state_bundle(root)
+    bundle["cm_state_landscape_analyses"] = [artifact]
+    session, engine = await _session(tmp_path)
+    try:
+        record = await _register(session, request, bundle)
+        await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
+        await session.commit()
+        await session.execute(text("PRAGMA foreign_keys=ON"))
+
+        for model, expected_count in (
+            (ConformationalMappingStateLandscapeAnalysisHeader, 1),
+            (ConformationalMappingStateLandscapeAnalysisPair, len(artifact["resolved_pairs"])),
+            (ConformationalMappingStateLandscapeAnalysisRow, len(artifact["rows"])),
+        ):
+            assert await session.scalar(
+                select(func.count()).select_from(model).where(model.request_id == record.request_id)
+            ) == expected_count
+
+        await rollback_request_records(session, record.request_id)
+        await rollback_request_records(session, record.request_id)
+        await session.commit()
+
+        for model in (
+            ConformationalMappingStateLandscapeAnalysisHeader,
+            ConformationalMappingStateLandscapeAnalysisPair,
+            ConformationalMappingStateLandscapeAnalysisRow,
+            ConformationalMappingLandscapeRow,
+            ConformationalMappingArtifact,
+            ConformationalMappingRecord,
+        ):
+            assert await session.scalar(
+                select(func.count()).select_from(model).where(model.request_id == record.request_id)
+            ) == 0
     finally:
         await session.close()
         await engine.dispose()
