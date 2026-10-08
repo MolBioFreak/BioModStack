@@ -67,6 +67,51 @@ def test_real_cli_runtime_exports_idempotence(fixture):
         profiles.save_install_profile({"web_host_port": 18090}, ROOT)
 
 
+def test_committed_generation_readable_in_narrower_service_cgroup(fixture, monkeypatch):
+    import biomodstack_local_resources as resources
+    monkeypatch.setattr(resources, "detect_local_capacity", lambda: resources.LocalCapacity(8, 8 * resources.GIB))
+    result = apply(fixture)
+    assert result["configured"], result
+    installed = profiles.load_install_profile()
+    assert installed["local_memory_gib"] == 6
+    exports = profiles.get_core_runtime_env_path().read_bytes()
+    monkeypatch.setattr(resources, "detect_local_capacity", lambda: resources.LocalCapacity(2, 4 * resources.GIB))
+    resources.applied_local_policy.cache_clear()
+    try:
+        tx.assert_configuration_readable()
+        assert profiles.load_install_profile() == installed
+        assert profiles.get_core_runtime_env_path().read_bytes() == exports
+        assert resources.applied_local_policy() == resources.LocalCapacity(2, 4 * resources.GIB)
+        # The very same values are oversized NEW input in this leaf.
+        with pytest.raises(ValueError):
+            profiles.validate_install_profile_raw(installed)
+        # Neither a runtime marker nor exports can enlarge committed capacity.
+        monkeypatch.setenv("BMS_LOCAL_CPU_THREADS", "100")
+        monkeypatch.setenv("BMS_LOCAL_MEMORY_BYTES", str(100 * resources.GIB))
+        monkeypatch.setenv("BMS_CONFIGURATION_VERIFIED", "1")
+        resources.applied_local_policy.cache_clear()
+        assert resources.applied_local_policy() == resources.LocalCapacity(2, 4 * resources.GIB)
+        monkeypatch.setattr(resources, "detect_local_capacity", lambda: resources.LocalCapacity(32, 32 * resources.GIB))
+        resources.applied_local_policy.cache_clear()
+        assert resources.applied_local_policy() == resources.committed_local_policy(installed)
+        # Integrity checks remain enabled even with that untrusted marker.
+        (tx.transaction_dir() / "generation" / "profile").write_text("{}")
+        with pytest.raises(tx.ConfigurationBlocked):
+            tx.assert_configuration_readable()
+    finally:
+        resources.applied_local_policy.cache_clear()
+
+
+@pytest.mark.parametrize("values", [
+    {"local_cpu_threads": True}, {"local_cpu_threads": 0},
+    {"local_memory_gib": float("nan")}, {"local_memory_gib": float("inf")},
+    {"local_memory_gib": 0}, {"local_memory_gib": 1e-20},
+])
+def test_integrity_validation_still_rejects_malformed_budgets(values):
+    with pytest.raises(ValueError):
+        profiles.validate_install_profile_raw(values, admit_local_capacity=False)
+
+
 POINTS = ["pending_journal", "journal", "stage:profile", "stage:core_runtime_env", "stage:compat_env", "validated",
           "publish:profile", "publish:core_runtime_env", "publish:compat_env", "before_activation",
           "activated", "committed"]
