@@ -1,9 +1,9 @@
 /**
  * OligoDesignerTemplate - Comprehensive Multi-Polymer Design (DNA, RNA, Protein)
  * 
- * Uses RFDpoly for de novo structure generation with Boltz-2 validation.
- * Supports: RNA aptamers, DNA aptamers, protein-DNA complexes, RNP complexes,
- * and protein-binding aptamer design with target specification.
+ * Uses RFDpoly for de novo backbone generation + NA-MPNN for sequence design.
+ * Designs NEW sequences optimized to fold into generated 3D backbones.
+ * Does NOT predict structure from existing sequences (use Boltz-2 for that).
  * 
  * RFDpoly Size Limits (experimentally validated):
  * - RNA: ≤120 nt (safe), up to 240 nt validated via cryo-EM
@@ -135,13 +135,13 @@ const DESIGN_MODE_ICONS: Record<DesignMode, React.ReactNode> = {
 const DESIGN_MODE_INFO: Record<DesignMode, { label: string; description: string; requiresTarget: boolean; defaultChains: ChainConfig[] }> = {
     rna_aptamer: {
         label: 'RNA Aptamer',
-        description: 'Design RNA molecules with specific 3D structures (riboswitches, aptamers)',
+        description: 'Design new RNA molecules with optimal 3D folds (riboswitches, aptamers)',
         requiresTarget: false,
         defaultChains: [{ id: '1', type: 'rna', length: 40, useRange: false, useSequence: false }]
     },
     dna_aptamer: {
         label: 'DNA Aptamer',
-        description: 'Design DNA sequences with target-binding capability',
+        description: 'Design new DNA molecules with optimal 3D folds',
         requiresTarget: false,
         defaultChains: [{ id: '1', type: 'dna', length: 40, useRange: false, useSequence: false }]
     },
@@ -165,7 +165,7 @@ const DESIGN_MODE_INFO: Record<DesignMode, { label: string; description: string;
     },
     protein_binding_aptamer: {
         label: 'Protein-Binding Aptamer',
-        description: 'Design RNA/DNA that binds a specific target protein',
+        description: 'Design RNA/DNA to bind a specific target protein',
         requiresTarget: true,
         defaultChains: [{ id: '1', type: 'rna', length: 40, useRange: false, useSequence: false }]
     },
@@ -294,9 +294,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
     const [showFilters, setShowFilters] = useState(false);
     const [showStorage, setShowStorage] = useState(false);
     const [showParallelism, setShowParallelism] = useState(false);
-    const [temperature, setTemperature] = useState(1.0);
     const [seed, setSeed] = useState<number | null>(null);
-    const [noiseSchedule, setNoiseSchedule] = useState<'linear' | 'cosine'>('linear');
     const [bindingGuidance, setBindingGuidance] = useState(false);
 
     // NA-MPNN sequence design settings
@@ -357,16 +355,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
         return chains.map(c => c.type).join(',');
     }, [chains]);
 
-    // Build chain sequences object for backend
-    const chainSequences = useMemo(() => {
-        const seqs: Record<string, string> = {};
-        chains.forEach((c, idx) => {
-            if (c.useSequence && c.sequence) {
-                seqs[`chain_${idx + 1}`] = c.sequence.replace(/\s/g, '').toUpperCase();
-            }
-        });
-        return Object.keys(seqs).length > 0 ? seqs : null;
-    }, [chains]);
+
 
     // ============================================================================
     // Effects
@@ -444,7 +433,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     rfdpoly_num_designs: effectiveNumDesigns,
                     rfdpoly_diffusion_steps: QUALITY_PRESETS[qualityPreset].steps,
                     rfdpoly_checkpoint: checkpoint,
-                    rfdpoly_noise_schedule: noiseSchedule,
+
                     // Target binding (for protein-binding aptamer mode)
                     ...(selectedTarget && {
                         target_pdb: selectedTarget.path || selectedTarget.url,
@@ -456,8 +445,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                     ...(designApproach === 'scaffold' && scaffoldPdbPath && {
                         scaffold_pdb: scaffoldPdbPath,
                     }),
-                    // Custom sequences
-                    ...(chainSequences && { chain_sequences: chainSequences }),
+
                     // Validation & filtering
                     oligo_validate_boltz: validateWithBoltz,
                     boltz_validation_mode: boltzValidationMode,
@@ -481,7 +469,6 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                         designs_per_job: designsPerJob,
                     }),
                     // Advanced options
-                    ...(temperature !== 1.0 && { rfdpoly_temperature: temperature }),
                     ...(seed !== null && { rfdpoly_seed: seed }),
                     // NA-MPNN sequence design
                     nampnn_num_seqs: nampnnNumSeqs,
@@ -1353,19 +1340,6 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                 {showAdvanced && (
                     <div className="mt-4 grid grid-cols-2 gap-4">
                         <div>
-                            <label className="text-xs text-slate-400 mb-1 block">Temperature</label>
-                            <input
-                                type="number"
-                                step={0.1}
-                                value={temperature}
-                                onChange={(e) => setTemperature(parseFloat(e.target.value) || 1.0)}
-                                min={0.1}
-                                max={2.0}
-                                className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
-                            />
-                            <div className="text-xs text-slate-500 mt-1">Higher = more diverse</div>
-                        </div>
-                        <div>
                             <label className="text-xs text-slate-400 mb-1 block">Random Seed (optional)</label>
                             <input
                                 type="number"
@@ -1374,17 +1348,6 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                                 placeholder="Auto"
                                 className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
                             />
-                        </div>
-                        <div>
-                            <label className="text-xs text-slate-400 mb-1 block">Noise Schedule</label>
-                            <select
-                                value={noiseSchedule}
-                                onChange={(e) => setNoiseSchedule(e.target.value as 'linear' | 'cosine')}
-                                className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
-                            >
-                                <option value="linear">Linear</option>
-                                <option value="cosine">Cosine</option>
-                            </select>
                         </div>
                         <div className="flex items-center">
                             <label className="flex items-center gap-2">
