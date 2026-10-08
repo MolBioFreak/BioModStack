@@ -18,9 +18,21 @@ interface Props {
     backgroundColor?: string;
     label?: string;  // Optional label to show on viewer
     selections?: Selection[]; // Highlights
-    /** Per-residue coloring (e.g., frustration maps). Key format: "A45" (chain + residue number) */
+    /** Per-residue coloring (e.g., frustration maps). Key format: "A45" or "A:45". */
     residueColors?: Map<string, { r: number; g: number; b: number }>;
 }
+
+const parseResidueColorKey = (key: string): { chainId: string; residueNumber: number } | null => {
+    const delimited = key.match(/^([^:]+):(-?\d+)$/);
+    if (delimited) {
+        return { chainId: delimited[1], residueNumber: parseInt(delimited[2], 10) };
+    }
+    const legacy = key.match(/^([A-Za-z])(\-?\d+)$/);
+    if (legacy) {
+        return { chainId: legacy[1], residueNumber: parseInt(legacy[2], 10) };
+    }
+    return null;
+};
 
 export default function MolstarViewer({
     structureUrl,
@@ -132,17 +144,16 @@ export default function MolstarViewer({
         try {
             // Convert residueColors map to pdbe-molstar selection format
             const colorData = Array.from(residueColors.entries()).map(([key, color]) => {
-                // Parse key like "A45" into chain and residue number
-                const match = key.match(/^([A-Za-z])(-?\d+)$/);
-                if (!match) {
+                const parsedKey = parseResidueColorKey(key);
+                if (!parsedKey) {
                     console.warn(`Invalid residue key format: ${key}`);
                     return null;
                 }
                 return {
-                    struct_asym_id: match[1],
-                    auth_asym_id: match[1],
-                    start_residue_number: parseInt(match[2]),
-                    end_residue_number: parseInt(match[2]),
+                    struct_asym_id: parsedKey.chainId,
+                    auth_asym_id: parsedKey.chainId,
+                    start_residue_number: parsedKey.residueNumber,
+                    end_residue_number: parsedKey.residueNumber,
                     color: rgbToHex(color.r, color.g, color.b),
                     focus: false
                 };

@@ -16,6 +16,7 @@ from services.analysis_registry import (
     ANTIBODY_ANNOTATION_PACK_ANALYSIS,
     CHAIN_METRICS_ANALYSIS,
     CONTACT_MAP_ANALYSIS,
+    FAMPNN_PSCE_PROFILE_ANALYSIS,
     JOB_AA_COMPOSITION_ANALYSIS,
     JOB_CDR_LOGO_PACK_ANALYSIS,
     JOB_CORRELATION_MATRIX_ANALYSIS,
@@ -26,14 +27,17 @@ from services.analysis_registry import (
     normalize_job_scope_params,
     normalize_pae_matrix_params,
 )
+from services.aligned_error_utils import load_structure_residue_records
 from services.analysis_subprocess import _extract_metric_pairs
 from services.analysis_runs import build_artifact_manifest_for_run, serialize_analysis_run
+from services.result_ingester import _validation_role_fields
 
 
 def test_phase1_analysis_definitions_exist() -> None:
     assert get_analysis_definition(STRUCTURE_SUMMARY_ANALYSIS) is not None
     assert get_analysis_definition(CONTACT_MAP_ANALYSIS) is not None
     assert get_analysis_definition(CHAIN_METRICS_ANALYSIS) is not None
+    assert get_analysis_definition(FAMPNN_PSCE_PROFILE_ANALYSIS) is not None
     assert get_analysis_definition(PAE_MATRIX_ANALYSIS) is not None
     assert get_analysis_definition(ANTIBODY_ANNOTATION_PACK_ANALYSIS) is not None
     assert get_analysis_definition(JOB_CORRELATION_MATRIX_ANALYSIS) is not None
@@ -107,3 +111,53 @@ def test_job_correlation_pairs_are_aligned_by_design() -> None:
         (92.0, 1.5),
         (74.0, 6.1),
     ]
+
+
+def test_generic_complex_jobs_infer_target_and_binder_chains() -> None:
+    job = SimpleNamespace(
+        model_id="protenix",
+        mode="complex",
+        params={
+            "complex_components": [
+                {"type": "protein", "id": "A", "sequence": "AAAA"},
+                {"type": "ion", "id": "B", "ccd": "ZN"},
+                {"type": "protein", "id": "E", "sequence": "BBBB"},
+            ]
+        },
+    )
+
+    assert _validation_role_fields(job, job.params) == {
+        "detected_antibody_chains": "E",
+        "detected_target_chain": "A",
+    }
+
+
+def test_load_structure_residue_records_handles_cif_headers_with_trailing_spaces() -> None:
+    cif_text = """data_test
+#
+loop_
+_atom_site.group_PDB 
+_atom_site.id 
+_atom_site.type_symbol 
+_atom_site.label_atom_id 
+_atom_site.label_comp_id 
+_atom_site.label_asym_id 
+_atom_site.label_entity_id 
+_atom_site.label_seq_id 
+_atom_site.Cartn_x 
+_atom_site.Cartn_y 
+_atom_site.Cartn_z 
+_atom_site.auth_asym_id 
+ATOM 1 C CA ALA A 1 1 1.0 2.0 3.0 A
+ATOM 2 C CB ALA A 1 1 1.5 2.5 3.5 A
+#
+"""
+    with TemporaryDirectory() as tmpdir:
+        cif_path = Path(tmpdir) / "test.cif"
+        cif_path.write_text(cif_text, encoding="utf-8")
+        residues, token_mask = load_structure_residue_records(cif_path)
+
+    assert len(residues) == 1
+    assert residues[0].chain_id == "A"
+    assert residues[0].residue_name == "ALA"
+    assert token_mask.tolist() == [True]

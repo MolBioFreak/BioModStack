@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, fetchMsaCacheInfo, type MsaCacheInfo } from '../lib/api';
+import { submitJob, fetchMsaCacheInfo, uploadFile, type MsaCacheInfo } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { SequenceManager } from './SequenceManager';
 import { LigandSelector, componentIdFromIndex, type LigandEntry } from './LigandSelector';
-import { TargetAntigenSelector } from './TargetAntigenSelector';
-import { parsePDBFile, type Chain } from '../utils/pdbUtils';
+import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
+import { parsePDBFile, getModelByNumber, type Chain, type ParsedPDB } from '../utils/pdbUtils';
 
 interface StructurePredictionTemplateProps {
     onBack: () => void;
@@ -28,6 +28,29 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [lockGpus, setLockGpus] = useState(false);
     const [sequence, setSequence] = useState(initialValues?.sequence || '');
     const [sequenceName, setSequenceName] = useState(initialValues?.sequence_name || 'predicted');
+    const [primaryChainId, setPrimaryChainId] = useState<string>(
+        String(initialValues?.primary_chain_id || initialValues?.target_chains || 'A')
+            .split(',')
+            .map((token: string) => token.trim())
+            .find(Boolean) || 'A'
+    );
+    const [targetSource, setTargetSource] = useState<SelectedTarget | null>((initialValues?.target_source as SelectedTarget | null) || null);
+    const [targetSourcePath, setTargetSourcePath] = useState<string | null>(
+        initialValues?.fixed_target_source_path || initialValues?.target_source?.path || null
+    );
+    const [targetSourceChainId, setTargetSourceChainId] = useState<string | null>(
+        String(initialValues?.fixed_target_source_chains || initialValues?.primary_chain_id || initialValues?.target_chains || '')
+            .split(',')
+            .map((token: string) => token.trim())
+            .find(Boolean) || null
+    );
+    const [targetSourceSequence, setTargetSourceSequence] = useState<string>(initialValues?.fixed_target_source_sequence || '');
+    const [targetStructure, setTargetStructure] = useState<ParsedPDB | null>(null);
+    const [selectedTargetModel, setSelectedTargetModel] = useState<number | null>(() => {
+        const raw = initialValues?.fixed_target_model_number ?? initialValues?.target_model_number;
+        const parsed = Number(raw);
+        return Number.isFinite(parsed) && parsed >= 1 ? parsed : 1;
+    });
 
     // Predictor selection
     const [predictor, setPredictor] = useState<'boltz' | 'rf3' | 'protenix' | 'both' | 'all'>(initialValues?.pred_method || 'boltz');
@@ -40,6 +63,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [boltzUsePotentials, setBoltzUsePotentials] = useState(initialValues?.boltz_use_potentials ?? false);
     const [boltzMethod, setBoltzMethod] = useState(initialValues?.boltz_method || '');
     const [boltzMaxParallelSamples, setBoltzMaxParallelSamples] = useState(initialValues?.boltz_max_parallel_samples ?? 1);
+    const [boltzAnchorTarget, setBoltzAnchorTarget] = useState(initialValues?.boltz_anchor_target ?? false);
 
     // RF3 parameters
     const [rf3UseMsa, setRf3UseMsa] = useState(initialValues?.rf3_use_msa ?? true);
@@ -54,6 +78,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [protenixNCycle, setProtenixNCycle] = useState(initialValues?.protenix_n_cycle ?? 10);
     const [protenixUseMsa, setProtenixUseMsa] = useState(initialValues?.protenix_use_msa ?? true);
     const [protenixUseTemplate, setProtenixUseTemplate] = useState(initialValues?.protenix_use_template ?? false);
+    const [protenixAnchorTarget, setProtenixAnchorTarget] = useState(initialValues?.protenix_anchor_target ?? false);
 
     // Parallel jobs
     const [numParallelJobs, setNumParallelJobs] = useState(initialValues?.num_parallel_jobs ?? 1);
@@ -129,6 +154,8 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
     const [showInputModal, setShowInputModal] = useState(false);
     const [inputModalTab, setInputModalTab] = useState<'library' | 'pdb'>('library');
     const importTargetRef = useRef<'primary' | 'additional'>('primary');  // Use ref to avoid stale closure
+    const [modalParsedStructure, setModalParsedStructure] = useState<ParsedPDB | null>(null);
+    const [modalSelectedModel, setModalSelectedModel] = useState<number>(1);
     const [parsedChains, setParsedChains] = useState<Chain[]>([]);
     const [selectedChainIndices, setSelectedChainIndices] = useState<Set<number>>(new Set());
     const [sequenceToSave, setSequenceToSave] = useState<{ sequence: string; name: string } | null>(null);
@@ -153,12 +180,129 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         ((predictor === 'boltz' || predictor === 'both' || predictor === 'all') && boltzUseMsa) ||
         ((predictor === 'rf3' || predictor === 'both' || predictor === 'all') && rf3UseMsa) ||
         ((predictor === 'protenix' || predictor === 'all') && protenixUseMsa);
+    const complexMode = ligands.length > 0;
+    const fixedTargetAvailable = !!targetSourceChainId && !!targetSource;
+    const usesBoltz = predictor === 'boltz' || predictor === 'both' || predictor === 'all';
+    const usesProtenix = predictor === 'protenix' || predictor === 'all';
+
+    const closePdbModalState = () => {
+        setModalParsedStructure(null);
+        setModalSelectedModel(1);
+        setParsedChains([]);
+        setSelectedChainIndices(new Set());
+    };
+
+    const sanitizeSequenceInput = (value: string) => value.toUpperCase().replace(/[^A-Z]/g, '');
+
+    const canonicalTargetSourceName = (target: SelectedTarget | null) => {
+        const raw = (target?.name?.trim() || 'target').replace(/[^A-Za-z0-9._-]+/g, '_');
+        return raw.toLowerCase().endsWith('.pdb') || raw.toLowerCase().endsWith('.cif') || raw.toLowerCase().endsWith('.mmcif')
+            ? raw
+            : `${raw}.pdb`;
+    };
+
+    const nextAvailableComponentId = (usedIds: Set<string>) => {
+        let index = 0;
+        let candidate = componentIdFromIndex(index);
+        while (usedIds.has(candidate)) {
+            index += 1;
+            candidate = componentIdFromIndex(index);
+        }
+        return candidate;
+    };
+
+    const buildComplexComponents = () => {
+        const components: Array<Record<string, any>> = [];
+        const usedIds = new Set<string>();
+        const reserveId = (preferred?: string) => {
+            const normalized = (preferred || '').trim();
+            if (normalized && !usedIds.has(normalized)) {
+                usedIds.add(normalized);
+                return normalized;
+            }
+            const fallback = nextAvailableComponentId(usedIds);
+            usedIds.add(fallback);
+            return fallback;
+        };
+
+        const resolvedPrimaryId = reserveId(primaryChainId || 'A');
+        components.push({
+            type: 'protein',
+            id: resolvedPrimaryId,
+            sequence: sequence.trim(),
+            name: sequenceName,
+        });
+
+        const binderIds: string[] = [];
+        ligands.forEach((ligand) => {
+            const resolvedId = reserveId(ligand.id);
+            const component: Record<string, any> = {
+                type: ligand.type,
+                id: resolvedId,
+                name: ligand.name,
+            };
+            if (ligand.sequence) component.sequence = ligand.sequence;
+            if (ligand.ccd) component.ccd = ligand.ccd;
+            if (ligand.smiles) component.smiles = ligand.smiles;
+            components.push(component);
+            if (ligand.type === 'protein' || ligand.type === 'peptide') {
+                binderIds.push(resolvedId);
+            }
+        });
+
+        return {
+            components,
+            resolvedPrimaryId,
+            binderIds,
+        };
+    };
+
+    const resolveTargetStructurePath = async () => {
+        if (targetSourcePath) {
+            return targetSourcePath;
+        }
+        if (!targetSource) {
+            return null;
+        }
+        if (targetSource.path) {
+            setTargetSourcePath(targetSource.path);
+            return targetSource.path;
+        }
+
+        let sourceFile = targetSource.file ?? null;
+        if (!sourceFile && targetSource.url) {
+            const response = await fetch(targetSource.url);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch target structure (${response.status})`);
+            }
+            const blob = await response.blob();
+            sourceFile = new File([blob], canonicalTargetSourceName(targetSource), { type: blob.type || 'chemical/x-pdb' });
+        }
+
+        if (!sourceFile) {
+            return null;
+        }
+
+        const response = await uploadFile('inputs/structure_prediction', sourceFile);
+        const uploadedPath = response.data?.path || `inputs/structure_prediction/${sourceFile.name}`;
+        setTargetSourcePath(uploadedPath);
+        return uploadedPath;
+    };
 
     useEffect(() => {
         if (numParallelJobs > 1 && msaProvider === 'colabfold_api') {
             setMsaProvider('local');
         }
     }, [numParallelJobs, msaProvider]);
+
+    useEffect(() => {
+        if (!modalParsedStructure) {
+            setParsedChains([]);
+            return;
+        }
+        const activeModel = getModelByNumber(modalParsedStructure, modalSelectedModel);
+        setParsedChains(activeModel?.chains ?? modalParsedStructure.chains ?? []);
+    }, [modalParsedStructure, modalSelectedModel]);
 
     useEffect(() => {
         const normalizedSequence = sequence.replace(/\s+/g, '').trim();
@@ -215,7 +359,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                 ? `Cache: ${msaCacheInfo.cache_entries} entr${msaCacheInfo.cache_entries === 1 ? 'y' : 'ies'}`
                 : 'Cache: none';
 
-    const handleSubmit = () => {
+    const handleSubmit = async () => {
         if (!sequence.trim()) {
             alert('Please enter an amino acid sequence');
             return;
@@ -229,13 +373,14 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         };
 
         // Boltz-2 parameters
-        if (predictor === 'boltz' || predictor === 'both') {
+        if (predictor === 'boltz' || predictor === 'both' || predictor === 'all') {
             params.boltz_use_msa = boltzUseMsa;
             params.boltz_recycling_steps = boltzRecyclingSteps;
             params.boltz_sampling_steps = boltzSamplingSteps;
             params.boltz_num_samples = boltzNumSamples;
             params.boltz_use_potentials = boltzUsePotentials;
             params.boltz_max_parallel_samples = boltzMaxParallelSamples;
+            params.boltz_anchor_target = boltzAnchorTarget;
             if (boltzMethod) params.boltz_method = boltzMethod;
         }
 
@@ -255,6 +400,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             params.protenix_n_cycle = protenixNCycle;
             params.protenix_use_msa = protenixUseMsa;
             params.protenix_use_template = protenixUseTemplate;
+            params.protenix_anchor_target = protenixAnchorTarget;
         }
 
         if (msaNeeded && msaProvider === 'colabfold_api' && numParallelJobs > 1) {
@@ -291,16 +437,53 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             if (msaNumIterations !== undefined) params.msa_num_iterations = msaNumIterations;
         }
 
-        // Complex components
-        if (ligands.length > 0) {
-            params.complex_components = [
-                { type: 'protein', id: 'A', sequence: sequence.trim() },
-                ...ligands.map(l => ({ type: l.type, id: l.id, ccd: l.ccd, smiles: l.smiles, sequence: l.sequence, name: l.name }))
-            ];
+        const anchoringRequested = (usesBoltz && boltzAnchorTarget) || (usesProtenix && protenixAnchorTarget);
+        if (anchoringRequested && !complexMode) {
+            alert('Fixed-target anchoring currently applies to complex predictions. Add at least one additional component before launching.');
+            return;
+        }
+        if (anchoringRequested && !fixedTargetAvailable) {
+            alert('Fixed-target anchoring requires importing the primary target from a PDB source first.');
+            return;
+        }
+        if (anchoringRequested) {
+            const normalizedCurrentSequence = sanitizeSequenceInput(sequence);
+            const normalizedSourceSequence = sanitizeSequenceInput(targetSourceSequence);
+            if (!normalizedSourceSequence || normalizedCurrentSequence !== normalizedSourceSequence) {
+                alert('Fixed-target anchoring requires the primary sequence to exactly match the imported target source chain.');
+                return;
+            }
         }
 
         const modelId = predictor === 'rf3' ? 'rf3' : predictor === 'protenix' ? 'protenix' : 'boltz2';
-        const mode = (ligands.length > 0) ? 'complex' : 'predict';
+        const mode = complexMode ? 'complex' : 'predict';
+
+        if (complexMode) {
+            const { components, resolvedPrimaryId, binderIds } = buildComplexComponents();
+            params.complex_components = components;
+            params.primary_chain_id = resolvedPrimaryId;
+            params.target_chains = resolvedPrimaryId;
+            if (binderIds.length > 0) {
+                params.binder_chains = binderIds.join(',');
+            }
+
+            if (anchoringRequested) {
+                try {
+                    const resolvedSourcePath = await resolveTargetStructurePath();
+                    if (!resolvedSourcePath) {
+                        alert('Failed to stage the fixed target structure for anchored prediction.');
+                        return;
+                    }
+                    params.fixed_target_source_path = resolvedSourcePath;
+                    params.fixed_target_source_chains = targetSourceChainId;
+                    params.fixed_target_model_number = selectedTargetModel || undefined;
+                    params.fixed_target_source_sequence = targetSourceSequence || undefined;
+                } catch (error: any) {
+                    alert(error?.message || 'Failed to stage the fixed target structure.');
+                    return;
+                }
+            }
+        }
 
         submitMutation.mutate({
             name: jobName,
@@ -308,6 +491,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             mode: mode,
             params: {
                 ...params,
+                target_source: targetSource || undefined,
                 pinned_gpus: pinnedGpus.length > 0 ? pinnedGpus : undefined,
                 lock_gpus: lockGpus && pinnedGpus.length > 0,
                 allow_retries: allowRetries
@@ -321,9 +505,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         }
     };
 
-
-
-    const handlePdbSelect = async (target: any) => {
+    const handlePdbSelect = async (target: SelectedTarget | null) => {
         if (!target) return;
 
         try {
@@ -333,20 +515,42 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
             } else if (target.url) {
                 const response = await fetch(target.url);
                 const blob = await response.blob();
-                file = new File([blob], target.name + '.pdb', { type: 'chemical/x-pdb' });
+                file = new File([blob], canonicalTargetSourceName(target), { type: blob.type || 'chemical/x-pdb' });
             } else {
                 return;
             }
 
             const parsed = await parsePDBFile(file);
+            const defaultModelNumber = parsed.models[0]?.modelNumber ?? 1;
+            setModalParsedStructure(parsed);
+            setModalSelectedModel(defaultModelNumber);
+            setSequenceName(target.name.replace(/\.pdb$/i, ''));
+
+            if (importTargetRef.current === 'primary') {
+                setTargetSource(target);
+                setTargetSourcePath(target.path || null);
+            }
+
             if (parsed.chains.length === 1) {
-                setSequence(parsed.chains[0].sequence);
-                setSequenceName(target.name.replace('.pdb', ''));
+                const onlyChain = parsed.chains[0];
+                if (importTargetRef.current === 'additional') {
+                    setLigands((prev) => [...prev, {
+                        id: onlyChain.id,
+                        type: 'protein',
+                        sequence: onlyChain.sequence,
+                        name: `Chain ${onlyChain.id}`,
+                    }]);
+                } else {
+                    setSequence(onlyChain.sequence);
+                    setPrimaryChainId(onlyChain.id || 'A');
+                    setTargetSourceChainId(onlyChain.id || 'A');
+                    setTargetSourceSequence(onlyChain.sequence);
+                    setTargetStructure(parsed);
+                    setSelectedTargetModel(defaultModelNumber);
+                }
                 setShowInputModal(false);
-                setParsedChains([]);
-                setSelectedChainIndices(new Set());
+                closePdbModalState();
             } else if (parsed.chains.length > 1) {
-                setParsedChains(parsed.chains);
                 setSequenceName(target.name.replace('.pdb', ''));
                 setSelectedChainIndices(new Set());
             } else {
@@ -358,18 +562,36 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
         }
     };
 
-
-
     const handleMultiChainImport = () => {
-        const selectedChains = parsedChains.filter((_, i) => selectedChainIndices.has(i));
+        const activeModalModel = modalParsedStructure ? getModelByNumber(modalParsedStructure, modalSelectedModel) : null;
+        const sourceChains = activeModalModel?.chains ?? parsedChains;
+        const selectedChains = sourceChains.filter((_, i) => selectedChainIndices.has(i));
         if (selectedChains.length === 0) return;
 
         // Sort by ID to keep order deterministic (A, B, C...)
         selectedChains.sort((a, b) => a.id.localeCompare(b.id));
 
-        // First chain is primary
+        if (importTargetRef.current === 'additional') {
+            const newLigands: LigandEntry[] = selectedChains.map((c) => ({
+                id: c.id,
+                type: 'protein',
+                sequence: c.sequence,
+                name: `Chain ${c.id}`
+            }));
+            setLigands((prev) => [...prev, ...newLigands]);
+            setShowInputModal(false);
+            closePdbModalState();
+            return;
+        }
+
+        // First chain is primary target
         const primary = selectedChains[0];
         setSequence(primary.sequence);
+        setPrimaryChainId(primary.id || 'A');
+        setTargetSourceChainId(primary.id || 'A');
+        setTargetSourceSequence(primary.sequence);
+        setTargetStructure(modalParsedStructure);
+        setSelectedTargetModel(modalSelectedModel);
 
         // Others are ligands/complex components
         const others = selectedChains.slice(1);
@@ -380,17 +602,11 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                 sequence: c.sequence,
                 name: `Chain ${c.id}`
             }));
-
-            // Append to existing ligands or replace?
-            // "1:1 recreate" implies we might want to just set them.
-            // But we should be careful not to wipe out manual adds if user intends to mix.
-            // For now, let's append.
             setLigands(prev => [...prev, ...newLigands]);
         }
 
         setShowInputModal(false);
-        setParsedChains([]);
-        setSelectedChainIndices(new Set());
+        closePdbModalState();
     };
 
     const toggleChainSelection = (index: number) => {
@@ -590,6 +806,104 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                         />
                     </div>
                 </div>
+
+                {targetSource && (
+                    <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
+                        <div className="flex items-start justify-between gap-4">
+                            <div>
+                                <h3 className="text-sm font-semibold text-slate-200">Fixed Target Source</h3>
+                                <p className="text-xs text-slate-500">
+                                    Imported target structure is available for anchored complex prediction. Primary sequence must stay identical to the selected source chain.
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setTargetSource(null);
+                                    setTargetSourcePath(null);
+                                    setTargetSourceChainId(null);
+                                    setTargetSourceSequence('');
+                                    setTargetStructure(null);
+                                    setPrimaryChainId('A');
+                                    setBoltzAnchorTarget(false);
+                                    setProtenixAnchorTarget(false);
+                                }}
+                                className="text-xs text-slate-400 hover:text-white"
+                            >
+                                Clear Source
+                            </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                            <div className="bg-slate-900/60 border border-slate-700/60 rounded-lg px-3 py-2">
+                                <div className="text-xs text-slate-500 mb-1">Source</div>
+                                <div className="text-slate-200 break-all">{targetSource.name}</div>
+                            </div>
+                            <div className="bg-slate-900/60 border border-slate-700/60 rounded-lg px-3 py-2">
+                                <div className="text-xs text-slate-500 mb-1">Primary Chain</div>
+                                <div className="text-slate-200">{targetSourceChainId || primaryChainId}</div>
+                            </div>
+                            <div className="bg-slate-900/60 border border-slate-700/60 rounded-lg px-3 py-2">
+                                <div className="text-xs text-slate-500 mb-1">Staged Path</div>
+                                <div className="text-slate-200 break-all">{targetSourcePath || 'Will stage at submit'}</div>
+                            </div>
+                        </div>
+
+                        {targetStructure && targetStructure.models.length > 1 && (
+                            <div className="max-w-xs">
+                                <label className="text-xs text-slate-400 block mb-1">Target Model</label>
+                                <select
+                                    value={selectedTargetModel ?? targetStructure.models[0]?.modelNumber ?? 1}
+                                    onChange={(e) => setSelectedTargetModel(Number(e.target.value) || 1)}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                >
+                                    {targetStructure.models.map((model) => (
+                                        <option key={model.modelNumber} value={model.modelNumber}>
+                                            {model.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
+
+                        {complexMode ? (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {usesBoltz && (
+                                    <label className="flex items-start gap-3 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg cursor-pointer hover:bg-blue-500/15 transition-colors">
+                                        <input
+                                            type="checkbox"
+                                            checked={boltzAnchorTarget}
+                                            onChange={(e) => setBoltzAnchorTarget(e.target.checked)}
+                                            className="mt-0.5 w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-500"
+                                        />
+                                        <div>
+                                            <span className="text-blue-200 font-medium">Hold fixed target in Boltz</span>
+                                            <p className="text-xs text-blue-100/70">Attach the imported target chain as a structural template during Boltz complex prediction.</p>
+                                        </div>
+                                    </label>
+                                )}
+                                {usesProtenix && (
+                                    <label className="flex items-start gap-3 p-3 bg-violet-500/10 border border-violet-500/30 rounded-lg cursor-pointer hover:bg-violet-500/15 transition-colors">
+                                        <input
+                                            type="checkbox"
+                                            checked={protenixAnchorTarget}
+                                            onChange={(e) => setProtenixAnchorTarget(e.target.checked)}
+                                            className="mt-0.5 w-4 h-4 rounded bg-slate-900 border-slate-700 text-violet-500"
+                                        />
+                                        <div>
+                                            <span className="text-violet-200 font-medium">Hold fixed target in Protenix</span>
+                                            <p className="text-xs text-violet-100/70">Stage the imported target chain into the Protenix template DB so the target stays template-guided during co-folding.</p>
+                                        </div>
+                                    </label>
+                                )}
+                            </div>
+                        ) : (
+                            <p className="text-xs text-amber-300/80">
+                                Add at least one additional component to switch into complex mode before fixed-target anchoring can be used.
+                            </p>
+                        )}
+                    </div>
+                )}
 
                 {/* Boltz-2 Parameters */}
                 {showBoltzParams && (
@@ -1254,6 +1568,14 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                                 // Set as primary sequence
                                                 setSequence(seq.sequence);
                                                 setSequenceName(seq.name);
+                                                setPrimaryChainId('A');
+                                                setTargetSource(null);
+                                                setTargetSourcePath(null);
+                                                setTargetSourceChainId(null);
+                                                setTargetSourceSequence('');
+                                                setTargetStructure(null);
+                                                setBoltzAnchorTarget(false);
+                                                setProtenixAnchorTarget(false);
                                             }
                                             setShowInputModal(false);
                                         }}
@@ -1271,14 +1593,30 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                             <div className="flex items-center justify-between">
                                                 <h3 className="text-lg font-medium text-slate-200">Select Chain</h3>
                                                 <button
-                                                    onClick={() => setParsedChains([])}
+                                                    onClick={closePdbModalState}
                                                     className="text-sm text-slate-400 hover:text-white"
                                                 >
                                                     ← Back to search
                                                 </button>
                                             </div>
+                                            {modalParsedStructure && modalParsedStructure.models.length > 1 && (
+                                                <div className="max-w-xs">
+                                                    <label className="block text-sm font-medium text-slate-400 mb-2">Source Model</label>
+                                                    <select
+                                                        value={modalSelectedModel}
+                                                        onChange={(e) => setModalSelectedModel(Number(e.target.value) || 1)}
+                                                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm"
+                                                    >
+                                                        {modalParsedStructure.models.map((model) => (
+                                                            <option key={model.modelNumber} value={model.modelNumber}>
+                                                                {model.label}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                            )}
                                             <p className="text-sm text-slate-500">
-                                                Multiple chains found in PDB file. Please select one to use as input.
+                                                Multiple chains found in the selected structure. Choose the model and chain set you want to import.
                                             </p>
                                             <div className="grid gap-2">
                                                 {parsedChains.map((chain, i) => {
@@ -1327,6 +1665,7 @@ export function StructurePredictionTemplate({ onBack, initialValues }: Structure
                                     ) : (
                                         <TargetAntigenSelector
                                             onSelect={handlePdbSelect}
+                                            selectedTarget={targetSource}
                                         />
                                     )}
                                 </div>

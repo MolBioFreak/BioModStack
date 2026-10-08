@@ -2345,6 +2345,7 @@ def run_colabfold_msa_workflow(
     
     # Resolve DB paths before cache lookup so cache profile can reflect effective config.
     db_path = Path(db_path)
+    uniref_db = db_path / "uniref30_2302_db"
     envdb = db_path / "colabfold_envdb_202108_db"
     env_available = envdb.exists() and Path(str(envdb) + ".dbtype").exists()
     if config["use_env"] and not env_available:
@@ -3168,11 +3169,7 @@ def run_colabfold_msa_workflow(
             print("MSA lock released", flush=True)
 
 
-# Backward compatibility alias
-run_local_mmseqs2 = run_colabfold_msa_workflow
-
-
-if __name__ == "__main__":
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate MSA using full ColabFold workflow (GPU/CPU hybrid)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -3272,9 +3269,13 @@ Quality Presets:
                         help="Fail if MSA has fewer sequences (0 = no fail)")
     parser.add_argument("--fast-env-fallback-min-depth", type=int, default=25,
                         help="For preset=fast with use_env disabled, auto-run EnvDB when UniRef depth is below this (0 disables fallback)")
-    
-    args = parser.parse_args()
-    
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+
     os.makedirs(args.out_dir, exist_ok=True)
     common_kwargs = dict(
         sequence=args.sequence,
@@ -3297,7 +3298,6 @@ Quality Presets:
         gpu_server_wait_timeout=args.gpu_server_wait_timeout,
         gpu_server_db_load_mode=args.gpu_server_db_load_mode,
         gpu_server_startup_wait=args.gpu_server_startup_wait,
-        disallow_cpu_fallback=args.disallow_cpu_fallback,
         reference_sequence=args.reference_sequence,
         preset=args.preset,
         num_iterations=args.num_iterations,
@@ -3323,4 +3323,16 @@ Quality Presets:
             colabfold_api_poll_interval=args.colabfold_api_poll_interval,
         )
     else:
-        run_colabfold_msa_workflow(**common_kwargs)
+        run_colabfold_msa_workflow(
+            **common_kwargs,
+            disallow_cpu_fallback=args.disallow_cpu_fallback,
+        )
+    return 0
+
+
+# Backward compatibility alias
+run_local_mmseqs2 = run_colabfold_msa_workflow
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

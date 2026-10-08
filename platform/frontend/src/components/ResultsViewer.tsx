@@ -71,6 +71,11 @@ const SERVER_SORT_FIELDS = new Set<DesignSortField>([
     'pae_overall',
     'pae_interaction',
     'conf_score',
+    'ligand_iptm',
+    'rmsd_binder',
+    'rmsd_overall',
+    'rmsd_target',
+    'has_clash',
     'rog',
     'rfd_rog',
     'backbone',
@@ -141,6 +146,11 @@ const SORT_OPTIONS: Array<{ value: string; label: string }> = [
     { value: 'iptm', label: 'iPTM' },
     { value: 'ptm', label: 'pTM' },
     { value: 'pae_overall', label: 'PAE' },
+    { value: 'ligand_iptm', label: 'Ligand iPTM' },
+    { value: 'rmsd_binder', label: 'Val RMSD Binder' },
+    { value: 'rmsd_overall', label: 'Val RMSD Overall' },
+    { value: 'rmsd_target', label: 'Val RMSD Target' },
+    { value: 'has_clash', label: 'Clash' },
     { value: 'rog', label: 'RoG' },
     { value: 'rfd_rog', label: 'RFD RoG' },
     { value: 'frustration_high_count', label: 'Frust High' },
@@ -169,6 +179,10 @@ const ASCENDING_DEFAULT_SORT_FIELDS = new Set<string>([
     'target_min_atom_distance',
     'epitope_centroid_distance',
     'target_centroid_distance',
+    'fampnn_psce',
+    'rmsd_binder',
+    'rmsd_overall',
+    'rmsd_target',
     'rfa_hotspot_min_distance',
     'rfa_hotspot_avg_min_distance',
     'rfa_runtime_seconds',
@@ -183,6 +197,7 @@ const ASCENDING_DEFAULT_SORT_FIELDS = new Set<string>([
     'maturation_rmsd',
     'maturation_selected_rmsd',
     'maturation_nonselected_rmsd',
+    'has_clash',
 ]);
 
 // Formatting helpers
@@ -238,7 +253,10 @@ const getMetricColor = (metric: string, value: number | null): string => {
         return value >= 0.7 ? 'text-emerald-400' : value >= 0.5 ? 'text-amber-400' : 'text-red-400';
     }
     if (metric === 'fampnn_psce') {
-        return value <= 0.2 ? 'text-emerald-400' : value <= 0.4 ? 'text-amber-400' : 'text-red-400';
+        return value <= 0.9 ? 'text-emerald-400' : value <= 1.2 ? 'text-cyan-400' : value <= 1.6 ? 'text-amber-400' : 'text-rose-400';
+    }
+    if (metric === 'fampnn_max_residue_psce') {
+        return value <= 1.6 ? 'text-emerald-400' : value <= 2.4 ? 'text-cyan-400' : value <= 3.0 ? 'text-amber-400' : 'text-rose-400';
     }
     if (metric === 'ipsae') {
         return value >= 0.75 ? 'text-emerald-400' : value >= 0.55 ? 'text-amber-400' : 'text-red-400';
@@ -435,7 +453,35 @@ const getPpiflowAnchorRecord = (design: { provenance?: unknown } | null | undefi
     asRecord(getPpiflowRecord(design)?.anchors)
 );
 
-const getPpiflowSourceName = (design: { name?: string; provenance?: unknown } | null | undefined): string | null => {
+const getFampnnRecord = (design: { provenance?: unknown; confidence_metrics?: unknown } | null | undefined): Record<string, any> | null => (
+    asRecord(asRecord(design?.provenance)?.fampnn)
+    ?? asRecord(asRecord(getPpiflowRecord(design))?.fampnn)
+    ?? asRecord(asRecord(design?.confidence_metrics)?.fampnn)
+);
+
+const getFampnnScalar = (
+    design: { provenance?: unknown; confidence_metrics?: unknown } | null | undefined,
+    ...keys: string[]
+): number | null => {
+    const directRecord = asRecord(design as unknown);
+    const record = getFampnnRecord(design);
+    for (const key of keys) {
+        const directValue = directRecord?.[key];
+        if (typeof directValue === 'number' && Number.isFinite(directValue)) return directValue;
+        const value = record?.[key];
+        if (typeof value === 'number' && Number.isFinite(value)) return value;
+    }
+    return null;
+};
+
+const getFampnnMaxResiduePsce = (design: { provenance?: unknown; confidence_metrics?: unknown } | null | undefined): number | null => (
+    getFampnnScalar(design, 'fampnn_max_residue_psce', 'max_residue_psce')
+);
+
+const getPpiflowSourceName = (design: { name?: string; provenance?: unknown; source_design_name?: string | null } | null | undefined): string | null => {
+    if (typeof design?.source_design_name === 'string' && design.source_design_name.trim()) {
+        return design.source_design_name.trim();
+    }
     const record = getPpiflowRecord(design);
     const sourceName = record?.source_design_name;
     if (typeof sourceName === 'string' && sourceName.trim()) {
@@ -471,6 +517,35 @@ const getPpiflowSourceOrdinal = (design: { name?: string; provenance?: unknown }
     return Number.isFinite(parsed) ? parsed : null;
 };
 
+const formatStageDescriptor = (family: unknown, mode: unknown): string | null => {
+    const familyText = typeof family === 'string' ? family.trim() : '';
+    const modeText = typeof mode === 'string' ? mode.trim() : '';
+    if (!familyText && !modeText) return null;
+    if (familyText && modeText) return `${familyText} • ${modeText}`;
+    return familyText || modeText || null;
+};
+
+const formatSourceSummary = (job: Job | null | undefined): string | null => {
+    if (!job) return null;
+    const stageLabel = formatStageDescriptor(job.source_stage_family, job.source_stage_mode);
+    const count = typeof job.source_selection_count === 'number' ? job.source_selection_count : null;
+    const dataset = typeof job.selection_dataset_name === 'string' && job.selection_dataset_name.trim() ? job.selection_dataset_name.trim() : null;
+    const parts = [stageLabel, count != null ? `${count} selected inputs` : null, dataset ? `dataset ${dataset}` : null].filter(Boolean);
+    return parts.length > 0 ? parts.join(' • ') : null;
+};
+
+const formatLineagePathSummary = (
+    producedFamily: unknown,
+    producedMode: unknown,
+    sourceFamily: unknown,
+    sourceMode: unknown,
+): string | null => {
+    const produced = formatStageDescriptor(producedFamily, producedMode);
+    const source = formatStageDescriptor(sourceFamily, sourceMode);
+    if (source && produced) return `${source} → ${produced}`;
+    return produced || source || null;
+};
+
 type StageSequenceEntry = {
     chain: string;
     sequence: string;
@@ -478,20 +553,47 @@ type StageSequenceEntry = {
     psce: number | null;
 };
 
+const formatSequenceViewerText = (entries: StageSequenceEntry[]): string => {
+    if (entries.length === 0) return '';
+    const groupsPerLine = 5;
+    const residuesPerGroup = 10;
+    const residuesPerLine = groupsPerLine * residuesPerGroup;
+    const totalLengthWidth = String(Math.max(...entries.map((entry) => entry.length))).length;
+
+    return entries.map((entry) => {
+        const lines: string[] = [`Chain ${entry.chain}`];
+        for (let start = 0; start < entry.sequence.length; start += residuesPerLine) {
+            const chunk = entry.sequence.slice(start, start + residuesPerLine);
+            const grouped = chunk.match(new RegExp(`.{1,${residuesPerGroup}}`, 'g'))?.join(' ') ?? chunk;
+            const lineStart = String(start + 1).padStart(totalLengthWidth, ' ');
+            const lineEnd = String(Math.min(start + residuesPerLine, entry.sequence.length)).padStart(totalLengthWidth, ' ');
+            lines.push(`${lineStart}-${lineEnd}  ${grouped}`);
+        }
+        return lines.join('\n');
+    }).join('\n\n');
+};
+
 const parseStageSequenceEntries = (
     sequenceValue: unknown,
     chainAvgValue: unknown,
+    chainLabelsValue?: unknown,
 ): StageSequenceEntry[] => {
     if (typeof sequenceValue !== 'string' || !sequenceValue.trim()) return [];
     const chainAvg = asRecord(chainAvgValue);
+    const chainLabels = typeof chainLabelsValue === 'string'
+        ? chainLabelsValue
+            .split(/[|,]/)
+            .map((token) => token.trim())
+            .filter(Boolean)
+        : [];
     return sequenceValue
         .split('|')
         .map((token) => token.trim())
         .filter(Boolean)
-        .map((token) => {
+        .map((token, index) => {
             const [chainLabel, rawSequence] = token.includes(':')
                 ? token.split(':', 2)
-                : [token[0] || '?', token];
+                : [chainLabels[index] || (chainLabels.length === 1 ? chainLabels[0] : `Chain ${index + 1}`), token];
             const chain = String(chainLabel || '?').trim() || '?';
             const sequence = String(rawSequence || '').trim();
             const psceRaw = chainAvg?.[chain];
@@ -695,6 +797,7 @@ const getLineageOutputLabel = (job: Job): string => {
     const stageMode = String(job.stage_mode || '').trim().toLowerCase();
     if (family === 'ppiflow') {
         if (stageMode === 'backbone_refine' || stageMode === 'post_rfantibody') return 'Backbone Refinement';
+        if (stageMode === 'post_ppiflow') return 'Backbone Reattempt';
         if (stageMode === 'maturation' || stageMode === 'post_fampnn') return 'Maturation';
         if (stageMode === 'post_validation') return 'Post-Validation Repair';
         return 'PPIFlow';
@@ -715,7 +818,7 @@ const getLineageOutputScopeLabel = (job: Job): string | null => {
         selected_loops: job.params?.ppiflow_selected_loops,
     };
     const stageMode = String(job.stage_mode || '').trim().toLowerCase();
-    const candidates: unknown[] = stageMode === 'backbone_refine' || stageMode === 'post_rfantibody'
+    const candidates: unknown[] = stageMode === 'backbone_refine' || stageMode === 'post_rfantibody' || stageMode === 'post_ppiflow'
         ? [
             scopeRecord,
             paramsScopeRecord,
@@ -831,6 +934,103 @@ const coerceGateBackboneSummary = (value: unknown): GateBackboneSummary | null =
 const getDefaultSortDirection = (field: string): 'asc' | 'desc' =>
     ASCENDING_DEFAULT_SORT_FIELDS.has(field) ? 'asc' : 'desc';
 
+const isTableColumnSortable = (field: string, sortable?: boolean): boolean =>
+    sortable !== false && field !== 'selected';
+
+const getDesignSortValue = (design: Design, field: string): string | number | boolean | null => {
+    switch (field) {
+        case 'plddt':
+            return design.plddt_overall ?? null;
+        case 'pae':
+            return design.pae_overall ?? null;
+        case 'confidence':
+            return design.conf_score ?? null;
+        case 'backbone':
+            return design.backbone_id ?? null;
+        case 'binding_tier':
+            return (design.iptm ?? 0) + ((design.epitope_contact_count ?? 0) >= 5 ? 0.05 : 0);
+        case 'ppiflow_source_name':
+            return getPpiflowSourceName(design) ?? null;
+        case 'ppiflow_sample_index':
+            return getPpiflowSampleIndex(design);
+        case 'ppiflow_seq_identity': {
+            const direct = (design as unknown as Record<string, unknown>).ppiflow_seq_identity;
+            if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
+            const fallback = getPpiflowScoreRecord(design)?.sequence_identity;
+            return typeof fallback === 'number' && Number.isFinite(fallback) ? fallback : null;
+        }
+        case 'ppiflow_anchor_count': {
+            const direct = (design as unknown as Record<string, unknown>).ppiflow_anchor_count;
+            if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
+            const fallback = getPpiflowAnchorRecord(design)?.anchor_count;
+            return typeof fallback === 'number' && Number.isFinite(fallback) ? fallback : null;
+        }
+        case 'ppiflow_clash_count': {
+            const direct = (design as unknown as Record<string, unknown>).ppiflow_clash_count;
+            if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
+            const fallback = getPpiflowScoreRecord(design)?.clash_count_ca;
+            return typeof fallback === 'number' && Number.isFinite(fallback) ? fallback : null;
+        }
+        default: {
+            const value = (design as unknown as Record<string, unknown>)[field];
+            if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+                return value;
+            }
+            return null;
+        }
+    }
+};
+
+const compareDesignSortValues = (
+    left: string | number | boolean | null,
+    right: string | number | boolean | null,
+    direction: 'asc' | 'desc',
+): number => {
+    const normalize = (value: string | number | boolean | null): string | number | null => {
+        if (value == null) return null;
+        if (typeof value === 'boolean') return value ? 1 : 0;
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            return trimmed.length > 0 ? trimmed.toLocaleLowerCase() : null;
+        }
+        return Number.isFinite(value) ? value : null;
+    };
+
+    const leftValue = normalize(left);
+    const rightValue = normalize(right);
+
+    if (leftValue == null && rightValue == null) return 0;
+    if (leftValue == null) return 1;
+    if (rightValue == null) return -1;
+
+    let result = 0;
+    if (typeof leftValue === 'string' || typeof rightValue === 'string') {
+        result = String(leftValue).localeCompare(String(rightValue), undefined, { numeric: true, sensitivity: 'base' });
+    } else {
+        result = leftValue - rightValue;
+    }
+
+    return direction === 'asc' ? result : -result;
+};
+
+const compareDesignsByField = (
+    left: Design,
+    right: Design,
+    field: string,
+    direction: 'asc' | 'desc',
+): number => {
+    const valueCompare = compareDesignSortValues(
+        getDesignSortValue(left, field),
+        getDesignSortValue(right, field),
+        direction,
+    );
+    if (valueCompare !== 0) return valueCompare;
+
+    const nameCompare = left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: 'base' });
+    if (nameCompare !== 0) return nameCompare;
+    return left.id.localeCompare(right.id);
+};
+
 const coerceSavedReviewFilterSets = (value: unknown): SavedReviewFilterSet[] => {
     if (!Array.isArray(value)) return [];
     return value
@@ -915,6 +1115,8 @@ export function ResultsViewer() {
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
     const [outputSourceFilter, setOutputSourceFilter] = useState<OutputSourceFilter>('all');
     const [antibodySourceFilter, setAntibodySourceFilter] = useState<OutputSourceFilter>('all');
+    const manualOutputSourceSelectionRef = useRef(false);
+    const outputSourceSelectionJobRef = useRef<string | null>(jobId || null);
     const [showCdrIndelModal, setShowCdrIndelModal] = useState(false);
     const [showManualMutagenesisModal, setShowManualMutagenesisModal] = useState(false);
     const [cdrIndelConfig, setCdrIndelConfig] = useState<AntibodyCdrIndelConfig>({
@@ -953,7 +1155,7 @@ export function ResultsViewer() {
     const [sortField, setSortField] = useState<string>('name');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
     const [filterText, setFilterText] = useState('');
-    const [colorMode, setColorMode] = useState<'default' | 'plddt' | 'cdr' | 'frustration'>('plddt');  // Structure coloring mode
+    const [colorMode, setColorMode] = useState<'default' | 'plddt' | 'cdr' | 'frustration' | 'fampnn_psce'>('plddt');  // Structure coloring mode
     // Compare feature disabled for now:
     // const [showReferencePanel, setShowReferencePanel] = useState(false);
     // const [referenceStructures, setReferenceStructures] = useState<Array<{ url: string; format: 'pdb' | 'cif'; name: string }>>([]);
@@ -988,6 +1190,7 @@ export function ResultsViewer() {
     const [savedFilterSetName, setSavedFilterSetName] = useState<string>('');
     const [appliedSavedFilterSetId, setAppliedSavedFilterSetId] = useState<string | null>(null);
     const [savedReviewFilterSetsOverride, setSavedReviewFilterSetsOverride] = useState<SavedReviewFilterSet[] | null>(null);
+    const [sequenceCopyFeedback, setSequenceCopyFeedback] = useState<'full' | 'fasta' | 'error' | null>(null);
     const PAGE_SIZE_OPTIONS = [50, 100, 250, 500, 1000, 0]; // 0 = All
     const [filterDraft, setFilterDraft] = useState<FilterDraftState>({
         sortField: 'name',
@@ -1167,13 +1370,21 @@ export function ResultsViewer() {
                 return `${total.toLocaleString()} designs`;
             })();
             const childIndicator = hasChildren ? ` • ${batchData?.children.length || 0} variants` : '';
+            const sourceSummary = formatSourceSummary(job);
+            const detailParts = [
+                `${dateStr} ${timeStr}`,
+                job.model_id || job.mode,
+                childIndicator ? childIndicator.slice(3) : null,
+                displayDesigns,
+                sourceSummary ? `from ${sourceSummary}` : null,
+            ].filter(Boolean);
             regularOptions.push({
                 key: job.id,
                 value: job.id,
                 group: 'jobs',
                 title: job.name,
-                detail: `${dateStr} ${timeStr} • ${job.model_id || job.mode}${childIndicator} • ${displayDesigns}`,
-                searchText: `${job.name} ${job.model_id || ''} ${job.mode || ''} ${displayDesigns}`.toLowerCase(),
+                detail: detailParts.join(' • '),
+                searchText: `${job.name} ${job.model_id || ''} ${job.mode || ''} ${displayDesigns} ${sourceSummary || ''}`.toLowerCase(),
                 createdAt: date.getTime(),
             });
         });
@@ -1184,14 +1395,20 @@ export function ResultsViewer() {
             const timeStr = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
             const groupLabel = getLineageGroupLabel(group.representative);
             const parentName = group.parentJob?.name || 'Paused review root';
+            const sourceSummary = formatSourceSummary(group.representative);
             return {
                 key: groupKey,
                 value: group.representative.id,
                 group: 'lineage' as const,
                 groupKey,
                 title: `${parentName} • ${groupLabel}`,
-                detail: `${dateStr} ${timeStr} • ${group.jobCount} job${group.jobCount === 1 ? '' : 's'} • ${group.totalDesigns.toLocaleString()} outputs`,
-                searchText: `${parentName} ${groupLabel} ${group.representative.name} ${group.totalDesigns}`.toLowerCase(),
+                detail: [
+                    `${dateStr} ${timeStr}`,
+                    `${group.jobCount} job${group.jobCount === 1 ? '' : 's'}`,
+                    `${group.totalDesigns.toLocaleString()} outputs`,
+                    sourceSummary ? `from ${sourceSummary}` : null,
+                ].filter(Boolean).join(' • '),
+                searchText: `${parentName} ${groupLabel} ${group.representative.name} ${group.totalDesigns} ${sourceSummary || ''}`.toLowerCase(),
                 createdAt: date.getTime(),
             };
         });
@@ -1321,6 +1538,26 @@ export function ResultsViewer() {
         setManualMutagenesisConfig((current) => current.chain_id ? current : { ...current, chain_id: preferredChain });
     }, [activeJob?.params?.antibody_chains]);
 
+    useEffect(() => {
+        setSequenceCopyFeedback(null);
+    }, [selectedDesignId]);
+
+    useEffect(() => {
+        if (!sequenceCopyFeedback) return undefined;
+        const timeoutId = window.setTimeout(() => setSequenceCopyFeedback(null), 1800);
+        return () => window.clearTimeout(timeoutId);
+    }, [sequenceCopyFeedback]);
+
+    const handleCopySequenceText = useCallback(async (text: string, kind: 'full' | 'fasta') => {
+        try {
+            await navigator.clipboard.writeText(text);
+            setSequenceCopyFeedback(kind);
+        } catch (error) {
+            console.error('Failed to copy sequence text', error);
+            setSequenceCopyFeedback('error');
+        }
+    }, []);
+
     // Sync URL with selection
     useEffect(() => {
         if (nonNgsJobs.length === 0) {
@@ -1426,8 +1663,11 @@ export function ResultsViewer() {
             || family === 'ppiflow'
             || family === 'validation'
         ) ? family as OutputSourceFilter : 'all';
+        manualOutputSourceSelectionRef.current = true;
+        outputSourceSelectionJobRef.current = activeLineageRootJob.id;
         setOutputSourceFilter(sourceFilter);
         setAntibodySourceFilter(sourceFilter);
+        setSelectedBackboneId(null);
         setSelectedJobId(activeLineageRootJob.id);
         setSelectedDesignId('');
         setCurrentPage(1);
@@ -1507,16 +1747,22 @@ export function ResultsViewer() {
         }
         return '';
     }, [appliedSavedReviewFilterSet?.id, isPostRFantibodyReview, rfReviewSet]);
+    const backboneFilterApplies = outputSourceFilter === 'all' || outputSourceFilter === 'rfantibody';
+    const useClientSourcePagination = outputSourceFilter !== 'all';
+    const requiresClientOnlySort = !SERVER_SORT_FIELDS.has(sortField as DesignSortField) && isTableColumnSortable(sortField);
+    const forceBulkLoadForSorting = useClientSourcePagination || pageSize === 0 || requiresClientOnlySort;
     const designQueryFilters = useMemo<DesignFilters>(() => ({
         job_id: selectedJobId,
-        include_children: !isPostRFantibodyReview && Boolean(activeJobHasDesignBearingChildren && !(activeJob?.design_count || 0)),
+        include_children: !isPostRFantibodyReview && Boolean(
+            activeJobHasDesignBearingChildren && !(activeJob?.design_count || 0)
+        ),
         design_ids: activeSavedSubsetDesignIds,
         q: filterText.trim() || undefined,
-        limit: pageSize === 0 ? MAX_BULK_SELECTION_DESIGNS : pageSize,
-        offset: pageSize === 0 ? 0 : (currentPage - 1) * pageSize,
+        limit: forceBulkLoadForSorting ? MAX_BULK_SELECTION_DESIGNS : pageSize,
+        offset: forceBulkLoadForSorting ? 0 : (currentPage - 1) * pageSize,
         sort_by: apiSortField,
         sort_desc: sortDir === 'desc',
-        backbone_id: selectedBackboneId ?? undefined,
+        backbone_id: backboneFilterApplies ? (selectedBackboneId ?? undefined) : undefined,
         plddt_min: plddtMin > 0 ? plddtMin : undefined,
         iptm_min: iptmMin > 0 ? iptmMin : undefined,
         ipsae_min: ipsaeMin > 0 ? ipsaeMin : undefined,
@@ -1568,7 +1814,10 @@ export function ResultsViewer() {
         activeSavedSubsetDesignIds,
         activeJob?.design_count,
         activeJobHasDesignBearingChildren,
+        backboneFilterApplies,
         isPostRFantibodyReview,
+        useClientSourcePagination,
+        forceBulkLoadForSorting,
     ]);
     const bulkSelectionFilters = useMemo<DesignFilters>(() => ({
         ...designQueryFilters,
@@ -1582,6 +1831,8 @@ export function ResultsViewer() {
         enabled: !!activeJob && !reviewSelectionRequired,
     });
     const rawDesigns = designsData?.data.designs ?? [];
+    const serverTotalDesigns = designsData?.data.total ?? rawDesigns.length;
+    const canClientSortLoadedDesigns = forceBulkLoadForSorting || serverTotalDesigns <= rawDesigns.length;
     const designs = useMemo(() => {
         const deduped: typeof rawDesigns = [];
         const validationIndices = new Map<string, number>();
@@ -1608,8 +1859,10 @@ export function ResultsViewer() {
 
         return deduped;
     }, [rawDesigns, selectedJobId]);
-    const totalDesigns = designsData?.data.total ?? designs.length;
-    const totalPages = pageSize === 0 ? 1 : Math.ceil(totalDesigns / pageSize);
+    const orderedDesigns = useMemo(() => {
+        if (!canClientSortLoadedDesigns) return designs;
+        return [...designs].sort((left, right) => compareDesignsByField(left, right, sortField, sortDir));
+    }, [canClientSortLoadedDesigns, designs, sortDir, sortField]);
 
     const { data: selectedDesignDetailData } = useQuery({
         queryKey: ['design', selectedDesignId],
@@ -1725,10 +1978,10 @@ export function ResultsViewer() {
     );
     useEffect(() => {
         if (selectedBackboneId == null) return;
-        if (!reviewBackboneRows.some((row) => row.id === selectedBackboneId)) {
+        if (!backboneFilterApplies || !reviewBackboneRows.some((row) => row.id === selectedBackboneId)) {
             setSelectedBackboneId(null);
         }
-    }, [selectedBackboneId, reviewBackboneRows]);
+    }, [backboneFilterApplies, selectedBackboneId, reviewBackboneRows]);
 
     const { data: structureAnalysisRun } = useQuery({
         queryKey: ['design-analysis', 'structure_summary', selectedDesignId],
@@ -1960,7 +2213,6 @@ export function ResultsViewer() {
         }));
     }, [antibodyData?.overlay_selections]);
 
-    const orderedDesigns = designs;
     const analyticsChartDesigns = designs;
     const preferredAnalysisLens = useMemo<AnalysisLens | 'auto'>(() => {
         if (outputSourceFilter !== 'all' && designs.some((design) => inferDesignOutputSource(design as any) === outputSourceFilter)) {
@@ -1972,10 +2224,17 @@ export function ResultsViewer() {
         return inferPreferredAnalysisLens(activeJob, designs as any) ?? 'auto';
     }, [activeJob, antibodySourceFilter, designs, outputSourceFilter]);
     const selectedDesignSet = useMemo(() => new Set(selectedDesignIds), [selectedDesignIds]);
-    const tableDesigns = useMemo(() => {
+    const sourceScopedDesigns = useMemo(() => {
         if (outputSourceFilter === 'all') return orderedDesigns;
         return orderedDesigns.filter((design) => inferDesignOutputSource(design as any) === outputSourceFilter);
     }, [orderedDesigns, outputSourceFilter]);
+    const totalDesigns = useClientSourcePagination ? sourceScopedDesigns.length : serverTotalDesigns;
+    const totalPages = pageSize === 0 ? 1 : Math.ceil(totalDesigns / pageSize);
+    const tableDesigns = useMemo(() => {
+        if (!useClientSourcePagination || pageSize === 0) return sourceScopedDesigns;
+        const start = Math.max(0, (currentPage - 1) * pageSize);
+        return sourceScopedDesigns.slice(start, start + pageSize);
+    }, [currentPage, pageSize, sourceScopedDesigns, useClientSourcePagination]);
     const showPpiflowColumns = outputSourceFilter === 'ppiflow'
         || preferredAnalysisLens === 'ppiflow'
         || orderedDesigns.some((design) => inferDesignOutputSource(design as any) === 'ppiflow');
@@ -2037,7 +2296,7 @@ export function ResultsViewer() {
     const beginTablePan = (event: React.PointerEvent<HTMLDivElement>) => {
         if (event.button !== 0) return;
         const target = event.target as HTMLElement | null;
-        if (target?.closest('input, button, select, a, label')) return;
+        if (target?.closest('input, button, select, a, label, thead, th, [data-table-interactive="true"]')) return;
         const viewport = tableScrollViewportRef.current;
         if (!viewport) return;
         tablePanStateRef.current = {
@@ -2148,13 +2407,18 @@ export function ResultsViewer() {
         rfdRogMax,
         sortField,
         sortDir,
+        outputSourceFilter,
     ]);
 
     useEffect(() => {
+        if (manualOutputSourceSelectionRef.current && outputSourceSelectionJobRef.current === selectedJobId) {
+            return;
+        }
         const preferredSource = inferPreferredOutputSource(activeJob);
         const nextSource = preferredSource !== 'all' && designs.some((design) => inferDesignOutputSource(design as any) === preferredSource)
             ? preferredSource
             : 'all';
+        outputSourceSelectionJobRef.current = selectedJobId || null;
         setOutputSourceFilter(nextSource);
         setAntibodySourceFilter(nextSource);
     }, [selectedJobId, activeJob?.awaiting_stage, activeJob?.current_stage, activeJob?.awaiting_payload?.candidate_dir, designs]);
@@ -2269,6 +2533,10 @@ export function ResultsViewer() {
             setColorMode('default');
             return;
         }
+        if (selectedDesignLens === 'fampnn') {
+            setColorMode('fampnn_psce');
+            return;
+        }
         if (selectedDesignLens === 'frustrampnn') {
             setColorMode(selectedDesign?.frustration_residues?.length ? 'frustration' : 'default');
             return;
@@ -2306,20 +2574,59 @@ export function ResultsViewer() {
     const selectedDesignSource = selectedDesign ? inferDesignOutputSource(selectedDesign) : 'all';
     const selectedDesignProvenance = useMemo(() => asRecord(selectedDesign?.provenance), [selectedDesign?.provenance]);
     const selectedDesignFampnnPayload = useMemo(() => (
-        asRecord(selectedDesignProvenance?.fampnn)
-        ?? asRecord(asRecord(selectedDesignProvenance?.ppiflow)?.fampnn)
-        ?? asRecord(asRecord(selectedDesign?.confidence_metrics)?.fampnn)
-    ), [selectedDesign?.confidence_metrics, selectedDesignProvenance]);
+        getFampnnRecord(selectedDesign)
+    ), [selectedDesign]);
+    const selectedDesignFampnnMaxResiduePsce = useMemo(
+        () => getFampnnMaxResiduePsce(selectedDesign),
+        [selectedDesign],
+    );
     const selectedDesignPpiflowRecord = useMemo(() => (
         getPpiflowRecord(selectedDesign)
     ), [selectedDesign]);
     const selectedDesignHasPpiflowLens = selectedDesignLens === 'ppiflow' || Boolean(selectedDesignPpiflowRecord);
+    const selectedDesignSequenceSource = useMemo(() => {
+        const stageSequence = typeof selectedDesignFampnnPayload?.sequence === 'string' ? selectedDesignFampnnPayload.sequence.trim() : '';
+        if (stageSequence) {
+            return { sequence: stageSequence, kind: 'stage' as const };
+        }
+        const binderSequence = [
+            selectedDesign?.binder_sequence,
+            selectedDesignFampnnPayload?.binder_sequence,
+        ].find((value) => typeof value === 'string' && value.trim());
+        return {
+            sequence: typeof binderSequence === 'string' ? binderSequence.trim() : '',
+            kind: 'binder' as const,
+        };
+    }, [selectedDesign?.binder_sequence, selectedDesignFampnnPayload]);
     const selectedDesignSequenceEntries = useMemo(
         () => parseStageSequenceEntries(
-            selectedDesignFampnnPayload?.sequence,
+            selectedDesignSequenceSource.sequence,
             selectedDesignFampnnPayload?.chain_avg_psce,
+            selectedDesign?.detected_antibody_chains,
         ),
-        [selectedDesignFampnnPayload],
+        [selectedDesign?.detected_antibody_chains, selectedDesignFampnnPayload, selectedDesignSequenceSource],
+    );
+    const selectedDesignSequenceSourceLabel = selectedDesignSequenceSource.kind === 'stage'
+        ? 'Stage-native sequence output'
+        : 'Structure-derived binder sequence';
+    const selectedDesignFullSequence = useMemo(
+        () => selectedDesignSequenceEntries.map((entry) => entry.sequence).join(''),
+        [selectedDesignSequenceEntries],
+    );
+    const selectedDesignFullSequenceFasta = useMemo(() => {
+        if (selectedDesignSequenceEntries.length === 0) return '';
+        const recordName = selectedDesign?.name?.trim() || 'selected_design';
+        return selectedDesignSequenceEntries
+            .map((entry) => `>${recordName}|chain_${entry.chain}\n${entry.sequence}`)
+            .join('\n');
+    }, [selectedDesign?.name, selectedDesignSequenceEntries]);
+    const selectedDesignSequenceChainSummary = useMemo(
+        () => selectedDesignSequenceEntries.map((entry) => `${entry.chain} (${entry.length} aa)`).join(' • '),
+        [selectedDesignSequenceEntries],
+    );
+    const selectedDesignSequenceViewerText = useMemo(
+        () => formatSequenceViewerText(selectedDesignSequenceEntries),
+        [selectedDesignSequenceEntries],
     );
     const selectedDesignStageSettings = useMemo(() => {
         const provenanceSettings = asRecord(selectedDesignProvenance?.stage_settings)
@@ -2395,8 +2702,8 @@ export function ResultsViewer() {
     const selectedDesignPpiflowSummaryRows = useMemo(() => {
         if (!selectedDesignHasPpiflowLens || !selectedDesign) return [];
         return [
-            ['Source Design', selectedDesignPpiflowRecord?.source_design_name],
-            ['Source PDB', selectedDesignPpiflowRecord?.source_pdb_path],
+            ['Source Design', selectedDesign.source_design_name ?? selectedDesignPpiflowRecord?.source_design_name],
+            ['Source PDB', selectedDesign.source_pdb_path ?? selectedDesignPpiflowRecord?.source_pdb_path],
             ['Movable Span', selectedDesignPpiflowRecord?.ppiflow_positions ?? selectedDesignPpiflowRecord?.movable_region_positions],
             ['Anchor Count', selectedDesignPpiflowRecord?.anchors?.anchor_count],
             ['Anchor Candidates', selectedDesignPpiflowRecord?.anchors?.anchor_candidate_count],
@@ -2421,6 +2728,35 @@ export function ResultsViewer() {
                 return [label, String(value)] as const;
             });
     }, [selectedDesign, selectedDesignHasPpiflowLens, selectedDesignPpiflowRecord]);
+    const selectedDesignLineageRows = useMemo(() => {
+        if (!selectedDesign) return [] as readonly (readonly [string, string])[];
+        const sourceStageLabel = formatStageDescriptor(selectedDesign.source_stage_family ?? activeJob?.source_stage_family, selectedDesign.source_stage_mode ?? activeJob?.source_stage_mode);
+        const producedStageLabel = formatStageDescriptor(selectedDesign.stage_family, selectedDesign.stage_mode);
+        const stagePathLabel = formatLineagePathSummary(
+            selectedDesign.stage_family,
+            selectedDesign.stage_mode,
+            selectedDesign.source_stage_family ?? activeJob?.source_stage_family,
+            selectedDesign.source_stage_mode ?? activeJob?.source_stage_mode,
+        );
+        return [
+            ['Stage Path', stagePathLabel],
+            ['Produced By', producedStageLabel],
+            ['Source Stage', sourceStageLabel],
+            ['Source Stage Job', selectedDesign.source_stage_job_id ?? activeJob?.source_stage_job_id ?? null],
+            ['Selection Dataset', activeJob?.selection_dataset_name ?? null],
+            ['Selection Set Size', activeJob?.source_selection_count != null ? String(activeJob.source_selection_count) : null],
+            ['Selection Manifest', activeJob?.source_selection_manifest_path ?? null],
+            ['Lineage Root Job', selectedDesign.lineage_root_job_id ?? activeJob?.lineage_root_job_id ?? null],
+            ['Immediate Parent Design', selectedDesign.parent_design_id],
+            ['Origin Design', selectedDesign.origin_design_id],
+            ['Origin Backbone', selectedDesign.origin_backbone_design_id],
+            ['Source Design', selectedDesign.source_design_name ?? getPpiflowSourceName(selectedDesign as any)],
+            ['Source PDB', selectedDesign.source_pdb_path ?? null],
+        ]
+            .filter(([, value]) => value !== undefined && value !== null && value !== '')
+            .map(([label, value]) => [label, String(value)] as const);
+    }, [activeJob?.lineage_root_job_id, activeJob?.selection_dataset_name, activeJob?.source_selection_count, activeJob?.source_selection_manifest_path, activeJob?.source_stage_family, activeJob?.source_stage_job_id, activeJob?.source_stage_mode, selectedDesign]);
+
     const selectedDesignMetricCards = useMemo(() => {
         if (!selectedDesign) return [];
         if (selectedDesignHasPpiflowLens) {
@@ -2474,15 +2810,24 @@ export function ResultsViewer() {
         return [
             { label: 'Output', value: getOutputSourceLabel(selectedDesign), tone: selectedDesignSource === 'rfantibody' ? 'text-violet-300' : selectedDesignSource === 'fampnn' ? 'text-emerald-300' : 'text-cyan-300' },
             { label: 'Binder Type', value: (selectedDesign.antibody_type ?? antibodyData?.antibody_type)?.toUpperCase() || '—', tone: 'text-slate-200' },
-            {
-                label: selectedDesignSource === 'fampnn' ? 'FAMPNN pSCE' : selectedDesignSource === 'rfantibody' ? 'RF pLDDT Global' : 'pLDDT',
-                value: selectedDesignSource === 'fampnn'
-                    ? formatMetric(selectedDesign.fampnn_psce, 2)
-                    : formatMetric(selectedDesign.plddt_overall, 1),
-                tone: selectedDesignSource === 'fampnn'
-                    ? getMetricColor('fampnn_psce', selectedDesign.fampnn_psce)
-                    : getMetricColor('plddt_overall', selectedDesign.plddt_overall),
-            },
+            ...(selectedDesignSource === 'fampnn'
+                ? [
+                    {
+                        label: 'Avg PSCE',
+                        value: formatMetric(selectedDesign.fampnn_psce, 2),
+                        tone: getMetricColor('fampnn_psce', selectedDesign.fampnn_psce),
+                    },
+                    {
+                        label: 'Worst Residue PSCE',
+                        value: formatMetric(selectedDesignFampnnMaxResiduePsce, 2),
+                        tone: getMetricColor('fampnn_max_residue_psce', selectedDesignFampnnMaxResiduePsce),
+                    },
+                ]
+                : [{
+                    label: selectedDesignSource === 'rfantibody' ? 'RF pLDDT Global' : 'pLDDT',
+                    value: formatMetric(selectedDesign.plddt_overall, 1),
+                    tone: getMetricColor('plddt_overall', selectedDesign.plddt_overall),
+                }]),
             ...(selectedDesignSource === 'rfantibody'
                 ? [{
                     label: 'RF pLDDT Selected',
@@ -2545,7 +2890,7 @@ export function ResultsViewer() {
             { label: 'High Frust Count', value: selectedDesign.frustration_high_count ?? '—', tone: 'text-amber-300' },
             { label: 'Maturation ΔIface', value: (selectedDesign.maturation_selected_delta_interface ?? selectedDesign.maturation_delta_interface) != null ? (selectedDesign.maturation_selected_delta_interface ?? selectedDesign.maturation_delta_interface)!.toFixed(2) : '—', tone: 'text-fuchsia-300' },
         ];
-    }, [antibodyData?.antibody_type, antibodyData?.humanness_score, getMetricColor, rfMetricLabels.distance, rfMetricLabels.epitope, rfMetricLabels.short, rfMetricScope, selectedDesign, selectedDesignHasPpiflowLens, selectedDesignPpiflowRecord, selectedDesignProvenance?.selected_loop_scope, selectedDesignSource]);
+    }, [antibodyData?.antibody_type, antibodyData?.humanness_score, getMetricColor, rfMetricLabels.distance, rfMetricLabels.epitope, rfMetricLabels.short, rfMetricScope, selectedDesign, selectedDesignFampnnMaxResiduePsce, selectedDesignHasPpiflowLens, selectedDesignPpiflowRecord, selectedDesignProvenance?.selected_loop_scope, selectedDesignSource]);
     const overviewAnalysisItems = useMemo(() => ([
         {
             key: 'structure_summary',
@@ -2722,6 +3067,7 @@ export function ResultsViewer() {
         const targetDistances = designs.map(d => d.target_min_distance).filter((v): v is number => v != null);
         const hotspotCoverage = designs.map(d => d.rfa_hotspot_covered_count).filter((v): v is number => v != null);
         const psces = designs.map(d => d.fampnn_psce).filter((v): v is number => v != null);
+        const maxResiduePsces = designs.map(d => getFampnnMaxResiduePsce(d)).filter((v): v is number => v != null);
         const ppiflowDeltas = designs.map(d => d.maturation_selected_delta_interface ?? d.maturation_delta_interface).filter((v): v is number => v != null);
         const ppiflowInterfaceScores = designs.map(d => d.maturation_selected_interface_score ?? d.maturation_interface_score).filter((v): v is number => v != null);
         const ppiflowRmsd = designs.map(d => d.maturation_selected_rmsd ?? d.maturation_rmsd).filter((v): v is number => v != null);
@@ -2780,6 +3126,7 @@ export function ResultsViewer() {
             avgTargetDistance: targetDistances.length ? targetDistances.reduce((a, b) => a + b, 0) / targetDistances.length : null,
             avgHotspotCoverage: hotspotCoverage.length ? hotspotCoverage.reduce((a, b) => a + b, 0) / hotspotCoverage.length : null,
             avgPsce: psces.length ? psces.reduce((a, b) => a + b, 0) / psces.length : null,
+            avgMaxResiduePsce: maxResiduePsces.length ? maxResiduePsces.reduce((a, b) => a + b, 0) / maxResiduePsces.length : null,
             avgPpiflowDeltaInterface: ppiflowDeltas.length ? ppiflowDeltas.reduce((a, b) => a + b, 0) / ppiflowDeltas.length : null,
             avgPpiflowInterfaceScore: ppiflowInterfaceScores.length ? ppiflowInterfaceScores.reduce((a, b) => a + b, 0) / ppiflowInterfaceScores.length : null,
             avgPpiflowRmsd: ppiflowRmsd.length ? ppiflowRmsd.reduce((a, b) => a + b, 0) / ppiflowRmsd.length : null,
@@ -2802,10 +3149,14 @@ export function ResultsViewer() {
             tierB: tierCounts.B,
             tierC: tierCounts.C,
             tierD: tierCounts.D,
-            psceExcellent: psces.filter((value) => value <= 0.2).length,
-            psceGood: psces.filter((value) => value > 0.2 && value <= 0.3).length,
-            psceModerate: psces.filter((value) => value > 0.3 && value <= 0.4).length,
-            psceHighRisk: psces.filter((value) => value > 0.4).length,
+            psceExcellent: psces.filter((value) => value <= 0.9).length,
+            psceGood: psces.filter((value) => value > 0.9 && value <= 1.2).length,
+            psceModerate: psces.filter((value) => value > 1.2 && value <= 1.6).length,
+            psceReview: psces.filter((value) => value > 1.6).length,
+            worstPsceClean: maxResiduePsces.filter((value) => value <= 1.6).length,
+            worstPsceWatch: maxResiduePsces.filter((value) => value > 1.6 && value <= 2.4).length,
+            worstPsceOutlier: maxResiduePsces.filter((value) => value > 2.4 && value <= 3.0).length,
+            worstPsceSevere: maxResiduePsces.filter((value) => value > 3.0).length,
             screenPassed,
             screenFailed,
             topScreeningReasons: Array.from(screeningReasons.entries())
@@ -2869,7 +3220,11 @@ export function ResultsViewer() {
             psceExcellent: 0,
             psceGood: 0,
             psceModerate: 0,
-            psceHighRisk: 0,
+            psceReview: 0,
+            worstPsceClean: 0,
+            worstPsceWatch: 0,
+            worstPsceOutlier: 0,
+            worstPsceSevere: 0,
             screenPassed,
             screenFailed,
             topScreeningReasons: [],
@@ -2880,12 +3235,21 @@ export function ResultsViewer() {
     const usingReviewRepresentativeFallback = !stats && !!rfReviewFallbackStats;
 
     const handleSort = (field: string) => {
+        const nextSortDir = sortField === field
+            ? (sortDir === 'asc' ? 'desc' : 'asc')
+            : getDefaultSortDirection(field);
+        setCurrentPage(1);
         if (sortField === field) {
-            setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+            setSortDir(nextSortDir);
         } else {
             setSortField(field);
-            setSortDir(getDefaultSortDirection(field));
+            setSortDir(nextSortDir);
         }
+        setFilterDraft((current) => ({
+            ...current,
+            sortField: field,
+            sortDir: nextSortDir,
+        }));
     };
 
     const updateFilterDraft = <K extends keyof FilterDraftState>(key: K, value: FilterDraftState[K]) => {
@@ -3026,6 +3390,8 @@ export function ResultsViewer() {
             : null;
 
         setRfReviewSet(nextRfReviewSet);
+        manualOutputSourceSelectionRef.current = true;
+        outputSourceSelectionJobRef.current = selectedJobId || null;
         setOutputSourceFilter(nextOutputSourceFilter);
         setAntibodySourceFilter(nextOutputSourceFilter);
         setSortField(nextSortField);
@@ -3084,6 +3450,8 @@ export function ResultsViewer() {
     const clearReviewSourceSelection = () => {
         setAppliedSavedFilterSetId(null);
         setRfReviewSet(null);
+        manualOutputSourceSelectionRef.current = true;
+        outputSourceSelectionJobRef.current = selectedJobId || null;
         setOutputSourceFilter('all');
         setAntibodySourceFilter('all');
         setFilterText('');
@@ -3184,6 +3552,8 @@ export function ResultsViewer() {
     const selectLiveReviewSet = (nextRfReviewSet: RfReviewSet) => {
         setAppliedSavedFilterSetId(null);
         setRfReviewSet(nextRfReviewSet);
+        manualOutputSourceSelectionRef.current = true;
+        outputSourceSelectionJobRef.current = selectedJobId || null;
         setOutputSourceFilter('all');
         setAntibodySourceFilter('all');
         setFilterText('');
@@ -3389,11 +3759,23 @@ export function ResultsViewer() {
         const savedDatasetCount = resolvedSavedFilterSet?.design_ids?.length
             ?? resolvedSavedFilterSet?.visible_count
             ?? null;
+        const launchDesignIdSet = launchDesignIds.length > 0 ? new Set(launchDesignIds) : null;
+        const selectedLaunchDesigns = launchDesignIdSet
+            ? designs.filter((design) => launchDesignIdSet.has(design.id))
+            : [];
+        const selectedLaunchSourceFilters = Array.from(new Set(
+            selectedLaunchDesigns.map((design) => inferDesignOutputSource(design as any))
+        ));
+        const launchSourceOutputFilter = resolvedSavedFilterSet
+            ? savedSourceOutputFilter
+            : selectedLaunchSourceFilters.length === 1
+                ? selectedLaunchSourceFilters[0]
+                : outputSourceFilter;
         const refinementLaunchState: AntibodyRefinementLaunchState = {
             refinementMode: true,
             sourceJobId: activeJob.id,
             sourceArtifactGroup: resolvedSavedFilterSet ? savedSourceArtifactGroup : activeRfArtifactGroup,
-            sourceOutputSourceFilter: resolvedSavedFilterSet ? savedSourceOutputFilter : outputSourceFilter,
+            sourceOutputSourceFilter: launchSourceOutputFilter,
             sourceSortField: resolvedSavedFilterSet ? savedSourceSortField : sortField,
             sourceSortDir: resolvedSavedFilterSet ? savedSourceSortDir : sortDir,
             sourceVisibleCount: resolvedSavedFilterSet ? savedDatasetCount : tableDesigns.length,
@@ -3552,6 +3934,30 @@ export function ResultsViewer() {
                         <p className="text-slate-400 text-sm mt-1">
                             {activeJob ? `${activeJob.name} • ${activeJob.model_id}` : 'Select a job to analyze'}
                         </p>
+                        {activeJob && (
+                            <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-300">
+                                {formatLineagePathSummary(
+                                    activeJob.stage_family,
+                                    activeJob.stage_mode,
+                                    activeJob.source_stage_family,
+                                    activeJob.source_stage_mode,
+                                ) && (
+                                    <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
+                                        Path {formatLineagePathSummary(
+                                            activeJob.stage_family,
+                                            activeJob.stage_mode,
+                                            activeJob.source_stage_family,
+                                            activeJob.source_stage_mode,
+                                        )}
+                                    </span>
+                                )}
+                                {formatSourceSummary(activeJob) && (
+                                    <span className="rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1">
+                                        Source {formatSourceSummary(activeJob)}
+                                    </span>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     {/* Smart Job Selector */}
@@ -3677,6 +4083,9 @@ export function ResultsViewer() {
                                                 <>
                                                     This lineage already has persisted downstream child outputs. Switch between them directly here without losing access to the paused RF review parent.
                                                 </>
+                                            )}
+                                            {(!isPostRFantibodyReview && formatSourceSummary(activeJob)) && (
+                                                <span className="ml-2 text-sky-200">Launch source: {formatSourceSummary(activeJob)}</span>
                                             )}
                                         </div>
                                     </div>
@@ -4850,33 +5259,63 @@ export function ResultsViewer() {
                                                     <>
                                                         <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
                                                             <span>🧬</span>
-                                                            FA-MPNN Quality Distribution
-                                                            <span className="text-xs text-slate-500 font-normal">(based on pSCE)</span>
+                                                            FA-MPNN pSCE Distribution
+                                                            <span className="text-xs text-slate-500 font-normal">(average vs worst residue)</span>
                                                         </h3>
-                                                        <div className="grid grid-cols-4 gap-3">
-                                                            <div className="bg-emerald-500/20 rounded-lg p-3 text-center border border-emerald-500/30">
-                                                                <div className="text-2xl font-bold text-emerald-300">{overviewStats.psceExcellent ?? 0}</div>
-                                                                <div className="text-xs text-emerald-400 font-medium">Excellent</div>
-                                                                <div className="text-[10px] text-slate-500">pSCE ≤ 0.20</div>
+                                                        <div className="space-y-4">
+                                                            <div>
+                                                                <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Average pSCE</div>
+                                                                <div className="grid grid-cols-4 gap-3">
+                                                                    <div className="bg-emerald-500/20 rounded-lg p-3 text-center border border-emerald-500/30">
+                                                                        <div className="text-2xl font-bold text-emerald-300">{overviewStats.psceExcellent ?? 0}</div>
+                                                                        <div className="text-xs text-emerald-400 font-medium">Excellent</div>
+                                                                        <div className="text-[10px] text-slate-500">≤ 0.90</div>
+                                                                    </div>
+                                                                    <div className="bg-cyan-500/20 rounded-lg p-3 text-center border border-cyan-500/30">
+                                                                        <div className="text-2xl font-bold text-cyan-300">{overviewStats.psceGood ?? 0}</div>
+                                                                        <div className="text-xs text-cyan-400 font-medium">Good</div>
+                                                                        <div className="text-[10px] text-slate-500">0.90 - 1.20</div>
+                                                                    </div>
+                                                                    <div className="bg-amber-500/20 rounded-lg p-3 text-center border border-amber-500/30">
+                                                                        <div className="text-2xl font-bold text-amber-300">{overviewStats.psceModerate ?? 0}</div>
+                                                                        <div className="text-xs text-amber-400 font-medium">Moderate</div>
+                                                                        <div className="text-[10px] text-slate-500">1.20 - 1.60</div>
+                                                                    </div>
+                                                                    <div className="bg-rose-500/20 rounded-lg p-3 text-center border border-rose-500/30">
+                                                                        <div className="text-2xl font-bold text-rose-300">{overviewStats.psceReview ?? 0}</div>
+                                                                        <div className="text-xs text-rose-400 font-medium">Review</div>
+                                                                        <div className="text-[10px] text-slate-500">&gt; 1.60</div>
+                                                                    </div>
+                                                                </div>
                                                             </div>
-                                                            <div className="bg-blue-500/20 rounded-lg p-3 text-center border border-blue-500/30">
-                                                                <div className="text-2xl font-bold text-blue-300">{overviewStats.psceGood ?? 0}</div>
-                                                                <div className="text-xs text-blue-400 font-medium">Good</div>
-                                                                <div className="text-[10px] text-slate-500">0.20 - 0.30</div>
-                                                            </div>
-                                                            <div className="bg-amber-500/20 rounded-lg p-3 text-center border border-amber-500/30">
-                                                                <div className="text-2xl font-bold text-amber-300">{overviewStats.psceModerate ?? 0}</div>
-                                                                <div className="text-xs text-amber-400 font-medium">Moderate</div>
-                                                                <div className="text-[10px] text-slate-500">0.30 - 0.40</div>
-                                                            </div>
-                                                            <div className="bg-red-500/20 rounded-lg p-3 text-center border border-red-500/30">
-                                                                <div className="text-2xl font-bold text-red-300">{overviewStats.psceHighRisk ?? 0}</div>
-                                                                <div className="text-xs text-red-400 font-medium">High Risk</div>
-                                                                <div className="text-[10px] text-slate-500">pSCE &gt; 0.40</div>
+                                                            <div>
+                                                                <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Worst Residue pSCE</div>
+                                                                <div className="grid grid-cols-4 gap-3">
+                                                                    <div className="bg-emerald-500/20 rounded-lg p-3 text-center border border-emerald-500/30">
+                                                                        <div className="text-2xl font-bold text-emerald-300">{overviewStats.worstPsceClean ?? 0}</div>
+                                                                        <div className="text-xs text-emerald-400 font-medium">Clean</div>
+                                                                        <div className="text-[10px] text-slate-500">≤ 1.60</div>
+                                                                    </div>
+                                                                    <div className="bg-cyan-500/20 rounded-lg p-3 text-center border border-cyan-500/30">
+                                                                        <div className="text-2xl font-bold text-cyan-300">{overviewStats.worstPsceWatch ?? 0}</div>
+                                                                        <div className="text-xs text-cyan-400 font-medium">Watch</div>
+                                                                        <div className="text-[10px] text-slate-500">1.60 - 2.40</div>
+                                                                    </div>
+                                                                    <div className="bg-amber-500/20 rounded-lg p-3 text-center border border-amber-500/30">
+                                                                        <div className="text-2xl font-bold text-amber-300">{overviewStats.worstPsceOutlier ?? 0}</div>
+                                                                        <div className="text-xs text-amber-400 font-medium">Outlier</div>
+                                                                        <div className="text-[10px] text-slate-500">2.40 - 3.00</div>
+                                                                    </div>
+                                                                    <div className="bg-rose-500/20 rounded-lg p-3 text-center border border-rose-500/30">
+                                                                        <div className="text-2xl font-bold text-rose-300">{overviewStats.worstPsceSevere ?? 0}</div>
+                                                                        <div className="text-xs text-rose-400 font-medium">Severe</div>
+                                                                        <div className="text-[10px] text-slate-500">&gt; 3.00</div>
+                                                                    </div>
+                                                                </div>
                                                             </div>
                                                         </div>
                                                         <div className="mt-3 text-xs text-slate-500 flex items-center gap-3">
-                                                            <span>Lower pSCE is better for FA-MPNN sequence confidence.</span>
+                                                            <span>Average pSCE captures overall sidechain confidence; worst-residue pSCE surfaces local outliers. Lower is better for both.</span>
                                                         </div>
                                                     </>
                                                 ) : preferredAnalysisLens === 'ppiflow' ? (
@@ -5535,67 +5974,105 @@ export function ResultsViewer() {
                                                         ))}
                                                     </div>
 
-                                                    {(selectedDesignSequenceEntries.length > 0 || selectedDesignStageSettingsRows.length > 0 || selectedDesignPpiflowSummaryRows.length > 0) && (
-                                                        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
-                                                            {selectedDesignSequenceEntries.length > 0 && (
-                                                                <div className="xl:col-span-2 rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
-                                                                    <div className="flex items-center justify-between gap-3">
-                                                                        <div className="text-[11px] uppercase tracking-wider text-slate-500">
-                                                                            {selectedDesignHasPpiflowLens ? 'PPIFlow Sequence Record' : 'FAMPNN Sequence Record'}
-                                                                        </div>
-                                                                        <div className="text-[11px] text-slate-500">
-                                                                            Stage-native sequence output
-                                                                        </div>
+                                                    {selectedDesignSequenceEntries.length > 0 && (
+                                                        <div className="mt-4 rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
+                                                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                                                <div>
+                                                                    <div className="text-[11px] uppercase tracking-wider text-slate-500">
+                                                                        {selectedDesignHasPpiflowLens ? 'PPIFlow Sequence Record' : 'FAMPNN Sequence Record'}
                                                                     </div>
-                                                                    <div className="mt-3 space-y-3">
-                                                                        {selectedDesignSequenceEntries.map((entry) => (
-                                                                            <div key={`${entry.chain}:${entry.sequence}`} className="rounded-lg border border-slate-700/40 bg-slate-950/40 p-3">
-                                                                                <div className="flex items-center justify-between gap-3 text-xs text-slate-400">
-                                                                                    <span>Chain {entry.chain}</span>
-                                                                                    <span className="font-mono text-slate-300">
-                                                                                        {entry.length} aa{entry.psce != null ? ` • pSCE ${entry.psce.toFixed(2)}` : ''}
-                                                                                    </span>
-                                                                                </div>
-                                                                                <div className="mt-2 break-all font-mono text-xs text-white">
-                                                                                    {entry.sequence}
-                                                                                </div>
+                                                                    <div className="mt-2 text-xs font-semibold text-white">Full Amino-Acid Sequence</div>
+                                                                    <div className="mt-1 text-[11px] text-slate-400">
+                                                                        {selectedDesignSequenceSourceLabel} • {selectedDesignSequenceChainSummary || 'stage-native order'} • {selectedDesignFullSequence.length} aa total
+                                                                    </div>
+                                                                </div>
+                                                                <div className="flex flex-wrap items-center gap-2">
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => void handleCopySequenceText(selectedDesignFullSequence, 'full')}
+                                                                        disabled={!selectedDesignFullSequence}
+                                                                        className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-medium text-emerald-100 transition-colors hover:bg-emerald-500/20"
+                                                                    >
+                                                                        {sequenceCopyFeedback === 'full' ? 'Copied Full Sequence' : 'Copy Full Sequence'}
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => void handleCopySequenceText(selectedDesignFullSequenceFasta, 'fasta')}
+                                                                        disabled={!selectedDesignFullSequenceFasta}
+                                                                        className="rounded-md border border-slate-600 bg-slate-900/60 px-3 py-1.5 text-[11px] font-medium text-slate-200 transition-colors hover:border-slate-500 hover:bg-slate-900"
+                                                                    >
+                                                                        {sequenceCopyFeedback === 'fasta' ? 'Copied FASTA' : 'Copy FASTA'}
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                            <div className="mt-3 overflow-x-auto rounded-lg border border-slate-700/40 bg-slate-950/55 p-4">
+                                                                <pre className="font-mono text-xs leading-6 text-slate-100 whitespace-pre">
+                                                                    {selectedDesignSequenceViewerText}
+                                                                </pre>
+                                                            </div>
+                                                            <div className="mt-3 flex flex-wrap gap-2">
+                                                                {selectedDesignSequenceEntries.map((entry) => (
+                                                                    <div key={`${entry.chain}:${entry.length}`} className="rounded-full border border-slate-700/50 bg-slate-950/40 px-3 py-1 text-[11px] text-slate-300">
+                                                                        Chain {entry.chain} • {entry.length} aa{entry.psce != null ? ` • pSCE ${entry.psce.toFixed(2)}` : ''}
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+                                                                <span>Wrapped in 10-aa blocks with line ranges for manual inspection.</span>
+                                                                <span className={sequenceCopyFeedback === 'error' ? 'text-rose-300' : 'text-slate-500'}>
+                                                                    {sequenceCopyFeedback === 'error'
+                                                                        ? 'Clipboard write failed. Manual select/copy still works.'
+                                                                        : 'Use FASTA copy to preserve explicit chain boundaries.'}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {(selectedDesignStageSettingsRows.length > 0 || selectedDesignPpiflowSummaryRows.length > 0 || selectedDesignLineageRows.length > 0) && (
+                                                        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
+                                                            {selectedDesignLineageRows.length > 0 && (
+                                                                <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
+                                                                    <div className="text-[11px] uppercase tracking-wider text-slate-500">Lineage & Source</div>
+                                                                    <div className="mt-3 space-y-2 text-xs">
+                                                                        {selectedDesignLineageRows.map(([label, value]) => (
+                                                                            <div key={label} className="flex items-start justify-between gap-3 rounded-lg bg-slate-950/40 px-3 py-2">
+                                                                                <span className="text-slate-500">{label}</span>
+                                                                                <span className="max-w-[60%] break-words text-right font-mono text-slate-200">{value}</span>
                                                                             </div>
                                                                         ))}
                                                                     </div>
                                                                 </div>
                                                             )}
 
-                                                            <div className="space-y-4">
-                                                                {selectedDesignStageSettingsRows.length > 0 && (
-                                                                    <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
-                                                                        <div className="text-[11px] uppercase tracking-wider text-slate-500">
-                                                                            {selectedDesignSource === 'fampnn' ? 'FAMPNN Settings' : 'PPIFlow Settings'}
-                                                                        </div>
-                                                                        <div className="mt-3 space-y-2 text-xs">
-                                                                            {selectedDesignStageSettingsRows.map(([label, value]) => (
-                                                                                <div key={label} className="flex items-start justify-between gap-3 rounded-lg bg-slate-950/40 px-3 py-2">
-                                                                                    <span className="text-slate-500">{label}</span>
-                                                                                    <span className="max-w-[60%] break-words text-right font-mono text-slate-200">{value}</span>
-                                                                                </div>
-                                                                            ))}
-                                                                        </div>
+                                                            {selectedDesignStageSettingsRows.length > 0 && (
+                                                                <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
+                                                                    <div className="text-[11px] uppercase tracking-wider text-slate-500">
+                                                                        {selectedDesignSource === 'fampnn' ? 'FAMPNN Settings' : 'PPIFlow Settings'}
                                                                     </div>
-                                                                )}
+                                                                    <div className="mt-3 space-y-2 text-xs">
+                                                                        {selectedDesignStageSettingsRows.map(([label, value]) => (
+                                                                            <div key={label} className="flex items-start justify-between gap-3 rounded-lg bg-slate-950/40 px-3 py-2">
+                                                                                <span className="text-slate-500">{label}</span>
+                                                                                <span className="max-w-[60%] break-words text-right font-mono text-slate-200">{value}</span>
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                </div>
+                                                            )}
 
-                                                                {selectedDesignPpiflowSummaryRows.length > 0 && (
-                                                                    <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
-                                                                        <div className="text-[11px] uppercase tracking-wider text-slate-500">PPIFlow Refinement Record</div>
-                                                                        <div className="mt-3 space-y-2 text-xs">
-                                                                            {selectedDesignPpiflowSummaryRows.map(([label, value]) => (
-                                                                                <div key={label} className="flex items-start justify-between gap-3 rounded-lg bg-slate-950/40 px-3 py-2">
-                                                                                    <span className="text-slate-500">{label}</span>
-                                                                                    <span className="max-w-[60%] break-words text-right font-mono text-slate-200">{value}</span>
-                                                                                </div>
-                                                                            ))}
-                                                                        </div>
+                                                            {selectedDesignPpiflowSummaryRows.length > 0 && (
+                                                                <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
+                                                                    <div className="text-[11px] uppercase tracking-wider text-slate-500">PPIFlow Refinement Record</div>
+                                                                    <div className="mt-3 space-y-2 text-xs">
+                                                                        {selectedDesignPpiflowSummaryRows.map(([label, value]) => (
+                                                                            <div key={label} className="flex items-start justify-between gap-3 rounded-lg bg-slate-950/40 px-3 py-2">
+                                                                                <span className="text-slate-500">{label}</span>
+                                                                                <span className="max-w-[60%] break-words text-right font-mono text-slate-200">{value}</span>
+                                                                            </div>
+                                                                        ))}
                                                                     </div>
-                                                                )}
-                                                            </div>
+                                                                </div>
+                                                            )}
                                                         </div>
                                                     )}
 
@@ -5833,7 +6310,7 @@ export function ResultsViewer() {
                                     {activeTab === 'table' && (
                                         <div className="p-4">
                                             {/* Backbone / Family Toggle Bar */}
-                                            {reviewBackboneRows.length > 0 && (
+                                            {reviewBackboneRows.length > 0 && backboneFilterApplies && (
                                                 <div className="mb-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
                                                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                                                         <div>
@@ -6289,7 +6766,11 @@ export function ResultsViewer() {
                                                     <button
                                                         key={value}
                                                         type="button"
-                                                        onClick={() => setOutputSourceFilter(value)}
+                                                        onClick={() => {
+                                                            manualOutputSourceSelectionRef.current = true;
+                                                            outputSourceSelectionJobRef.current = selectedJobId || null;
+                                                            setOutputSourceFilter(value);
+                                                        }}
                                                         className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${outputSourceFilter === value
                                                             ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
                                                             : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-slate-600'
@@ -6380,26 +6861,33 @@ export function ResultsViewer() {
                                                                 { key: 'fr2_contacts', label: 'FR2' },
                                                                 { key: 'is_favorite', label: '★' },
                                                                 ...(showPpiflowColumns ? [
-                                                                    { key: 'ppiflow_source_name', label: 'PPI Src', sortable: false },
-                                                                    { key: 'ppiflow_sample_index', label: 'Sample', sortable: false },
+                                                                    { key: 'ppiflow_source_name', label: 'PPI Src' },
+                                                                    { key: 'ppiflow_sample_index', label: 'Sample' },
                                                                     { key: 'maturation_selected_interface_score', label: 'Iface Sel' },
                                                                     { key: 'maturation_interface_score', label: 'Iface Glob' },
-                                                                    { key: 'ppiflow_seq_identity', label: 'Seq ID', sortable: false },
-                                                                    { key: 'ppiflow_anchor_count', label: 'Anchors', sortable: false },
-                                                                    { key: 'ppiflow_clash_count', label: 'CA Clash', sortable: false },
+                                                                    { key: 'ppiflow_seq_identity', label: 'Seq ID' },
+                                                                    { key: 'ppiflow_anchor_count', label: 'Anchors' },
+                                                                    { key: 'ppiflow_clash_count', label: 'CA Clash' },
                                                                 ] : []),
-                                                            ].map(col => (
-                                                                <th
-                                                                    key={col.key}
-                                                                    onClick={col.key === 'selected' || col.sortable === false ? undefined : () => handleSort(col.key)}
-                                                                    className={`px-3 py-2 text-left font-medium text-slate-400 ${col.key === 'selected' || col.sortable === false ? '' : 'cursor-pointer hover:text-white'}`}
-                                                                >
-                                                                    {col.label}
-                                                                    {col.sortable !== false && sortField === col.key && (
-                                                                        <span className="ml-1">{sortDir === 'asc' ? '▲' : '▼'}</span>
-                                                                    )}
-                                                                </th>
-                                                            ))}
+                                                            ].map(col => {
+                                                                const sortable = isTableColumnSortable(
+                                                                    col.key,
+                                                                    'sortable' in col && typeof col.sortable === 'boolean' ? col.sortable : undefined,
+                                                                );
+                                                                return (
+                                                                    <th
+                                                                        key={col.key}
+                                                                        data-table-interactive="true"
+                                                                        onClick={sortable ? () => handleSort(col.key) : undefined}
+                                                                        className={`px-3 py-2 text-left font-medium text-slate-400 ${sortable ? 'cursor-pointer hover:text-white' : ''}`}
+                                                                    >
+                                                                        {col.label}
+                                                                        {sortable && sortField === col.key && (
+                                                                            <span className="ml-1">{sortDir === 'asc' ? '▲' : '▼'}</span>
+                                                                        )}
+                                                                    </th>
+                                                                );
+                                                            })}
                                                         </tr>
                                                     </thead>
                                                     <tbody>

@@ -18,6 +18,7 @@ from services.aligned_error_utils import fingerprint_aligned_error_artifact
 STRUCTURE_SUMMARY_ANALYSIS = "structure_summary"
 CONTACT_MAP_ANALYSIS = "contact_map"
 CHAIN_METRICS_ANALYSIS = "chain_metrics"
+FAMPNN_PSCE_PROFILE_ANALYSIS = "fampnn_psce_profile"
 PAE_MATRIX_ANALYSIS = "pae_matrix"
 IPSAE_INTERFACE_ANALYSIS = "ipsae_interface"
 ANTIBODY_ANNOTATION_PACK_ANALYSIS = "antibody_annotation_pack"
@@ -113,6 +114,11 @@ def normalize_chain_metrics_params(raw: dict[str, Any] | None) -> dict[str, Any]
     return {}
 
 
+def normalize_fampnn_psce_profile_params(raw: dict[str, Any] | None) -> dict[str, Any]:
+    params = dict(raw or {})
+    return {"ignore_cbeta": _normalize_bool(params.get("ignore_cbeta"), False)}
+
+
 def normalize_pae_matrix_params(raw: dict[str, Any] | None) -> dict[str, Any]:
     params = dict(raw or {})
     max_size = params.get("max_size", 200)
@@ -173,6 +179,14 @@ def build_chain_metrics_signature(design: Design, params: dict[str, Any], _sessi
     return _json_hash({
         "analysis_type": CHAIN_METRICS_ANALYSIS,
         "structure": _structure_fingerprint(design.pdb_path),
+    })
+
+
+def build_fampnn_psce_profile_signature(design: Design, params: dict[str, Any], _session: AsyncSession) -> str:
+    return _json_hash({
+        "analysis_type": FAMPNN_PSCE_PROFILE_ANALYSIS,
+        "structure": _structure_fingerprint(design.pdb_path),
+        "params": params,
     })
 
 
@@ -386,6 +400,14 @@ ANALYSIS_DEFINITIONS: Dict[str, AnalysisDefinition] = {
         resource_class="cpu_heavy",
         normalize_params=normalize_chain_metrics_params,
         build_input_signature=build_chain_metrics_signature,
+    ),
+    FAMPNN_PSCE_PROFILE_ANALYSIS: AnalysisDefinition(
+        analysis_type=FAMPNN_PSCE_PROFILE_ANALYSIS,
+        subject_kind="design",
+        version="2026-03-23-v1",
+        resource_class="cpu_heavy",
+        normalize_params=normalize_fampnn_psce_profile_params,
+        build_input_signature=build_fampnn_psce_profile_signature,
     ),
     PAE_MATRIX_ANALYSIS: AnalysisDefinition(
         analysis_type=PAE_MATRIX_ANALYSIS,

@@ -181,6 +181,53 @@ def count_files(directory: Path | None, patterns: Iterable[str]) -> int:
     return len(_iter_matching_files(directory, patterns))
 
 
+def _pick_best_review_dir(
+    preferred_dir: Path | None,
+    candidates: Iterable[Path | None],
+    patterns: Iterable[str],
+) -> Path | None:
+    ordered: list[Path] = []
+    for candidate in [preferred_dir, *list(candidates)]:
+        if candidate is None:
+            continue
+        resolved = candidate.expanduser().resolve()
+        if resolved not in ordered:
+            ordered.append(resolved)
+
+    if not ordered:
+        return preferred_dir
+
+    best_dir: Path | None = preferred_dir.expanduser().resolve() if preferred_dir else None
+    best_count = count_files(best_dir, patterns) if best_dir and best_dir.exists() else 0
+
+    if best_dir is None:
+        best_dir = next((candidate for candidate in ordered if candidate.exists()), None)
+
+    for candidate in ordered:
+        if not candidate.exists():
+            continue
+        candidate_count = count_files(candidate, patterns)
+        if candidate_count > best_count:
+            best_dir = candidate
+            best_count = candidate_count
+
+    return best_dir
+
+
+def _rfantibody_raw_dir_candidates(output_path: Path) -> list[Path]:
+    return [
+        output_path / "collected" / "rfantibody_raw",
+        output_path / "collected" / "rfantibody",
+        output_path / "run" / "rfantibody" / "output",
+    ]
+
+
+def _rfantibody_filtered_dir_candidates(output_path: Path) -> list[Path]:
+    return [
+        output_path / "collected" / "rfantibody_filtered",
+    ]
+
+
 def summarize_backbones(directory: Path | None, patterns: Iterable[str], preview_limit: int = 3) -> Optional[dict]:
     if not directory or not directory.exists():
         return None
@@ -295,26 +342,19 @@ def refresh_gate_payload(payload: Optional[dict], output_dir: str | None = None)
     screening_by_backbone: dict[int, dict] = {}
 
     if stage == "post_rfantibody" and output_path is not None:
-        inferred_raw_dir = output_path / "collected" / "rfantibody"
-        inferred_filtered_dir = output_path / "collected" / "rfantibody_filtered"
-        raw_count = count_files(raw_dir, STRUCTURE_PATTERNS) if raw_dir else 0
-        inferred_raw_count = count_files(inferred_raw_dir, STRUCTURE_PATTERNS) if inferred_raw_dir.exists() else 0
-        if inferred_raw_count > raw_count:
-            raw_dir = inferred_raw_dir
-
-        filtered_count = count_files(filtered_dir, STRUCTURE_PATTERNS) if filtered_dir else 0
-        inferred_filtered_count = count_files(inferred_filtered_dir, STRUCTURE_PATTERNS) if inferred_filtered_dir.exists() else 0
-        if inferred_filtered_count > filtered_count:
-            filtered_dir = inferred_filtered_dir
+        raw_dir = _pick_best_review_dir(raw_dir, _rfantibody_raw_dir_candidates(output_path), STRUCTURE_PATTERNS)
+        filtered_dir = _pick_best_review_dir(filtered_dir, _rfantibody_filtered_dir_candidates(output_path), STRUCTURE_PATTERNS)
+        screening_by_name, screening_by_backbone = _load_screening_rows(output_dir)
+        derived_filtered_files = resolve_rfantibody_filtered_files(raw_dir, filtered_dir, screening_by_name, screening_by_backbone)
 
         candidate_count = count_files(candidate_dir, STRUCTURE_PATTERNS) if candidate_dir else 0
         if candidate_count == 0:
-            if count_files(filtered_dir, STRUCTURE_PATTERNS) > 0:
+            if filtered_dir and count_files(filtered_dir, STRUCTURE_PATTERNS) > 0:
                 candidate_dir = filtered_dir
-            elif count_files(raw_dir, STRUCTURE_PATTERNS) > 0:
+            elif derived_filtered_files and raw_dir is not None:
                 candidate_dir = raw_dir
-
-        screening_by_name, screening_by_backbone = _load_screening_rows(output_dir)
+            elif raw_dir and count_files(raw_dir, STRUCTURE_PATTERNS) > 0:
+                candidate_dir = raw_dir
 
     current["candidate_dir"] = normalize_review_path(candidate_dir)
     current["candidate_count"] = count_files(candidate_dir, STRUCTURE_PATTERNS)
@@ -370,8 +410,12 @@ def infer_antibody_stage_state(job: Job, completed: list[str], stage_outputs: di
         return completed, stage_outputs
 
     inferred: dict[str, Path] = {}
-    rfa_dir = output_path / "collected" / "rfantibody"
-    if rfa_dir.exists():
+    rfa_dir = _pick_best_review_dir(
+        None,
+        _rfantibody_raw_dir_candidates(output_path),
+        STRUCTURE_PATTERNS,
+    )
+    if rfa_dir and rfa_dir.exists():
         inferred["rfantibody"] = rfa_dir
 
     fampnn_filtered = output_path / "collected" / "fampnn_filtered"

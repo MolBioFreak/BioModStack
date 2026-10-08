@@ -53,6 +53,11 @@ class Job(Base):
     lineage_root_job_id = Column(String(36), nullable=True, index=True)  # Root job for this lineage branch
     stage_family = Column(String(64), nullable=True, index=True)  # e.g. rfantibody, fampnn, ppiflow
     stage_mode = Column(String(64), nullable=True, index=True)  # e.g. backbone_refine, maturation
+    source_stage_job_id = Column(String(36), nullable=True, index=True)
+    source_stage_family = Column(String(64), nullable=True, index=True)
+    source_stage_mode = Column(String(64), nullable=True, index=True)
+    source_selection_manifest_path = Column(String(500), nullable=True)
+    source_selection_count = Column(Integer, nullable=True)
     selection_source_type = Column(String(64), nullable=True)  # saved_dataset, selected_designs, etc.
     selection_source_job_id = Column(String(36), nullable=True, index=True)
     selection_dataset_name = Column(String(255), nullable=True)
@@ -126,6 +131,11 @@ class Design(Base):
     origin_backbone_design_id = Column(String(36), nullable=True, index=True)
     stage_family = Column(String(64), nullable=True, index=True)
     stage_mode = Column(String(64), nullable=True, index=True)
+    source_stage_job_id = Column(String(36), nullable=True, index=True)
+    source_stage_family = Column(String(64), nullable=True, index=True)
+    source_stage_mode = Column(String(64), nullable=True, index=True)
+    source_pdb_path = Column(String(500), nullable=True)
+    source_design_name = Column(String(255), nullable=True)
     selected_loop_scope = Column(JSON, nullable=True)
     provenance = Column(JSON, nullable=True)
     

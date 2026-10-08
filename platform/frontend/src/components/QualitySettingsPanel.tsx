@@ -121,7 +121,7 @@ export interface QualitySettings {
 }
 
 export type QualityPreset = 'speed' | 'balanced' | 'quality' | 'maximum';
-export type PPIFlowStageMode = 'off' | 'post_rfantibody' | 'post_fampnn' | 'both';
+export type PPIFlowStageMode = 'off' | 'post_rfantibody' | 'post_ppiflow' | 'post_fampnn' | 'both';
 export type PPIFlowRegionMode = 'selected_cdrs' | 'all_cdrs' | 'framework_only' | 'all_antibody';
 
 const normalizeProtenixModel = (model?: string) => {
@@ -589,16 +589,19 @@ interface QualitySettingsPanelProps {
     preset: QualityPreset;
     onPresetChange: (preset: QualityPreset) => void;
     structureValidator?: 'boltz2' | 'protenix';
+    allowPostPpiFlowRetry?: boolean;
 }
 
 interface PPIFlowSettingsFieldsProps {
     settings: QualitySettings;
     onSettingsChange: (settings: QualitySettings) => void;
+    allowPostPpiFlowRetry?: boolean;
 }
 
 export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
     settings,
     onSettingsChange,
+    allowPostPpiFlowRetry = false,
 }) => {
     const updateSetting = <K extends keyof QualitySettings>(key: K, value: QualitySettings[K]) => {
         onSettingsChange({
@@ -629,6 +632,7 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
     const stageModeLabel: Record<PPIFlowStageMode, string> = {
         off: 'Off',
         post_rfantibody: 'Post RF backbone refine',
+        post_ppiflow: 'Post-PPIFlow backbone reattempt',
         post_fampnn: 'Post FA-MPNN maturation',
         both: 'Both stages',
     };
@@ -636,9 +640,10 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
         updateSettings({
             ppiflow_stage_mode: next,
             run_maturation: next === 'post_fampnn' || next === 'both',
+            ...(next === 'post_ppiflow' ? { ppiflow_require_anchors: false } : {}),
         });
     };
-    const backboneStageEnabled = stageMode === 'post_rfantibody' || stageMode === 'both';
+    const backboneStageEnabled = stageMode === 'post_rfantibody' || stageMode === 'post_ppiflow' || stageMode === 'both';
     const maturationStageEnabled = stageMode === 'post_fampnn' || stageMode === 'both';
 
     return (
@@ -657,13 +662,14 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                 </div>
             </div>
             <p className="text-[11px] text-slate-500">
-                Backbone refinement runs before sequence design. Maturation runs after FA-MPNN. Leave loop scopes blank to inherit the workflow-selected CDR set.
+                Backbone refinement runs before sequence design. Maturation runs after FA-MPNN. Post-PPIFlow reattempt reuses existing PPIFlow outputs for another sequence-free pass and defaults strict anchors off. Leave loop scopes blank to inherit the workflow-selected CDR set.
             </p>
 
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <div className={`grid grid-cols-2 gap-2 ${allowPostPpiFlowRetry ? 'md:grid-cols-5' : 'md:grid-cols-4'}`}>
                 {([
                     ['off', 'Off'],
                     ['post_rfantibody', 'Post RF'],
+                    ...(allowPostPpiFlowRetry ? [['post_ppiflow', 'Post PPIFlow']] as Array<[PPIFlowStageMode, string]> : []),
                     ['post_fampnn', 'Post FA-MPNN'],
                     ['both', 'Both'],
                 ] as Array<[PPIFlowStageMode, string]>).map(([value, label]) => (
@@ -1261,6 +1267,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
     preset,
     onPresetChange,
     structureValidator = 'boltz2',
+    allowPostPpiFlowRetry = false,
 }) => {
     const [isExpanded, setIsExpanded] = useState(false);
     const [showMsaRuntimeOverrides, setShowMsaRuntimeOverrides] = useState(false);
@@ -2280,6 +2287,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                         <PPIFlowSettingsFields
                             settings={settings}
                             onSettingsChange={onSettingsChange}
+                            allowPostPpiFlowRetry={allowPostPpiFlowRetry}
                         />
                     </div>
 

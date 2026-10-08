@@ -369,9 +369,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const resolvedPpiFlowCheckpoint = qualitySettings.ppiflow_checkpoint.trim() || PRESETS.balanced.ppiflow_checkpoint;
     const selectedLoopList = Array.from(selectedCDRLoops).sort();
     const ppiflowStageMode = (qualitySettings.ppiflow_stage_mode || (qualitySettings.run_maturation ? 'post_fampnn' : 'off')) as PPIFlowStageMode;
-    const runPpiFlowBackboneRefine = ppiflowStageMode === 'post_rfantibody' || ppiflowStageMode === 'both';
+    const runPpiFlowBackboneRefine = ppiflowStageMode === 'post_rfantibody' || ppiflowStageMode === 'post_ppiflow' || ppiflowStageMode === 'both';
     const runPpiFlowMaturation = ppiflowStageMode === 'post_fampnn' || ppiflowStageMode === 'both';
     const anyPpiFlowStageEnabled = runPpiFlowBackboneRefine || runPpiFlowMaturation;
+    const refinementSourceIsPpiFlow = isRefinementMode && refinementSourceOutputSourceFilter === 'ppiflow';
+    const refinementBlocksImmediatePpiFlowBackbone = isRefinementMode && (
+        refinementSourceOutputSourceFilter === 'fampnn'
+        || refinementSourceOutputSourceFilter === 'validation'
+    );
     const ppiflowBackboneRegionMode = normalizePpiFlowRegionMode(qualitySettings.ppiflow_backbone_region_mode);
     const ppiflowMaturationRegionMode = normalizePpiFlowRegionMode(qualitySettings.ppiflow_maturation_region_mode);
     const effectivePpiFlowBackboneLoopScope = ppiflowBackboneRegionMode === 'selected_cdrs'
@@ -380,6 +385,42 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const effectivePpiFlowMaturationLoopScope = ppiflowMaturationRegionMode === 'selected_cdrs'
         ? (normalizeLoopScopeInput(qualitySettings.ppiflow_maturation_loop_scope) || selectedLoopList.join(','))
         : undefined;
+
+    useEffect(() => {
+        if (refinementSourceIsPpiFlow) {
+            if (ppiflowStageMode !== 'post_rfantibody' && ppiflowStageMode !== 'both') return;
+
+            setQualitySettings((current) => {
+                const currentMode = (current.ppiflow_stage_mode || (current.run_maturation ? 'post_fampnn' : 'off')) as PPIFlowStageMode;
+                if (currentMode !== 'post_rfantibody' && currentMode !== 'both') {
+                    return current;
+                }
+                return {
+                    ...current,
+                    ppiflow_stage_mode: 'post_ppiflow',
+                    run_maturation: false,
+                    ppiflow_require_anchors: false,
+                };
+            });
+            return;
+        }
+
+        if (!refinementBlocksImmediatePpiFlowBackbone) return;
+        if (ppiflowStageMode !== 'post_rfantibody' && ppiflowStageMode !== 'both') return;
+
+        setQualitySettings((current) => {
+            const currentMode = (current.ppiflow_stage_mode || (current.run_maturation ? 'post_fampnn' : 'off')) as PPIFlowStageMode;
+            if (currentMode !== 'post_rfantibody' && currentMode !== 'both') {
+                return current;
+            }
+            const nextMode: PPIFlowStageMode = currentMode === 'both' ? 'post_fampnn' : 'off';
+            return {
+                ...current,
+                ppiflow_stage_mode: nextMode,
+                run_maturation: nextMode === 'post_fampnn',
+            };
+        });
+    }, [ppiflowStageMode, refinementBlocksImmediatePpiFlowBackbone, refinementSourceIsPpiFlow]);
 
     // Physics refinement settings (OpenMM)
     const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(PHYSICS_DEFAULTS);
@@ -725,11 +766,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             setRunStructureValidation(false);
             setRunFrustrampnn(false);
             setQualitySettings((current) => {
-                const nextStageMode = current.ppiflow_stage_mode !== 'off' ? current.ppiflow_stage_mode : 'post_rfantibody';
+                const nextStageMode = current.ppiflow_stage_mode !== 'off'
+                    ? current.ppiflow_stage_mode
+                    : (refinementSourceIsPpiFlow ? 'post_ppiflow' : 'post_rfantibody');
                 return {
                     ...current,
                     ppiflow_stage_mode: nextStageMode,
                     run_maturation: nextStageMode === 'post_fampnn' || nextStageMode === 'both',
+                    ...(nextStageMode === 'post_ppiflow' ? { ppiflow_require_anchors: false } : {}),
                 };
             });
             setInteractiveWorkflow(false);
@@ -1666,7 +1710,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     : runPpiFlowBackboneRefine && runPpiFlowMaturation
                                         ? 'Backbone refinement + post-FA-MPNN maturation'
                                         : runPpiFlowBackboneRefine
-                                            ? 'Backbone refinement after RFantibody'
+                                            ? (ppiflowStageMode === 'post_ppiflow' ? 'Backbone reattempt from PPIFlow outputs' : 'Backbone refinement after RFantibody')
                                             : 'Maturation after FA-MPNN',
                                 accent: anyPpiFlowStageEnabled ? 'var(--accent-secondary)' : undefined,
                                 muted: !anyPpiFlowStageEnabled,
@@ -1817,18 +1861,40 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                         ...current,
                                         ppiflow_stage_mode: next,
                                         run_maturation: next === 'post_fampnn' || next === 'both',
+                                        ...(next === 'post_ppiflow' ? { ppiflow_require_anchors: false } : {}),
                                     }));
                                 }}
                                 className="mt-2 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200"
                             >
                                 <option value="off">Off</option>
-                                <option value="post_rfantibody">Backbone refine after RFantibody</option>
+                                <option value="post_rfantibody" disabled={refinementBlocksImmediatePpiFlowBackbone}>
+                                    Backbone refine after RFantibody
+                                </option>
+                                {refinementSourceIsPpiFlow && (
+                                    <option value="post_ppiflow">
+                                        Reattempt from PPIFlow output
+                                    </option>
+                                )}
                                 <option value="post_fampnn">Maturation after FA-MPNN</option>
-                                <option value="both">Run both stages</option>
+                                <option value="both" disabled={refinementBlocksImmediatePpiFlowBackbone}>
+                                    Run both stages
+                                </option>
                             </select>
                             <div className="mt-2 text-[11px] text-slate-500">
                                 Sequence-free backbone refinement runs before FA-MPNN. Maturation runs after FA-MPNN on sequenced candidates.
                             </div>
+                            {refinementSourceIsPpiFlow && (
+                                <div className="mt-2 text-[11px] text-amber-300">
+                                    This relaunch starts from prior PPIFlow outputs. Use the post-PPIFlow reattempt mode for another sequence-free pass.
+                                    Strict anchor requirement defaults off there to avoid the zero-anchor failure seen on recursive backbone-refine launches.
+                                </div>
+                            )}
+                            {refinementBlocksImmediatePpiFlowBackbone && (
+                                <div className="mt-2 text-[11px] text-amber-300">
+                                    This relaunch starts from downstream outputs, so immediate post-RFantibody PPIFlow backbone refinement is disabled here.
+                                    Use sequence design first, then optionally run post-FA-MPNN PPIFlow maturation.
+                                </div>
+                            )}
                             {anyPpiFlowStageEnabled && (
                                 <div className="mt-2 text-[11px] text-teal-300">
                                     Orchestrated child jobs • {qualitySettings.maturation_designs_per_job} PDB{qualitySettings.maturation_designs_per_job === 1 ? '' : 's'} per PPIFlow child
@@ -3315,6 +3381,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         preset={qualityPreset}
                         onPresetChange={setQualityPreset}
                         structureValidator={structureValidator}
+                        allowPostPpiFlowRetry={refinementSourceIsPpiFlow}
                     />
 
                     {/* Physics Refinement Panel (OpenMM) */}

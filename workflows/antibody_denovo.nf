@@ -1739,7 +1739,7 @@ workflow ANTIBODY_DENOVO {
     } // End of skip_rfantibody else block
 
     def interactiveGateEnabled = params.interactive_gating == true || params.interactive_swa == true
-    def rfantibodyRawDir = params.out_dir ? "${params.out_dir}/collected/rfantibody" : null
+    def rfantibodyRawDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_raw" : null
     def rfantibodyFilteredDir = params.out_dir ? "${params.out_dir}/collected/rfantibody_filtered" : null
     def rfantibodyScreenEnabled = params.enable_rfantibody_filter == true
     def shouldPauseAfterRFantibody = !params.skip_rfantibody && interactiveGateEnabled &&

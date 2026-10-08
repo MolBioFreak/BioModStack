@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, case, inspect as sa_inspect
+from sqlalchemy.exc import NoInspectionAvailable
 from sqlalchemy.orm import load_only
 from typing import Optional, List, Dict, Any, Union
 from pydantic import BaseModel
@@ -19,7 +20,9 @@ import math
 from database import get_session, Design, Job
 from paths import to_allowed_relative
 from services.analysis_runs import get_matching_design_analysis_run, load_analysis_result
+from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_chains
 from services.stage_review import REVIEWABLE_STAGES, ensure_stage_review_rows, load_review_gate_snapshot
+from services.structure_utils import get_per_chain_fampnn_psce
 
 
 router = APIRouter()
@@ -168,6 +171,8 @@ class DesignResponse(BaseModel):
     # Sequence metrics
     mpnn_score: Optional[float]
     fampnn_psce: Optional[float]
+    fampnn_max_residue_psce: Optional[float] = None
+    fampnn_min_residue_psce: Optional[float] = None
     
     # Prediction metrics
     plddt_overall: Optional[float]
@@ -210,6 +215,7 @@ class DesignResponse(BaseModel):
     
     # Antibody CDR annotation
     binder_length: Optional[int] = None
+    binder_sequence: Optional[str] = None
     antibody_type: Optional[str] = None  # vhh, fab, scfv
     cdr_h1: Optional[str] = None
     cdr_h2: Optional[str] = None
@@ -236,6 +242,11 @@ class DesignResponse(BaseModel):
     origin_backbone_design_id: Optional[str] = None
     stage_family: Optional[str] = None
     stage_mode: Optional[str] = None
+    source_stage_job_id: Optional[str] = None
+    source_stage_family: Optional[str] = None
+    source_stage_mode: Optional[str] = None
+    source_pdb_path: Optional[str] = None
+    source_design_name: Optional[str] = None
     selected_loop_scope: Optional[Dict[str, Any]] = None
     provenance: Optional[Dict[str, Any]] = None
     
@@ -441,6 +452,21 @@ ANALYTICS_LOAD_ONLY_COLUMNS = (
     Design.origin_backbone_design_id,
     Design.stage_family,
     Design.stage_mode,
+    Design.source_stage_job_id,
+    Design.source_stage_family,
+    Design.source_stage_mode,
+    Design.source_pdb_path,
+    Design.source_design_name,
+    Design.source_stage_job_id,
+    Design.source_stage_family,
+    Design.source_stage_mode,
+    Design.source_pdb_path,
+    Design.source_design_name,
+    Design.source_stage_job_id,
+    Design.source_stage_family,
+    Design.source_stage_mode,
+    Design.source_pdb_path,
+    Design.source_design_name,
     Design.selected_loop_scope,
     Design.provenance,
     Design.screening_reason,
@@ -563,6 +589,11 @@ DESIGN_LIST_LOAD_ONLY_COLUMNS = (
     Design.origin_backbone_design_id,
     Design.stage_family,
     Design.stage_mode,
+    Design.source_stage_job_id,
+    Design.source_stage_family,
+    Design.source_stage_mode,
+    Design.source_pdb_path,
+    Design.source_design_name,
     Design.selected_loop_scope,
     Design.provenance,
     Design.created_at,
@@ -593,6 +624,11 @@ BACKBONE_SUMMARY_LOAD_ONLY_COLUMNS = (
     Design.origin_backbone_design_id,
     Design.stage_family,
     Design.stage_mode,
+    Design.source_stage_job_id,
+    Design.source_stage_family,
+    Design.source_stage_mode,
+    Design.source_pdb_path,
+    Design.source_design_name,
     Design.selected_loop_scope,
     Design.provenance,
 )
@@ -843,6 +879,177 @@ def _round_nullable(value: Optional[float], digits: int) -> Optional[float]:
     return round(numeric, digits)
 
 
+def _numeric_record_value(record: Optional[Dict[str, Any]], *keys: str) -> Optional[float]:
+    if not isinstance(record, dict):
+        return None
+    for key in keys:
+        value = record.get(key)
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+            if math.isfinite(numeric):
+                return numeric
+    return None
+
+
+def _text_record_value(record: Optional[Dict[str, Any]], *keys: str) -> Optional[str]:
+    if not isinstance(record, dict):
+        return None
+    for key in keys:
+        value = record.get(key)
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text
+    return None
+
+
+def _fampnn_payload_records(design: Design) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    try:
+        state = sa_inspect(design)
+        unloaded = set(state.unloaded)
+    except NoInspectionAvailable:
+        unloaded = set()
+    provenance_value = None if "provenance" in unloaded else getattr(design, "provenance", None)
+    confidence_value = None if "confidence_metrics" in unloaded else getattr(design, "confidence_metrics", None)
+    provenance = provenance_value if isinstance(provenance_value, dict) else {}
+    ppiflow = provenance.get("ppiflow") if isinstance(provenance.get("ppiflow"), dict) else {}
+    confidence = confidence_value if isinstance(confidence_value, dict) else {}
+    for candidate in (provenance.get("fampnn"), ppiflow.get("fampnn"), confidence.get("fampnn")):
+        if isinstance(candidate, dict):
+            records.append(candidate)
+    return records
+
+
+def _compute_fampnn_response_metrics(
+    design: Design,
+    *,
+    include_structure_fallback: bool = False,
+) -> Dict[str, Optional[float]]:
+    payload_records = _fampnn_payload_records(design)
+    avg_psce = _round_nullable(
+        design.fampnn_psce if design.fampnn_psce is not None else next(
+            (
+                value
+                for value in (
+                    _numeric_record_value(record, "fampnn_avg_psce", "avg_psce")
+                    for record in payload_records
+                )
+                if value is not None
+            ),
+            None,
+        ),
+        3,
+    )
+    max_psce = _round_nullable(
+        next(
+            (
+                value
+                for value in (
+                    _numeric_record_value(record, "fampnn_max_residue_psce", "max_residue_psce")
+                    for record in payload_records
+                )
+                if value is not None
+            ),
+            None,
+        ),
+        3,
+    )
+    min_psce = _round_nullable(
+        next(
+            (
+                value
+                for value in (
+                    _numeric_record_value(record, "fampnn_min_residue_psce", "min_residue_psce")
+                    for record in payload_records
+                )
+                if value is not None
+            ),
+            None,
+        ),
+        3,
+    )
+
+    if include_structure_fallback and (avg_psce is None or max_psce is None or min_psce is None):
+        has_fampnn_hints = avg_psce is not None or bool(payload_records) or str(getattr(design, "stage_family", "") or "").strip().lower() == "fampnn"
+        if has_fampnn_hints and design.pdb_path:
+            try:
+                chain_profiles = get_per_chain_fampnn_psce(Path(design.pdb_path))
+            except Exception:
+                chain_profiles = {}
+            residue_psces: List[float] = []
+            for profile in chain_profiles.values():
+                values = profile.get("psce") if isinstance(profile, dict) else None
+                if not isinstance(values, list):
+                    continue
+                for value in values:
+                    if isinstance(value, (int, float)):
+                        numeric = float(value)
+                        if math.isfinite(numeric):
+                            residue_psces.append(numeric)
+            if residue_psces:
+                if avg_psce is None:
+                    avg_psce = _round_nullable(sum(residue_psces) / len(residue_psces), 3)
+                if max_psce is None:
+                    max_psce = _round_nullable(max(residue_psces), 3)
+                if min_psce is None:
+                    min_psce = _round_nullable(min(residue_psces), 3)
+
+    return {
+        "fampnn_psce": avg_psce,
+        "fampnn_max_residue_psce": max_psce,
+        "fampnn_min_residue_psce": min_psce,
+    }
+
+
+def _compute_binder_sequence_response_value(
+    design: Design,
+    *,
+    include_structure_fallback: bool = False,
+) -> Optional[str]:
+    payload_records = _fampnn_payload_records(design)
+    for record in payload_records:
+        binder_sequence = _text_record_value(record, "binder_sequence")
+        if binder_sequence:
+            return binder_sequence
+
+    if not include_structure_fallback or not design.pdb_path:
+        return None
+
+    structure_path = Path(design.pdb_path)
+    if not structure_path.exists():
+        return None
+
+    try:
+        sequences = extract_sequence_from_pdb(str(structure_path))
+        if not sequences:
+            return None
+
+        binder_chains = identify_binder_chains(sequences, str(structure_path))
+        ordered_chain_ids = [
+            chain_id
+            for chain_id in dict.fromkeys(binder_chains.values())
+            if isinstance(chain_id, str) and chain_id in sequences and sequences.get(chain_id)
+        ]
+        if ordered_chain_ids:
+            binder_sequences = [sequences[chain_id].strip() for chain_id in ordered_chain_ids if isinstance(sequences.get(chain_id), str) and sequences[chain_id].strip()]
+            if binder_sequences:
+                return "|".join(binder_sequences)
+
+        heavy_chain = sequences.get("H")
+        if isinstance(heavy_chain, str) and heavy_chain.strip():
+            return heavy_chain.strip()
+
+        if len(sequences) == 1:
+            only_sequence = next(iter(sequences.values()))
+            if isinstance(only_sequence, str) and only_sequence.strip():
+                return only_sequence.strip()
+    except Exception:
+        return None
+
+    return None
+
+
 def _design_summary_sort_key(design: Design) -> tuple:
     return (
         -(design.plddt_overall if design.plddt_overall is not None else float("-inf")),
@@ -861,7 +1068,11 @@ def _safe_allowed_relative(path_str: Optional[str]) -> Optional[str]:
         return None
 
 
-def _design_to_response(design: Design) -> DesignResponse:
+def _design_to_response(
+    design: Design,
+    *,
+    include_fampnn_structure_fallback: bool = False,
+) -> DesignResponse:
     state = sa_inspect(design)
     unloaded = set(state.unloaded)
     data: Dict[str, Any] = {}
@@ -873,6 +1084,15 @@ def _design_to_response(design: Design) -> DesignResponse:
             continue
         data[field_name] = getattr(design, field_name, None)
     data["frustration_csv_relpath"] = None if "frustration_csv_path" in unloaded else _safe_allowed_relative(design.frustration_csv_path)
+    fampnn_metrics = _compute_fampnn_response_metrics(
+        design,
+        include_structure_fallback=include_fampnn_structure_fallback,
+    )
+    data.update(fampnn_metrics)
+    data["binder_sequence"] = _compute_binder_sequence_response_value(
+        design,
+        include_structure_fallback=include_fampnn_structure_fallback,
+    )
     return DesignResponse.model_validate(data)
 
 
@@ -1036,6 +1256,11 @@ async def list_designs(
         'pae_overall': Design.pae_overall,
         'pae_interaction': Design.pae_interaction,
         'conf_score': Design.conf_score,
+        'ligand_iptm': Design.ligand_iptm,
+        'rmsd_binder': Design.rmsd_binder,
+        'rmsd_overall': Design.rmsd_overall,
+        'rmsd_target': Design.rmsd_target,
+        'has_clash': Design.has_clash,
         'confidence': Design.conf_score,
         'backbone': Design.backbone_id,
         'backbone_id': Design.backbone_id,
@@ -1382,7 +1607,7 @@ async def get_design(
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
     
-    return _design_to_response(design)
+    return _design_to_response(design, include_fampnn_structure_fallback=True)
 
 
 @router.get("/{design_id}/pdb")
@@ -1416,15 +1641,21 @@ async def get_design_source_pdb(
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
 
-    provenance = design.provenance if isinstance(design.provenance, dict) else {}
-    ppiflow = provenance.get("ppiflow") if isinstance(provenance.get("ppiflow"), dict) else {}
-    source_pdb_path = ppiflow.get("source_pdb_path")
-    source_design_name = str(ppiflow.get("source_design_name") or "").strip() or f"{design.name}_source"
+    source_pdb_path = str(getattr(design, "source_pdb_path", "") or "").strip()
+    source_design_name = str(getattr(design, "source_design_name", "") or "").strip()
+    if not source_pdb_path:
+        provenance = design.provenance if isinstance(design.provenance, dict) else {}
+        ppiflow = provenance.get("ppiflow") if isinstance(provenance.get("ppiflow"), dict) else {}
+        source_pdb_path = str(ppiflow.get("source_pdb_path") or "").strip()
+        if not source_design_name:
+            source_design_name = str(ppiflow.get("source_design_name") or "").strip()
 
-    if not isinstance(source_pdb_path, str) or not source_pdb_path.strip():
+    if not source_design_name:
+        source_design_name = f"{design.name}_source"
+    if not source_pdb_path:
         raise HTTPException(status_code=404, detail="No source structure recorded for this design")
 
-    return _structure_file_response(Path(source_pdb_path.strip()), source_design_name)
+    return _structure_file_response(Path(source_pdb_path), source_design_name)
 
 
 class ResidueMetrics(BaseModel):

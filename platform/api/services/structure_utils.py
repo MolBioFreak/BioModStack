@@ -353,6 +353,74 @@ def get_per_chain_metrics(path: Union[str, Path]) -> dict:
         return {}
 
 
+def get_per_chain_fampnn_psce(path: Union[str, Path], ignore_cbeta: bool = False) -> dict:
+    """
+    Extract per-chain FA-MPNN pSCE profiles from structure B-factors.
+
+    pSCE is stored in FA-MPNN output B-factors as an angstrom-scale expected
+    sidechain error. This mirrors scripts/analyse_fampnn.py by averaging only
+    sidechain atoms on a per-residue basis and skipping residues without scored
+    sidechain atoms (for example glycine, or alanine when C-beta is ignored).
+    """
+    try:
+        structure = load_structure(path)
+        if 'b_factor' not in structure.get_annotation_categories():
+            logger.info(f"[structure_utils] No B-factors in {path} for FA-MPNN pSCE extraction")
+            return {}
+
+        backbone_atoms = {"C", "N", "O", "CA"}
+        if ignore_cbeta:
+            backbone_atoms.add("CB")
+
+        result: Dict[str, Any] = {}
+        for chain_id in np.unique(structure.chain_id):
+            chain = structure[structure.chain_id == chain_id]
+            protein_mask = struc.filter_amino_acids(chain)
+            if not np.any(protein_mask):
+                continue
+
+            residue_numbers: List[int] = []
+            residue_names: List[str] = []
+            psce_values: List[float] = []
+
+            for residue in struc.residue_iter(chain[protein_mask]):
+                if len(residue) == 0:
+                    continue
+                sidechain_mask = ~np.isin(residue.atom_name, list(backbone_atoms))
+                sidechain_atoms = residue[sidechain_mask]
+                if len(sidechain_atoms) == 0 or 'b_factor' not in sidechain_atoms.get_annotation_categories():
+                    continue
+
+                b_factors = np.asarray(sidechain_atoms.get_annotation('b_factor'), dtype=float)
+                finite_b_factors = b_factors[np.isfinite(b_factors)]
+                if finite_b_factors.size == 0:
+                    continue
+
+                residue_numbers.append(int(sidechain_atoms.res_id[0]))
+                residue_names.append(str(sidechain_atoms.res_name[0]).strip())
+                psce_values.append(float(np.mean(finite_b_factors)))
+
+            if not psce_values:
+                continue
+
+            rounded_psce = [round(value, 4) for value in psce_values]
+            result[str(chain_id)] = {
+                'type': 'protein',
+                'length': len(rounded_psce),
+                'avg_psce': round(float(np.mean(psce_values)), 4),
+                'max_psce': round(float(np.max(psce_values)), 4),
+                'min_psce': round(float(np.min(psce_values)), 4),
+                'residue_numbers': residue_numbers,
+                'residue_names': residue_names,
+                'psce': rounded_psce,
+            }
+
+        return result
+    except Exception as e:
+        logger.error(f"[structure_utils] Error extracting FA-MPNN pSCE from {path}: {e}")
+        return {}
+
+
 def _parse_residue_specs(epitope_residues: List[str]) -> List[Tuple[Optional[str], int]]:
     specs: List[Tuple[Optional[str], int]] = []
     for res_spec in epitope_residues:

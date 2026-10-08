@@ -434,6 +434,7 @@ process PrepareComplexWithMSA {
     publishDir "${params.out_dir}/run/boltz_complex", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa/*.a3m"
     publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa/*_msa_quality.json"
+    publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa/complex_msa_manifest.json"
 
     input:
     tuple val(complex_name), path(complex_json), path(msa_files)
@@ -442,6 +443,7 @@ process PrepareComplexWithMSA {
     tuple val(complex_name), path("yamls/${complex_name}.yaml"), path("msa"), emit: prepared
     path "msa/*.a3m", emit: msa, optional: true
     path "msa/*_msa_quality.json", emit: quality_report, optional: true
+    path "msa/complex_msa_manifest.json", emit: msa_manifest, optional: true
     path "*.log"
 
     script:
@@ -480,6 +482,11 @@ process PrepareComplexWithMSA {
     def colabfoldApiMinInterval = params.colabfold_api_min_interval ?: 6.0
     def colabfoldApiPollInterval = params.colabfold_api_poll_interval ?: 6.0
     def msaAllowEmptyFallback = params.msa_allow_empty_fallback != null ? params.msa_allow_empty_fallback.toString() : "false"
+    def anchorTarget = params.boltz_anchor_target != null ? params.boltz_anchor_target.toString() : "false"
+    def fixedTargetSourcePath = params.fixed_target_source_path ?: ""
+    def fixedTargetSourceChains = params.fixed_target_source_chains ?: ""
+    def fixedTargetModelNumber = params.fixed_target_model_number ?: ""
+    def targetChains = params.target_chains ?: ""
     // Per-chain MSA timeout in seconds for complex prep; set <=0 to disable timeout.
     def msaChainTimeoutSeconds = params.msa_chain_timeout_seconds ?: 3600
     """
@@ -536,6 +543,11 @@ colabfold_api_host = "${colabfoldApiHost}"
 colabfold_api_min_interval = "${colabfoldApiMinInterval}"
 colabfold_api_poll_interval = "${colabfoldApiPollInterval}"
 msa_allow_empty_fallback = "${msaAllowEmptyFallback}".strip().lower() == "true"
+anchor_target = "${anchorTarget}".strip().lower() == "true"
+fixed_target_source_path = "${fixedTargetSourcePath}".strip()
+fixed_target_source_chains = [token.strip() for token in "${fixedTargetSourceChains}".split(",") if token.strip()]
+fixed_target_model_number = "${fixedTargetModelNumber}".strip()
+target_chain_ids = {token.strip() for token in "${targetChains}".split(",") if token.strip()}
 msa_chain_timeout_seconds = int("${msaChainTimeoutSeconds}")
 msa_fallback_path = "${msa_files}"
 fallback_msa = None
@@ -552,6 +564,37 @@ msa_chain_timeout = None if msa_chain_timeout_seconds <= 0 else msa_chain_timeou
 # Boltz-2 requires identical sequences to share the same MSA
 seq_to_msa = {}
 msa_failures = []
+msa_records = []
+template_cif_path = None
+
+if anchor_target:
+    if not fixed_target_source_path:
+        raise RuntimeError("boltz_anchor_target requires fixed_target_source_path")
+    if not fixed_target_source_chains:
+        raise RuntimeError("boltz_anchor_target requires fixed_target_source_chains")
+    if not target_chain_ids:
+        raise RuntimeError("boltz_anchor_target requires target_chains")
+    extract_cmd = [
+        "python3",
+        "${params.code_root}/scripts/extract_target_templates.py",
+        "--pdb_files",
+        fixed_target_source_path,
+        "--target_chains",
+        ",".join(fixed_target_source_chains),
+        "--out_dir",
+        "target_templates/mmcif",
+        "--manifest",
+        "target_templates/manifest.json",
+    ]
+    if fixed_target_model_number:
+        extract_cmd.extend(["--model_number", fixed_target_model_number])
+    subprocess.run(extract_cmd, check=True)
+    manifest = json.loads(Path("target_templates/manifest.json").read_text())
+    if not manifest:
+        raise RuntimeError("Fixed-target template extraction produced an empty manifest")
+    template_info = next(iter(manifest.values()))
+    template_cif_path = str(Path(template_info["cif"]).resolve())
+    print(f"Prepared fixed-target template: {template_cif_path}")
 
 for comp in complex_def.get("components", []):
     comp_type = comp.get("type", "protein")
@@ -560,18 +603,32 @@ for comp in complex_def.get("components", []):
     if comp_type == "protein":
         sequence = comp.get("sequence", "")
         entry = {"protein": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": sequence}}
+        record = {
+            "component_id": comp_id,
+            "component_type": comp_type,
+            "sequence_length": len(sequence),
+            "msa_mode": None,
+            "msa_path": None,
+        }
         
         # Check for pre-existing MSA path
         msa_path = comp.get("msa_path")
         if msa_path and Path(msa_path).exists():
-            entry["protein"]["msa"] = str(Path(msa_path).resolve())
+            resolved = str(Path(msa_path).resolve())
+            entry["protein"]["msa"] = resolved
+            record["msa_mode"] = "provided"
+            record["msa_path"] = resolved
         elif fallback_msa:
             entry["protein"]["msa"] = fallback_msa
+            record["msa_mode"] = "fallback"
+            record["msa_path"] = fallback_msa
         elif use_msa and sequence:
             # Check if we've already generated MSA for this exact sequence (homodimer support)
             if sequence in seq_to_msa:
                 print(f"Reusing MSA for chain {comp_id} - identical sequence already has MSA")
                 entry["protein"]["msa"] = seq_to_msa[sequence]
+                record["msa_mode"] = "reused"
+                record["msa_path"] = seq_to_msa[sequence]
             else:
                 # Generate MSA using run_local_msa.py with file-based locking to prevent parallel OOM
                 chain_id = comp_id[0] if isinstance(comp_id, list) else comp_id
@@ -644,6 +701,8 @@ for comp in complex_def.get("components", []):
                         entry["protein"]["msa"] = msa_resolved
                         # Cache this sequence->MSA mapping for homodimer reuse
                         seq_to_msa[sequence] = msa_resolved
+                        record["msa_mode"] = "generated"
+                        record["msa_path"] = msa_resolved
                         print(f"Generated MSA: {msa_file}")
                 except Exception as e:
                     print(f"MSA generation failed for chain {chain_id}: {e}")
@@ -661,7 +720,22 @@ for comp in complex_def.get("components", []):
                 msa_failures.append(reason)
             else:
                 entry["protein"]["msa"] = "empty"
+                record["msa_mode"] = "empty"
                 print(f"No MSA available for chain {comp_id} - using single-sequence mode")
+
+        if anchor_target and template_cif_path:
+            entry_chain_ids = entry["protein"]["id"] if isinstance(entry["protein"]["id"], list) else [entry["protein"]["id"]]
+            for chain_id in entry_chain_ids:
+                if chain_id in target_chain_ids:
+                    entry["protein"]["templates"] = [{
+                        "cif": template_cif_path,
+                        "chain_id": chain_id,
+                        "template_id": chain_id,
+                        "force": True,
+                    }]
+                    record["anchored_template_cif"] = template_cif_path
+                    break
+        msa_records.append(record)
                 
     elif comp_type == "ligand":
         entry = {"ligand": {"id": [comp_id] if isinstance(comp_id, str) else comp_id}}
@@ -705,6 +779,13 @@ for comp in complex_def.get("components", []):
     elif comp_type == "peptide":
         peptide_seq = comp.get("sequence", "").upper()
         entry = {"protein": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": peptide_seq}}
+        record = {
+            "component_id": comp_id,
+            "component_type": comp_type,
+            "sequence_length": len(peptide_seq),
+            "msa_mode": None,
+            "msa_path": None,
+        }
         
         # Peptides < 30 residues: use msa: empty (too short for meaningful MSA hits)
         # Peptides >= 30 residues: try MSA generation like regular proteins
@@ -713,11 +794,14 @@ for comp in complex_def.get("components", []):
         if len(peptide_seq) < PEPTIDE_MSA_THRESHOLD:
             # Short peptides use single-sequence mode to avoid MSA consistency errors
             entry["protein"]["msa"] = "empty"
+            record["msa_mode"] = "empty_short_peptide"
         elif use_msa and peptide_seq:
             # Longer peptides: try MSA generation using same logic as proteins
             if peptide_seq in seq_to_msa:
                 print(f"Reusing MSA for peptide chain {comp_id}")
                 entry["protein"]["msa"] = seq_to_msa[peptide_seq]
+                record["msa_mode"] = "reused"
+                record["msa_path"] = seq_to_msa[peptide_seq]
             else:
                 chain_id = comp_id[0] if isinstance(comp_id, list) else comp_id
                 msa_file = f"msa/{complex_name}_{chain_id}.a3m"
@@ -765,17 +849,23 @@ for comp in complex_def.get("components", []):
                         msa_resolved = str(Path(msa_file).resolve())
                         entry["protein"]["msa"] = msa_resolved
                         seq_to_msa[peptide_seq] = msa_resolved
+                        record["msa_mode"] = "generated"
+                        record["msa_path"] = msa_resolved
                         print(f"Generated peptide MSA: {msa_file}")
                     else:
                         # MSA failed - fall back to empty
                         print("Peptide MSA generation returned no results, using single-sequence mode")
                         entry["protein"]["msa"] = "empty"
+                        record["msa_mode"] = "empty"
                 except Exception as e:
                     print(f"Peptide MSA generation failed: {e}, using single-sequence mode")
                     entry["protein"]["msa"] = "empty"
+                    record["msa_mode"] = "empty"
         else:
             # MSA disabled globally - use empty
             entry["protein"]["msa"] = "empty"
+            record["msa_mode"] = "empty"
+        msa_records.append(record)
     else:
         continue
     boltz_yaml["sequences"].append(entry)
@@ -788,6 +878,18 @@ if msa_failures:
     for msg in msa_failures:
         print(f"  - {msg}")
     raise SystemExit(2)
+
+manifest_payload = {
+    "complex_name": complex_name,
+    "use_msa": use_msa,
+    "msa_provider": msa_provider,
+    "anchor_target": anchor_target,
+    "target_chain_ids": sorted(target_chain_ids),
+    "fixed_target_source_path": fixed_target_source_path or None,
+    "fixed_target_source_chains": fixed_target_source_chains,
+    "protein_components": msa_records,
+}
+Path("msa/complex_msa_manifest.json").write_text(json.dumps(manifest_payload, indent=2), encoding="utf-8")
 
 yaml_path = f"yamls/{complex_name}.yaml"
 with open(yaml_path, "w") as f:
@@ -811,6 +913,7 @@ process BoltzFromComplex {
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.npz", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
     tuple val(complex_name), path(complex_yaml), path(msa_dir)
@@ -819,6 +922,7 @@ process BoltzFromComplex {
     path "predictions/*.pdb", emit: pdbs, optional: true
     path "predictions/*.cif", emit: cifs, optional: true
     path "predictions/*.json", emit: jsons, optional: true
+    path "predictions/*.npz", emit: npz, optional: true
     path "*.log"
 
     script:
@@ -861,6 +965,7 @@ process BoltzFromComplex {
         for json_file in \${dir}/*.json; do
             if [ -f "\${json_file}" ]; then cp "\${json_file}" predictions/; fi
         done
+        cp "\${dir}"/pae_*.npz predictions/ 2>/dev/null || :
         cp "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
     done
 
