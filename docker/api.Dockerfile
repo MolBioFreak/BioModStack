@@ -72,8 +72,8 @@ USER biomodstack
 RUN --mount=type=bind,source=.,target=/src,readonly \
     cp -R --no-preserve=ownership,timestamps /src/. /app \
     && uv venv .venv \
-    && uv pip install --python .venv/bin/python --require-hashes -r vendor/pysam/build-requirements.lock \
-    && uv sync --frozen --no-dev --inexact --no-build-isolation-package pysam \
+    && uv pip install --no-config --python .venv/bin/python --require-hashes -r vendor/pysam/build-requirements.lock \
+    && HTSLIB_CONFIGURE_OPTIONS=--enable-libcurl uv sync --frozen --no-dev --inexact --no-build-isolation-package pysam \
     && python /app/scripts/check_removed_vocabulary.py --mode sanitize \
         /app/platform/api/.venv/lib/python3.10/site-packages \
     && rm -rf "${UV_CACHE_DIR}" /home/biomodstack/.cache/uv \

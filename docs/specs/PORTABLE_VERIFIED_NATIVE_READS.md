@@ -36,13 +36,18 @@ After the parent opens the full-first-pass gate, from `platform/api`:
 
 ```sh
 uv venv .venv
-uv pip install --python .venv/bin/python --require-hashes -r vendor/pysam/build-requirements.lock
+uv pip install --no-config --python .venv/bin/python --require-hashes -r vendor/pysam/build-requirements.lock
 HTSLIB_CONFIGURE_OPTIONS=--enable-libcurl uv sync --frozen --group dev --inexact --no-build-isolation-package pysam
 uv run --frozen python -c 'from services.verified_native_reads import require_runtime; p=require_runtime(); from pysam.bms_native_build import IDENTITY; print(p.__version__, IDENTITY)'
 uv run --frozen --group dev pytest tests/test_verified_native_reads.py -m 'not native_http'
 uv run --frozen --group dev pytest tests/test_verified_native_reads.py -m native_http
 uv run --frozen --group dev pytest tests/test_ngs_alignment_sessions.py tests/test_ont_ngs_workflow_products.py
 ```
+
+Create `.venv` only when absent; inspect and preserve an existing environment.
+The hashed build-tools install uses `--no-config` so application constraints
+(such as `msgpack>=…`) cannot enter that separate, fully hashed tool transaction.
+The subsequent frozen project sync still applies the project lock and constraints.
 
 Use the repository's normal test database/environment setup. Installing system
 headers, compiling the Docker image, native imports and **all** commands above are
