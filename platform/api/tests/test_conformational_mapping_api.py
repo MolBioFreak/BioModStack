@@ -149,8 +149,9 @@ async def test_request_status_projects_terminal_job_without_mutating_on_get(
         status="queued", progress_json={"phase": "queued"}, failure_receipt_json=None,
         result_contract_id=None,
     )
-    job = SimpleNamespace(
+    job = Job(
         id="job-1", status="failed", queue_status="failed", current_stage="analysis",
+        params={},
         error_message="bounded failure",
     )
 
@@ -592,7 +593,7 @@ async def test_completed_request_does_not_project_historical_failure_as_current(
         result_contract_id="conformational_mapping_confornets_v1",
         request_json={"run_record": {"name": "Map", "notes": "Keep context", "selected_input": {}}},
     )
-    job = SimpleNamespace(status="completed")
+    job = Job(status="completed", params={})
 
     async def authorized(*_args, **_kwargs):
         return record
@@ -687,21 +688,41 @@ def test_cm_checkpoint_upload_is_rejected() -> None:
 
 @pytest.mark.asyncio
 async def test_cm_submission_accepts_only_the_installed_managed_checkpoint(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    managed = SimpleNamespace(source_id="cm_src_server_confornets_checkpoint_approved")
-
-    async def ensure(_session):
-        return managed
-
-    monkeypatch.setattr(cm_router, "_ensure_managed_confornets_checkpoint", ensure)
-    assert await cm_router._managed_checkpoint_for_submission(
-        SimpleNamespace(), managed.source_id
-    ) is managed
-    with pytest.raises(HTTPException, match="installed managed checkpoint"):
-        await cm_router._managed_checkpoint_for_submission(
-            SimpleNamespace(), "cm_src_caller_checkpoint"
-        )
+    # Synthetic checkpoint bytes exercise registration, not model inference.
+    weights = tmp_path / "weights"
+    checkpoint = weights / "openfold3/of3-p2-155k.pt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"offline-checkpoint-fixture")
+    monkeypatch.setattr(cm_router, "get_weights_root", lambda: weights)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'checkpoint.db'}")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as session:
+            managed = await cm_router._ensure_managed_confornets_checkpoint(session)
+            assert managed is not None
+            await session.commit()
+        async with factory() as session:
+            selected = await cm_router._managed_checkpoint_for_submission(session, managed.source_id)
+            assert selected.content_sha256 == hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+            assert selected.source_id == managed.source_id
+            with pytest.raises(HTTPException, match="installed managed checkpoint") as wrong:
+                await cm_router._managed_checkpoint_for_submission(session, "cm_src_caller_checkpoint")
+            assert wrong.value.status_code == 422
+            selected.content_sha256 = "0" * 64
+            await session.commit()
+            with pytest.raises(HTTPException, match="identity conflicts") as conflict:
+                await cm_router._managed_checkpoint_for_submission(session, managed.source_id)
+            assert conflict.value.status_code == 503
+            checkpoint.unlink()
+            with pytest.raises(HTTPException, match="unavailable") as missing:
+                await cm_router._managed_checkpoint_for_submission(session, managed.source_id)
+            assert missing.value.status_code == 503
+    finally:
+        await engine.dispose()
 
 
 def test_cm_run_record_trusts_only_content_bound_provider_receipts(

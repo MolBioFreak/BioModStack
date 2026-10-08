@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -13,9 +13,9 @@ from sqlalchemy.orm import sessionmaker
 from database import Base, ConformationalMappingRecord, ConformationalMappingRequest, Job
 from routers import conformational_mapping as cm_router
 from routers.conformational_mapping import ResamplingLaunchRequest
-from services.conformational_mapping.contracts import canonical_sha256
+from services.conformational_mapping.contracts import canonical_sha256, validate_schema
 from services.conformational_mapping.persistence import register_prepared_request
-from services.conformational_mapping.resampling import materialize_resampling_pair, pair_terminal_manifests
+from services.conformational_mapping.resampling import ResamplingError, materialize_resampling_pair, pair_terminal_manifests
 from services.conformational_mapping.state_landscape_analysis import derive_state_landscape_analysis_for_request
 
 
@@ -24,7 +24,35 @@ TOOL = {"tool_id": "msa", "tool_version": "1", "tool_sha256": "a" * 64, "databas
 
 
 def _snapshot() -> dict:
-    return json.loads(FIXTURE.read_text())["cm_complex_snapshot_v1"]
+    """Synthetic complex with two explicitly sequence/feature-bound instances.
+
+    This is not implicit splitting of an admitted shared entity: it is a distinct
+    input authority. The original shared-copy authority remains a negative below.
+    """
+    snapshot = json.loads(FIXTURE.read_text())["cm_complex_snapshot_v1"]
+    shared = snapshot["entities"][0]
+    snapshot["entities"] = [
+        {**shared, "source_entity_id": entity_id, "count": 1,
+         "ordered_instance_ids": [instance_id]}
+        for entity_id, instance_id in zip(
+            ["repeat_prot", "unaffected_prot"], shared["ordered_instance_ids"], strict=True
+        )
+    ]
+    for index, mapping in enumerate(snapshot["instance_mappings"]):
+        mapping["source_entity_id"] = snapshot["entities"][index]["source_entity_id"]
+        mapping["runtime_entity_id"] = f"runtime-protein-{index}"
+        mapping["output_entity_id"] = str(index + 1)
+    snapshot["normalized_source_sha256"] = canonical_sha256({
+        key: value for key, value in snapshot.items() if key != "normalized_source_sha256"
+    })
+    validate_schema("cm_complex_snapshot_v1", snapshot)
+    return snapshot
+
+
+def _features(changed: str, *, disabled: bool = False) -> dict:
+    # Test-only feature bytes; never scientific execution/acceptance evidence.
+    return {"repeat_prot": {} if disabled else {"msa": changed},
+            "unaffected_prot": {} if disabled else {"msa": "unchanged"}}
 
 
 def _handoff(mode: str = "regenerate_mutated_protein_v1") -> dict:
@@ -40,8 +68,8 @@ def _handoff(mode: str = "regenerate_mutated_protein_v1") -> dict:
 def _materialize(mode: str = "regenerate_mutated_protein_v1") -> dict:
     disabled = mode == "features_disabled_control_v1"
     return materialize_resampling_pair(
-        _snapshot(), _handoff(mode), wt_features={"repeat_prot": {} if disabled else {"msa": "wt"}},
-        mutant_features={"repeat_prot": {} if disabled else {"msa": "mut"}}, tool_identity=TOOL,
+        _snapshot(), _handoff(mode), wt_features=_features("wt", disabled=disabled),
+        mutant_features=_features("mut", disabled=disabled), tool_identity=TOOL,
     )
 
 
@@ -49,6 +77,8 @@ def test_cm10_001_explicit_wt_control() -> None:
     pair = _materialize()
     assert pair["wt_snapshot"]["entities"][0]["sequence"] == "A"
     assert pair["mutant_snapshot"]["entities"][0]["sequence"] == "V"
+    assert pair["mutant_snapshot"]["entities"][1] == pair["wt_snapshot"]["entities"][1]
+    assert pair["feature_records"][1]["wt_sha256"] == pair["feature_records"][1]["mutant_sha256"]
 
 
 def test_cm10_002_materialize_from_complex_snapshot() -> None:
@@ -97,8 +127,8 @@ def test_cm10_009_unaffected_feature_bytes_identical() -> None:
     snapshot["entities"].append({"entity_type": "dna", "source_entity_id": "dna", "count": 1, "ordered_instance_ids": ["dna1"], "sequence": "AC"})
     handoff = _handoff()
     handoff["source_complex_sha256"] = canonical_sha256(snapshot)
-    pair = materialize_resampling_pair(snapshot, handoff, wt_features={"repeat_prot": {"msa": "wt"}, "dna": {"value": 1}}, mutant_features={"repeat_prot": {"msa": "mut"}, "dna": {"value": 1}}, tool_identity=TOOL)
-    assert pair["feature_records"][1]["declared_difference"] == "byte_identical_unaffected"
+    pair = materialize_resampling_pair(snapshot, handoff, wt_features={**_features("wt"), "dna": {"value": 1}}, mutant_features={**_features("mut"), "dna": {"value": 1}}, tool_identity=TOOL)
+    assert pair["feature_records"][2]["declared_difference"] == "byte_identical_unaffected"
 
 
 def test_cm10_010_per_entity_hash_differences_declared() -> None:
@@ -116,21 +146,47 @@ def test_cm10_011_manifest_pairing_and_unmatched_status() -> None:
     assert manifest["terminal_status"] == "failed"
 
 
-def test_cm10_012_atomic_no_partial_launch() -> None:
-    launches: list[str] = []
-    with pytest.raises(RuntimeError):
-        launches.extend(["wt", "mutant"])
-        try:
-            raise RuntimeError("launch boundary")
-        finally:
-            launches.clear()
-    assert launches == []
+@pytest.mark.parametrize("mode", ["regenerate_mutated_protein_v1", "paired_regenerate_changed_protein_v1", "features_disabled_control_v1"])
+def test_shared_copy_resampling_rejected_without_mutating_input(mode: str) -> None:
+    snapshot = json.loads(FIXTURE.read_text())["cm_complex_snapshot_v1"]
+    original = copy.deepcopy(snapshot)
+    handoff = _handoff(mode)
+    handoff["source_complex_sha256"] = canonical_sha256(snapshot)
+    with pytest.raises(ResamplingError, match="per-instance sequence and feature binding"):
+        materialize_resampling_pair(snapshot, handoff, wt_features=_features("wt"),
+                                   mutant_features=_features("mut"), tool_identity=TOOL)
+    assert snapshot == original
+
+
+@pytest.mark.parametrize("invalid", ["stale_source", "reused_changed_features", "changed_unaffected_features", "disabled_nonempty"])
+def test_resampling_rejects_undeclared_authority_changes(invalid: str) -> None:
+    snapshot, handoff = _snapshot(), _handoff()
+    wt_features, mutant_features = _features("wt"), _features("mut")
+    if invalid == "stale_source":
+        handoff["source_complex_sha256"] = "0" * 64
+        message = "source complex is stale"
+    elif invalid == "reused_changed_features":
+        mutant_features["repeat_prot"] = wt_features["repeat_prot"]
+        message = "feature bytes were reused"
+    elif invalid == "changed_unaffected_features":
+        mutant_features["unaffected_prot"] = {"msa": "changed"}
+        message = "unaffected entity feature bytes changed"
+    else:
+        handoff["feature_policy"] = {"mode": "features_disabled_control_v1"}
+        message = "requires empty WT and mutant features"
+    original = copy.deepcopy(snapshot)
+    with pytest.raises(ResamplingError, match=message):
+        materialize_resampling_pair(snapshot, handoff, wt_features=wt_features,
+                                   mutant_features=mutant_features, tool_identity=TOOL)
+    assert snapshot == original
 
 
 @pytest.mark.asyncio
-async def test_cm10_013_actual_resampling_launch_cannot_authorize_state_analysis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("fail_after_registration", [False, True])
+async def test_cm10_013_actual_resampling_launch_cannot_authorize_state_analysis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_after_registration: bool) -> None:
     """A real child request plus its pair context is not comparison authority."""
 
+    monkeypatch.setenv("BMS_CM_AUTHORIZATION_ENABLED", "1")
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'resampling.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -173,12 +229,26 @@ async def test_cm10_013_actual_resampling_launch_cannot_authorize_state_analysis
         monkeypatch.setattr(cm_router, "_runtime_registry", lambda _backend: {"test_runtime": True})
         request = Request({"type": "http", "method": "POST", "scheme": "http", "path": "/", "headers": [], "client": ("test", 1), "server": ("test", 80)})
         request.state.authenticated_principal = {"id": "alice", "roles": ["scientist"]}
-        launched = await cm_router.launch_resampling(
-            parent_id,
-            ResamplingLaunchRequest(handoff_key="handoff", wt_features={"repeat_prot": {"msa": "wt"}}, mutant_features={"repeat_prot": {"msa": "mut"}}, tool_identity=TOOL),
-            request,
-            session,
+        body = ResamplingLaunchRequest(
+            handoff_key="handoff", wt_features=_features("wt"),
+            mutant_features=_features("mut"), tool_identity=TOOL,
         )
+        if fail_after_registration:
+            async def fail_after_flush(*args, **kwargs):
+                await register_prepared_request(*args, **kwargs)
+                raise RuntimeError("injected after child registration")
+
+            monkeypatch.setattr(cm_router, "register_prepared_request", fail_after_flush)
+            with pytest.raises(HTTPException) as failed:
+                await cm_router.launch_resampling(parent_id, body, request, session)
+            assert failed.value.status_code == 500
+            assert list((tmp_path / "results").iterdir()) == []
+            # Both child authorities and pair record must have rolled back.
+            assert list((await session.scalars(select(Job.id))).all()) == [parent_id]
+            assert list((await session.scalars(select(ConformationalMappingRequest.request_id))).all()) == [parent_id]
+            assert list((await session.scalars(select(ConformationalMappingRecord.record_type))).all()) == ["handoff"]
+            return
+        launched = await cm_router.launch_resampling(parent_id, body, request, session)
         child = await session.scalar(select(ConformationalMappingRequest).where(ConformationalMappingRequest.request_id == launched["request_id"]))
         assert child is not None
         child_root = tmp_path / "results" / f"conformational_mapping_{child.request_id}"

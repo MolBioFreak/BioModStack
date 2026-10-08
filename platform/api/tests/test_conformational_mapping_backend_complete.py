@@ -41,6 +41,7 @@ def _request(*, principal: str | None = None, token: str | None = None, proxy: s
 
 
 def test_cm_principal_requires_effective_authentication_and_valid_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BMS_CM_AUTHORIZATION_ENABLED", "1")
     monkeypatch.setenv("BMS_CM_TRUSTED_PROXY_SECRET", "trusted-secret")
     with pytest.raises(HTTPException) as missing:
         cm._principal(_request())
@@ -54,6 +55,7 @@ def test_cm_principal_requires_effective_authentication_and_valid_proxy(monkeypa
 
 @pytest.mark.asyncio
 async def test_request_capability_is_enforced_for_non_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BMS_CM_AUTHORIZATION_ENABLED", "1")
     token, digest = issue_request_capability()
     record = SimpleNamespace(principal_id="alice", progress_json={"capability_sha256": digest})
 
@@ -112,7 +114,7 @@ def _global_cm_payload(submission: dict[str, object], receipt_ids: list[str]) ->
         else "bms.cm.confornets.adapter.v1"
     )
     return {
-        "schema": "bms.experiment.workflow.v1",
+        "schema": "bms.workflow.conformational_mapping.v1",
         "workflow_family": "conformational_mapping",
         "contract_version": "1",
         "adapter_id": adapter,
@@ -265,7 +267,7 @@ async def _persist_recoverable_cm_attempt(
         status="queued",
         model_id="conformational_mapping",
         mode="map",
-        params={"cm_request_path": str(materialized.request_path)},
+        params=materialized.launch_params,
         output_dir=str(output_root),
         batch_id=run_group_id,
         lineage_root_job_id=attempt_id,
@@ -477,16 +479,16 @@ async def test_global_cm_existing_attempt_recovery_rejects_nonexecutable_job_aut
         if substitution == "missing_params":
             job.params = {}
         elif substitution == "extra_params":
-            job.params = {"cm_request_path": str(request_path), "gpu_id": 0}
+            job.params = {**job.params, "gpu_id": 0}
         elif substitution == "traversal_request_path":
-            job.params = {"cm_request_path": f"{output_root}/nested/../cm_request_v1.json"}
+            job.params = {**job.params, "cm_request_path": f"{output_root}/nested/../cm_request_v1.json"}
         elif substitution == "alternate_request_path":
             arbitrary = tmp_path / "fixture" / "cm_request_v1.json"
             arbitrary.parent.mkdir()
             arbitrary.write_bytes(request_path.read_bytes())
-            job.params = {"cm_request_path": str(arbitrary)}
+            job.params = {**job.params, "cm_request_path": str(arbitrary)}
         elif substitution == "nonexistent_request_path":
-            job.params = {"cm_request_path": str(tmp_path / "missing" / "cm_request_v1.json")}
+            job.params = {**job.params, "cm_request_path": str(tmp_path / "missing" / "cm_request_v1.json")}
         elif substitution == "substituted_output_dir":
             job.output_dir = str(tmp_path / "other-output")
         elif substitution == "equivalent_output_dir":
@@ -617,7 +619,8 @@ def test_confornets_snapshot_identity_binds_full_normalized_snapshot() -> None:
 
 
 @pytest.mark.asyncio
-async def test_your_runs_lists_only_owned_completed_verified_reusable_artifacts(tmp_path: Path) -> None:
+async def test_your_runs_lists_only_owned_completed_verified_reusable_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BMS_CM_AUTHORIZATION_ENABLED", "1")
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'runs.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -669,47 +672,72 @@ def test_retry_launch_params_never_reuse_resume_work_dir() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stopped", [True, False])
 async def test_typed_cancellation_persists_joint_intent_before_external_stop(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stopped: bool,
 ) -> None:
-    job = SimpleNamespace(
-        id="job", parent_job_id=None, status="running", queue_status="running",
-        params={}, nextflow_run_id="run", paused=False, assigned_gpu=0,
-        awaiting_input=False, awaiting_stage=None, awaiting_payload={}, retry_count=0,
-        current_stage="inference", stage_progress=0.5, completed_at=None, error_message=None,
-    )
-    typed = {"status": "running", "phase": "running"}
-    commits: list[tuple[str, str, str]] = []
+    """Only the physical-stop boundary is doubled; SQL and typed route are real."""
+    monkeypatch.setenv("BMS_CM_AUTHORIZATION_ENABLED", "1")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cancel.db'}")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as session:
+            session.add(Job(
+                id="job", name="cancel fixture", model_id="conformational_mapping", mode="map",
+                status="running", queue_status="running", params={}, nextflow_run_id="run",
+                assigned_gpu=0, current_stage="inference", stage_progress=0.5,
+            ))
+            await session.flush()
+            session.add(ConformationalMappingRequest(
+                request_id="request", job_id="job", principal_id="alice", backend="protenix_v2_ensemble",
+                status="running", request_sha256="a" * 64, coordinate_plan_sha256="b" * 64,
+                resume_key="c" * 64, result_contract_id="conformational_mapping_ensemble_v1",
+                request_json={}, coordinate_plan_json={}, progress_json={"phase": "running"},
+            ))
+            await session.commit()
 
-    class Session:
-        async def flush(self) -> None:
-            return None
+        calls = []
 
-        async def commit(self) -> None:
-            commits.append((job.status, job.queue_status, typed["phase"]))
+        async def stop(run_id: str) -> bool:
+            calls.append(run_id)
+            # A second physical connection observes committed joint intent.
+            async with factory() as observer:
+                job = await observer.get(Job, "job")
+                typed = await observer.get(ConformationalMappingRequest, "request")
+                assert (job.status, job.queue_status, typed.progress_json["phase"]) == (
+                    "running", "cancelling", "cancellation_requested",
+                )
+                assert job.params["cancellation_receipt"]["state"] == "requested"
+            return stopped
 
-    async def load_lineage(_session: object, _job_id: str):
-        return job, [job], {"job": 0}
-
-    async def stop(_run_id: str) -> bool:
-        assert commits == [("running", "cancelling", "cancellation_requested")]
-        return True
-
-    async def mark_intent() -> None:
-        typed["phase"] = "cancellation_requested"
-
-    async def mark_terminal() -> None:
-        typed.update({"status": "cancelled", "phase": "cancelled"})
-
-    monkeypatch.setattr(job_control, "_load_job_lineage", load_lineage)
-    monkeypatch.setattr(job_control, "cancel_nextflow_job", stop)
-    await job_control.cancel_job_lineage(
-        "job", Session(),  # type: ignore[arg-type]
-        commit=True,
-        before_intent_commit=mark_intent,
-        before_terminal_commit=mark_terminal,
-    )
-    assert commits == [
-        ("running", "cancelling", "cancellation_requested"),
-        ("cancelled", "cancelled", "cancelled"),
-    ]
+        monkeypatch.setattr(job_control, "cancel_nextflow_job", stop)
+        async with factory() as session:
+            if stopped:
+                assert await cm.cancel_request("request", _request(principal="alice"), session) == {
+                    "request_id": "request", "status": "cancelled",
+                }
+            else:
+                with pytest.raises(HTTPException) as pending:
+                    await cm.cancel_request("request", _request(principal="alice"), session)
+                assert pending.value.status_code == 409
+                assert pending.value.detail["code"] == "CANCELLATION_INCOMPLETE"
+        assert calls == ["run"]
+        async with factory() as observer:
+            job = await observer.get(Job, "job")
+            typed = await observer.get(ConformationalMappingRequest, "request")
+            if stopped:
+                assert (job.status, job.queue_status, typed.status, typed.progress_json["phase"]) == (
+                    "cancelled", "cancelled", "cancelled", "cancelled",
+                )
+                assert job.assigned_gpu is None
+                assert job.params["cancellation_receipt"]["state"] == "completed"
+            else:
+                assert (job.status, job.queue_status, typed.status, typed.progress_json["phase"]) == (
+                    "running", "cancelling", "running", "cancellation_requested",
+                )
+                assert job.assigned_gpu == 0
+                assert job.completed_at is None
+    finally:
+        await engine.dispose()
