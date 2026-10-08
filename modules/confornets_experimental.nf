@@ -39,6 +39,7 @@ process PrepConforNetsRequest {
     def skipMsa = shellQuote(boolString(params.cn_skip_msa))
     def computeConfidence = shellQuote(boolString(params.cn_compute_confidence))
     def saveFullConfidence = shellQuote(boolString(params.cn_save_full_confidence))
+    def computeEvaluation = shellQuote(boolString(params.cn_compute_evaluation == null ? true : params.cn_compute_evaluation))
     def confornetPath = shellQuote(params.cn_confornet_path ?: '')
     def mseDir = shellQuote(params.cn_mse_dir ?: '')
     def sourceTestCases = shellQuote(params.cn_source_test_cases ?: '')
@@ -80,6 +81,7 @@ process PrepConforNetsRequest {
         --grad-clip ${gradClip} \
         --compute-confidence ${computeConfidence} \
         --save-full-confidence ${saveFullConfidence} \
+        --compute-evaluation ${computeEvaluation} \
         --confornet-path ${confornetPath} \
         --mse-dir ${mseDir} \
         --source-test-cases ${sourceTestCases} \

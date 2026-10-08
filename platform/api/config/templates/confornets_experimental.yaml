@@ -297,7 +297,7 @@ user_params:
     label: Compute Confidence
     type: boolean
     required: false
-    default: false
+    default: true
     description: Request upstream pLDDT/gPDE/PTM confidence CSV outputs when supported.
 
   - name: save_full_confidence
@@ -306,3 +306,10 @@ user_params:
     required: false
     default: false
     description: Persist raw per-sample confidence tensors in addition to CSV summaries.
+
+  - name: compute_evaluation
+    label: Compute Evaluation Metrics
+    type: boolean
+    required: false
+    default: true
+    description: Compute reference RMSD, success@1, pairwise diversity, and 2D landscape coordinates from real normalized CIF conformers and staged references.

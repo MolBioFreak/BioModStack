@@ -78,11 +78,41 @@ def test_build_plan_manifest_threads_context_spill_contract_into_input_metadata(
         "'bcp_context_query_tile_tokens': os.environ.get('BCP_CONTEXT_QUERY_TILE_TOKENS', '').strip()",
     ):
         assert expected in process_block
+    assert "cont..." not in process_block
 
 
-def test_workflow_keeps_dram_context_backend_on_plan_worker_path_for_1x1() -> None:
+def test_workflow_routes_true_distributed_directly_and_keeps_legacy_backends_on_plan_worker_path() -> None:
     workflow_text = (REPO_ROOT / "workflows" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
 
-    assert "def requestedBackend = (params.bcp_backend ?: 'dram-context-spill-workhorse').toString()" in workflow_text
-    assert "def requiresPlanRuntime = requestedBackend == 'dram-context-spill-workhorse'" in workflow_text
-    assert "def useCoordinator = bcpRole != 'child' && (logicalSizeCp > 1 || requiresPlanRuntime)" in workflow_text
+    assert "def requestedBackend = params.get('bcp_backend', 'true-distributed-context-parallel').toString()" in workflow_text
+    assert "def useTrueDistributed = requestedBackend == 'true-distributed-context-parallel'" in workflow_text
+    assert "def requiresPlanRuntime = requestedBackend in ['dram-context-spill-workhorse', 'shared-cache-serial-output-tiling', 'metadata-only']" in workflow_text
+    assert "def useCoordinator = bcpRole != 'child' && !useTrueDistributed && (logicalSizeCp > 1 || requiresPlanRuntime)" in workflow_text
+
+
+def test_true_backend_context_store_is_predictor_owned_not_plan_runtime() -> None:
+    text = MODULE_PATH.read_text(encoding="utf-8")
+    run_start = text.index("process RunBoltzCPExperimental {")
+    plan_start = text.index("process BuildBoltzCPPlanManifest {")
+    run_block = text[run_start:plan_start]
+    plan_block = text[plan_start:text.index("process SpawnBoltzCPChildren {", plan_start)]
+
+    assert "--context_store_root \"\\$BCP_CONTEXT_STORE_ROOT\"" in run_block
+    assert "--context_store_mode \"\\$BCP_CONTEXT_STORE_MODE\"" in run_block
+    assert "BCP_CONTEXT_STORE_MODE=${contextStoreMode}" in run_block
+    assert "BCP_CONTEXT_STORE_ROOT=${contextStoreRoot}" in run_block
+    assert "--context_store_root" not in plan_block
+    assert "--context_store_mode" not in plan_block
+
+
+def test_true_backend_launch_manifest_reports_rank_local_dram_spill_truth_dynamically() -> None:
+    text = MODULE_PATH.read_text(encoding="utf-8")
+    run_start = text.index("process RunBoltzCPExperimental {")
+    plan_start = text.index("process BuildBoltzCPPlanManifest {")
+    run_block = text[run_start:plan_start]
+
+    assert 'context_store_mode = os.environ.get("BCP_CONTEXT_STORE_MODE", "").strip()' in run_block
+    assert 'context_store_spill_enabled = context_store_mode.startswith("rank-local-dram-spill")' in run_block
+    assert '"streaming_spill_enabled": context_store_spill_enabled' in run_block
+    assert '"memory_reduction_claimed": context_store_spill_enabled' in run_block
+    assert '"within_op_peak_not_reduced": context_store_spill_enabled' in run_block

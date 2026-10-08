@@ -36,6 +36,9 @@ def test_model_registry_loads_boltz_cp_experimental() -> None:
     assert any(param.name == "shard_plan_id" for param in model.params)
     assert any(param.name == "gpu_ids" for param in model.params)
     assert any(param.name == "backend" for param in model.params)
+    assert any(param.name == "triattn_backend" for param in model.params)
+    assert any(param.name == "context_store_mode" for param in model.params)
+    assert any(param.name == "context_store_root" for param in model.params)
     assert not any(param.name == "size_cp" for param in model.params)
 
 
@@ -52,28 +55,153 @@ def test_template_registry_loads_boltz_cp_experimental() -> None:
     assert template.preset_params["structure_launch_variant"] == "boltz_cp_experimental"
     assert template.preset_params["bcp_repo_path"] == "/home/dalab/tmp/boltz-cp"
     assert template.preset_params["bcp_shard_plan_id"] == "2x2"
+    assert template.preset_params["bcp_backend"] == "true-distributed-context-parallel"
+    assert template.preset_params["bcp_triattn_backend"] == "reference"
     assert not any(param.name == "input_path" for param in template.user_params)
     assert not any(param.name == "gpu_ids" for param in template.user_params)
     assert not any(param.name == "size_cp" for param in template.user_params)
 
 
-def test_boltz_cp_launch_copy_is_honest_about_current_data_plane_semantics() -> None:
+def test_boltz_cp_launch_copy_identifies_true_distributed_default_without_hiding_legacy_boundary() -> None:
     model_text = (API_ROOT / "config" / "models" / "boltz_cp_experimental.yaml").read_text(encoding="utf-8")
     template_text = (API_ROOT / "config" / "templates" / "boltz_cp_experimental.yaml").read_text(encoding="utf-8")
     combined = f"{model_text}\n{template_text}"
 
-    assert "control-plane" in combined
-    assert "not native distributed context parallel" in combined
-    assert "single full Boltz prediction then output tiling" in combined
+    assert "true-distributed-context-parallel" in combined
+    assert "DTensor context-parallel Boltz-2 prediction data-plane" in combined
+    assert "shared-cache-serial-output-tiling" in combined
+    assert "legacy control-plane/output-tiling fallback" in combined
+    assert "triattn_backend" in combined
+    assert "context_store_mode" in combined
+    assert "evidence-only" in combined
+    assert "rank-local-dram-spill-layer" in combined
+    assert "rank-local-dram-spill-op" in combined
+    assert "does not claim tensor streaming, spill execution, or memory reduction" in combined
+    assert "default: reference" in combined
+    assert "trifast" in combined
+    assert "fail closed" in combined
+    assert "current large-protein coordinator is control-plane" not in combined
+    assert "one single full Boltz prediction then output tiling" not in combined
     assert "true multi-GPU single-fold" not in combined
-    assert "Run DTensor context-parallel Boltz-2 inference across the selected GPUs" not in combined
 
 
-def test_boltz_cp_workflow_banner_prints_backend_and_honesty_boundary() -> None:
+def test_boltz_cp_workflow_banner_prints_true_distributed_default_and_legacy_boundary() -> None:
     workflow_text = (API_ROOT.parents[1] / "workflows" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
 
-    assert "* Backend: ${params.bcp_backend ?: 'dram-context-spill-workhorse'}" in workflow_text
-    assert "* Data-plane boundary: current large-protein coordinator is control-plane/tile-store; not native distributed context-parallel Boltz prediction" in workflow_text
+    assert "* Backend: ${params.get('bcp_backend', 'true-distributed-context-parallel')}" in workflow_text
+    assert "* Data-plane: true-distributed-context-parallel launches torch.distributed DTensor CP prediction; shared-cache backends remain legacy output-tiling only" in workflow_text
+
+
+def test_main_boltz_cp_banner_prints_backend_and_serial_legacy_boundary() -> None:
+    main_text = (API_ROOT.parents[1] / "main.nf").read_text(encoding="utf-8")
+
+    assert "def bcpBackend = params.get('bcp_backend', 'true-distributed-context-parallel')" in main_text
+    assert "* Backend: ${bcpBackend}" in main_text
+    assert "shared-cache backends remain legacy serial full-prediction/output-tiling only" in main_text
+    assert "params.bcp_input_path" not in main_text
+    assert "params.bcp_gpu_ids" not in main_text
+    assert "params.bcp_size_cp" not in main_text
+    assert "params.bcp_sampling_steps" not in main_text
+
+
+def test_boltz_cp_workflow_uses_warning_safe_optional_param_access() -> None:
+    workflow_text = (API_ROOT.parents[1] / "workflows" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    assert "params.bcp_shard_plan_id" not in workflow_text
+    assert "params.bcp_backend" not in workflow_text
+    assert "params.bcp_sampling_steps" not in workflow_text
+
+
+def test_boltz_cp_module_uses_warning_safe_bcp_param_access() -> None:
+    module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    assert "params.bcp_" not in module_text
+
+
+def test_boltz_cp_module_null_optional_bcp_values_do_not_become_literal_null_flags() -> None:
+    module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    assert "def seedValue = (params.get('bcp_seed', '') ?: '').toString().trim()" in module_text
+    assert "params.get('bcp_seed', '').toString().trim()" not in module_text
+    assert "def gpuIdsParam = params.get('bcp_gpu_ids', null)" in module_text
+    assert "gpuIdsParam = params.get('gpu_id', '')" in module_text
+    assert "def gpuIdsValue = (gpuIdsParam == null ? '' : gpuIdsParam.toString())" in module_text
+    assert "params.get('bcp_gpu_ids', params.get('gpu_id', '')) ?: params.get('gpu_id', '')" not in module_text
+
+
+def test_boltz_cp_model_rejects_single_sampling_step_before_runtime() -> None:
+    registry = ModelRegistry()
+
+    errors = registry.validate_job_params(
+        "boltz_cp_experimental",
+        "design",
+        {
+            "input_path": "/tmp/complex_input.yaml",
+            "sampling_steps": 1,
+        },
+    )
+
+    assert "sampling_steps must be >= 2.0" in errors
+
+
+def test_boltz_cp_model_accepts_rank_local_dram_spill_context_store_modes() -> None:
+    registry = ModelRegistry()
+
+    for mode in ("rank-local-dram-spill-layer", "rank-local-dram-spill-op"):
+        errors = registry.validate_job_params(
+            "boltz_cp_experimental",
+            "design",
+            {
+                "input_path": "/tmp/complex_input.yaml",
+                "sampling_steps": 200,
+                "context_store_mode": mode,
+            },
+        )
+
+        assert errors == []
+
+
+def test_boltz_cp_validation_normalizes_triattn_alias_before_enum_check() -> None:
+    registry = ModelRegistry()
+    validation_params = jobs._normalize_boltz_cp_params_for_validation(
+        "boltz_cp_experimental",
+        {
+            "input_path": "/tmp/complex_input.yaml",
+            "bcp_triattn_backend": "not-a-real-triattn-backend",
+        },
+    )
+
+    assert validation_params["triattn_backend"] == "not-a-real-triattn-backend"
+    assert registry.validate_job_params("boltz_cp_experimental", "design", validation_params) == [
+        "Invalid value for triattn_backend: must be one of ['reference', 'trifast', 'cueq']"
+    ]
+
+
+def test_boltz_cp_module_true_cp_preflights_sampling_steps_before_torchrun() -> None:
+    module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    preflight_index = module_text.index("runtime-parameter-preflight")
+    torchrun_index = module_text.index("torch.distributed.run")
+
+    assert preflight_index < torchrun_index
+    assert "InvalidBoltzSamplingSteps" in module_text
+    assert "BCP_SAMPLING_STEPS" in module_text
+    assert "Need at least 2 sampling steps" in module_text
+
+
+def test_boltz_cp_module_true_cp_preflights_triangle_backend_before_torchrun() -> None:
+    module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    preflight_index = module_text.index("triattn-backend-preflight")
+    torchrun_index = module_text.index("torch.distributed.run")
+
+    assert preflight_index < torchrun_index
+    assert "MissingTriangleAttentionBackend" in module_text
+    assert "UnsupportedTriangleAttentionBackend" in module_text
+    assert "supported_backends = {\"reference\", \"trifast\", \"cueq\"}" in module_text
+    assert "importlib.util.find_spec" in module_text
+    assert "is_true_distributed_context_parallel" in module_text
+    assert "BCP_TRIATTN_BACKEND" in module_text
 
 
 def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
@@ -92,6 +220,9 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
             "diffusion_samples": 2,
             "seed": 17,
             "backend": "dram-context-spill-workhorse",
+            "triattn_backend": "reference",
+            "context_store_mode": "off",
+            "context_store_root": "/tmp/predictor-owned-cp-store",
         },
         "/tmp/out",
         job_id="job-bcp-1",
@@ -113,6 +244,9 @@ def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:
     assert "--bcp_diffusion_samples 2" in joined
     assert "--bcp_seed 17" in joined
     assert "--bcp_backend dram-context-spill-workhorse" in joined
+    assert "--bcp_triattn_backend reference" in joined
+    assert "--bcp_context_store_mode off" in joined
+    assert "--bcp_context_store_root /tmp/predictor-owned-cp-store" in joined
     assert "--rfd_mode boltz_cp_experimental" in joined
     assert "--input_path /tmp/complex_input.yaml" not in joined
     assert "--gpu_ids 0,1,2,3" not in joined
@@ -453,6 +587,17 @@ def test_boltz_cp_module_materializes_msa_inputs_with_run_local_msa() -> None:
 
 
 
+def test_boltz_cp_module_reuses_msa_paths_for_duplicate_sequences() -> None:
+    module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    assert "msa_by_sequence: dict[str, str] = {}" in module_text
+    assert "canonical_msa = msa_by_sequence.get(sequence)" in module_text
+    assert "msa_by_sequence[sequence] = canonical_msa" in module_text
+    assert "protein[\"msa\"] = canonical_msa" in module_text
+    assert "if canonical_msa:" in module_text
+
+
+
 def test_boltz_cp_workflow_branches_between_child_and_coordinator_paths() -> None:
     workflow_text = (API_ROOT.parents[1] / "workflows" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
 
@@ -461,12 +606,89 @@ def test_boltz_cp_workflow_branches_between_child_and_coordinator_paths() -> Non
     assert "WaitForBoltzCPChildren" in workflow_text
     assert "FinalizeBoltzCPExperimentalChildren" in workflow_text
     assert "def bcpRole = params.get('bcp_role', 'coordinator').toString()" in workflow_text
-    assert "def requestedBackend = (params.bcp_backend ?: 'dram-context-spill-workhorse').toString()" in workflow_text
-    assert "def requiresPlanRuntime = requestedBackend == 'dram-context-spill-workhorse'" in workflow_text
-    assert "def useCoordinator = bcpRole != 'child' && (logicalSizeCp > 1 || requiresPlanRuntime)" in workflow_text
+    assert "def requestedBackend = params.get('bcp_backend', 'true-distributed-context-parallel').toString()" in workflow_text
+    assert "def useTrueDistributed = requestedBackend == 'true-distributed-context-parallel'" in workflow_text
+    assert "def requiresPlanRuntime = requestedBackend in ['dram-context-spill-workhorse', 'shared-cache-serial-output-tiling', 'metadata-only']" in workflow_text
+    assert "def useCoordinator = bcpRole != 'child' && !useTrueDistributed && (logicalSizeCp > 1 || requiresPlanRuntime)" in workflow_text
     assert "logicalSizeCp = ['1x1': 1, '2x2': 4, '4x4': 16]" in workflow_text
     assert "BuildBoltzCPPlanManifest.out.plan_store" in workflow_text
     assert "FinalizeBoltzCPExperimentalChildren(WaitForBoltzCPChildren.out.result, BuildBoltzCPPlanManifest.out.plan_store)" in workflow_text
+
+
+def test_build_nextflow_command_defaults_boltz_cp_to_true_distributed_data_plane(tmp_path: Path) -> None:
+    output_dir = tmp_path / "bcp_true_distributed_default"
+    cmd = build_nextflow_command(
+        "boltz_cp_experimental",
+        "design",
+        {
+            "input_path": "/tmp/complex_input.yaml",
+            "shard_plan_id": "2x2",
+            "gpu_ids": "0,2,3,1",
+            "input_format": "preprocessed",
+            "recycling_steps": 1,
+            "sampling_steps": 20,
+            "diffusion_samples": 1,
+        },
+        str(output_dir),
+        job_id="job-bcp-true-default",
+    )
+
+    joined = " ".join(cmd)
+
+    assert "--bcp_backend true-distributed-context-parallel" in joined
+    assert "--bcp_confidence_prediction false" in joined
+    assert "--bcp_input_format preprocessed" in joined
+    assert "--bcp_size_cp 4" in joined
+
+
+def test_boltz_cp_module_true_distributed_path_uses_venv_torchrun_and_diagnostics() -> None:
+    module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    assert '"\\$BOLTZ_PYTHON" -m torch.distributed.run' in module_text
+    assert 'CUDA_VISIBLE_DEVICES="\\$GPU_IDS_RAW"' in module_text
+    assert "export CUDA_DEVICE_ORDER=PCI_BUS_ID" in module_text
+    assert "BCP_DATA_PLANE_SEMANTICS=torch.distributed_dtensor_context_parallel" in module_text
+    assert "BCP_CONTEXT_STORE_MODE" in module_text
+    assert "BCP_CONTEXT_STORE_ROOT" in module_text
+    assert "--context_store_root \"\\$BCP_CONTEXT_STORE_ROOT\"" in module_text
+    assert "--context_store_mode \"\\$BCP_CONTEXT_STORE_MODE\"" in module_text
+    assert '"context_store_mode": os.environ.get("BCP_CONTEXT_STORE_MODE", "")' in module_text
+    assert '"context_store_root": os.environ.get("BCP_CONTEXT_STORE_ROOT", "")' in module_text
+    assert "torch.distributed_dtensor_pairformer_context_store_evidence" in module_text
+    assert "export BCP_CONFIDENCE_PREDICTION BCP_MAX_MSA_SEQS BCP_MAX_PARALLEL_SAMPLES BCP_PRECISION" in module_text
+    assert "true_cp_launch_manifest.json" in module_text
+    assert "true_cp_failure_diagnostics.json" in module_text
+    assert "--no_confidence_prediction" in module_text
+    assert "BOLTZ_CACHE_DIR=${cachePath}" in module_text
+    assert 'export BOLTZ_CACHE="\\$BOLTZ_CACHE_DIR"' in module_text
+    assert '--cache "\\$BOLTZ_CACHE_DIR"' in module_text
+    assert "params.get('bcp_triattn_backend', 'reference')" in module_text
+    assert "params.get('bcp_triattn_backend', 'trifast')" not in module_text
+
+
+
+def test_boltz_cp_true_distributed_path_persists_physical_rank_probe_before_prediction() -> None:
+    module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    rank_probe_script_marker = 'cat > "\\$TASK_ROOT/true_cp_rank_probe.py"'
+    rank_probe_script_index = module_text.index(rank_probe_script_marker)
+    rank_probe_launch_index = module_text.index(
+        '"\\$TASK_ROOT/true_cp_rank_probe.py"',
+        rank_probe_script_index + len(rank_probe_script_marker),
+    )
+    predict_launch_index = module_text.index("src/boltz/distributed/main.py predict")
+
+    assert rank_probe_script_index < rank_probe_launch_index < predict_launch_index
+    assert "true_cp_rank_probe.jsonl" in module_text
+    assert "rank_probe_path" in module_text
+    assert 'path \'true_cp_rank_probe.jsonl\', emit: rank_probe, optional: true' in module_text
+    assert 'path \'true_cp_context_store\', emit: context_store, optional: true' in module_text
+    assert 'pattern: \'true_cp_*\'' in module_text
+    assert '"rank": os.environ.get("RANK", "")' in module_text
+    assert '"local_rank": os.environ.get("LOCAL_RANK", "")' in module_text
+    assert '"world_size": os.environ.get("WORLD_SIZE", "")' in module_text
+    assert '"cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", "")' in module_text
+    assert 'handle.write(json.dumps(payload, sort_keys=True) + "\\\\n")' in module_text
 
 
 
@@ -511,6 +733,35 @@ def test_boltz_cp_plan_manifest_exports_context_tile_params_without_truncation_a
     assert "BCP_CONTEXT_TILE_TOKENS=${contextTileTokens}" in module_text
     assert "BCP_CONTEXT_KEY_TILE_TOKENS=${contextKeyTileTokens}" in module_text
     assert "BCP_CONTEXT_QUERY_TILE_TOKENS=${contextQueryTileTokens}" in module_text
+
+
+def test_boltz_cp_true_distributed_cache_defaults_to_writable_boltz_models_with_task_local_fallback() -> None:
+    module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    assert "def cachePath = shellQuote(params.get('bcp_cache_path', null) ?: params.get('boltz_models', '') ?: '')" in module_text
+    assert 'BOLTZ_CACHE_DIR="\\$TASK_ROOT/boltz_cache"' in module_text
+    assert 'mkdir -p "\\$BOLTZ_CACHE_DIR"' in module_text
+    assert "def cachePath = shellQuote('/boltzcache')" not in module_text
+
+
+
+def test_boltz_cp_true_distributed_cache_falls_back_to_mounted_boltzcache_before_task_local() -> None:
+    module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    assert 'if [ -d "/boltzcache" ] && [ -w "/boltzcache" ]; then' in module_text
+    assert 'BOLTZ_CACHE_DIR="/boltzcache"' in module_text
+    assert "using_mounted_boltzcache_fallback" in module_text
+    assert 'else\n            BOLTZ_CACHE_DIR="\\$TASK_ROOT/boltz_cache"' in module_text
+
+
+
+def test_boltz_cp_true_distributed_cache_falls_back_when_configured_path_cannot_be_created() -> None:
+    module_text = (API_ROOT.parents[1] / "modules" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    assert 'if ! mkdir -p "\\$BOLTZ_CACHE_DIR" 2> "\\$TASK_ROOT/boltz_cache_mkdir.err"; then' in module_text
+    assert "configured_boltz_cache_unavailable" in module_text
+    assert 'BOLTZ_CACHE_DIR="\\$TASK_ROOT/boltz_cache"' in module_text
+    assert 'rm -f "\\$TASK_ROOT/boltz_cache_mkdir.err"' in module_text
 
 
 
