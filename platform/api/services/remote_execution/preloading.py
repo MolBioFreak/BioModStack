@@ -56,14 +56,15 @@ def recipe_digest(job):
     return hashlib.sha256(json.dumps(values, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
 
 
-def compile_recipe(job):
+def compile_recipe(job, *, compiled_parameters=None):
     from services.nextflow import build_job_nextflow_command, _build_msa_batch_command
     output = job.child_output_dir or job.output_dir
     if not output:
         raise ExecutionTargetError("Saved Job has no authoritative output identity")
     if job.model_id == "msa_batch":
         return _build_msa_batch_command(deepcopy(job.params), output)
-    return build_job_nextflow_command(job, deepcopy(job.params), output)
+    return build_job_nextflow_command(job, deepcopy(job.params), output,
+        compiled_parameters=compiled_parameters)
 
 
 def endpoint(target):
@@ -147,6 +148,7 @@ class PreloadController:
             independent = isinstance(request, ProvisionRequest)
             selection = ProvisionSelection(kind=request.kind, model_id=request.model_id) if independent else None
             snapshot, command = None, None
+            compiled_parameters = {}
             if independent:
                 await session.rollback()
                 preview, _ = await self._preview(selection, target)
@@ -166,7 +168,8 @@ class PreloadController:
                     if snapshot.execution_source_revision and (snapshot.execution_source_revision,
                             snapshot.execution_source_tree) != (revision, tree):
                         raise ExecutionTargetError("Saved Job source differs from current source; choose a current recipe")
-                    command = await asyncio.to_thread(compile_recipe, snapshot)
+                    command = await asyncio.to_thread(compile_recipe, snapshot,
+                        compiled_parameters=compiled_parameters)
                 except ExecutionTargetError:
                     raise
                 except Exception as exc:
@@ -187,7 +190,7 @@ class PreloadController:
             connection = RemoteConnection.from_target(target)
             expected_endpoint = endpoint(target)
             self.tasks[operation_id] = asyncio.create_task(self._run(target_id, progress, snapshot,
-                command, connection, expected_endpoint), name=f"preload-{operation_id}")
+                command, connection, expected_endpoint, compiled_parameters), name=f"preload-{operation_id}")
             response = _target_response(await get_target(session, target_id))
             await session.rollback()
             return response
@@ -222,7 +225,7 @@ class PreloadController:
         if changed.rowcount != 1:
             raise ExecutionTargetError("Preload operation was superseded")
 
-    async def _run(self, target_id, progress, snapshot, command, connection, expected_endpoint):
+    async def _run(self, target_id, progress, snapshot, command, connection, expected_endpoint, compiled_parameters):
         try:
             async def check_fence():
                 async with self.session_factory() as session:
@@ -288,6 +291,7 @@ class PreloadController:
                     from .cache import prewarm_cache
                     prewarm = prewarm_cache
                 receipt = await prewarm(connection=connection, job=snapshot, command=command,
+                    compiled_parameters=compiled_parameters,
                     source_revision=progress.source_revision, source_tree=progress.source_tree,
                     operation_id=progress.operation_id, progress=publish, check_fence=check_fence)
             await check_fence()

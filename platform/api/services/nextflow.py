@@ -2282,10 +2282,12 @@ async def launch_nextflow_job(
                 gpu_id = _resolve_launch_gpu_id(job, launch_params, model_id)
                 if gpu_id is not None:
                     launch_params["gpu_id"] = gpu_id
+                compiled_parameters: Dict[str, Any] = {}
                 remote_command = (
                     _build_msa_batch_command(launch_params, output_dir)
                     if model_id == "msa_batch"
-                    else build_job_nextflow_command(job, launch_params, output_dir)
+                    else build_job_nextflow_command(job, launch_params, output_dir,
+                        compiled_parameters=compiled_parameters)
                 )
                 remote_command = await _persist_boltz_launch_authority(session, job, remote_command)
                 remote_environment = {"NXF_ANSI_LOG": "false"}
@@ -2303,6 +2305,7 @@ async def launch_nextflow_job(
                     session,
                     job,
                     command=remote_command,
+                    compiled_parameters=compiled_parameters,
                     environment=remote_environment,
                     secret_environment={stage_reporting.ENV_TOKEN_KEY: stage_report_token},
                 )
@@ -3344,20 +3347,25 @@ def uses_native_parent_components(command: list[str]) -> bool:
                for value in command if value.endswith('.nf'))
 
 
-def build_job_nextflow_command(job, params, output_dir):
+def build_job_nextflow_command(job, params, output_dir, *, compiled_parameters=None):
     """All launch/rebuild paths join request origin from their owning persisted Job."""
     from services.core_protein_scientific_contract import workflow_params
     requested = (job.provenance or {}).get('core_protein_requested_params')
     command = build_nextflow_command(job.model_id, job.mode, workflow_params(job, params),
-        output_dir, job_id=job.id, requested_params=requested)
+        output_dir, job_id=job.id, requested_params=requested,
+        compiled_parameters=compiled_parameters)
     if uses_native_parent_components(command) and params.get('run_frustrampnn') is True:
         from paths import get_container_dir
         from services.remote_execution.images import resolve_image
         image = resolve_image('frustrampnn.sif', get_container_dir())
         command.extend(['--frustrampnn_container_path', str(image)])
+        if compiled_parameters is not None:
+            compiled_parameters['frustrampnn_container_path'] = str(image)
     for key in ('protenix_prepared_msa_dir', 'protenix_prepared_msa_sha256'):
         if params.get(key):
             command.extend(['--' + key, str(params[key])])
+            if compiled_parameters is not None:
+                compiled_parameters[key] = params[key]
     return command
 
 
@@ -3369,6 +3377,7 @@ def build_nextflow_command(
     job_id: str = None,
     *,
     requested_params: Optional[Dict[str, Any]] = None,
+    compiled_parameters: Optional[Dict[str, Any]] = None,
 ) -> list:
     """
     Build the Nextflow command line dynamically.
@@ -3376,6 +3385,16 @@ def build_nextflow_command(
     Converts all params to --key value flags.
     """
     # Shared preview and scheduler/replay command compilation gate.
+    # Placement consumers receive compiler-owned native values directly. They
+    # must not recover scientific/dependency authority by parsing rendered argv.
+    native_parameters: Dict[str, Any] = {}
+    def finish_command(command):
+        if compiled_parameters is not None:
+            from copy import deepcopy
+            compiled_parameters.clear()
+            compiled_parameters.update(deepcopy(native_parameters))
+        return command
+
     from services.msa_policy import apply_msa_policy
     params = apply_msa_policy(model_id, params)
     # Controller execution metadata is not a scientific Nextflow parameter.
@@ -3529,7 +3548,10 @@ def build_nextflow_command(
         ]
         if job_id:
             command.extend(["--job_id", str(job_id)])
-        return command
+        native_parameters.update(out_dir=str(output_dir), job_id=str(job_id),
+            frustrampnn_batch_manifest_path=batch_manifest_path,
+            frustrampnn_physical_gpu_id=gpu_id)
+        return finish_command(command)
 
     if str(model_id or "").strip() == "conformational_mapping":
         if str(mode or "").strip() != "map":
@@ -3593,7 +3615,12 @@ def build_nextflow_command(
             "--gpu_id", str(normalized_gpu_id),
             "--frustrampnn_physical_gpu_id", str(normalized_gpu_id),
         ])
-        return command
+        native_parameters.update(out_dir=str(output_dir), cm_request_path=request_path,
+            run_frustrampnn=True, gpu_id=normalized_gpu_id,
+            frustrampnn_physical_gpu_id=normalized_gpu_id)
+        if job_id:
+            native_parameters['job_id'] = str(job_id)
+        return finish_command(command)
 
     normalized_model_id = str(model_id or "").strip().lower()
     normalized_mode = str(mode or "").strip().lower()
@@ -3866,6 +3893,8 @@ def build_nextflow_command(
     # Add job_id for spawn-wait-collect tracking
     if job_id:
         cmd.extend(["--job_id", job_id])
+        native_parameters['job_id'] = job_id
+    native_parameters['out_dir'] = output_dir
 
     # Force core path params so moved data/model drives are always honored.
     # Only apply defaults when caller didn't explicitly provide a value.
@@ -3888,6 +3917,7 @@ def build_nextflow_command(
     for key, value in explicit_path_defaults.items():
         if params.get(key) in (None, ""):
             cmd.extend([f"--{key}", str(value)])
+            native_parameters[key] = str(value)
 
     # Inject MSA GPU policy defaults when caller did not explicitly specify them.
     # Precedence:
@@ -4674,11 +4704,14 @@ def build_nextflow_command(
             json.dump({"components": complex_components}, f, indent=2)
         logger.info(f"Wrote complex definition to {complex_json_path}")
         cmd.extend(["--complex_json_path", str(complex_json_path)])
+        native_parameters['complex_json_path'] = str(complex_json_path)
 
     if sequence_batch_json_path:
         cmd.extend(["--sequence_batch_json_path", str(sequence_batch_json_path)])
+        native_parameters['sequence_batch_json_path'] = str(sequence_batch_json_path)
     if complex_batch_dir:
         cmd.extend(["--complex_batch_dir", str(complex_batch_dir)])
+        native_parameters['complex_batch_dir'] = str(complex_batch_dir)
     
     # Dynamic parameter passing
     for key, value in params.items():
@@ -4703,9 +4736,11 @@ def build_nextflow_command(
             
             if isinstance(value, bool):
                 cmd.extend([f"--{nf_key}", str(value).lower()])
+                native_parameters[nf_key] = value
             elif isinstance(value, list):
                 # Convert list to comma-separated string for Nextflow
                 cmd.extend([f"--{nf_key}", ",".join(str(v) for v in value)])
+                native_parameters[nf_key] = list(value)
             elif isinstance(value, dict):
                 if key == 'fampnn_analysis_declaration':
                     declaration_bytes = json.dumps(value, allow_nan=False, sort_keys=True).encode('utf-8')
@@ -4714,6 +4749,8 @@ def build_nextflow_command(
                     declaration_path.write_bytes(declaration_bytes)
                     cmd.extend(['--fampnn_analysis_declaration_path', str(declaration_path),
                                 '--fampnn_analysis_declaration_sha256', hashlib.sha256(declaration_bytes).hexdigest()])
+                    native_parameters['fampnn_analysis_declaration_path'] = str(declaration_path)
+                    native_parameters['fampnn_analysis_declaration_sha256'] = hashlib.sha256(declaration_bytes).hexdigest()
                 elif key == "frustrampnn_settings":
                     transport_value = dict(value)
                     protein_selection = transport_value.get("protein_selection")
@@ -4763,12 +4800,15 @@ def build_nextflow_command(
                             serialized.decode("utf-8"),
                         ]
                     )
+                    native_parameters['frustrampnn_settings_value_origin'] = settings_value_origin
+                    native_parameters[nf_key] = transport_value
                 else:
-                    # Unrelated nested parameters remain unsupported and are not
-                    # broadened into a generic JSON command-line transport.
+                    # Unsupported nested values are not broadened into generic
+                    # JSON transport or included in the native projection.
                     logger.warning(f"Skipping dict parameter {key} - not supported in command line")
             else:
                 cmd.extend([f"--{nf_key}", str(value)])
+                native_parameters[nf_key] = value
 
     if params.get("run_frustrampnn") is True:
         component_gpu = params.get("gpu_id")
@@ -4777,8 +4817,9 @@ def build_nextflow_command(
                 "Enabled FrustraMPNN requires a scheduler-assigned physical GPU ID"
             )
         cmd.extend(["--frustrampnn_physical_gpu_id", str(component_gpu)])
+        native_parameters['frustrampnn_physical_gpu_id'] = int(str(component_gpu))
 
-    return cmd
+    return finish_command(cmd)
 
 
 def _pid_is_alive(pid: int) -> bool:

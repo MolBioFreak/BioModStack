@@ -484,12 +484,12 @@ def _rewrite(value: str, path_map: dict[str, str]) -> str:
     return value
 
 
-def compile_remote_dependencies(model_id: str, mode: str, command: list[str]) -> tuple[list[str], dict[str, Any]]:
-    """Compile the normalized launch argv, never the original persisted defaults.
+def compile_remote_dependencies(model_id: str, mode: str, command: list[str], *,
+                                compiled_parameters: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    """Materialize dependencies from the shared compiler's native projection.
 
-    This boundary runs only for remote packages; local command/model policy is
-    unchanged. The returned argv is the sole authority for runtime and input
-    selection below.
+    Rendered argv is transport, never a source for reconstructing scientific
+    values. Remaining placement adapters below must preserve this authority.
     """
     # These current workflows still require controller-side child orchestration.
     # Reject rather than silently dropping required stages or falling back locally.
@@ -504,11 +504,10 @@ def compile_remote_dependencies(model_id: str, mode: str, command: list[str]) ->
             + '; controller callbacks/child scheduling are still required. '
             'No local fallback or partial scientific execution was performed.'
         )
-    params: dict[str, Any] = {}
-    for index, value in enumerate(command):
-        if value.startswith("--"):
-            raw = command[index + 1] if index + 1 < len(command) and not command[index + 1].startswith("--") else True
-            params[value[2:]] = {"true": True, "false": False}.get(raw, raw) if isinstance(raw, str) else raw
+    from copy import deepcopy
+    if not isinstance(compiled_parameters, dict) or not compiled_parameters:
+        raise RemoteBundleError('Shared compiler parameter projection is required')
+    params = deepcopy(compiled_parameters)
     if ('protein_design.nf' in selected_workflows
             and model_id.lower() not in {'boltzgen', 'boltzgen_child'}
             and params.get('diffusion_method') != 'boltzgen'
@@ -648,6 +647,7 @@ def prepare_remote_bundle(
     job: Any,
     target: Any,
     command: list[str],
+    compiled_parameters: dict[str, Any],
     environment: dict[str, str] | None = None,
     attempt_id: str | None = None,
 ) -> PreparedRemoteBundle:
@@ -728,7 +728,8 @@ def prepare_remote_bundle(
         if '--component_attempt_id' in command:
             raise RemoteBundleError('Remote component attempt must be bound by the bundle owner')
         command = [*command, '--component_attempt_id', attempt_id]
-    command, effective_params = compile_remote_dependencies(str(job.model_id), str(job.mode), command)
+    command, effective_params = compile_remote_dependencies(str(job.model_id), str(job.mode), command,
+        compiled_parameters=compiled_parameters)
     if native and effective_params.get('run_frustrampnn') is True:
         assignment = dict((job.provenance or {}).get('remote_execution_assignment') or {})
         indices = assignment.get('gpu_indices')

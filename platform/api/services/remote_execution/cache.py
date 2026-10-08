@@ -165,7 +165,7 @@ p.mkdir(mode=0o700,exist_ok=False)
                                   links=links, runtime_root=bundle.remote_runtime_dir)
 
 
-def _prewarm_plan(job, command, source_revision, source_tree, directory):
+def _prewarm_plan(job, command, source_revision, source_tree, directory, compiled_parameters):
     repo = get_code_root().resolve()
     if current_source_identity(repo) != (source_revision, source_tree):
         raise ValueError('Prewarm source identity does not match current committed source')
@@ -176,7 +176,8 @@ def _prewarm_plan(job, command, source_revision, source_tree, directory):
     source = directory / 'source'
     _safe_extract(archive, source)
     archive.replace(source / '.bms-source.tar')
-    _, effective = compile_remote_dependencies(str(job.model_id), str(job.mode), command)
+    _, effective = compile_remote_dependencies(str(job.model_id), str(job.mode), command,
+        compiled_parameters=compiled_parameters)
     entries = []
     assets = [(source / '.bms-source.tar', 'source/.bms-source.tar')]
     assets.extend((path, 'runtime/' + relative) for path, relative in
@@ -263,12 +264,12 @@ async def provision_cache(*, connection, entries, operation_id, progress, check_
 
 
 async def prewarm_cache(*, connection, job, command, source_revision, source_tree,
-                        operation_id, progress, check_fence):
+                        operation_id, progress, check_fence, compiled_parameters):
     """Only source/runtime: no input admission, envelope creation or scientific run."""
     await check_fence()
     with tempfile.TemporaryDirectory(prefix='bms-prewarm-') as temporary:
         entries = await asyncio.to_thread(_prewarm_plan, job, command, source_revision,
-                                           source_tree, Path(temporary))
+                                           source_tree, Path(temporary), compiled_parameters)
         receipts = await _cache_artifacts(connection=connection, artifacts=entries,
                                           operation_id=operation_id, progress=progress,
                                           check_fence=check_fence)

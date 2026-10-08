@@ -452,6 +452,7 @@ def _controller_attempt_guard(job_id: str):
 
 async def launch_remote_job(
     session: AsyncSession, job: Job, *, command: list[str],
+    compiled_parameters: dict,
     environment: dict[str, str] | None = None,
     secret_environment: dict[str, str] | None = None,
 ) -> str:
@@ -459,6 +460,7 @@ async def launch_remote_job(
         if not owned:
             raise RemoteExecutionError("Remote attempt already has an active controller")
         return await _launch_remote_job_owned(session, job, command=command,
+            compiled_parameters=compiled_parameters,
             environment=environment, secret_environment=secret_environment)
 
 
@@ -467,9 +469,11 @@ async def _launch_remote_job_owned(
     job: Job,
     *,
     command: list[str],
+    compiled_parameters: dict,
     environment: dict[str, str] | None = None,
     secret_environment: dict[str, str] | None = None,
 ) -> str:
+    # Native values come from the same compiler used for local execution.
     if (not job.execution_target_id or job.status != "queued" or job.queue_status != "preparing"
             or job.remote_state != "preparing" or job.remote_attempt_id or job.nextflow_run_id):
         raise RemoteExecutionError("Remote launch requires a fresh durable preparing claim")
@@ -483,6 +487,7 @@ async def _launch_remote_job_owned(
         await _verify_launch_runner(session, job, connection, target)
         bundle = await asyncio.to_thread(
             prepare_remote_bundle, job=job, target=target, command=command,
+            compiled_parameters=compiled_parameters,
             environment=environment, attempt_id=requested_attempt_id,
         )
         run_id = f"{REMOTE_RUN_PREFIX}{bundle.attempt_id}"
