@@ -856,6 +856,23 @@ def test_production_tailnet_proxy_requires_exact_read_only_config(monkeypatch, t
     assert report["listener_pids"] == [123, 124]
     assert report["container_listener_pids"] == [1, 27]
 
+    monkeypatch.setattr(
+        tailnet, "_container_process_reports",
+        lambda name, container_id, host_pids: [
+            _nginx_process_report(123, 27, tailnet._process_cgroup(123)),
+            _nginx_process_report(124, 1, tailnet._process_cgroup(124)),
+        ],
+    )
+    with pytest.raises(tailnet.TailnetEnvironmentError, match="socket has an owner outside"):
+        tailnet._validated_production_tailnet_proxy(tmp_path)
+    monkeypatch.setattr(
+        tailnet, "_container_process_reports",
+        lambda name, container_id, host_pids: [
+            _nginx_process_report(123, 1, tailnet._process_cgroup(123)),
+            _nginx_process_report(124, 27, tailnet._process_cgroup(124)),
+        ],
+    )
+
     inspected[0]["HostConfig"]["Memory"] = 0
     with pytest.raises(tailnet.TailnetEnvironmentError, match="resource boundaries"):
         tailnet._validated_production_tailnet_proxy(tmp_path)
@@ -977,6 +994,12 @@ def test_development_runtime_inspects_only_shared_api_container(monkeypatch, tmp
             "/app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000",
         ],
         "State": {"Pid": 123},
+        "HostConfig": {"ReadonlyRootfs": False},
+        "Mounts": [{
+            "Type": "bind", "Source": "/mnt/BioModStack",
+            "Destination": "/var/lib/biomodstack", "Mode": "rw",
+            "RW": True, "Propagation": "rprivate",
+        }],
         "Config": {
             "WorkingDir": "/app/platform/api",
             "Labels": {
@@ -1017,12 +1040,13 @@ def test_container_runtime_rejects_revision_mismatch(monkeypatch, tmp_path: Path
 
 def test_container_runtime_accepts_exact_source_owned_image_lineage(monkeypatch, tmp_path: Path) -> None:
     revision = "a" * 40
-    monkeypatch.setattr(tailnet, "_docker_runtime_report", lambda required_names: {
+    runtime_report = {
         "containers": [
-            {"name": "biomodstack-api", "container_id": "a" * 64, "image_id": tailnet.MANAGED_API_IMAGE_ID, "revision": revision, "compose_working_dir": str(tmp_path), "pid": 1, "cgroup": "0::/system.slice/docker-" + ("a" * 64) + ".scope\n", "cmdline": "/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000", "cwd": "/app/platform/api"},
-            {"name": "biomodstack-web", "container_id": "b" * 64, "image_id": tailnet.MANAGED_WEB_IMAGE_ID, "revision": revision, "compose_working_dir": str(tmp_path), "pid": 2, "cgroup": "0::/system.slice/docker-" + ("b" * 64) + ".scope\n", "cmdline": "/docker-entrypoint.sh nginx -g daemon off;", "cwd": "/"},
+            {"name": "biomodstack-api", "container_id": "a" * 64, "image_id": tailnet.MANAGED_API_IMAGE_ID, "revision": revision, "compose_working_dir": str(tmp_path), "pid": 1, "cgroup": "0::/system.slice/docker-" + ("a" * 64) + ".scope\n", "cmdline": "/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000", "cwd": "/app/platform/api", "readonly_rootfs": False, "mounts": [{"type": "bind", "source": "/mnt/BioModStack", "destination": "/var/lib/biomodstack", "mode": "rw", "rw": True, "propagation": "rprivate"}]},
+            {"name": "biomodstack-web", "container_id": "b" * 64, "image_id": tailnet.MANAGED_WEB_IMAGE_ID, "revision": revision, "compose_working_dir": str(tmp_path), "pid": 2, "cgroup": "0::/system.slice/docker-" + ("b" * 64) + ".scope\n", "cmdline": "/docker-entrypoint.sh nginx -g daemon off;", "cwd": "/", "readonly_rootfs": False, "mounts": []},
         ]
-    })
+    }
+    monkeypatch.setattr(tailnet, "_docker_runtime_report", lambda required_names: runtime_report)
     monkeypatch.setattr(tailnet, "_git_revision", lambda root: revision)
     monkeypatch.setattr(
         tailnet,
@@ -1047,6 +1071,30 @@ def test_container_runtime_accepts_exact_source_owned_image_lineage(monkeypatch,
     report = tailnet._validated_container_runtime(tmp_path, require_web=True)
     assert report["validated_revision"] == revision
     assert report["validated_compose_root"] == str(tmp_path.resolve())
+
+    runtime_report["containers"][0]["mounts"].append({
+        "type": "bind", "source": "/tmp/rogue.py",
+        "destination": "/app/platform/api/main.py", "mode": "ro",
+        "rw": False, "propagation": "rprivate",
+    })
+    with pytest.raises(tailnet.TailnetEnvironmentError, match="image/process identity"):
+        tailnet._validated_container_runtime(tmp_path, require_web=True)
+
+
+def test_host_owner_helper_uses_kernel_proc_names_not_human_ls_output(monkeypatch) -> None:
+    captured: list[str] = []
+
+    def fake_run(command, **_kwargs):
+        captured.extend(command)
+        return tailnet.subprocess.CompletedProcess(command, 0, "123 77\n", "")
+
+    monkeypatch.setattr(tailnet, "_run", fake_run)
+    assert tailnet._host_listener_inode_owners([77]) == {77: [123]}
+    assert captured[captured.index("--user") + 1] == "0:0"
+    helper = captured[captured.index("-c") + 1]
+    assert "os.scandir('/host-proc')" in helper
+    assert "os.readlink(fd_entry.path)" in helper
+    assert "ls -l" not in helper
 
 
 def test_canonical_source_override_supersedes_old_dropins_without_deleting_them(

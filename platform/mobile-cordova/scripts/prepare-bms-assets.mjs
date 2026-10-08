@@ -641,16 +641,22 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
           imageId: 'sha256:74bf34e32e2f5d0f72d3f6d117c1b4877c169e7a62c0da06ea05b75d5e0cd12c',
           cmdline: '/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000',
           cwd: '/app/platform/api',
+          mounts: [{
+            type: 'bind', source: '/mnt/BioModStack', destination: '/var/lib/biomodstack',
+            mode: 'rw', rw: true, propagation: 'rprivate',
+          }],
         }
         : {
           imageId: 'sha256:7e79b645349216a2457cd2f64af53beb26d9041c7911ed8438d6708239017c3e',
           cmdline: '/docker-entrypoint.sh nginx -g daemon off;',
           cwd: '/',
+          mounts: [],
         };
       if (
         !hasExactKeys(container, [
           'name', 'container_id', 'revision', 'compose_working_dir', 'pid', 'cgroup',
           'image_id', 'cmdline', 'cwd', 'host_pids', 'process_reports',
+          'readonly_rootfs', 'mounts',
         ])
         || !containerIdPattern.test(String(container.container_id || ''))
         || container.revision !== revision
@@ -661,6 +667,8 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         || container.image_id !== expectedIdentity.imageId
         || container.cmdline !== expectedIdentity.cmdline
         || container.cwd !== expectedIdentity.cwd
+        || container.readonly_rootfs !== false
+        || JSON.stringify(container.mounts) !== JSON.stringify(expectedIdentity.mounts)
         || !sortedUniquePositiveIntegers(container.host_pids)
         || !container.host_pids.includes(container.pid)
         || (name === 'biomodstack-api'
@@ -774,9 +782,14 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       || (containerName === 'biomodstack-api'
         && JSON.stringify(listener.container_listener_pids) !== JSON.stringify([1]))
     ) return false;
+    const reportsMatchPidMap = listener.listener_pid_map.every((mapping) => {
+      const report = listener.listener_reports.find((item) => item?.pid === mapping.host_pid);
+      return report?.container_pid === mapping.container_pid;
+    });
     const ownerPids = [...new Set(Object.values(listener.listener_inode_owners).flat())]
       .sort((left, right) => left - right);
-    return JSON.stringify(listener.host_listener_pids) === JSON.stringify(ownerPids)
+    return reportsMatchPidMap
+      && JSON.stringify(listener.host_listener_pids) === JSON.stringify(ownerPids)
       && JSON.stringify(ownerPids) === JSON.stringify(listener.container_host_pids)
       && listener.listener_reports.every((report) => (
         validContainerProcessReport(report, containerName, container.container_id)
@@ -845,6 +858,10 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       && JSON.stringify(mappedHostPids) === JSON.stringify(proxy.listener_pids)
       && proxy.listener_pid_map.filter((item) => item.container_pid === 1).length === 1
       && proxy.listener_pid_map.find((item) => item.container_pid === 1)?.host_pid === proxy.pid
+      && proxy.listener_pid_map.every((mapping) => {
+        const report = proxy.listener_reports.find((item) => item?.pid === mapping.host_pid);
+        return report?.container_pid === mapping.container_pid;
+      })
       && JSON.stringify(reportPids) === JSON.stringify(ownerPids)
       && JSON.stringify(proxy.listener_pids) === JSON.stringify(proxy.container_host_pids)
       && proxy.listener_reports.every((report) => (
@@ -920,32 +937,100 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       ));
   };
   const validHealth = (health) => {
-    const validFrontend = (report) => hasExactKeys(report, ['status']) && report.status === 200;
     const validBuild = (build) => (
       hasExactKeys(build, ['revision', 'build_id', 'build_time'])
       && revisionPattern.test(String(build.revision || ''))
       && nonEmptyBounded(build.build_id, 256)
       && validBuildTime(build.build_time)
     );
-    const validApi = (report) => (
-      hasExactKeys(report, ['status', 'payload'])
-      && report.status === 200
-      && hasExactKeys(report.payload, ['build', 'status', 'liveness', 'readiness'])
-      && report.payload.status === 'healthy'
-      && validBuild(report.payload.build)
-      && hasExactKeys(report.payload.liveness, ['alive', 'status'])
-      && report.payload.liveness.alive === true
-      && report.payload.liveness.status === 'alive'
-      && hasExactKeys(report.payload.readiness, ['ready'])
-      && report.payload.readiness.ready === true
+    const validReadinessCheck = (check, launch = false) => (
+      hasExactKeys(check, launch
+        ? ['allowed', 'ready', 'required', 'status']
+        : ['ready', 'required', 'status'])
+      && typeof check.ready === 'boolean'
+      && typeof check.required === 'boolean'
+      && (!launch || typeof check.allowed === 'boolean')
+      && nonEmptyBounded(check.status, 128)
     );
-    return hasExactKeys(health, [
-      'local_frontend', 'tailnet_frontend', 'local_api', 'tailnet_api',
-    ])
-      && validFrontend(health.local_frontend)
-      && validFrontend(health.tailnet_frontend)
-      && validApi(health.local_api)
-      && validApi(health.tailnet_api);
+    const validApiPayload = (payload) => (
+      hasExactKeys(payload, ['build', 'liveness', 'molbio', 'readiness', 'service', 'status'])
+      && payload.status === 'healthy'
+      && nonEmptyBounded(payload.service, 256)
+      && validBuild(payload.build)
+      && hasExactKeys(payload.liveness, ['alive', 'status'])
+      && payload.liveness.alive === true
+      && payload.liveness.status === 'alive'
+      && hasExactKeys(payload.molbio, [
+        'database_kind', 'database_schema_current', 'database_schema_issue_count',
+        'foreign_key_violations', 'immutable_trigger_count', 'immutable_triggers_current',
+        'latest_migration', 'migration_count', 'migrations_current', 'owner', 'quick_check',
+        'sequence_parent_cycle_count', 'sequence_parent_foreign_key_current', 'status',
+      ])
+      && ['database_schema_current', 'immutable_triggers_current', 'migrations_current',
+        'sequence_parent_foreign_key_current'].every((key) => typeof payload.molbio[key] === 'boolean')
+      && ['database_schema_issue_count', 'foreign_key_violations', 'immutable_trigger_count',
+        'migration_count', 'sequence_parent_cycle_count'].every((key) => Number.isInteger(payload.molbio[key]))
+      && ['database_kind', 'latest_migration', 'owner', 'quick_check', 'status']
+        .every((key) => nonEmptyBounded(payload.molbio[key], 512))
+      && hasExactKeys(payload.readiness, ['checks', 'mode', 'ready'])
+      && payload.readiness.ready === true
+      && nonEmptyBounded(payload.readiness.mode, 128)
+      && hasExactKeys(payload.readiness.checks, [
+        'core_database', 'frontend', 'molbio_database', 'process_liveness',
+        'workflow_adapter', 'workflow_launch',
+      ])
+      && ['core_database', 'frontend', 'molbio_database', 'process_liveness', 'workflow_adapter']
+        .every((key) => validReadinessCheck(payload.readiness.checks[key]))
+      && validReadinessCheck(payload.readiness.checks.workflow_launch, true)
+    );
+    const validProbe = (report, requestedUrl, finalUrl, expectApi) => (
+      hasExactKeys(report, ['url', 'final_url', 'status', 'payload'])
+      && report.url === requestedUrl
+      && report.final_url === finalUrl
+      && report.status === 200
+      && (expectApi ? validApiPayload(report.payload) : report.payload === null)
+    );
+    const localFrontendUrl = environment === 'development'
+      ? `${expected.frontendTarget}/`
+      : expected.frontendTarget;
+    const publicFrontendFinalUrl = environment === 'production'
+      ? `${trustedOrigin}/bms/`
+      : `${trustedOrigin}/`;
+    return hasExactKeys(health, ['local_frontend', 'local_api', 'tailnet_frontend', 'tailnet_api'])
+      && validProbe(health.local_frontend, localFrontendUrl, localFrontendUrl, false)
+      && validProbe(health.tailnet_frontend, `${trustedOrigin}/`, publicFrontendFinalUrl, false)
+      && validProbe(
+        health.local_api, 'http://127.0.0.1:8000/api/health',
+        'http://127.0.0.1:8000/api/health', true,
+      )
+      && validProbe(
+        health.tailnet_api, `${trustedOrigin}/api/health`,
+        `${trustedOrigin}/api/health`, true,
+      );
+  };
+  const validLoopbackProxy = (value) => {
+    if (!nonEmptyBounded(value, 2048)) return false;
+    try {
+      const proxy = new URL(value);
+      const port = Number(proxy.port);
+      return proxy.protocol === 'http:'
+        && proxy.hostname === '127.0.0.1'
+        && proxy.username === '' && proxy.password === ''
+        && Number.isInteger(port) && port > 0 && port <= 65535
+        && proxy.search === '' && proxy.hash === '';
+    } catch {
+      return false;
+    }
+  };
+  const validServeHandlers = (handlers) => {
+    if (!handlers || typeof handlers !== 'object' || Array.isArray(handlers)) return false;
+    const entries = Object.entries(handlers);
+    if (!entries.some(([path]) => path === '/')
+      || !entries.some(([path]) => path === '/api/tailnet-environment')) return false;
+    return entries.every(([path, handler]) => {
+      if (!/^\/(?:[^\s?#]*)$/.test(path) || path.includes('..')) return false;
+      return hasExactKeys(handler, ['Proxy']) && validLoopbackProxy(handler.Proxy);
+    });
   };
   if (!expected || !payload || typeof payload !== 'object') reject();
   const baseKeys = [
@@ -954,6 +1039,7 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     'serve_root_proxy', 'tailnet_origin', 'serve_handlers', 'frontend_listeners',
     'api_listeners', 'workflow_adapter_listener', 'health',
     'managed_api_runtime', 'managed_api_listener',
+    'previous_serve_root_proxy',
   ];
   const environmentKeys = environment === 'development'
     ? ['development_frontend_listener']
@@ -972,11 +1058,12 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
     || payload.tailnet_origin !== trustedOrigin
     || !revisionPattern.test(String(payload.project_revision || ''))
     || !revisionPattern.test(String(payload.selector_revision || ''))
-    || !hasExactKeys(payload.serve_handlers, ['/', '/api/tailnet-environment'])
+    || !validServeHandlers(payload.serve_handlers)
     || !hasExactKeys(payload.serve_handlers?.['/'], ['Proxy'])
     || !hasExactKeys(payload.serve_handlers?.['/api/tailnet-environment'], ['Proxy'])
     || payload.serve_handlers?.['/']?.Proxy !== expected.serveRootProxy
     || payload.serve_handlers?.['/api/tailnet-environment']?.Proxy !== 'http://127.0.0.1:8001'
+    || !validLoopbackProxy(payload.previous_serve_root_proxy)
   ) reject();
 
   const health = payload.health;
