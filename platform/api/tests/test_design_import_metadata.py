@@ -167,6 +167,31 @@ def test_design_response_fails_closed_for_unknown_model_contract() -> None:
     assert response.result_set_label is None
     assert response.analysis_contract_id is None
     assert response.supported_analyzers == []
+    assert response.viewer_capabilities == []
+    assert response.result_contract_source == "unsupported"
+
+
+def test_design_response_exposes_registry_capabilities_for_known_streams() -> None:
+    design = Design(
+        id="ppiflow-contract-design-1",
+        job_id="ppiflow-contract-job-1",
+        name="candidate_ppiflow_sample0",
+        stage_family="ppiflow",
+        stage_mode="maturation",
+        ppiflow_filter_passed=True,
+        is_favorite=False,
+        created_at=datetime(2026, 4, 14, 18, 0, 0),
+    )
+
+    response = _design_to_response(design)
+
+    assert response.result_set == "ppiflow_passed"
+    assert response.analysis_contract_id == "ppiflow_maturation_v1"
+    assert response.supported_analyzers == ["ppiflow_maturation_v1"]
+    assert "ppiflow_maturation_metrics" in response.viewer_capabilities
+    assert "rosetta_interface_score" in response.required_fields
+    assert response.result_contract_schema_version == 1
+    assert response.result_contract_source == "registry"
 
 
 def test_ppiflow_children_inherit_source_binder_length_from_embedded_source_uuid() -> None:

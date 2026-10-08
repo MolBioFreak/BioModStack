@@ -271,6 +271,11 @@ class DesignResponse(BaseModel):
     result_set_label: Optional[str] = None
     analysis_contract_id: Optional[str] = None
     supported_analyzers: List[str] = Field(default_factory=list)
+    viewer_capabilities: List[str] = Field(default_factory=list)
+    required_fields: List[str] = Field(default_factory=list)
+    required_artifacts: List[str] = Field(default_factory=list)
+    result_contract_schema_version: Optional[int] = None
+    result_contract_source: str = "unsupported"
     selected_loop_scope: Optional[Dict[str, Any]] = None
     provenance: Optional[Dict[str, Any]] = None
     is_imported: bool = False
@@ -1863,6 +1868,11 @@ def _design_to_response(
     )
     data["analysis_contract_id"] = contract.analysis_contract_id
     data["supported_analyzers"] = contract.supported_analyzers
+    data["viewer_capabilities"] = contract.viewer_capabilities
+    data["required_fields"] = contract.required_fields
+    data["required_artifacts"] = contract.required_artifacts
+    data["result_contract_schema_version"] = contract.schema_version
+    data["result_contract_source"] = contract.contract_source
     if not isinstance(data.get("metric_provenance"), dict):
         data["metric_provenance"] = build_design_metric_provenance({**data, "pdb_path": data.get("pdb_path")})
     if not isinstance(data.get("metric_completeness"), dict):
