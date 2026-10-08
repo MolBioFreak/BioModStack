@@ -14,10 +14,11 @@ export function Layout({ children }: LayoutProps) {
     const location = useLocation();
 
     const isActive = (path: string) => location.pathname === path;
+    const showSystemMenus = location.pathname !== '/ngs';
 
     return (
         <div
-            className="h-screen flex flex-col transition-colors duration-300 overflow-hidden"
+            className="h-screen flex flex-col transition-colors duration-300 overflow-x-hidden"
             style={{
                 background: `linear-gradient(to bottom right, var(--bg-gradient-from), var(--bg-gradient-via), var(--bg-gradient-to))`
             }}
@@ -30,10 +31,10 @@ export function Layout({ children }: LayoutProps) {
                     borderColor: 'var(--border-primary)'
                 }}
             >
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <div className="flex items-center justify-between h-16">
+                <div className="max-w-7xl mx-auto px-2 sm:px-3 lg:px-4">
+                    <div className="flex items-center justify-between h-16 min-w-0 gap-3">
                         {/* Logo / Brand */}
-                        <Link to="/" className="flex items-center gap-3">
+                        <Link to="/" className="flex items-center gap-3 shrink-0">
                             <div
                                 className="w-10 h-10 rounded-xl flex items-center justify-center"
                                 style={{
@@ -43,66 +44,91 @@ export function Layout({ children }: LayoutProps) {
                                 <span className="text-white font-bold text-xl">B</span>
                             </div>
                             <span
-                                className="text-xl font-bold bg-clip-text text-transparent"
+                                className="text-lg font-bold bg-clip-text text-transparent whitespace-nowrap"
                                 style={{
                                     backgroundImage: `linear-gradient(to right, var(--accent-gradient-from), var(--accent-gradient-to))`
                                 }}
                             >
-                                BioModStack
+                                <span className="inline 2xl:hidden">BMS</span>
+                                <span className="hidden 2xl:inline">BioModStack</span>
                             </span>
                         </Link>
 
                         {/* Navigation Links */}
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1 ml-2">
                             <Link
                                 to="/"
-                                className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all shrink-0 whitespace-nowrap"
                                 style={{
                                     backgroundColor: isActive('/') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
                                     color: isActive('/') ? 'var(--accent-primary)' : 'var(--text-secondary)'
                                 }}
                             >
-                                Dashboard
+                                <span className="inline 2xl:hidden">Home</span>
+                                <span className="hidden 2xl:inline">Dashboard</span>
                             </Link>
                             <Link
                                 to="/submit"
-                                className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all shrink-0 whitespace-nowrap"
                                 style={{
                                     backgroundColor: isActive('/submit') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
                                     color: isActive('/submit') ? 'var(--accent-primary)' : 'var(--text-secondary)'
                                 }}
                             >
-                                Job Launcher
+                                <span className="inline 2xl:hidden">Launcher</span>
+                                <span className="hidden 2xl:inline">Job Launcher</span>
                             </Link>
                             <Link
                                 to="/designs"
-                                className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all shrink-0 whitespace-nowrap"
                                 style={{
                                     backgroundColor: isActive('/designs') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
                                     color: isActive('/designs') ? 'var(--accent-primary)' : 'var(--text-secondary)'
                                 }}
                             >
-                                Data Viewer
+                                <span className="inline 2xl:hidden">Viewer</span>
+                                <span className="hidden 2xl:inline">Data Viewer</span>
                             </Link>
                             <Link
                                 to="/designer"
-                                className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
                                 style={{
                                     backgroundColor: isActive('/designer') ? 'color-mix(in srgb, var(--success) 20%, transparent)' : 'transparent',
                                     color: isActive('/designer') ? 'var(--success)' : 'var(--text-secondary)'
                                 }}
+                                title="Molecular Biology Toolkit"
                             >
-                                Molecular Biology Toolkit
+                                <span className="inline 2xl:hidden">Mol Bio Toolkit</span>
+                                <span className="hidden 2xl:inline">Molecular Biology Toolkit</span>
+                            </Link>
+                            <Link
+                                to="/ngs"
+                                className="px-3 py-2 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap shrink-0"
+                                style={{
+                                    backgroundColor: isActive('/ngs') ? 'color-mix(in srgb, var(--accent-secondary) 20%, transparent)' : 'transparent',
+                                    color: isActive('/ngs') ? 'var(--accent-secondary)' : 'var(--text-secondary)'
+                                }}
+                                title="NGS Data Visualization Toolkit"
+                            >
+                                <span className="inline-flex items-center gap-1.5">
+                                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                                        <rect x="4" y="3" width="16" height="18" rx="2" />
+                                        <path d="M8 7h8M8 11h8" strokeDasharray="2 2" />
+                                        <circle cx="12" cy="16" r="2" />
+                                    </svg>
+                                    <span className="inline 2xl:hidden">NGS Toolkit</span>
+                                    <span className="hidden 2xl:inline">NGS Data Visualization Toolkit</span>
+                                </span>
                             </Link>
 
                             {/* Theme Selector */}
                             <ThemeSelector />
 
                             {/* GPU Power Control */}
-                            <PowerControlMenu />
+                            {showSystemMenus && <PowerControlMenu />}
 
                             {/* Persistent MSA Server Settings */}
-                            <MSAServerSettingsMenu />
+                            {showSystemMenus && <MSAServerSettingsMenu />}
 
                             {/* Debug Menu */}
                             <DebugMenu />
@@ -195,7 +221,7 @@ function DebugMenu() {
                                 disabled={loading !== null}
                                 className="w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-red-500/10 rounded-lg transition-all flex items-center justify-between disabled:opacity-50"
                             >
-                                <span>⚠️ Full Purge (clear all)</span>
+                                <span>Full Purge (clear all)</span>
                                 {loading === 'full' && <span className="text-xs text-red-400">Running...</span>}
                             </button>
                         </div>

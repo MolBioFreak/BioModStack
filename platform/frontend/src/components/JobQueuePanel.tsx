@@ -29,6 +29,7 @@ const GPU_NAMES: Record<number, string> = {
 function getModelBadge(modelId: string): string {
     const key = modelId.toLowerCase();
     if (key === 'msa_batch') return 'MSA';
+    if (key.includes('nanopore')) return 'NGS';
     if (key.includes('boltzgen')) return 'BG';
     if (key.includes('boltz')) return 'B2';
     if (key.includes('rf3')) return 'RF';
@@ -140,6 +141,20 @@ function StageBadge({ stage, progress }: { stage: string | null; progress?: stri
 
     // Map stage names to display-friendly versions
     const stageDisplayNames: Record<string, string> = {
+        'doradobasecall': 'Dorado Basecall',
+        'doradoalign': 'Dorado Align',
+        'preparebamforanalysis': 'BAM Prepare',
+        'modkitpileup': 'modkit Pileup',
+        'modkitsummary': 'modkit Summary',
+        'fastqmultimerqc': 'Multimer QC',
+        'dorado_basecall': 'Dorado Basecall',
+        'dorado_align': 'Dorado Align',
+        'bam_prepare': 'BAM Prepare',
+        'modkit': 'modkit',
+        'multimer_qc': 'Multimer QC',
+        'runclonevalidation': 'wf-clone-validation',
+        'wf_clone_validation': 'wf-clone-validation',
+        'wf-clone-validation': 'wf-clone-validation',
         'rfantibody': 'RFAntibody',
         'rfdiffusion': 'RFdiffusion',
         'rfdpoly': 'RFDpoly',
