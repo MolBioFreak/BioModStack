@@ -3,7 +3,7 @@
  * Structure Prediction Workflow
  * 
  * Standalone entry point for sequence-to-structure prediction using Boltz-2,
- * RF3, Protenix, or ESMFold2.
+ * Protenix, or ESMFold2. NVIDIA Fold-CP uses its pinned OEM entry point.
  * 
  * Usage:
  *   nextflow run workflows/structure_prediction.nf -c nextflow.config \
