@@ -1830,7 +1830,9 @@ async def oem_switch_audit(request: Request):
 
 @router.post("/motion/oem/startup_step")
 async def motion_oem_startup_step(request: Request):
-    return await proxy_request("POST", "/motion/oem/startup_step", await request.json(), timeout=90.0)
+    # Keep proxy timeout above the robot-side per-step budget so BMS does not
+    # convert a late-but-complete OEM step response into a synthetic 504.
+    return await proxy_request("POST", "/motion/oem/startup_step", await request.json(), timeout=120.0)
 
 
 @router.post("/motion/oem/home_xy")

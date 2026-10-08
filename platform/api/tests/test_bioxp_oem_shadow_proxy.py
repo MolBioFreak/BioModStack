@@ -174,3 +174,28 @@ async def test_oem_movement_readiness_comparison_proxy_is_readonly(monkeypatch):
     assert payload["bms_role"] == "thin_proxy_only"
     assert payload["usb_motion"] == "no"
     assert calls == [{"method": "GET", "path": "/motion/oem/movement_readiness/comparison", "json_data": None, "params": None, "timeout": 12.0}]
+
+
+@pytest.mark.asyncio
+async def test_oem_startup_step_proxy_has_timeout_headroom(monkeypatch):
+    calls = []
+
+    class FakeRequest:
+        async def json(self):
+            return {"step": "door-home", "timeout_s": 90.0, "operator_ack": "HOME", "reason": "unit test"}
+
+    async def fake_proxy(method, path, json_data=None, params=None, timeout=65.0):
+        calls.append({"method": method, "path": path, "json_data": json_data, "params": params, "timeout": timeout})
+        return {"ok": True, "step": "door-home"}
+
+    monkeypatch.setattr(bioxp, "proxy_request", fake_proxy)
+    payload = await bioxp.motion_oem_startup_step(FakeRequest())
+
+    assert payload["ok"] is True
+    assert calls == [{
+        "method": "POST",
+        "path": "/motion/oem/startup_step",
+        "json_data": {"step": "door-home", "timeout_s": 90.0, "operator_ack": "HOME", "reason": "unit test"},
+        "params": None,
+        "timeout": 120.0,
+    }]
