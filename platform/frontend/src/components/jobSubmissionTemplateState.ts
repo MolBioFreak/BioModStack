@@ -3,6 +3,7 @@ export const DEDICATED_LAUNCHER_TEMPLATE_IDS = [
     'antibody_denovo',
     'structure_prediction',
     'boltz_cp_experimental',
+    'esmfold2_experimental',
     'boltzgen_design',
     'bindcraft',
     'oligo_design',
@@ -18,6 +19,15 @@ const DEDICATED_TEMPLATE_INITIAL_VALUES: Partial<Record<DedicatedLauncherTemplat
         template_model_id: 'boltz_cp_experimental',
         template_mode_id: 'design',
         structure_launch_variant: 'boltz_cp_experimental',
+    },
+    esmfold2_experimental: {
+        name: 'esmfold2_prediction',
+        job_name: 'esmfold2_prediction',
+        sequence_name: 'esmfold2_candidate',
+        template_model_id: 'esmfold2_experimental',
+        template_mode_id: 'predict',
+        structure_launch_variant: 'esmfold2_experimental',
+        model_variant: 'fast',
     },
 };
 

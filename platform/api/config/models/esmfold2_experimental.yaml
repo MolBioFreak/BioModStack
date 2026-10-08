@@ -1,0 +1,241 @@
+id: esmfold2_experimental
+name: ESMFold2 Experimental
+version: "0.2.0"
+category: structure_prediction
+description: >
+  Standalone experimental ESMFold2 path for local all-atom folding of proteins,
+  protein complexes, optional DNA/RNA chains, ligands, and PDB-derived sequence
+  sources. The UI reuses the production Structure Prediction launcher while the
+  backend maps canonical structure inputs into the ESMFold2 runtime.
+container: esmfold2.sif
+
+ui_icon: sparkles
+ui_color: "#22D3EE"
+experimental: true
+
+inputs:
+  - sequence
+  - pdb
+  - a3m
+  - dna
+  - rna
+  - smiles
+outputs:
+  - cif
+  - json
+
+modes:
+  - id: predict
+    name: Standalone ESMFold2 Fold
+    description: Run the Biohub ESMFold2 local model path with protein, complex, nucleic-acid, ligand, PDB-sequence, and MSA inputs.
+    params:
+      - sequence
+      - sequence_name
+      - chain_id
+      - pdb_sequence_path
+      - pdb_chain_ids
+      - msa_path
+      - msa_format
+      - msa_max_sequences
+      - msa_remove_insertions
+      - dna_sequence
+      - dna_chain_id
+      - rna_sequence
+      - rna_chain_id
+      - ligand_smiles
+      - ligand_ccd
+      - ligand_chain_id
+      - complex_components_json
+      - model_variant
+      - model_id_or_path
+      - local_files_only
+      - quality_preset
+      - num_loops
+      - num_sampling_steps
+      - num_diffusion_samples
+      - seed
+      - device
+
+params:
+  - name: sequence
+    type: text
+    description: Optional primary protein chain. Leave blank only when a PDB sequence source or Components JSON supplies at least one protein.
+    required: false
+    pattern: "^[A-Za-z]*$"
+    preset_type: sequence
+
+  - name: sequence_name
+    type: string
+    description: Stable output stem for the folded structure and metadata.
+    required: false
+    default: esmfold2_candidate
+
+  - name: chain_id
+    type: string
+    description: Chain ID for the primary protein; comma-separated IDs represent a homomer.
+    required: false
+    default: A
+
+  - name: pdb_sequence_path
+    type: file
+    description: Optional local PDB/CIF sequence source. BMS extracts polymer sequences; coordinates are not used as structural templates.
+    required: false
+    preset_type: pdb
+    file_type: pdb
+
+  - name: pdb_chain_ids
+    type: string
+    description: Optional comma-separated PDB chains to import from the selected sequence source.
+    required: false
+    default: ""
+
+  - name: msa_path
+    type: file
+    description: Optional A3M/Stockholm MSA for the primary protein sequence.
+    required: false
+    file_type: a3m
+
+  - name: msa_format
+    type: string
+    description: MSA file format.
+    required: false
+    default: auto
+    enum:
+      - auto
+      - a3m
+      - stockholm
+
+  - name: msa_max_sequences
+    type: integer
+    description: Optional cap on MSA depth loaded into ESMFold2.
+    required: false
+    minimum: 1
+    maximum: 10000
+
+  - name: msa_remove_insertions
+    type: boolean
+    description: Remove lowercase A3M insertions before folding.
+    required: false
+    default: true
+
+  - name: dna_sequence
+    type: text
+    description: Optional DNA chain sequence to include in the complex.
+    required: false
+    preset_type: dna
+
+  - name: dna_chain_id
+    type: string
+    description: Chain ID for the optional DNA chain.
+    required: false
+    default: C
+
+  - name: rna_sequence
+    type: text
+    description: Optional RNA chain sequence to include in the complex.
+    required: false
+    preset_type: rna
+
+  - name: rna_chain_id
+    type: string
+    description: Chain ID for the optional RNA chain.
+    required: false
+    default: D
+
+  - name: ligand_smiles
+    type: string
+    description: Optional ligand SMILES for all-atom complex folding.
+    required: false
+    preset_type: ligand
+
+  - name: ligand_ccd
+    type: string
+    description: Optional ligand CCD code(s), comma-separated. Use instead of or with SMILES when appropriate.
+    required: false
+
+  - name: ligand_chain_id
+    type: string
+    description: Chain/component ID for the optional ligand.
+    required: false
+    default: L
+
+  - name: complex_components_json
+    type: textarea
+    description: >
+      Advanced JSON array for multiple components: protein/dna/rna/ligand objects
+      with id, sequence, smiles/ccd, and optional per-protein msa_path.
+    required: false
+
+  - name: model_variant
+    type: string
+    description: ESMFold2 checkpoint family. Fast is the default first target; full is local-asset dependent.
+    required: false
+    default: fast
+    enum:
+      - fast
+      - full
+
+  - name: model_id_or_path
+    type: string
+    description: Optional Hugging Face repo ID or local model directory override. When blank, BMS chooses biohub/ESMFold2-Fast for fast or biohub/ESMFold2 for full.
+    required: false
+    default: ""
+
+  - name: local_files_only
+    type: boolean
+    description: Keep inference offline and fail closed when Biohub ESMFold2/ESMC-6B assets are missing locally.
+    required: false
+    default: true
+
+  - name: quality_preset
+    type: string
+    description: BMS runtime preset for ESMFold2 loop/step/sample controls.
+    required: false
+    default: standard
+    enum:
+      - smoke
+      - standard
+      - thorough
+      - custom
+
+  - name: num_loops
+    type: integer
+    description: ESMFold2 inference loops passed to the upstream model.
+    required: false
+    default: 3
+    minimum: 1
+    maximum: 12
+
+  - name: num_sampling_steps
+    type: integer
+    description: Diffusion sampling steps.
+    required: false
+    default: 50
+    minimum: 1
+    maximum: 1000
+
+  - name: num_diffusion_samples
+    type: integer
+    description: Number of diffusion samples to draw for the input system.
+    required: false
+    default: 1
+    minimum: 1
+    maximum: 8
+
+  - name: seed
+    type: integer
+    description: Optional random seed for diffusion sampling.
+    required: false
+    minimum: 0
+    maximum: 2147483647
+
+  - name: device
+    type: string
+    description: Torch device override. Leave auto unless debugging GPU placement.
+    required: false
+    default: auto
+    enum:
+      - auto
+      - cuda
+      - cpu
+    hidden: true

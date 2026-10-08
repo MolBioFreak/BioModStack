@@ -359,7 +359,7 @@ export function EmpowerImport() {
             <div>
                 <h3 className="text-lg font-semibold text-text-primary">Empower 3 Chromatogram Import + SST Review</h3>
                 <p className="text-text-secondary text-sm">
-                    Upload Empower AIA .cdf, ARW chromatogram text, ZIP batches, or CSV/ASCII exports; review real injection rows, chromatograms, peaks, SST summaries, and plasmid/SST tracking logs.
+                    AIA/ARW/ZIP/CSV imports; injections, peaks, SST, plasmid logs.
                 </p>
             </div>
 
@@ -375,7 +375,7 @@ export function EmpowerImport() {
                             className="block w-full text-xs text-text-secondary"
                         />
                         <p className="text-xs text-text-muted">
-                            AIA .cdf provides raw chromatograms and native peak tables; paired .arw metadata is merged when present. For proprietary DB/RAW containers, export AIA .cdf/.arw or CSV/ASCII from Empower.
+                            Proprietary DB/RAW needs Empower export to AIA/ARW or CSV/ASCII.
                         </p>
                         {files.length > 0 && (
                             <div className="text-xs text-text-muted">{files.length} file(s) selected</div>

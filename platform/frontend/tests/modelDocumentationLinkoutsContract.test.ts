@@ -42,6 +42,7 @@ const expectedUniqueTopics: ModelDocumentationTopic[] = [
   'confornets',
   'diffdock',
   'disco',
+  'esmfold2',
   'fampnn',
   'fold_cp',
   'laproteina',
@@ -104,6 +105,9 @@ test('model documentation linkout registry exposes compact shared DOI/GitHub/pre
     'https://arxiv.org/abs/2507.09466',
     'https://github.com/DISCO-design/DISCO',
     'https://arxiv.org/abs/2604.05181',
+    'https://github.com/Biohub/esm',
+    'https://huggingface.co/biohub/ESMFold2-Fast',
+    'https://biohub.ai/papers/esm_protein.pdf',
     'https://github.com/chaidiscovery/chai-lab',
     'https://doi.org/10.1101/2024.10.10.615955',
     'https://doi.org/10.1101/2025.09.30.679633',
@@ -142,6 +146,7 @@ test('workflow model inventory is source-grounded and exposes the total unique m
   assert.deepEqual(workflowsById.get('protein_local_redesign')?.modelTopics, ['rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2']);
   assert.deepEqual(workflowsById.get('protein_cad_experimental')?.modelTopics, ['laproteina', 'disco']);
   assert.deepEqual(workflowsById.get('protein_hunter_experimental')?.modelTopics, ['protein_hunter', 'boltz2', 'chai1']);
+  assert.deepEqual(workflowsById.get('esmfold2_experimental')?.modelTopics, ['esmfold2']);
 
   for (const workflow of WORKFLOW_MODEL_INVENTORY) {
     assert.ok(workflow.sourceFiles.length > 0, `${workflow.workflowId} should name source files`);
@@ -166,20 +171,29 @@ test('JobSubmission keeps workflow cards concise, hides Advanced Models, and rou
   requireSnippet(source, 'const getTemplateDocumentationTopics = (template: UntypedApiValue | null | undefined): ModelDocumentationTopic[] => {');
   requireSnippet(source, "return ['fold_cp', 'boltz2'];");
   requireSnippet(source, "return ['confornets'];");
+  requireSnippet(source, "return ['esmfold2'];");
   requireSnippet(source, "return ['rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2'];");
   requireSnippet(source, "return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2'];");
   requireSnippet(source, "return ['boltz2', 'rf3', 'protenix'];");
 
   requireSnippet(source, "return 'Experimental Fold-CP path for large Boltz-2 folds.';");
   requireSnippet(source, "return 'Experimental single-chain conformer landscape workflow.';");
+  requireSnippet(source, "return 'Standalone ESMFold2 protein/complex fold.';");
+  requireSnippet(source, "'esmfold2_experimental'].includes(model.id)");
+  requireSnippet(source, "if (template.id === 'esmfold2_experimental') return 'EF';");
   requireSnippet(source, "return 'Backbone generation and local redesign.';");
   requireSnippet(source, "return 'Structure and complex prediction validator.';");
   requireSnippet(source, 'Docs available');
   requireSnippet(source, 'topics={getTemplateDocumentationTopics(templateDetail)}');
-  requireSnippet(source, 'summary="Method detail lives in maintained docs, not inline launcher prose."');
+  requireSnippet(source, 'summary="Docs carry method detail."');
   requireSnippet(source, 'topics={getModelDocumentationTopics(selectedModel)}');
-  requireSnippet(source, 'summary="Method background is linked out; this panel stays focused on launch controls."');
+  requireSnippet(source, 'summary="Docs linked; launch controls here."');
 
+  rejectSnippet(source, 'Choose a preset workflow for your experiment goal:');
+  rejectSnippet(source, 'Choose an active alpha workflow:');
+  rejectSnippet(source, 'This template runs the following stages:');
+  rejectSnippet(source, 'Method detail lives in maintained docs, not inline launcher prose.');
+  rejectSnippet(source, 'Method background is linked out; this panel stays focused on launch controls.');
   rejectSnippet(source, 'Experimental workflows are isolated here on purpose');
   rejectSnippet(source, 'Frontier mode:');
   rejectSnippet(source, 'real integrations, but they are still alpha-grade systems intended for iterative frontier work');

@@ -16,7 +16,7 @@ test('BMS DB service top-bar menu and control panel expose runtime contract', ()
   assert.match(controlSource, /\/api\/system\/db-service/);
   assert.match(controlSource, /\/api\/system\/db-service\/\$\{action\}/);
   assert.match(controlSource, /BMS DB/);
-  assert.match(controlSource, /Optional DB runtime: start\/restart, health, logs\./);
+  assert.match(controlSource, /DB state, actions, logs\./);
   assert.match(controlSource, /Start DB/);
   assert.match(controlSource, /Restart DB/);
   assert.match(controlSource, /db_service_offline — press Start DB/);
@@ -36,4 +36,5 @@ test('BMS DB service top-bar menu and control panel expose runtime contract', ()
   assert.doesNotMatch(controlSource, /Start BMS DB service/);
   assert.doesNotMatch(controlSource, /Restart BMS DB service/);
   assert.doesNotMatch(controlSource, /db_service_offline — use BMS DB service → Start/);
+  assert.doesNotMatch(controlSource, /Optional DB runtime: start\/restart, health, logs\./);
 });

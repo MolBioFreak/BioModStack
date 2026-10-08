@@ -20,9 +20,9 @@ function sourceBetween(source: string, startNeedle: string, endNeedle: string): 
 test('BioXP shell and page labels point to Handler Controls, not legacy harness/interface wording', () => {
     assert.match(layoutSource, /title="BioXP Handler Controls"/);
     assert.match(layoutSource, />\s*BioXP Handler\s*</);
-    assert.match(appSource, /BioXP Handler Controls - OEM\/liquid-handler-first robot-local runtime proxy/);
+    assert.match(appSource, /BioXP Handler Controls/);
     assert.match(cockpitSource, />BioXP Handler Controls</);
-    assert.match(cockpitSource, /OEM\/liquid-handler-first BMS proxy for the robot-local BioXP runtime/);
+    assert.match(cockpitSource, /Runtime link, motion, jobs, recipes, camera/);
     assert.match(cockpitSource, /label: 'Runtime Linkage'/);
     assert.doesNotMatch(layoutSource, /BioXP Cockpit/);
     assert.doesNotMatch(layoutSource, /BioXP Control Surface/);
@@ -35,7 +35,7 @@ test('default Handler Controls tab contains readback and live motion/grabber sur
 
     assert.match(controlsTab, /\{liveXyzMotionPanel\}/);
     assert.match(liveMotionPanel, /Live X\/Y\/Z \+ Grabber Motion/);
-    assert.match(cockpitSource, /Direct OEM homing modes for supervised testing/);
+    assert.match(cockpitSource, /Supervised OEM homing modes/);
     assert.match(cockpitSource, /OEM HomeXY/);
     assert.match(cockpitSource, />\s*Rehome Diagnostic \/ No Homing\s*</);
     assert.match(cockpitSource, /OEM Rehome ACK/);
@@ -122,8 +122,8 @@ test('PrepareToRunJob UI uses the named no-motion readiness route, not the raw r
 
     assert.match(clientSource, /export const usePrepareToRunJobReadiness/);
     assert.match(oemPanel, /PrepareToRunJob Readiness \/ No Motion/);
-    assert.match(oemPanel, /named dry-run route/);
-    assert.match(oemPanel, /motion_commanded=false/);
+    assert.match(oemPanel, /Startup\/readiness checks report no-motion flags/);
+    assert.match(oemPanel, /No-motion readiness route/);
     assert.match(oemPanel, /recordOemAction\('prepare_to_run_job_readiness_no_motion'/);
     assert.doesNotMatch(oemPanel, /useOemRuntimeCommand\('PrepareToRunJob'\)/);
     assert.doesNotMatch(oemPanel, /recordOemAction\('PrepareToRunJob'/);
@@ -152,7 +152,7 @@ test('Zero and Switch Home controls are separate while live guardrails block ris
     assert.match(axisControls, /Switch Home/);
     assert.match(axisControls, /disabled=\{!enabled \|\| zeroAxis\.isPending \|\| zeroToControllerBlocked\}/);
     assert.match(axisControls, /disabled=\{!enabled \|\| homeAxis\.isPending \|\| switchHomeBlocked\}/);
-    assert.match(axisControls, /Switch Home requires capture_bundle=true/);
+    assert.match(axisControls, /Switch Home disabled here; use supervised OEM recipe/);
     assert.match(cameraAxisControls, /const negativeMoveBlocked = directionGuard\.negativeBlocked/);
     assert.match(cameraAxisControls, /const positiveMoveBlocked = directionGuard\.positiveBlocked/);
     assert.match(cameraAxisControls, /disabled=\{!enabled \|\| moveRelative\.isPending \|\| negativeMoveBlocked\}/);

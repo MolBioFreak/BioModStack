@@ -46,7 +46,7 @@ interface StatsToolsControlPanelProps {
 export function StatsToolsControlPanel({
     embeddedContext = 'stats-toolkit-debug',
     title = 'Stats Tools',
-    subtitle = 'Optional runtime: start/stop/restart, health, logs.',
+    subtitle = 'Stats runtime actions + logs.',
     className = '',
     autoRefresh = true,
 }: StatsToolsControlPanelProps) {
@@ -223,7 +223,7 @@ export function StatsToolsMenu() {
                         <StatsToolsControlPanel
                             embeddedContext="topbar-control-panel"
                             title="Stats Tools"
-                            subtitle="Optional runtime: start/stop/restart, health, logs."
+                            subtitle="Stats runtime actions + logs."
                             autoRefresh={isOpen}
                         />
                     </div>

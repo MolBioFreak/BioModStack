@@ -319,3 +319,7 @@ workflow PPIFLOW_GENERATOR_DESIGN {
         raw_pdbs = CollectPPIFlowGeneratorRaw.out.pdbs
         filtered_pdbs = CollectPPIFlowGeneratorFiltered.out.pdbs
 }
+
+workflow {
+    PPIFLOW_GENERATOR_DESIGN()
+}

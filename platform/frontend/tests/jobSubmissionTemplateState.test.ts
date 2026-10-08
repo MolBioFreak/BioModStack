@@ -8,6 +8,7 @@ test('dedicated launcher templates all suppress the generic launcher chrome', ()
     assert.equal(isDedicatedLauncherTemplate('antibody_denovo'), true);
     assert.equal(isDedicatedLauncherTemplate('structure_prediction'), true);
     assert.equal(isDedicatedLauncherTemplate('boltz_cp_experimental'), true);
+    assert.equal(isDedicatedLauncherTemplate('esmfold2_experimental'), true);
     assert.equal(isDedicatedLauncherTemplate('boltzgen_design'), true);
     assert.equal(isDedicatedLauncherTemplate('bindcraft'), true);
     assert.equal(isDedicatedLauncherTemplate('oligo_design'), true);
@@ -16,11 +17,20 @@ test('dedicated launcher templates all suppress the generic launcher chrome', ()
     assert.equal(isDedicatedLauncherTemplate(null), false);
 });
 
-test('dedicated template initial values seed boltz cp with its experimental workflow identity', () => {
+test('dedicated template initial values seed experimental structure variants with workflow identity', () => {
     assert.deepEqual(getDedicatedTemplateInitialValues('boltz_cp_experimental'), {
         template_model_id: 'boltz_cp_experimental',
         template_mode_id: 'design',
         structure_launch_variant: 'boltz_cp_experimental',
+    });
+    assert.deepEqual(getDedicatedTemplateInitialValues('esmfold2_experimental'), {
+        name: 'esmfold2_prediction',
+        job_name: 'esmfold2_prediction',
+        sequence_name: 'esmfold2_candidate',
+        template_model_id: 'esmfold2_experimental',
+        template_mode_id: 'predict',
+        structure_launch_variant: 'esmfold2_experimental',
+        model_variant: 'fast',
     });
     assert.equal(getDedicatedTemplateInitialValues('structure_prediction'), undefined);
     assert.equal(getDedicatedTemplateInitialValues('unknown_template'), undefined);

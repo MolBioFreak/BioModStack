@@ -24,37 +24,37 @@ const analysisOptions: Array<AssayNavItem<AnalysisType>> = [
         id: 'qc',
         label: 'Manual Analytical QC',
         status: 'Clean + group data',
-        description: 'Sanitize numeric assay rows, manually exclude bad data, bunch labels, and compute group/run/cross-run statistics before downstream analysis.',
+        description: 'Clean rows, exclude, bunch, group/run stats.',
     },
     {
         id: 'spc',
         label: 'Control Chart (SPC)',
         status: 'Run-chart QC',
-        description: 'Create I-MR or X̄-R charts from real process measurements with centerline and control-limit Plotly overlays.',
+        description: 'I-MR/X̄-R charts, centerline, limits.',
     },
     {
         id: 'capability',
         label: 'Process Capability',
         status: 'Cp / Cpk / Pp / Ppk',
-        description: 'Evaluate specification fit, centering, within/overall sigma, and capability visualization from pasted values.',
+        description: 'Cp/Cpk/Pp/Ppk from pasted values.',
     },
     {
         id: 'doe',
         label: 'Design of Experiments',
         status: 'pyDOE3 + RSM',
-        description: 'Generate factorial/response-surface designs and analyze explicit DOE matrices with Plotly contour/surface views.',
+        description: 'Factorial/RSM design + contour/surface views.',
     },
     {
         id: 'hypothesis',
         label: 'Hypothesis Testing',
         status: 'Classical tests',
-        description: 'Run one-sample, two-sample, paired t-tests, and ANOVA against real numeric groups.',
+        description: 't-tests and ANOVA on named groups.',
     },
     {
         id: 'regression',
         label: 'Regression Analysis',
         status: 'statsmodels OLS',
-        description: 'Fit simple linear models with coefficients, diagnostics, residual statistics, and Plotly scatter/fitted traces.',
+        description: 'OLS coefficients, diagnostics, residuals.',
     },
 ];
 
@@ -70,7 +70,7 @@ const statusItems = [
     },
     {
         title: 'Data policy',
-        value: 'Empty workbench until pasted values or generated DOE output exists; manual QC never fabricates rows',
+        value: 'Empty until pasted/generated data; no fabricated rows',
         tone: 'warning' as const,
     },
 ];
@@ -83,7 +83,7 @@ export function StatisticsPage() {
             <AssayWorkbenchIntro
                 eyebrow="BMS DOE + Statistics Workbench"
                 title="JMP-like core statistics with explicit real inputs"
-                description="Generate DOE layouts, fit RSM/regression models, run SPC/capability, and perform classical tests without loading built-in assay rows. Plotly renders the active charts; backend routes report the statistical engine where available."
+                description="DOE, RSM/regression, SPC, capability, tests, Plotly."
             >
                 <AssayStatusStrip items={statusItems} />
             </AssayWorkbenchIntro>

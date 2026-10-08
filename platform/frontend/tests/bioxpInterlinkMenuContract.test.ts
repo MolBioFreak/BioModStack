@@ -24,7 +24,7 @@ test('interlink panel exposes governed connection, diagnostics, logs, and button
         'Status:',
         'Endpoint:',
         'deriveBioXpInterlinkMenuStatus',
-        'useBioXpInterlinkState(false, isOpen ? 5000 : 15000)',
+        'useBioXpInterlinkState(true, isOpen ? 5000 : 30000)',
         'maskEndpointForDisplay',
         'xxx.xxx',
         'Profile settings',
@@ -107,6 +107,7 @@ test('interlink status helper fails closed on unknown, stale, or timed-out robot
 
     assert.doesNotMatch(panelSource, /reachable === false\s*\?\s*'DEGRADED'\s*:\s*'LINKED'/);
     assert.doesNotMatch(panelSource, /Connected, not reachable/);
+    assert.match(cockpitSource, /useBioXpInterlinkState\(activeTab === 'connection', activeTab === 'connection' \? 5000 : false\)/);
 });
 
 test('frontend client exposes interlink hooks and only the BMS proxy route family', () => {
@@ -143,9 +144,8 @@ test('frontend client exposes interlink hooks and only the BMS proxy route famil
 
 test('BioXP cockpit exposes latch/24V interlock override as explicit commissioning-only control', () => {
     for (const marker of [
-        'Commissioning latch + 24V interlock override',
-        'Default off. This bypasses the latch/mag sensor and 24V sense gate',
-        'Operator observation is still authoritative',
+        'Commissioning latch + 24V override',
+        'Default off; strict-startup only. Operator observation required.',
         'Enable Latch+24V Override',
         'Disable Override',
         "operator_ack: 'INTERLOCK_OVERRIDE'",
@@ -164,7 +164,7 @@ test('BioXP cockpit fails closed when robot API/control-plane evidence is absent
         "operationCapabilities.data?.robot_openapi_reachable === true",
         'ROBOT UNREACHABLE',
         'BIOXP ROBOT UNREACHABLE',
-        'Robot API/status probes failed or timed out',
+        'Robot probes failed; hardware state unknown.',
         'CHECKING...',
     ]) {
         assert.match(cockpitSource, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -193,7 +193,7 @@ test('BioXP cockpit treats fresh positive robot evidence as reachable even after
 
 test('BioXP cockpit is gated by active interlink state and does not own reset lifecycle', () => {
     assert.match(cockpitSource, /useBioXpInterlinkState/);
-    assert.match(cockpitSource, /Connect from BIOXP LINK first/);
+    assert.match(cockpitSource, /Activate BIOXP LINK first\. No auto-motion on load\./);
     assert.match(cockpitSource, /interlinkActive/);
     assert.doesNotMatch(cockpitSource, /useMotionHardReset/);
     assert.doesNotMatch(cockpitSource, /motionHardReset/);

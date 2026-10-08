@@ -47,6 +47,7 @@ process BatchBoltzValidation {
     def geometryMode = params.boltz_target_geometry_mode ?: (anchor_target ? 'conditioned' : 'flexible')
     def anchor_strict = (params.boltz_anchor_strict == true || params.boltz_anchor_strict == 'true')
     def anchor_target_rmsd = params.boltz_anchor_target_max_rmsd ?: 1.5
+    def boltzStrictArgs = (anchor_target && anchor_strict) ? "--strict_target_rmsd ${anchor_target_rmsd}" : ""
     def boltzAnchorArgs = anchor_target ? "--anchor_target --target_chains \"${resolvedTargetChains}\" --template_manifest target_templates/manifest.json" : ""
     def boltzBatchCache = shellQuote(params.get('boltz_models', '') ?: '')
     def boltzBatchCacheFallback = shellQuote("${params.get('data_root', '') ?: params.get('code_root', '.')}/cache/boltz")

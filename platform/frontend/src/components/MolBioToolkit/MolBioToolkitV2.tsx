@@ -122,7 +122,7 @@ function SequenceLibrary({
                     Open Molecular Input
                 </button>
                 <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-3 text-xs text-slate-400">
-                    Search saved constructs, import GenBank or SnapGene files, build DNA or RNA from paste, or pull primers from the library.
+                    Open saved constructs, import files, paste sequence, or pull primers.
                 </div>
             </div>
 

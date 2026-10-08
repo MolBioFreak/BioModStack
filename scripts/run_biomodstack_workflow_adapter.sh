@@ -6,7 +6,7 @@ PROJECT_DIR="${BMS_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+export PATH="/usr/local/bin:/usr/bin:/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
 if [ -f "$HOME/.biomodstack/env.sh" ]; then
     source "$HOME/.biomodstack/env.sh"
@@ -48,6 +48,10 @@ fi
 export BMS_HOME="$PROJECT_DIR"
 unset BMS_WORKFLOW_ADAPTER_URL
 export BMS_CORE_RUNTIME_MODE=0
+BMS_NEXTFLOW_HOME="${BMS_NEXTFLOW_HOME:-${BMS_DATA:-/mnt/BioModStack}/nextflow}"
+export BMS_NEXTFLOW_HOME
+export NXF_HOME="${NXF_HOME:-$BMS_NEXTFLOW_HOME}"
+mkdir -p "$NXF_HOME"
 export BMS_CPU_POWER_COLLECTOR_URL="${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.0.1:8797/power}"
 BMS_WORKFLOW_ADAPTER_BIND_HOST="${BMS_WORKFLOW_ADAPTER_BIND_HOST:-127.0.0.1}"
 

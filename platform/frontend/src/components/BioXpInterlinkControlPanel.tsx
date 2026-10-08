@@ -69,7 +69,7 @@ const BIOXP_INTERLINK_DOC_LINKS = [
 
 export function BioXpInterlinkMenu() {
     const [isOpen, setIsOpen] = useState(false);
-    const state = useBioXpInterlinkState(false, isOpen ? 5000 : 15000);
+    const state = useBioXpInterlinkState(true, isOpen ? 5000 : 30000);
     const saveSettings = useSaveBioXpInterlinkSettings();
     const forgetSettings = useForgetBioXpInterlinkSettings();
     const connect = useBioXpInterlinkConnect();

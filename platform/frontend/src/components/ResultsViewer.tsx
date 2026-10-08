@@ -4454,7 +4454,7 @@ export function ResultsViewer() {
                         : '90% identity';
             setIterationMessage({
                 kind: 'success',
-                text: `Added ${result.uniqueCount.toLocaleString()} BoltzGen representative outputs from ${result.totalCount.toLocaleString()} filtered designs using ${clusterLabel} clustering.`,
+                text: `Added ${result.uniqueCount.toLocaleString()} / ${result.totalCount.toLocaleString()} BoltzGen reps (${clusterLabel}).`,
             });
         },
         onError: (error) => {
@@ -5168,8 +5168,8 @@ export function ResultsViewer() {
                                             </div>
                                             <p className="mt-1 text-xs text-slate-400">
                                                 {isProteinLocalRedesignReviewContext
-                                                    ? 'Filter the paused review table, promote the outputs you want to keep into a working set, then continue the paused Protein Local Redesign workflow from that subset.'
-                                                    : 'Sort and filter the current output set, then promote visible, filtered, or top-ranked outputs into a working set for the antibody refinement workflow.'}
+                                                    ? 'Filter/promote outputs, then continue the paused PLR workflow.'
+                                                    : 'Promote visible, filtered, or top-ranked outputs into antibody refinement.'}
                                             </p>
                                         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                                             <span className="rounded-full border border-indigo-500/30 bg-slate-900/70 px-2 py-1 text-indigo-100">
@@ -6520,7 +6520,7 @@ export function ResultsViewer() {
                                                                         {selectedDesign ? getFriendlyDesignName(selectedDesign as UntypedApiValue) : 'No output selected'}
                                                                     </div>
                                                                     <div className="mt-1 text-[11px] text-slate-400">
-                                                                        {selectedDesign ? `${getOutputSourceLabel(selectedDesign)} • ${selectedDesignSource === 'rfantibody' ? 'review/source metrics stay automatic' : 'derived analyses persist once run'}` : 'Choose an output in the viewer first.'}
+                                                                        {selectedDesign ? `${getOutputSourceLabel(selectedDesign)} • ${selectedDesignSource === 'rfantibody' ? 'RF metrics auto' : 'analyses persist'}` : 'Choose an output first.'}
                                                                     </div>
                                                                 </div>
                                                                 <div className="mt-3 space-y-2">
@@ -6717,8 +6717,8 @@ export function ResultsViewer() {
                                                 </div>
                                                 <div className="mt-2 text-[11px] text-slate-500">
                                                     {isPostRFantibodyReview
-                                                        ? `RF headline distances here are using the ${rfMetricLabels.short.toLowerCase()} lens. Switch lenses in the viewer or binder detail panel to compare against the alternate scope.`
-                                                        : '`Any-Target Dist` measures nearest binder CA to unknown target residue, so it can be smaller than `Epitope Dist`, which only measures against the selected epitope residues.'}
+                                                        ? `RF lens: ${rfMetricLabels.short}. Toggle loop/whole-antibody in review.`
+                                                        : 'Any-Target: whole target. Epitope: selected residues.'}
                                                 </div>
                                             </div>
                                             <StructureViewerPane
@@ -6913,8 +6913,8 @@ export function ResultsViewer() {
                                                             </div>
                                                             <div className="text-[11px] text-slate-500">
                                                                 {selectedDesignSource === 'rfantibody'
-                                                                    ? `The RF review cards below are showing ${rfMetricLabels.short.toLowerCase()} engagement. Switch to whole-antibody mode when you want framework-mediated nanobody contacts in the headline metrics.`
-                                                                    : '`Any-Target Dist` is nearest binder CA to the full target surface. `Epitope Dist` is nearest binder CA only to the selected epitope residues, so the unknown-target distance can legitimately be smaller.'}
+                                                                    ? `${rfMetricLabels.short} engagement shown. Whole-antibody lens includes framework contacts.`
+                                                                    : 'Any-Target: whole target. Epitope: selected residues.'}
                                                             </div>
                                                         </div>
                                                     </div>
@@ -7767,9 +7767,9 @@ export function ResultsViewer() {
                                                     </span>
                                                 </div>
                                                 <div className="mt-2 text-[11px] text-slate-500">
-                                                    {isPostRFantibodyReview
-                                                        ? `RF table metrics are using the ${rfMetricLabels.short.toLowerCase()} lens. Use the RF lens toggle in review to compare loop-only and whole-antibody screening.`
-                                                        : '`Any-Target Dist` can be smaller than `Epitope Dist` because it measures against the whole target surface, not just the selected epitope residues.'}
+                                                    {selectedDesignSource === 'rfantibody'
+                                                        ? `RF lens: ${rfMetricLabels.short}. Toggle loop/whole-antibody in review.`
+                                                        : 'Any-Target uses whole target; Epitope uses selected residues.'}
                                                 </div>
                                             </div>
                                             {/* Text Filter + Annotate CDRs */}

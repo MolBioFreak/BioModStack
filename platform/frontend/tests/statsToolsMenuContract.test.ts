@@ -34,7 +34,7 @@ test('stats-tools lifecycle controls live in shared control panel and Stats Tool
   assert.match(controlSource, /\/api\/system\/stats-tools/);
   assert.match(controlSource, /\/api\/system\/stats-tools\/\$\{action\}/);
   assert.match(controlSource, /Stats Tools/);
-  assert.match(controlSource, /Optional runtime: start\/stop\/restart, health, logs\./);
+  assert.match(controlSource, /Stats runtime actions \+ logs\./);
   assert.match(controlSource, />Start<\/button>/);
   assert.match(controlSource, />Stop<\/button>/);
   assert.match(controlSource, />Restart<\/button>/);
@@ -59,4 +59,5 @@ test('stats-tools lifecycle controls live in shared control panel and Stats Tool
   assert.doesNotMatch(controlSource, /Stop stats-tools/);
   assert.doesNotMatch(controlSource, /Restart stats-tools/);
   assert.doesNotMatch(controlSource, /stats_tools_offline — use Stats Toolkit → Debug → Start stats-tools/);
+  assert.doesNotMatch(controlSource, /Optional runtime: start\/stop\/restart, health, logs\./);
 });

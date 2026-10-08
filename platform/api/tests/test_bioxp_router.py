@@ -396,7 +396,7 @@ async def test_liquid_routes_proxy_to_robot_runtime(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
-async def test_motion_reference_camera_and_vision_routes_proxy_to_robot_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_motion_reference_status_is_read_only_from_bms(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, str, dict | None, dict | None, float]] = []
 
     async def fake_proxy_request(method: str, path: str, json_data=None, params=None, timeout: float = 65.0):
@@ -410,8 +410,12 @@ async def test_motion_reference_camera_and_vision_routes_proxy_to_robot_runtime(
     monkeypatch.setattr(bioxp, 'proxy_request', fake_proxy_request)
 
     assert await bioxp.motion_reference_status('x,y,z,g,door') == {'ok': True, 'path': '/motion/reference/status', 'params': {'axes': 'x,y,z,g,door'}}
-    assert await bioxp.motion_reference_mark_referenced(RequestStub()) == {'ok': True, 'path': '/motion/reference/mark_referenced', 'params': None}
-    assert await bioxp.motion_reference_mark_desynced(RequestStub()) == {'ok': True, 'path': '/motion/reference/mark_desynced', 'params': None}
+    with pytest.raises(HTTPException) as referenced_error:
+        await bioxp.motion_reference_mark_referenced()
+    assert referenced_error.value.status_code == 410
+    with pytest.raises(HTTPException) as desynced_error:
+        await bioxp.motion_reference_mark_desynced()
+    assert desynced_error.value.status_code == 410
     assert await bioxp.motion_axes_current(RequestStub()) == {'ok': True, 'path': '/motion/axes/current', 'params': None}
     assert await bioxp.camera_stream_state() == {'ok': True, 'path': '/camera/stream_state', 'params': None}
     assert await bioxp.vision_inspect(RequestStub()) == {'ok': True, 'path': '/vision/inspect', 'params': None}
@@ -419,8 +423,6 @@ async def test_motion_reference_camera_and_vision_routes_proxy_to_robot_runtime(
 
     assert calls == [
         ('GET', '/motion/reference/status', None, {'axes': 'x,y,z,g,door'}, 20.0),
-        ('POST', '/motion/reference/mark_referenced', {'axes': ['x'], 'reason': 'operator_verified'}, None, 30.0),
-        ('POST', '/motion/reference/mark_desynced', {'axes': ['x'], 'reason': 'operator_verified'}, None, 30.0),
         (
             'POST',
             '/motion/axes/current',

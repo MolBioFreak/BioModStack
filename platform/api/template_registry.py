@@ -33,6 +33,8 @@ class TemplateParam(BaseModel):
     placeholder: Optional[str] = None
     preset_type: Optional[str] = None
     file_type: Optional[str] = None
+    recommended_range: Optional[str] = None
+    default_source: Optional[str] = None
     condition: Optional[dict] = None  # Conditional visibility: {param: str, values: List[str]}
 
 

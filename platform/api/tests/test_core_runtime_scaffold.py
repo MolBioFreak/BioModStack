@@ -373,6 +373,7 @@ def test_workflow_adapter_script_runs_host_native_adapter_without_recursive_rout
 
     assert "unset BMS_WORKFLOW_ADAPTER_URL" in adapter_script
     assert "export BMS_CORE_RUNTIME_MODE=0" in adapter_script
+    assert 'export PATH="/usr/local/bin:/usr/bin:/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"' in adapter_script
     assert 'BMS_WORKFLOW_ADAPTER_BIND_HOST="${BMS_WORKFLOW_ADAPTER_BIND_HOST:-127.0.0.1}"' in adapter_script
     assert 'uv run uvicorn workflow_adapter_app:app --port 8001 --host "$BMS_WORKFLOW_ADAPTER_BIND_HOST"' in adapter_script
 
@@ -386,3 +387,12 @@ def test_workflow_adapter_script_loads_install_profile_runtime_paths_after_legac
     legacy_source_index = adapter_script.index('source "$HOME/.biomodstack/env.sh"')
     profile_source_index = adapter_script.index('load_env_file_overrides "$CORE_RUNTIME_ENV_FILE"')
     assert legacy_source_index < profile_source_index
+
+
+def test_workflow_adapter_script_uses_durable_nextflow_home_not_tmp_cache() -> None:
+    adapter_script = (REPO_ROOT / "scripts" / "run_biomodstack_workflow_adapter.sh").read_text(encoding="utf-8")
+
+    assert 'BMS_NEXTFLOW_HOME="${BMS_NEXTFLOW_HOME:-${BMS_DATA:-/mnt/BioModStack}/nextflow}"' in adapter_script
+    assert 'export NXF_HOME="${NXF_HOME:-$BMS_NEXTFLOW_HOME}"' in adapter_script
+    assert 'mkdir -p "$NXF_HOME"' in adapter_script
+    assert "/tmp/nxf-home" not in adapter_script

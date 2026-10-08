@@ -21,37 +21,37 @@ const analysisOptions: Array<AssayNavItem<AnalysisType>> = [
         id: 'import',
         label: 'Instrument Import',
         status: 'QuantStudio / StepOnePlus',
-        description: 'Parse real EDS, Excel, or CSV exports into plate heatmaps, well tables, standard-curve QC, replicate QC, NTCs, and spike recovery.',
+        description: 'Import EDS/Excel/CSV; plate, curve, replicate QC.',
     },
     {
         id: 'deltacq',
         label: 'ΔCq Analysis',
         status: 'Reference-normalized',
-        description: 'Paste real Cq rows with sample, gene, Cq, and group metadata; BMS requires explicit reference and target genes.',
+        description: 'Cq rows + explicit reference/target genes.',
     },
     {
         id: 'deltadeltacq',
         label: 'ΔΔCq & Fold Change',
         status: 'Control-group required',
-        description: 'Compute relative expression and fold-change from explicit control/treatment groups without inventing group labels.',
+        description: 'Control/treatment groups → fold-change.',
     },
     {
         id: 'stdcurve',
         label: 'Standard Curve',
         status: 'MIQE metrics',
-        description: 'Fit log-quantity versus Cq, report slope, efficiency, R², residuals, QC flags, and Plotly fit visualization.',
+        description: 'Slope, efficiency, R², residuals, flags.',
     },
     {
         id: 'quantify',
         label: 'Absolute Quantification',
         status: 'Sample IDs required',
-        description: 'Quantify unknowns against a real standard curve; each sample value must carry a real identifier.',
+        description: 'Unknowns against standards; sample IDs required.',
     },
     {
         id: 'anova',
         label: 'ANOVA + Dunnett',
         status: 'Named groups only',
-        description: 'Run group comparison statistics with an explicit control group and named treatment groups.',
+        description: 'Control + named treatment groups.',
     },
 ];
 
@@ -84,7 +84,7 @@ export function QpcrPage() {
             <AssayWorkbenchIntro
                 eyebrow="BMS qPCR Workbench"
                 title="QuantStudio / StepOnePlus analysis on real assay data"
-                description="Import actual instrument exports or paste explicit Cq tables for standard curves, spike recovery, replicate QC, ΔCq, ΔΔCq, fold-change, ANOVA, and MIQE-style metrics. The panels start empty by design; BMS does not preload built-in assay rows."
+                description="Instrument exports or pasted Cq tables; no built-in rows."
             >
                 <AssayStatusStrip items={statusItems} columnsClass="sm:grid-cols-2 xl:grid-cols-4" />
             </AssayWorkbenchIntro>

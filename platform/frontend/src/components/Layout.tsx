@@ -569,7 +569,7 @@ export function Layout({ children }: LayoutProps) {
                                         backgroundColor: isActive('/ngs') ? 'color-mix(in srgb, var(--accent-secondary) 20%, transparent)' : 'transparent',
                                         color: isActive('/ngs') ? 'var(--accent-secondary)' : 'var(--text-secondary)'
                                     }}
-                                    title="NGS Data Visualization Toolkit"
+                                    title="NGS Toolkit"
                                 >
                                     NGS Toolkit
                                 </Link>
@@ -758,7 +758,7 @@ function DiagnosticsMenu() {
                         <div className="flex items-center justify-between gap-3 border-b border-slate-700 pb-2">
                             <div>
                                 <p className="text-xs font-semibold text-emerald-300 uppercase tracking-wider">Diagnostics/About</p>
-                                <p className="text-[11px] text-slate-400">Surface, channel, shell, and API health summary</p>
+                                <p className="text-[11px] text-slate-400">Live surface + API status</p>
                             </div>
                             <button
                                 onClick={() => void refreshDiagnostics()}
@@ -777,7 +777,7 @@ function DiagnosticsMenu() {
                             <div className="flex items-center justify-between gap-3">
                                 <div>
                                     <p className="text-xs font-semibold text-slate-200">Runtime channel</p>
-                                    <p className="text-[11px] text-slate-400">Switch web/Electron surfaces by reloading onto the selected local channel.</p>
+                                    <p className="text-[11px] text-slate-400">Channel switch + start</p>
                                 </div>
                                 <button
                                     onClick={() => void handleStartRuntimeTarget('both')}

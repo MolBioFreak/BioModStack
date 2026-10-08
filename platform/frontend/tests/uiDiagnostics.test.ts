@@ -46,7 +46,9 @@ test('layout exposes one far-left diagnostics top-bar entry with copy support', 
 
   assert.match(layoutSource, /<DiagnosticsMenu/);
   assert.match(layoutSource, /Diagnostics\/About/);
+  assert.match(layoutSource, /Live surface \+ API status/);
   assert.match(layoutSource, /Runtime channel/);
+  assert.match(layoutSource, /Channel switch \+ start/);
   assert.match(layoutSource, /Switch to Vite dev/);
   assert.match(layoutSource, /Switch to stable \/bms\//);
   assert.match(layoutSource, /navigator\.clipboard\.writeText/);
@@ -61,7 +63,7 @@ test('layout exposes one far-left diagnostics top-bar entry with copy support', 
   assert.match(layoutSource, /data-bms-primary-nav-active=\{isActive\('\/assay'\) \? 'true' : undefined\}/);
   assert.match(layoutSource, /flex min-w-0 flex-wrap items-center/);
   assert.match(layoutSource, /2xl:flex-nowrap/);
-  assert.match(layoutSource, /order-3 min-w-0 w-full overflow-x-auto/);
+  assert.match(layoutSource, /order-2 min-w-0 w-full overflow-x-auto/);
   assert.match(layoutSource, /2xl:order-2 2xl:w-auto 2xl:flex-1/);
   assert.match(layoutSource, /order-2 ml-auto flex max-w-\[calc\(100vw-1rem\)\]/);
   assert.match(layoutSource, /flex-wrap items-center justify-end gap-1\.5 overflow-visible/);
@@ -76,6 +78,8 @@ test('layout exposes one far-left diagnostics top-bar entry with copy support', 
   assert.match(layoutSource, /onClickCapture=\{handleClickCapture\}/);
   assert.match(layoutSource, /data-bms-drag-scroll-ignore="true"/);
   assert.match(layoutSource, /scrollIntoView\(\{ block: 'nearest', inline: 'center' \}\)/);
+  assert.doesNotMatch(layoutSource, /Surface, channel, shell, and API health summary/);
+  assert.doesNotMatch(layoutSource, /Switch web\/Electron surfaces by reloading onto the selected local channel\./);
 
   const diagnosticsIndex = layoutSource.indexOf('<DiagnosticsMenu');
   const logoIndex = layoutSource.indexOf('{/* Logo / Brand */}');

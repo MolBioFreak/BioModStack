@@ -77,11 +77,40 @@ run_compose() {
     "${compose_cmd[@]}" "${compose_extra_args[@]}" -f "$COMPOSE_FILE" "$@"
 }
 
+service_args_include_api() {
+    if [ "$#" -eq 0 ]; then
+        return 0
+    fi
+    for arg in "$@"; do
+        case "$arg" in
+            bms-api|biomodstack-api)
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+cleanup_legacy_api_listener_if_needed() {
+    service_args_include_api "$@" || return 0
+    python3 - <<'PY'
+import sys
+from pathlib import Path
+root = Path(__import__('os').environ.get('BMS_HOME', '.')).resolve()
+if str(root) not in sys.path:
+    sys.path.insert(0, str(root))
+from biomodstack_services import cleanup_legacy_listener
+cleanup_legacy_listener('api', root)
+PY
+}
+
 case "$ACTION" in
     up)
+        cleanup_legacy_api_listener_if_needed "$@"
         exec "${compose_cmd[@]}" "${compose_extra_args[@]}" -f "$COMPOSE_FILE" up -d --remove-orphans "$@"
         ;;
     rebuild|build)
+        cleanup_legacy_api_listener_if_needed "$@"
         exec "${compose_cmd[@]}" "${compose_extra_args[@]}" -f "$COMPOSE_FILE" up -d --build --remove-orphans "$@"
         ;;
     stop)
@@ -91,6 +120,7 @@ case "$ACTION" in
         run_compose down --remove-orphans "$@"
         ;;
     restart)
+        cleanup_legacy_api_listener_if_needed "$@"
         run_compose restart "$@"
         ;;
     logs)

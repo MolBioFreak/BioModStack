@@ -19,6 +19,7 @@ const predictorLabel: Record<StructurePredictor, string> = {
     boltz: 'Boltz-2',
     rf3: 'RoseTTAFold 3',
     protenix: 'Protenix',
+    esmfold2: 'ESMFold2',
 };
 
 const numberInputClass = 'mt-1 w-full rounded border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100';

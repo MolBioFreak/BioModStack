@@ -483,7 +483,7 @@ export function DataViewerLanding({
                 throw new Error('Choose a dataset file first.');
             }
             if (!preview?.importable) {
-                throw new Error('This preview format is not importable yet. Use a ProteinBase JSONL bundle to create a synthetic Results Viewer job.');
+                throw new Error('Only ProteinBase JSONL imports today.');
             }
             const trimmedDatasetName = datasetName.trim();
             if (!trimmedDatasetName) {
@@ -505,7 +505,7 @@ export function DataViewerLanding({
         onSuccess: async (job) => {
             setFeedback({
                 kind: 'success',
-                text: `Imported ${job.name} with ${job.design_count.toLocaleString()} designs. Opening it in Results Viewer...`,
+                text: `Imported ${job.name} (${job.design_count.toLocaleString()} designs). Opening Results...`,
             });
             await Promise.all([
                 queryClient.invalidateQueries({ queryKey: ['jobs'] }),
@@ -527,9 +527,9 @@ export function DataViewerLanding({
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                         <div className="text-xs font-semibold uppercase tracking-[0.24em] text-cyan-300">Data hub</div>
-                        <h2 className="mt-2 text-2xl font-semibold text-white">Import data into the existing viewer</h2>
+                        <h2 className="mt-2 text-2xl font-semibold text-white">Import into Results Viewer</h2>
                         <p className="mt-2 max-w-3xl text-sm text-slate-300">
-                            Start from a real import surface instead of the tiny job dropdown: choose a file, inspect the auto-detected format and columns, then import it as a synthetic completed job or jump straight into an existing dataset.
+                            Choose file → preview fields → import completed dataset, or open existing jobs.
                         </p>
                     </div>
                     <button
@@ -537,7 +537,7 @@ export function DataViewerLanding({
                         onClick={onBrowseJobs}
                         className="rounded-xl border border-slate-700 bg-slate-800/80 px-4 py-2 text-sm font-medium text-slate-100 transition-colors hover:border-slate-500 hover:bg-slate-800"
                     >
-                        Browse all existing workflows
+                        Browse workflows
                     </button>
                 </div>
 
@@ -624,7 +624,7 @@ export function DataViewerLanding({
 
                             {!selectedFile && (
                                 <p className="mt-3 text-sm text-slate-400">
-                                    Drop in a dataset file and this page will auto-detect whether it looks like a ProteinBase bundle, generic JSONL, or tabular CSV/TSV.
+                                    Drop a dataset file to auto-detect ProteinBase, JSONL, or CSV/TSV.
                                 </p>
                             )}
 

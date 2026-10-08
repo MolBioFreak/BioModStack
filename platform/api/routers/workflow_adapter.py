@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import subprocess
+import threading
+import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -9,7 +11,22 @@ from pydantic import BaseModel, Field
 import sqlalchemy
 
 import database
-from biomodstack_services import ServiceManagerError, start_runtime_target
+from biomodstack_services import (
+    CONTAINER_RUNTIME_MODE,
+    CORE_RUNTIME_SERVICE,
+    WORKFLOW_ADAPTER_SERVICE,
+    ServiceManagerError,
+    resolve_runtime_mode,
+    restart_all,
+    restart_api,
+    run_core_runtime_script,
+    runtime_descriptor,
+    start_all,
+    start_api,
+    start_runtime_target,
+    stop_all,
+    stop_api,
+)
 from services import nextflow
 
 
@@ -51,6 +68,10 @@ class WorkflowAdapterRuntimeStartTargetRequest(BaseModel):
     target: str | None = None
 
 
+class WorkflowAdapterRuntimeActionRequest(BaseModel):
+    runtime: str | None = None
+
+
 LOCAL_ADAPTER_HOSTS = {None, "127.0.0.1", "::1", "localhost", "testclient"}
 
 
@@ -80,6 +101,118 @@ async def workflow_adapter_start_runtime_target(
     except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"target": normalized_target, "control_mode": "host-adapter"}
+
+
+def _run_delayed(action) -> None:
+    def runner() -> None:
+        time.sleep(0.75)
+        action()
+
+    threading.Thread(target=runner, daemon=True).start()
+
+
+def _mark_current_adapter_ready(payload: dict[str, object]) -> dict[str, object]:
+    """Normalize status emitted by the adapter process that is serving this route."""
+    if not isinstance(payload, dict):
+        return payload
+    normalized = dict(payload)
+    health_raw = normalized.get("health")
+    if isinstance(health_raw, dict):
+        health = dict(health_raw)
+        if "adapter_ready" in health:
+            health["adapter_ready"] = True
+        normalized["health"] = health
+    else:
+        health = {}
+
+    services_raw = normalized.get("services")
+    if isinstance(services_raw, list):
+        services: list[object] = []
+        for service in services_raw:
+            if not isinstance(service, dict):
+                services.append(service)
+                continue
+            item = dict(service)
+            if item.get("name") == WORKFLOW_ADAPTER_SERVICE:
+                item["active"] = True
+                item["active_source"] = "current-adapter-process"
+            services.append(item)
+        normalized["services"] = services
+        if services and all(isinstance(service, dict) for service in services):
+            runtime_ready = all(bool(value) for value in health.values()) if health else bool(normalized.get("runtime_ready"))
+            normalized["runtime_ready"] = runtime_ready
+            normalized["runtime_active"] = all(bool(service.get("active")) for service in services if isinstance(service, dict)) and runtime_ready
+    return normalized
+
+
+def _run_container_api_web_action(action_name: str) -> dict[str, object]:
+    if action_name == "stop":
+        _run_delayed(lambda: run_core_runtime_script("stop", "bms-web", "bms-api"))
+    elif action_name == "restart":
+        _run_delayed(lambda: run_core_runtime_script("restart", "bms-api", "bms-web"))
+    elif action_name == "stop-api":
+        _run_delayed(lambda: run_core_runtime_script("stop", "bms-api"))
+    elif action_name == "restart-api":
+        _run_delayed(lambda: run_core_runtime_script("restart", "bms-api"))
+    else:
+        raise KeyError(action_name)
+    return {
+        "accepted": True,
+        "background": True,
+        "runtime_mode": CONTAINER_RUNTIME_MODE,
+        "action": action_name,
+        "control_mode": "host-adapter",
+        "note": "Accepted by host adapter; API/web container action runs after this response so the caller is not killed mid-request.",
+    }
+
+
+@router.get("/runtime/state")
+async def workflow_adapter_runtime_state(
+    request: Request,
+    runtime: str | None = None,
+) -> dict[str, object]:
+    _require_local_adapter_request(request)
+    runtime_mode = resolve_runtime_mode(runtime)
+    try:
+        payload = _mark_current_adapter_ready(runtime_descriptor(runtime_mode=runtime_mode))
+    except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    payload["control_mode"] = "host-adapter"
+    return payload
+
+
+@router.post("/runtime/{action_name}")
+async def workflow_adapter_runtime_action(
+    request: Request,
+    action_name: str,
+    payload: WorkflowAdapterRuntimeActionRequest | None = None,
+    runtime: str | None = None,
+) -> dict[str, object]:
+    _require_local_adapter_request(request)
+    normalized_action = str(action_name or "").strip().lower()
+    runtime_mode = resolve_runtime_mode(runtime or (payload.runtime if payload else None))
+    actions = {
+        "start": start_all,
+        "start-api": start_api,
+        "stop": stop_all,
+        "stop-api": stop_api,
+        "restart": restart_all,
+        "restart-api": restart_api,
+    }
+    if normalized_action not in actions:
+        raise HTTPException(status_code=400, detail=f"unsupported runtime action: {action_name}")
+
+    if runtime_mode == CONTAINER_RUNTIME_MODE and normalized_action in {"stop", "restart", "stop-api", "restart-api"}:
+        return _run_container_api_web_action(normalized_action)
+
+    try:
+        actions[normalized_action](runtime_mode=runtime_mode)
+        payload_out = runtime_descriptor(runtime_mode=runtime_mode)
+    except (ServiceManagerError, FileNotFoundError, OSError, subprocess.CalledProcessError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    payload_out["control_mode"] = "host-adapter"
+    payload_out["action"] = normalized_action
+    return payload_out
 
 
 @router.post("/launch", response_model=WorkflowAdapterLaunchResponse, status_code=202)

@@ -86,6 +86,23 @@ test('boltz cp experimental launch config keeps the structure template locked to
     assert.equal(config.forcedPredictor, 'boltz');
 });
 
+test('esmfold2 experimental launch config reuses structure inputs without generic predictor or batch controls', () => {
+    const config = resolveStructureLaunchConfig({
+        template_model_id: 'esmfold2_experimental',
+        structure_launch_variant: 'esmfold2_experimental',
+    });
+
+    assert.equal(config.variant, 'esmfold2_experimental');
+    assert.equal(config.submitModelId, 'esmfold2_experimental');
+    assert.equal(config.submitMode, 'predict');
+    assert.equal(config.allowPredictorSelection, false);
+    assert.equal(config.showParallelJobs, false);
+    assert.equal(config.showSequenceBatch, false);
+    assert.equal(config.showMsaControls, false);
+    assert.equal(config.forcedPredictor, 'esmfold2');
+    assert.deepEqual(getPredictorFamiliesForSelection('complex', 'esmfold2'), ['esmfold2']);
+});
+
 test('structure submit target preserves native predictor routing but forces boltz cp experimental onto its workflow identity', () => {
     const defaultConfig = resolveStructureLaunchConfig({ template_model_id: 'boltz2' });
     assert.deepEqual(
@@ -109,6 +126,29 @@ test('structure submit target preserves native predictor routing but forces bolt
         }),
         { modelId: 'boltz_cp_experimental', mode: 'design' },
     );
+
+    const esmfold2Config = resolveStructureLaunchConfig({
+        template_model_id: 'esmfold2_experimental',
+        structure_launch_variant: 'esmfold2_experimental',
+    });
+    assert.deepEqual(
+        resolveStructureSubmitTarget({
+            launchConfig: esmfold2Config,
+            predictionMode: 'complex',
+            predictorSelection: 'boltz',
+        }),
+        { modelId: 'esmfold2_experimental', mode: 'predict' },
+    );
+});
+
+test('esmfold2 structure variant is wired inside StructurePredictionTemplate instead of generic JobSubmission fields', () => {
+    const source = readFileSync('src/components/StructurePredictionTemplate.tsx', 'utf8');
+
+    assert.match(source, /data-bms-esmfold2-structure-variant="true"/);
+    assert.match(source, /structure_launch_variant = 'esmfold2_experimental'/);
+    assert.match(source, /params\.model_variant = esmfold2Variant/);
+    assert.match(source, /Uses this structure launcher for sequence, PDB import, and complex components/);
+    assert.match(source, /PDB coordinates are not structural templates/);
 });
 
 test('boltz cp gpu launch settings use pinned gpus directly and clamp size_cp to a valid square divisor', () => {

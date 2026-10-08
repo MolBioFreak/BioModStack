@@ -57,13 +57,13 @@ test('assay analytics UI does not pre-seed viewers with fake/demo data', () => {
 test('assay import panels expose supported real instrument exports and reject proprietary containers', () => {
   const empower = readFileSync(join(root, 'src/components/hplc/EmpowerImport.tsx'), 'utf8');
   assert.match(empower, /Empower exports \(\.cdf, \.arw, \.zip, \.csv, \.txt\)/);
-  assert.match(empower, /AIA \.cdf provides raw chromatograms and native peak tables/);
+  assert.match(empower, /Proprietary DB\/RAW needs Empower export to AIA\/ARW or CSV\/ASCII/);
   assert.match(empower, /accept="\.cdf,\.arw,\.zip,\.csv,\.txt"/);
   assert.match(empower, /Unsupported native Empower database\/RAW files/);
 
   const qpcr = readFileSync(join(root, 'src/components/qpcr/RawDataImport.tsx'), 'utf8');
   assert.match(qpcr, /QuantStudio \.eds/);
-  assert.match(qpcr, /Large uploads are allowed through the BMS nginx proxy/);
+  assert.match(qpcr, /Upload EDS, Excel, or instrument CSV/);
 });
 
 test('assay sections use BMS-native workbench copy and explicit unavailable states', () => {
@@ -81,7 +81,7 @@ test('assay sections use BMS-native workbench copy and explicit unavailable stat
 
   assert.match(statsIndex, /BMS DOE \+ Statistics Workbench/);
   assert.match(statsIndex, /\/api\/assay-analytics DOE\/statistics routes/);
-  assert.match(statsIndex, /Empty workbench until pasted values or generated DOE output exists/);
+  assert.match(statsIndex, /Empty until pasted\/generated data; no fabricated rows/);
 
   assert.doesNotMatch(qpcrIndex + hplcIndex + statsIndex, /Data Processor|Statistical Toolkit/);
 });

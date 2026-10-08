@@ -172,7 +172,7 @@ const FAMPNN_CHECKPOINT_OPTIONS = [
     {
         value: 'fampnn_0_3_cath.pt',
         label: 'FAMPNN (0.3A, CATH)',
-        description: 'CATH-trained 0.3A checkpoint. Recommended upstream for mutation scoring rather than primary sequence design.',
+        description: 'CATH 0.3A checkpoint; best for mutation scoring.',
     },
 ] as const;
 
@@ -530,7 +530,7 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                     <p className="text-[10px] text-slate-600 mt-1">
                         {settings.ppiflow_objective_mode === 'selected_interface'
                             ? 'Legacy gate on selected delta interface score. More negative is better.'
-                            : 'Loop-aware gate on the aggregated objective score. Lower is better; values below zero usually indicate improved loop behavior against the target.'}
+                            : 'Loop-aware objective gate. Lower is better.'}
                     </p>
                 </div>
 
@@ -591,10 +591,10 @@ export const PPIFlowSettingsFields: React.FC<PPIFlowSettingsFieldsProps> = ({
                     </label>
                     <p className="text-[10px] text-slate-600">
                         {managedByStageProfile && optimizationScenario === 'pre_sequence'
-                            ? 'Stage-optimized pre-sequence refinement still scores anchors, but it disables strict zero-anchor rejection so nearby backbones can be explored before sequence design.'
+                            ? 'Pre-sequence: anchor scoring on; zero-anchor rejection off.'
                             : managedByStageProfile && optimizationScenario === 'post_sequence'
-                                ? 'Stage-optimized post-FA-MPNN maturation keeps strict anchor enforcement on for sequence-conditioned cleanup.'
-                                : 'Default paper-aligned path: repack the interface first, then fail loudly if no usable anchors remain outside the movable region.'}
+                                ? 'Post-FA-MPNN: strict anchors on.'
+                                : 'Default: repack interface; fail if anchors are absent.'}
                     </p>
                 </div>
             </div>
@@ -1506,8 +1506,8 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                             </div>
                             <p className="text-xs text-slate-500">
                                 {structureValidator === 'protenix'
-                                    ? 'Shared MSA controls for the Protenix validator path. These affect MSA preparation and provider/runtime behavior, not the core Protenix diffusion sampler.'
-                                    : 'Shared MSA controls for the Boltz-2 validator path. These affect the representative MSA generated upstream of validation.'}
+                                    ? 'MSA controls for Protenix validation. Provider/runtime only.'
+                                    : 'MSA controls for Boltz-2 validation.'}
                             </p>
 
                             <div>

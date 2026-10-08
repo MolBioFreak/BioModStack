@@ -233,7 +233,7 @@ export function AnalyticalQcWorkbench() {
             <div>
                 <h3 className="text-lg font-semibold text-[var(--text-primary)]">Manual Analytical Data QC</h3>
                 <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">
-                    Paste real assay rows, map value/run/group/sample columns, sanitize numeric data, manually exclude rows, bunch labels into analysis groups, and compute within-run plus cross-run QC statistics.
+                    Paste rows → map columns → clean/exclude/bunch → QC stats.
                 </p>
             </div>
 
@@ -241,7 +241,7 @@ export function AnalyticalQcWorkbench() {
                 <div className="space-y-4">
                     <AssayInputCard
                         title="Source table"
-                        description="Paste CSV/TSV exported from Empower, qPCR, plate readers, or a spreadsheet. Keep a header row; no built-in demo rows are loaded."
+                        description="CSV/TSV with headers from instruments or spreadsheets."
                     >
                         <textarea
                             value={rawText}
@@ -264,7 +264,7 @@ export function AnalyticalQcWorkbench() {
 
                     <AssayInputCard
                         title="Column mapping"
-                        description="BMS auto-detects common Empower/qPCR/statistics headers, but every mapping remains manually editable."
+                        description="Auto-detected headers; editable mappings."
                     >
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                             <ColumnSelect label="Numeric value" required value={columns.value || detectedColumns.value} headers={parsed.headers} onChange={(value) => updateColumn('value', value)} />
@@ -278,7 +278,7 @@ export function AnalyticalQcWorkbench() {
 
                     <AssayInputCard
                         title="Manual cleaning and bunching"
-                        description="Use explicit text rules to remove bad rows or merge noisy labels into analysis groups before statistics are computed."
+                        description="Text rules for row excludes and label bunching."
                     >
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                             <div>
