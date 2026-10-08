@@ -16,7 +16,7 @@ from services import ngs_alignment_sessions as storage
 from services import ngs_alignment_product_builder as builder
 from services import ngs_alignment_presentation_v5 as records
 from services.ngs_alignment_derived_products import identity_sha256, resolve_product_source
-from services.ngs_alignment_catalog_query import SORT_FIELDS, SIGNAL_FIELDS, joined_catalog
+from services.ngs_alignment_catalog_query import SORT_FIELDS, SIGNAL_FIELDS, joined_catalog, signal_snapshot
 
 
 class CatalogReadError(Exception):
@@ -112,13 +112,14 @@ def snapshot(row, root, *, signal=None):
             datasets[role] = stack.enter_context(storage.verified_parquet_dataset(handle))
         # Admit query buffers only after the immutable native inputs have their
         # own allocations. ExitStack closes the engine before its input leases.
+        prepared_signal = stack.enter_context(signal_snapshot(signal))
         connection = stack.enter_context(_query_connection(None))
         connection.execute("SET autoinstall_known_extensions=false")
         connection.execute("SET autoload_known_extensions=false")
         connection.execute("SET enable_external_access=false")
         for role, dataset in datasets.items():
             connection.register(role, dataset)
-        yield connection, manifest
+        yield connection, {**manifest, "_signal_snapshot": prepared_signal}
 
 
 def retry_delivery_cache(job, row, root):
@@ -183,7 +184,7 @@ def read_page(job, row, root, *, search, alignment_state, limit, cursor, populat
                "search": search, "alignment_state": alignment_state, "locus": locus,
                "metric_min": metric_min, "metric_max": metric_max, "limit": limit,
                "sort_by": sort_by, "sort_direction": sort_direction, "null_order": "last"}
-    with snapshot(row, root, signal=signal) as (db, manifest), joined_catalog(db, signal, manifest["statistics"]["logical_read_count"]) as signal_state:
+    with snapshot(row, root, signal=signal) as (db, manifest), joined_catalog(db, manifest["_signal_snapshot"], manifest["statistics"]["logical_read_count"]) as signal_state:
         if sort_by in SIGNAL_FIELDS:
             binding["signal_snapshot_id"] = signal_state["signal_snapshot_id"]
         last = _cursor(cursor, binding)
@@ -279,7 +280,7 @@ def exact_read(job, row, root, *, read_id, include_sequence, population_id, sign
     records._validate_read_id(read_id)
     resolve_product_source(job, row)
     assert_population(population_id, population(row))
-    with snapshot(row, root, signal=signal) as (db, manifest), joined_catalog(db, signal, manifest["statistics"]["logical_read_count"]) as signal_state:
+    with snapshot(row, root, signal=signal) as (db, manifest), joined_catalog(db, manifest["_signal_snapshot"], manifest["statistics"]["logical_read_count"]) as signal_state:
         matches = _rows(db, "SELECT * FROM joined_catalog WHERE read_id = ?", [read_id])
         if len(matches) != 1:
             raise CatalogReadError("NGS_RESOURCE_NOT_FOUND", "The exact read was not found.", 404)
@@ -304,7 +305,7 @@ def record_page(job, row, root, *, read_id, include_sequence, population_id, lim
     records._validate_read_id(read_id)
     resolve_product_source(job, row)
     assert_population(population_id, population(row))
-    with snapshot(row, root, signal=signal) as (db, manifest), joined_catalog(db, signal, manifest["statistics"]["logical_read_count"]) as signal_state:
+    with snapshot(row, root, signal=signal) as (db, manifest), joined_catalog(db, manifest["_signal_snapshot"], manifest["statistics"]["logical_read_count"]) as signal_state:
         binding = {"population_id": population(row),
             "locator_sha256": manifest["authority"]["artifacts"]["locators"]["sha256"],
             "read_id": read_id, "limit": limit, "include_sequence": include_sequence}

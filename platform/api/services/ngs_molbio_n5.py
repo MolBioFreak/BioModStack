@@ -569,7 +569,11 @@ async def _locked_local_admission_policy(session: AsyncSession) -> ExperimentRes
     if (policy.cpu_thread_limit, policy.dram_byte_limit) != (desired.cpu_threads, desired.memory_bytes):
         active = await session.scalar(select(func.count()).select_from(ExperimentResourceAdmission).where(
             ExperimentResourceAdmission.state.in_(ACTIVE_ADMISSION_STATES)))
-        if active:
+        derived = (await session.execute(text(
+            "SELECT COALESCE(SUM(cpu_threads),0), COALESCE(SUM(dram_bytes),0) "
+            "FROM derived_resource_reservations WHERE policy_id='managed-workflows' AND state!='released'"
+        ))).one()
+        if active or int(derived[0]) > desired.cpu_threads or int(derived[1]) > desired.memory_bytes:
             raise ResourceAdmissionDenied("resource_policy_unavailable", "local policy changed with active admissions; drain work before managed application/restart", [])
         policy.cpu_thread_limit = desired.cpu_threads
         policy.dram_byte_limit = desired.memory_bytes

@@ -18,7 +18,7 @@ def preview_snapshot(job, catalog, preview, root):
     with builder._namespace(root, preview, create=False) as namespace:
         with storage.open_presentation_authority_root(namespace / "sealed", create=False) as directory:
             manifest = builder._manifest(directory, preview, lambda: None,
-                expected_manifest=preview.manifest_sha256, expected_authority=preview.authority_sha256)
+                expected_manifest=preview.manifest_sha256, expected_authority=preview.authority_sha256, verify_artifacts=False)
             yield directory, manifest
 
 

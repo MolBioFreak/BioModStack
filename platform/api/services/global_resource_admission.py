@@ -118,7 +118,8 @@ def _recover(db, target, machine):
             db.execute("UPDATE derived_resource_reservations SET state='orphaned', "
                        "cpu_threads=0, dram_bytes=0, updated_at=?, release_reason=? "
                        "WHERE reservation_id=? AND state IN ('active','retained')",
-                       (_now(), "owner_lock_quiescent; disk retained pending cleanup", row["reservation_id"]))
+                       (_now(), "resident_storage_owner_quiescent" if row["state"] == "retained" else
+                        "owner_lock_quiescent; disk retained pending cleanup", row["reservation_id"]))
         finally:
             os.close(descriptor)
 
@@ -154,7 +155,7 @@ def _process_limits():
     return cpu, ram
 
 
-def _capacity(db, storage_root):
+def _capacity(db, storage_root, *, resident_credit=0):
     target, policy_id, machine = _target()
     policy = db.execute("SELECT * FROM resource_admission_policy WHERE policy_id=?", (policy_id,)).fetchone()
     if policy is None:
@@ -174,6 +175,13 @@ def _capacity(db, storage_root):
                         "FROM derived_resource_reservations WHERE policy_id=? AND state!='released'", (policy_id,)).fetchone()
     disk_used = db.execute("SELECT COALESCE(SUM(disk_bytes),0) FROM derived_resource_reservations "
                           "WHERE machine_id=? AND storage_device=? AND state!='released'", (machine, device)).fetchone()[0]
+    # Resident bytes already reduced disk.free; only unmaterialized commitments
+    # reduce physical availability again. Unknown crashed active work remains
+    # conservatively pending until the quiescent storage owner reconciles it.
+    pending_disk = db.execute("SELECT COALESCE(SUM(disk_bytes),0) FROM derived_resource_reservations "
+        "WHERE machine_id=? AND storage_device=? AND state NOT IN ('released','retained') "
+        "AND COALESCE(release_reason,'') NOT IN ('resident_storage_owner_quiescent',"
+        "'quiescent_owned_storage_reconciled')", (machine, device)).fetchone()[0]
     workflow_cpu = workflow_ram = 0
     if policy_id == "managed-workflows":
         workflow_cpu, workflow_ram = db.execute(
@@ -181,7 +189,7 @@ def _capacity(db, storage_root):
             "WHERE state IN ('admitted','queued')").fetchone()
     available = (max(0, cpu_limit - totals[0] - workflow_cpu),
                  max(0, min(memory_limit - totals[1] - workflow_ram, process_ram)),
-                 max(0, min(disk_limit - disk_used, disk.free - disk_used)))
+                 max(0, min(disk_limit - disk_used, disk.free - pending_disk + resident_credit)))
     return target, policy, machine, root, device, available
 
 
@@ -195,6 +203,7 @@ class Allocation:
     receipt: dict
     _descriptor: int
     _closed: bool = False
+    _resident: bool = False
 
     def retain(self, *, disk_bytes, dram_bytes=0):
         """After construction quiesces, keep only charged owned storage/cache RAM."""
@@ -209,6 +218,7 @@ class Allocation:
             if result.rowcount != 1:
                 raise ResourceCapacityUnavailable("resource allocation ownership lost")
         self.cpu_threads, self.dram_bytes, self.disk_bytes = 0, dram_bytes, disk_bytes
+        self._resident = True
 
     def release(self, *, storage_removed=False):
         """Call only after all threads/children/readers quiesce.
@@ -224,7 +234,8 @@ class Allocation:
                        "AND state IN ('active','retained')",
                        ("released" if storage_removed or not self.disk_bytes else "orphaned",
                         0 if storage_removed else self.disk_bytes, _now(),
-                        "owner_quiescent_storage_removed" if storage_removed else "owner_quiescent_storage_retained",
+                        "owner_quiescent_storage_removed" if storage_removed else
+                        "resident_storage_owner_quiescent" if self._resident else "owner_quiescent_storage_retained",
                         self.reservation_id, self.token))
         self._closed = True
         os.close(self._descriptor)
@@ -246,6 +257,7 @@ def reserve(*, owner, storage_root, cpu_threads=1, dram_bytes=None, disk_bytes=N
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with _transaction() as db:
+            surviving = 0
             if adopt_quiescent:
                 # Transfer accounting only with independent quiescence proof.
                 # The cache/product caller additionally holds its storage lock.
@@ -274,7 +286,7 @@ def reserve(*, owner, storage_root, cpu_threads=1, dram_bytes=None, disk_bytes=N
                     db.execute("UPDATE derived_resource_reservations SET state='released',cpu_threads=0,"
                         "dram_bytes=0,disk_bytes=0,updated_at=?,release_reason=? WHERE reservation_id=?",
                         (_now(), "quiescent_storage_transferred:" + identifier, row["reservation_id"]))
-            target, policy, machine, root, device, available = _capacity(db, storage_root)
+            target, policy, machine, root, device, available = _capacity(db, storage_root, resident_credit=surviving)
             owned = root if owned_path is None else Path(owned_path).resolve(strict=False)
             try:
                 owned.relative_to(root)

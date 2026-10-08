@@ -5130,3 +5130,104 @@ def test_presentation_retry_cas_conflict_returns_typed_409_not_500(
     )
     assert response.status_code == 409
     assert ngs_routes.OntNgsErrorV1.model_validate(response.json()).code == "NGS_AUTHORITY_CONFLICT"
+
+
+def test_f2_signal_input_is_pinned_before_query_scratch(monkeypatch, tmp_path):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from services import ngs_alignment_catalog_reader as reader
+    from services.scientific_artifacts import query
+    events = []
+    @contextmanager
+    def namespace(*args, **kwargs):
+        yield tmp_path
+    @contextmanager
+    def artifact(*args, **kwargs):
+        yield object()
+    @contextmanager
+    def signal(value):
+        events.append("signal-open")
+        try:
+            yield (value, None, None, None)
+        finally:
+            events.append("signal-close")
+    @contextmanager
+    def connection(*args):
+        assert events == ["signal-open"]
+        events.append("query-open")
+        try:
+            yield SimpleNamespace(execute=lambda *args: None, register=lambda *args: None)
+        finally:
+            events.append("query-close")
+    manifest = {"authority": {"artifacts": {role: {"filename": role, "sha256": "a" * 64,
+        "size_bytes": 1} for role in ("catalog", "locators")}}}
+    monkeypatch.setattr(reader.builder, "_namespace", namespace)
+    monkeypatch.setattr(reader.builder, "_manifest", lambda *a, **k: manifest)
+    monkeypatch.setattr(reader.storage, "open_presentation_authority_root", namespace)
+    monkeypatch.setattr(reader.storage, "open_verified_artifact_snapshot", artifact)
+    monkeypatch.setattr(reader.storage, "verified_parquet_dataset", artifact)
+    monkeypatch.setattr(reader, "signal_snapshot", signal)
+    monkeypatch.setattr(query, "_query_connection", connection)
+    row = SimpleNamespace(product="catalog", state="ready", manifest_sha256="a", authority_sha256="b")
+    with reader.snapshot(row, tmp_path, signal={"source": "cold"}) as (_, result):
+        assert result["_signal_snapshot"][0] == {"source": "cold"}
+    assert events == ["signal-open", "query-open", "query-close", "signal-close"]
+
+
+def test_f2_semantic_reuse_requires_live_exact_peer_generation(tmp_path):
+    import hashlib
+    path = tmp_path / "cache"
+    path.write_bytes(b"receipt-bound")
+    with path.open("rb") as first, path.open("rb") as second:
+        identity = service._snapshot_file_identity(first)
+        chunks = (hashlib.sha256(b"receipt-bound").digest(),)
+        a = service._SnapshotLease(first, "semantic-a", service._SnapshotReceipt(identity, chunks))
+        b = service._SnapshotLease(second, "semantic-b", service._SnapshotReceipt(identity, chunks))
+        a.remember_semantic_value("contract-v1", ("contig", 12), b)
+        assert a.verified_semantic_value("contract-v1", b) == (True, ("contig", 12))
+        replacement = service._SnapshotLease(second, "semantic-b", service._SnapshotReceipt(identity, chunks))
+        assert a.verified_semantic_value("contract-v1", replacement) == (False, None)
+        assert a.verified_semantic_value("contract-v2", b) == (False, None)
+
+
+def test_f2_retained_disk_is_not_subtracted_from_physical_free_twice(monkeypatch, tmp_path):
+    import sqlite3
+    from types import SimpleNamespace
+    from services import global_resource_admission as resources
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.executescript("""
+        CREATE TABLE resource_admission_policy (policy_id, policy_version, cpu_thread_limit,
+            dram_byte_limit, disk_byte_limit, lock_generation, updated_at);
+        INSERT INTO resource_admission_policy VALUES ('execution-target:test', 'v1', 4, 1000, 1000, 0, '');
+        CREATE TABLE derived_resource_reservations (policy_id, machine_id, storage_device,
+            state, cpu_threads, dram_bytes, disk_bytes, release_reason);
+    """)
+    device = str(tmp_path.stat().st_dev)
+    db.executemany("INSERT INTO derived_resource_reservations VALUES (?,?,?,?,?,?,?,?)", [
+        ("execution-target:test", "machine", device, "retained", 0, 0, 300, None),
+        ("execution-target:test", "machine", device, "active", 0, 0, 100, None),
+    ])
+    monkeypatch.setattr(resources, "_target", lambda: ("test", "execution-target:test", "machine"))
+    monkeypatch.setattr(resources, "_recover", lambda *args: None)
+    monkeypatch.setattr(resources, "_process_limits", lambda: (4, 1000))
+    monkeypatch.setattr(resources.shutil, "disk_usage", lambda root: SimpleNamespace(total=1000, free=500))
+    assert resources._capacity(db, tmp_path)[-1][2] == 500 - 100
+    assert resources._capacity(db, tmp_path, resident_credit=50)[-1][2] == 500 - 100 + 50
+    db.close()
+
+
+def test_f2_signal_capacity_is_not_invalid_metrics(monkeypatch, tmp_path):
+    from contextlib import contextmanager
+    from services import ngs_alignment_catalog_query as query
+    @contextmanager
+    def root(*args, **kwargs):
+        yield tmp_path
+    def refuse(*args, **kwargs):
+        raise service.AlignmentCapacityUnavailable("snapshot cache capacity unavailable")
+    monkeypatch.setattr(query, "_artifact_receipt_identity", lambda value: ("metrics.parquet", "a" * 64, 1))
+    monkeypatch.setattr(service, "open_presentation_authority_root", root)
+    monkeypatch.setattr(service, "open_verified_artifact_snapshot", refuse)
+    with pytest.raises(service.AlignmentCapacityUnavailable):
+        with query.signal_snapshot({"artifact": {"content_sha256": "a" * 64}}):
+            pytest.fail("capacity refusal was converted into a scientific metrics state")

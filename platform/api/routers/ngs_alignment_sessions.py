@@ -2815,6 +2815,7 @@ async def _catalog_signal(job, db, raw_run_id=None, raw_observed_generation=None
 
 async def _catalog_query(job, session_id, db, operation, **kwargs):
     from services import ngs_alignment_catalog_reader as reader
+    from services.scientific_artifacts.query import ScientificArtifactQueryCapacityUnavailable
     if "read_id" in kwargs:
         try:
             reader.records._validate_read_id(kwargs["read_id"])
@@ -2833,6 +2834,9 @@ async def _catalog_query(job, session_id, db, operation, **kwargs):
         preview = await db.get(NgsAlignmentDerivedProduct, derived_products.default_preview_request_id(catalog))
         result = await run_in_threadpool(getattr(reader, operation), *args, **kwargs)
         return await run_in_threadpool(reader.decorate_preview, catalog, preview, root, result)
+    except ScientificArtifactQueryCapacityUnavailable as exc:
+        raise OntNgsRouteError(status_code=503, code="NGS_READ_CAPACITY_UNAVAILABLE",
+            message="Read query capacity is unavailable.", job_id=str(job.id), resource="read") from exc
     except reader.CatalogReadError as exc:
         raise OntNgsRouteError(status_code=exc.status, code=exc.code, message=str(exc),
             job_id=str(job.id), resource="read") from exc

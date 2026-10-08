@@ -118,16 +118,23 @@ def sources(job, root):
         raise storage.AlignmentSessionError("native catalog reference binding changed")
     with storage.open_verified_artifact_snapshot(root / ref["path"], expected_sha256=ref["sha256"], expected_size=ref["size_bytes"]) as fasta_handle, storage.open_verified_artifact_snapshot(
             root / fai["path"], expected_sha256=fai["sha256"], expected_size=fai["size_bytes"]) as fai_handle:
-        contigs, sequence = storage._fasta_contigs_from_handle(fasta_handle)
-        if len(contigs) != 1:
-            raise storage.AlignmentSessionError("native single-reference catalog is unsupported")
-        contig, (length, _md5) = next(iter(contigs.items()))
-        if hashlib.sha256(sequence).hexdigest() != reference_sha:
-            raise storage.AlignmentSessionError("native reference digest mismatch")
-        with pysam.FastaFile(storage._descriptor_path(fasta_handle.fileno()),
-                filepath_index=storage._descriptor_path(fai_handle.fileno())) as fasta:
-            if tuple(fasta.references) != (contig,) or fasta.get_reference_length(contig) != length:
-                raise storage.AlignmentSessionError("native reference index integrity mismatch")
+        semantic_key = identity_sha256({"schema": "bms.ngs.native-reference-validation.v1",
+            "reference_sha256": reference_sha})
+        verified, shape = fasta_handle.verified_semantic_value(semantic_key, fai_handle)
+        if verified:
+            contig, length = shape
+        else:
+            contigs, sequence = storage._fasta_contigs_from_handle(fasta_handle)
+            if len(contigs) != 1:
+                raise storage.AlignmentSessionError("native single-reference catalog is unsupported")
+            contig, (length, _md5) = next(iter(contigs.items()))
+            if hashlib.sha256(sequence).hexdigest() != reference_sha:
+                raise storage.AlignmentSessionError("native reference digest mismatch")
+            with pysam.FastaFile(storage._descriptor_path(fasta_handle.fileno()),
+                    filepath_index=storage._descriptor_path(fai_handle.fileno())) as fasta:
+                if tuple(fasta.references) != (contig,) or fasta.get_reference_length(contig) != length:
+                    raise storage.AlignmentSessionError("native reference index integrity mismatch")
+            fasta_handle.remember_semantic_value(semantic_key, (contig, length), fai_handle)
     # Derived request pointers are excluded to avoid a source/intent hash cycle.
     scientific = {key: value for key, value in receipt.items() if key != "alignment_presentations"}
     receipt_sha = hashlib.sha256(rfc8785.dumps(scientific)).hexdigest()

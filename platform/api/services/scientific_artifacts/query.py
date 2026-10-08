@@ -16,6 +16,10 @@ class ScientificArtifactQueryError(ScientificArtifactError):
     """A closed analytical query contract was violated."""
 
 
+class ScientificArtifactQueryCapacityUnavailable(ScientificArtifactQueryError):
+    """Admission or engine capacity, not invalid artifact semantics."""
+
+
 def _validated_scalar(value: object) -> object:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -50,8 +54,8 @@ def _query_connection(path: object):
         connection.execute(f"SET temp_directory='{scratch_sql}'")
         connection.execute(f"SET max_temp_directory_size='{allocation.disk_bytes}B'")
         yield connection
-    except resources.ResourceCapacityUnavailable as exc:
-        raise ScientificArtifactQueryError("query capacity unavailable") from exc
+    except (resources.ResourceCapacityUnavailable, duckdb.OutOfMemoryException) as exc:
+        raise ScientificArtifactQueryCapacityUnavailable("query capacity unavailable") from exc
     finally:
         try:
             if connection is not None:

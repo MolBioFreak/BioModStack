@@ -153,6 +153,10 @@ class AlignmentPresentationFailure(AlignmentSessionError):
         self.retryable = retryable
 
 
+class AlignmentCapacityUnavailable(AlignmentSessionError):
+    """Resource refusal, distinct from invalid scientific or cached bytes."""
+
+
 class _AlignmentDerivativeByteLimit(AlignmentSessionError):
     """Raised when the kernel-enforced derivative file limit is reached."""
 
@@ -261,19 +265,29 @@ class _SnapshotLease:
         self._position = position
         return position
 
-    def has_verified_semantics(self, key: str, peer) -> bool:
+    def verified_semantic_value(self, key: str, *peers):
         self._check()
-        peer._check()
+        for peer in peers:
+            peer._check()
         with _snapshot_cache_condition:
             saved = self._receipt.semantic_validation
-            return bool(saved and saved[0] == key and saved[1]() is peer._receipt)
+            found = bool(saved and saved[0] == key and len(saved[1]) == len(peers)
+                         and all(ref() is peer._receipt for ref, peer in zip(saved[1], peers)))
+            return found, saved[2] if found else None
+
+    def remember_semantic_value(self, key: str, value, *peers) -> None:
+        # One bounded semantic result per generation, never a global path cache.
+        self._check()
+        for peer in peers:
+            peer._check()
+        with _snapshot_cache_condition:
+            self._receipt.semantic_validation[:] = [key, tuple(weakref.ref(peer._receipt) for peer in peers), value]
+
+    def has_verified_semantics(self, key: str, peer) -> bool:
+        return self.verified_semantic_value(key, peer)[0]
 
     def remember_verified_semantics(self, key: str, peer) -> None:
-        # Call only after semantic validation through these exact leased bytes.
-        self._check()
-        peer._check()
-        with _snapshot_cache_condition:
-            self._receipt.semantic_validation[:] = [key, weakref.ref(peer._receipt)]
+        self.remember_semantic_value(key, None, peer)
 
     def fileno(self) -> int:
         self._check()
@@ -285,7 +299,7 @@ class _SnapshotLease:
             from services import global_resource_admission as resources
             if not hasattr(os, "memfd_create") or not all(hasattr(fcntl, name) for name in
                     ("F_ADD_SEALS", "F_GET_SEALS", "F_SEAL_WRITE", "F_SEAL_GROW", "F_SEAL_SHRINK", "F_SEAL_SEAL")):
-                raise AlignmentSessionError("native reader capacity unavailable: kernel file sealing unsupported")
+                raise AlignmentCapacityUnavailable("native reader capacity unavailable: kernel file sealing unsupported")
             allocation = None
             descriptor = None
             position = self._position
@@ -314,9 +328,9 @@ class _SnapshotLease:
                 _snapshot_native[self._digest] = (descriptor, allocation)
                 return descriptor
             except resources.ResourceCapacityUnavailable as exc:
-                raise AlignmentSessionError("native snapshot capacity unavailable") from exc
+                raise AlignmentCapacityUnavailable("native snapshot capacity unavailable") from exc
             except OSError as exc:
-                raise AlignmentSessionError("native snapshot capacity unavailable: sealed image could not be created") from exc
+                raise AlignmentCapacityUnavailable("native snapshot capacity unavailable: sealed image could not be created") from exc
             finally:
                 self._position = position
                 if self._digest not in _snapshot_native:
@@ -500,10 +514,10 @@ def recover_verified_cache(*, retry_digest: str | None = None) -> None:
         raise ValueError("invalid cache retry identity")
     with _snapshot_cache_condition:
         if retry_digest in _snapshot_inflight:
-            raise AlignmentSessionError("snapshot cache capacity unavailable: import in progress")
+            raise AlignmentCapacityUnavailable("snapshot cache capacity unavailable: import in progress")
         if retry_digest in _snapshot_cache:
             if _snapshot_cache_leases.get(retry_digest, 0):
-                raise AlignmentSessionError("snapshot cache capacity unavailable: active readers")
+                raise AlignmentCapacityUnavailable("snapshot cache capacity unavailable: active readers")
             _snapshot_invalid.discard(retry_digest)
             _discard_cached_snapshot_locked(retry_digest)
         directories = (root / retry_digest,) if retry_digest is not None else root.iterdir()
@@ -522,7 +536,7 @@ def recover_verified_cache(*, retry_digest: str | None = None) -> None:
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     if retry_digest == digest:
-                        raise AlignmentSessionError("snapshot cache capacity unavailable: active readers")
+                        raise AlignmentCapacityUnavailable("snapshot cache capacity unavailable: active readers")
                     continue
                 with open_presentation_authority_root(directory, create=False) as owned:
                     if retry_digest == digest:
@@ -666,7 +680,7 @@ def _reserve_snapshot(digest: str, size: int) -> BinaryIO | None:
                 _snapshot_cache_condition.wait()
                 continue
             if not _evict_for_reservation_locked(size):
-                raise AlignmentSessionError("snapshot cache capacity unavailable")
+                raise AlignmentCapacityUnavailable("snapshot cache capacity unavailable")
             from services import global_resource_admission as resources
             import fcntl
             root = _snapshot_cache_directory()
@@ -688,13 +702,13 @@ def _reserve_snapshot(digest: str, size: int) -> BinaryIO | None:
                     if (directory / "invalid").exists():
                         raise AlignmentSessionError("snapshot integrity mismatch: explicit cache retry required")
                     if not exclusive and not (directory / "data").is_file():
-                        raise AlignmentSessionError("snapshot cache capacity unavailable: publication in progress")
+                        raise AlignmentCapacityUnavailable("snapshot cache capacity unavailable: publication in progress")
                     if any(name.startswith("import-") for name in os.listdir(directory)):
-                        raise AlignmentSessionError("snapshot cache capacity unavailable: explicit restart cleanup required")
+                        raise AlignmentCapacityUnavailable("snapshot cache capacity unavailable: explicit restart cleanup required")
             except BaseException as exc:
                 os.close(descriptor)
                 if isinstance(exc, BlockingIOError):
-                    raise AlignmentSessionError("snapshot cache capacity unavailable: object owned by another process") from exc
+                    raise AlignmentCapacityUnavailable("snapshot cache capacity unavailable: object owned by another process") from exc
                 raise
             # RAM covers chunk receipts plus bounded import/read buffers. It is
             # charged for idle entries too, rather than treating cache as free.
@@ -713,7 +727,7 @@ def _reserve_snapshot(digest: str, size: int) -> BinaryIO | None:
                     continue
                 if _evict_quiescent_disk_snapshot(digest):
                     continue
-                raise AlignmentSessionError("snapshot cache capacity unavailable") from exc
+                raise AlignmentCapacityUnavailable("snapshot cache capacity unavailable") from exc
             except BaseException:
                 os.close(descriptor)
                 raise
@@ -855,7 +869,7 @@ def _check_snapshot_source(path: Path, digest: str, size: int, *, allocation=Non
                         or before != _snapshot_file_identity(source)):
                     raise AlignmentSessionError("source artifact integrity digest mismatch")
         except resources.ResourceCapacityUnavailable as exc:
-            raise AlignmentSessionError("source verification capacity unavailable") from exc
+            raise AlignmentCapacityUnavailable("source verification capacity unavailable") from exc
         with _snapshot_cache_condition:
             previous = _snapshot_sources.setdefault(key, before)
             if previous != before:
@@ -889,7 +903,7 @@ def retry_verified_artifact_cache(path: Path, *, expected_size: int, expected_sh
                         or before != _snapshot_file_identity(source)):
                     raise AlignmentSessionError("source artifact integrity mismatch; cache retry rejected")
     except resources.ResourceCapacityUnavailable as exc:
-        raise AlignmentSessionError("cache retry capacity unavailable") from exc
+        raise AlignmentCapacityUnavailable("cache retry capacity unavailable") from exc
     recover_verified_cache(retry_digest=expected_sha256)
     with open_verified_artifact_snapshot(path, expected_size=expected_size,
             expected_sha256=expected_sha256):
@@ -1003,7 +1017,7 @@ def open_verified_artifact_snapshot(
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
         if isinstance(exc, OSError) and exc.errno in {28, 122}:
-            raise AlignmentSessionError("snapshot cache capacity unavailable") from exc
+            raise AlignmentCapacityUnavailable("snapshot cache capacity unavailable") from exc
         raise
     finally:
         if source is not None:
@@ -1700,13 +1714,52 @@ def _fasta_contigs(
         expected_sha256=expected_sha256,
     )
     try:
-        contigs, _normalized_reference = _fasta_contigs_from_handle(handle)
-        return contigs
+        key = "bms.ngs.fasta-contigs.v1"
+        verified, contigs = handle.verified_semantic_value(key, handle)
+        if not verified:
+            contigs, _normalized_reference = _fasta_contigs_from_handle(handle)
+            handle.remember_semantic_value(key, contigs, handle)
+        return dict(contigs)
     finally:
         handle.close()
 
 
-def _validate_alignment_bundle(
+def _validate_alignment_bundle(*args, **kwargs):
+    try:
+        return _validate_alignment_bundle_cached(*args, **kwargs)
+    except AlignmentCapacityUnavailable:
+        raise
+    except (AlignmentSessionError, OSError) as exc:
+        return False, f"alignment bundle validation failed: {type(exc).__name__}"
+
+
+def _validate_alignment_bundle_cached(bam, index, reference, manifest_reference_sha256,
+        source_reference_sha256=None, mode="primary", **identities):
+    # Publication and restart adoption still validate; warm calls reuse only a
+    # proof attached to all three live verified-cache generations.
+    from contextlib import ExitStack
+    with ExitStack() as stack:
+        handles = []
+        for name, path in (("bam", bam), ("index", index), ("reference", reference)):
+            digest, size = identities.get(name + "_sha256"), identities.get(name + "_size")
+            if digest is None or size is None:
+                digest, size = _sha256_file_and_size(path)
+                identities[name + "_sha256"], identities[name + "_size"] = digest, size
+            handles.append(stack.enter_context(open_verified_artifact_snapshot(
+                path, expected_sha256=digest, expected_size=size)))
+        key = hashlib.sha256(json.dumps(["bms.ngs.alignment-validation.v1", mode,
+            manifest_reference_sha256, source_reference_sha256], separators=(",", ":")).encode()).hexdigest()
+        if handles[0].has_verified_semantics(key, handles[1]) and handles[1].has_verified_semantics(key, handles[2]):
+            return True, None
+        result = _validate_alignment_bundle_uncached(bam, index, reference,
+            manifest_reference_sha256, source_reference_sha256, mode, **identities)
+        if result[0]:
+            handles[0].remember_verified_semantics(key, handles[1])
+            handles[1].remember_verified_semantics(key, handles[2])
+        return result
+
+
+def _validate_alignment_bundle_uncached(
     bam: Path,
     index: Path,
     reference: Path,
@@ -1777,6 +1830,8 @@ def _validate_alignment_bundle(
                 bam_contigs[fields["SN"]] = (int(fields["LN"]), fields.get("M5"))
         reference_contigs, normalized_reference = _fasta_contigs_from_handle(reference_snapshot)
         observed_sha256 = hashlib.sha256(normalized_reference).hexdigest()
+    except AlignmentCapacityUnavailable:
+        raise
     except (AlignmentSessionError, OSError, subprocess.SubprocessError, UnicodeError) as exc:
         return False, f"alignment bundle validation failed: {type(exc).__name__}"
     finally:
@@ -1813,9 +1868,15 @@ def _artifact_descriptor(job_id: str, record: dict[str, Any], role: str) -> dict
     path = record["path"]
     if not isinstance(path, Path):
         raise AlignmentSessionError(str(record.get("error") or "unsafe artifact"))
-    observed_digest, observed_size = _sha256_file_and_size(path)
     declared_digest = record.get("declared_sha256")
     declared_size = record.get("declared_size_bytes")
+    if (isinstance(declared_digest, str) and re.fullmatch(r"[0-9a-f]{64}", declared_digest)
+            and type(declared_size) is int and declared_size >= 0):
+        with open_verified_artifact_snapshot(path, expected_sha256=declared_digest,
+                                             expected_size=declared_size):
+            observed_digest, observed_size = declared_digest, declared_size
+    else:
+        observed_digest, observed_size = _sha256_file_and_size(path)
     integrity_valid = (
         isinstance(declared_digest, str)
         and re.fullmatch(r"[0-9a-f]{64}", declared_digest) is not None
@@ -1888,6 +1949,8 @@ def _session_records(
                 artifacts[role] = _artifact_descriptor(job_id, record, role)
                 if artifacts[role]["integrity_valid"] is not True:
                     errors.append(f"{role.replace('_', ' ')} manifest integrity is missing or invalid")
+            except AlignmentCapacityUnavailable:
+                raise
             except AlignmentSessionError as exc:
                 errors.append(str(exc))
         for required_role in ("alignment", "alignment_index", "reference", "reference_index"):
@@ -1935,6 +1998,8 @@ def _session_records(
                     reference_length = reference_contigs[reference_contig][0]
                 elif not errors:
                     errors.append("a single authoritative reference contig is required")
+            except AlignmentCapacityUnavailable:
+                raise
             except (AlignmentSessionError, OSError, UnicodeError) as exc:
                 if not errors:
                     errors.append(f"reference contig inspection failed: {type(exc).__name__}")
@@ -3313,7 +3378,7 @@ def _cleanup_locus_cache(
         total -= size
         count -= 1
     if total > LOCUS_CACHE_MAX_BYTES or count > LOCUS_CACHE_MAX_ENTRIES:
-        raise AlignmentSessionError("locus slice cache capacity unavailable")
+        raise AlignmentCapacityUnavailable("locus slice cache capacity unavailable")
 
 
 def _presentation_entry_size(candidate: Path) -> int | None:
@@ -3398,7 +3463,7 @@ def _cleanup_presentation_namespace(
         total > ALIGNMENT_PRESENTATION_CACHE_MAX_BYTES
         or count > ALIGNMENT_PRESENTATION_CACHE_MAX_ENTRIES
     ):
-        raise AlignmentSessionError("alignment presentation cache capacity unavailable")
+        raise AlignmentCapacityUnavailable("alignment presentation cache capacity unavailable")
 
 
 def _presentation_names_for_manifest(namespace: Path, manifest_sha256: str | None) -> set[str]:
