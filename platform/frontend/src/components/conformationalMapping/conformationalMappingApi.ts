@@ -140,6 +140,79 @@ export interface CmRecord {
     payload: Record<string, unknown>;
 }
 
+export type CmStateLandscapeComparisonMode = 'pairwise' | 'reference';
+export type CmStateLandscapeMetricStatus = 'ok' | 'unavailable';
+export type CmStateLandscapeClass = 'high' | 'neutral' | 'minimally_frustrated';
+
+export interface CmStateLandscapeIdentity {
+    target_id: string;
+    entity_instance_id: string;
+    auth_asym_id: string;
+    auth_seq_id: number;
+    insertion_code: string;
+    sequence_index: number;
+    validated_wt: string;
+}
+
+export interface CmStateLandscapeResolvedPair {
+    pair_id: string;
+    candidate_a_id: string;
+    candidate_b_id: string;
+}
+
+export type CmStateLandscapeNumericMetric =
+    | { a: number; b: number; delta_b_minus_a: number; status: 'ok'; reason: null }
+    | { a: null; b: null; delta_b_minus_a: null; status: 'unavailable'; reason: string };
+
+export type CmStateLandscapeClassMetric =
+    | { a: CmStateLandscapeClass; b: CmStateLandscapeClass; transition: string; status: 'ok'; reason: null }
+    | { a: null; b: null; transition: null; status: 'unavailable'; reason: string };
+
+export interface CmStateLandscapeMetrics {
+    native_score: CmStateLandscapeNumericMetric;
+    high_non_native_highly_frustrated_fraction: CmStateLandscapeNumericMetric;
+    maximum_non_native_substitution_delta_relative_to_native: CmStateLandscapeNumericMetric;
+    native_class: CmStateLandscapeClassMetric;
+}
+
+export interface CmStateLandscapeRow extends CmStateLandscapeResolvedPair {
+    identity: CmStateLandscapeIdentity;
+    metrics: CmStateLandscapeMetrics;
+}
+
+export interface CmStateLandscapeSupport extends CmStateLandscapeResolvedPair {
+    eligible_row_count: number;
+    excluded_row_count: number;
+}
+
+export interface CmStateLandscapeExclusion extends CmStateLandscapeResolvedPair {
+    identity: CmStateLandscapeIdentity | null;
+    reason: string;
+    detail: string;
+}
+
+export interface CmStateLandscapeAnalysis {
+    schema_name: 'cm_state_landscape_analysis';
+    schema_version: 1;
+    analysis_id: string;
+    source_ensemble_sha256: string;
+    source_landscape_sha256: string;
+    source_structure_map_sha256: string;
+    comparison_mode: CmStateLandscapeComparisonMode;
+    comparison_target_id: string;
+    comparison_scope: 'all_within_target' | 'all_other_within_target';
+    reference_backend_coordinates: Record<string, unknown> | null;
+    reference_candidate_id: string | null;
+    resolved_pairs: CmStateLandscapeResolvedPair[];
+    comparison_sha256: string;
+    formula_version: 'cm_state_landscape_analysis_v1';
+    formula_sha256: string;
+    policy_sha256: string;
+    rows: CmStateLandscapeRow[];
+    support_ledger: CmStateLandscapeSupport[];
+    exclusion_ledger: CmStateLandscapeExclusion[];
+}
+
 export interface CmResults {
     request_id: string;
     result_contract_id: string;
