@@ -55,7 +55,9 @@ async def test_mounted_independent_readback_reuse_corruption_and_staleness(store
         selection = {'kind':'model','model_id':'protenix'}
         for bad in ({**selection, 'url':'https://example.invalid'}, {**selection, 'path':'/etc/passwd'}):
             assert (await client.post(prefix + '/provision/preview', json=bad)).status_code == 422
-        assert (await client.post(prefix + '/provision/preview', json={'kind':'model','model_id':'boltz2'})).status_code == 409
+        blocked = await client.post(prefix + '/provision/preview', json={'kind':'model','model_id':'boltz2'})
+        assert blocked.status_code == 200
+        assert blocked.json()['blockers']
         response = await client.post(prefix + '/provision/preview', json=selection)
         assert response.status_code == 200, response.text
         preview = response.json()

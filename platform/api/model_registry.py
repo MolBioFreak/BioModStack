@@ -95,6 +95,21 @@ INDEPENDENT_RUNTIME_MODELS = frozenset({
 })
 
 
+# Image-only selection does not promise the model's selected weights/stages.
+# These public launcher entries already bind the named image in native plans.
+INDEPENDENT_RUNTIME_IMAGES = INDEPENDENT_RUNTIME_MODELS | frozenset({
+    'boltzgen', 'protein_local_redesign', 'molecular_dynamics',
+    'boltz_cp_experimental', 'confornets_experimental',
+})
+
+
+def model_image_dependencies(model_id: str) -> tuple[RuntimeDependencyRef, ...]:
+    model = get_registry().get_model(model_id)
+    if model is None or not model.enabled or model_id not in INDEPENDENT_RUNTIME_IMAGES:
+        raise ValueError('Independent image binding is not available for this model')
+    return (RuntimeDependencyRef(kind='image', relative_path=model.container),)
+
+
 def model_runtime_dependencies(model_id: str, *, internal: bool = False) -> tuple[RuntimeDependencyRef, ...]:
     """Known managed bindings, not proof of the entire selected workflow closure.
 
