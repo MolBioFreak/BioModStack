@@ -183,7 +183,30 @@ def native_checkpoint_dependencies(process: str, params: dict):
             compatibility_authority='model_acquisition_plan; scripts/lib/pinned_weight_layout.py'))
         blockers.append(UnresolvedField(key, 'dependency_closure', authority, reason))
 
-    if process == 'RunRF3':
+    if process in {'ProtenixPredict', 'ProtenixFromComplex', 'BatchProtenixValidation',
+                   'CanonicalProtenixEnsemble', 'RunShapeProtenixValidator'}:
+        # Installed Protenix bd54a05d047b8925a241056f36d619700604068a:
+        # runner/inference.py:download_inference_cache,load_checkpoint and
+        # configs/configs_data.py,configs_inference.py. These are native input
+        # members, not an acquisition allowlist or generated kernel/font caches.
+        owner = ('Protenix:runner/inference.py:download_inference_cache,load_checkpoint; '
+                 'configs/configs_data.py; configs/configs_inference.py; '
+                 'scripts/run_protenix_inference.py')
+        members = ['checkpoint/protenix-v2.pt', 'common/components.cif',
+                   'common/components.cif.rdkit_mol.pkl',
+                   'common/clusters-by-entity-40.txt', 'common/obsolete_release_date.csv']
+        enabled = lambda key: params.get(key) in (True, 'true')
+        anchored = process in {'ProtenixFromComplex', 'BatchProtenixValidation'} and enabled('protenix_anchor_target')
+        templates = process != 'RunShapeProtenixValidator' and (enabled('protenix_use_template') or anchored)
+        if templates:
+            members.extend(('common/obsolete_to_successor.json', 'common/release_date_cache.json'))
+            # Anchored consumers generate mmcif from their declared target input.
+            if not anchored:
+                members.append('mmcif')
+        for member in members:
+            dependencies.append(SelectedDependency('weights:protenix:' + member, 'weights',
+                'protenix/' + member, owner, selector='protenix_weights', selector_subpath=member))
+    elif process == 'RunRF3':
         owner = 'scripts/run_rf3.py:main overrides; modules/rf3.nf:RunRF3'
         if params.get('rf3_extra_config'):
             require('weights:rf3:selected-checkpoint', owner,
@@ -742,6 +765,8 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
         assert definition is not None  # Managed resolution checked this definition.
         ids = []
         for ref in refs:
+            if selected_model == 'protenix' and ref.kind == 'weights':
+                continue  # The selected native process below owns member selection.
             key = f'{ref.kind}:{ref.relative_path}'
             ids.append(key)
             selector = {'protenix.sif': 'protenix_container_path',
@@ -846,6 +871,10 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
             process = 'ESMFold2MSAPredict' if 'core_protein_scientific_contract' in p else 'ESMFold2Predict'
 
         deps = managed(predictor)
+        selected_weights, weight_blockers = native_checkpoint_dependencies(process, p)
+        dependencies.update((item.logical_id, item) for item in selected_weights)
+        deps += tuple(item.logical_id for item in selected_weights)
+        blockers.extend(weight_blockers)
         input_role, output_role = predictor + ':input', predictor + ':canonical_structures'
         source = module + ':' + process
         helpers = []

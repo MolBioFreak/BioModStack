@@ -100,7 +100,12 @@ def package(tmp_path, monkeypatch):
     monkeypatch.setenv('BMS_REMOTE_API_BASE_URL', 'https://bms.example.invalid')
     (roots['containers']/'protenix.sif').write_bytes(b'image-not-executed')
     (roots['weights']/'protenix').mkdir()
-    (roots['weights']/'protenix/model.pt').write_bytes(b'weights-not-executed')
+    for member in ('checkpoint/protenix-v2.pt', 'common/components.cif',
+                   'common/components.cif.rdkit_mol.pkl', 'common/clusters-by-entity-40.txt',
+                   'common/obsolete_release_date.csv'):
+        path = roots['weights'] / 'protenix' / member
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'offline dependency fixture; not model data')
     seq = roots['inputs']/'seq.fasta'
     seq.write_text('>A\nAAAA\n')
     (roots['repo']/'main.nf').write_text('workflow {}\n')
@@ -243,7 +248,7 @@ def test_normalized_bundle_relocates_real_runtime(package, tmp_path, monkeypatch
     prepared = bundle.prepare_remote_bundle(job=job, target=target, command=command,
                                             native_invocation=job.native_invocation)
     envelope = prepared.envelope
-    assert len(prepared.runtime_transfers) == (2 if shared_critical else 3)
+    assert len(prepared.runtime_transfers) == (6 if shared_critical else 7)
     if shared_critical:
         binding = target.capabilities['critical_runtime_binding']
         assert binding['paths']['nextflow'] in envelope.command
@@ -342,6 +347,11 @@ def test_selected_prediction_managed_closure_uses_native_names(method, expected,
         'pred_method': method, 'run_frustrampnn': False,
         'protenix_use_msa': False, 'boltz_use_msa': False,
     }, 'workflows/structure_prediction.nf')
+    if 'protenix' in expected:
+        expected = (expected - {'protenix'}) | {
+            'protenix/checkpoint/protenix-v2.pt', 'protenix/common/components.cif',
+            'protenix/common/components.cif.rdkit_mol.pkl',
+            'protenix/common/clusters-by-entity-40.txt', 'protenix/common/obsolete_release_date.csv'}
     refs = {ref.relative_path for ref in metadata.dependencies if ref.kind in {'image', 'weights'}}
     assert refs == expected
     assert 'boltz2-v2.9.5-7ebf1be.sif' not in refs
@@ -572,7 +582,7 @@ def test_actual_normalized_nextflow_command_omits_unrelated_original_params(pack
     argv = compile_native(job, normalized)
     prepared = bundle.prepare_remote_bundle(job=job, target=target, command=argv,
                                             native_invocation=job.native_invocation)
-    assert len(prepared.runtime_transfers) == 3
+    assert len(prepared.runtime_transfers) == 7
     assert len(prepared.input_transfers) == 2
     assert prepared.input_transfers[0].remote_destination.endswith('/.bms/portable-input-bindings.json')
     assert prepared.input_transfers[1].remote_destination.endswith('/component-resources.config')

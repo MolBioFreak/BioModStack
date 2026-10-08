@@ -162,6 +162,8 @@ class SelectedDependency:
     compatibility_authority: str | None = None
     requiredness: str = 'required'
     condition: str | None = None
+    # A selector may bind a root while relative_path names one selected member.
+    selector_subpath: str | None = None
 
 
 @dataclass(frozen=True)

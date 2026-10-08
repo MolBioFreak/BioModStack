@@ -436,6 +436,16 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
                     else Path(str(selected)).expanduser())
         else:
             path = Path(str(selected)).expanduser() if selected else root / relative if relative else None
+        if dependency.selector_subpath is not None:
+            member = PurePosixPath(dependency.selector_subpath)
+            if (not dependency.selector or not member.parts or member.is_absolute()
+                    or '..' in member.parts or '\\' in dependency.selector_subpath):
+                raise RemoteBundleError('Selected runtime dependency has an invalid selector member: ' + dependency.logical_id)
+            if selected and path is not None:
+                selected_root = path
+                path = selected_root / member
+                if not path.resolve().is_relative_to(selected_root.resolve()):
+                    raise RemoteBundleError('Selected runtime dependency escapes selector root: ' + dependency.logical_id)
         if path is None or not path.is_absolute():
             raise RemoteBundleError('Selected runtime dependency has no managed binding: ' + dependency.logical_id)
         if dependency.kind == 'image' and (path.is_symlink() or any(parent.is_symlink() for parent in path.parents)):
