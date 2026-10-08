@@ -234,3 +234,130 @@ def test_unsafe_or_cross_lane_document_rejected(fixture, profile):
     fixture.write_text(json.dumps(raw))
     assert not apply(fixture)["configured"]
     assert not tx.transaction_dir().exists()
+
+
+@pytest.mark.parametrize("entry", ["journal.json.tmp", "journal.json"])
+def test_predictable_temp_symlink_preserves_operator_file(fixture, entry):
+    pending = tx.transaction_dir().with_name("configuration-v1-preparing")
+    pending.mkdir(parents=True)
+    victim = fixture.parent / "operator-state.txt"
+    victim.write_text("PRESERVE ME\n")
+    (pending / entry).symlink_to(victim)
+    result = subprocess.run(["bash", str(ROOT / "start_ui.sh"), "configure", "--json",
+                             "--document", str(fixture)], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert not json.loads(result.stdout)["configured"]
+    assert victim.read_text() == "PRESERVE ME\n"
+    assert (pending / entry).is_symlink()  # no rename/adoption of unknown journal
+
+
+@pytest.mark.parametrize("kind", ["symlink", "file", "foreign"])
+def test_unsafe_staging_directory_preserved(fixture, monkeypatch, kind):
+    pending = tx.transaction_dir().with_name("configuration-v1-preparing")
+    pending.parent.mkdir(parents=True)
+    other = fixture.parent / "other"
+    if kind == "symlink":
+        other.mkdir()
+        pending.symlink_to(other, target_is_directory=True)
+    elif kind == "file":
+        pending.write_text("KEEP")
+    else:
+        pending.mkdir()
+        original = Path.lstat
+        def foreign(path):
+            info = original(path)
+            if path == pending:
+                values = list(info)
+                values[4] = os.geteuid() + 42
+                return os.stat_result(values)
+            return info
+        monkeypatch.setattr(Path, "lstat", foreign)
+    assert not apply(fixture)["configured"]
+    assert os.path.lexists(pending)
+    if kind == "file":
+        assert pending.read_text() == "KEEP"
+    if kind == "symlink":
+        assert not list(other.iterdir())
+
+
+def test_exclusive_write_and_old_temp_names_preserved(fixture):
+    directory = fixture.parent / "write-test"
+    directory.mkdir()
+    victim = directory / "victim"
+    victim.write_text("KEEP")
+    (directory / "new.tmp").symlink_to(victim)
+    tx._write(directory / "new", "NEW")
+    assert victim.read_text() == "KEEP"
+    assert (directory / "new.tmp").is_symlink()
+    assert (directory / "new").stat().st_mode & 0o777 == 0o600
+    with pytest.raises(FileExistsError):
+        tx._write(victim, "CLOBBER")
+    assert victim.read_text() == "KEEP"
+    assert not list(directory.glob(".new.*"))
+
+
+@pytest.mark.parametrize("point", ["journal", "publish:compat_env", "before_activation"])
+@pytest.mark.parametrize("lane", [".biomodstack", ".biomodstack-dev"])
+def test_legacy_state_appears_during_interruption(fixture, monkeypatch, point, lane):
+    monkeypatch.setattr(tx, "_checkpoint", lambda name: (_ for _ in ()).throw(OSError("stop")) if name == point else None)
+    assert not apply(fixture)["configured"]
+    legacy = Path.home() / lane
+    legacy.mkdir(exist_ok=True)
+    database = legacy / "biomodstack.db"
+    database.write_bytes(b"existing legacy database")
+    code, report = cli("recover")
+    assert code == 3 and not report["configured"]
+    assert report["blockers"][0]["code"] == "existing_state_migration_unsupported"
+    assert database.read_bytes() == b"existing legacy database"
+    assert not (tx.transaction_dir() / "active").exists()
+
+
+def test_state_rechecked_immediately_before_activation(fixture, monkeypatch):
+    def insert(name):
+        if name == "before_activation":
+            legacy = Path.home() / ".biomodstack-dev"
+            legacy.mkdir()
+            (legacy / "biomodstack.db").write_text("KEEP")
+    monkeypatch.setattr(tx, "_checkpoint", insert)
+    assert not apply(fixture)["configuration_active"]
+
+
+def test_first_install_release_remains_explicitly_blocked(fixture):
+    assert cli("configure", "--document", str(fixture))[0] == 0
+    sys.path.insert(0, str(ROOT / "scripts"))
+    ProductionReleaseBackend = __import__("biomodstack_release").ProductionReleaseBackend
+    with pytest.raises(tx.ConfigurationBlocked, match="managed_configuration_read_only"):
+        ProductionReleaseBackend(repo_root=ROOT, allow_first_install=True)
+
+
+@pytest.mark.parametrize("kind", ["symlink", "hardlink", "fifo"])
+def test_lock_requires_owned_single_link_regular_file(fixture, kind):
+    root = tx.transaction_dir().parent
+    root.mkdir(parents=True)
+    lock = root / "configuration.lock"
+    victim = fixture.parent / "operator-state"
+    victim.write_text("KEEP")
+    if kind == "symlink":
+        lock.symlink_to(victim)
+    elif kind == "hardlink":
+        os.link(victim, lock)
+    else:
+        os.mkfifo(lock)
+    assert cli("configure", "--document", str(fixture))[0] == 3
+    assert victim.read_text() == "KEEP"
+    assert os.path.lexists(lock)
+
+
+def test_recovery_rejects_new_checkout_local_env(fixture, monkeypatch):
+    source = fixture.parent / "source"
+    source.mkdir()
+    monkeypatch.setattr(tx, "_checkpoint", lambda name: (_ for _ in ()).throw(OSError("stop")) if name == "journal" else None)
+    result = tx.configuration_report("configure", project_root=source, document=fixture)
+    assert not result["configured"] and result["recovery_available"]
+    legacy = source / ".env.core-runtime.local"
+    legacy.write_text("KEEP")
+    monkeypatch.setattr(tx, "_checkpoint", lambda name: None)
+    result = tx.configuration_report("recover", project_root=source)
+    assert not result["configured"]
+    assert result["blockers"][0]["code"] == "existing_install_migration_unsupported"
+    assert legacy.read_text() == "KEEP"

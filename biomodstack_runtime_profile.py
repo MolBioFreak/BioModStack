@@ -233,7 +233,7 @@ def get_biomodstack_config_dir() -> Path:
     xdg_config_home = os.getenv("XDG_CONFIG_HOME")
     if xdg_config_home:
         return _resolve_path(xdg_config_home) / "biomodstack"
-    return Path.home().resolve() / ".config" / "biomodstack"
+    return (Path.home() / ".config").resolve() / "biomodstack"
 
 
 def get_install_profile_path() -> Path:
