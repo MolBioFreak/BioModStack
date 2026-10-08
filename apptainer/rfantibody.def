@@ -1,70 +1,137 @@
 Bootstrap: docker
-From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+From: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
 
-%labels
-    Author BioModStack
-    Description RFantibody - De novo antibody backbone design with fine-tuned RFdiffusion
-    Version 1.0.0
+# RFantibody container optimized for NVIDIA RTX 5090 (sm_120) and RTX 3090 (sm_86)
+# Based on successful RFdiffusion implementation using CUDA 12.8
+# Builds DGL from source to support Blackwell architecture
 
 %post
-    apt-get update && apt-get install -y \
-        wget \
+    export DEBIAN_FRONTEND=noninteractive
+
+    # Install system dependencies
+    apt-get -q update
+    apt-get install --no-install-recommends -y \
         git \
-        curl \
-        python3 \
-        python3-pip \
-        python3-venv \
-        && apt-get clean \
-        && rm -rf /var/lib/apt/lists/*
+        wget \
+        build-essential \
+        ninja-build \
+        g++-11 \
+        ca-certificates
 
-    # Install UV package manager (10-100x faster than pip)
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="/root/.local/bin:$PATH"
+    # Install modern CMake (3.29.3) - Ubuntu 22.04 default is too old
+    cd /tmp
+    wget -q https://github.com/Kitware/CMake/releases/download/v3.29.3/cmake-3.29.3-linux-x86_64.sh
+    sh cmake-3.29.3-linux-x86_64.sh --skip-license --prefix=/usr/local
+    rm cmake-3.29.3-linux-x86_64.sh
 
-    # Create virtual environment
-    uv venv /opt/venv
-    export VIRTUAL_ENV=/opt/venv
-    export PATH="/opt/venv/bin:$PATH"
+    # Install Mambaforge for conda environment management
+    wget -q https://github.com/conda-forge/miniforge/releases/download/24.3.0-0/Mambaforge-24.3.0-0-Linux-x86_64.sh -O /tmp/mambaforge.sh
+    bash /tmp/mambaforge.sh -b -p /opt/conda
+    rm /tmp/mambaforge.sh
+    export PATH="/opt/conda/bin:$PATH"
 
-    # Install PyTorch 2.4 with CUDA 12.4 support (DGL 2.1.0 requires PyTorch <= 2.4)
-    uv pip install "torch==2.4.*" "torchvision==0.19.*" "torchaudio==2.4.*" --index-url https://download.pytorch.org/whl/cu124
+    # Create Python 3.11 environment
+    mamba create -y -n rfantibody python=3.11
+    export PATH="/opt/conda/envs/rfantibody/bin:$PATH"
 
-    # Clone RFantibody
+    # Install PyTorch nightly with CUDA 12.8 support (required for RTX 5090 sm_120)
+    # Use --no-deps to bypass dependency resolver issues with nightly builds
+    pip install --pre --no-deps torch --index-url https://download.pytorch.org/whl/nightly/cu128
+    pip install --pre --no-deps torchvision --index-url https://download.pytorch.org/whl/nightly/cu128
+    pip install --pre --no-deps torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+
+    # Install PyTorch's CUDA dependencies from the nightly index
+    pip install --pre --index-url https://download.pytorch.org/whl/nightly/cu128 \
+        cuda-bindings \
+        nvidia-cudnn-cu12 \
+        nvidia-cublas-cu12 \
+        nvidia-cuda-cupti-cu12 \
+        nvidia-cuda-nvrtc-cu12 \
+        nvidia-cuda-runtime-cu12 \
+        nvidia-cufft-cu12 \
+        nvidia-cufile-cu12 \
+        nvidia-curand-cu12 \
+        nvidia-cusolver-cu12 \
+        nvidia-cusparse-cu12 \
+        nvidia-cusparselt-cu12 \
+        nvidia-nccl-cu12 \
+        nvidia-nvjitlink-cu12 \
+        nvidia-nvshmem-cu12 \
+        nvidia-nvtx-cu12 \
+        pytorch-triton
+
+    # Install other dependencies
+    pip install "numpy<2.0" sympy networkx jinja2 fsspec filelock typing-extensions scipy pillow
+
+    # Clone RFantibody repository
     git clone https://github.com/RosettaCommons/RFantibody.git /opt/RFantibody
     cd /opt/RFantibody
 
-    # Install ALL RFantibody dependencies from pyproject.toml with UV
-    # Core deps: torch, numpy, hydra-core, icecream, opt-einsum, e3nn, pyrsistent
-    # Runtime deps (not listed but needed): pandas, scipy
-    # DGL hidden deps: pydantic, pyarrow, fsspec
-    uv pip install numpy pandas scipy hydra-core icecream opt-einsum e3nn pyrsistent pyyaml biopython pydantic pyarrow fsspec
-    
-    # Install RFantibody as editable package from src/
-    uv pip install -e /opt/RFantibody 2>/dev/null || true
-    
-    # Pin torchdata to version with datapipes API (required by DGL)
-    uv pip install "torchdata==0.8.0"
-    
-    # SE3-Transformer / DGL - try older version for compatibility
-    # Also install dgl without graphbolt dependency issues
-    uv pip install "dgl==2.0.0" -f https://data.dgl.ai/wheels/cu121/repo.html
+    # Install RFantibody dependencies
+    pip install --no-cache-dir \
+        hydra-core==1.3.2 \
+        pandas \
+        "pydantic>=2.0" \
+        pyrsistent==0.19.3 \
+        icecream==2.1.3 \
+        biopython==1.81 \
+        pyyaml \
+        pyarrow \
+        fsspec
 
-    # Cleanup
-    rm -rf /root/.cache/uv
+    # Install e3nn with --no-deps to prevent torch downgrade
+    pip install --no-cache-dir --no-deps e3nn==0.5.9
+    pip install --no-cache-dir --no-deps opt_einsum
+    pip install --no-cache-dir --no-deps opt-einsum-fx
+
+    # Install torchdata with --no-deps to prevent torch downgrade
+    pip install --no-cache-dir --no-deps torchdata
+
+    # Build and install DGL from source with CUDA 12.8 support
+    rm -rf /tmp/dgl
+    cd /tmp
+    git clone --recursive https://github.com/dmlc/dgl.git
+    cd dgl
+    mkdir build
+    cd build
+    cmake -DUSE_CUDA=ON \
+          -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda \
+          -DCMAKE_BUILD_TYPE=Release \
+          ..
+    make -j$(nproc)
+    cd /tmp/dgl/python
+    pip install .
+
+    # Build and install SE3Transformer from RFantibody/include
+    cd /opt/RFantibody/include/SE3Transformer
+    pip install --no-cache-dir . --no-deps || true
+
+    # Install RFantibody as editable package
+    cd /opt/RFantibody
+    pip install --no-cache-dir -e . --no-deps || true
+
+    # Create python3.10 symlink for backward compatibility with Nextflow modules
+    ln -sf /opt/conda/envs/rfantibody/bin/python /opt/conda/envs/rfantibody/bin/python3.10
+    ln -sf /opt/conda/envs/rfantibody/bin/python /opt/conda/envs/rfantibody/bin/python3
+
+    # Clean up
+    apt-get autoremove -y
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+    rm -rf /tmp/dgl /tmp/mambaforge.sh /tmp/cmake-*.sh
 
     # Create weights directory - weights should be mounted at runtime
     mkdir -p /opt/RFantibody/weights
 
 %environment
+    export PATH="/opt/conda/envs/rfantibody/bin:$PATH"
+    export DGLBACKEND="pytorch"
+    export PYTHONUNBUFFERED=1
     # CRITICAL: Include all necessary paths for rfantibody module imports
-    # parsers.py uses relative imports, so we need to add those directories
-    # SE3Transformer contains se3_transformer module
     export PYTHONPATH="/opt/RFantibody/src:/opt/RFantibody/src/rfantibody/rfdiffusion:/opt/RFantibody/src/rfantibody/rf2:/opt/RFantibody/include:/opt/RFantibody/include/SE3Transformer:/opt/RFantibody:$PYTHONPATH"
-    export PATH="/opt/venv/bin:/opt/RFantibody:$PATH"
-    export VIRTUAL_ENV=/opt/venv
     # Weights path - should be mounted from host at /opt/RFantibody/weights
     export RFANTIBODY_WEIGHTS="/opt/RFantibody/weights"
 
 %runscript
     cd /opt/RFantibody
-    python3 "$@"
+    exec python scripts/rfdiffusion_inference.py "$@"
