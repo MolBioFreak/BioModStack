@@ -15,6 +15,7 @@ Bundle the transitive dependencies of `modules/frustrampnn_native_parent.nf`, `m
 - Shared grouping preserves candidate order, requested settings, batching enablement, group sizes, and singleton remainders.
 - The final join rejects missing, duplicate, foreign, failed, or request-conflicting results. Required native results are not replaced by a generic success receipt.
 - Canonical bundles are published beneath `frustrampnn/results/<candidate>/`. The native parent terminal receipt and SQLite grouping ledger are beneath `frustrampnn/component_runtime/`.
+- A failed native group writes an attempt-scoped, request-hash-bound diagnostic beneath `frustrampnn/component_runtime/failed/` before re-raising the original failure. This records failure, not scientific success, and does not change fail-fast behavior.
 - Ordinary protein-design metadata retains canonical candidate identity even when legacy fold and sequence IDs are absent. Nullable native ranks remain integers or null; structured scientific extensions retain JSON encoding in CSV cells. Projection still requires exact manifest/candidate agreement.
 
 ## BoltzGen campaigns

@@ -140,6 +140,7 @@ def main():
     p.add_argument('--container', type=Path, required=True)
     p.add_argument('--gpu', type=int, required=True)
     p.add_argument('--apptainer', default='apptainer')
+    p.add_argument('--diagnostic-root', type=Path)
     p = sub.add_parser('seal')
     p.add_argument('--candidate', action='append', type=Path, required=True)
     p.add_argument('--bundle', action='append', type=Path, required=True)
@@ -152,7 +153,24 @@ def main():
     elif args.operation == 'plan':
         materialize_groups(args.candidate, Path('groups'), attempt_id=args.attempt)
     elif args.operation == 'run':
-        run_group(args.candidate, args.container, args.gpu, args.apptainer)
+        try:
+            run_group(args.candidate, args.container, args.gpu, args.apptainer)
+        except Exception as error:
+            # Failed Nextflow tasks do not publish normal outputs. Retain a
+            # deliberately bounded diagnostic outside that success-only path,
+            # then preserve the original failure and fail-fast semantics.
+            if args.diagnostic_root is not None:
+                requests = []
+                for candidate in args.candidate:
+                    request = candidate/'workflow_component_request_v3.json'
+                    requests.append(hashlib.sha256(request.read_bytes()).hexdigest()
+                                    if request.is_file() and not request.is_symlink() else None)
+                durable_write(args.diagnostic_root/'failure.json', canonical_bytes({
+                    'schema_name': 'bms.frustrampnn.native-group-failure.v1',
+                    'status': 'failed', 'failure_type': type(error).__name__,
+                    'request_sha256': requests, 'scientific_success': False,
+                }))
+            raise
     else:
         seal(args.candidate, args.bundle, Path('joined'), args.publish_root, args.attempt)
 
