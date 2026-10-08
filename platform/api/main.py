@@ -13,7 +13,7 @@ import asyncio
 import logging
 
 from database import init_db, async_session
-from routers import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, smiles_converter, queue, rcsb, nucleotide_sequences, system, frameworks
+from routers import jobs, gpu, files, models, templates, inputs, designs, analytics, user_sequences, user_templates, smiles_converter, queue, rcsb, nucleotide_sequences, system, frameworks, molbio_ops, msa
 from services.gpu_orchestrator import GPUOrchestrator
 from routers.gpu import get_gpu_stats
 
@@ -107,6 +107,8 @@ app.include_router(rcsb.router, prefix="/api/rcsb", tags=["rcsb"])
 app.include_router(nucleotide_sequences.router)  # /api/sequences/*
 app.include_router(system.router, prefix="/api", tags=["system"])  # /api/system/*
 app.include_router(frameworks.router)  # /api/frameworks/* - SAbDab integration
+app.include_router(molbio_ops.router)
+app.include_router(msa.router)
 
 
 @app.get("/api/health")
@@ -119,4 +121,3 @@ async def health_check():
 async def root():
     """Root redirect to API docs."""
     return {"message": "BioModStack API", "docs": "/docs"}
-

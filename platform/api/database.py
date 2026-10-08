@@ -271,6 +271,12 @@ class NucleotideSequence(Base):
     organism = Column(String(255), nullable=True)
     accession = Column(String(100), nullable=True)  # GenBank accession
     source_file = Column(String(255), nullable=True)  # Original filename if imported
+
+    # Provenance
+    parent_id = Column(String(36), nullable=True)
+    operation = Column(String(50), nullable=True)  # digest, pcr, ligate, mutagenesis, gibson, goldengate
+    operation_params = Column(JSON, nullable=True)
+    version = Column(Integer, nullable=False, default=1)
     
     # GC content cached
     gc_content = Column(Float, nullable=True)

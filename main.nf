@@ -25,6 +25,7 @@ include { BoltzFromSequence } from './modules/structure_prediction.nf'
 include { BoltzFromComplex } from './modules/structure_prediction.nf'
 include { RF3FromSequence } from './modules/structure_prediction.nf'
 include { structure_prediction_wf } from './modules/structure_prediction.nf'
+include { OpenMMRelaxation ; OpenMMScore } from './modules/openmm.nf'
 
 // Antibody Design Subworkflow
 include { ANTIBODY_DESIGN } from './workflows/antibody_design.nf'

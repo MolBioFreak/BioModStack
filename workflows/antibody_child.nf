@@ -84,7 +84,7 @@ workflow {
     if (params.pdb_paths) {
         // Parse list from string "[path1, path2]" or JSON
         def clean_paths = params.pdb_paths.toString().replace('[','').replace(']','').split(',')
-        pdbs_to_process = clean_paths.collect { it.strip() }.findAll { it }
+        pdbs_to_process = clean_paths.collect { it.trim() }.findAll { it }
     } else if (params.pdb_path) {
         // Legacy single mode
         pdbs_to_process = [params.pdb_path]

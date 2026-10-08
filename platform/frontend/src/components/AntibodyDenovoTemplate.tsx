@@ -11,6 +11,7 @@ import { QualitySettingsPanel, PRESETS, type QualitySettings, type QualityPreset
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
 import { FrameworkEditor, type FrameworkEditorState } from './FrameworkEditor';
+import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
 
 interface AntibodyDenovoTemplateProps {
     onBack: () => void;
@@ -48,6 +49,9 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     // Quality settings
     const [qualityPreset, setQualityPreset] = useState<QualityPreset>('balanced');
     const [qualitySettings, setQualitySettings] = useState<QualitySettings>(PRESETS.balanced);
+
+    // Physics refinement settings (OpenMM)
+    const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(PHYSICS_DEFAULTS);
 
     // Framework selection - preset, custom, or SAbDab
     type FrameworkType = 'standard-fv' | 'nanobody' | 'custom' | 'sabdab';
@@ -402,6 +406,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     fampnn_collected_pdbs: fampnnCollectedPdbs.trim() || undefined,
                     // Debug: Custom output directory
                     out_dir: customOutputDir.trim() || undefined,
+                    // Physics refinement (OpenMM)
+                    openmm_enabled: physicsSettings.enabled,
+                    openmm_compute_tier: physicsSettings.computeTier,
+                    openmm_cdr_only: physicsSettings.cdrOnly,
+                    openmm_restraint_mode: physicsSettings.restraintMode,
+                    openmm_mmgbsa_mode: physicsSettings.mmgbsaMode,
+                    openmm_force_field: physicsSettings.forceField,
+                    openmm_top_n_percentage: physicsSettings.topNPercentage,
                 }
             };
 
@@ -821,6 +833,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     onSettingsChange={setQualitySettings}
                     preset={qualityPreset}
                     onPresetChange={setQualityPreset}
+                />
+
+                {/* Physics Refinement Panel (OpenMM) */}
+                <PhysicsRefinementPanel
+                    settings={physicsSettings}
+                    onSettingsChange={setPhysicsSettings}
+                    isAntibody={true}
                 />
 
                 {/* Number of Backbones */}
