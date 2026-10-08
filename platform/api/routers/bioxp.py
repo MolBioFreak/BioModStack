@@ -258,6 +258,8 @@ ROBOT_LOCAL_EXPECTED_ROUTES: Dict[str, bool] = {
     "/motion/oem/programs": True,
     "/motion/oem/programs/{program_name}": True,
     "/motion/oem/{program_name}/dry_run": True,
+    "/motion/oem/shadow_readback": True,
+    "/motion/oem/shadow_readback/capture": True,
     "/motion/range/status": True,
     "/motion/interlock/prepare": True,
     "/motion/interlock/override": True,
@@ -903,6 +905,38 @@ async def oem_homing_program_dry_run(program_name: str, request: Request):
         payload.setdefault("bms_role", "thin_proxy_only")
         payload.setdefault("live_homing", "blocked")
     return payload
+
+
+@router.get("/motion/oem/shadow_readback")
+async def oem_shadow_readback(axes: str = "x,y,z,g,door"):
+    """Read-only proxy to robot-local OEM shadow/readback artifact route."""
+    payload = await proxy_request(
+        "GET",
+        "/motion/oem/shadow_readback",
+        params={"axes": axes},
+        timeout=20.0,
+    )
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        payload.setdefault("bms_role", "thin_proxy_only")
+        payload.setdefault("live_homing", "blocked")
+    return payload
+
+
+@router.post("/motion/oem/shadow_readback/capture")
+async def oem_shadow_readback_capture(payload: Dict[str, Any]):
+    """Read-only proxy to robot-local OEM shadow/readback capture route."""
+    proxied = await proxy_request(
+        "POST",
+        "/motion/oem/shadow_readback/capture",
+        json_data=payload,
+        timeout=30.0,
+    )
+    if isinstance(proxied, dict):
+        proxied = dict(proxied)
+        proxied.setdefault("bms_role", "thin_proxy_only")
+        proxied.setdefault("live_homing", "blocked")
+    return proxied
 
 
 async def _request_json_or_empty(request: Request) -> Dict[str, Any]:
