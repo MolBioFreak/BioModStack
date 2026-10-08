@@ -95,11 +95,13 @@ export function format(template: unknown, ...args: unknown[]): string {
     return `${formatted} ${args.slice(argIndex).map((value) => inspect(value)).join(' ')}`;
 }
 
-export function debuglog(_section: string): (...args: unknown[]) => void {
+export function debuglog(section: string): (...args: unknown[]) => void {
+    void section;
     return () => {};
 }
 
-export function deprecate<T extends (...args: never[]) => unknown>(fn: T, _message: string): T {
+export function deprecate<T extends (...args: never[]) => unknown>(fn: T, message: string): T {
+    void message;
     return fn;
 }
 

@@ -14,7 +14,7 @@ export interface Job {
     status: 'queued' | 'running' | 'completed' | 'awaiting_input' | 'failed' | 'cancelled';
     model_id: string;
     mode: string;
-    params: Record<string, any>;
+    params: Record<string, UntypedApiValue>;
     created_at: string;
     design_count: number;
     requested_design_count?: number | null;
@@ -54,8 +54,8 @@ export interface Job {
     stage_outputs?: Record<string, string[]> | null;
     awaiting_input?: boolean | null;
     awaiting_stage?: string | null;
-    awaiting_payload?: Record<string, any> | null;
-    decision_history?: Array<Record<string, any>> | null;
+    awaiting_payload?: Record<string, UntypedApiValue> | null;
+    decision_history?: Array<Record<string, UntypedApiValue>> | null;
     selected_cdr_loops?: string[] | null;
 }
 
@@ -363,8 +363,8 @@ export const submitJob = (jobData: Partial<Job>) => {
 
 export interface BoltzGenPreviewResponse {
     yaml_text: string;
-    scaffold_specs: Array<Record<string, any>>;
-    resolved_params: Record<string, any>;
+    scaffold_specs: Array<Record<string, UntypedApiValue>>;
+    resolved_params: Record<string, UntypedApiValue>;
     notes: string[];
     check_ok: boolean;
     check_stdout?: string | null;
@@ -372,7 +372,7 @@ export interface BoltzGenPreviewResponse {
 }
 
 export const previewBoltzGenDesignSpec = (payload: {
-    params: Record<string, any>;
+    params: Record<string, UntypedApiValue>;
     validate?: boolean;
 }) => api.post<BoltzGenPreviewResponse>('/api/boltzgen/preview', payload);
 
@@ -642,32 +642,32 @@ export const continueProteinLocalReview = (
 
 // Models API
 export const fetchModels = (category?: string) =>
-    api.get<any[]>('/api/models', { params: { category } });
+    api.get<UntypedApiValue[]>('/api/models', { params: { category } });
 
 export const fetchModelById = (id: string) =>
-    api.get<any>(`/api/models/${id}`);
+    api.get<UntypedApiValue>(`/api/models/${id}`);
 
 // Files API
 export const fetchFiles = (path: string = '/') =>
-    api.get<any>('/api/files/browse', { params: { path } });
+    api.get<UntypedApiValue>('/api/files/browse', { params: { path } });
 
 // Templates API
 export const fetchTemplates = () =>
-    api.get<any[]>('/api/templates');
+    api.get<UntypedApiValue[]>('/api/templates');
 
 export const fetchTemplateById = (id: string) =>
-    api.get<any>(`/api/templates/${id}`);
+    api.get<UntypedApiValue>(`/api/templates/${id}`);
 
 // Inputs Presets API
 export const fetchInputPresets = (type: string) =>
-    api.get<any[]>('/api/inputs/presets', { params: { type } });
+    api.get<UntypedApiValue[]>('/api/inputs/presets', { params: { type } });
 
 export const fetchStandardPaths = () =>
-    api.get<any>('/api/inputs/paths');
+    api.get<UntypedApiValue>('/api/inputs/paths');
 
 // Directory presets for batch processing
 export const fetchPresetDirectories = () =>
-    api.get<any[]>('/api/inputs/preset-directories');
+    api.get<UntypedApiValue[]>('/api/inputs/preset-directories');
 
 // Designs API
 export type RfScreeningScope = 'cdr_loops' | 'whole_antibody';
@@ -1143,7 +1143,7 @@ export interface JobAnalytics {
     design_count: number;
     metrics: Record<string, MetricDistribution | null>;
     correlations: Record<string, Array<{ x: number; y: number; id: string }>> | null;
-    pipeline_summary: Record<string, any>;
+    pipeline_summary: Record<string, UntypedApiValue>;
 }
 
 export interface DesignMetricPoint {
@@ -1351,7 +1351,7 @@ export interface UserTemplate {
     base_template_id: string | null;
     model_id: string | null;
     mode: string | null;
-    params: Record<string, any>;
+    params: Record<string, UntypedApiValue>;
     created_at: string;
     updated_at: string | null;
 }
@@ -1364,7 +1364,7 @@ export interface UserTemplateCreate {
     base_template_id?: string;
     model_id?: string;
     mode?: string;
-    params: Record<string, any>;
+    params: Record<string, UntypedApiValue>;
 }
 
 export const fetchUserTemplates = (search?: string, model_id?: string) =>
@@ -1551,9 +1551,9 @@ export interface SequenceFeature {
     strand: number;
     color?: string;
     description?: string;
-    notes?: Record<string, any>;
-    qualifiers?: Record<string, any>;
-    provenance?: Record<string, any>;
+    notes?: Record<string, UntypedApiValue>;
+    qualifiers?: Record<string, UntypedApiValue>;
+    provenance?: Record<string, UntypedApiValue>;
     segments?: Array<{
         start: number;
         end: number;
@@ -1573,8 +1573,8 @@ export interface SequencePrimer {
     tm_algorithm?: string;
     tm_salt_correction?: string;
     tm_settings?: PrimerTmSettings;
-    notes?: Record<string, any>;
-    provenance?: Record<string, any>;
+    notes?: Record<string, UntypedApiValue>;
+    provenance?: Record<string, UntypedApiValue>;
     sites?: Array<{
         start: number;
         end: number;

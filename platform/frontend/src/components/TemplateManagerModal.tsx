@@ -1,6 +1,6 @@
 /**
  * TemplateManagerModal - Modal for saving current job configuration as a reusable template
- * 
+ *
  * Features:
  * - Save current job params as a named template
  * - Edit existing user templates
@@ -23,7 +23,7 @@ interface TemplateManagerModalProps {
     onClose: () => void;
     onSelect?: (template: UserTemplate) => void;
     // For saving current config as template
-    currentParams?: Record<string, any>;
+    currentParams?: Record<string, UntypedApiValue>;
     currentModelId?: string;
     currentMode?: string;
     baseTemplateId?: string;
@@ -74,7 +74,7 @@ export function TemplateManagerModal({
             resetForm();
             setMode('list');
         },
-        onError: (err: any) => {
+        onError: (err: UntypedApiValue) => {
             setFormError(err.response?.data?.detail || 'Failed to create template');
         }
     });
@@ -88,7 +88,7 @@ export function TemplateManagerModal({
             resetForm();
             setMode('list');
         },
-        onError: (err: any) => {
+        onError: (err: UntypedApiValue) => {
             setFormError(err.response?.data?.detail || 'Failed to update template');
         }
     });
@@ -119,7 +119,7 @@ export function TemplateManagerModal({
                 setMode('edit');
             }
         }
-    }, [isOpen, currentParams]);
+    }, [isOpen, currentParams, editingTemplate, mode]);
 
     // Populate form when editing
     useEffect(() => {

@@ -1,6 +1,6 @@
 /**
  * FrameworkBrowser - Browse and select antibody frameworks from SAbDab
- * 
+ *
  * Enhanced with:
  * - CDR-H3 length range slider (now works with local SQLite!)
  * - Debounced auto-search (500ms)
@@ -107,8 +107,7 @@ function useDebounce<T>(value: T, delay: number): T {
 
 export function FrameworkBrowser({
     onSelect,
-    selectedFramework,
-    showCustomUpload: _showCustomUpload = true
+    selectedFramework
 }: FrameworkBrowserProps) {
     const [activeTab, setActiveTab] = useState<'presets' | 'sabdab' | 'cached'>('presets');
 
@@ -131,7 +130,7 @@ export function FrameworkBrowser({
     const [downloadingPdb, setDownloadingPdb] = useState<string | null>(null);
     // Chain selector state for frameworks with antigens
     const [pendingDownload, setPendingDownload] = useState<{
-        data: any;
+        data: UntypedApiValue;
         cdrH3Length?: number | null;
     } | null>(null);
 
@@ -143,7 +142,7 @@ export function FrameworkBrowser({
         queryFn: () => getSabdabFilterOptions(),
         staleTime: 1000 * 60 * 60, // 1 hour
     });
-    const filterOptions: SAbDabFilterOptions | undefined = (filterOptionsData as any)?.data;
+    const filterOptions: SAbDabFilterOptions | undefined = (filterOptionsData as UntypedApiValue)?.data;
 
     // Fetch database stats
     const { data: statsData } = useQuery({
@@ -151,7 +150,7 @@ export function FrameworkBrowser({
         queryFn: () => getSabdabDatabaseStats(),
         staleTime: 1000 * 60 * 5, // 5 min
     });
-    const stats: SAbDabDatabaseStats | undefined = (statsData as any)?.data;
+    const stats: SAbDabDatabaseStats | undefined = (statsData as UntypedApiValue)?.data;
 
     // Build search params object for debouncing
     const searchParams = useMemo(() => ({
@@ -176,7 +175,7 @@ export function FrameworkBrowser({
         queryFn: () => searchSabdabFrameworks(debouncedParams),
         enabled: activeTab === 'sabdab',
     });
-    const searchResponse = (searchData as any)?.data;
+    const searchResponse = (searchData as UntypedApiValue)?.data;
     const frameworks: SAbDabSearchResult[] = searchResponse?.results ?? [];
     const totalResults = searchResponse?.total ?? 0;
 
@@ -191,7 +190,7 @@ export function FrameworkBrowser({
         queryFn: listCachedFrameworks,
         enabled: activeTab === 'cached',
     });
-    const cached: CachedFramework[] = (cachedData as any)?.data?.frameworks ?? [];
+    const cached: CachedFramework[] = useMemo(() => (cachedData as UntypedApiValue)?.data?.frameworks ?? [], [cachedData]);
     const sortedCached = useMemo(() => {
         const entries = [...cached];
         entries.sort((a, b) => {
@@ -218,7 +217,7 @@ export function FrameworkBrowser({
         queryFn: getSabdabAttribution,
         staleTime: Infinity,
     });
-    const attribution = (attributionData as any)?.data;
+    const attribution = (attributionData as UntypedApiValue)?.data;
 
     // Download mutation
     const downloadMutation = useMutation({
@@ -554,7 +553,7 @@ export function FrameworkBrowser({
                             <label className="text-xs text-slate-500">Sort by:</label>
                             <select
                                 value={sortBy}
-                                onChange={e => setSortBy(e.target.value as any)}
+                                onChange={e => setSortBy(e.target.value as UntypedApiValue)}
                                 className="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm text-white"
                             >
                                 <option value="resolution">Resolution (best first)</option>

@@ -25,6 +25,7 @@
     "src/runtime/navigation.ts",
     "src/runtime/runtimeSwitch.ts",
     "src/runtime/uiDiagnostics.ts",
+    "src/types/**/*.d.ts",
     "tests/**/*.ts"
   ]
 }

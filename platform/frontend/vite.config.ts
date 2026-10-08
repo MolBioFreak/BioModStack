@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
+import type { IncomingMessage } from 'node:http'
 import { createRequire } from 'node:module'
 import path from 'path'
 
@@ -158,7 +159,7 @@ export default defineConfig(({ mode }) => ({
         target: 'http://localhost:8000',
         changeOrigin: true,
         configure: (proxy) => {
-          proxy.on('proxyRes', (proxyRes: any) => {
+          proxy.on('proxyRes', (proxyRes: IncomingMessage) => {
             proxyRes.headers['x-accel-buffering'] = 'no';
             proxyRes.headers['cache-control'] = 'no-cache, no-store, no-transform';
           });

@@ -1,7 +1,7 @@
 /**
  * CDRRangeSelector Component
  * Interactive residue grid for manually defining CDR regions on a framework structure
- * 
+ *
  * Features:
  * - Click to toggle single residue
  * - Shift+click for range selection
@@ -75,7 +75,7 @@ export function CDRRangeSelector({
         };
     };
 
-    // Check if residue belongs to any CDR
+    // Check if residue belongs to unknown CDR
     const getCDRForResidue = (resKey: string): CDRDefinition | null => {
         for (const cdr of cdrDefinitions) {
             if (cdr.residues.has(resKey)) return cdr;

@@ -974,7 +974,7 @@ export function RawDataImport() {
                                                                         type="number"
                                                                         inputMode="decimal"
                                                                         min="0"
-                                                                        step="any"
+                                                                        step="unknown"
                                                                         value={row.dilutionFactor}
                                                                         onChange={(event) => handleDilutionInputChange(row.key, 'dilutionFactor', event.target.value)}
                                                                         className="w-24 border border-border-primary bg-bg-secondary px-2 py-1 text-text-primary"
@@ -986,7 +986,7 @@ export function RawDataImport() {
                                                                         type="number"
                                                                         inputMode="decimal"
                                                                         min="0"
-                                                                        step="any"
+                                                                        step="unknown"
                                                                         value={row.expectedQuantity}
                                                                         onChange={(event) => handleDilutionInputChange(row.key, 'expectedQuantity', event.target.value)}
                                                                         className="w-28 border border-border-primary bg-bg-secondary px-2 py-1 text-text-primary"

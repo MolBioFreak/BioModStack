@@ -19,9 +19,9 @@ declare module '@teselagen/bio-parsers' {
             end: number;
             strand?: number;
             color?: string;
-            [key: string]: any;
+            [key: string]: UntypedApiValue;
         }>;
-        [key: string]: any;
+        [key: string]: UntypedApiValue;
     }
 
     export function anyToJson(
@@ -30,7 +30,7 @@ declare module '@teselagen/bio-parsers' {
     ): Promise<Array<{ parsedSequence: ParsedSequence }> | { parsedSequence: ParsedSequence }>;
 
     export function jsonToGenbank(
-        json: any,
-        options?: any
+        json: UntypedApiValue,
+        options?: UntypedApiValue
     ): string;
 }

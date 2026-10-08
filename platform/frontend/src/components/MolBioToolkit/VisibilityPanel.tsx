@@ -2,7 +2,8 @@
  * VisibilityPanel - Toggle annotation layer visibility + settings
  */
 
-import { COLOR_PALETTES, type ColorPaletteName } from './SequenceViewer';
+import { COLOR_PALETTES } from './sequenceViewerConstants';
+import type { ColorPaletteName } from './SequenceViewer';
 
 interface VisibilityState {
     features: boolean;

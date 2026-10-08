@@ -1,11 +1,11 @@
 /**
  * ExperimentalAnalyticsPane - Plotly-powered advanced analytics (Experimental)
- * 
+ *
  * This is a separate, isolated tab that doesn't affect existing analytics.
  * Uses Plotly.js for interactive visualizations with more statistical depth.
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
@@ -130,7 +130,7 @@ const PRESET_ANALYSES = [
     { id: 'contact_map', label: 'Residue Contact Map', xAxis: null, yAxis: null, zAxis: null, colorBy: null, type: 'contact' },
 ] as const;
 
-export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }: ExperimentalAnalyticsPaneProps) {
+export function ExperimentalAnalyticsPane({ designs, jobId }: ExperimentalAnalyticsPaneProps) {
     const queryClient = useQueryClient();
     const analyticsDesigns = useMemo(
         () => (designs.length > MAX_ANALYTICS_DESIGNS ? designs.slice(0, MAX_ANALYTICS_DESIGNS) : designs),
@@ -373,17 +373,17 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
         return base;
     }, [plotlyMetricsData]);
 
-    const getMetricValue = (design: Design, key: string): number | null => {
+    const getMetricValue = useCallback((design: Design, key: string): number | null => {
         const direct = (design as unknown as Record<string, unknown>)[key];
         if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
         if (typeof direct === 'boolean') return direct ? 1 : 0;
         const mapped = plotlyMetricsByDesign.get(design.id)?.[key];
         if (typeof mapped === 'number' && Number.isFinite(mapped)) return mapped;
         return null;
-    };
+    }, [plotlyMetricsByDesign]);
 
-    const getMetricLabel = (key: string): string =>
-        metricOptions.find((m) => m.key === key)?.label || key;
+    const getMetricLabel = useCallback((key: string): string =>
+        metricOptions.find((m) => m.key === key)?.label || key, [metricOptions]);
 
     // Sort designs by relevant metric based on preset
     const sortedDesigns = useMemo(() => {
@@ -419,11 +419,11 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
     }, [designs, selectedPreset]);
 
     // Extract numeric values from designs
-    const extractValues = (key: MetricKey): number[] => {
+    const extractValues = useCallback((key: MetricKey): number[] => {
         return designs
             .map((d) => getMetricValue(d, key))
             .filter((v): v is number => v != null && typeof v === 'number');
-    };
+    }, [designs, getMetricValue]);
 
     // Apply preset
     const handlePresetChange = (presetId: string) => {
@@ -483,7 +483,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                 opacity: 0.7,
             },
         }];
-    }, [designs, xAxis, yAxis, colorBy, selectedPreset]);
+    }, [designs, colorBy, getMetricLabel, selectedPreset, getMetricValue, xAxis, yAxis]);
 
     // Histogram data for distribution view
     const histogramData = useMemo((): Data[] => {
@@ -496,7 +496,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
             marker: { color: '#60a5fa' },
             nbinsx: 30,
         } as Data];
-    }, [designs, xAxis, selectedPreset]);
+    }, [extractValues, xAxis, selectedPreset]);
 
     // Violin plot data for confidence metrics
     const violinData = useMemo((): Data[] => {
@@ -519,7 +519,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
             line: { color: m.color },
             fillcolor: m.color + '40',
         }));
-    }, [designs, selectedPreset]);
+    }, [extractValues, selectedPreset]);
 
     // Box plot data for binding metrics
     const boxData = useMemo((): Data[] => {
@@ -540,9 +540,9 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
             marker: { color: m.color },
             boxpoints: 'outliers' as const,
         }));
-    }, [designs, selectedPreset]);
+    }, [extractValues, selectedPreset]);
 
-    // Dynamic 3D scatter data (supports any X/Y/Z metric combination)
+    // Dynamic 3D scatter data (supports unknown X/Y/Z metric combination)
     const scatter3DData = useMemo((): Data[] => {
         const preset = PRESET_ANALYSES.find(p => p.id === selectedPreset);
         // Support both '3d' and '3d_custom' types
@@ -603,7 +603,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
                 opacity: 0.85,
             },
         }];
-    }, [designs, xAxis, yAxis, zAxis, colorBy, markerSize, selectedPreset]);
+    }, [xAxis, yAxis, zAxis, designs, getMetricLabel, colorBy, markerSize, selectedPreset, getMetricValue]);
 
     // Parallel coordinates data - shows all designs across multiple metrics
     const parallelCoordsData = useMemo((): Data[] => {
@@ -651,7 +651,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
             },
             dimensions: dimensions,
         } as Data];
-    }, [designs, colorBy, selectedPreset]);
+    }, [selectedPreset, colorBy, designs, getMetricLabel, extractValues, getMetricValue]);
 
     // Contour plot data - 2D density visualization for factor interactions
     const contourData = useMemo((): Data[] => {
@@ -692,7 +692,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
             },
             hovertemplate: `${getMetricLabel(xAxis)}: %{x:.2f}<br>${getMetricLabel(yAxis)}: %{y:.2f}<extra></extra>`,
         } as Data];
-    }, [designs, xAxis, yAxis, zAxis, selectedPreset]);
+    }, [designs, getMetricLabel, xAxis, yAxis, selectedPreset, getMetricValue, zAxis]);
 
     // Layout configuration
     const scatterLayout: Partial<Layout> = {
@@ -749,7 +749,7 @@ export function ExperimentalAnalyticsPane({ designs, jobName: _jobName, jobId }:
             xMean: xVals.length ? (xVals.reduce((a, b) => a + b, 0) / xVals.length).toFixed(2) : '—',
             yMean: yVals.length ? (yVals.reduce((a, b) => a + b, 0) / yVals.length).toFixed(2) : '—',
         };
-    }, [designs, xAxis, yAxis]);
+    }, [extractValues, xAxis, yAxis]);
 
     return (
         <div className="p-6 space-y-6">

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useIsMutating } from '@tanstack/react-query';
 import {
     getCameraStreamUrl,
@@ -28,6 +28,7 @@ import {
     useHeadClearLockOperation,
     useHeadLiftIncrementOperation,
     useHomeAxis,
+    useZeroAxis,
     useLatchLock,
     useLatchStatus,
     useLatchUnlock,
@@ -293,7 +294,7 @@ const getLiquidTruthLabel = (liquidStatus: LiquidStatus | undefined) => {
     return liquidStatus.hardware_truth_level ?? (liquidStatus.available ? 'software shadow' : 'unavailable');
 };
 
-const getAxisDirectionState = (axisData: AxisStatus | undefined, _steps: number) => {
+const getAxisDirectionState = (axisData: AxisStatus | undefined) => {
     const leftActive = axisData?.switch_activity?.left_active === true;
     const rightActive = axisData?.switch_activity?.right_active === true;
     const leftMasked = axisData?.preset?.disable_left === true;
@@ -313,6 +314,176 @@ const getAxisDirectionState = (axisData: AxisStatus | undefined, _steps: number)
 const hasMutationKeyPrefix = (mutationKey: unknown, prefix: readonly string[]) =>
     Array.isArray(mutationKey) && prefix.every((part, index) => mutationKey[index] === part);
 
+type AxisMotionSliderProfile = {
+    stepMin: number;
+    stepMax: number;
+    stepDefault: number;
+    stepIncrement: number;
+    speedMin: number;
+    speedMax: number;
+    speedDefault: number;
+    speedIncrement: number;
+    accMin: number;
+    accMax: number;
+    accDefault: number;
+    accIncrement: number;
+    absoluteMin: number;
+    absoluteMax: number;
+    source: string;
+};
+
+const AXIS_MOTION_SLIDER_PROFILES: Record<AxisName, AxisMotionSliderProfile> = {
+    x: {
+        stepMin: 1,
+        stepMax: 91919,
+        stepDefault: 100,
+        stepIncrement: 100,
+        speedMin: 50,
+        speedMax: 1700,
+        speedDefault: 300,
+        speedIncrement: 10,
+        accMin: 20,
+        accMax: 400,
+        accDefault: 120,
+        accIncrement: 10,
+        absoluteMin: 0,
+        absoluteMax: 91919,
+        source: 'OEM axis limit: X 0..91919; speed/acc norm 50..1700 / 20..400',
+    },
+    y: {
+        stepMin: 1,
+        stepMax: 95247,
+        stepDefault: 100,
+        stepIncrement: 100,
+        speedMin: 50,
+        speedMax: 1800,
+        speedDefault: 300,
+        speedIncrement: 10,
+        accMin: 20,
+        accMax: 750,
+        accDefault: 120,
+        accIncrement: 10,
+        absoluteMin: 0,
+        absoluteMax: 95247,
+        source: 'OEM axis limit: Y 0..95247; speed/acc norm 50..1800 / 20..750',
+    },
+    z: {
+        stepMin: 1,
+        stepMax: 160000,
+        stepDefault: 50,
+        stepIncrement: 50,
+        speedMin: 50,
+        speedMax: 1791,
+        speedDefault: 250,
+        speedIncrement: 10,
+        accMin: 20,
+        accMax: 576,
+        accDefault: 60,
+        accIncrement: 10,
+        absoluteMin: 0,
+        absoluteMax: 160000,
+        source: 'OEM axis limit: Z 0..160000; speed/acc norm 50..1791 / 20..576',
+    },
+    g: {
+        stepMin: 1,
+        stepMax: 15000,
+        stepDefault: 30,
+        stepIncrement: 10,
+        speedMin: 20,
+        speedMax: 600,
+        speedDefault: 200,
+        speedIncrement: 10,
+        accMin: 20,
+        accMax: 20,
+        accDefault: 20,
+        accIncrement: 1,
+        absoluteMin: 0,
+        absoluteMax: 15000,
+        source: 'OEM axis limit: gripper 0..15000; startup/manual gripper speed envelope 20..600',
+    },
+    door: {
+        stepMin: 1,
+        stepMax: 10000,
+        stepDefault: 100,
+        stepIncrement: 100,
+        speedMin: 50,
+        speedMax: 600,
+        speedDefault: 200,
+        speedIncrement: 10,
+        accMin: 20,
+        accMax: 200,
+        accDefault: 100,
+        accIncrement: 10,
+        absoluteMin: 0,
+        absoluteMax: 10000,
+        source: 'Thermal door service range fallback; primary OEM configured AxisLimits cover X/Y/Z/G',
+    },
+};
+
+const clampInteger = (value: number, min: number, max: number) => {
+    const lower = Math.min(min, max);
+    const upper = Math.max(min, max);
+    if (!Number.isFinite(value)) {
+        return lower;
+    }
+    return Math.max(lower, Math.min(upper, Math.round(value)));
+};
+
+const SliderNumberControl = ({
+    label,
+    value,
+    min,
+    max,
+    step,
+    onChange,
+}: {
+    label: string;
+    value: number;
+    min: number;
+    max: number;
+    step: number;
+    onChange: (value: number) => void;
+}) => {
+    const boundedValue = clampInteger(value, min, max);
+    const updateBoundedValue = (nextValue: number) => onChange(clampInteger(nextValue, min, max));
+
+    return (
+        <label className="text-[10px] uppercase tracking-[0.12em] text-content-muted space-y-1">
+            <div className="flex items-center justify-between gap-2">
+                <span>{label}</span>
+                <span className="font-mono text-content">{boundedValue}</span>
+            </div>
+            <div className="flex items-center gap-2">
+                <input
+                    type="range"
+                    aria-label={`${label} slider`}
+                    min={min}
+                    max={max}
+                    step={step}
+                    value={boundedValue}
+                    onChange={(e) => updateBoundedValue(Number(e.target.value))}
+                    className="min-w-0 flex-1 accent-accent"
+                />
+                <input
+                    type="number"
+                    aria-label={`${label} value`}
+                    inputMode="numeric"
+                    min={min}
+                    max={max}
+                    step={1}
+                    value={boundedValue}
+                    onChange={(e) => updateBoundedValue(Number(e.target.value))}
+                    className="w-24 rounded border border-accent/10 bg-surface px-2 py-1 font-mono text-[11px] text-content"
+                />
+            </div>
+            <div className="flex items-center justify-between font-mono text-[9px] text-content-muted/80">
+                <span>{min}</span>
+                <span>{max}</span>
+            </div>
+        </label>
+    );
+};
+
 const AxisControls = ({
     axis,
     label,
@@ -326,17 +497,17 @@ const AxisControls = ({
 }) => {
     const moveRelative = useMoveRelative();
     const moveAbsolute = useMoveAbsolute();
+    const zeroAxis = useZeroAxis();
     const homeAxis = useHomeAxis();
-    const [steps, setSteps] = useState(100);
-    const [absolutePosition, setAbsolutePosition] = useState(0);
+    const sliderProfile = AXIS_MOTION_SLIDER_PROFILES[axis];
+    const [steps, setSteps] = useState(sliderProfile.stepDefault);
+    const [commandSpeed, setCommandSpeed] = useState(sliderProfile.speedDefault);
+    const [commandAcc, setCommandAcc] = useState(sliderProfile.accDefault);
+    const [absolutePosition, setAbsolutePosition] = useState(sliderProfile.absoluteMin);
     const [lastMotionResult, setLastMotionResult] = useState<AxisMotionResult | null>(null);
     const [commandStartPosition, setCommandStartPosition] = useState<number | null>(null);
     const [commandLabel, setCommandLabel] = useState<string | null>(null);
-    const [captureBundle, setCaptureBundle] = useState(true);
-    const [dryRunBundle, setDryRunBundle] = useState(false);
-    const [operatorNote, setOperatorNote] = useState('');
-    const [snapshotRefsText, setSnapshotRefsText] = useState('');
-    const localMotionBusy = moveRelative.isPending || moveAbsolute.isPending || homeAxis.isPending;
+    const localMotionBusy = moveRelative.isPending || moveAbsolute.isPending || zeroAxis.isPending || homeAxis.isPending;
     const { data, isLoading, isError, error, refetch } = useAxisStatus(
         axis,
         enabled,
@@ -348,9 +519,9 @@ const AxisControls = ({
 
     useEffect(() => {
         if (typeof reportedPosition === 'number') {
-            setAbsolutePosition(reportedPosition);
+            setAbsolutePosition(clampInteger(reportedPosition, sliderProfile.absoluteMin, sliderProfile.absoluteMax));
         }
-    }, [reportedPosition]);
+    }, [reportedPosition, sliderProfile.absoluteMax, sliderProfile.absoluteMin]);
 
     const moving = typeof reportedSpeed === 'number' ? reportedSpeed !== 0 : false;
     const leftActive = data?.switch_activity?.left_active;
@@ -360,9 +531,10 @@ const AxisControls = ({
     const switchConflictObserved = leftActive === true && rightActive === true;
     const negativeMoveBlocked = false;
     const positiveMoveBlocked = false;
-    const homeToZeroBlocked = false;
-    const homeToZeroBlockedTitle = 'Return this axis to controller coordinate 0; does not run switch-search homing. Raw switch readback is displayed but does not software-block this command.';
-    const referenceHomeTitle = 'Manual switch-search home is disabled after live X/Z limit-switch ignore incidents. Use OEM startup-step recipes only after the robot-local predicate is fixed.';
+    const zeroToControllerBlocked = false;
+    const switchHomeBlocked = false;
+    const zeroToControllerTitle = 'Return this axis to controller coordinate 0; this is not switch-search homing.';
+    const switchHomeTitle = 'Run the robot-local manual OEM switch-search home through the BMS proxy. This can physically move the axis; require operator/watch-camera proof before trusting the result.';
     const motionProfile = lastMotionResult?.motion_profile ?? {
         speed: data?.preset?.speed ?? 100,
         acc: data?.preset?.acc ?? 50,
@@ -377,16 +549,30 @@ const AxisControls = ({
     const truthEvidenceLevel = lastMotionResult?.motion_truth?.evidence_level?.replaceAll('_', ' ');
     const artifactBundle = lastMotionResult?.artifact_bundle;
     const artifactSnapshotCount = artifactBundle?.snapshot_refs?.length ?? 0;
-    const normalizedOperatorNote = operatorNote.trim();
-    const normalizedSnapshotRefs = snapshotRefsText
-        .split(/\n|,/)
-        .map((value) => value.trim())
-        .filter(Boolean);
+    const boundedStepMagnitude = clampInteger(Math.abs(steps), sliderProfile.stepMin, sliderProfile.stepMax);
+    const boundedSpeed = clampInteger(commandSpeed, sliderProfile.speedMin, sliderProfile.speedMax);
+    const boundedAcc = clampInteger(commandAcc, sliderProfile.accMin, sliderProfile.accMax);
+    const boundedAbsolutePosition = clampInteger(absolutePosition, sliderProfile.absoluteMin, sliderProfile.absoluteMax);
     const motionArtifactPayload = {
-        capture_bundle: captureBundle,
-        dry_run_bundle: captureBundle ? dryRunBundle : false,
-        operator_note: normalizedOperatorNote || undefined,
-        snapshot_refs: normalizedSnapshotRefs,
+        capture_bundle: false,
+        dry_run_bundle: false,
+        snapshot_refs: [],
+    };
+    const requestedMotionProfilePayload = {
+        speed: boundedSpeed,
+        acc: boundedAcc,
+    };
+    const requestedHomeProfilePayload = {
+        speed: requestedMotionProfilePayload.speed,
+    };
+
+    const clampRelativeStepsForDirection = (direction: -1 | 1) => {
+        const requestedDelta = direction * boundedStepMagnitude;
+        if (typeof reportedPosition !== 'number') {
+            return requestedDelta;
+        }
+        const boundedTarget = clampInteger(reportedPosition + requestedDelta, sliderProfile.absoluteMin, sliderProfile.absoluteMax);
+        return boundedTarget - reportedPosition;
     };
 
     const startCommand = (labelText: string) => {
@@ -398,9 +584,9 @@ const AxisControls = ({
         setLastMotionResult(payload);
         setCommandLabel(null);
         if (typeof payload?.position_after?.position === 'number') {
-            setAbsolutePosition(payload.position_after.position);
+            setAbsolutePosition(clampInteger(payload.position_after.position, sliderProfile.absoluteMin, sliderProfile.absoluteMax));
         } else if (typeof payload?.home?.position_after?.position === 'number') {
-            setAbsolutePosition(payload.home.position_after.position);
+            setAbsolutePosition(clampInteger(payload.home.position_after.position, sliderProfile.absoluteMin, sliderProfile.absoluteMax));
         }
     };
 
@@ -437,19 +623,45 @@ const AxisControls = ({
                 <div>Live Δ: {liveDelta ?? 'n/a'}</div>
             </div>
 
-            <div className="flex gap-2 items-center">
-                <span className="text-xs text-content-muted w-12">Step</span>
-                <input
-                    type="number"
-                    value={steps}
-                    onChange={(e) => setSteps(Number(e.target.value))}
-                    className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm w-28"
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded border border-accent/10 bg-surface/30 p-2">
+                <SliderNumberControl
+                    label="Speed"
+                    min={sliderProfile.speedMin}
+                    max={sliderProfile.speedMax}
+                    step={sliderProfile.speedIncrement}
+                    value={boundedSpeed}
+                    onChange={setCommandSpeed}
                 />
+                <SliderNumberControl
+                    label="Acc"
+                    min={sliderProfile.accMin}
+                    max={sliderProfile.accMax}
+                    step={sliderProfile.accIncrement}
+                    value={boundedAcc}
+                    onChange={setCommandAcc}
+                />
+                <SliderNumberControl
+                    label="Step"
+                    min={sliderProfile.stepMin}
+                    max={sliderProfile.stepMax}
+                    step={sliderProfile.stepIncrement}
+                    value={boundedStepMagnitude}
+                    onChange={setSteps}
+                />
+                <div className="sm:col-span-3 text-[10px] text-content-muted">
+                    Bounded sliders: relative step {sliderProfile.stepMin}..{sliderProfile.stepMax}; speed {sliderProfile.speedMin}..{sliderProfile.speedMax}; acc {sliderProfile.accMin}..{sliderProfile.accMax}. {sliderProfile.source}. Payloads are clamped before send; robot API still applies its own normalization.
+                </div>
+            </div>
+
+            <div className="flex gap-2 items-center flex-wrap">
+                <span className="text-xs text-content-muted w-12">Step</span>
+                <span className="font-mono text-xs text-content w-24">{boundedStepMagnitude}</span>
                 <button
                     onClick={() => {
-                        startCommand(`REL ${-Math.abs(steps)}`);
+                        const relativeSteps = clampRelativeStepsForDirection(-1);
+                        startCommand(`REL ${relativeSteps}`);
                         moveRelative.mutate(
-                            { axis, steps: -Math.abs(steps), ...motionArtifactPayload },
+                            { axis, steps: relativeSteps, ...requestedMotionProfilePayload, ...motionArtifactPayload },
                             {
                                 onSuccess: (payload) => finishCommand(payload),
                                 onError: () => setCommandLabel(null),
@@ -463,9 +675,10 @@ const AxisControls = ({
                 </button>
                 <button
                     onClick={() => {
-                        startCommand(`REL ${Math.abs(steps)}`);
+                        const relativeSteps = clampRelativeStepsForDirection(1);
+                        startCommand(`REL ${relativeSteps}`);
                         moveRelative.mutate(
-                            { axis, steps: Math.abs(steps), ...motionArtifactPayload },
+                            { axis, steps: relativeSteps, ...requestedMotionProfilePayload, ...motionArtifactPayload },
                             {
                                 onSuccess: (payload) => finishCommand(payload),
                                 onError: () => setCommandLabel(null),
@@ -479,45 +692,60 @@ const AxisControls = ({
                 </button>
                 <button
                     onClick={() => {
-                        if (homeToZeroBlocked) {
+                        if (zeroToControllerBlocked) {
                             return;
                         }
-                        startCommand('HOME → 0');
-                        homeAxis.mutate(
-                            { axis, ...motionArtifactPayload },
+                        startCommand('ZERO → 0');
+                        zeroAxis.mutate(
+                            { axis, ...requestedHomeProfilePayload, ...motionArtifactPayload },
                             {
                                 onSuccess: (payload) => finishCommand(payload),
                                 onError: () => setCommandLabel(null),
                             },
                         );
                     }}
-                    disabled={!enabled || homeAxis.isPending || homeToZeroBlocked}
-                    title={homeToZeroBlockedTitle}
+                    disabled={!enabled || zeroAxis.isPending || zeroToControllerBlocked}
+                    title={zeroToControllerTitle}
                     className="ml-auto px-3 py-1.5 bg-accent/20 hover:bg-accent/30 text-accent text-xs rounded-lg transition-colors"
                 >
-                    Home → 0
+                    Zero → 0
                 </button>
-                <span
-                    title={referenceHomeTitle}
-                    className="px-3 py-1.5 bg-warning/10 text-warning text-xs rounded-lg border border-warning/20"
+                <button
+                    onClick={() => {
+                        if (switchHomeBlocked) {
+                            return;
+                        }
+                        startCommand('SWITCH HOME');
+                        homeAxis.mutate(
+                            { axis, ...requestedHomeProfilePayload, ...motionArtifactPayload },
+                            {
+                                onSuccess: (payload) => finishCommand(payload),
+                                onError: () => setCommandLabel(null),
+                            },
+                        );
+                    }}
+                    disabled={!enabled || homeAxis.isPending || switchHomeBlocked}
+                    title={switchHomeTitle}
+                    className="px-3 py-1.5 bg-warning/20 hover:bg-warning/30 text-warning text-xs rounded-lg border border-warning/20 transition-colors"
                 >
-                    Switch-home disabled
-                </span>
+                    Switch Home
+                </button>
             </div>
 
-            <div className="flex gap-2 items-center">
-                <span className="text-xs text-content-muted w-12">Abs</span>
-                <input
-                    type="number"
-                    value={absolutePosition}
-                    onChange={(e) => setAbsolutePosition(Number(e.target.value))}
-                    className="bg-surface border border-accent/10 rounded-lg px-3 py-1.5 text-content text-sm w-28"
+            <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto] gap-2 items-end rounded border border-accent/10 bg-surface/30 p-2">
+                <SliderNumberControl
+                    label="Absolute target"
+                    min={sliderProfile.absoluteMin}
+                    max={sliderProfile.absoluteMax}
+                    step={sliderProfile.stepIncrement}
+                    value={boundedAbsolutePosition}
+                    onChange={setAbsolutePosition}
                 />
                 <button
                     onClick={() => {
-                        startCommand(`ABS ${absolutePosition}`);
+                        startCommand(`ABS ${boundedAbsolutePosition}`);
                         moveAbsolute.mutate(
-                            { axis, position_steps: absolutePosition, ...motionArtifactPayload },
+                            { axis, position_steps: boundedAbsolutePosition, ...requestedMotionProfilePayload, ...motionArtifactPayload },
                             {
                                 onSuccess: (payload) => finishCommand(payload),
                                 onError: () => setCommandLabel(null),
@@ -525,52 +753,10 @@ const AxisControls = ({
                         );
                     }}
                     disabled={!enabled || moveAbsolute.isPending}
-                    className="px-4 py-1.5 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors"
+                    className="px-4 py-1.5 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40"
                 >
                     Move Absolute
                 </button>
-            </div>
-
-            <div className="space-y-2 rounded border border-border-primary bg-surface/40 p-3">
-                <div className="flex flex-wrap items-center gap-3 text-[10px] text-content-muted">
-                    <label className="inline-flex items-center gap-2">
-                        <input
-                            type="checkbox"
-                            checked={captureBundle}
-                            onChange={(e) => {
-                                const checked = e.target.checked;
-                                setCaptureBundle(checked);
-                                if (!checked) {
-                                    setDryRunBundle(false);
-                                }
-                            }}
-                        />
-                        Capture validation bundle
-                    </label>
-                    <label className="inline-flex items-center gap-2">
-                        <input
-                            type="checkbox"
-                            checked={dryRunBundle}
-                            disabled={!captureBundle}
-                            onChange={(e) => setDryRunBundle(e.target.checked)}
-                        />
-                        Dry-run bundle only
-                    </label>
-                </div>
-                <textarea
-                    value={operatorNote}
-                    onChange={(e) => setOperatorNote(e.target.value)}
-                    rows={2}
-                    placeholder="Operator note for supervised validation"
-                    className="w-full rounded border border-border-primary bg-surface px-3 py-2 text-[11px] text-content"
-                />
-                <textarea
-                    value={snapshotRefsText}
-                    onChange={(e) => setSnapshotRefsText(e.target.value)}
-                    rows={2}
-                    placeholder="Snapshot refs or image paths (comma or newline separated)"
-                    className="w-full rounded border border-border-primary bg-surface px-3 py-2 text-[11px] text-content"
-                />
             </div>
 
             {(commandLabel || lastMotionResult) && (
@@ -645,11 +831,11 @@ const AxisControls = ({
 
 const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; label: string; enabled: boolean }) => {
     const moveRelative = useMoveRelative();
-    const homeAxis = useHomeAxis();
+    const zeroAxis = useZeroAxis();
     const [steps, setSteps] = useState(axis === 'z' ? 35 : axis === 'g' ? 30 : 60);
     const [commandStartPosition, setCommandStartPosition] = useState<number | null>(null);
     const [commandLabel, setCommandLabel] = useState<string | null>(null);
-    const localMotionBusy = moveRelative.isPending || homeAxis.isPending;
+    const localMotionBusy = moveRelative.isPending || zeroAxis.isPending;
     const { data, isError, error } = useAxisStatus(axis, enabled, localMotionBusy ? 750 : 2500);
 
     const position = data?.status?.position?.position;
@@ -660,7 +846,7 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
     const leftMasked = data?.preset?.disable_left === true;
     const rightMasked = data?.preset?.disable_right === true;
     const switchConflictObserved = leftActive === true && rightActive === true;
-    const homeToZeroBlocked = false;
+    const zeroToControllerBlocked = false;
     const liveDelta =
         commandStartPosition != null && typeof position === 'number'
             ? position - commandStartPosition
@@ -675,8 +861,8 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
         <div className="rounded-lg border border-white/10 bg-[rgba(8,16,29,0.35)] backdrop-blur-sm p-2 space-y-2 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
             <div className="flex items-center justify-between gap-2">
                 <span className="text-[11px] font-semibold text-content">{label}</span>
-                <span className={`text-[10px] px-2 py-0.5 rounded-full border ${moving || moveRelative.isPending || homeAxis.isPending ? 'bg-white/10 text-content border-white/15' : 'bg-white/5 text-content-muted border-white/10'}`}>
-                    {moving || moveRelative.isPending || homeAxis.isPending ? 'MOVE' : 'IDLE'}
+                <span className={`text-[10px] px-2 py-0.5 rounded-full border ${moving || moveRelative.isPending || zeroAxis.isPending ? 'bg-white/10 text-content border-white/15' : 'bg-white/5 text-content-muted border-white/10'}`}>
+                    {moving || moveRelative.isPending || zeroAxis.isPending ? 'MOVE' : 'IDLE'}
                 </span>
             </div>
             <div className="flex items-center justify-between text-[10px] font-mono text-content-muted">
@@ -718,17 +904,17 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
                 </button>
                 <button
                     onClick={() => {
-                        beginCommand('HOME → 0');
-                        homeAxis.mutate(
+                        beginCommand('ZERO → 0');
+                        zeroAxis.mutate(
                             { axis },
                             { onSettled: () => setCommandLabel(null) },
                         );
                     }}
-                    disabled={!enabled || homeAxis.isPending || homeToZeroBlocked}
-                    title="Return this axis to controller coordinate 0; does not run switch-search homing. Raw switch readback is displayed but does not software-block this command."
+                    disabled={!enabled || zeroAxis.isPending || zeroToControllerBlocked}
+                    title="Return this axis to controller coordinate 0; this is not switch-search homing."
                     className="ml-auto px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-content text-[11px] border border-white/10 disabled:opacity-30 transition-colors"
                 >
-                    Home → 0
+                    Zero → 0
                 </button>
             </div>
             {(leftActive === true || rightActive === true) && (
@@ -743,9 +929,9 @@ const CameraAxisQuickControls = ({ axis, label, enabled }: { axis: AxisName; lab
                     {commandLabel}
                 </div>
             )}
-            {(moveRelative.isError || homeAxis.isError || isError) && (
+            {(moveRelative.isError || zeroAxis.isError || isError) && (
                 <div className="text-[10px] text-error">
-                    {getErrorMessage(moveRelative.error) || getErrorMessage(homeAxis.error) || getErrorMessage(error)}
+                    {getErrorMessage(moveRelative.error) || getErrorMessage(zeroAxis.error) || getErrorMessage(error)}
                 </div>
             )}
         </div>
@@ -766,21 +952,21 @@ const CameraHoldJogPad = ({ enabled }: { enabled: boolean }) => {
     const axisBatchStatus = useAxisStatusBatch([...CAMERA_HOLD_JOG_AXES], enabled, statusPollIntervalMs);
     const axisRows = axisBatchStatus.data?.rows ?? {};
 
-    const axisDataMap: Record<'x' | 'y' | 'z', AxisStatus | undefined> = {
+    const axisDataMap: Record<'x' | 'y' | 'z', AxisStatus | undefined> = useMemo(() => ({
         x: axisRows.x,
         y: axisRows.y,
         z: axisRows.z,
-    };
+    }), [axisRows.x, axisRows.y, axisRows.z]);
     const xAxis = axisDataMap.x;
     const yAxis = axisDataMap.y;
     const zAxis = axisDataMap.z;
 
     const stopHold = () => setHoldCommand(null);
 
-    const isBlocked = (command: CameraHoldJogCommand) =>
-        getAxisDirectionState(axisDataMap[command.axis], command.steps).blocked;
+    const isBlocked = useCallback((command: CameraHoldJogCommand) =>
+        getAxisDirectionState(axisDataMap[command.axis]).blocked, [axisDataMap]);
 
-    const issueJog = (command: CameraHoldJogCommand) => {
+    const issueJog = useCallback((command: CameraHoldJogCommand) => {
         moveRelative.mutate(
             {
                 axis: command.axis,
@@ -799,7 +985,7 @@ const CameraHoldJogPad = ({ enabled }: { enabled: boolean }) => {
                 },
             },
         );
-    };
+    }, [moveRelative]);
 
     const startHold = (command: CameraHoldJogCommand) => (event: ReactPointerEvent<HTMLButtonElement>) => {
         event.preventDefault();
@@ -849,14 +1035,14 @@ const CameraHoldJogPad = ({ enabled }: { enabled: boolean }) => {
         }
         const timer = window.setTimeout(() => issueJog(holdCommand), CAMERA_HOLD_JOG_REPEAT_DELAY_MS);
         return () => window.clearTimeout(timer);
-    }, [enabled, holdCommand, moveRelative.isPending, axisBatchStatus.data]);
+    }, [enabled, holdCommand, moveRelative.isPending, axisBatchStatus.data, isBlocked, issueJog]);
 
-    const xNegative = getAxisDirectionState(xAxis, -1);
-    const xPositive = getAxisDirectionState(xAxis, 1);
-    const yNegative = getAxisDirectionState(yAxis, -1);
-    const yPositive = getAxisDirectionState(yAxis, 1);
-    const zNegative = getAxisDirectionState(zAxis, -1);
-    const zPositive = getAxisDirectionState(zAxis, 1);
+    const xNegative = getAxisDirectionState(xAxis);
+    const xPositive = getAxisDirectionState(xAxis);
+    const yNegative = getAxisDirectionState(yAxis);
+    const yPositive = getAxisDirectionState(yAxis);
+    const zNegative = getAxisDirectionState(zAxis);
+    const zPositive = getAxisDirectionState(zAxis);
 
     const warnings = [
         xNegative.blocked ? 'X- blocked by active left limit.' : null,
@@ -1371,11 +1557,12 @@ export const BioXpCockpit = () => {
     const [streamNonce, setStreamNonce] = useState(0);
     const [streamReady, setStreamReady] = useState(false);
     const [streamError, setStreamError] = useState<string | null>(null);
-    const [latestCameraAction, setLatestCameraAction] = useState<{ action: string; data: any } | null>(null);
-    const [latestMotionInfraAction, setLatestMotionInfraAction] = useState<{ action: string; data: any } | null>(null);
+    const [latestCameraAction, setLatestCameraAction] = useState<{ action: string; data: UntypedApiValue } | null>(null);
+    const [latestMotionInfraAction, setLatestMotionInfraAction] = useState<{ action: string; data: UntypedApiValue } | null>(null);
     const [ledRgbState, setLedRgbState] = useState({ r: 32, g: 128, b: 255 });
     const [ledPctState, setLedPctState] = useState(35);
     const [lastHealthyAt, setLastHealthyAt] = useState<number | null>(null);
+    const [connectionNowMs, setConnectionNowMs] = useState(0);
     const [viewerFullscreen, setViewerFullscreen] = useState(false);
     const [pendingCameraControlCid, setPendingCameraControlCid] = useState<number | null>(null);
     const [liquidVolumeUl, setLiquidVolumeUl] = useState(10);
@@ -1383,10 +1570,10 @@ export const BioXpCockpit = () => {
     const [liquidPressureProfile, setLiquidPressureProfile] = useState('1R');
     const [liquidSource, setLiquidSource] = useState('reagent_rack:A1');
     const [liquidDestination, setLiquidDestination] = useState('reaction_plate:A1');
-    const [latestLiquidAction, setLatestLiquidAction] = useState<{ action: string; data: any } | null>(null);
-    const [latestOemAction, setLatestOemAction] = useState<{ action: string; data: any } | null>(null);
-    const [latestReferenceAction, setLatestReferenceAction] = useState<{ action: string; data: any } | null>(null);
-    const [latestVisionAction, setLatestVisionAction] = useState<{ action: string; data: any } | null>(null);
+    const [latestLiquidAction, setLatestLiquidAction] = useState<{ action: string; data: UntypedApiValue } | null>(null);
+    const [latestOemAction, setLatestOemAction] = useState<{ action: string; data: UntypedApiValue } | null>(null);
+    const [latestReferenceAction, setLatestReferenceAction] = useState<{ action: string; data: UntypedApiValue } | null>(null);
+    const [latestVisionAction, setLatestVisionAction] = useState<{ action: string; data: UntypedApiValue } | null>(null);
     const [showCommissioningControls, setShowCommissioningControls] = useState(false);
     const [headLiftSteps, setHeadLiftSteps] = useState(500);
     const [microMoveAxis, setMicroMoveAxis] = useState<AxisName>('x');
@@ -1434,7 +1621,8 @@ export const BioXpCockpit = () => {
     const runtimeStatusHelp = runtimeSummary.detail;
     const hasRecentHardwareContact =
         lastHealthyAt != null &&
-        (Date.now() - lastHealthyAt) < CONNECTION_STICKY_WINDOW_MS;
+        connectionNowMs > 0 &&
+        (connectionNowMs - lastHealthyAt) < CONNECTION_STICKY_WINDOW_MS;
     const connectionPollingEnabled = activeTab === 'connection' && !hardwareBusy;
     const controlsPollingEnabled = false;
     const cameraDiscoveryEnabled = hardwareReachable && activeTab === 'camera' && !pollCamera && !motionBusy;
@@ -1501,10 +1689,20 @@ export const BioXpCockpit = () => {
         CAMERA_STREAM_MODES.find((mode) => mode.key === streamMode) ?? CAMERA_STREAM_MODES[1];
 
     useEffect(() => {
-        if (hardwareReachable) {
-            setLastHealthyAt(Date.now());
-        }
+        if (!hardwareReachable) return undefined;
+        const timer = window.setTimeout(() => {
+            const now = Date.now();
+            setLastHealthyAt(now);
+            setConnectionNowMs(now);
+        }, 0);
+        return () => window.clearTimeout(timer);
     }, [hardwareReachable]);
+
+    useEffect(() => {
+        if (lastHealthyAt == null) return undefined;
+        const timer = window.setInterval(() => setConnectionNowMs(Date.now()), 1000);
+        return () => window.clearInterval(timer);
+    }, [lastHealthyAt]);
 
     useEffect(() => {
         if (cameraDevices.data?.preferred_device && cameraDevice !== cameraDevices.data.preferred_device) {
@@ -1542,7 +1740,7 @@ export const BioXpCockpit = () => {
                 : null;
     const latestCameraResult = latestCameraAction?.data ?? null;
     const latestHardwareAction = prepareInterlock.data ?? clearLock.data ?? null;
-    const recordCameraAction = (action: string, data: any) => {
+    const recordCameraAction = (action: string, data: UntypedApiValue) => {
         setLatestCameraAction({ action, data });
     };
     const recordCameraError = (action: string, error: unknown) => {
@@ -1593,7 +1791,7 @@ export const BioXpCockpit = () => {
         }
         return parts.join(' | ');
     })();
-    const recordMotionInfraAction = (action: string, data: any) => {
+    const recordMotionInfraAction = (action: string, data: UntypedApiValue) => {
         setLatestMotionInfraAction({ action, data });
     };
     const recordMotionInfraError = (action: string, error: unknown) => {
@@ -1646,13 +1844,13 @@ export const BioXpCockpit = () => {
         metadata: { source: 'bms-cockpit' },
     });
 
-    const recordLiquidAction = (action: string, data: any) => setLatestLiquidAction({ action, data });
+    const recordLiquidAction = (action: string, data: UntypedApiValue) => setLatestLiquidAction({ action, data });
     const recordLiquidError = (action: string, error: unknown) => recordLiquidAction(action, { ok: false, error: getErrorMessage(error) ?? `${action} failed` });
-    const recordOemAction = (action: string, data: any) => setLatestOemAction({ action, data });
+    const recordOemAction = (action: string, data: UntypedApiValue) => setLatestOemAction({ action, data });
     const recordOemError = (action: string, error: unknown) => recordOemAction(action, { ok: false, error: getErrorMessage(error) ?? `${action} failed` });
-    const recordReferenceAction = (action: string, data: any) => setLatestReferenceAction({ action, data });
+    const recordReferenceAction = (action: string, data: UntypedApiValue) => setLatestReferenceAction({ action, data });
     const recordReferenceError = (action: string, error: unknown) => recordReferenceAction(action, { ok: false, error: getErrorMessage(error) ?? `${action} failed` });
-    const recordVisionAction = (action: string, data: any) => setLatestVisionAction({ action, data });
+    const recordVisionAction = (action: string, data: UntypedApiValue) => setLatestVisionAction({ action, data });
     const recordVisionError = (action: string, error: unknown) => recordVisionAction(action, { ok: false, error: getErrorMessage(error) ?? `${action} failed` });
     const operationPayload = () => ({
         operator_ack: true,
@@ -1735,14 +1933,14 @@ export const BioXpCockpit = () => {
             cameraStop.mutate({ device: cameraDevice });
             setPollCamera(false);
         }
-    }, [activeTab, pollCamera, cameraDevice]);
+    }, [activeTab, pollCamera, cameraDevice, cameraStop]);
 
     useEffect(() => {
         if (!isConnected && pollCamera) {
             cameraStop.mutate({ device: cameraDevice });
             setPollCamera(false);
         }
-    }, [isConnected, pollCamera, cameraDevice]);
+    }, [isConnected, pollCamera, cameraDevice, cameraStop]);
 
     useEffect(() => {
         if (pollCamera) {
@@ -1771,7 +1969,7 @@ export const BioXpCockpit = () => {
             setPollCamera(false);
         }, 4000);
         return () => window.clearTimeout(timer);
-    }, [pollCamera, streamReady, streamNonce, cameraDevice]);
+    }, [pollCamera, streamReady, streamNonce, cameraDevice, cameraStop]);
 
     const streamUrl = pollCamera
         ? getCameraStreamUrl({
@@ -1974,14 +2172,14 @@ export const BioXpCockpit = () => {
 
     const liveXyzMotionPanel = (
         <SectionCard
-            title="Live X/Y/Z Motion"
-            subtitle="Operator-readable gantry controls: arm first, then use relative/zero buttons while watching the instrument. Manual switch-search home is disabled until robot-local predicates prove deassert→active transitions."
+            title="Live X/Y/Z + Grabber Motion"
+            subtitle="Operator-readable gantry/grabber controls: arm first, then set speed/acc and use relative/zero/home buttons while watching the instrument. Switch Home is the real robot-local manual home route, not controller-zero."
         >
             <div className="rounded-lg border border-warning/20 bg-warning/5 p-3 space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                         <div className="text-sm font-semibold text-warning">Operator-supervised movement</div>
-                        <div className="text-xs text-content-muted">X/Y are currently reference-safe; Z is controller-readable but may need re-reference before blind absolute travel. Relative buttons remain the fastest practical move surface.</div>
+                        <div className="text-xs text-content-muted">X/Y/Z plus Grabber are live axis controls. Speed/acc inputs are per card. Zero and Switch Home are separate on purpose: zero returns to controller coordinate 0; Switch Home asks the robot API to re-reference against its home predicate.</div>
                     </div>
                     <button
                         onClick={() => motionArmStrictStartup.mutate(
@@ -1994,15 +2192,16 @@ export const BioXpCockpit = () => {
                         {motionArmStrictStartup.isPending ? 'ARMING...' : 'Arm Motors No Homing'}
                     </button>
                 </div>
-                <div className="text-[11px] text-warning">These controls can physically move the robot. Keep hands/tools clear; stop if controller delta does not match visible motion.</div>
             </div>
-            <div className="mt-3 grid grid-cols-1 gap-4">
+            <div className="mt-3 grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <AxisControls axis="x" label="Gantry X" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
+                <AxisControls axis="g" label="Grabber / Gripper" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
                 <AxisControls axis="y" label="Gantry Y" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
                 <AxisControls axis="z" label="Pipette Z" enabled={isConnected} pollIntervalMs={motionBusy ? false : 8000} />
             </div>
         </SectionCard>
     );
+
 
     const liquidPanel = (
         <SectionCard
@@ -2067,23 +2266,13 @@ export const BioXpCockpit = () => {
 
     const oemReadbackPanel = (
         <SectionCard
-            title="OEM Runtime & Startup"
-            subtitle="Primary BioXP operator surface: BMS proxies the robot-local OEM runtime and liquid-handler contract instead of owning a second motor supervisor."
+            title="OEM Runtime Readback & No-Motion Checks"
+            subtitle="Readback and bounded runtime/startup checks only. Live axis motion, arm, zero, and switch-home controls are kept in the single Live X/Y/Z + Grabber panel."
         >
             <div className="rounded-lg border border-accent/20 bg-accent/5 p-3 space-y-2">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">Live testing entrypoint</div>
-                <div className="text-xs text-content-muted">Use the no-homing motor arm first. Startup preflight and PrepareToRunJob readiness are explicitly non-motion; the named dry-run route records motion_commanded=false / hardware_touched=false from the robot-local runtime response.</div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">No-motion startup/readiness</div>
+                <div className="text-xs text-content-muted">Startup preflight and PrepareToRunJob readiness are explicitly non-motion; the named dry-run route records motion_commanded=false / hardware_touched=false from the robot-local runtime response.</div>
                 <div className="flex flex-wrap gap-2">
-                    <button
-                        onClick={() => motionArmStrictStartup.mutate(
-                            { run_homing: false },
-                            { onSuccess: (data) => recordOemAction('arm_motors_no_homing', data), onError: (error) => recordOemError('arm_motors_no_homing', error) },
-                        )}
-                        disabled={!isConnected || motionArmStrictStartup.isPending}
-                        className="px-3 py-2 bg-accent hover:bg-accent/80 text-white text-xs rounded-lg transition-colors disabled:opacity-40"
-                    >
-                        {motionArmStrictStartup.isPending ? 'ARMING...' : 'Arm Motors No Homing'}
-                    </button>
                     <button
                         onClick={() => oemStartupRequest.mutate({ mode: 'dry_run', require_config: false, operator: 'bms-cockpit', source: 'oem-startup-panel-preflight' }, { onSuccess: (data) => recordOemAction('startup_preflight_no_motion', data), onError: (error) => recordOemError('startup_preflight_no_motion', error) })}
                         disabled={!isConnected || oemStartupRequest.isPending}
@@ -2769,10 +2958,10 @@ export const BioXpCockpit = () => {
                         <div className="space-y-6">
                             <SectionCard
                                 title="Commissioning Motion — Axis Controls"
-                                subtitle="Hidden from the default handler path. These supervised movement buttons execute through BMS → robot-local BioXP API proxy only for live commissioning; raw switch-search home is disabled."
+                                subtitle="Commissioning-only axis surface for raw/recovery contexts. The normal operator path uses the single Live X/Y/Z + Grabber panel; do not duplicate daily movement controls here."
                             >
                                 <div className="text-[11px] font-mono text-content-muted">
-                                    Safety profile: speed 100, acc 50 unless the robot preset reports a safer axis profile; abort if speed is nonzero with no position delta for 2s.
+                                    Each axis card now exposes Speed and Acc inputs; robot API clamps requests to the axis-safe/OEM envelope. Abort if speed is nonzero with no position delta for 2s.
                                     {motionBusy ? ' Background polling is paused while a motion command is in flight.' : null}
                                 </div>
                                 <div className="mt-3 space-y-4">

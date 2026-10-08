@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { submitJob, fetchBoltzCpShardPlans, fetchMsaCacheInfo, uploadFile, type BoltzCpShardPlan, type MsaCacheInfo } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { SequenceManager } from './SequenceManager';
-import { LigandSelector, componentIdFromIndex, type LigandEntry } from './LigandSelector';
+import { LigandSelector, type LigandEntry } from './LigandSelector';
+import { componentIdFromIndex } from './ligandSelectorData';
 import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
 import MolstarViewer from './MolstarViewer';
 import {
@@ -47,9 +48,9 @@ import { resolveInitialGpuPinningState } from './gpuToggleState.js';
 
 interface StructurePredictionTemplateProps {
     onBack: () => void;
-    initialValues?: Record<string, any>;
+    initialValues?: Record<string, UntypedApiValue>;
     onOpenTemplateManager?: (context: {
-        currentParams?: Record<string, any>;
+        currentParams?: Record<string, UntypedApiValue>;
         currentModelId?: string;
         currentMode?: string;
         baseTemplateId?: string;
@@ -70,7 +71,7 @@ const normalizeProteinSequence = (value: unknown): string => (
         : ''
 );
 
-const isProteinComponent = (component: any): boolean => {
+const isProteinComponent = (component: UntypedApiValue): boolean => {
     const type = String(component?.type || '').trim().toLowerCase();
     return type === 'protein' || type === 'peptide';
 };
@@ -81,7 +82,7 @@ const looksLikeAntibodyVariableDomain = (sequence: string): boolean => {
     return ['QVQL', 'EVQL', 'QLQL', 'QVQ', 'EVQ', 'VQLA', 'DIQM', 'EIVL'].some((prefix) => normalized.startsWith(prefix));
 };
 
-const resolveInitialPrimaryProteinComponent = (initialValues?: Record<string, any>) => {
+const resolveInitialPrimaryProteinComponent = (initialValues?: Record<string, UntypedApiValue>) => {
     const components = Array.isArray(initialValues?.complex_components) ? initialValues.complex_components : [];
     const proteinComponents = components.filter(isProteinComponent);
     if (proteinComponents.length === 0) return null;
@@ -94,17 +95,17 @@ const resolveInitialPrimaryProteinComponent = (initialValues?: Record<string, an
         ...parseChainIdList(initialValues?.target_chains),
     ];
     for (const chainId of preferredIds) {
-        const matched = proteinComponents.find((component: any) => String(component?.id || '').trim() === chainId);
+        const matched = proteinComponents.find((component: UntypedApiValue) => String(component?.id || '').trim() === chainId);
         if (matched) return matched;
     }
 
     const preferredSequence = normalizeProteinSequence(initialValues?.sequence || initialValues?.sequence_input);
     if (preferredSequence) {
-        const matched = proteinComponents.find((component: any) => normalizeProteinSequence(component?.sequence) === preferredSequence);
+        const matched = proteinComponents.find((component: UntypedApiValue) => normalizeProteinSequence(component?.sequence) === preferredSequence);
         if (matched) return matched;
     }
 
-    const antibodyLike = proteinComponents.find((component: any) => looksLikeAntibodyVariableDomain(String(component?.sequence || '')));
+    const antibodyLike = proteinComponents.find((component: UntypedApiValue) => looksLikeAntibodyVariableDomain(String(component?.sequence || '')));
     if (antibodyLike) return antibodyLike;
 
     return proteinComponents[0];
@@ -307,12 +308,12 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             return [];
         }
         const primaryId = String(initialPrimaryProteinComponent?.id || '');
-        const nonPrimaryComponents = components.filter((component: any) => String(component?.id || '') !== primaryId);
+        const nonPrimaryComponents = components.filter((component: UntypedApiValue) => String(component?.id || '') !== primaryId);
         // Everything except the resolved primary component becomes additional context.
         // Expand counted components into distinct entries so
         // retries and cloned jobs preserve repeated ions/cofactors in the UI.
         const expanded: LigandEntry[] = [];
-        nonPrimaryComponents.forEach((component: any) => {
+        nonPrimaryComponents.forEach((component: UntypedApiValue) => {
             const countRaw = component?.count ?? 1;
             const count = Number.isFinite(Number(countRaw))
                 ? Math.max(1, Math.min(12, Math.floor(Number(countRaw))))
@@ -351,7 +352,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const [sequenceToSave, setSequenceToSave] = useState<{ sequence: string; name: string } | null>(null);
 
     const submitMutation = useMutation({
-        mutationFn: async (data: any) => submitJob(data),
+        mutationFn: async (data: UntypedApiValue) => submitJob(data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             navigate('/');
@@ -490,8 +491,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         return nextAvailableComponentId(usedIds);
     })();
 
-    const buildComplexComponents = (batchEntries: Array<{ name: string; sequence: string }> = []) => {
-        const components: Array<Record<string, any>> = [];
+    const buildComplexComponents = useCallback((batchEntries: Array<{ name: string; sequence: string }> = []) => {
+        const components: Array<Record<string, UntypedApiValue>> = [];
         const usedIds = new Set<string>();
         const reserveId = (preferred?: string) => {
             const normalized = (preferred || '').trim();
@@ -515,7 +516,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         const binderIds: string[] = [];
         ligands.forEach((ligand) => {
             const resolvedId = reserveId(ligand.id);
-            const component: Record<string, any> = {
+            const component: Record<string, UntypedApiValue> = {
                 type: ligand.type,
                 id: resolvedId,
                 name: ligand.name,
@@ -545,7 +546,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             resolvedPrimaryId,
             binderIds,
         };
-    };
+    }, [autoBatchBinderMode, implicitBatchBinderId, ligands, primaryChainId, sequence, sequenceBatchPrefix, sequenceName]);
 
     const proteinBatchTargets = [
         { id: primaryChainId || 'A', name: `${sequenceName || 'Primary'} (${primaryChainId || 'A'})`, role: 'Primary' },
@@ -621,7 +622,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         recyclingSteps: boltzRecyclingSteps,
     });
     const currentTemplateParams = useMemo(() => {
-        const params: Record<string, any> = {
+        const params: Record<string, UntypedApiValue> = {
             name: jobName,
             job_name: jobName,
             sequence: sequence.trim(),
@@ -735,77 +736,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [
-        allowRetries,
-        batchEntriesPreview,
-        bcpOutputFormat,
-        bcpShardPlanId,
-        bcpSeed,
-        bcpWriteFullPae,
-        boltzCpGpuSettings.gpuIds,
-        boltzCpGpuSettings.sizeCp,
-        boltzMaxParallelSamples,
-        boltzMethod,
-        boltzNumSamples,
-        boltzRecyclingSteps,
-        boltzSamplingSteps,
-        boltzTargetGeometryMode,
-        boltzUseMsa,
-        boltzUsePotentials,
-        buildComplexComponents,
-        colabfoldApiHost,
-        colabfoldApiMinInterval,
-        colabfoldApiPollInterval,
-        complexMode,
-        isBoltzCpLaunch,
-        jobName,
-        launchConfig.showParallelJobs,
-        lockGpus,
-        msaAllowEmptyFallback,
-        msaCacheOnly,
-        msaEvalue,
-        msaMinCoverage,
-        msaMinDepthFail,
-        msaMinDepthWarning,
-        msaMinSeqId,
-        msaNeeded,
-        msaNumIterations,
-        msaPreset,
-        msaProvider,
-        msaTargetShardMinSizeGb,
-        msaTargetShardMode,
-        msaTargetShards,
-        msaTaxonomy,
-        msaUseEnv,
-        msaUseExpand,
-        numParallelJobs,
-        pinnedGpus,
-        predictor,
-        protenixModelWeights,
-        protenixNCycle,
-        protenixNSample,
-        protenixNStep,
-        protenixSeeds,
-        protenixTargetGeometryMode,
-        protenixUseMsa,
-        resolvedPredictorSelection.canonicalSelection,
-        resolvedSequenceBatchComponentId,
-        rf3NumRecycles,
-        rf3NumSamples,
-        rf3UseMsa,
-        selectedTargetModel,
-        sequence,
-        sequenceBatchInput,
-        sequenceBatchPrefix,
-        sequenceName,
-        targetSource,
-        targetSourceChainId,
-        targetSourcePath,
-        targetSourceSequence,
-        usesBoltz,
-        usesProtenix,
-        usesRf3,
-    ]);
+    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, isBoltzCpLaunch, usesBoltz, usesRf3, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpShardPlanId, bcpOutputFormat, bcpWriteFullPae, bcpContextQueryTileTokens, bcpSeed, boltzCpGpuSettings.gpuIds, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, rf3UseMsa, rf3NumRecycles, rf3NumSamples, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
     const targetPreview = targetSource
         ? resolveTargetPreviewSource({
             previewUrl: targetPreviewUrl,
@@ -915,7 +846,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         setMsaCacheOnly(false);
                     }
                 })
-                .catch((err: any) => {
+                .catch((err: UntypedApiValue) => {
                     if (!active) return;
                     setMsaCacheInfo(null);
                     setMsaCacheError(err?.response?.data?.detail || err?.message || 'Failed to read MSA cache');
@@ -962,7 +893,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             return;
         }
 
-        const params: Record<string, any> = {
+        const params: Record<string, UntypedApiValue> = {
             sequence: sequence.trim(),
             sequence_name: sequenceName,
             pred_method: resolvedPredictorSelection.canonicalSelection,
@@ -1020,7 +951,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             return;
         }
 
-        // MSA Quality parameters (when MSA is enabled for any predictor)
+        // MSA Quality parameters (when MSA is enabled for unknown predictor)
         if (msaNeeded) {
             Object.assign(params, buildStructureMsaSubmitParams({
                 provider: msaProvider,
@@ -1090,7 +1021,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                     params.fixed_target_source_chains = targetSourceChainId;
                     params.fixed_target_model_number = selectedTargetModel || undefined;
                     params.fixed_target_source_sequence = targetSourceSequence || undefined;
-                } catch (error: any) {
+                } catch (error: UntypedApiValue) {
                     alert(error?.message || 'Failed to stage the fixed target structure.');
                     return;
                 }

@@ -18,7 +18,7 @@ import type {
 export {
     EMPTY_SEQUENCE,
     DEFAULT_VISIBILITY
-} from './SequenceViewer';
+} from './sequenceViewerConstants';
 
 // Re-export types
 export type {

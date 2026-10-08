@@ -1,11 +1,11 @@
 /**
  * TargetAntigenSelector - Select a target PDB for antibody design
- * 
+ *
  * Tabs: Upload | Your Runs | Presets | RCSB Fetch
  * Allows selecting PDBs from previous job results, presets, or RCSB
  */
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchInputPresets, fetchDesigns, listCachedRcsbPdbs, type CachedRcsbEntry } from '../lib/api';
 import type { Job } from '../lib/api';
@@ -99,7 +99,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
         queryFn: listCachedRcsbPdbs,
         enabled: activeTab === 'rcsb',
     });
-    const cachedRcsb: CachedRcsbEntry[] = (cachedRcsbData as any)?.data?.cached ?? [];
+    const cachedRcsb: CachedRcsbEntry[] = useMemo(() => (cachedRcsbData as UntypedApiValue)?.data?.cached ?? [], [cachedRcsbData]);
     const sortedCachedRcsb = useMemo(() => {
         const entries = [...cachedRcsb];
         entries.sort((a, b) => {
@@ -133,18 +133,18 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
         }),
         enabled: !!selectedJob,
     });
-    const designsResponse = (designsData as any)?.data;
-    const designs = designsResponse?.designs ?? (designsData as any)?.designs ?? [];
+    const designsResponse = (designsData as UntypedApiValue)?.data;
+    const designs = designsResponse?.designs ?? (designsData as UntypedApiValue)?.designs ?? [];
     const totalDesigns = designsResponse?.total ?? 0;
     const totalPages = Math.ceil(totalDesigns / DESIGNS_PER_PAGE);
 
-    const triggerReingest = async (jobId: string) => {
+    const triggerReingest = useCallback(async (jobId: string) => {
         try {
             setReingestStatus('running');
             setReingestMessage('Re-ingesting designs…');
             const res = await fetch(`/api/jobs/${jobId}/reingest?include_children=true`, { method: 'POST' });
             const rawText = await res.text();
-            let data: any = null;
+            let data: UntypedApiValue = null;
             try {
                 data = rawText ? JSON.parse(rawText) : null;
             } catch {
@@ -156,11 +156,11 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
             setReingestStatus('done');
             setReingestMessage(data?.message || 'Re-ingest complete');
             queryClient.invalidateQueries({ queryKey: ['designs'] });
-        } catch (err: any) {
+        } catch (err: UntypedApiValue) {
             setReingestStatus('error');
             setReingestMessage(err?.message || 'Re-ingest failed');
         }
-    };
+    }, [queryClient]);
 
     useEffect(() => {
         if (!selectedJob || designsLoading) return;
@@ -168,7 +168,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
             reingestAttempted.current.add(selectedJob.id);
             triggerReingest(selectedJob.id);
         }
-    }, [selectedJob, designsLoading, designs.length]);
+    }, [selectedJob, designsLoading, designs.length, triggerReingest]);
 
     // Fetch preset PDBs
     const { data: presetsData } = useQuery({
@@ -223,7 +223,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
         }
     };
 
-    const handleDesignSelect = (design: any) => {
+    const handleDesignSelect = (design: UntypedApiValue) => {
         onSelect({
             type: 'run',
             url: `/api/designs/${design.id}/pdb`,
@@ -353,7 +353,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                                 <div className="flex gap-2 text-xs">
                                     <select
                                         value={sortBy}
-                                        onChange={(e) => setSortBy(e.target.value as any)}
+                                        onChange={(e) => setSortBy(e.target.value as UntypedApiValue)}
                                         className="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-300 outline-none focus:border-blue-500"
                                     >
                                         <option value="plddt">Sort by pLDDT</option>
@@ -386,7 +386,7 @@ export function TargetAntigenSelector({ onSelect, selectedTarget, initialTab, la
                                             </button>
                                         </div>
                                     ) : (
-                                        designs.map((design: any) => (
+                                        designs.map((design: UntypedApiValue) => (
                                             <button
                                                 key={design.id}
                                                 onClick={() => handleDesignSelect(design)}

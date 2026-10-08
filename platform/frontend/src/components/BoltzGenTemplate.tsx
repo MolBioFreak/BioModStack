@@ -1,6 +1,6 @@
 /**
  * BoltzGenTemplate - Guided workflow for ligand-aware binder design
- * 
+ *
  * Modes:
  * - Ligand Binder: Design protein binding to custom SMILES
  * - NTP Binder: Design protein binding nucleotides (polymerase-like)
@@ -19,7 +19,8 @@ import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { parsePDBFile, parsePDB, type Chain, formatSelectedResidues } from '../utils/pdbUtils';
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
-import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
+import { PhysicsRefinementPanel, type PhysicsRefinementSettings } from './PhysicsRefinementPanel';
+import { DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './physicsRefinementSettings';
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import { resolveInitialGpuPinningState } from './gpuToggleState.js';
 
@@ -51,7 +52,7 @@ type CheckpointMode = 'both' | 'diverse' | 'adherence';
 
 interface BoltzGenTemplateProps {
     onBack: () => void;
-    initialValues?: Record<string, any>;
+    initialValues?: Record<string, UntypedApiValue>;
     hideHeader?: boolean;
     hideCancelButton?: boolean;
     forcedMode?: DesignMode;
@@ -167,7 +168,7 @@ export function BoltzGenTemplate({
                     setParsedChains([]);
                 });
         }
-    }, [targetSource?.url, targetPdb]);
+    }, [targetSource?.url, targetPdb, selectedChain]);
 
     // Effect: Parse PDB when target file changes (upload)
     useEffect(() => {
@@ -185,14 +186,14 @@ export function BoltzGenTemplate({
             setParsedChains([]);
             setSelectedChain(null);
         }
-    }, [targetPdb]);
+    }, [selectedChain, targetPdb, targetSource?.url]);
 
     // Effect: Update framework when toggle changes
     useEffect(() => {
         if (useFrameworkTemplate && !nanobodyFramework) {
             setNanobodyFramework(DEFAULT_VHH_FRAMEWORK);
         }
-    }, [useFrameworkTemplate]);
+    }, [nanobodyFramework, useFrameworkTemplate]);
 
     // Filtering parameters (new)
     const [budget, setBudget] = useState<number | ''>(initialValues?.boltzgen_budget || 50);
@@ -339,7 +340,7 @@ export function BoltzGenTemplate({
             }
             navigate('/');
         },
-        onError: (error: any) => {
+        onError: (error: UntypedApiValue) => {
             const detail = error.response?.data?.detail;
             const message = typeof detail === 'object' ? JSON.stringify(detail, null, 2) : (detail || error.message);
             window.alert('Job submission failed:\n' + message);
@@ -355,7 +356,7 @@ export function BoltzGenTemplate({
     const handleSubmit = async () => {
         if (!isValid) return;
 
-        const params: Record<string, any> = {
+        const params: Record<string, UntypedApiValue> = {
             diffusion_method: 'boltzgen',
             run_boltzgen_only: dockingMethod === 'none',
             run_docking: dockingMethod !== 'none',
@@ -443,7 +444,7 @@ export function BoltzGenTemplate({
 
         // Inverse folding parameters - cysteine avoidance
         if (avoidCysteine) {
-            // Merge with any custom avoid residues
+            // Merge with unknown custom avoid residues
             const avoidSet = new Set(inverseFoldAvoid.split('').filter((c: string) => c.match(/[A-Z]/)));
             avoidSet.add('C');
             params.boltzgen_inverse_fold_avoid = Array.from(avoidSet).join('');
@@ -1052,7 +1053,7 @@ export function BoltzGenTemplate({
                             type="text"
                             value={ligandSmiles}
                             onChange={e => setLigandSmiles(e.target.value)}
-                            placeholder="e.g., CCO for ethanol, or paste any valid SMILES"
+                            placeholder="e.g., CCO for ethanol, or paste unknown valid SMILES"
                             className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-white font-mono text-sm focus:ring-2 focus:ring-amber-500 outline-none"
                         />
                         <p className="text-xs text-slate-500 mt-2">

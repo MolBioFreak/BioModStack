@@ -228,13 +228,12 @@ function GPUBadge({
 
 // Elapsed time badge for running jobs
 // NOTE: tick prop is passed from parent to trigger re-renders without N intervals
-function ElapsedTimeBadge({ startedAt, tick: _tick }: { startedAt: string | null; tick: number }) {
+function ElapsedTimeBadge({ startedAt, nowMs }: { startedAt: string | null; nowMs: number }) {
     if (!startedAt) return null;
 
     const start = parseApiTimestamp(startedAt);
     if (start === null) return null;
-    const now = Date.now();
-    const elapsedMs = Math.max(0, now - start);
+    const elapsedMs = Math.max(0, nowMs - start);
 
     const seconds = Math.floor(elapsedMs / 1000) % 60;
     const minutes = Math.floor(elapsedMs / 60000) % 60;
@@ -328,10 +327,10 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
     const [showCancelled, setShowCancelled] = useState(false);
     const [showNgsJobs, setShowNgsJobs] = useState(true);
     // Keep elapsed badges roughly fresh without repainting the whole panel every second.
-    const [elapsedTick, setElapsedTick] = useState(0);
+    const [elapsedNowMs, setElapsedNowMs] = useState(() => Date.now());
 
     useEffect(() => {
-        const timer = setInterval(() => setElapsedTick(t => t + 1), 2000);
+        const timer = setInterval(() => setElapsedNowMs(Date.now()), 2000);
         return () => clearInterval(timer);
     }, []);
 
@@ -604,7 +603,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                                                     }
                                                 }}
                                                 isPending={isPending}
-                                                elapsedTick={elapsedTick}
+                                                elapsedNowMs={elapsedNowMs}
                                                 gpuCatalog={gpuCatalog}
                                                 liveGpuOptions={liveGpuOptions}
                                             />
@@ -631,7 +630,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                                                     }
                                                 }}
                                                 isPending={isPending}
-                                                elapsedTick={elapsedTick}
+                                                elapsedNowMs={elapsedNowMs}
                                                 gpuCatalog={gpuCatalog}
                                                 liveGpuOptions={liveGpuOptions}
                                             />
@@ -660,7 +659,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                                                 onPin={(gpuId) => pinMutation.mutate({ jobId: job.id, gpuId })}
                                                 onForceLaunch={(gpuId) => forceLaunchMutation.mutate({ jobId: job.id, gpuId })}
                                                 isPending={isPending}
-                                                elapsedTick={elapsedTick}
+                                                elapsedNowMs={elapsedNowMs}
                                                 gpuCatalog={gpuCatalog}
                                                 liveGpuOptions={liveGpuOptions}
                                             />
@@ -690,7 +689,7 @@ export function JobQueuePanel({ className = '' }: { className?: string }) {
                                                 onPin={(gpuId) => pinMutation.mutate({ jobId: job.id, gpuId })}
                                                 onForceLaunch={(gpuId) => forceLaunchMutation.mutate({ jobId: job.id, gpuId })}
                                                 isPending={isPending}
-                                                elapsedTick={elapsedTick}
+                                                elapsedNowMs={elapsedNowMs}
                                                 gpuCatalog={gpuCatalog}
                                                 liveGpuOptions={liveGpuOptions}
                                             />
@@ -714,7 +713,7 @@ interface JobRowProps {
     onPin?: (gpuId: number | null) => void;
     onForceLaunch?: (gpuId: number) => void;
     isPending: boolean;
-    elapsedTick: number;  // For elapsed time display
+    elapsedNowMs: number;  // For elapsed time display
     gpuCatalog: GpuCatalogLike;
     liveGpuOptions: GpuCatalogEntry[];
 }
@@ -727,7 +726,7 @@ function JobRow({
     onPin,
     onForceLaunch,
     isPending,
-    elapsedTick,
+    elapsedNowMs,
     gpuCatalog,
     liveGpuOptions,
 }: JobRowProps) {
@@ -787,7 +786,7 @@ function JobRow({
                             {job.queue_status === 'running' && (
                                 <>
                                     <StageBadge stage={job.current_stage} progress={job.stage_progress} />
-                                    <ElapsedTimeBadge startedAt={job.started_at} tick={elapsedTick} />
+                                    <ElapsedTimeBadge startedAt={job.started_at} nowMs={elapsedNowMs} />
                                 </>
                             )}
                             {job.queue_status === 'queued' && job.scheduler_required_mb ? (

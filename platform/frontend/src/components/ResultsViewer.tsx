@@ -569,7 +569,7 @@ const formatValidationDesignLabel = (
     return sourceLabel;
 };
 
-const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null; confidence_metrics?: Record<string, any> | null }): string => {
+const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null; confidence_metrics?: Record<string, UntypedApiValue> | null }): string => {
     const source = inferDesignOutputSource(design);
     const sampleMatch = design.name.match(/(?:_sample_(\d+)|_ppiflow_sample(\d+))$/i);
     const sampleIndex = sampleMatch?.[1] ?? sampleMatch?.[2] ?? null;
@@ -579,7 +579,7 @@ const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null;
             ? `Seq ${seqMatch[1]} • ${getOutputSourceLabel(design)} Sample ${sampleIndex}`
             : `${getOutputSourceLabel(design)} Sample ${sampleIndex}`;
     }
-    if (source === 'validation') return formatValidationDesignLabel(design as any);
+    if (source === 'validation') return formatValidationDesignLabel(design as UntypedApiValue);
     if (source === 'boltzgen') {
         const inputMatch = design.name.match(/boltzgen_input_(\d+)/i);
         const variantMatch = design.name.match(/variant_(\d+)/i);
@@ -591,7 +591,7 @@ const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null;
     if (source === 'ppiflow') {
         const ppiflowRecord = (
             design && typeof design === 'object' && 'provenance' in design && design.provenance && typeof design.provenance === 'object'
-                ? ((design.provenance as Record<string, any>).ppiflow as Record<string, any> | undefined)
+                ? ((design.provenance as Record<string, UntypedApiValue>).ppiflow as Record<string, UntypedApiValue> | undefined)
                 : undefined
         );
         const sourceName = typeof ppiflowRecord?.source_design_name === 'string' ? ppiflowRecord.source_design_name.trim() : '';
@@ -638,17 +638,17 @@ const getDesignSelectorMetricLabel = (design: Design): string | null => {
     return null;
 };
 
-const asRecord = (value: unknown): Record<string, any> | null => (
+const asRecord = (value: unknown): Record<string, UntypedApiValue> | null => (
     value && typeof value === 'object' && !Array.isArray(value)
-        ? value as Record<string, any>
+        ? value as Record<string, UntypedApiValue>
         : null
 );
 
-const getPpiflowRecord = (design: { provenance?: unknown } | null | undefined): Record<string, any> | null => (
+const getPpiflowRecord = (design: { provenance?: unknown } | null | undefined): Record<string, UntypedApiValue> | null => (
     asRecord(asRecord(design?.provenance)?.ppiflow)
 );
 
-const getPpiflowScoreRecord = (design: { provenance?: unknown } | null | undefined): Record<string, any> | null => {
+const getPpiflowScoreRecord = (design: { provenance?: unknown } | null | undefined): Record<string, UntypedApiValue> | null => {
     const record = getPpiflowRecord(design);
     return (
         asRecord(record?.maturation_score)
@@ -657,27 +657,27 @@ const getPpiflowScoreRecord = (design: { provenance?: unknown } | null | undefin
     );
 };
 
-const getPpiflowAnchorRecord = (design: { provenance?: unknown } | null | undefined): Record<string, any> | null => (
+const getPpiflowAnchorRecord = (design: { provenance?: unknown } | null | undefined): Record<string, UntypedApiValue> | null => (
     asRecord(getPpiflowRecord(design)?.anchors)
 );
 
-const getPpiflowLoopMetricsRecord = (design: { provenance?: unknown; ppiflow_loop_metrics?: unknown } | null | undefined): Record<string, Record<string, any>> | null => {
+const getPpiflowLoopMetricsRecord = (design: { provenance?: unknown; ppiflow_loop_metrics?: unknown } | null | undefined): Record<string, Record<string, UntypedApiValue>> | null => {
     const direct = asRecord(design && 'ppiflow_loop_metrics' in design ? design.ppiflow_loop_metrics : null);
     if (direct) {
         return Object.fromEntries(
             Object.entries(direct).filter(([, value]) => value && typeof value === 'object' && !Array.isArray(value))
-        ) as Record<string, Record<string, any>>;
+        ) as Record<string, Record<string, UntypedApiValue>>;
     }
     const fallback = asRecord(getPpiflowScoreRecord(design)?.loop_metrics);
     if (!fallback) return null;
     return Object.fromEntries(
         Object.entries(fallback).filter(([, value]) => value && typeof value === 'object' && !Array.isArray(value))
-    ) as Record<string, Record<string, any>>;
+    ) as Record<string, Record<string, UntypedApiValue>>;
 };
 
 const getPpiflowLoopEntries = (
     design: { provenance?: unknown; ppiflow_loop_metrics?: unknown } | null | undefined,
-): Array<{ loopId: string; metrics: Record<string, any> }> => {
+): Array<{ loopId: string; metrics: Record<string, UntypedApiValue> }> => {
     const metrics = getPpiflowLoopMetricsRecord(design);
     if (!metrics) return [];
     return Object.entries(metrics)
@@ -686,7 +686,7 @@ const getPpiflowLoopEntries = (
         .sort((a, b) => a.loopId.localeCompare(b.loopId));
 };
 
-const getFampnnRecord = (design: { provenance?: unknown; confidence_metrics?: unknown } | null | undefined): Record<string, any> | null => (
+const getFampnnRecord = (design: { provenance?: unknown; confidence_metrics?: unknown } | null | undefined): Record<string, UntypedApiValue> | null => (
     asRecord(asRecord(design?.provenance)?.fampnn)
     ?? asRecord(asRecord(getPpiflowRecord(design))?.fampnn)
     ?? asRecord(asRecord(design?.confidence_metrics)?.fampnn)
@@ -711,7 +711,7 @@ const getFampnnMaxResiduePsce = (design: { provenance?: unknown; confidence_metr
     getFampnnScalar(design, 'fampnn_max_residue_psce', 'max_residue_psce')
 );
 
-const getCalibyRecord = (design: { provenance?: unknown; confidence_metrics?: unknown } | null | undefined): Record<string, any> | null => (
+const getCalibyRecord = (design: { provenance?: unknown; confidence_metrics?: unknown } | null | undefined): Record<string, UntypedApiValue> | null => (
     asRecord(asRecord(design?.provenance)?.caliby)
     ?? asRecord(design?.confidence_metrics)
 );
@@ -1073,7 +1073,7 @@ const normalizeLoopScopeLabel = (value: unknown): string | null => {
     }
     if (typeof value === 'string') {
         const loops = value
-            .replace(/[\[\]]/g, '')
+            .split('[').join('').split(']').join('')
             .split(/[\s,;|]+/)
             .map((item) => item.trim().toUpperCase())
             .filter(Boolean);
@@ -2297,43 +2297,7 @@ export function ResultsViewer() {
         rfd_rog_min: rfdRogMinValue,
         rfd_rog_max: rfdRogMaxValue,
         artifact_group: activeRfArtifactGroup,
-    }), [
-        selectedJobId,
-        isReviewStageJob,
-        filterText,
-        pageSize,
-        currentPage,
-        apiSortField,
-        sortDir,
-        selectedBackboneId,
-        plddtMin,
-        iptmMin,
-        ipsaeMin,
-        contactsMin,
-        targetContactsMin,
-        epitopeMaxDistValue,
-        targetMaxDistValue,
-        binderSizeMinValue,
-        binderSizeMaxValue,
-        cdrH1MinValue,
-        cdrH1MaxValue,
-        cdrH2MinValue,
-        cdrH2MaxValue,
-        cdrH3MinValue,
-        cdrH3MaxValue,
-        rogMinValue,
-        rogMaxValue,
-        rfdRogMinValue,
-        rfdRogMaxValue,
-        activeRfArtifactGroup,
-        activeSavedSubsetDesignIds,
-        activeJob?.design_count,
-        activeJobHasDesignBearingChildren,
-        backboneFilterApplies,
-        isPostRFantibodyReview,
-        useClientSourcePagination,
-        forceBulkLoadForSorting,
-    ]);
+    }), [selectedJobId, isReviewStageJob, filterText, pageSize, currentPage, apiSortField, sortDir, selectedBackboneId, plddtMin, iptmMin, ipsaeMin, contactsMin, targetContactsMin, epitopeMaxDistValue, targetMaxDistValue, binderSizeMinValue, binderSizeMaxValue, cdrH1MinValue, cdrH1MaxValue, cdrH2MinValue, cdrH2MaxValue, cdrH3MinValue, cdrH3MaxValue, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue, activeRfArtifactGroup, activeSavedSubsetDesignIds, activeJob?.design_count, activeJobHasDesignBearingChildren, backboneFilterApplies, forceBulkLoadForSorting]);
     const bulkSelectionFilters = useMemo<DesignFilters>(() => ({
         ...designQueryFilters,
         limit: MAX_BULK_SELECTION_DESIGNS,
@@ -2345,7 +2309,7 @@ export function ResultsViewer() {
         queryFn: () => fetchDesigns(designQueryFilters),
         enabled: !!activeJob && !reviewSelectionRequired,
     });
-    const rawDesigns = designsData?.data.designs ?? [];
+    const rawDesigns = useMemo(() => designsData?.data.designs ?? [], [designsData?.data.designs]);
     const serverTotalDesigns = designsData?.data.total ?? rawDesigns.length;
     const canClientSortLoadedDesigns = forceBulkLoadForSorting || serverTotalDesigns <= rawDesigns.length;
     const designs = useMemo(() => {
@@ -2353,7 +2317,7 @@ export function ResultsViewer() {
         const validationIndices = new Map<string, number>();
 
         for (const design of rawDesigns) {
-            if (inferDesignOutputSource(design as any) !== 'validation') {
+            if (inferDesignOutputSource(design as UntypedApiValue) !== 'validation') {
                 deduped.push(design);
                 continue;
             }
@@ -2388,9 +2352,9 @@ export function ResultsViewer() {
     const selectedDesign = selectedDesignDetailData ?? designs.find(d => d.id === selectedDesignId);
     const selectedDesignLens = useMemo<AnalysisLens | null>(() => {
         if (selectedDesign) {
-            return inferDesignAnalysisLens(selectedDesign as any);
+            return inferDesignAnalysisLens(selectedDesign as UntypedApiValue);
         }
-        return inferPreferredAnalysisLens(activeJob, designs as any) ?? null;
+        return inferPreferredAnalysisLens(activeJob, designs as UntypedApiValue) ?? null;
     }, [activeJob, designs, selectedDesign]);
 
     // Fetch backbone summary for toggle UI
@@ -2430,8 +2394,8 @@ export function ResultsViewer() {
     const reviewBackboneRows = useMemo(() => {
         if (reviewSelectionRequired) return [];
         const ids = new Set<number>();
-        const apiBackbones = (backboneSummary?.backbones || {}) as Record<string, any>;
-        const currentEntries = (currentGateBackboneSummary?.backbones || {}) as Record<string, any>;
+        const apiBackbones = (backboneSummary?.backbones || {}) as Record<string, UntypedApiValue>;
+        const currentEntries = (currentGateBackboneSummary?.backbones || {}) as Record<string, UntypedApiValue>;
         for (const key of Object.keys(currentEntries)) {
             const parsed = Number(key);
             if (Number.isFinite(parsed)) ids.add(parsed);
@@ -2872,21 +2836,21 @@ export function ResultsViewer() {
 
     const analyticsChartDesigns = designs;
     const preferredAnalysisLens = useMemo<AnalysisLens | 'auto'>(() => {
-        if (isAnalysisLensOutputSource(outputSourceFilter) && designs.some((design) => inferDesignOutputSource(design as any) === outputSourceFilter)) {
+        if (isAnalysisLensOutputSource(outputSourceFilter) && designs.some((design) => inferDesignOutputSource(design as UntypedApiValue) === outputSourceFilter)) {
             return outputSourceFilter;
         }
-        if (isAnalysisLensOutputSource(antibodySourceFilter) && designs.some((design) => inferDesignOutputSource(design as any) === antibodySourceFilter)) {
+        if (isAnalysisLensOutputSource(antibodySourceFilter) && designs.some((design) => inferDesignOutputSource(design as UntypedApiValue) === antibodySourceFilter)) {
             return antibodySourceFilter;
         }
-        return inferPreferredAnalysisLens(activeJob, designs as any) ?? 'auto';
+        return inferPreferredAnalysisLens(activeJob, designs as UntypedApiValue) ?? 'auto';
     }, [activeJob, antibodySourceFilter, designs, outputSourceFilter]);
     const selectedDesignSet = useMemo(() => new Set(selectedDesignIds), [selectedDesignIds]);
     const sourceScopedDesigns = useMemo(() => {
         if (outputSourceFilter === 'all') return orderedDesigns;
-        return orderedDesigns.filter((design) => inferDesignOutputSource(design as any) === outputSourceFilter);
+        return orderedDesigns.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === outputSourceFilter);
     }, [orderedDesigns, outputSourceFilter]);
     const boltzgenScopedDesigns = useMemo(
-        () => sourceScopedDesigns.filter((design) => inferDesignOutputSource(design as any) === 'boltzgen'),
+        () => sourceScopedDesigns.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === 'boltzgen'),
         [sourceScopedDesigns],
     );
     const boltzgenClusterSummary = useMemo(
@@ -2903,7 +2867,7 @@ export function ResultsViewer() {
     }, [currentPage, pageSize, sourceScopedDesigns, useClientSourcePagination]);
     const showPpiflowColumns = outputSourceFilter === 'ppiflow'
         || preferredAnalysisLens === 'ppiflow'
-        || orderedDesigns.some((design) => inferDesignOutputSource(design as any) === 'ppiflow');
+        || orderedDesigns.some((design) => inferDesignOutputSource(design as UntypedApiValue) === 'ppiflow');
     const visibleDesignIds = useMemo(() => tableDesigns.map((design) => design.id), [tableDesigns]);
     const visibleSelectionRef = useRef<HTMLInputElement | null>(null);
     const tableScrollViewportRef = useRef<HTMLDivElement | null>(null);
@@ -3081,13 +3045,13 @@ export function ResultsViewer() {
             return;
         }
         const preferredSource = inferPreferredOutputSource(activeJob);
-        const nextSource = preferredSource !== 'all' && designs.some((design) => inferDesignOutputSource(design as any) === preferredSource)
+        const nextSource = preferredSource !== 'all' && designs.some((design) => inferDesignOutputSource(design as UntypedApiValue) === preferredSource)
             ? preferredSource
             : 'all';
         outputSourceSelectionJobRef.current = selectedJobId || null;
         setOutputSourceFilter(nextSource);
         setAntibodySourceFilter(nextSource);
-    }, [selectedJobId, activeJob?.awaiting_stage, activeJob?.current_stage, activeJob?.awaiting_payload?.candidate_dir, designs]);
+    }, [selectedJobId, activeJob?.awaiting_stage, activeJob?.current_stage, activeJob?.awaiting_payload?.candidate_dir, designs, activeJob]);
 
     useEffect(() => {
         setRfReviewSet(null);
@@ -3499,7 +3463,7 @@ export function ResultsViewer() {
             ['Immediate Parent Design', selectedDesign.parent_design_id],
             ['Origin Design', selectedDesign.origin_design_id],
             ['Origin Backbone', selectedDesign.origin_backbone_design_id],
-            ['Source Design', selectedDesign.source_design_name ?? getPpiflowSourceName(selectedDesign as any)],
+            ['Source Design', selectedDesign.source_design_name ?? getPpiflowSourceName(selectedDesign as UntypedApiValue)],
             ['Source PDB', selectedDesign.source_pdb_path ?? null],
         ]
             .filter(([, value]) => value !== undefined && value !== null && value !== '')
@@ -3547,7 +3511,7 @@ export function ResultsViewer() {
             const selectedIfaceScore = selectedDesign.maturation_selected_interface_score ?? (typeof ppiflowScore?.selected_interface_score_matured === 'number' ? ppiflowScore.selected_interface_score_matured : null);
             const selectedRmsd = selectedDesign.maturation_selected_rmsd ?? (typeof ppiflowScore?.selected_rmsd_backbone === 'number' ? ppiflowScore.selected_rmsd_backbone : null);
             const nonselectedRmsd = selectedDesign.maturation_nonselected_rmsd ?? (typeof ppiflowScore?.nonselected_rmsd_backbone === 'number' ? ppiflowScore.nonselected_rmsd_backbone : null);
-            const sampleIndex = getPpiflowSampleIndex(selectedDesign as any);
+            const sampleIndex = getPpiflowSampleIndex(selectedDesign as UntypedApiValue);
             const loopScope = normalizeLoopScopeLabel(selectedDesignPpiflowRecord?.selected_loop_scope ?? selectedDesignProvenance?.selected_loop_scope);
             const movableSpan = selectedDesignPpiflowRecord?.ppiflow_positions ?? selectedDesignPpiflowRecord?.movable_region_positions ?? null;
             const objectiveScore = selectedDesign.ppiflow_objective_score ?? (typeof ppiflowScore?.objective_score === 'number' ? ppiflowScore.objective_score : null);
@@ -3557,7 +3521,7 @@ export function ResultsViewer() {
             const primaryLoopEpitopeDelta = selectedDesign.ppiflow_primary_loop_epitope_contact_delta ?? (typeof ppiflowScore?.primary_loop_epitope_contact_delta === 'number' ? ppiflowScore.primary_loop_epitope_contact_delta : null);
             return [
                 { label: 'Output', value: getOutputSourceLabel(selectedDesign), tone: 'text-cyan-300' },
-                { label: 'Source Backbone', value: getPpiflowSourceName(selectedDesign as any) ?? '—', tone: 'text-slate-200' },
+                { label: 'Source Backbone', value: getPpiflowSourceName(selectedDesign as UntypedApiValue) ?? '—', tone: 'text-slate-200' },
                 { label: 'Sample', value: sampleIndex != null ? String(sampleIndex) : '—', tone: 'text-slate-200' },
                 { label: 'Region', value: loopScope ?? '—', tone: 'text-slate-200' },
                 { label: 'Movable Span', value: movableSpan ?? '—', tone: 'text-slate-200' },
@@ -3719,7 +3683,7 @@ export function ResultsViewer() {
             { label: 'High Frust Count', value: selectedDesign.frustration_high_count ?? '—', tone: 'text-amber-300' },
             { label: 'Maturation ΔIface', value: (selectedDesign.maturation_selected_delta_interface ?? selectedDesign.maturation_delta_interface) != null ? (selectedDesign.maturation_selected_delta_interface ?? selectedDesign.maturation_delta_interface)!.toFixed(2) : '—', tone: 'text-fuchsia-300' },
         ];
-    }, [antibodyData?.antibody_type, antibodyData?.humanness_score, getMetricColor, rfMetricLabels.distance, rfMetricLabels.epitope, rfMetricLabels.short, rfMetricScope, selectedDesign, selectedDesignCalibyPottsEnergy, selectedDesignCalibyScPlddt, selectedDesignCalibyScRmsd, selectedDesignFampnnMaxResiduePsce, selectedDesignHasPpiflowLens, selectedDesignPpiflowRecord, selectedDesignProvenance?.selected_loop_scope, selectedDesignSource]);
+    }, [antibodyData?.antibody_type, antibodyData?.humanness_score, rfMetricLabels.distance, rfMetricLabels.epitope, rfMetricLabels.short, rfMetricScope, selectedDesign, selectedDesignCalibyPottsEnergy, selectedDesignCalibyScPlddt, selectedDesignCalibyScRmsd, selectedDesignFampnnMaxResiduePsce, selectedDesignHasPpiflowLens, selectedDesignPpiflowRecord, selectedDesignProvenance?.selected_loop_scope, selectedDesignSource]);
     const overviewAnalysisItems = useMemo(() => ([
         {
             key: 'structure_summary',
@@ -3793,37 +3757,7 @@ export function ResultsViewer() {
                 : null,
             run: () => runContactMapAnalysis.mutateAsync(),
         },
-    ]), [
-        antibodyAnalysisBusy,
-        antibodyAnalysisRun?.error_message,
-        antibodyAnalysisRun?.status,
-        antibodyData,
-        chainMetricsAnalysis,
-        chainMetricsAnalysisBusy,
-        chainMetricsAnalysisRun?.error_message,
-        chainMetricsAnalysisRun?.status,
-        ipsaeAnalysis,
-        ipsaeAnalysisBusy,
-        ipsaeAnalysisRun?.error_message,
-        ipsaeAnalysisRun?.status,
-        contactMapAnalysis,
-        contactMapAnalysisBusy,
-        contactMapAnalysisRun?.error_message,
-        contactMapAnalysisRun?.status,
-        paeMatrixAnalysis,
-        paeMatrixAnalysisBusy,
-        paeMatrixAnalysisRun?.error_message,
-        paeMatrixAnalysisRun?.status,
-        runAntibodyAnalysis,
-        runChainMetricsAnalysis,
-        runContactMapAnalysis,
-        runPaeMatrixAnalysis,
-        runStructureAnalysis,
-        structureAnalysis,
-        structureAnalysisBusy,
-        structureAnalysisRun?.error_message,
-        structureAnalysisRun?.status,
-    ]);
+    ]), [structureAnalysisRun?.status, structureAnalysisRun?.error_message, structureAnalysisBusy, structureAnalysis, antibodyAnalysisRun?.status, antibodyAnalysisRun?.error_message, antibodyAnalysisBusy, antibodyData, chainMetricsAnalysisRun?.status, chainMetricsAnalysisRun?.error_message, chainMetricsAnalysisBusy, chainMetricsAnalysis, ipsaeAnalysisRun?.status, ipsaeAnalysisRun?.error_message, ipsaeAnalysisBusy, ipsaeAnalysis, paeMatrixAnalysisRun?.status, paeMatrixAnalysisRun?.error_message, paeMatrixAnalysisBusy, paeMatrixAnalysis, contactMapAnalysisRun?.status, contactMapAnalysisRun?.error_message, contactMapAnalysisBusy, contactMapAnalysis, runStructureAnalysis, runAntibodyAnalysis, runChainMetricsAnalysis, runIpsaeAnalysis, runPaeMatrixAnalysis, runContactMapAnalysis]);
     const overviewAnalysisCounts = useMemo(() => {
         if (!selectedDesignId) {
             return { cached: 0, running: 0, missing: 0, attention: 0 };
@@ -3904,24 +3838,24 @@ export function ResultsViewer() {
         const ppiflowRmsd = designs.map(d => d.maturation_selected_rmsd ?? d.maturation_rmsd).filter((v): v is number => v != null);
         const ppiflowSeqIdentity = designs
             .map(d => {
-                const score = getPpiflowScoreRecord(d as any);
+                const score = getPpiflowScoreRecord(d as UntypedApiValue);
                 return typeof score?.sequence_identity === 'number' ? score.sequence_identity : null;
             })
             .filter((v): v is number => v != null);
         const ppiflowAnchorCounts = designs
             .map(d => {
-                const anchors = getPpiflowAnchorRecord(d as any);
+                const anchors = getPpiflowAnchorRecord(d as UntypedApiValue);
                 return typeof anchors?.anchor_count === 'number' ? anchors.anchor_count : null;
             })
             .filter((v): v is number => v != null);
         const ppiflowClashCounts = designs
             .map(d => {
-                const score = getPpiflowScoreRecord(d as any);
+                const score = getPpiflowScoreRecord(d as UntypedApiValue);
                 return typeof score?.clash_count_ca === 'number' ? score.clash_count_ca : null;
             })
             .filter((v): v is number => v != null);
-        const ppiflowDesigns = designs.filter((d) => inferDesignOutputSource(d as any) === 'ppiflow');
-        const ppiflowUniqueSources = new Set(ppiflowDesigns.map((d) => getPpiflowSourceKey(d as any)).filter(Boolean));
+        const ppiflowDesigns = designs.filter((d) => inferDesignOutputSource(d as UntypedApiValue) === 'ppiflow');
+        const ppiflowUniqueSources = new Set(ppiflowDesigns.map((d) => getPpiflowSourceKey(d as UntypedApiValue)).filter(Boolean));
         const frustrationHigh = designs.map(d => d.frustration_high_count).filter((v): v is number => v != null);
         const frustrationPct = designs.map(d => d.frustration_pct_high).filter((v): v is number => v != null);
         const screenPassed = designs.filter((d) => d.passed_screen === true).length;
@@ -4461,7 +4395,7 @@ export function ResultsViewer() {
             }
             const scopedDesigns = outputSourceFilter === 'all'
                 ? response.data.designs
-                : response.data.designs.filter((design) => inferDesignOutputSource(design as any) === outputSourceFilter);
+                : response.data.designs.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === outputSourceFilter);
             if (mode === 'top_ranked') {
                 return scopedDesigns.slice(0, Math.max(1, topN || 1)).map((design) => design.id);
             }
@@ -4495,7 +4429,7 @@ export function ResultsViewer() {
             if (response.data.total > MAX_BULK_SELECTION_DESIGNS) {
                 throw new Error(`Filtered result set exceeds ${MAX_BULK_SELECTION_DESIGNS.toLocaleString()} outputs. Narrow the filters first.`);
             }
-            const boltzgenDesigns = response.data.designs.filter((design) => inferDesignOutputSource(design as any) === 'boltzgen');
+            const boltzgenDesigns = response.data.designs.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === 'boltzgen');
             if (boltzgenDesigns.length === 0) {
                 throw new Error('No BoltzGen outputs matched the current filtered set.');
             }
@@ -4542,7 +4476,7 @@ export function ResultsViewer() {
             }
             const scopedDesigns = outputSourceFilter === 'all'
                 ? response.data.designs
-                : response.data.designs.filter((design) => inferDesignOutputSource(design as any) === outputSourceFilter);
+                : response.data.designs.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === outputSourceFilter);
             if (scopedDesigns.length === 0) {
                 throw new Error('No outputs matched the current filtered set.');
             }
@@ -4660,7 +4594,7 @@ export function ResultsViewer() {
             ? designs.filter((design) => launchDesignIdSet.has(design.id))
             : [];
         const selectedLaunchSourceFilters = Array.from(new Set(
-            selectedLaunchDesigns.map((design) => inferDesignOutputSource(design as any))
+            selectedLaunchDesigns.map((design) => inferDesignOutputSource(design as UntypedApiValue))
         ));
         const launchSourceOutputFilter = resolvedSavedFilterSet
             ? savedSourceOutputFilter
@@ -4712,7 +4646,7 @@ export function ResultsViewer() {
     };
 
     const getErrorMessage = (error: unknown): string => {
-        const detail = (error as any)?.response?.data?.detail;
+        const detail = (error as UntypedApiValue)?.response?.data?.detail;
         if (typeof detail === 'string') return detail;
         if (Array.isArray(detail)) return detail.join(', ');
         if (detail && typeof detail === 'object') return JSON.stringify(detail);
@@ -6495,7 +6429,7 @@ export function ResultsViewer() {
                                                                     <div key={d.id} className="flex justify-between items-center py-2 px-3 bg-slate-900/50 rounded-lg">
                                                                         <span className="text-sm truncate flex-1">
                                                                             {preferredAnalysisLens === 'ppiflow'
-                                                                                ? `${getPpiflowSourceName(d as any) ?? d.name}${getPpiflowSampleIndex(d as any) != null ? ` • sample ${getPpiflowSampleIndex(d as any)}` : ''}`
+                                                                                ? `${getPpiflowSourceName(d as UntypedApiValue) ?? d.name}${getPpiflowSampleIndex(d as UntypedApiValue) != null ? ` • sample ${getPpiflowSampleIndex(d as UntypedApiValue)}` : ''}`
                                                                                 : d.name}
                                                                         </span>
                                                                         <span className={`text-sm font-mono ${preferredAnalysisLens === 'fampnn'
@@ -6583,7 +6517,7 @@ export function ResultsViewer() {
                                                                 <div className="border-b border-slate-800/80 pb-3">
                                                                     <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Selected Output</div>
                                                                     <div className="mt-2 text-sm font-medium text-white">
-                                                                        {selectedDesign ? getFriendlyDesignName(selectedDesign as any) : 'No output selected'}
+                                                                        {selectedDesign ? getFriendlyDesignName(selectedDesign as UntypedApiValue) : 'No output selected'}
                                                                     </div>
                                                                     <div className="mt-1 text-[11px] text-slate-400">
                                                                         {selectedDesign ? `${getOutputSourceLabel(selectedDesign)} • ${selectedDesignSource === 'rfantibody' ? 'review/source metrics stay automatic' : 'derived analyses persist once run'}` : 'Choose an output in the viewer first.'}
@@ -6784,7 +6718,7 @@ export function ResultsViewer() {
                                                 <div className="mt-2 text-[11px] text-slate-500">
                                                     {isPostRFantibodyReview
                                                         ? `RF headline distances here are using the ${rfMetricLabels.short.toLowerCase()} lens. Switch lenses in the viewer or binder detail panel to compare against the alternate scope.`
-                                                        : '`Any-Target Dist` measures nearest binder CA to any target residue, so it can be smaller than `Epitope Dist`, which only measures against the selected epitope residues.'}
+                                                        : '`Any-Target Dist` measures nearest binder CA to unknown target residue, so it can be smaller than `Epitope Dist`, which only measures against the selected epitope residues.'}
                                                 </div>
                                             </div>
                                             <StructureViewerPane
@@ -6980,7 +6914,7 @@ export function ResultsViewer() {
                                                             <div className="text-[11px] text-slate-500">
                                                                 {selectedDesignSource === 'rfantibody'
                                                                     ? `The RF review cards below are showing ${rfMetricLabels.short.toLowerCase()} engagement. Switch to whole-antibody mode when you want framework-mediated nanobody contacts in the headline metrics.`
-                                                                    : '`Any-Target Dist` is nearest binder CA to the full target surface. `Epitope Dist` is nearest binder CA only to the selected epitope residues, so the any-target distance can legitimately be smaller.'}
+                                                                    : '`Any-Target Dist` is nearest binder CA to the full target surface. `Epitope Dist` is nearest binder CA only to the selected epitope residues, so the unknown-target distance can legitimately be smaller.'}
                                                             </div>
                                                         </div>
                                                     </div>
@@ -7024,7 +6958,7 @@ export function ResultsViewer() {
                                                         {selectedDesignMetricCards.map((card) => (
                                                             <div key={card.label} className="rounded-xl border border-slate-700/50 bg-slate-800/50 p-4">
                                                                 <div className="text-[11px] uppercase tracking-wider text-slate-500">{card.label}</div>
-                                                                <div className={`mt-2 text-lg font-semibold ${card.tone}`}>{card.value as any}</div>
+                                                                <div className={`mt-2 text-lg font-semibold ${card.tone}`}>{card.value as UntypedApiValue}</div>
                                                             </div>
                                                         ))}
                                                     </div>
@@ -7356,7 +7290,7 @@ export function ResultsViewer() {
                                                                     )}
                                                                 </div>
                                                                 <div className="mt-3 space-y-2 text-xs">
-                                                                    {antibodyTopFrustrationResidues.length > 0 ? antibodyTopFrustrationResidues.map((row: any) => (
+                                                                    {antibodyTopFrustrationResidues.length > 0 ? antibodyTopFrustrationResidues.map((row: UntypedApiValue) => (
                                                                         <div key={`${row.chain}:${row.pos}`} className="flex items-center justify-between rounded-lg bg-slate-900/50 px-3 py-2">
                                                                             <span className="font-mono text-slate-300">{row.chain}{row.pos}</span>
                                                                             <span className={`${row.frust <= -1 ? 'text-amber-300' : row.frust >= 0.58 ? 'text-red-300' : 'text-slate-400'}`}>{row.frust.toFixed(2)} {row.frustClass}</span>
@@ -7657,7 +7591,7 @@ export function ResultsViewer() {
                                                         />
                                                     </div>
                                                     <div className="flex items-center gap-2">
-                                                        <span className="text-xs text-slate-500" title="Maximum nearest CA distance from the binder to any target residue">Any-Tgt Dist ≤</span>
+                                                        <span className="text-xs text-slate-500" title="Maximum nearest CA distance from the binder to unknown target residue">Any-Tgt Dist ≤</span>
                                                         <input
                                                             type="number"
                                                             min="0"
@@ -8035,15 +7969,15 @@ export function ResultsViewer() {
                                                                 </td>
                                                                 <td className="px-3 py-2 max-w-[260px]">
                                                                     <div className="flex items-center gap-2">
-                                                                        <span className={`px-2 py-0.5 text-[10px] font-semibold rounded border ${getOutputSourceBadgeClass(inferDesignOutputSource(d as any))}`}>
-                                                                            {getOutputSourceLabel(d as any)}
+                                                                        <span className={`px-2 py-0.5 text-[10px] font-semibold rounded border ${getOutputSourceBadgeClass(inferDesignOutputSource(d as UntypedApiValue))}`}>
+                                                                            {getOutputSourceLabel(d as UntypedApiValue)}
                                                                         </span>
                                                                         {d.frustration_high_count != null && (
                                                                             <span className="px-2 py-0.5 text-[10px] font-semibold rounded border border-amber-500/40 bg-amber-500/10 text-amber-200">
                                                                                 Frustra
                                                                             </span>
                                                                         )}
-                                                                        <span className="font-medium truncate">{getFriendlyDesignName(d as any)}</span>
+                                                                        <span className="font-medium truncate">{getFriendlyDesignName(d as UntypedApiValue)}</span>
                                                                     </div>
                                                                     <div className="mt-1 truncate text-[11px] text-slate-500" title={d.name}>
                                                                         {d.name}
@@ -8081,22 +8015,22 @@ export function ResultsViewer() {
 
                                                                 {/* Binder Size (AA count) */}
                                                                 <td className="px-3 py-2 font-mono text-slate-400">
-                                                                    {(d as any).binder_length ?? '—'}
+                                                                    {(d as UntypedApiValue).binder_length ?? '—'}
                                                                 </td>
 
                                                                 {/* CDR-H1 Length */}
                                                                 <td className="px-3 py-2 font-mono text-violet-400">
-                                                                    {(d as any).cdr_h1_length ?? '—'}
+                                                                    {(d as UntypedApiValue).cdr_h1_length ?? '—'}
                                                                 </td>
 
                                                                 {/* CDR-H2 Length */}
                                                                 <td className="px-3 py-2 font-mono text-violet-400">
-                                                                    {(d as any).cdr_h2_length ?? '—'}
+                                                                    {(d as UntypedApiValue).cdr_h2_length ?? '—'}
                                                                 </td>
 
                                                                 {/* CDR-H3 Length */}
                                                                 <td className="px-3 py-2 font-mono text-violet-400">
-                                                                    {(d as any).cdr_h3_length ?? '—'}
+                                                                    {(d as UntypedApiValue).cdr_h3_length ?? '—'}
                                                                 </td>
 
                                                                 {/* Epitope Contact Count */}
@@ -8106,9 +8040,9 @@ export function ResultsViewer() {
                                                                 </td>
 
                                                                 {/* Target Contact Count */}
-                                                                <td className={`px-3 py-2 font-mono ${((d as any).target_contact_count ?? 0) >= 5 ? 'text-emerald-400' :
-                                                                    ((d as any).target_contact_count ?? 0) > 0 ? 'text-amber-400' : 'text-slate-500'}`}>
-                                                                    {(d as any).target_contact_count ?? '—'}
+                                                                <td className={`px-3 py-2 font-mono ${((d as UntypedApiValue).target_contact_count ?? 0) >= 5 ? 'text-emerald-400' :
+                                                                    ((d as UntypedApiValue).target_contact_count ?? 0) > 0 ? 'text-amber-400' : 'text-slate-500'}`}>
+                                                                    {(d as UntypedApiValue).target_contact_count ?? '—'}
                                                                 </td>
 
                                                                 {/* Epitope Min Distance */}
@@ -8190,9 +8124,9 @@ export function ResultsViewer() {
                                                                 </td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_binder, 2)}</td>
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.rmsd_overall, 2)}</td>
-                                                                <td className="px-3 py-2 font-mono text-slate-300">{formatMetric((d as any).rmsd_target, 2)}</td>
-                                                                <td className="px-3 py-2 max-w-[180px] truncate text-xs text-slate-400" title={(d as any).screening_reason ?? ''}>
-                                                                    {(d as any).screening_reason ?? '—'}
+                                                                <td className="px-3 py-2 font-mono text-slate-300">{formatMetric((d as UntypedApiValue).rmsd_target, 2)}</td>
+                                                                <td className="px-3 py-2 max-w-[180px] truncate text-xs text-slate-400" title={(d as UntypedApiValue).screening_reason ?? ''}>
+                                                                    {(d as UntypedApiValue).screening_reason ?? '—'}
                                                                 </td>
                                                                 <td className={`px-3 py-2 font-mono ${d.frustration_high_count != null
                                                                     ? d.frustration_high_count > 5
@@ -8227,10 +8161,10 @@ export function ResultsViewer() {
                                                                 <td className="px-3 py-2 font-mono text-slate-300">{formatMetric(d.maturation_rmsd, 2)}</td>
                                                                 {showPpiflowColumns && (
                                                                     <>
-                                                                        <td className="px-3 py-2 max-w-[200px] truncate text-xs text-slate-300" title={getPpiflowSourceName(d as any) ?? ''}>
-                                                                            {getPpiflowSourceName(d as any) ?? '—'}
+                                                                        <td className="px-3 py-2 max-w-[200px] truncate text-xs text-slate-300" title={getPpiflowSourceName(d as UntypedApiValue) ?? ''}>
+                                                                            {getPpiflowSourceName(d as UntypedApiValue) ?? '—'}
                                                                         </td>
-                                                                        <td className="px-3 py-2 font-mono text-slate-300">{getPpiflowSampleIndex(d as any) ?? '—'}</td>
+                                                                        <td className="px-3 py-2 font-mono text-slate-300">{getPpiflowSampleIndex(d as UntypedApiValue) ?? '—'}</td>
                                                                         <td className={`px-3 py-2 font-mono ${(d.ppiflow_objective_score ?? rowPpiflowScore?.objective_score) != null ? ((d.ppiflow_objective_score ?? rowPpiflowScore?.objective_score) <= 0 ? 'text-emerald-400' : 'text-rose-400') : 'text-slate-500'}`}>
                                                                             {formatMetric(d.ppiflow_objective_score ?? rowPpiflowScore?.objective_score, 2)}
                                                                         </td>

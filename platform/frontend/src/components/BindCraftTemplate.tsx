@@ -1,9 +1,9 @@
 /**
  * BindCraftTemplate - De Novo Minibinder Design Workflow
- * 
+ *
  * Uses AlphaFold2 backpropagation, ProteinMPNN, and PyRosetta for
  * automated binder design with ~50% experimental success rate.
- * 
+ *
  * Reference: https://github.com/martinpacesa/BindCraft
  */
 
@@ -14,7 +14,8 @@ import { useNavigate } from 'react-router-dom';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { TemplateManagerModal } from './TemplateManagerModal';
 import { FrameworkBrowser, type SelectedFramework } from './FrameworkBrowser';
-import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
+import { PhysicsRefinementPanel, type PhysicsRefinementSettings } from './PhysicsRefinementPanel';
+import { DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './physicsRefinementSettings';
 
 // Design algorithm options
 const DESIGN_ALGORITHMS = [

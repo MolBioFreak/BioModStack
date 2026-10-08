@@ -93,11 +93,7 @@ export function DesignComparePane({ designs, preSelectedId }: DesignComparePaneP
         return dataPoints;
     }, [metricsMap, designs]);
 
-    const designNames = selectedIds.map(id => designs.find(d => d.id === id)?.name || id).filter(_name =>
-        // Only include if data actually exists in chartData keys (optimization?)
-        // Actually map directly to selectedIds order for color consistency
-        true
-    );
+    const designNames = selectedIds.map(id => designs.find(d => d.id === id)?.name || id);
 
     return (
         <div className="flex h-[800px] gap-6">

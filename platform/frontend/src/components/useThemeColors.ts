@@ -1,12 +1,12 @@
 /**
  * useThemeColors - Hook to get current theme colors for Plotly charts
- * 
+ *
  * Reads CSS custom properties from the document and provides them
  * as JavaScript values for Plotly layout configuration.
  */
 
 import { useMemo } from 'react';
-import { useTheme } from './ThemeProvider';
+import { useTheme } from './themeContext';
 
 export interface ThemeColors {
     bgPrimary: string;
@@ -52,6 +52,7 @@ export function useThemeColors(): ThemeColors {
 
     // Recompute when theme changes
     return useMemo(() => {
+        void theme;
         return {
             bgPrimary: getCSSVariable('--bg-primary', FALLBACK_COLORS.bgPrimary),
             bgSecondary: getCSSVariable('--bg-secondary', FALLBACK_COLORS.bgSecondary),

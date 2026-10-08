@@ -2918,6 +2918,7 @@ def _write_mutated_seed_pdb(
 def _materialize_substitution_seed_selection(
     root_job: Job,
     source_job: Job,
+    designs: List[Design],
     variants: List[Dict[str, Any]],
     action: str,
 ) -> tuple[Path, Path]:
@@ -3174,6 +3175,7 @@ def _build_manual_mutagenesis_seeded_refinement_job(
     selection_dir, fixed_json_path = _materialize_substitution_seed_selection(
         root_job=root_job,
         source_job=source_job,
+        designs=designs,
         variants=variants,
         action="mutation_seeded_refinement",
     )

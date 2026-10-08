@@ -357,7 +357,7 @@ export default function StructureViewerPane({
         viewportHeight,
     }), [viewportWidth, viewportHeight]);
     const designOrigin = getDesignOriginLabel(selectedDesign);
-    const designLens = selectedDesign ? inferDesignAnalysisLens(selectedDesign as any) : null;
+    const designLens = selectedDesign ? inferDesignAnalysisLens(selectedDesign as UntypedApiValue) : null;
     const selectedDesignPpiflowRecord = asRecord(asRecord(selectedDesign?.provenance)?.ppiflow);
     const fampnnPayload = useMemo(() => getFampnnPayload(selectedDesign), [selectedDesign]);
     const fampnnAvgPsce = useMemo(() => {
@@ -455,7 +455,7 @@ export default function StructureViewerPane({
     const structureAnalysisStatusCopy = formatAnalysisStatus(structureAnalysisStatus);
 
     const chainMetricsRun = viewerAnalyses?.chainMetricsRun ?? null;
-    const chainMetrics = viewerAnalyses?.chainMetrics ?? {};
+    const chainMetrics = useMemo(() => viewerAnalyses?.chainMetrics ?? {}, [viewerAnalyses?.chainMetrics]);
     const chainMetricsBusy = viewerAnalyses?.chainMetricsBusy ?? false;
     const onRunChainMetrics = viewerAnalyses?.onRunChainMetrics;
     const chainMetricsStatus = chainMetricsRun?.status ?? 'missing';
@@ -463,7 +463,7 @@ export default function StructureViewerPane({
 
     const fampnnPsceProfileRun = viewerAnalyses?.fampnnPsceProfileRun ?? null;
     const fampnnPsceProfile = viewerAnalyses?.fampnnPsceProfile ?? null;
-    const fampnnPsceChains = (fampnnPsceProfile?.chains ?? {}) as Record<string, FampnnPsceChainMetric>;
+    const fampnnPsceChains = useMemo(() => (fampnnPsceProfile?.chains ?? {}) as Record<string, FampnnPsceChainMetric>, [fampnnPsceProfile?.chains]);
     const fampnnPsceBusy = viewerAnalyses?.fampnnPsceBusy ?? false;
     const onRunFampnnPsceProfile = viewerAnalyses?.onRunFampnnPsceProfile;
     const fampnnPsceStatus = fampnnPsceProfileRun?.status ?? 'missing';
@@ -1286,7 +1286,7 @@ export default function StructureViewerPane({
     ), [applyQuickView, isQuickViewActive, viewerQuickViews]);
 
     // Toggleable Analytics Panel for fullscreen
-    const FullscreenOverlay = () => (
+    const renderFullscreenOverlay = () => (
         <div
             data-structure-viewer-fullscreen-analytics-layout={fullscreenAnalyticsLayout.mode}
             className={fullscreenAnalyticsLayout.panelClassName}
@@ -1900,7 +1900,7 @@ export default function StructureViewerPane({
     const analyticsSecondaryValueClass = viewerLayout.isStacked ? 'text-base font-semibold' : 'text-lg font-semibold';
 
     // Full sidebar for normal mode
-    const AnalyticsSidebar = () => (
+    const renderAnalyticsSidebar = () => (
         <div
             data-structure-viewer-analytics-layout={viewerLayout.isStacked ? 'stacked' : 'sidebar'}
             className={`${analyticsSidebarWidthClass} ${analyticsSidebarSpacingClass}`}
@@ -2396,12 +2396,12 @@ export default function StructureViewerPane({
             )}
 
             {/* CDR Info */}
-            {(selectedDesign as any)?.cdr_h3 && (
+            {(selectedDesign as UntypedApiValue)?.cdr_h3 && (
                 <div className="bg-slate-800/50 rounded-lg border border-slate-700/50 p-4">
                     <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">CDR Loops</h4>
                     <div className="space-y-2 font-mono text-xs">
                         {['H1', 'H2', 'H3', 'L1', 'L2', 'L3'].map(cdr => {
-                            const seq = (selectedDesign as any)?.[`cdr_${cdr.toLowerCase()}`];
+                            const seq = (selectedDesign as UntypedApiValue)?.[`cdr_${cdr.toLowerCase()}`];
                             if (!seq) return null;
                             return (
                                 <div key={cdr} className="flex justify-between gap-2">
@@ -2433,7 +2433,7 @@ export default function StructureViewerPane({
     );
 
     // Shared toolbar for design/color selection
-    const ViewerToolbar = ({ isCompact = false }: { isCompact?: boolean }) => (
+    const renderViewerToolbar = (isCompact = false) => (
         <div className={`flex items-center gap-2 ${isCompact ? 'flex-wrap' : 'mb-3 flex-wrap'}`}>
             {/* Design Selector */}
             <div className="relative">
@@ -2640,7 +2640,7 @@ export default function StructureViewerPane({
                 <div ref={viewerAreaRef} className={isFullscreen ? 'absolute inset-0' : viewerLayout.isStacked ? 'min-w-0' : 'flex-[2] min-w-0'}>
                     {/* Toolbar - positioned differently based on mode */}
                     <div className={isFullscreen ? 'absolute top-3 left-3 z-40' : ''}>
-                        <ViewerToolbar isCompact={isFullscreen || viewerLayout.isStacked} />
+                        {renderViewerToolbar(isFullscreen || viewerLayout.isStacked)}
                     </div>
 
                     {/* Main Viewer - ALWAYS at this exact tree position */}
@@ -2747,13 +2747,13 @@ export default function StructureViewerPane({
                 </div>
 
                 {/* Right Column: Analytics Sidebar - hidden in fullscreen */}
-                {!isFullscreen && analyticsPanelOpen && <AnalyticsSidebar />}
+                {!isFullscreen && analyticsPanelOpen && renderAnalyticsSidebar()}
             </div>
 
             {/* Fullscreen overlay panel - only in fullscreen mode */}
             {isFullscreen && analyticsPanelOpen && (
                 <div className={fullscreenAnalyticsLayout.frameClassName}>
-                    <FullscreenOverlay />
+                    {renderFullscreenOverlay()}
                 </div>
             )}
         </div>

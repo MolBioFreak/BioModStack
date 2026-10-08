@@ -28,7 +28,7 @@ test('ConforNets experimental workflow is API-template driven and hidden from ra
     );
     assert.match(
         jobSubmissionSource,
-        /visibleApiTemplates\.filter\(\(t(?:: any)?\) => t\.experimental\)/,
+        /visibleApiTemplates\.filter\(\(t(?:: [^)]+)?\) => t\.experimental\)/,
         'experimental cards should still come from the API template registry',
     );
 

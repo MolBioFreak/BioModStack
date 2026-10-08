@@ -1,15 +1,15 @@
 /**
  * OligoDesignerTemplate - Comprehensive Multi-Polymer Design (DNA, RNA, Protein)
- * 
+ *
  * Uses RFDpoly for de novo backbone generation + NA-MPNN for sequence design.
  * Designs NEW sequences optimized to fold into generated 3D backbones.
  * Does NOT predict structure from existing sequences (use Boltz-2 for that).
- * 
+ *
  * RFDpoly Size Limits (experimentally validated):
  * - RNA: ≤120 nt (safe), up to 240 nt validated via cryo-EM
  * - DNA: ≤120 nt (safe), similar limits expected
  * - Protein: ≤400 AA high accuracy, up to 600 AA with reduced quality
- * 
+ *
  * Pattern follows BindCraftTemplate for consistency and comprehensiveness.
  */
 
@@ -17,7 +17,8 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { submitJob } from '../lib/api';
-import { PhysicsRefinementPanel, type PhysicsRefinementSettings, DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './PhysicsRefinementPanel';
+import { PhysicsRefinementPanel, type PhysicsRefinementSettings } from './PhysicsRefinementPanel';
+import { DEFAULT_SETTINGS as PHYSICS_DEFAULTS } from './physicsRefinementSettings';
 import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
 import { AptamerBrowser, type Aptamer } from './AptamerBrowser';
 import MolstarViewer from './MolstarViewer';
@@ -362,7 +363,7 @@ export function OligoDesignerTemplate({ onBack, initialValues }: OligoDesignerTe
                 useRange: false,
             }]);
         }
-    }, [selectedAptamer]);
+    }, [chains.length, selectedAptamer]);
 
     // ============================================================================
     // Handlers

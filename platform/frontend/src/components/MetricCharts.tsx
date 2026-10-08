@@ -535,7 +535,7 @@ export function SparklineChart({
 
 /**
  * IPTMHeatmap - Displays the chain-chain ipTM scores matrix
- * 
+ *
  * Shows interface pTM scores between all pairs of chains,
  * using a viridis-like color scale (purple → blue → green → yellow).
  */
@@ -667,7 +667,7 @@ export interface StabilityHeatmapProps {
     height?: number;
 }
 
-export function StabilityHeatmap({ data, title = "Stability (ddG)", width = 300, height: _height = 300 }: StabilityHeatmapProps) {
+export function StabilityHeatmap({ data, title = "Stability (ddG)", width = 300 }: StabilityHeatmapProps) {
     if (!data || Object.keys(data).length === 0) {
         return (
             <div className="flex items-center justify-center text-slate-500 text-xs h-full bg-slate-800/20 rounded-xl">
@@ -681,7 +681,7 @@ export function StabilityHeatmap({ data, title = "Stability (ddG)", width = 300,
     const chains = Object.keys(data).sort();
 
     // Flatten to a grid for visualization
-    // We'll visualize one chain at a time or stack them? 
+    // We'll visualize one chain at a time or stack them?
     // For now, let's just take the first chain if multiple, or allow selection?
     // Simpler: Just visualize the first chain found.
     const chainId = chains[0];
@@ -764,7 +764,7 @@ export function StabilityHeatmap({ data, title = "Stability (ddG)", width = 300,
                             {positions.map(pos => (
                                 <div key={pos} className="flex flex-col">
                                     {aminoAcids.map(aa => {
-                                        const val = (data as any)[pos]?.[aa];
+                                        const val = (data as UntypedApiValue)[pos]?.[aa];
                                         return (
                                             <div
                                                 key={`${pos}-${aa}`}

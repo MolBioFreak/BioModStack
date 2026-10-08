@@ -303,7 +303,7 @@ export function AssemblyPanel({
                     : await simulateGoldenGateAssembly(payload);
             }
             setResult(response.data);
-        } catch (runError: any) {
+        } catch (runError: UntypedApiValue) {
             setError(runError?.response?.data?.detail || runError?.message || 'Assembly failed');
         } finally {
             setLoading(null);

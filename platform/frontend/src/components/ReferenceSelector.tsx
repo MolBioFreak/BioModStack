@@ -1,6 +1,6 @@
 /**
  * ReferenceSelector - Select a reference PDB for structure comparison
- * 
+ *
  * Tabs: Your Runs | Presets | RCSB Fetch | Cached
  */
 
@@ -82,8 +82,8 @@ export function ReferenceSelector({ onSelect, selectedRef, currentDesignId }: Re
         queryKey: ['jobs'],
         queryFn: () => fetchJobs(),
     });
-    const jobs = (jobsData as any)?.data?.jobs ?? [];
-    const completedJobs = jobs.filter((j: any) => j.status === 'completed');
+    const jobs = (jobsData as UntypedApiValue)?.data?.jobs ?? [];
+    const completedJobs = jobs.filter((j: UntypedApiValue) => j.status === 'completed');
 
     // Fetch designs for selected job
     const { data: designsData, isLoading: designsLoading } = useQuery({
@@ -91,9 +91,9 @@ export function ReferenceSelector({ onSelect, selectedRef, currentDesignId }: Re
         queryFn: () => fetchDesigns({ job_id: selectedJobId }),
         enabled: !!selectedJobId,
     });
-    const designs = (designsData as any)?.data?.designs ?? [];
+    const designs = (designsData as UntypedApiValue)?.data?.designs ?? [];
     // Filter out current design from the comparison list
-    const filteredDesigns = designs.filter((d: any) => d.id !== currentDesignId);
+    const filteredDesigns = designs.filter((d: UntypedApiValue) => d.id !== currentDesignId);
 
     // Fetch preset PDBs
     const { data: presetsData } = useQuery({
@@ -165,7 +165,7 @@ export function ReferenceSelector({ onSelect, selectedRef, currentDesignId }: Re
         });
     };
 
-    const handleDesignSelect = (design: any) => {
+    const handleDesignSelect = (design: UntypedApiValue) => {
         onSelect({
             url: `/api/designs/${design.id}/pdb`,
             format: 'pdb',
@@ -235,7 +235,7 @@ export function ReferenceSelector({ onSelect, selectedRef, currentDesignId }: Re
                             className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500"
                         >
                             <option value="">Select a job...</option>
-                            {completedJobs.map((job: any) => (
+                            {completedJobs.map((job: UntypedApiValue) => (
                                 <option key={job.id} value={job.id}>
                                     {job.name} ({job.design_count ?? '?'} designs)
                                 </option>
@@ -252,7 +252,7 @@ export function ReferenceSelector({ onSelect, selectedRef, currentDesignId }: Re
                                         No other designs in this job
                                     </div>
                                 ) : (
-                                    filteredDesigns.map((design: any) => (
+                                    filteredDesigns.map((design: UntypedApiValue) => (
                                         <button
                                             key={design.id}
                                             onClick={() => handleDesignSelect(design)}

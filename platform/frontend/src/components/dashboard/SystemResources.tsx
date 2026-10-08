@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
     fetchSystemStatus,
@@ -728,7 +728,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
     const [debugExpanded, setDebugExpanded] = useState(false);
     const gpuCatalog = useMemo(() => buildGpuCatalog(gpus), [gpus]);
     const liveGpuEntries = useMemo(() => listGpuCatalogEntries(gpuCatalog), [gpuCatalog]);
-    const getMaxVramMb = (gpuId: number): number => Math.max(getGpuMemoryTotalMb(gpuId, gpuCatalog) ?? 0, 1024);
+    const getMaxVramMb = useCallback((gpuId: number): number => Math.max(getGpuMemoryTotalMb(gpuId, gpuCatalog) ?? 0, 1024), [gpuCatalog]);
 
     // Per-GPU local state for overrides (stores pending changes)
     const [localGpuOverrides, setLocalGpuOverrides] = useState<Record<string, {
@@ -790,7 +790,7 @@ function GPUSchedulerSettings({ gpus }: { gpus: GPUStatus[] }) {
             };
         }
         setLocalGpuOverrides(gpuStates);
-    }, [config, liveGpuEntries]);
+    }, [config, getMaxVramMb, liveGpuEntries]);
 
     // Get or initialize local GPU override
     const getLocalGpuOverride = (gpuId: string) => {

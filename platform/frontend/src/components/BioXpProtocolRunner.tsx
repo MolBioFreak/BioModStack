@@ -112,7 +112,7 @@ const buildProtocolPayload = (
     }
 
     try {
-        const parsedDocument = JSON.parse(trimmedDocument) as Record<string, any>;
+        const parsedDocument = JSON.parse(trimmedDocument) as Record<string, UntypedApiValue>;
         return {
             payload: {
                 source_type: 'native',
@@ -193,7 +193,7 @@ export const BioXpProtocolRunner = ({
         [sourceType, xmlPath, nativeDocumentText],
     );
 
-    const jobRows = protocolJobs.data?.rows ?? [];
+    const jobRows = useMemo(() => protocolJobs.data?.rows ?? [], [protocolJobs.data]);
     const selectedSummary = jobRows.find((row) => row.job_id === selectedJobId) ?? null;
     const selectedJob = protocolJob.data ?? null;
     const compilePreview = compileProtocol.data ?? null;
