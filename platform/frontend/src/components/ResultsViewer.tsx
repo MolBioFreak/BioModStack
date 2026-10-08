@@ -423,7 +423,7 @@ const getDefaultSortDirection = (field: string): 'asc' | 'desc' =>
 const coerceSavedReviewFilterSets = (value: unknown): SavedReviewFilterSet[] => {
     if (!Array.isArray(value)) return [];
     return value
-        .map((entry) => {
+        .map((entry): SavedReviewFilterSet | null => {
             if (!entry || typeof entry !== 'object') return null;
             const typed = entry as Record<string, unknown>;
             const filterState = typed.filter_state && typeof typed.filter_state === 'object'
