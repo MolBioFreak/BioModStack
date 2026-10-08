@@ -114,7 +114,7 @@ def test_md_workflow_uses_bounded_singleton_entrypoints() -> None:
 def test_md_nextflow_profile_propagates_the_feature_gate_into_containers() -> None:
     config = (REPO_ROOT / "nextflow.config").read_text(encoding="utf-8")
     assert "def mdFeatureFlag = System.getenv('BMS_FEATURE_MOLECULAR_DYNAMICS') ?: '0'" in config
-    assert config.count("--env BMS_FEATURE_MOLECULAR_DYNAMICS=${mdFeatureFlag}") == 3
+    assert config.count("--env BMS_FEATURE_MOLECULAR_DYNAMICS=${mdFeatureFlag}") == 4
     assert "molecular_dynamics_experimental" in config
     assert "withLabel: MolecularDynamicsGromacs" in config
     assert "withLabel: MolecularDynamicsOpenMM" in config
@@ -134,16 +134,9 @@ def test_openmm_image_definition_pins_a_cuda_capable_exact_runtime() -> None:
     assert "includeDir=include_dir" in openmm_pipeline
 
 
-def test_md_result_contract_advertises_manifest_and_trajectory_artifacts() -> None:
+def test_md_is_not_advertised_as_a_design_result_contract() -> None:
     contract = resolve_result_contract(provenance={"model_id": "molecular_dynamics"})
 
-    assert contract.analysis_contract_id == "molecular_dynamics_v1"
-    assert contract.contract_source == "registry"
-    assert contract.required_fields == ["schema", "status", "replicas"]
-    assert contract.required_artifacts == ["replica_manifests", "trajectories", "checkpoints"]
-    assert contract.viewer_capabilities == [
-        "generic_metadata",
-        "trajectory_viewer",
-        "md_performance_metrics",
-        "provenance_audit",
-    ]
+    assert contract.analysis_contract_id is None
+    assert contract.supported_analyzers == []
+    assert contract.viewer_capabilities == []

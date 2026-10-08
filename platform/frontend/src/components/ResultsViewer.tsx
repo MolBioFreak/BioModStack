@@ -49,7 +49,6 @@ import {
     supportsViewerCapability,
 } from '../lib/resultCapabilities';
 import MolstarViewer from './MolstarViewer';
-// FloatingViewer - unused, kept for reference
 import { StabilityHeatmap } from './MetricCharts';
 import { BatchComparePane } from './BatchComparePane';
 import { DesignComparePane } from './DesignComparePane';
@@ -57,6 +56,7 @@ import { DataViewerLanding } from './DataViewerLanding';
 // ReferenceSelector and MetricOverlay - unused, kept for reference
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
+import MDResultsPane from './MDResultsPane';
 import {
     saveAntibodyRefinementLaunchState,
     type AntibodyRefinementLaunchState,
@@ -2368,7 +2368,7 @@ export function ResultsViewer() {
     const { data: designsData, isLoading: designsLoading } = useQuery({
         queryKey: ['designs', designQueryFilters],
         queryFn: () => fetchDesigns(designQueryFilters),
-        enabled: !!activeJob && !reviewSelectionRequired,
+        enabled: !!activeJob && activeJob.model_id !== 'molecular_dynamics' && !reviewSelectionRequired,
     });
     const rawDesigns = useMemo(
         () => (designsData?.data.designs ?? []).map(sanitizeDesignForReview),
@@ -4998,6 +4998,9 @@ export function ResultsViewer() {
         .map((entry) => entry.trim())
         .filter(Boolean).length;
     const showDataHubLanding = !activeJob && !(jobsLoading || (jobId && routedJobLoading));
+    const viewerShellClassName = showDataHubLanding
+        ? 'mx-auto w-full max-w-[1180px]'
+        : 'w-full';
 
     return (
         <div className="min-h-screen bg-slate-950 text-slate-200">
@@ -5007,7 +5010,7 @@ export function ResultsViewer() {
                 <div className="absolute bottom-0 right-0 w-1/2 h-1/2 bg-violet-500/5 rounded-full blur-[150px]" />
             </div>
 
-            <div className="relative z-10 w-full px-3 sm:px-4 lg:px-5 xl:px-6 2xl:px-8">
+            <div className={`relative z-10 px-3 sm:px-4 lg:px-5 xl:px-6 2xl:px-8 ${viewerShellClassName}`}>
                 {/* Header */}
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
                     <div>
@@ -5042,12 +5045,12 @@ export function ResultsViewer() {
                     </div>
 
                     {/* Smart Job Selector */}
-                    <div className="flex items-center gap-3">
-                        <div className="relative" ref={jobSelectorRef}>
+                    <div className="flex w-full items-center gap-3 md:w-auto">
+                        <div className="relative w-full md:w-auto" ref={jobSelectorRef}>
                             <button
                                 type="button"
                                 onClick={() => setShowJobSelectorMenu((current) => !current)}
-                                className="flex min-w-[420px] items-center justify-between gap-3 rounded-xl border border-slate-600 bg-slate-800/80 px-4 py-3 text-left shadow-lg transition-all hover:border-slate-500"
+                                className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-700 bg-slate-900/80 px-4 py-3 text-left shadow-xl shadow-slate-950/30 transition-all hover:border-cyan-500/40 hover:bg-slate-900 md:w-[420px] md:min-w-[420px]"
                             >
                                 <div className="min-w-0">
                                     <div className="truncate text-sm font-medium text-white">
@@ -5070,7 +5073,7 @@ export function ResultsViewer() {
                             </button>
 
                             {showJobSelectorMenu && (
-                                <div className="absolute right-0 z-50 mt-2 w-[520px] overflow-hidden rounded-2xl border border-slate-700 bg-slate-900/98 shadow-2xl shadow-slate-950/70 backdrop-blur">
+                                <div className="absolute right-0 z-50 mt-2 w-[min(520px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-700 bg-slate-900/98 shadow-2xl shadow-slate-950/70 backdrop-blur">
                                     <div className="border-b border-slate-800 p-3">
                                         <input
                                             autoFocus
@@ -5152,6 +5155,9 @@ export function ResultsViewer() {
                 )}
 
                 {activeJob && (
+                    activeJob.model_id === 'molecular_dynamics' ? (
+                        <MDResultsPane jobId={activeJob.id} />
+                    ) : (
                     <>
                         {activeLineageRootJob && (
                             <div className={`mb-4 rounded-xl border p-4 ${isPostRFantibodyReview ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-sky-500/20 bg-sky-500/5'}`}>
@@ -7572,7 +7578,6 @@ export function ResultsViewer() {
                                                             {getFriendlyDesignName(selectedDesign)} • {antibodyData?.imgt_pdb_url ? 'IMGT Renumbered Structure' : 'Original Structure'}
                                                         </div>
                                                         <MolstarViewer
-                                                            key={selectedDesignId + '_ab'}
                                                             structureUrl={antibodyData?.imgt_pdb_url || (selectedDesignId ? `/api/designs/${selectedDesignId}/pdb` : undefined)}
                                                             format="pdb"
                                                             alphafoldView={false}
@@ -8636,8 +8641,8 @@ export function ResultsViewer() {
                             )}
                         </div>
                     </>
-                )
-                }
+                    )
+                )}
             </div >
         </div >
     );

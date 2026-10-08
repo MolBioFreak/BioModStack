@@ -151,18 +151,6 @@ _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
         required_artifacts=["structure"],
         notes="Conformational mapping monomer outputs with normalized conformer artifacts.",
     ),
-    ResultContractDefinition(
-        contract_id="molecular_dynamics_v1",
-        model_ids=["molecular_dynamics"],
-        stage_families=["molecular_dynamics"],
-        artifact_classes=["md_trajectory"],
-        result_sets=["md_replicas"],
-        supported_analyzers=["molecular_dynamics_v1"],
-        viewer_capabilities=["generic_metadata", "trajectory_viewer", "md_performance_metrics", "provenance_audit"],
-        required_fields=["schema", "status", "replicas"],
-        required_artifacts=["replica_manifests", "trajectories", "checkpoints"],
-        notes="Replica-indexed production MD outputs with restart and checksummed provenance.",
-    ),
 ]
 
 

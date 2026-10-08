@@ -1,6 +1,17 @@
 nextflow.enable.dsl=2
 
 include { MD_PREPARE_CONFIG } from '../../../modules/experimental/molecular_dynamics/prepare'
+include { MD_ANALYZE_REPLICA } from '../../../modules/experimental/molecular_dynamics/analyze'
+
+def sha256File(path) {
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+    path.toFile().withInputStream { stream ->
+        byte[] buffer = new byte[1024 * 1024]
+        int read
+        while ((read = stream.read(buffer)) > 0) digest.update(buffer, 0, read)
+    }
+    digest.digest().encodeHex().toString()
+}
 
 params.md_job_config = null
 params.md_input_root = null
@@ -8,6 +19,7 @@ params.api_url = System.getenv('API_BASE_URL') ?: 'http://127.0.0.1:8000'
 params.job_id = null
 params.job_name = 'Molecular Dynamics'
 params.md_child_poll_seconds = 5
+params.md_analysis_enabled = (System.getenv('BMS_MD_ANALYSIS_ENABLED') ?: '0') == '1'
 
 process MD_SPAWN_REPLICAS {
     tag "md-spawn:${parent_job_id}"
@@ -132,4 +144,17 @@ workflow {
     )
     MD_COLLECT_REPLICAS(MD_WAIT_FOR_REPLICAS.out.child_status)
     MD_ASSERT_REPLICA_OUTCOME(MD_COLLECT_REPLICAS.out.manifest)
+    if (params.md_analysis_enabled) {
+        analysis_items = MD_COLLECT_REPLICAS.out.replicas.flatMap { replicas_dir ->
+            replicas_dir.toFile().listFiles()
+                .findAll { entry -> entry.isDirectory() && entry.name ==~ /replica_[0-9]+/ }
+                .sort { left, right -> left.name <=> right.name }
+                .collect { entry ->
+                    def replicaIndex = (entry.name - 'replica_') as int
+                    def manifestPath = entry.toPath().resolve('manifest.json')
+                    tuple(replicaIndex, file(entry), sha256File(manifestPath))
+                }
+        }
+        MD_ANALYZE_REPLICA(analysis_items)
+    }
 }

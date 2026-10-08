@@ -359,6 +359,7 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("protein_modification_experimental", "region_redesign"): "workflows/protein_local_redesign.nf",
     ("molecular_dynamics", "simulate"): "workflows/experimental/molecular_dynamics/orchestrator.nf",
     ("molecular_dynamics", "replica"): "workflows/experimental/molecular_dynamics/replica.nf",
+    ("molecular_dynamics", "analyze"): "workflows/experimental/molecular_dynamics/analyze.nf",
     ("conformational_mapping", "map"): "workflows/conformational_mapping.nf",
 }
 
@@ -2820,6 +2821,7 @@ def build_nextflow_command(
         ('confornets_experimental', 'design'): 'confornets_experimental',
         ('molecular_dynamics', 'simulate'): 'molecular_dynamics_coordinator',
         ('molecular_dynamics', 'replica'): 'molecular_dynamics',
+        ('molecular_dynamics', 'analyze'): 'molecular_dynamics_analysis',
         ('esmfold2', 'predict'): 'esmfold2',
         ('esmfold2', 'complex'): 'esmfold2',
         ('esmfold2_experimental', 'predict'): 'esmfold2',
@@ -2911,11 +2913,10 @@ def build_nextflow_command(
     profile = f"{effective_profile},workstation_ryzen7960x"
 
     if model_id == 'molecular_dynamics':
-        profile = (
-            "molecular_dynamics_coordinator,workstation_ryzen7960x"
-            if mode == "simulate"
-            else "molecular_dynamics_experimental,workstation_ryzen7960x"
-        )
+        profile = {
+            "simulate": "molecular_dynamics_coordinator,workstation_ryzen7960x",
+            "analyze": "molecular_dynamics_analysis,workstation_ryzen7960x",
+        }.get(mode, "molecular_dynamics_experimental,workstation_ryzen7960x")
     
     # Special case: DiffDock standalone docking uses 'docking' profile
     if model_id == 'diffdock' and mode in ['dock', 'ntp_dock']:

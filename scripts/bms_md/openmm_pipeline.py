@@ -183,6 +183,7 @@ def run_openmm_job(
             "checkpoint": checkpoint,
             "state": state_xml,
             "final_coordinates": final_coordinates,
+            "representative_structure": final_coordinates,
             "state_data": state_data,
             "stage_ledger": output_dir / "stage_state.json",
         },
@@ -191,6 +192,14 @@ def run_openmm_job(
     manifest["status"] = "completed"
     manifest["engine"].update({"cuda_enabled": True, "precision": "mixed", "allocation": allocation})
     manifest["replica_seed"] = replica_seed(config["random_seed"], replica_index)
+    atom_order_identity = f"sha256:{manifest['artifacts']['final_coordinates']['sha256']}"
+    manifest["artifacts"]["final_coordinates"].update({
+        "semantic_role": "analysis_topology", "atom_order_identity": atom_order_identity,
+    })
+    manifest["artifacts"]["trajectory"].update({
+        "semantic_role": "analysis_trajectory", "atom_order_identity": atom_order_identity,
+    })
+    manifest["artifacts"]["representative_structure"]["semantic_role"] = "representative_structure"
     manifest_path = output_dir / "manifest.json"
     _atomic_json(manifest_path, manifest)
     return manifest_path

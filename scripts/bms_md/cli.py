@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .aggregate import write_aggregate
+from .analysis import write_analysis_report
 from .contract import normalize_job_config
 from .engine_adapters import run_md_replica
 from .feature_gate import require_experimental_md_feature
@@ -36,6 +37,16 @@ def build_parser() -> argparse.ArgumentParser:
     aggregate = subparsers.add_parser("aggregate", help="combine completed replica manifests")
     aggregate.add_argument("--manifests", type=Path, nargs="+", required=True)
     aggregate.add_argument("--output", type=Path, required=True)
+    analyze = subparsers.add_parser("analyze", help="run checksum-bound engine-neutral MD analysis")
+    analyze.add_argument("--manifest", type=Path, required=True)
+    analyze.add_argument("--output", type=Path, required=True)
+    analyze.add_argument("--stride", type=int, default=1)
+    analyze.add_argument("--max-points", type=int, default=2000)
+    analyze.add_argument(
+        "--report-failure-as-output",
+        action="store_true",
+        help="emit a typed failed report without failing the workflow task",
+    )
     return parser
 
 
@@ -78,6 +89,14 @@ def main() -> None:
         return
     if args.command == "aggregate":
         print(write_aggregate(args.manifests, args.output))
+        return
+    if args.command == "analyze":
+        output, success = write_analysis_report(
+            args.manifest, args.output, stride=args.stride, max_points=args.max_points
+        )
+        print(output)
+        if not success and not args.report_failure_as_output:
+            raise SystemExit(2)
         return
     raise SystemExit(f"unsupported command: {args.command}")
 
