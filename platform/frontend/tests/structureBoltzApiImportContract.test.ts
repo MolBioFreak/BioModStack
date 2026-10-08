@@ -11,8 +11,8 @@ test('Structure Prediction exposes Boltz API as a real remote submission backend
     assert.match(structureSource, /Estimate API cost/);
     assert.match(structureSource, /Queue Boltz API job/);
     assert.match(structureSource, /submitBoltzApiJob/);
-    assert.match(structureSource, /client_request_id: boltzApiClientRequestId/);
-    assert.match(structureSource, /Math\.min\(10, boltzNumSamples\)/);
+    assert.match(structureSource, /buildBoltzApiStructureRequest\(\{/);
+    assert.match(structureSource, /BoltzApiNativeSettingsPanel/);
     assert.match(structureSource, /showParallelJobs && !isBoltzApi/);
     assert.match(structureSource, /showSequenceBatch && !isBoltzApi/);
     assert.match(structureSource, /!isBoltzApi && <label[^>]+>[\s\S]*?Allow Retries/);
