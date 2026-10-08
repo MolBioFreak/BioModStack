@@ -81,6 +81,12 @@ export function isBmsFeatureVisible(state: BmsFeatureState, feature: BmsFeatureK
     return state.features[feature] && (showDevFeatures || !state.devFeatures[feature]);
 }
 
+export function resolveShowDevFeaturesDefault(viteDev: boolean, storedValue: string | null): boolean {
+    if (storedValue === 'true') return true;
+    if (storedValue === 'false') return false;
+    return viteDev;
+}
+
 async function fetchBmsFeatureState(): Promise<BmsFeatureState> {
     const response = await fetch('/api/system/features', { cache: 'no-store' });
     if (!response.ok) {
