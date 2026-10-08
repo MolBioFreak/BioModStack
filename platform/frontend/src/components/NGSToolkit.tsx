@@ -2125,7 +2125,7 @@ function ontWorkflowDisplayName(workflowId: unknown, fallbackMode: string): stri
         ont_fastq_qc: 'ONT FASTQ QC',
         wf_clone_validation: 'wf-clone-validation',
     };
-    return typeof workflowId === 'string' && labels[workflowId] ? labels[workflowId] : fallbackMode.replace(/_/g, ' ');
+    return typeof workflowId === 'string' && labels[workflowId] ? labels[workflowId] : fallbackMode?.replace(/_/g, ' ') || '—';
 }
 
 function formatParamValue(value: unknown): string {
@@ -3113,7 +3113,7 @@ function NativeNGSToolkit() {
     const onCatalogReadActionRef = useRef(onCatalogReadAction);
     onCatalogReadActionRef.current = onCatalogReadAction;
     useEffect(() => { setCatalogSelection(null); catalogActionGeneration.current += 1; }, [selectedJob?.id, compatibleSignalViewerSession?.viewer_session_id]);
-    const selectedCatalogReadId = catalogSelection?.jobId === selectedJob?.id && catalogSelection?.sessionId === selectedAlignmentSession?.session_id
+    const selectedCatalogReadId = catalogSelection && catalogSelection.jobId === selectedJob?.id && catalogSelection.sessionId === selectedAlignmentSession?.session_id
         ? catalogSelection.read.read_id : compatibleSignalViewerSession?.selected_read_id ?? null;
     const [nativeViewBusy, setNativeViewBusy] = useState(false);
     const [nativeViewError, setNativeViewError] = useState<string | null>(null);

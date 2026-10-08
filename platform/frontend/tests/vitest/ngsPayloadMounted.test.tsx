@@ -143,6 +143,7 @@ it('binds final launch to the reviewed preview and independent reference-free co
 
 it('discards a preview when an operator changes a control', async () => {
     await renderTemplate();
+    await act(async () => buttonWithText('Show advanced controls')!.click());
     await act(async () => buttonWithText('Review and submit')!.click()); await flush();
     expect(buttonWithText('Confirm reviewed launch')).not.toBeNull();
     await act(async () => checkboxContaining('Evaluate circular-reference rotations')!.click());
@@ -156,6 +157,7 @@ it.each(['pod5', 'bam'])('preserves the full active plasmid QC settings for %s',
         expectedPlasmidSize: 8123, minFastqReadLength: 37, fastqMinimap2Preset: 'map-pb',
         fastqMinimap2AllowSecondary: false, igvTrackWindowBp: 145, igvReportMaxSites: 22, igvReportFlankingBp: 0,
     });
+    await act(async () => buttonWithText('Show advanced controls')!.click());
     expect(container.textContent).toContain('IGV track/report tuning');
     await act(async () => buttonWithText('Review and submit')!.click()); await flush();
     expect(apiMocks.previewOntNgsJob.mock.calls[0][1].params).toMatchObject({

@@ -59,6 +59,8 @@ export default defineConfig({
             './tests/vitest/projectNativeOwnersMounted.test.tsx',
             './tests/vitest/devIssueLedgerScreenshot.test.tsx',
             './tests/vitest/ngsResultRoutingMounted.test.tsx',
+            './tests/vitest/ngsNativeAttachmentMounted.test.tsx',
+            './tests/vitest/ngsDomainOwnerMounted.test.tsx',
             './tests/vitest/ngsWorkflowChooserMounted.test.tsx',
             './tests/vitest/ngsProjectPanelMounted.test.tsx',
             './tests/vitest/molBioProjectHubMounted.test.tsx',
