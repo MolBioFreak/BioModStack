@@ -559,7 +559,8 @@ class _NativeAnnotations:
     def msa(self, predictor, after, *, consumer=None):
         from component_runtime import ExternalServiceIntent, NativeArtifactRole, canonical_bytes
         key = predictor + ':generated_msa'
-        if consumer == 'modules/antibody_batch.nf:BatchProtenixValidation':
+        if consumer in {'modules/antibody_batch.nf:BatchProtenixValidation',
+                        'modules/protenix.nf:ProtenixFromComplex'}:
             self.asset('support_tool', 'scripts/lib/component_adapter.py', consumer)
         enabled = self.p.get('protenix_use_msa', True) is not False if predictor == 'protenix' else self.p.get('boltz_use_msa') is True
         self.roles.append(NativeArtifactRole(key, predictor, 'input', 'native_chain_alignments',
@@ -877,7 +878,9 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
                     a.msa('boltz2', after)
                 elif validator == 'esmfold2':branches.extend(a.chain(['ESMFold2FromPdb'], typed))
                 elif validator == 'protenix_v2':
-                    branches.extend(a.chain(['ProtenixFromComplex'], typed)); a.msa('protenix', typed)
+                    branches.extend(a.chain(['ProtenixFromComplex'], typed))
+                    a.msa('protenix', typed, consumer='modules/protenix.nf:ProtenixFromComplex'
+                          if yes('plr_validator_suite_active') and not p.get('protenix_prepared_msa_dir') else None)
                 else:unresolved(workflow, 'dependency_closure', entrypoint, 'Unsupported validator: ' + str(validator))
             after = a.chain(['FinalizeProteinLocalValidatorSuite', 'EnforceProteinLocalValidatorSuite', 'StageProteinLocalValidatedCandidates'], tuple(branches))
         if yes('interactive_gating') and not yes('interactive_gate_continue'):
