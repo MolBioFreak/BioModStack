@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitJob, uploadFile, extractChain } from '../lib/api';
+import { submitJob, uploadFile, extractChain, annotateFrameworkCdrs, type CDRAnnotationResponse } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { parsePDBFile, type Chain } from '../utils/pdbUtils';
 import { EpitopeSelector } from './EpitopeSelector';
@@ -67,6 +67,10 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const [customFrameworkFile, setCustomFrameworkFile] = useState<File | null>(null);
     const [customFrameworkPath, setCustomFrameworkPath] = useState<string | null>(null);
     const [sabdabFramework, setSabdabFramework] = useState<SelectedFramework | null>(null);
+
+    // ANARCII CDR detection state
+    const [detectedCDRs, setDetectedCDRs] = useState<CDRAnnotationResponse | null>(null);
+    const [isDetectingCDRs, setIsDetectingCDRs] = useState(false);
 
     // Framework protection settings
     const [frameworkProtection, setFrameworkProtection] = useState<FrameworkEditorState>({
@@ -665,6 +669,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                 <FrameworkBrowser
                                     onSelect={(fw) => {
                                         setSabdabFramework(fw);
+                                        setDetectedCDRs(null); // Clear previous detection
                                         // Set framework PDB URL for 3D preview if pdbCode available
                                         if (fw?.pdbCode) {
                                             // Use RCSB PDB download URL for Mol* viewer
@@ -678,6 +683,112 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                     selectedFramework={sabdabFramework}
                                     showCustomUpload={false}
                                 />
+
+                                {/* ANARCII CDR Detection */}
+                                {sabdabFramework?.pdbCode && (
+                                    <div className="mt-3 pt-3 border-t border-slate-700">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <span className="text-sm font-medium text-slate-400">CDR Detection (ANARCII)</span>
+                                            <button
+                                                type="button"
+                                                onClick={async () => {
+                                                    if (!sabdabFramework?.pdbCode) return;
+                                                    setIsDetectingCDRs(true);
+                                                    try {
+                                                        const result = await annotateFrameworkCdrs(sabdabFramework.pdbCode);
+                                                        setDetectedCDRs(result.data);
+                                                    } catch (err) {
+                                                        console.error('CDR detection failed:', err);
+                                                    } finally {
+                                                        setIsDetectingCDRs(false);
+                                                    }
+                                                }}
+                                                disabled={isDetectingCDRs}
+                                                className="px-3 py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-600 text-white rounded-lg transition-all"
+                                            >
+                                                {isDetectingCDRs ? 'Detecting...' : detectedCDRs ? 'Re-Detect CDRs' : 'Detect CDRs'}
+                                            </button>
+                                        </div>
+
+                                        {/* Detection Results */}
+                                        {detectedCDRs && (
+                                            <div className="bg-slate-800/50 rounded-lg p-3 space-y-2">
+                                                <div className="text-xs text-slate-500 mb-2">
+                                                    Detected {detectedCDRs.antibody_type} CDR regions:
+                                                </div>
+                                                <div className="grid grid-cols-3 gap-2 text-xs">
+                                                    {detectedCDRs.cdr_h1 && (
+                                                        <div className="bg-emerald-900/30 border border-emerald-800/50 rounded p-2">
+                                                            <div className="text-emerald-400 font-medium">H1</div>
+                                                            <div className="text-slate-300 font-mono text-xs truncate" title={detectedCDRs.cdr_h1}>{detectedCDRs.cdr_h1}</div>
+                                                            {detectedCDRs.cdr_h1_range && <div className="text-slate-500">{detectedCDRs.cdr_h1_range[0]}-{detectedCDRs.cdr_h1_range[1]}</div>}
+                                                        </div>
+                                                    )}
+                                                    {detectedCDRs.cdr_h2 && (
+                                                        <div className="bg-emerald-900/30 border border-emerald-800/50 rounded p-2">
+                                                            <div className="text-emerald-400 font-medium">H2</div>
+                                                            <div className="text-slate-300 font-mono text-xs truncate" title={detectedCDRs.cdr_h2}>{detectedCDRs.cdr_h2}</div>
+                                                            {detectedCDRs.cdr_h2_range && <div className="text-slate-500">{detectedCDRs.cdr_h2_range[0]}-{detectedCDRs.cdr_h2_range[1]}</div>}
+                                                        </div>
+                                                    )}
+                                                    {detectedCDRs.cdr_h3 && (
+                                                        <div className="bg-emerald-900/30 border border-emerald-800/50 rounded p-2">
+                                                            <div className="text-emerald-400 font-medium">H3</div>
+                                                            <div className="text-slate-300 font-mono text-xs truncate" title={detectedCDRs.cdr_h3}>{detectedCDRs.cdr_h3}</div>
+                                                            {detectedCDRs.cdr_h3_range && <div className="text-slate-500">{detectedCDRs.cdr_h3_range[0]}-{detectedCDRs.cdr_h3_range[1]}</div>}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                {/* Light chain CDRs if present */}
+                                                {(detectedCDRs.cdr_l1 || detectedCDRs.cdr_l2 || detectedCDRs.cdr_l3) && (
+                                                    <div className="grid grid-cols-3 gap-2 text-xs mt-2">
+                                                        {detectedCDRs.cdr_l1 && (
+                                                            <div className="bg-purple-900/30 border border-purple-800/50 rounded p-2">
+                                                                <div className="text-purple-400 font-medium">L1</div>
+                                                                <div className="text-slate-300 font-mono text-xs truncate" title={detectedCDRs.cdr_l1}>{detectedCDRs.cdr_l1}</div>
+                                                                {detectedCDRs.cdr_l1_range && <div className="text-slate-500">{detectedCDRs.cdr_l1_range[0]}-{detectedCDRs.cdr_l1_range[1]}</div>}
+                                                            </div>
+                                                        )}
+                                                        {detectedCDRs.cdr_l2 && (
+                                                            <div className="bg-purple-900/30 border border-purple-800/50 rounded p-2">
+                                                                <div className="text-purple-400 font-medium">L2</div>
+                                                                <div className="text-slate-300 font-mono text-xs truncate" title={detectedCDRs.cdr_l2}>{detectedCDRs.cdr_l2}</div>
+                                                                {detectedCDRs.cdr_l2_range && <div className="text-slate-500">{detectedCDRs.cdr_l2_range[0]}-{detectedCDRs.cdr_l2_range[1]}</div>}
+                                                            </div>
+                                                        )}
+                                                        {detectedCDRs.cdr_l3 && (
+                                                            <div className="bg-purple-900/30 border border-purple-800/50 rounded p-2">
+                                                                <div className="text-purple-400 font-medium">L3</div>
+                                                                <div className="text-slate-300 font-mono text-xs truncate" title={detectedCDRs.cdr_l3}>{detectedCDRs.cdr_l3}</div>
+                                                                {detectedCDRs.cdr_l3_range && <div className="text-slate-500">{detectedCDRs.cdr_l3_range[0]}-{detectedCDRs.cdr_l3_range[1]}</div>}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                                {/* Confirmation Button */}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        // Convert detected CDRs to selectedCDRLoops format
+                                                        const loops = new Set<string>();
+                                                        if (detectedCDRs.cdr_h1) loops.add('H1');
+                                                        if (detectedCDRs.cdr_h2) loops.add('H2');
+                                                        if (detectedCDRs.cdr_h3) loops.add('H3');
+                                                        if (detectedCDRs.cdr_l1) loops.add('L1');
+                                                        if (detectedCDRs.cdr_l2) loops.add('L2');
+                                                        if (detectedCDRs.cdr_l3) loops.add('L3');
+                                                        setSelectedCDRLoops(loops);
+                                                        // Note: IMGT position ranges stored in detectedCDRs are available
+                                                        // for passing to backend (rfantibody design_loops param)
+                                                    }}
+                                                    className="w-full mt-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-all"
+                                                >
+                                                    ✓ Use These CDRs
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         )}
 

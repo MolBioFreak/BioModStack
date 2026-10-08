@@ -4,7 +4,7 @@
  * Clean rewrite replacing OVE with modern component architecture.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { SequenceViewer, DEFAULT_VISIBILITY } from './SequenceViewer';
 import { SequenceHeader } from './SequenceHeader';
 import { VisibilityPanel } from './VisibilityPanel';
@@ -24,7 +24,63 @@ import type {
 import { EMPTY_SEQUENCE } from './types';
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SEQUENCE LIBRARY SIDEBAR
+// DEMO PLASMIDS - For testing when no sequences exist
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const DEMO_PLASMIDS: SequenceData[] = [
+    {
+        name: 'pUC19',
+        sequence: 'TCGCGCGTTTCGGTGATGACGGTGAAAACCTCTGACACATGCAGCTCCCGGAGACGGTCACAGCTTGTCTGTAAGCGGATGCCGGGAGCAGACAAGCCCGTCAGGGCGCGTCAGCGGGTGTTGGCGGGTGTCGGGGCTGGCTTAACTATGCGGCATCAGAGCAGATTGTACTGAGAGTGCACCATATGCGGTGTGAAATACCGCACAGATGCGTAAGGAGAAAATACCGCATCAGGCGCCATTCGCCATTCAGGCTGCGCAACTGTTGGGAAGGGCGATCGGTGCGGGCCTCTTCGCTATTACGCCAGCTGGCGAAAGGGGGATGTGCTGCAAGGCGATTAAGTTGGGTAACGCCAGGGTTTTCCCAGTCACGACGTTGTAAAACGACGGCCAGTGAATTCGAGCTCGGTACCCGGGGATCCTCTAGAGTCGACCTGCAGGCATGCAAGCTTGGCGTAATCATGGTCATAGCTGTTTCCTGTGTGAAATTGTTATCCGCTCACAATTCCACACAACATACGAGCCGGAAGCATAAAGTGTAAAGCCTGGGGTGCCTAATGAGTGAGCTAACTCACATTAATTGCGTTGCGCTCACTGCCCGCTTTCCAGTCGGGAAACCTGTCGTGCCAGCTGCATTAATGAATCGGCCAACGCGCGGGGAGAGGCGGTTTGCGTATTGGGCGCTCTTCCGCTTCCTCGCTCACTGACTCGCTGCGCTCGGTCGTTCGGCTGCGGCGAGCGGTATCAGCTCACTCAAAGGCGGTAATACGGTTATCCACAGAATCAGGGGATAACGCAGGAAAGAACATGTGAGCAAAAGGCCAGCAAAAGGCCAGGAACCGTAAAAAGGCCGCGTTGCTGGCGTTTTTCCATAGGCTCCGCCCCCCTGACGAGCATCACAAAAATCGACGCTCAAGTCAGAGGTGGCGAAACCCGACAGGACTATAAAGATACCAGGCGTTTCCCCCTGGAAGCTCCCTCGTGCGCTCTCCTGTTCCGACCCTGCCGCTTACCGGATACCTGTCCGCCTTTCTCCCTTCGGGAAGCGTGGCGCTTTCTCATAGCTCACGCTGTAGGTATCTCAGTTCGGTGTAGGTCGTTCGCTCCAAGCTGGGCTGTGTGCACGAACCCCCCGTTCAGCCCGACCGCTGCGCCTTATCCGGTAACTATCGTCTTGAGTCCAACCCGGTAAGACACGACTTATCGCCACTGGCAGCAGCCACTGGTAACAGGATTAGCAGAGCGAGGTATGTAGGCGGTGCTACAGAGTTCTTGAAGTGGTGGCCTAACTACGGCTACACTAGAAGAACAGTATTTGGTATCTGCGCTCTGCTGAAGCCAGTTACCTTCGGAAAAAGAGTTGGTAGCTCTTGATCCGGCAAACAAACCACCGCTGGTAGCGGTGGTTTTTTTGTTTGCAAGCAGCAGATTACGCGCAGAAAAAAAGGATCTCAAGAAGATCCTTTGATCTTTTCTACGGGGTCTGACGCTCAGTGGAACGAAAACTCACGTTAAGGGATTTTGGTCATGAGATTATCAAAAAGGATCTTCACCTAGATCCTTTTAAATTAAAAATGAAGTTTTAAATCAATCTAAAGTATATATGAGTAAACTTGGTCTGACAGTTACCAATGCTTAATCAGTGAGGCACCTATCTCAGCGATCTGTCTATTTCGTTCATCCATAGTTGCCTGACTCCCCGTCGTGTAGATAACTACGATACGGGAGGGCTTACCATCTGGCCCCAGTGCTGCAATGATACCGCGAGACCCACGCTCACCGGCTCCAGATTTATCAGCAATAAACCAGCCAGCCGGAAGGGCCGAGCGCAGAAGTGGTCCTGCAACTTTATCCGCCTCCATCCAGTCTATTAATTGTTGCCGGGAAGCTAGAGTAAGTAGTTCGCCAGTTAATAGTTTGCGCAACGTTGTTGCCATTGCTACAGGCATCGTGGTGTCACGCTCGTCGTTTGGTATGGCTTCATTCAGCTCCGGTTCCCAACGATCAAGGCGAGTTACATGATCCCCCATGTTGTGCAAAAAAGCGGTTAGCTCCTTCGGTCCTCCGATCGTTGTCAGAAGTAAGTTGGCCGCAGTGTTATCACTCATGGTTATGGCAGCACTGCATAATTCTCTTACTGTCATGCCATCCGTAAGATGCTTTTCTGTGACTGGTGAGTACTCAACCAAGTCATTCTGAGAATAGTGTATGCGGCGACCGAGTTGCTCTTGCCCGGCGTCAATACGGGATAATACCGCGCCACATAGCAGAACTTTAAAAGTGCTCATCATTGGAAAACGTTCTTCGGGGCGAAAACTCTCAAGGATCTTACCGCTGTTGAGATCCAGTTCGATGTAACCCACTCGTGCACCCAACTGATCTTCAGCATCTTTTACTTTCACCAGCGTTTCTGGGTGAGCAAAAACAGGAAGGCAAAATGCCGCAAAAAAGGGAATAAGGGCGACACGGAAATGTTGAATACTCATACTCTTCCTTTTTCAATATTATTGAAGCATTTATCAGGGTTATTGTCTCATGAGCGGATACATATTTGAATGTATTTAGAAAAATAAACAAATAGGGGTTCCGCGCACATTTCCCCGAAAAGTGCCACCTGACGTC',
+        circular: true,
+        sequenceType: 'dna',
+        features: [
+            { id: 'f1', name: 'lac promoter', type: 'promoter', start: 430, end: 495, strand: 1, color: '#8b5cf6' },
+            { id: 'f2', name: 'MCS', type: 'misc_feature', start: 496, end: 545, strand: 1, color: '#3b82f6' },
+            { id: 'f3', name: 'lacZ alpha', type: 'CDS', start: 545, end: 795, strand: 1, color: '#22c55e' },
+            { id: 'f4', name: 'AmpR', type: 'CDS', start: 1830, end: 2690, strand: -1, color: '#ef4444' },
+            { id: 'f5', name: 'ori', type: 'rep_origin', start: 995, end: 1580, strand: 1, color: '#ec4899' }
+        ],
+        primers: [],
+        translations: []
+    },
+    {
+        name: 'pET-28a',
+        sequence: 'ATCCGGATATATTTCTGTCTCTGAATCAGAAACATCTCGATTGAAATCCCCTGCGCCAGGAGTGTCTCCGAACTTTAATAGCAAGGTTCAGAATTTGATGCCGAAGGATTTCGATCAGCTCGCTGATGATTTTCAGCAACATGATTGGCGCTCAGACCGCCTGGCCACCGCAGGCGGTGGAGTGCAATGTCGTGCAATGCCACGCAAGCTTGTCGAGAAGTACTAGAGCCACCATGCGGTCCGGCAGATCTGAATTCGAGCTCCGTCGACAAGCTTGCGGCCGCACTCGAGCACCACCACCACCACCACTGAGATCCGGCTGCTAACAAAGCCCGAAAGGAAGCTGAGTTGGCTGCTGCCACCGCTGAGCAATAACTAGCATAACCCCTTGGGGCCTCTAAACGGGTCTTGAGGGGTTTTTTGCTGAAAGGAGGAACTATATCCGGATTGGCGAATGGGACGCGCCCTGTAGCGGCGCATTAAGCGCGGCGGGTGTGGTGGTTACGCGCAGCGTGACCGCTACACTTGCCAGCGCCCTAGCGCCCGCTCCTTTCGCTTTCTTCCCTTCCTTTCTCGCCACGTTCGCCGGCTTTCCCCGTCAAGCTCTAAATCGGGGGCTCCCTTTAGGGTTCCGATTTAGTGCTTTACGGCACCTCGACCCCAAAAAACTTGATTAGGGTGATGGTTCACGTAGTGGGCCATCGCCCTGATAGACGGTTTTTCGCCCTTTGACGTTGGAGTCCACGTTCTTTAATAGTGGACTCTTGTTCCAAACTGGAACAACACTCAACCCTATCTCGGTCTATTCTTTTGATTTATAAGGGATTTTGCCGATTTCGGCCTATTGGTTAAAAAATGAGCTGATTTAACAAAAATTTAACGCGAATTTTAACAAAATATTAACGTTTACAATTTCAGGTGGCACTTTTCGGGGAAATGTGCGCGGAACCCCTATTTGTTTATTTTTCTAAATACATTCAAATATGTATCCGCTCATGAATTAATTCTTAGAAAAACTCATCGAGCATCAAATGAAACTGCAATTTATTCATATCAGGATTATCAATACCATATTTTTGAAAAAGCCGTTTCTGTAATGAAGGAGAAAACTCACCGAGGCAGTTCCATAGGATGGCAAGATCCTGGTATCGGTCTGCGATTCCGACTCGTCCAACATCAATACAACCTATTAATTTCCCCTCGTCAAAAATAAGGTTATCAAGTGAGAAATCACCATGAGTGACGACTGAATCCGGTGAGAATGGCAAAAGTTTATGCATTTCTTTCCAGACTTGTTCAACAGGCCAGCCATTACGCTCGTCATCAAAATCACTCGCATCAACCAAACCGTTATTCATTCGTGATTGCGCCTGAGCGAGACGAAATACGCGATCGCTGTTAAAAGGACAATTACAAACAGGAATCGAATGCAACCGGCGCAGGAACACTGCCAGCGCATCAACAATATTTTCACCTGAATCAGGATATTCTTCTAATACCTGGAATGCTGTTTTCCCGGGGATCGCAGTGGTGAGTAACCATGCATCATCAGGAGTACGGATAAAATGCTTGATGGTCGGAAGAGGCATAAATTCCGTCAGCCAGTTTAGTCTGACCATCTCATCTGTAACATCATTGGCAACGCTACCTTTGCCATGTTTCAGAAACAACTCTGGCGCATCGGGCTTCCCATACAATCGATAGATTGTCGCACCTGATTGCCCGACATTATCGCGAGCCCATTTATACCCATATAAATCAGCATCCATGTTGGAATTTAATCGCGGCCTAGAGCAAGACGTTTCCCGTTGAATATGGCTCATAACACCCCTTGTATTACTGTTTATGTAAGCAGACAGTTTTATTGTTCATGACCAAAATCCCTTAACGTGAGTTTTCGTTCCACTGAGCGTCAGACCCCGTAGAAAAGATCAAAGGATCTTCTTGAGATCCTTTTTTTCTGCGCGTAATCTGCTGCTTGCAAACAAAAAAACCACCGCTACCAGCGGTGGTTTGTTTGCCGGATCAAGAGCTACCAACTCTTTTTCCGAAGGTAACTGGCTTCAGCAGAGCGCAGATACCAAATACTGTCCTTCTAGTGTAGCCGTAGTTAGGCCACCACTTCAAGAACTCTGTAGCACCGCCTACATACCTCGCTCTGCTAATCCTGTTACCAGTGGCTGCTGCCAGTGGCGATAAGTCGTGTCTTACCGGGTTGGACTCAAGACGATAGTTACCGGATAAGGCGCAGCGGTCGGGCTGAACGGGGGGTTCGTGCACACAGCCCAGCTTGGAGCGAACGACCTACACCGAACT',
+        circular: true,
+        sequenceType: 'dna',
+        features: [
+            { id: 'f1', name: 'T7 promoter', type: 'promoter', start: 205, end: 225, strand: 1, color: '#8b5cf6' },
+            { id: 'f2', name: '6xHis tag', type: 'misc_feature', start: 270, end: 288, strand: 1, color: '#f59e0b' },
+            { id: 'f3', name: 'T7 terminator', type: 'terminator', start: 313, end: 360, strand: 1, color: '#ef4444' },
+            { id: 'f4', name: 'KanR', type: 'CDS', start: 470, end: 1280, strand: -1, color: '#22c55e' },
+            { id: 'f5', name: 'ori', type: 'rep_origin', start: 1500, end: 2100, strand: 1, color: '#ec4899' }
+        ],
+        primers: [
+            { id: 'p1', name: 'T7_Fwd', sequence: 'TAATACGACTCACTATAGGG', start: 205, end: 225, strand: 1, tm: 52.2, gc_percent: 40 },
+            { id: 'p2', name: 'T7_Rev', sequence: 'GCTAGTTATTGCTCAGCGG', start: 313, end: 332, strand: -1, tm: 56.7, gc_percent: 52.6 }
+        ],
+        translations: []
+    },
+    {
+        name: 'GFP Insert (Linear)',
+        sequence: 'ATGAGTAAAGGAGAAGAACTTTTCACTGGAGTTGTCCCAATTCTTGTTGAATTAGATGGTGATGTTAATGGGCACAAATTTTCTGTCAGTGGAGAGGGTGAAGGTGATGCAACATACGGAAAACTTACCCTTAAATTTATTTGCACTACTGGAAAACTACCTGTTCCATGGCCAACACTTGTCACTACTTTCGGTTATGGTGTTCAATGCTTTGCGAGATACCCAGATCATATGAAACAGCATGACTTTTTCAAGAGTGCCATGCCCGAAGGTTATGTACAGGAAAGAACTATATTTTTCAAAGATGACGGGAACTACAAGACACGTGCTGAAGTCAAGTTTGAAGGTGATACCCTTGTTAATAGAATCGAGTTAAAAGGTATTGATTTTAAAGAAGATGGAAACATTCTTGGACACAAATTGGAATACAACTATAACTCACACAATGTATACATCATGGCAGACAAACAAAAGAATGGAATCAAAGTTAACTTCAAAATTAGACACAACATTGAAGATGGAAGCGTTCAACTAGCAGACCATTATCAACAAAATACTCCAATTGGCGATGGCCCTGTCCTTTTACCAGACAACCATTACCTGTCCACACAATCTGCCCTTTCGAAAGATCCCAACGAAAAGAGAGACCACATGGTCCTTCTTGAGTTTGTAACAGCTGCTGGGATTACACATGGCATGGATGAACTATACAAATAA',
+        circular: false,
+        sequenceType: 'dna',
+        features: [
+            { id: 'f1', name: 'GFP CDS', type: 'CDS', start: 0, end: 717, strand: 1, color: '#22c55e' },
+            { id: 'f2', name: 'Start codon', type: 'misc_feature', start: 0, end: 3, strand: 1, color: '#3b82f6' },
+            { id: 'f3', name: 'Stop codon', type: 'misc_feature', start: 714, end: 717, strand: 1, color: '#ef4444' }
+        ],
+        primers: [
+            { id: 'p1', name: 'GFP_Fwd', sequence: 'ATGAGTAAAGGAGAAGAACTTTTC', start: 0, end: 24, strand: 1, tm: 54.3, gc_percent: 33.3 },
+            { id: 'p2', name: 'GFP_Rev', sequence: 'TTATTTGTATAGTTCATCCATGCC', start: 693, end: 717, strand: -1, tm: 53.2, gc_percent: 33.3 }
+        ],
+        translations: []
+    }
+];
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SEQUENCE LIBRARY SIDEBAR WITH IMPORT
 // ═══════════════════════════════════════════════════════════════════════════════
 
 interface SequenceLibraryProps {
@@ -32,38 +88,97 @@ interface SequenceLibraryProps {
     selectedId: string | null;
     onSelect: (id: string) => void;
     onRefresh: () => void;
+    onImport: (file: File) => void;
+    onLoadDemo: (demo: SequenceData) => void;
     loading: boolean;
 }
 
-function SequenceLibrary({ sequences, selectedId, onSelect, onRefresh, loading }: SequenceLibraryProps) {
+function SequenceLibrary({ sequences, selectedId, onSelect, onRefresh, onImport, onLoadDemo, loading }: SequenceLibraryProps) {
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const [showDemos, setShowDemos] = useState(false);
+
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            onImport(file);
+            e.target.value = ''; // Reset for re-upload
+        }
+    };
+
     return (
-        <div className="sequence-library w-64 bg-slate-900 border-r border-slate-700 flex flex-col">
+        <div className="sequence-library w-64 flex-shrink-0 bg-slate-900 border-r border-slate-700 flex flex-col overflow-hidden">
             <div className="flex items-center justify-between p-3 border-b border-slate-700">
-                <h3 className="font-semibold text-slate-200">Sequence Library</h3>
-                <button
-                    onClick={onRefresh}
-                    disabled={loading}
-                    className="p-1 hover:bg-slate-700 rounded transition-colors disabled:opacity-50"
-                    title="Refresh"
-                >
-                    <svg className={`w-4 h-4 text-slate-400 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                </button>
+                <h3 className="font-semibold text-slate-200">Library</h3>
+                <div className="flex items-center gap-1">
+                    <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="p-1.5 hover:bg-slate-700 rounded transition-colors"
+                        title="Import file (GenBank/FASTA)"
+                    >
+                        <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                        </svg>
+                    </button>
+                    <button
+                        onClick={onRefresh}
+                        disabled={loading}
+                        className="p-1.5 hover:bg-slate-700 rounded transition-colors disabled:opacity-50"
+                        title="Refresh"
+                    >
+                        <svg className={`w-4 h-4 text-slate-400 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                    </button>
+                </div>
+                <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".gb,.gbk,.genbank,.fasta,.fa,.fna"
+                    onChange={handleFileChange}
+                    className="hidden"
+                />
             </div>
 
             <div className="flex-1 overflow-y-auto">
+                {/* Demo plasmids section */}
+                <div className="border-b border-slate-700">
+                    <button
+                        onClick={() => setShowDemos(!showDemos)}
+                        className="w-full flex items-center justify-between p-2 text-xs text-slate-400 hover:bg-slate-800"
+                    >
+                        <span>Demo Plasmids ({DEMO_PLASMIDS.length})</span>
+                        <svg className={`w-3 h-3 transition-transform ${showDemos ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                    </button>
+                    {showDemos && (
+                        <div className="bg-slate-800/50">
+                            {DEMO_PLASMIDS.map((demo, i) => (
+                                <button
+                                    key={i}
+                                    onClick={() => onLoadDemo(demo)}
+                                    className="w-full text-left p-2 pl-4 text-sm text-slate-300 hover:bg-slate-700 transition-colors"
+                                >
+                                    <span className="mr-2">{demo.circular ? '○' : '─'}</span>
+                                    {demo.name}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {/* Saved sequences */}
                 {sequences.length === 0 ? (
                     <div className="p-4 text-center text-slate-500 text-sm">
-                        No sequences yet
+                        <p>No saved sequences</p>
+                        <p className="mt-1 text-xs">Import a file or try demos</p>
                     </div>
                 ) : (
                     sequences.map((seq) => (
                         <button
                             key={seq.id}
                             onClick={() => onSelect(seq.id)}
-                            className={`w-full text-left p-3 border-b border-slate-800 hover:bg-slate-800 transition-colors ${selectedId === seq.id ? 'bg-slate-700' : ''
-                                }`}
+                            className={`w-full text-left p-3 border-b border-slate-800 hover:bg-slate-800 transition-colors ${selectedId === seq.id ? 'bg-slate-700' : ''}`}
                         >
                             <div className="font-medium text-slate-200 truncate">{seq.name}</div>
                             <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
@@ -94,27 +209,25 @@ interface PanelTabsProps {
     onChange: (panel: ActivePanel) => void;
 }
 
-const PANELS: { id: ActivePanel; label: string; icon: string }[] = [
-    { id: 'digest', label: 'Digest', icon: '✂️' },
-    { id: 'pcr', label: 'PCR', icon: '🔬' },
-    { id: 'primers', label: 'Primers', icon: '🧬' },
-    { id: 'features', label: 'Features', icon: '📍' },
-    { id: 'edit', label: 'Edit', icon: '✏️' },
+const PANELS: { id: ActivePanel; label: string }[] = [
+    { id: 'digest', label: 'Digest' },
+    { id: 'pcr', label: 'PCR' },
+    { id: 'primers', label: 'Primers' },
+    { id: 'features', label: 'Features' },
 ];
 
 function PanelTabs({ active, onChange }: PanelTabsProps) {
     return (
-        <div className="panel-tabs flex border-b border-slate-700 bg-slate-800">
-            {PANELS.map(({ id, label, icon }) => (
+        <div className="panel-tabs flex flex-wrap border-b border-slate-700 bg-slate-800">
+            {PANELS.map(({ id, label }) => (
                 <button
                     key={id}
                     onClick={() => onChange(active === id ? null : id)}
-                    className={`flex items-center gap-1 px-3 py-2 text-sm transition-colors ${active === id
+                    className={`flex items-center gap-1 px-3 py-1.5 text-xs transition-colors ${active === id
                         ? 'bg-slate-700 text-slate-100 border-b-2 border-blue-500'
                         : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
                         }`}
                 >
-                    <span>{icon}</span>
                     <span>{label}</span>
                 </button>
             ))}
@@ -123,16 +236,89 @@ function PanelTabs({ active, onChange }: PanelTabsProps) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// EDIT PANEL (MVP - Phase 2.5)
+// SIMPLE GENBANK/FASTA PARSER
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function EditPanel() {
-    return (
-        <div className="p-4 text-center text-slate-400">
-            <p className="text-lg font-medium">Edit Panel</p>
-            <p className="text-sm mt-2">Coming in Phase 2.5</p>
-        </div>
-    );
+function parseSequenceFile(content: string, filename: string): SequenceData | null {
+    const upper = content.slice(0, 100).toUpperCase();
+
+    // GenBank format
+    if (upper.startsWith('LOCUS')) {
+        const nameMatch = content.match(/^LOCUS\s+(\S+)/);
+        const name = nameMatch?.[1] || filename.replace(/\.[^.]+$/, '');
+
+        const circular = /circular/i.test(content.slice(0, 200));
+
+        // Extract sequence from ORIGIN section
+        const originMatch = content.match(/ORIGIN[\s\S]*?\/\//);
+        let sequence = '';
+        if (originMatch) {
+            sequence = originMatch[0]
+                .replace(/ORIGIN/i, '')
+                .replace(/\/\//, '')
+                .replace(/[\d\s\n\r]/g, '')
+                .toUpperCase();
+        }
+
+        // Extract features
+        const features: Feature[] = [];
+        const featureRegex = /^\s{5}(\w+)\s+(?:complement\()?(\d+)\.\.(\d+)\)?/gm;
+        let match;
+        while ((match = featureRegex.exec(content)) !== null) {
+            const labelMatch = content.slice(match.index, match.index + 500).match(/\/label="([^"]+)"/);
+            features.push({
+                id: `f_${features.length}`,
+                name: labelMatch?.[1] || match[1],
+                type: match[1],
+                start: parseInt(match[2]) - 1,
+                end: parseInt(match[3]),
+                strand: content.slice(match.index - 20, match.index).includes('complement') ? -1 : 1,
+                color: getFeatureColor(match[1])
+            });
+        }
+
+        return {
+            name,
+            sequence,
+            circular,
+            sequenceType: 'dna',
+            features,
+            primers: [],
+            translations: []
+        };
+    }
+
+    // FASTA format
+    if (upper.startsWith('>')) {
+        const lines = content.split('\n');
+        const name = lines[0].slice(1).trim().split(/\s/)[0] || filename.replace(/\.[^.]+$/, '');
+        const sequence = lines.slice(1).join('').replace(/\s/g, '').toUpperCase();
+
+        return {
+            name,
+            sequence,
+            circular: false,
+            sequenceType: 'dna',
+            features: [],
+            primers: [],
+            translations: []
+        };
+    }
+
+    return null;
+}
+
+function getFeatureColor(type: string): string {
+    const colors: Record<string, string> = {
+        CDS: '#22c55e',
+        gene: '#3b82f6',
+        promoter: '#8b5cf6',
+        terminator: '#ef4444',
+        rep_origin: '#ec4899',
+        primer_bind: '#f59e0b',
+        misc_feature: '#6b7280'
+    };
+    return colors[type] || colors.misc_feature;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -188,7 +374,7 @@ export function MolBioToolkitV2() {
                 sequence: seq.sequence,
                 circular: seq.is_circular,
                 sequenceType: seq.sequence_type,
-                features: (seq.features || []).map(f => ({
+                features: (seq.features || []).map((f: Feature) => ({
                     id: f.id || String(Math.random()),
                     name: f.name,
                     type: f.type || 'misc_feature',
@@ -206,6 +392,26 @@ export function MolBioToolkitV2() {
         }
     }, [getSequence, resetHistory]);
 
+    // Load demo plasmid (no API, direct)
+    const loadDemo = useCallback((demo: SequenceData) => {
+        resetHistory(demo);
+        setSelectedSequenceId(null); // Not a saved sequence
+        setIsDirty(false);
+    }, [resetHistory]);
+
+    // Import file
+    const handleImport = useCallback(async (file: File) => {
+        const content = await file.text();
+        const parsed = parseSequenceFile(content, file.name);
+        if (parsed) {
+            resetHistory(parsed);
+            setSelectedSequenceId(null);
+            setIsDirty(true); // Imported but not saved
+        } else {
+            alert('Failed to parse file. Supported formats: GenBank (.gb, .gbk), FASTA (.fasta, .fa)');
+        }
+    }, [resetHistory]);
+
     // Save sequence
     const saveSequence = useCallback(async () => {
         if (!selectedSequenceId) return;
@@ -214,7 +420,7 @@ export function MolBioToolkitV2() {
             name: sequenceData.name,
             sequence: sequenceData.sequence,
             is_circular: sequenceData.circular,
-            sequence_type: sequenceData.sequenceType,
+            sequence_type: sequenceData.sequenceType === 'protein' ? 'dna' : sequenceData.sequenceType,
             features: sequenceData.features,
             primers: sequenceData.primers
         });
@@ -292,18 +498,20 @@ export function MolBioToolkitV2() {
     }, [undo, redo, saveSequence]);
 
     return (
-        <div className="molbio-toolkit h-screen flex bg-slate-900 text-slate-100">
+        <div className="molbio-toolkit h-full w-full flex bg-slate-900 text-slate-100 overflow-hidden">
             {/* Left: Sequence Library */}
             <SequenceLibrary
                 sequences={sequences}
                 selectedId={selectedSequenceId}
                 onSelect={loadSequence}
                 onRefresh={loadLibrary}
+                onImport={handleImport}
+                onLoadDemo={loadDemo}
                 loading={loading}
             />
 
             {/* Center: Viewer */}
-            <div className="flex-1 flex flex-col min-w-0">
+            <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
                 <SequenceHeader
                     sequenceData={sequenceData}
                     onSave={selectedSequenceId ? saveSequence : undefined}
@@ -315,7 +523,7 @@ export function MolBioToolkitV2() {
                     loading={loading}
                 />
 
-                <div className="flex-1 relative">
+                <div className="flex-1 overflow-hidden">
                     {sequenceData.sequence ? (
                         <SequenceViewer
                             sequenceData={sequenceData}
@@ -330,7 +538,7 @@ export function MolBioToolkitV2() {
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                                 </svg>
                                 <p className="text-lg">Select a sequence from the library</p>
-                                <p className="text-sm mt-1">or import a new file</p>
+                                <p className="text-sm mt-1">or expand "Demo Plasmids" to try one</p>
                             </div>
                         </div>
                     )}
@@ -338,14 +546,14 @@ export function MolBioToolkitV2() {
 
                 {/* Selection info bar */}
                 {selection && (
-                    <div className="px-4 py-1 bg-slate-800 border-t border-slate-700 text-sm text-slate-400">
+                    <div className="px-4 py-1 bg-slate-800 border-t border-slate-700 text-sm text-slate-400 flex-shrink-0">
                         Selected: {selection.start + 1} - {selection.end + 1} ({selection.end - selection.start + 1} bp)
                     </div>
                 )}
             </div>
 
             {/* Right: Tool Panels */}
-            <div className="w-80 border-l border-slate-700 bg-slate-800 flex flex-col">
+            <div className="w-72 flex-shrink-0 border-l border-slate-700 bg-slate-800 flex flex-col overflow-hidden">
                 <PanelTabs active={activePanel} onChange={setActivePanel} />
 
                 <div className="flex-1 overflow-y-auto">
@@ -387,12 +595,11 @@ export function MolBioToolkitV2() {
                             onRemoveFeature={handleRemoveFeature}
                         />
                     )}
-                    {activePanel === 'edit' && <EditPanel />}
                 </div>
 
                 {/* Error display */}
                 {error && (
-                    <div className="p-3 bg-red-900/50 border-t border-red-800 text-red-300 text-sm">
+                    <div className="p-3 bg-red-900/50 border-t border-red-800 text-red-300 text-sm flex-shrink-0">
                         Error: {error}
                     </div>
                 )}

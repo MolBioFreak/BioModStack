@@ -167,8 +167,8 @@ export function DigestPanel({
                         <label
                             key={enzyme.name}
                             className={`flex items-center justify-between px-2 py-1 rounded cursor-pointer text-sm transition-colors ${selectedEnzymes.includes(enzyme.name)
-                                    ? 'bg-blue-900/50 text-blue-300'
-                                    : 'hover:bg-slate-700/50 text-slate-300'
+                                ? 'bg-blue-900/50 text-blue-300'
+                                : 'hover:bg-slate-700/50 text-slate-300'
                                 }`}
                         >
                             <div className="flex items-center gap-1">
@@ -215,7 +215,7 @@ export function DigestPanel({
                     </h5>
                     <div className="space-y-1 max-h-40 overflow-y-auto">
                         {fragments
-                            .map((f, i) => ({ ...f, size: f.sequence?.length || (f.end - f.start) }))
+                            .map((f) => ({ ...f, size: f.sequence?.length || (f.end - f.start) }))
                             .sort((a, b) => b.size - a.size)
                             .map((f, i) => (
                                 <div

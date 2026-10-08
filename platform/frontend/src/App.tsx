@@ -5,7 +5,7 @@ import { Dashboard } from './components/Dashboard';
 import { JobSubmission } from './components/JobSubmission';
 import { ResultsViewer } from './components/ResultsViewer';
 import { JobDetailPage } from './components/JobDetailPage';
-import { MolBioToolkit } from './components/MolBioToolkit';
+import { MolBioToolkitV2 } from './components/MolBioToolkit/indexV2';
 
 function App() {
   return (
@@ -18,8 +18,8 @@ function App() {
           <Route path="/designs" element={<ResultsViewer />} />
           <Route path="/designs/:jobId" element={<ResultsViewer />} />
           <Route path="/jobs/:jobId" element={<JobDetailPage />} />
-          {/* Molecular Biology Toolkit - OVE-based sequence editor */}
-          <Route path="/designer" element={<MolBioToolkit />} />
+          {/* Molecular Biology Toolkit - Seqviz-based sequence editor */}
+          <Route path="/designer" element={<MolBioToolkitV2 />} />
         </Routes>
       </Layout>
     </HotkeysProvider>
