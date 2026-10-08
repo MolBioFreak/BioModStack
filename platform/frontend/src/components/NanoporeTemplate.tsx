@@ -986,6 +986,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [showGpuPinning] = useState(false);
     const [batchSize, setBatchSize] = useState<number | null>((initialValues?.batchSize as number | null | undefined) ?? null);
     const [emitSummary, setEmitSummary] = useState(initialValues?.emitSummary !== false);
+    const [emitMoves, setEmitMoves] = useState(initialValues?.emitMoves !== false);
     const [modkitFilterThreshold, setModkitFilterThreshold] = useState<number | null>(
         (initialValues?.modkitFilterThreshold as number | null | undefined) ?? null
     );
@@ -1271,6 +1272,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         sample_sheet: barcodeKit ? (sampleSheet || undefined) : undefined,
                         trim_adapters: trimAdapters,
                         emit_summary: emitSummary,
+                        emit_moves: doradoMode === 'simplex' ? emitMoves : false,
                         ...(batchSize !== null && { dorado_batch_size: batchSize }),
                     }),
                     ...(inputSource === 'bam' && {
@@ -2246,6 +2248,21 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                     className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
                                 />
                                 <span className="text-sm text-[var(--text-primary)]">Emit sequencing summary TSV</span>
+                            </label>
+                        )}
+                        {inputSource === 'pod5' && (
+                            <label
+                                className={`flex items-center gap-2 ${doradoMode === 'duplex' ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+                                title={doradoMode === 'duplex' ? 'Move-tag emission is unavailable for duplex until its move semantics are qualified.' : 'Persist mv, ts, and ns move-table evidence for aligned signal views.'}
+                            >
+                                <input
+                                    type="checkbox"
+                                    checked={doradoMode === 'simplex' && emitMoves}
+                                    disabled={doradoMode === 'duplex'}
+                                    onChange={(e) => setEmitMoves(e.target.checked)}
+                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                                />
+                                <span className="text-sm text-[var(--text-primary)]">Emit move tags for aligned signal views</span>
                             </label>
                         )}
                         {runModkit && canRunModkit && (

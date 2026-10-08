@@ -4732,3 +4732,393 @@ export const requestOntBlow5Preparation = (
 
 export const fetchFullJob = (jobId: string) =>
     apiData(api.get<Job>(`/api/jobs/${encodeURIComponent(jobId)}`));
+
+export type OntSignalCapabilityState = 'ready' | 'preparable' | 'unavailable' | 'independent';
+export type OntSignalMappingMode = 'signal_to_read' | 'signal_to_reference';
+export type OntSignalViewMode = 'read' | 'reference' | 'pileup';
+export type OntSignalJobState = 'requested' | 'running' | 'ready' | 'failed' | 'cancelled' | string;
+
+export interface OntSignalCapabilityMode {
+    state: OntSignalCapabilityState;
+    reason_code: string;
+}
+
+// ============================================================
+// ONT SIGNAL WORKBENCH API
+// ============================================================
+export interface OntSignalWorkbenchCapabilities {
+    run_id: string;
+    observed_generation: number;
+    resolved: {
+        raw_representation_id: string | null;
+        move_source_id: string | null;
+        mapping_profile_id: string | null;
+        calibration_job_id: string | null;
+        calibration_artifact_id: string | null;
+        signal_to_read_mapping_job_id: string | null;
+        signal_to_reference_mapping_job_id: string | null;
+    };
+    modes: Record<'igv' | 'raw_waveform' | 'signal_to_read' | 'signal_to_reference' | 'signal_pileup', OntSignalCapabilityMode>;
+}
+
+export interface OntSignalCapabilityAuthority {
+    alignment_job_id: string;
+    alignment_session_id: string;
+    reference_revision_id: string;
+}
+
+export interface OntMoveTableSource {
+    move_source_id: string;
+    run_id: string;
+    observed_generation: number;
+    raw_representation_id: string;
+    artifact_id: string;
+    artifact_sha256: string;
+    artifact_size_bytes: number;
+    bam_header_sha256: string | null;
+    record_count: number | null;
+    unique_read_count: number | null;
+    tag_counts: { mv: number | null; ts: number | null; ns: number | null };
+    basecall_model_id: string | null;
+    molecule_type: 'dna' | 'rna';
+    source_job_id: string | null;
+    external_registration_receipt_id: string | null;
+    source_runtime_identity: Record<string, unknown>;
+    read_inventory_sha256: string | null;
+    state: OntSignalJobState;
+    reason_code: string;
+    validation_receipt: Record<string, unknown>;
+    created_at: string;
+    validated_at: string | null;
+}
+
+export interface OntSignalCalibrationArtifact {
+    calibration_artifact_id: string;
+    raw_representation_id: string;
+    move_source_id: string;
+    basecall_model_id: string;
+    sample_selection: { method: string; requested_count: number; selected_count: number; intersection_count: number; read_ids: string[]; selection_sha256: string };
+    recommended_kmer_length: number;
+    recommended_signal_move_offset: number;
+    score_evidence: Array<Record<string, unknown>>;
+    runtime_identity: Record<string, unknown>;
+    parent_sha256s: Record<string, unknown>;
+    artifact_sha256: string;
+    created_at: string;
+}
+
+export interface OntSignalCalibrationJob {
+    calibration_job_id: string;
+    run_id: string;
+    observed_generation: number;
+    raw_representation_id: string;
+    move_source_id: string;
+    sample_count: number;
+    request_fingerprint: string;
+    state: OntSignalJobState;
+    reason_code: string;
+    attempt: number;
+    resource_snapshot: Record<string, unknown>;
+    stage_receipts: Record<string, unknown>;
+    failure_code: string | null;
+    failure_message: string | null;
+    artifact: OntSignalCalibrationArtifact | null;
+    created_at: string;
+    updated_at: string;
+    completed_at: string | null;
+}
+
+export interface OntSignalMappingProfile {
+    mapping_profile_id: string;
+    name: string;
+    molecule_type: 'dna' | 'rna';
+    basecall_model_id: string;
+    kmer_length: number;
+    signal_move_offset: number;
+    base_shift_value: number;
+    parameter_source: 'approved_calibration';
+    calibration_artifact_id: string;
+    primary_alignment_policy: 'primary_only';
+    minimum_mapq: 0;
+    include_supplementary: false;
+    read_set_selection: 'immutable_full_set';
+    approval_receipt: Record<string, unknown>;
+    approved_at: string;
+    approved_by: string | null;
+}
+
+export interface OntSignalMappingArtifact {
+    mapping_artifact_id: string;
+    mapping_job_id: string;
+    kind: 'reform_paf' | 'realign_paf';
+    sha256: string;
+    size_bytes: number;
+    media_type: string;
+    parent_identities: Record<string, unknown>;
+    runtime_identity: Record<string, unknown>;
+    validation_receipt: Record<string, unknown>;
+    created_at: string;
+}
+
+export interface OntSignalMappingJob {
+    mapping_job_id: string;
+    mode: OntSignalMappingMode;
+    run_id: string;
+    observed_generation: number;
+    raw_representation_id: string;
+    move_source_id: string;
+    mapping_profile_id: string;
+    reference_revision_id: string | null;
+    alignment_job_id: string | null;
+    alignment_session_id: string | null;
+    parent_mapping_job_id: string | null;
+    request_fingerprint: string;
+    state: OntSignalJobState;
+    reason_code: string;
+    attempt: number;
+    resource_snapshot: Record<string, unknown>;
+    stage_receipts: Record<string, unknown>;
+    failure_code: string | null;
+    failure_message: string | null;
+    artifacts: OntSignalMappingArtifact[];
+    created_at: string;
+    updated_at: string;
+    completed_at: string | null;
+}
+
+export interface OntSignalViewArtifact {
+    artifact_id: string;
+    sha256: string;
+    size_bytes: number;
+    media_type: string;
+    url?: string | null;
+}
+
+export interface OntSignalViewJob {
+    view_job_id: string;
+    mapping_artifact_id: string;
+    mode: OntSignalViewMode;
+    read_id: string | null;
+    reference_region: { contig: string; start: number; end: number } | null;
+    render_params: OntSignalRenderParamsResponse;
+    request_fingerprint: string;
+    state: OntSignalJobState;
+    reason_code: string;
+    output_manifest: {
+        schema?: string | null;
+        artifacts: OntSignalViewArtifact[];
+        command?: Record<string, unknown> | null;
+        network?: string | null;
+    };
+    render_receipt: Record<string, unknown>;
+    failure_code: string | null;
+    failure_message: string | null;
+    created_at: string;
+    updated_at: string;
+    completed_at: string | null;
+}
+
+export interface OntSignalRenderParams {
+    strand: 'forward' | 'reverse';
+    signal_units: 'pA' | 'raw_adc';
+    scale: 'none' | 'medmad' | 'znorm' | 'scaledpA';
+    base_shift_source: 'profile' | 'explicit';
+    base_shift_value: number;
+    fixed_width: boolean;
+    base_width: number;
+    point_size: number;
+    base_limit: number;
+    signal_sample_limit: number;
+    pileup_read_limit: number;
+    loose_bound: boolean;
+    show_samples: boolean;
+    show_base_colours: boolean;
+    remove_signal_outliers: boolean;
+    managed_bed_artifact_id: string | null;
+}
+
+export const DEFAULT_ONT_SIGNAL_RENDER_PARAMS: OntSignalRenderParams = {
+    strand: 'forward',
+    signal_units: 'pA',
+    scale: 'none',
+    base_shift_source: 'profile',
+    base_shift_value: 0,
+    fixed_width: false,
+    base_width: 10,
+    point_size: 0.5,
+    base_limit: 1000,
+    signal_sample_limit: 100_000,
+    pileup_read_limit: 20,
+    loose_bound: false,
+    show_samples: true,
+    show_base_colours: true,
+    remove_signal_outliers: false,
+    managed_bed_artifact_id: null,
+};
+
+export interface OntSignalRenderParamsResponse extends OntSignalRenderParams {
+    managed_bed_source_job_id?: string | null;
+    managed_bed_sha256?: string | null;
+    managed_bed_size_bytes?: number | null;
+}
+
+export type OntSignalViewerAlignmentDisplayMode = 'EXPANDED' | 'SQUISHED' | 'FULL';
+export type OntSignalViewerAlignmentColorBy = 'none' | 'strand' | 'firstOfPairStrand' | 'pairOrientation' | 'tlen' | 'unexpectedPair' | 'basemod' | 'basemod2';
+export type OntSignalViewerAlignmentGroupBy = 'none' | 'strand' | 'firstOfPairStrand' | 'pairOrientation' | 'mateChr' | 'chimeric' | 'supplementary' | 'readOrder';
+
+export interface OntSignalViewerIgvUpdateState {
+    alignment_display_mode: OntSignalViewerAlignmentDisplayMode;
+    alignment_color_by: OntSignalViewerAlignmentColorBy;
+    alignment_group_by: OntSignalViewerAlignmentGroupBy;
+    reads_track_loaded: boolean;
+}
+
+export interface OntSignalViewerSignalUpdateState {
+    mode: OntSignalViewMode | 'raw_waveform';
+    render_params: OntSignalRenderParams;
+    view_job_id: string | null;
+    read_mapping_job_id: string | null;
+    reference_mapping_job_id: string | null;
+}
+
+export interface OntSignalViewerIgvState extends Partial<OntSignalViewerIgvUpdateState> {
+    alignment_job_id?: string | null;
+    alignment_session_id?: string | null;
+    reference_revision_id?: string | null;
+    locus?: string | null;
+}
+
+export interface OntSignalViewerSignalState extends Partial<OntSignalViewerSignalUpdateState> {
+    selected_read_id?: string | null;
+    capabilities?: OntSignalWorkbenchCapabilities['modes'];
+}
+
+export interface OntSignalViewerSession {
+    viewer_session_id: string;
+    dataset_id: string;
+    run_id: string;
+    observed_generation: number;
+    alignment_job_id: string | null;
+    alignment_session_id: string | null;
+    reference_revision_id: string | null;
+    raw_representation_id: string | null;
+    move_source_id: string | null;
+    mapping_profile_id: string | null;
+    contig: string | null;
+    locus_start: number | null;
+    locus_end: number | null;
+    selected_read_id: string | null;
+    igv_state: OntSignalViewerIgvState;
+    signal_state: OntSignalViewerSignalState;
+    revision: number;
+    created_at: string;
+    updated_at: string;
+    reopen_url: string;
+}
+
+export interface OntSignalViewerSessionCreate {
+    dataset_id: string;
+    run_id: string;
+    observed_generation: number;
+    alignment_job_id: string | null;
+    alignment_session_id: string | null;
+    reference_revision_id: string | null;
+    contig: string | null;
+    locus_start: number | null;
+    locus_end: number | null;
+    selected_read_id: string | null;
+    igv_state: OntSignalViewerIgvUpdateState;
+    signal_state: OntSignalViewerSignalUpdateState;
+}
+
+export interface OntSignalViewerSessionUpdate {
+    expected_revision: number;
+    contig: string | null;
+    locus_start: number | null;
+    locus_end: number | null;
+    selected_read_id: string | null;
+    igv_state: OntSignalViewerIgvUpdateState;
+    signal_state: OntSignalViewerSignalUpdateState;
+}
+
+const signalWorkbenchRoot = '/api/ont/signal-workbench';
+export const fetchOntSignalWorkbenchCapabilities = (
+    runId: string,
+    observedGeneration: number,
+    authority: OntSignalCapabilityAuthority | null,
+) => apiData(api.get<OntSignalWorkbenchCapabilities>(
+    `${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/capabilities`,
+    { params: authority || undefined },
+));
+export const fetchOntMoveSources = (runId: string, observedGeneration: number) =>
+    apiData(api.get<{ items: OntMoveTableSource[] }>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/move-sources`));
+export const registerOntMoveSource = (runId: string, observedGeneration: number, request: {
+    raw_representation_id: string;
+    input_file_id: string;
+    molecule_type: 'dna' | 'rna';
+    source_job_id: string;
+}) => apiData(api.post<OntMoveTableSource>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/move-sources`, request));
+export const fetchOntSignalMappingProfiles = () =>
+    apiData(api.get<{ items: OntSignalMappingProfile[] }>(`${signalWorkbenchRoot}/mapping-profiles`));
+export const createOntSignalMappingProfile = (request: {
+    name: string;
+    molecule_type: 'dna' | 'rna';
+    basecall_model_id: string;
+    kmer_length: number;
+    signal_move_offset: number;
+    base_shift_value: number;
+    parameter_source: 'approved_calibration';
+    calibration_artifact_id: string;
+    primary_alignment_policy: 'primary_only';
+    minimum_mapq: 0;
+    include_supplementary: false;
+    read_set_selection: 'immutable_full_set';
+    approval_receipt: Record<string, unknown>;
+    approved_by: string | null;
+}) => apiData(api.post<OntSignalMappingProfile>(`${signalWorkbenchRoot}/mapping-profiles`, request));
+export const createOntSignalCalibration = (runId: string, observedGeneration: number, request: {
+    raw_representation_id: string;
+    move_source_id: string;
+    sample_count: number;
+}) => apiData(api.post<OntSignalCalibrationJob>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/calibrations`, request));
+export const fetchOntSignalCalibration = (calibrationJobId: string) =>
+    apiData(api.get<OntSignalCalibrationJob>(`${signalWorkbenchRoot}/calibrations/${encodeURIComponent(calibrationJobId)}`));
+export const cancelOntSignalCalibration = (calibrationJobId: string) =>
+    apiData(api.post<OntSignalCalibrationJob>(`${signalWorkbenchRoot}/calibrations/${encodeURIComponent(calibrationJobId)}/cancel`));
+export const createOntSignalMapping = (runId: string, observedGeneration: number, request: {
+    mode: OntSignalMappingMode;
+    raw_representation_id: string;
+    move_source_id: string;
+    mapping_profile_id: string;
+    reference_revision_id: string | null;
+    alignment_job_id: string | null;
+    alignment_session_id: string | null;
+}) => apiData(api.post<OntSignalMappingJob>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/mappings`, request));
+export const fetchOntSignalMapping = (mappingJobId: string) =>
+    apiData(api.get<OntSignalMappingJob>(`${signalWorkbenchRoot}/mappings/${encodeURIComponent(mappingJobId)}`));
+export const cancelOntSignalMapping = (mappingJobId: string) =>
+    apiData(api.post<OntSignalMappingJob>(`${signalWorkbenchRoot}/mappings/${encodeURIComponent(mappingJobId)}/cancel`));
+export const createOntSignalView = (request: {
+    mapping_artifact_id: string;
+    mode: OntSignalViewMode;
+    read_id: string | null;
+    reference_contig: string | null;
+    reference_start: number | null;
+    reference_end: number | null;
+    render_params: OntSignalRenderParams;
+}) => apiData(api.post<OntSignalViewJob>(`${signalWorkbenchRoot}/views`, request));
+export const fetchOntSignalView = (viewJobId: string) =>
+    apiData(api.get<OntSignalViewJob>(`${signalWorkbenchRoot}/views/${encodeURIComponent(viewJobId)}`));
+export const cancelOntSignalView = (viewJobId: string) =>
+    apiData(api.post<OntSignalViewJob>(`${signalWorkbenchRoot}/views/${encodeURIComponent(viewJobId)}/cancel`));
+export const fetchOntSignalViewArtifact = (viewJobId: string, artifactId: string) =>
+    apiData(api.get<Blob>(`${signalWorkbenchRoot}/views/${encodeURIComponent(viewJobId)}/artifacts/${encodeURIComponent(artifactId)}`, {
+        responseType: 'blob',
+        withCredentials: false,
+    }));
+export const createOntSignalViewerSession = (request: OntSignalViewerSessionCreate) =>
+    apiData(api.post<OntSignalViewerSession>(`${signalWorkbenchRoot}/viewer-sessions`, request));
+export const fetchOntSignalViewerSession = (viewerSessionId: string) =>
+    apiData(api.get<OntSignalViewerSession>(`${signalWorkbenchRoot}/viewer-sessions/${encodeURIComponent(viewerSessionId)}`));
+export const updateOntSignalViewerSession = (viewerSessionId: string, request: OntSignalViewerSessionUpdate) =>
+    apiData(api.patch<OntSignalViewerSession>(`${signalWorkbenchRoot}/viewer-sessions/${encodeURIComponent(viewerSessionId)}`, request));
