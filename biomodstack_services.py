@@ -1643,7 +1643,8 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
     mode = resolve_runtime_mode(runtime_mode)
     frontend_url = runtime_frontend_url(mode, project_root=root)
     wait_timeout_seconds = runtime_http_wait_timeout_seconds(mode)
-    assert_runtime_listener_preflight(root, mode)
+    if mode == DEV_RUNTIME_MODE:
+        assert_runtime_listener_preflight(root, mode)
     ensure_user_units(root, runtime_mode=mode)
 
     if mode == DEV_RUNTIME_MODE:
@@ -1664,6 +1665,7 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
     ensure_target_enabled(root, runtime_mode=mode)
     run_systemctl("stop", TARGET_UNIT, check=False, project_root=root)
     run_systemctl("stop", WORKFLOW_ADAPTER_SERVICE, CORE_RUNTIME_SERVICE, check=False, project_root=root)
+    assert_runtime_listener_preflight(root, mode)
     run_systemctl("start", *runtime_service_names(mode), TARGET_UNIT, project_root=root)
     wait_for_http(WORKFLOW_ADAPTER_HEALTH_URL, timeout_seconds=wait_timeout_seconds)
     wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
