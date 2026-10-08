@@ -12,6 +12,11 @@ from typing import Any
 from sqlalchemy.exc import SQLAlchemyError
 
 from services.assay_analytical_store import analytical_store_settings, analytical_store_status
+from services.host_agent_client import (
+    get_host_agent_service as _get_host_agent_service,
+    host_agent_enabled as _host_agent_enabled,
+    run_host_agent_service_action as _run_host_agent_service_action,
+)
 
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -312,8 +317,71 @@ def _missing_descriptor(tail: int, *, runtime_note: str | None = None, control_m
     }
 
 
+def _host_agent_unavailable_descriptor(tail: int, exc: Exception, *, last_action: str | None = None) -> dict[str, Any]:
+    descriptor = _missing_descriptor(
+        tail,
+        runtime_note=f"Host Agent unavailable: {exc}",
+        control_mode="host-agent",
+    )
+    descriptor["state"] = "unknown"
+    descriptor["health"] = "degraded"
+    descriptor["host_agent_available"] = False
+    if last_action is not None:
+        descriptor["last_action"] = last_action
+    return _redact_value(descriptor)
+
+
+def _normalize_host_agent_payload(
+    payload: dict[str, Any],
+    tail: int,
+    *,
+    last_action: str | None = None,
+) -> dict[str, Any]:
+    service_names = _configured_service_names()
+    container_names = _configured_container_names()
+    normalized: dict[str, Any] = {
+        "component": DB_SERVICE_COMPONENT,
+        "service_id": DB_SERVICE_ID,
+        "display_name": DB_SERVICE_DISPLAY_NAME,
+        "state": "unknown",
+        "health": "unknown",
+        "runtime_available": False,
+        "optional_at_boot": True,
+        "control_mode": "host-agent",
+        "service_name": service_names[0] if service_names else None,
+        "container_name": container_names[0] if container_names else None,
+        "host_agent_available": True,
+        "runtime_note": None,
+        "offline_message": OFFLINE_MESSAGE,
+        "commands": COMMANDS,
+        "logical_databases": _logical_database_statuses(),
+        "logs": "",
+        "logs_tail": tail,
+    }
+    normalized.update(payload)
+    normalized["component"] = str(normalized.get("component") or DB_SERVICE_COMPONENT)
+    normalized["service_id"] = str(normalized.get("service_id") or DB_SERVICE_ID)
+    normalized["display_name"] = str(normalized.get("display_name") or DB_SERVICE_DISPLAY_NAME)
+    normalized["optional_at_boot"] = bool(normalized.get("optional_at_boot", True))
+    normalized["control_mode"] = "host-agent"
+    normalized["host_agent_available"] = True
+    normalized["offline_message"] = normalized.get("offline_message") or OFFLINE_MESSAGE
+    normalized["commands"] = normalized.get("commands") or COMMANDS
+    normalized["logical_databases"] = normalized.get("logical_databases") or _logical_database_statuses()
+    normalized["logs_tail"] = tail
+    if last_action is not None:
+        normalized["last_action"] = last_action
+    return _redact_value(normalized)
+
+
 def describe_db_service(tail: int = 120) -> dict[str, Any]:
     bounded_tail = _bounded_tail(tail)
+    if _host_agent_enabled():
+        try:
+            return _normalize_host_agent_payload(_get_host_agent_service(DB_SERVICE_ID, tail=bounded_tail), bounded_tail)
+        except (RuntimeError, OSError, ValueError) as exc:
+            return _host_agent_unavailable_descriptor(bounded_tail, exc)
+
     ok, note = _docker_available()
     if not ok:
         return _redact_value(_missing_descriptor(bounded_tail, runtime_note=note, control_mode="unavailable"))
@@ -356,6 +424,19 @@ def run_db_service_action(action: str, tail: int = 120, *, advanced: bool = Fals
         payload = describe_db_service(tail=bounded_tail)
         payload["last_action"] = normalized
         return payload
+
+    if normalized == "stop" and not advanced:
+        raise ValueError("unsupported db-service action: stop requires --i-know-this-disables-db-backed-features")
+
+    if _host_agent_enabled():
+        try:
+            return _normalize_host_agent_payload(
+                _run_host_agent_service_action(DB_SERVICE_ID, normalized, {"tail": bounded_tail, "advanced": advanced}),
+                bounded_tail,
+                last_action=normalized,
+            )
+        except (RuntimeError, OSError, ValueError) as exc:
+            return _host_agent_unavailable_descriptor(bounded_tail, exc, last_action=normalized)
 
     ok, note = _docker_available()
     if not ok:
