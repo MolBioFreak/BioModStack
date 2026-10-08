@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import secrets
-from collections.abc import Callable
-from contextlib import suppress
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from math import isfinite
 from typing import Any, Protocol
@@ -160,13 +160,10 @@ class BioXpConnectionService:
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Dispatch against one generation while excluding disconnect/rebind."""
-        async with self._transition_lock:
-            if self._client is None or self._active_target is None:
-                raise ConnectionStateError("BioXP saved profile is not actively connected")
-            if self._generation != expected_generation:
-                raise ConnectionStateError("Expected connection generation does not match the active generation")
-            if require_fresh and self.snapshot().observation_fresh is not True:
-                raise ConnectionStateError("A fresh process-local BioXP status observation is required")
+        async with self.active_request_lease(
+            expected_generation=expected_generation,
+            require_fresh=require_fresh,
+        ) as client:
             kwargs: dict[str, Any] = {}
             if json_data is not None:
                 kwargs["json_data"] = json_data
@@ -174,7 +171,24 @@ class BioXpConnectionService:
                 kwargs["params"] = params
             if path_params is not None:
                 kwargs["path_params"] = path_params
-            return await self._client.request(route_name, **kwargs)
+            return await client.request(route_name, **kwargs)
+
+    @asynccontextmanager
+    async def active_request_lease(
+        self,
+        *,
+        expected_generation: int,
+        require_fresh: bool = True,
+    ) -> AsyncIterator[RobotClientProtocol]:
+        """Hold one active connection generation across a remote transaction."""
+        async with self._transition_lock:
+            if self._client is None or self._active_target is None:
+                raise ConnectionStateError("BioXP saved profile is not actively connected")
+            if self._generation != expected_generation:
+                raise ConnectionStateError("Expected connection generation does not match the active generation")
+            if require_fresh and self.snapshot().observation_fresh is not True:
+                raise ConnectionStateError("A fresh process-local BioXP status observation is required")
+            yield self._client
 
     async def _probe_locked(self) -> None:
         assert self._client is not None

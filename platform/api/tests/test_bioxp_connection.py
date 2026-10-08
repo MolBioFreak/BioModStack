@@ -190,6 +190,33 @@ def test_generation_bound_request_lease_serializes_disconnect(tmp_path: Path) ->
     asyncio.run(exercise())
 
 
+def test_multi_request_lease_serializes_disconnect_until_canonical_readback(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients: list[FakeRobotClient] = []
+    service = _service(tmp_path, clients)
+
+    async def exercise() -> None:
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        connected = await service.connect()
+
+        async with service.active_request_lease(
+            expected_generation=connected.generation,
+        ) as robot:
+            assert (await robot.request("oem_full_lifecycle_contract"))["route_name"] == "oem_full_lifecycle_contract"
+            disconnect_task = asyncio.create_task(service.disconnect())
+            await asyncio.sleep(0)
+            assert disconnect_task.done() is False
+            assert (await robot.request("plan_oem_full_lifecycle"))["route_name"] == "plan_oem_full_lifecycle"
+            assert (await robot.request("get_oem_full_lifecycle_run"))["route_name"] == "get_oem_full_lifecycle_run"
+            assert disconnect_task.done() is False
+
+        disconnected = await disconnect_task
+        assert disconnected.generation == connected.generation + 1
+        assert disconnected.active is False
+
+    asyncio.run(exercise())
+
+
 def test_stale_observation_is_explicit(tmp_path: Path) -> None:
     _, BioXpProfile, _, _ = _load()
     now = datetime(2026, 7, 18, tzinfo=timezone.utc)

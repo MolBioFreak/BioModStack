@@ -353,56 +353,55 @@ async def plan_full_lifecycle(
     request: FullLifecyclePlanRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> dict[str, Any]:
-    contract = _parse_safe_contract(await _leased_robot_request(
-        runtime, "oem_full_lifecycle_contract", expected_generation=request.expected_generation,
-    ))
-    _validate_contract_for_plan(contract, request)
-    robot_generation = contract.get("ownership_generation")
-    if type(robot_generation) is not int or robot_generation < 1:
-        raise HTTPException(status_code=502, detail="BioXP robot returned an invalid ownership generation")
-    payload = {
-        "command": "initialize_oem_movement_lifecycle",
-        "operator_ack": "INITIALIZE",
-        "expected_generation": robot_generation,
-        "bms_connection_generation": request.expected_generation,
-        "expected_machine_serial": request.expected_machine_serial,
-        "expected_registry_sha256": request.expected_registry_sha256,
-        "expected_evidence_lock_sha256": request.expected_evidence_lock_sha256,
-        "idempotency_key": request.idempotency_key,
-        "mode": "dry_run",
-    }
-    response = await _leased_robot_request(
-        runtime,
-        "plan_oem_full_lifecycle",
-        expected_generation=request.expected_generation,
-        json_data=payload,
-    )
-    planned = _validate_planned_run(
-        response,
-        outbound=payload,
-        expected_machine_serial=request.expected_machine_serial,
-        expected_registry_sha256=request.expected_registry_sha256,
-        expected_evidence_lock_sha256=request.expected_evidence_lock_sha256,
-    )
-    persisted_response = await _leased_robot_request(
-        runtime,
-        "get_oem_full_lifecycle_run",
-        expected_generation=request.expected_generation,
-        path_params={"run_id": planned.run_id},
-    )
-    persisted = _validate_planned_run(
-        persisted_response,
-        outbound=payload,
-        expected_machine_serial=request.expected_machine_serial,
-        expected_registry_sha256=request.expected_registry_sha256,
-        expected_evidence_lock_sha256=request.expected_evidence_lock_sha256,
-    )
-    if persisted.model_dump() != planned.model_dump():
-        raise HTTPException(
-            status_code=502,
-            detail="BioXP robot plan response differs from the durable canonical lifecycle run",
-        )
-    return persisted_response
+    try:
+        async with runtime.connection.active_request_lease(
+            expected_generation=request.expected_generation,
+            require_fresh=True,
+        ) as client:
+            contract = _parse_safe_contract(await _robot_request(client, "oem_full_lifecycle_contract"))
+            _validate_contract_for_plan(contract, request)
+            robot_generation = contract.get("ownership_generation")
+            if type(robot_generation) is not int or robot_generation < 1:
+                raise HTTPException(status_code=502, detail="BioXP robot returned an invalid ownership generation")
+            payload = {
+                "command": "initialize_oem_movement_lifecycle",
+                "operator_ack": "INITIALIZE",
+                "expected_generation": robot_generation,
+                "bms_connection_generation": request.expected_generation,
+                "expected_machine_serial": request.expected_machine_serial,
+                "expected_registry_sha256": request.expected_registry_sha256,
+                "expected_evidence_lock_sha256": request.expected_evidence_lock_sha256,
+                "idempotency_key": request.idempotency_key,
+                "mode": "dry_run",
+            }
+            response = await _robot_request(client, "plan_oem_full_lifecycle", json_data=payload)
+            planned = _validate_planned_run(
+                response,
+                outbound=payload,
+                expected_machine_serial=request.expected_machine_serial,
+                expected_registry_sha256=request.expected_registry_sha256,
+                expected_evidence_lock_sha256=request.expected_evidence_lock_sha256,
+            )
+            persisted_response = await _robot_request(
+                client,
+                "get_oem_full_lifecycle_run",
+                path_params={"run_id": planned.run_id},
+            )
+            persisted = _validate_planned_run(
+                persisted_response,
+                outbound=payload,
+                expected_machine_serial=request.expected_machine_serial,
+                expected_registry_sha256=request.expected_registry_sha256,
+                expected_evidence_lock_sha256=request.expected_evidence_lock_sha256,
+            )
+            if persisted.model_dump() != planned.model_dump():
+                raise HTTPException(
+                    status_code=502,
+                    detail="BioXP robot plan response differs from the durable canonical lifecycle run",
+                )
+            return persisted_response
+    except ConnectionStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 _RUN_ID = Path(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
