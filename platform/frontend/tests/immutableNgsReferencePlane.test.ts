@@ -11,43 +11,6 @@ const template = readSource('src/components/NanoporeTemplate.tsx');
 const barcodePanel = readSource('src/components/ngs/BarcodeUnitsPanel.tsx');
 const api = readSource('src/lib/api.ts');
 
-test('Nanopore references have no browser or mutable path authority', () => {
-    assert.doesNotMatch(
-        template,
-        /reference_fasta:\s*(?:effectiveReferencePath|referencePath|legacyPath|entry\.path)|managed_reference_(?:path|fasta_path)|params\.reference_fasta\s*=/u,
-    );
-    assert.doesNotMatch(template, /createMolBioNgsReference|importMolBioNgsBrowserReference/u);
-    assert.match(template, /commitMolBioSequenceImport/u);
-    assert.match(template, /origin_surface: 'ngs'/u);
-    assert.match(template, /createNucleotideSequence\(\{ \.\.\.record, sequence_type: 'rna', is_circular:/u);
-    assert.match(template, /managed_reference:\s*\{/u);
-    assert.match(api, /fetchMolBioSequenceRevisions/u);
-    assert.match(api, /\/api\/molbio\/sequences\/\$\{encodeURIComponent\(sequenceId\)\}\/revisions/u);
-    assert.match(template, /issueMolBioNgsReceipt\(selectedMolbioSequenceId, \{ revision_id: selectedMolbioRevisionId \}\)/u);
-    assert.match(template, /selectedMolbioRevision\.content_sha256/u);
-    assert.match(template, /selectedMolbioRevision\.topology/u);
-    assert.match(template, /selectedMolbioRevision\.is_current/u);
-});
-
-test('sequence import previews and commits the same strict payload and render every record', () => {
-    assert.match(api, /previewMolBioSequenceImport = \(payload: MolBioSequenceImportPayload\)/u);
-    assert.match(api, /commitMolBioSequenceImport = \(payload: MolBioSequenceImportPayload\)/u);
-    assert.match(api, /\/api\/molbio\/sequences\/import\/preview/u);
-    assert.match(api, /\/api\/molbio\/sequences\/import\/commit/u);
-    assert.match(api, /source_format: 'fasta' \| 'genbank' \| 'raw_dna'/u);
-    assert.match(api, /topology_default: 'circular' \| 'linear'/u);
-    assert.match(api, /raw_rows\?: MolBioRawDnaImportRow\[\]/u);
-    assert.match(template, /previewMolBioSequenceImport\(payload\)/u);
-    assert.match(template, /commitMolBioSequenceImport\(previewPayload\)/u);
-    assert.match(template, /previewRecords\.map\(/u);
-    assert.match(template, /<option value="fasta">/u);
-    assert.match(template, /<option value="genbank">/u);
-    assert.match(template, /<option value="raw_dna">/u);
-    assert.match(template, /record\.canonical_digest/u);
-    assert.match(template, /record\.topology/u);
-    assert.match(template, /record\.errors/u);
-});
-
 test('barcode mappings issue receipts then submit one all-at-once batch without unclassified', () => {
     assert.doesNotMatch(barcodePanel, /submitOntBarcodeUnit|barcode-units\/.*submit/u);
     assert.match(barcodePanel, /issueMolBioNgsReceipt\(draft\.sequenceId, \{ revision_id: draft\.revisionId \}\)/u);

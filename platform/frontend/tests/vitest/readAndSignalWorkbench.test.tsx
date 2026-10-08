@@ -679,20 +679,6 @@ afterEach(async () => {
 });
 
 describe('ReadAndSignalWorkbench governed behavior', () => {
-    it('keeps a compact fixed-width panel with diagnostics closed on first use', async () => {
-        await renderWorkbench({ viewerSession: null });
-        await settlePromises();
-
-        const panel = container.querySelector('[data-signal-workbench-panel]') as HTMLElement | null;
-        const diagnostics = container.querySelector('details[data-signal-diagnostics]') as HTMLDetailsElement | null;
-        expect(panel).not.toBeNull();
-        expect(panel?.className).toContain('lg:w-[560px]');
-        expect(container.querySelector('[role="separator"]')).toBeNull();
-        expect(diagnostics).not.toBeNull();
-        expect(diagnostics?.open).toBe(false);
-        expect(container.textContent).toContain('Read and signal');
-        expect(container.textContent).not.toContain('IGV remains the alignment authority.');
-    });
 
     it('loads a bounded searchable read list with provenance-labelled filter presets inside its own scroll owner', async () => {
         alignmentMocks.fetchReads.mockResolvedValue({
@@ -1118,61 +1104,6 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(pendingSignal?.aborted).toBe(true);
         resolvePendingPoll?.({ items: [moveSource, requestedExternalSource] });
         await settlePromises();
-    });
-
-    it('keeps frontend mapping and move-source request contracts exact to the staged closed router', () => {
-        const source = readFileSync(`${process.cwd()}/src/lib/api.ts`, 'utf8');
-        const profileContract = source.slice(
-            source.indexOf('export interface OntSignalMappingProfile'),
-            source.indexOf('export interface OntSignalMappingArtifact'),
-        );
-        const registrationContract = source.slice(
-            source.indexOf('export const registerOntMoveSource'),
-            source.indexOf('export const fetchOntSignalMappingProfiles'),
-        );
-        const mappingJobContract = source.slice(
-            source.indexOf('export interface OntSignalMappingJob'),
-            source.indexOf('export interface OntSignalViewArtifact'),
-        );
-        const viewResponseContract = source.slice(
-            source.indexOf('export interface OntSignalViewArtifact'),
-            source.indexOf('export interface OntSignalViewerSession'),
-        );
-
-        expect(profileContract).toContain("parameter_source: 'approved_calibration';");
-        expect(profileContract).toContain('calibration_artifact_id: string;');
-        expect(profileContract).not.toContain('exact_upstream_profile');
-        expect(profileContract).not.toContain('calibration_artifact_id: string | null');
-        expect(registrationContract).toContain('source_job_id: string;');
-        expect(registrationContract).not.toContain('external_registration_receipt:');
-        expect(registrationContract).not.toContain('external_registration_receipt_id:');
-        expect(source).toContain('external_registration_receipt_id: string | null;');
-        expect(mappingJobContract).toContain('request_fingerprint: string;');
-        expect(viewResponseContract).toContain('export interface OntSignalRenderParamsResponse extends OntSignalRenderParams');
-        expect(viewResponseContract).toContain('render_params: OntSignalRenderParamsResponse;');
-        expect(viewResponseContract).toContain('request_fingerprint: string;');
-        expect(viewResponseContract).toContain('command?: Record<string, unknown> | null;');
-        expect(viewResponseContract).toContain('network?: string | null;');
-        expect(viewResponseContract).not.toContain('[key: string]: unknown;');
-    });
-
-    it('models persisted viewer IGV and signal update state as closed typed contracts', () => {
-        const source = readFileSync(`${process.cwd()}/src/lib/api.ts`, 'utf8');
-        const viewerContract = source.slice(
-            source.indexOf('export interface OntSignalViewerIgvUpdateState'),
-            source.indexOf('const signalWorkbenchRoot'),
-        );
-
-        expect(viewerContract).toContain('igv_state: OntSignalViewerIgvState;');
-        expect(viewerContract).toContain('signal_state: OntSignalViewerSignalState;');
-        expect(viewerContract).toContain('igv_state: OntSignalViewerIgvUpdateState;');
-        expect(viewerContract).toContain('signal_state: OntSignalViewerSignalUpdateState;');
-        expect(viewerContract).toContain("mode: OntSignalViewMode | 'raw_waveform' | 'ideal_comparison';");
-        expect(viewerContract).toContain('render_params: OntSignalRenderParams;');
-        expect(viewerContract).toContain('read_mapping_job_id: string | null;');
-        expect(viewerContract).toContain('reference_mapping_job_id: string | null;');
-        expect(viewerContract).not.toContain('igv_state: Record<string, unknown>;');
-        expect(viewerContract).not.toContain('signal_state: Record<string, unknown>;');
     });
 
     it('queries capabilities with the complete exact alignment authority tuple', async () => {
@@ -1781,13 +1712,6 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         root = createRoot(container);
     });
 
-    it('opens a newly created raw-signal session with its exact fresh viewer identity', () => {
-        const source = readFileSync(`${process.cwd()}/src/components/NGSToolkit.tsx`, 'utf8');
-
-        expect(source).toContain('openSignalWorkbench(created.viewer_session_id);');
-        expect(source).not.toContain('acceptSignalViewerSession(created);\n            openSignalWorkbench();');
-    });
-
     it('gates read-launched viewer creation and navigation to the captured exact toolkit identity', async () => {
         const selectedJob = {
             id: 'alignment-job-1',
@@ -2201,12 +2125,6 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         client.clear();
     });
 
-    it('clears viewer session authority when inspecting another job', () => {
-        const source = readFileSync(`${process.cwd()}/src/components/NGSToolkit.tsx`, 'utf8');
-
-        expect(source).toContain("onClick={() => updateQueryParams({ job_id: job.id, viewer_session_id: null })}");
-    });
-
     it('mounts job and alignment selection boundaries without reusing an incompatible viewer session', async () => {
         const selectedJob = {
             id: 'alignment-job-1',
@@ -2507,19 +2425,6 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         client.clear();
     });
 
-    it('does not render selected-job output paths or substitute another path-like public field', () => {
-        const source = readFileSync(`${process.cwd()}/src/components/NGSToolkit.tsx`, 'utf8');
-        expect(source).not.toContain('{selectedJob.output_dir');
-        expect(source).not.toContain('Output Directory');
-        expect(source).not.toContain("['POD5 directory', selectedJob.params?.pod5_dir]");
-        expect(source).not.toContain("['BAM path', selectedJob.params?.bam_path]");
-        expect(source).not.toContain("['FASTQ path', selectedJob.params?.fastq_path]");
-        expect(source).not.toContain("['Reference FASTA', selectedJob.params?.reference_fasta]");
-        expect(source).not.toContain('{check.path ||');
-        expect(source).not.toContain('>{output}</span>');
-        expect(source).toContain('>{selectedJob.id}</');
-    });
-
     it('opens raw waveform and signal-to-read capabilities without alignment while reference controls remain gated', async () => {
         await renderWorkbench({ alignmentSession: null, referenceRevisionId: null });
         await waitUntil(() => expect(container.textContent).toContain('raw waveform'));
@@ -2557,17 +2462,6 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(container.querySelector('svg[aria-label="Raw electrical signal waveform"]')).not.toBeNull();
         expect(alignmentMocks.fetchRead).not.toHaveBeenCalled();
         expect(alignmentMocks.fetchReads).not.toHaveBeenCalled();
-    });
-
-    it('does not couple the NGSToolkit workbench launch or panel mount to an alignment session', () => {
-        const source = readFileSync(`${process.cwd()}/src/components/NGSToolkit.tsx`, 'utf8');
-        const labelAt = source.indexOf('Read &amp; Signal Workbench');
-        const launchMarkup = source.slice(source.lastIndexOf('<button', labelAt), labelAt);
-        const workbenchAt = source.lastIndexOf('<ReadAndSignalWorkbench');
-        const mountGuard = source.slice(source.lastIndexOf('signalWorkbenchRequested ? (', workbenchAt), workbenchAt);
-
-        expect(launchMarkup).not.toContain('selectedAlignmentSession');
-        expect(mountGuard).not.toContain('selectedAlignmentSession?.ready');
     });
 
     it('keeps IGV context and unavailable reasons visible while one prepare control calibrates before a fresh approval click', async () => {

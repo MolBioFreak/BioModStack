@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import React, { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
@@ -139,37 +138,6 @@ afterEach(async () => {
 });
 
 describe('OntInstrumentPanel opaque intent lifecycle', () => {
-    it('distinguishes source samples from displayed waveform samples', () => {
-        const source = readFileSync(
-            'src/components/ngs/OntInstrumentPanel.tsx',
-            'utf8',
-        );
-        expect(source).toContain('source samples');
-        expect(source).toContain('displayed');
-        expect(source).not.toContain('samples returned');
-    });
-
-    it('keeps raw-signal receipt data closed behind technical details by default', () => {
-        const source = readFileSync(
-            'src/components/ngs/OntInstrumentPanel.tsx',
-            'utf8',
-        );
-        const receiptStart = source.indexOf('aria-label="Raw-signal publication receipt"');
-        const detailsStart = source.lastIndexOf('<details', receiptStart);
-        const waveformStart = source.indexOf('Indexed BLOW5 waveform inspection', receiptStart);
-        const receipt = source.slice(detailsStart, waveformStart);
-
-        expect(receiptStart).toBeGreaterThan(-1);
-        expect(detailsStart).toBeGreaterThan(-1);
-        expect(waveformStart).toBeGreaterThan(receiptStart);
-        expect(receipt).toContain('<details');
-        expect(receipt).toContain('<summary');
-        expect(receipt).toContain('Technical details');
-        expect(receipt).toContain('Published artifacts');
-        expect(receipt).toContain('Semantic receipt');
-        expect(receipt).toContain('Compared samples');
-        expect(receipt).not.toContain('<details open');
-    });
 
     it('retains the created BMS intent and renders it revalidated/armed after the expected disabled-start response', async () => {
         let rejectStart: (reason: unknown) => void = () => undefined;

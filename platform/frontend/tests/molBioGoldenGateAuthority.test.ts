@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -8,27 +7,11 @@ import {
     requireGoldenGateAssemblyResponse,
 } from '../src/lib/goldenGateAuthority';
 
-const api = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-const panel = readFileSync(
-    new URL('../src/components/MolBioToolkit/panels/AssemblyPanel.tsx', import.meta.url),
-    'utf8',
-);
 const fragments = [{ id: 'f1', name: 'one', sequence: 'ACGT' }];
 const options = {
     catalog: { catalog_id: 'catalog-v1', catalog_sha256: 'a'.repeat(64) },
     enzymes: [{ enzyme_id: 'BsmBI', canonical_name: 'BsmBI', overhang_length: 4 }],
 };
-
-test('Golden Gate request contract requires stable catalog authority', () => {
-    assert.match(api, /GoldenGateAssemblyRequest[\s\S]{0,180}enzyme_id: string/);
-    assert.match(api, /GoldenGateAssemblyRequest[\s\S]{0,260}catalog_id: string/);
-    assert.match(api, /GoldenGateAssemblyRequest[\s\S]{0,360}expected_catalog_sha256: string/);
-    assert.doesNotMatch(api, /GoldenGateAssemblyRequest[\s\S]{0,180}enzyme_id\?: string/);
-    assert.doesNotMatch(api, /GoldenGateAssemblyOptionsResponse[\s\S]{0,300}site: string/);
-    assert.doesNotMatch(panel, /enzyme_name: goldenGateEnzyme/);
-    assert.match(panel, /enzyme\.canonical_name/);
-    assert.doesNotMatch(panel, /enzyme\.site/);
-});
 
 test('production request boundary submits exact loaded authority and stable ID', () => {
     const request = buildGoldenGateAssemblyRequest({

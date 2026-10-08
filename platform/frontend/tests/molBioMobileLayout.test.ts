@@ -121,6 +121,7 @@ test('failed mobile sequence activation keeps the picker and current surface', a
     });
     assert.equal(loaded, false);
     assert.equal(activations, 0);
+
 });
 
 test('successful mobile sequence activation closes the picker once', async () => {
@@ -158,8 +159,6 @@ test('successful mobile sequence activation closes the picker once', async () =>
         'current and exact URL effects must both reconcile mobile selection intent',
     );
 });
-
-
 
 test('MolBioToolkit wires the Cordova mobile projection and native Back policy', () => {
     assert.match(TOOLKIT_SOURCE, /shouldUseMolBioMobileLayout\(\{/u);

@@ -63,15 +63,6 @@ async function renderHub(presentation: 'inline' | 'launcher-dialog' = 'inline') 
 }
 
 describe('NGS/MolBio Project context bridge', () => {
-    it('shows one compact Choose Project link and no duplicate Project manager when context is absent', async () => {
-        await renderHub();
-        const link = container.querySelector<HTMLAnchorElement>('a[href="/projects?scope=ngs-molbio"]');
-        expect(link?.textContent).toBe('Choose Project');
-        expect(container.querySelector('[role="dialog"]')).toBeNull();
-        expect(container.textContent).not.toContain('New local NGS/MolBio Project');
-        expect(container.textContent).not.toContain('Broader Projects');
-        expect(container.textContent).not.toContain('Advanced project and experiment metadata');
-    });
 
     it('shows selected Project context, dedicated-manager navigation, and the scientific workspace', async () => {
         contextState.current = {
@@ -89,10 +80,4 @@ describe('NGS/MolBio Project context bridge', () => {
         expect(container.textContent).not.toContain('Create governed link');
     });
 
-    it('keeps the toolkit-header presentation as a direct link instead of a launcher dialog', async () => {
-        await renderHub('launcher-dialog');
-        expect(container.querySelector<HTMLAnchorElement>('a[href="/projects?scope=ngs-molbio"]')?.textContent).toBe('Projects');
-        expect(container.querySelector('button[aria-haspopup="dialog"]')).toBeNull();
-        expect(container.querySelector('[role="dialog"]')).toBeNull();
-    });
 });

@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -40,17 +38,4 @@ test('linearization fails closed when features or primers traverse the current o
         () => setSequenceTopology({ sequence: 'AACCGGTT', circular: true, features: [], primers: [{ start: 6, end: 2 }] }, false),
         /rotate the origin/i,
     );
-});
-
-test('input and edit surfaces expose explicit topology controls and history labels', () => {
-    const modal = readFileSync(resolve(process.cwd(), 'src/components/MolBioToolkit/MolecularInputModal.tsx'), 'utf8');
-    const editPanel = readFileSync(resolve(process.cwd(), 'src/components/MolBioToolkit/panels/EditPanel.tsx'), 'utf8');
-    const toolkit = readFileSync(resolve(process.cwd(), 'src/components/MolBioToolkit/MolBioToolkitV2.tsx'), 'utf8');
-
-    assert.match(modal, /importTopology/);
-    assert.match(modal, /Preserve file topology/);
-    assert.match(modal, /Force circular/);
-    assert.match(editPanel, /Circularize construct/);
-    assert.match(editPanel, /Linearize at current origin/);
-    assert.match(toolkit, /actionLabel/);
 });

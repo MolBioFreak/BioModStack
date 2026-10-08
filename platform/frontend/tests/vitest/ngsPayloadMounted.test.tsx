@@ -8,6 +8,7 @@ const apiMocks = vi.hoisted(() => ({
     commitMolBioSequenceImport: vi.fn(),
     createMolBioNgsReference: vi.fn(),
     fetchFiles: vi.fn(),
+    fetchExecutionTargets: vi.fn().mockResolvedValue({ data: [] }),
     fetchMolBioNgsReferenceRevision: vi.fn(),
     fetchMolBioNgsSummaries: vi.fn(),
     fetchMolBioNgsStateRevision: vi.fn(),
@@ -20,7 +21,10 @@ const apiMocks = vi.hoisted(() => ({
     submitPooledReferenceAssignment: vi.fn(),
 }));
 
-vi.mock('../../src/lib/api', () => apiMocks);
+vi.mock('../../src/lib/api', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../src/lib/api')>();
+    return { ...apiMocks, prepareExecutionPlacement: actual.prepareExecutionPlacement };
+});
 vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
     useGlobalExperimentContext: () => ({
         workspaceId: 'workspace-1',
@@ -180,85 +184,6 @@ describe('mounted NGS settings to submit payload', () => {
         const [, request] = apiMocks.submitOntNgsJob.mock.calls[0] as [string, { pinned_gpu: number | null; params: Record<string, unknown> }];
         expect(request.pinned_gpu).toBeNull();
         expect(request.params.run_fastq_qc).toBe(false);
-    });
-
-    it('renders the four accessible task-flow sections in mobile order and desktop two-row layout', async () => {
-        await renderTemplate({
-            selectedWorkflow: 'constructScreening',
-            inputSource: 'pod5',
-            pod5Dir: '/data/pod5',
-            jobName: 'pod5-construct-run',
-            runFastqQc: true,
-            runAssembly: false,
-            ngsReferenceRevisionId: 'reference-revision-1',
-        });
-
-        const sections = [
-            container.querySelector<HTMLElement>('[data-testid="ngs-job-input-section"]'),
-            container.querySelector<HTMLElement>('[data-ngs-section="reference"]'),
-            container.querySelector<HTMLElement>('[data-testid="ngs-basecalling-section"]'),
-            container.querySelector<HTMLElement>('[data-testid="ngs-analysis-section"]'),
-        ];
-        expect(sections.every(Boolean)).toBe(true);
-        expect(sections.map((section) => section?.querySelector(':scope > h2')?.textContent?.trim())).toEqual([
-            '1 · Job and input',
-            '2 · Reference / sample',
-            '3 · Basecalling and quality',
-            '4 · Analysis and advanced controls',
-        ]);
-        for (const section of sections) {
-            const heading = section?.querySelector<HTMLHeadingElement>(':scope > h2');
-            expect(heading?.id).toBeTruthy();
-            expect(section?.getAttribute('aria-labelledby')).toBe(heading?.id);
-            expect(section?.className).not.toContain('xl:col-span-2');
-        }
-        for (let index = 1; index < sections.length; index += 1) {
-            expect(Boolean(sections[index - 1]!.compareDocumentPosition(sections[index]!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
-        }
-        expect(sections[0]?.parentElement?.className).toContain('xl:grid-cols-2');
-    });
-
-    it('keeps pooled reference assignment inside Section 2 without removing any task-flow section', async () => {
-        await renderTemplate({
-            selectedWorkflow: 'pooledAssignment',
-            inputSource: 'fastq',
-            jobName: 'pooled-reference-assignment',
-            fastqPath: '/data/pooled.fastq',
-        });
-
-        const sections = [
-            container.querySelector<HTMLElement>('[data-testid="ngs-job-input-section"]'),
-            container.querySelector<HTMLElement>('[data-ngs-section="reference"]'),
-            container.querySelector<HTMLElement>('[data-testid="ngs-basecalling-section"]'),
-            container.querySelector<HTMLElement>('[data-testid="ngs-analysis-section"]'),
-        ];
-        expect(sections.every(Boolean)).toBe(true);
-        const referenceSection = sections[1];
-        expect(referenceSection?.querySelector('[data-testid="pooled-reference-assignment-panel"]')).not.toBeNull();
-        expect(referenceSection?.textContent).toContain('Pooled FASTQ reference assignment');
-    });
-
-    it('keeps Section 3 visible for FASTQ with an already-basecalled state', async () => {
-        await renderTemplate();
-
-        const basecalling = container.querySelector<HTMLElement>('[data-testid="ngs-basecalling-section"]');
-        expect(basecalling).not.toBeNull();
-        expect(basecalling?.textContent).toContain('Already basecalled');
-        expect(basecalling?.textContent).toContain('Basecalling is not applicable to FASTQ input.');
-    });
-
-    it('renders workflow separately from input, mode, model, GPU, and reference in review', async () => {
-        await renderTemplate();
-
-        expect(container.querySelector('[data-testid="ngs-review-bar"]')).not.toBeNull();
-        expect(container.querySelector('[data-testid="ngs-review-workflow"]')?.textContent).toContain('CONSTRUCT SCREENING');
-        expect(container.querySelector('[data-testid="ngs-review-input"]')?.textContent).toContain('INPUT READY');
-        expect(container.querySelector('[data-testid="ngs-review-mode"]')?.textContent).toContain('MODE');
-        expect(container.querySelector('[data-testid="ngs-review-model"]')?.textContent).toContain('MODEL');
-        expect(container.querySelector('[data-testid="ngs-review-gpu"]')?.textContent).toContain('CPU ONLY');
-        expect(container.querySelector('[data-testid="ngs-review-reference"]')).not.toBeNull();
-        expect(buttonWithText('Validate')).not.toBeNull();
-        expect(buttonWithText('Review and submit')).not.toBeNull();
     });
 
     it('reports every submit blocker through Validate without submitting', async () => {

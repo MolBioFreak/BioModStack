@@ -201,6 +201,9 @@ export default defineConfig({
             './tests/vitest/molBioMobileConstructs.test.tsx',
             './tests/vitest/molBioSequenceSelectionRace.test.tsx',
             './tests/vitest/molecularWorkspaceRestoreStrictMode.test.tsx',
+            './tests/vitest/sequenceViewerRestrictionAnnotations.test.tsx',
+            './tests/vitest/gcRestrictionDensity.test.tsx',
+            './tests/vitest/alignmentPresentationStatus.test.tsx',
         ],
     },
 });

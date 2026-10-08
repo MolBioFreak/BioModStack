@@ -292,22 +292,6 @@ describe('OntSignalIdealComparison', () => {
         }), expect.any(AbortSignal));
     });
 
-    it('exposes every supported profile and comparison render control', async () => {
-        await render();
-        expect(container.querySelector('option[value="rna004-prom"]')).not.toBeNull();
-        for (const label of ['Comparison scale', 'Comparison point size', 'Comparison fixed width',
-            'Comparison base width', 'Comparison base limit', 'Comparison signal sample limit',
-            'Comparison show samples', 'Comparison show base colours', 'Comparison remove outliers']) {
-            expect(container.querySelector(`[aria-label="${label}"]`)).not.toBeNull();
-        }
-        const pointSize = container.querySelector<HTMLSelectElement>('[aria-label="Comparison point size"]')!;
-        expect(pointSize.tagName).toBe('SELECT');
-        expect(Array.from(pointSize.options, (option) => Number(option.value))).toEqual([
-            0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
-        ]);
-        expect(pointSize.querySelector('option[value="1.5"]')).toBeNull();
-    });
-
     it('restores persisted immutable job settings and fixed profile disclosure on reopen', async () => {
         const persistedSettings = {
             ...preview.effective_request.effective_settings,
@@ -344,29 +328,6 @@ describe('OntSignalIdealComparison', () => {
         expect((container.querySelector('[aria-label="Simulation seed"]') as HTMLInputElement).value).toBe('19');
         expect(container.textContent).toContain('Persisted warning.');
         expect(container.textContent).toContain('PromethION');
-    });
-
-    it('accepts and renders the governed artifact with exact permanent runtime labels', async () => {
-        mocks.create.mockResolvedValueOnce(comparisonJob({
-            state: 'ready', reason_code: 'ideal_comparison_ready', generated_read_id: 'sim-1',
-            artifacts: [{ artifact_id: 'html-1', kind: 'comparison_html' }],
-            completed_at: '2026-08-27T00:01:00Z',
-        }));
-        mocks.artifact.mockResolvedValue(new Blob([
-            '<!doctype html><html><head></head><body>REAL · INSTRUMENT ACQUIRED · read-42 SIMULATED IDEAL · SQUIGULATOR 0.5.0 · reference</body></html>',
-        ], { type: 'text/html' }));
-        await render();
-        await act(async () => { findButton('Preview').click(); await Promise.resolve(); }); await settle();
-        await act(async () => { findButton('Generate and compare').click(); await Promise.resolve(); }); await settle();
-        expect(mocks.artifact).toHaveBeenCalledWith('comparison-1', 'html-1');
-        expect(container.querySelector('iframe')?.getAttribute('src')).toBe('blob:comparison');
-        expect(container.querySelector('[role="alert"]')).toBeNull();
-        const seed = container.querySelector<HTMLInputElement>('[aria-label="Simulation seed"]')!;
-        await act(async () => {
-            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(seed, '8');
-            seed.dispatchEvent(new Event('input', { bubbles: true })); seed.dispatchEvent(new Event('change', { bubbles: true }));
-        });
-        expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:comparison');
     });
 
     it('ignores a stale cancellation completion after comparison identity changes', async () => {

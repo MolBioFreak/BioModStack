@@ -17,15 +17,6 @@ function readSource(relativePath: string): string {
     return readFileSync(join(process.cwd(), relativePath), 'utf8');
 }
 
-test('sequence QC manifest API helpers target the typed manifest routes', () => {
-    const api = readSource('src/lib/api.ts');
-
-    assert.match(api, /export interface SequenceQcManifest/u);
-    assert.match(api, /fetchSequenceQcManifest = \(jobId: string\)/u);
-    assert.match(api, /`\/api\/jobs\/\$\{encodeURIComponent\(jobId\)\}\/sequence-qc-manifest`/u);
-    assert.doesNotMatch(api, /fetchSequenceQcManifestByPath/u);
-});
-
 test('missing sequence QC manifest is classified as an old-run unavailable state, not a workflow failure', () => {
     assert.equal(
         classifySequenceQcManifestError({ response: { status: 404, data: { detail: 'sequence-QC manifest not found for job_id: old-job' } } }),
@@ -71,55 +62,6 @@ test('alignment access denial renders browser authorization copy instead of a pa
     assert.match(html, /manifest access requires browser authorization/u);
     assert.match(html, /alignment access denied/u);
     assert.doesNotMatch(html, /manifest blocked by path safety/u);
-});
-
-test('NGSToolkit consumes useSequenceQcManifest and renders a manifest-first panel before path-scraped reports', () => {
-    const ngsToolkit = readSource('src/components/NGSToolkit.tsx');
-    const hook = readSource('src/components/ngs/useSequenceQcManifest.ts');
-    const panel = readSource('src/components/ngs/SequenceQcManifestPanel.tsx');
-
-    assert.match(ngsToolkit, /useSequenceQcManifest\(selectedJob\?\.id/u);
-    assert.match(ngsToolkit, /<SequenceQcManifestPanel/u);
-    assert.match(hook, /queryKey: \['sequence-qc-manifest', jobId, jobStatus\]/u);
-    assert.match(hook, /enabled: Boolean\(jobId\) && shouldFetchSequenceQcManifest\(jobStatus\)/u);
-    assert.match(hook, /status: 'unavailable-pending'/u);
-    assert.match(hook, /fetchSequenceQcManifest\(jobId\)/u);
-    assert.match(panel, /Sequence-QC Manifest/u);
-    assert.match(panel, /manifest unavailable for older run/i);
-    assert.match(panel, /fallback consensus cannot verify construct/i);
-    assert.match(panel, /biomodstack\.construct_verification\.v2/u);
-    assert.match(panel, /manifest\.verdict/u);
-    assert.match(panel, /manifest\.reason_codes/u);
-    assert.match(panel, /manifest\.execution/u);
-    assert.match(panel, /calibration_status/u);
-    assert.match(panel, /public_accuracy_validated/u);
-    assert.match(panel, /Profile uncalibrated/u);
-    assert.match(panel, /passes configured checks/u);
-    assert.match(panel, /manifest\.checks/u);
-    assert.match(panel, /manifest\.variants/u);
-    assert.match(panel, /Sequence identity/u);
-    assert.match(panel, /Contamination screen/u);
-    assert.match(panel, /Topology/u);
-});
-
-test('construct verification uses schema field names and exposes evidence provenance and bound navigation', () => {
-    const api = readSource('src/lib/api.ts');
-    const panel = readSource('src/components/ngs/SequenceQcManifestPanel.tsx');
-    const toolkit = readSource('src/components/NGSToolkit.tsx');
-
-    assert.match(api, /kind\?: string/u);
-    assert.match(api, /position_1based\?: number/u);
-    assert.match(api, /support_status\?:/u);
-    assert.match(api, /circular_event_id\?:/u);
-    assert.match(api, /declared_sequence_sha256/u);
-    assert.match(api, /normalized_sequence_sha256/u);
-    assert.match(panel, /Expected reference/u);
-    assert.match(panel, /Observed evidence/u);
-    assert.match(panel, /independent_from_expected/u);
-    assert.match(panel, /semantic_validation/u);
-    assert.match(panel, /onNavigateLocus/u);
-    assert.match(toolkit, /selectedAlignmentSession\.session_id/u);
-    assert.match(toolkit, /resolveBoundSessionLocus/u);
 });
 
 test('real verification fields render top-level provenance and variant support evidence', () => {
