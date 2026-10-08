@@ -16,6 +16,33 @@ export const api = axios.create({
     baseURL: API_BASE,
 });
 
+export interface BlindPoseSelectedRequest {
+    source_job_id: string;
+    target_name?: string;
+    design_ids: string[];
+    binder_chains: Record<string, string[]>;
+    target_chains: string[];
+    settings: {
+        model_variant: 'fast' | 'full'; model_id_or_path: string;
+        num_loops: number; num_sampling_steps: number; num_diffusion_samples: number; seed?: number;
+    };
+}
+export interface SelectedNativeResult {
+    records: Array<Record<string, unknown>>;
+    [key: string]: unknown;
+}
+export const submitBlindPoseSelected = async (request: BlindPoseSelectedRequest): Promise<Job> =>
+    (await api.post<Job>('/api/blind-pose/selected', request)).data;
+export const fetchBlindPoseSelectedResult = async (jobId: string): Promise<SelectedNativeResult> =>
+    (await api.get<SelectedNativeResult>(`/api/blind-pose/${encodeURIComponent(jobId)}/result`)).data;
+export const submitLigandInterfaceContext = async (
+    request: import('../components/BindLigandMPNNInterfaceContext').BindInterfaceContextSelection,
+): Promise<{ job: Job; selection: import('../components/BindLigandMPNNInterfaceContext').BindInterfaceContextSelection }> =>
+    (await api.post<{ job: Job; selection: import('../components/BindLigandMPNNInterfaceContext').BindInterfaceContextSelection }>(
+        '/api/ligandmpnn/interface-context/selected', request)).data;
+export const fetchLigandInterfaceContextResult = async (jobId: string): Promise<SelectedNativeResult> =>
+    (await api.get<SelectedNativeResult>(`/api/ligandmpnn/interface-context/${encodeURIComponent(jobId)}/result`)).data;
+
 api.interceptors.request.use((config) => {
     if (config.headers.get('X-BMS-Skip-Launch-Context') === '1') {
         config.headers.delete('X-BMS-Skip-Launch-Context');

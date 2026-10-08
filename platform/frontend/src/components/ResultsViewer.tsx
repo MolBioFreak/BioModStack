@@ -73,6 +73,7 @@ import {
 import ProteinLocalRedesignResultsPane, { isProteinLocalRedesignResultJob } from './ProteinLocalRedesignResultsPane';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import FrustraMpnnAnalysisControls from './FrustraMpnnAnalysisControls';
+import BlindPoseSelectedControls from './BlindPoseSelectedControls';
 import FrustraMpnnWorkbench from './frustrampnn/FrustraMpnnWorkbench';
 import {
     parseFrustraMpnnExperimentContext,
@@ -1850,6 +1851,14 @@ export function ResultsViewer() {
         queryFn: () => fetchJobById(jobId!),
         enabled: Boolean(jobId),
         retry: false,
+        refetchInterval: (query) => {
+            const job = query.state.data?.data;
+            if ((job?.model_id === 'esmfold2' && job.mode === 'blind_pose')
+                || (job?.model_id === 'ligandmpnn' && job.mode === 'interface_context')) {
+                return job.status === 'queued' || job.status === 'running' ? jobPollingInterval(1500, query) : false;
+            }
+            return false;
+        },
     });
     const routedJob = routedJobData?.data;
     const jobs = useMemo(() => {
@@ -5346,6 +5355,11 @@ export function ResultsViewer() {
                 {activeJob && isProteinLocalRedesignResultJob(activeJob) && !isRFD3LocalRedesignResultJob(activeJob) && (
                     <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                 )}
+                {activeJob && ((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
+                    || (activeJob.model_id === 'ligandmpnn' && activeJob.mode === 'interface_context')) &&
+                    <BlindPoseSelectedControls key={activeJob.id} sourceJobId={activeJob.id}
+                        sourceModelId={activeJob.model_id} sourceParams={activeJob.params}
+                        selectedDesignIds={selectedDesignIds} resultJob={activeJob} onOpenJob={handleSelectJob} />}
                 {activeJob && (
                     isRFD3GenerationResultJob(activeJob) ? (
                         <RFD3GenerationResultsPane key={activeJob.id} jobId={activeJob.id} />
@@ -5520,6 +5534,17 @@ export function ResultsViewer() {
                                 onOpenJob={handleSelectJob}
                             />
                         )}
+
+                        {activeJob && !((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
+                            || (activeJob.model_id === 'ligandmpnn' && activeJob.mode === 'interface_context')) && <BlindPoseSelectedControls
+                            key={activeJob.id}
+                            sourceJobId={activeJob.id}
+                            sourceModelId={activeJob.model_id}
+                            sourceParams={activeJob.params}
+                            selectedDesignIds={selectedDesignIds}
+                            resultJob={activeJob}
+                            onOpenJob={handleSelectJob}
+                        />}
 
                         {/* Tabs */}
                         <div className="flex gap-1 mb-6 border-b border-slate-800 pb-px">

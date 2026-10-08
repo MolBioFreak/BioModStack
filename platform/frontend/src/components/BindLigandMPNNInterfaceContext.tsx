@@ -1,5 +1,3 @@
-import React from 'react';
-
 /** Independent selected post-round diagnostic, never sequence redesign. */
 export interface BindInterfaceContextSettings {
   binder_chain: string;
