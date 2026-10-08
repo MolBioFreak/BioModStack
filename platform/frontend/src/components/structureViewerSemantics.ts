@@ -50,6 +50,11 @@ export interface StructureViewerResidueColor {
     b: number;
 }
 
+export interface PlddtResidueMaskPoint {
+    chain_id: string;
+    residue_number: number;
+}
+
 export interface PlddtResidueColorMapInput {
     chainMetrics?: Record<string, ChainMetricLike | null | undefined> | null;
     plddtProfile?: number[] | null;
@@ -57,6 +62,8 @@ export interface PlddtResidueColorMapInput {
     fallbackChainId?: string | null;
     scalarPlddtFallback?: number | null;
     preferScalarFallback?: boolean;
+    residueMask?: PlddtResidueMaskPoint[] | null;
+    maskMode?: 'include_only' | 'none';
     colorForValue: (value: number) => StructureViewerResidueColor;
 }
 
@@ -221,9 +228,17 @@ export const buildPlddtResidueColorMap = ({
     fallbackChainId,
     scalarPlddtFallback,
     preferScalarFallback,
+    residueMask,
+    maskMode = 'none',
     colorForValue,
 }: PlddtResidueColorMapInput): Map<string, StructureViewerResidueColor> | undefined => {
     const colorMap = new Map<string, StructureViewerResidueColor>();
+    const residueMaskKeys = maskMode === 'include_only' && Array.isArray(residueMask) && residueMask.length > 0
+        ? new Set(residueMask.map((point) => `${String(point.chain_id).trim()}:${point.residue_number}`))
+        : null;
+    const shouldIncludeResidue = (chainId: string, residueNumber: number): boolean => (
+        !residueMaskKeys || residueMaskKeys.has(`${chainId}:${residueNumber}`)
+    );
     const scalarFallback = finiteNumericValue(scalarPlddtFallback);
     if (preferScalarFallback && scalarFallback !== null) {
         addUniformScalarResidueColors(
@@ -232,6 +247,11 @@ export const buildPlddtResidueColorMap = ({
             scalarFallback,
             colorForValue,
         );
+        if (residueMaskKeys) {
+            for (const key of Array.from(colorMap.keys())) {
+                if (!residueMaskKeys.has(key)) colorMap.delete(key);
+            }
+        }
         if (colorMap.size > 0) return colorMap;
     }
 
@@ -243,7 +263,7 @@ export const buildPlddtResidueColorMap = ({
             const value = plddt[idx];
             if (!isFiniteNumber(value)) continue;
             const residueNumber = chainResidueNumbers[idx] ?? (idx + 1);
-            if (!Number.isFinite(residueNumber)) continue;
+            if (!Number.isFinite(residueNumber) || !shouldIncludeResidue(chainId, residueNumber)) continue;
             colorMap.set(`${chainId}:${residueNumber}`, colorForValue(value));
         }
     }
@@ -257,7 +277,7 @@ export const buildPlddtResidueColorMap = ({
         const value = profile[idx];
         if (!isFiniteNumber(value)) continue;
         const residueNumber = numbers[idx] ?? (idx + 1);
-        if (!Number.isFinite(residueNumber)) continue;
+        if (!Number.isFinite(residueNumber) || !shouldIncludeResidue(chainId, residueNumber)) continue;
         colorMap.set(`${chainId}:${residueNumber}`, colorForValue(value));
     }
     return colorMap.size > 0 ? colorMap : undefined;

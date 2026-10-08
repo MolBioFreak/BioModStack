@@ -267,6 +267,18 @@ const formatPersistedAnalysisStatus = (status: PersistedAnalysisRun['status'] | 
     return 'Not computed';
 };
 
+const formatApiErrorMessage = (error: unknown, fallback = 'Analysis request failed'): string => {
+    if (!error) return fallback;
+    const detail = (error as UntypedApiValue)?.response?.data?.detail;
+    if (typeof detail === 'string' && detail.trim()) return detail;
+    if (Array.isArray(detail)) return detail.join(', ');
+    if (detail && typeof detail === 'object') return JSON.stringify(detail);
+    const message = (error as UntypedApiValue)?.message;
+    if (typeof message === 'string' && message.trim()) return message;
+    if (error instanceof Error && error.message.trim()) return error.message;
+    return fallback;
+};
+
 const getPersistedAnalysisStatusClass = (status: PersistedAnalysisRun['status'] | 'missing'): string => {
     if (status === 'completed') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
     if (status === 'running') return 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200';
@@ -459,7 +471,7 @@ const isNgsJob = (job: Pick<Job, 'model_id' | 'mode'>): boolean => {
 
 const inferPreferredOutputSource = (job: Job | null | undefined): OutputSourceFilter => inferJobOutputSource(job);
 
-const OUTPUT_SOURCE_FILTER_ORDER: OutputSourceFilter[] = ['all', 'rfantibody', 'boltzgen', 'fampnn', 'caliby', 'ppiflow', 'confornets', 'imported', 'validation'];
+const OUTPUT_SOURCE_FILTER_ORDER: OutputSourceFilter[] = ['all', 'rfantibody', 'boltzgen', 'fampnn', 'caliby', 'ppiflow', 'confornets', 'esmfold2', 'imported', 'validation'];
 const SCOPED_OUTPUT_SOURCE_FILTERS = OUTPUT_SOURCE_FILTER_ORDER.filter(
     (source): source is Exclude<OutputSourceFilter, 'all'> => source !== 'all',
 );
@@ -471,6 +483,7 @@ const OUTPUT_SOURCE_BUTTON_LABELS: Array<[OutputSourceFilter, string]> = [
     ['caliby', 'Caliby'],
     ['ppiflow', 'PPIFlow'],
     ['confornets', 'ConforNets'],
+    ['esmfold2', 'ESMFold2'],
     ['imported', 'Imported'],
     ['validation', 'Validation'],
 ];
@@ -481,7 +494,7 @@ const isScopedOutputSourceFilter = (value: string): value is Exclude<OutputSourc
 );
 
 const isAnalysisLensOutputSource = (value: OutputSourceFilter): value is OutputSourceAnalysisLens => (
-    value !== 'all' && value !== 'imported' && value !== 'confornets'
+    value !== 'all' && value !== 'imported' && value !== 'confornets' && value !== 'esmfold2'
 );
 
 const hasExplicitBinderTargetRoles = (job: Job | null | undefined): boolean => {
@@ -588,6 +601,7 @@ const getFriendlyDesignName = (design: { name: string; pdb_path?: string | null;
         return 'BoltzGen Candidate';
     }
     if (source === 'fampnn') return seqMatch ? `FAMPNN Seq ${seqMatch[1]}` : 'FAMPNN Candidate';
+    if (source === 'esmfold2') return sampleIndex !== null ? `ESMFold2 Sample ${sampleIndex}` : 'ESMFold2 Prediction';
     if (source === 'ppiflow') {
         const ppiflowRecord = (
             design && typeof design === 'object' && 'provenance' in design && design.provenance && typeof design.provenance === 'object'
@@ -624,6 +638,9 @@ const getDesignSelectorMetricLabel = (design: Design): string | null => {
         }
     }
     if (source === 'validation' && typeof design.plddt_overall === 'number') {
+        return `pLDDT ${design.plddt_overall.toFixed(0)}`;
+    }
+    if (source === 'esmfold2' && typeof design.plddt_overall === 'number') {
         return `pLDDT ${design.plddt_overall.toFixed(0)}`;
     }
     if (source === 'fampnn' && typeof design.fampnn_psce === 'number') {
@@ -1600,6 +1617,7 @@ export function ResultsViewer() {
     const [selectedDesignId, setSelectedDesignId] = useState<string>('');
     const [selectedDesignIds, setSelectedDesignIds] = useState<string[]>([]);
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+    const [overviewAnalysisActionErrors, setOverviewAnalysisActionErrors] = useState<Record<string, string>>({});
     const [outputSourceFilter, setOutputSourceFilter] = useState<OutputSourceFilter>('all');
     const [antibodySourceFilter, setAntibodySourceFilter] = useState<OutputSourceFilter>('all');
     const manualOutputSourceSelectionRef = useRef(false);
@@ -2054,6 +2072,7 @@ export function ResultsViewer() {
 
     useEffect(() => {
         setSequenceCopyFeedback(null);
+        setOverviewAnalysisActionErrors({});
     }, [selectedDesignId]);
 
     useEffect(() => {
@@ -2469,7 +2488,7 @@ export function ResultsViewer() {
         }
     }, [backboneFilterApplies, selectedBackboneId, reviewBackboneRows]);
 
-    const { data: structureAnalysisRun } = useQuery({
+    const { data: structureAnalysisRun, error: structureAnalysisQueryError } = useQuery({
         queryKey: ['design-analysis', 'structure_summary', selectedDesignId],
         queryFn: () => (
             selectedDesignId
@@ -2502,7 +2521,7 @@ export function ResultsViewer() {
         || structureAnalysisRun?.status === 'running';
     const structureViewerAnalysisEnabled = !!selectedDesignId && (activeTab === 'overview' || activeTab === 'structure');
 
-    const { data: antibodyAnalysisRun } = useQuery({
+    const { data: antibodyAnalysisRun, error: antibodyAnalysisQueryError } = useQuery({
         queryKey: ['design-analysis', 'antibody_annotation_pack', selectedDesignId],
         queryFn: () => (
             selectedDesignId
@@ -2553,7 +2572,7 @@ export function ResultsViewer() {
         runAntibodyAnalysis.mutate();
     }, [activeTab, selectedDesignId, antibodyAnalysisBusy, antibodyAnalysisStatus, runAntibodyAnalysis]);
 
-    const { data: chainMetricsAnalysisRun } = useQuery({
+    const { data: chainMetricsAnalysisRun, error: chainMetricsAnalysisQueryError } = useQuery({
         queryKey: ['design-analysis', 'chain_metrics', selectedDesignId],
         queryFn: () => (
             selectedDesignId
@@ -2619,7 +2638,7 @@ export function ResultsViewer() {
         || fampnnPsceProfileAnalysisRun?.status === 'queued'
         || fampnnPsceProfileAnalysisRun?.status === 'running';
 
-    const { data: ipsaeAnalysisRun } = useQuery({
+    const { data: ipsaeAnalysisRun, error: ipsaeAnalysisQueryError } = useQuery({
         queryKey: ['design-analysis', 'ipsae_interface', selectedDesignId],
         queryFn: () => (
             selectedDesignId
@@ -2652,7 +2671,7 @@ export function ResultsViewer() {
         || ipsaeAnalysisRun?.status === 'queued'
         || ipsaeAnalysisRun?.status === 'running';
 
-    const { data: paeMatrixAnalysisRun } = useQuery({
+    const { data: paeMatrixAnalysisRun, error: paeMatrixAnalysisQueryError } = useQuery({
         queryKey: ['design-analysis', 'pae_matrix', selectedDesignId],
         queryFn: () => (
             selectedDesignId
@@ -2685,7 +2704,7 @@ export function ResultsViewer() {
         || paeMatrixAnalysisRun?.status === 'queued'
         || paeMatrixAnalysisRun?.status === 'running';
 
-    const { data: contactMapAnalysisRun } = useQuery({
+    const { data: contactMapAnalysisRun, error: contactMapAnalysisQueryError } = useQuery({
         queryKey: ['design-analysis', 'contact_map', selectedDesignId],
         queryFn: () => (
             selectedDesignId
@@ -3175,7 +3194,7 @@ export function ResultsViewer() {
         setColorMode('default');
     }, [hasCdrAnnotation, hasCdrOverlay, isOligoJob, selectedDesign?.frustration_residues?.length, selectedDesignLens, selectedJobId]);
     const antibodyDesignGroups = useMemo(() => {
-        const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], boltzgen: [], fampnn: [], caliby: [], ppiflow: [], confornets: [], imported: [], validation: [] };
+        const grouped: Record<OutputSourceFilter, typeof designs> = { all: [], rfantibody: [], boltzgen: [], fampnn: [], caliby: [], ppiflow: [], confornets: [], esmfold2: [], imported: [], validation: [] };
         for (const design of orderedDesigns) {
             const source = inferDesignOutputSource(design);
             if (source === 'all') grouped.all.push(design);
@@ -3691,7 +3710,8 @@ export function ResultsViewer() {
             scope: 'selected output',
             status: structureAnalysisRun?.status ?? 'missing',
             busy: structureAnalysisBusy,
-            error: structureAnalysisRun?.error_message,
+            error: structureAnalysisRun?.error_message ?? formatApiErrorMessage(structureAnalysisQueryError, ''),
+            unavailableReason: formatApiErrorMessage(structureAnalysisQueryError, ''),
             summary: structureAnalysis
                 ? `${structureAnalysis.residue_count} residues • ${structureAnalysis.chain_ids?.length ?? 0} chains`
                 : null,
@@ -3703,7 +3723,8 @@ export function ResultsViewer() {
             scope: 'selected output',
             status: antibodyAnalysisRun?.status ?? 'missing',
             busy: antibodyAnalysisBusy,
-            error: antibodyAnalysisRun?.error_message,
+            error: antibodyAnalysisRun?.error_message ?? formatApiErrorMessage(antibodyAnalysisQueryError, ''),
+            unavailableReason: formatApiErrorMessage(antibodyAnalysisQueryError, ''),
             summary: antibodyData
                 ? `${Object.values(antibodyData.cdr_lengths || {}).filter((value) => typeof value === 'number').length} annotated loops`
                 : null,
@@ -3715,7 +3736,8 @@ export function ResultsViewer() {
             scope: 'selected output',
             status: chainMetricsAnalysisRun?.status ?? 'missing',
             busy: chainMetricsAnalysisBusy,
-            error: chainMetricsAnalysisRun?.error_message,
+            error: chainMetricsAnalysisRun?.error_message ?? formatApiErrorMessage(chainMetricsAnalysisQueryError, ''),
+            unavailableReason: formatApiErrorMessage(chainMetricsAnalysisQueryError, ''),
             summary: chainMetricsAnalysis
                 ? `${Object.keys(chainMetricsAnalysis).length} chains cached`
                 : null,
@@ -3727,7 +3749,8 @@ export function ResultsViewer() {
             scope: 'selected output',
             status: ipsaeAnalysisRun?.status ?? 'missing',
             busy: ipsaeAnalysisBusy,
-            error: ipsaeAnalysisRun?.error_message,
+            error: ipsaeAnalysisRun?.error_message ?? formatApiErrorMessage(ipsaeAnalysisQueryError, ''),
+            unavailableReason: formatApiErrorMessage(ipsaeAnalysisQueryError, ''),
             summary: ipsaeAnalysis
                 ? `${formatMetric(ipsaeAnalysis.ipsae, 2)} ${ipsaeAnalysis.ipsae_chain_pair ? `• ${ipsaeAnalysis.ipsae_chain_pair}` : ''}`
                 : null,
@@ -3739,7 +3762,8 @@ export function ResultsViewer() {
             scope: 'selected output',
             status: paeMatrixAnalysisRun?.status ?? 'missing',
             busy: paeMatrixAnalysisBusy,
-            error: paeMatrixAnalysisRun?.error_message,
+            error: paeMatrixAnalysisRun?.error_message ?? formatApiErrorMessage(paeMatrixAnalysisQueryError, ''),
+            unavailableReason: formatApiErrorMessage(paeMatrixAnalysisQueryError, ''),
             summary: paeMatrixAnalysis
                 ? `${paeMatrixAnalysis.size} × ${paeMatrixAnalysis.size} matrix`
                 : null,
@@ -3751,13 +3775,14 @@ export function ResultsViewer() {
             scope: 'selected output',
             status: contactMapAnalysisRun?.status ?? 'missing',
             busy: contactMapAnalysisBusy,
-            error: contactMapAnalysisRun?.error_message,
+            error: contactMapAnalysisRun?.error_message ?? formatApiErrorMessage(contactMapAnalysisQueryError, ''),
+            unavailableReason: formatApiErrorMessage(contactMapAnalysisQueryError, ''),
             summary: contactMapAnalysis
                 ? `${contactMapAnalysis.size} × ${contactMapAnalysis.size} matrix`
                 : null,
             run: () => runContactMapAnalysis.mutateAsync(),
         },
-    ]), [structureAnalysisRun?.status, structureAnalysisRun?.error_message, structureAnalysisBusy, structureAnalysis, antibodyAnalysisRun?.status, antibodyAnalysisRun?.error_message, antibodyAnalysisBusy, antibodyData, chainMetricsAnalysisRun?.status, chainMetricsAnalysisRun?.error_message, chainMetricsAnalysisBusy, chainMetricsAnalysis, ipsaeAnalysisRun?.status, ipsaeAnalysisRun?.error_message, ipsaeAnalysisBusy, ipsaeAnalysis, paeMatrixAnalysisRun?.status, paeMatrixAnalysisRun?.error_message, paeMatrixAnalysisBusy, paeMatrixAnalysis, contactMapAnalysisRun?.status, contactMapAnalysisRun?.error_message, contactMapAnalysisBusy, contactMapAnalysis, runStructureAnalysis, runAntibodyAnalysis, runChainMetricsAnalysis, runIpsaeAnalysis, runPaeMatrixAnalysis, runContactMapAnalysis]);
+    ]), [structureAnalysisRun?.status, structureAnalysisRun?.error_message, structureAnalysisQueryError, structureAnalysisBusy, structureAnalysis, antibodyAnalysisRun?.status, antibodyAnalysisRun?.error_message, antibodyAnalysisQueryError, antibodyAnalysisBusy, antibodyData, chainMetricsAnalysisRun?.status, chainMetricsAnalysisRun?.error_message, chainMetricsAnalysisQueryError, chainMetricsAnalysisBusy, chainMetricsAnalysis, ipsaeAnalysisRun?.status, ipsaeAnalysisRun?.error_message, ipsaeAnalysisQueryError, ipsaeAnalysisBusy, ipsaeAnalysis, paeMatrixAnalysisRun?.status, paeMatrixAnalysisRun?.error_message, paeMatrixAnalysisQueryError, paeMatrixAnalysisBusy, paeMatrixAnalysis, contactMapAnalysisRun?.status, contactMapAnalysisRun?.error_message, contactMapAnalysisQueryError, contactMapAnalysisBusy, contactMapAnalysis, runStructureAnalysis, runAntibodyAnalysis, runChainMetricsAnalysis, runIpsaeAnalysis, runPaeMatrixAnalysis, runContactMapAnalysis]);
     const overviewAnalysisCounts = useMemo(() => {
         if (!selectedDesignId) {
             return { cached: 0, running: 0, missing: 0, attention: 0 };
@@ -3773,13 +3798,49 @@ export function ResultsViewer() {
     const runMissingOverviewAnalyses = useCallback(async () => {
         if (!selectedDesignId) return;
         const pendingItems = overviewAnalysisItems.filter((item) => (
-            item.status === 'missing'
-            || item.status === 'failed'
-            || item.status === 'stale'
-            || item.status === 'cancelled'
+            !item.unavailableReason
+            && (item.status === 'missing'
+                || item.status === 'failed'
+                || item.status === 'stale'
+                || item.status === 'cancelled')
         ));
         if (!pendingItems.length) return;
-        await Promise.allSettled(pendingItems.map((item) => item.run()));
+        setOverviewAnalysisActionErrors((current) => {
+            const next = { ...current };
+            pendingItems.forEach((item) => {
+                delete next[item.key];
+            });
+            return next;
+        });
+        const results = await Promise.allSettled(pendingItems.map((item) => item.run()));
+        setOverviewAnalysisActionErrors((current) => {
+            const next = { ...current };
+            results.forEach((result, index) => {
+                const item = pendingItems[index];
+                if (result.status === 'rejected') {
+                    next[item.key] = formatApiErrorMessage(result.reason);
+                } else {
+                    delete next[item.key];
+                }
+            });
+            return next;
+        });
+    }, [overviewAnalysisItems, selectedDesignId]);
+    const runOverviewAnalysisItem = useCallback(async (item: typeof overviewAnalysisItems[number]) => {
+        if (!selectedDesignId || item.busy || item.unavailableReason) return;
+        setOverviewAnalysisActionErrors((current) => {
+            const next = { ...current };
+            delete next[item.key];
+            return next;
+        });
+        try {
+            await item.run();
+        } catch (error) {
+            setOverviewAnalysisActionErrors((current) => ({
+                ...current,
+                [item.key]: formatApiErrorMessage(error),
+            }));
+        }
     }, [overviewAnalysisItems, selectedDesignId]);
     useEffect(() => {
         if (reviewSelectionRequired) return;
@@ -6526,7 +6587,9 @@ export function ResultsViewer() {
                                                                 <div className="mt-3 space-y-2">
                                                                     {overviewAnalysisItems.map((item) => {
                                                                         const statusCopy = formatPersistedAnalysisStatus(item.status);
-                                                                        const canRun = Boolean(selectedDesignId) && !item.busy;
+                                                                        const actionError = overviewAnalysisActionErrors[item.key];
+                                                                        const displayedError = actionError || item.error;
+                                                                        const canRun = Boolean(selectedDesignId) && !item.busy && !item.unavailableReason;
                                                                         return (
                                                                             <div key={item.key} className="rounded-lg border border-slate-800/80 bg-slate-900/70 p-3">
                                                                                 <div className="flex items-start justify-between gap-3">
@@ -6541,13 +6604,13 @@ export function ResultsViewer() {
                                                                                         {item.summary && (
                                                                                             <div className="mt-2 text-[11px] text-slate-300">{item.summary}</div>
                                                                                         )}
-                                                                                        {item.error && (
-                                                                                            <div className="mt-2 text-[11px] text-rose-300">Last error: {item.error}</div>
+                                                                                        {displayedError && (
+                                                                                            <div className="mt-2 text-[11px] text-rose-300">Last error: {displayedError}</div>
                                                                                         )}
                                                                                     </div>
                                                                                     <button
                                                                                         type="button"
-                                                                                        onClick={() => { void item.run(); }}
+                                                                                        onClick={() => { void runOverviewAnalysisItem(item); }}
                                                                                         disabled={!canRun}
                                                                                         className={`shrink-0 rounded border px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors ${canRun
                                                                                             ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20'
@@ -6568,8 +6631,8 @@ export function ResultsViewer() {
                                                                     <button
                                                                         type="button"
                                                                         onClick={() => { void runMissingOverviewAnalyses(); }}
-                                                                        disabled={!selectedDesignId || overviewAnalysisItems.every((item) => item.status === 'completed')}
-                                                                        className={`rounded border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors ${selectedDesignId && overviewAnalysisItems.some((item) => item.status !== 'completed')
+                                                                        disabled={!selectedDesignId || overviewAnalysisItems.every((item) => item.status === 'completed' || item.unavailableReason)}
+                                                                        className={`rounded border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors ${selectedDesignId && overviewAnalysisItems.some((item) => item.status !== 'completed' && !item.unavailableReason)
                                                                             ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20'
                                                                             : 'cursor-not-allowed border-slate-700 bg-slate-900/70 text-slate-500'
                                                                             }`}
