@@ -1,4 +1,4 @@
-"""Read-only restriction catalog and sequence-analysis API (Phase 1+2)."""
+"""Restriction catalog, exact analysis, duplex digest, and immutable persistence API."""
 from __future__ import annotations
 
 import asyncio
@@ -10,6 +10,7 @@ import json
 import re
 import secrets
 import threading
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated, Any, Coroutine, Literal, Union, cast
@@ -20,10 +21,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from molbio_database import get_molbio_session
-from molbio_models import MolecularDocument, MolecularRevision
+from molbio_models import (
+    MolecularDocument, MolecularOperation, MolecularOperationInput,
+    MolecularOperationOutput, MolecularRevision, RestrictionDigestResult,
+)
 from services.restriction_analysis import (
     MAX_EXPLICIT_ENZYME_IDS,
     MAX_INLINE_SEQUENCE_LENGTH,
@@ -36,6 +42,14 @@ from services.restriction_analysis import (
     analyze_sequence,
     normalize_dna,
     resource_policy_receipt,
+)
+
+from services.restriction_digest import (
+    MAX_SELECTED_ENZYMES,
+    DigestGeometryError,
+    DigestLimitError,
+    DigestSimulation,
+    simulate_digest,
 )
 
 from services.restriction_catalog import (
@@ -128,6 +142,21 @@ class CatalogRoute(APIRoute):
             try:
                 return await route_handler(request)
             except RequestValidationError as exc:
+                if request.method == "POST" and "/digests" in request.url.path:
+                    oversized = any(
+                        error.get("type") in {"too_long", "string_too_long"}
+                        for error in exc.errors()
+                    )
+                    return JSONResponse(
+                        status_code=413 if oversized else 422,
+                        content={"detail": {
+                            "code": "request_too_large" if oversized else "invalid_digest_request",
+                            "message": (
+                                "restriction digest request is too large"
+                                if oversized else "restriction digest request is invalid"
+                            ),
+                        }},
+                    )
                 if request.method == "POST" and request.url.path.endswith("/analyze"):
                     oversized_locations = {
                         ("body", "source", "inline_dna", "dna"),
@@ -220,7 +249,7 @@ class CatalogReceipt(StrictResponse):
     resource_policy: ResourcePolicyReceipt
     resource_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     analysis_enabled: Literal[True]
-    digest_enabled: Literal[False]
+    digest_enabled: Literal[True]
 
 
 class CatalogPage(StrictResponse):
@@ -337,6 +366,69 @@ class AnalysisResponse(UnsignedAnalysisResponse):
     result_sha256: str
 
 
+class DigestSimulationRequest(StrictResponse):
+    schema_: Literal["bms.molbio.restriction-digest-simulation-request.v1"] = Field(alias="schema")
+    source: AnalysisSource
+    catalog: AnalysisCatalogBinding
+    enzyme_ids: list[str] = Field(
+        min_length=1, max_length=MAX_SELECTED_ENZYMES,
+        json_schema_extra={"maxItems": MAX_SELECTED_ENZYMES},
+    )
+
+    @field_validator("enzyme_ids")
+    @classmethod
+    def unique_enzyme_ids(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value) or any(not item or len(item) > 128 for item in value):
+            raise ValueError("enzyme IDs must be unique bounded nonempty strings")
+        return value
+
+
+class DigestSaveRequest(StrictResponse):
+    schema_: Literal["bms.molbio.restriction-digest-save-request.v1"] = Field(alias="schema")
+    source: MolecularRevisionSource
+    catalog: AnalysisCatalogBinding
+    enzyme_ids: list[str] = Field(
+        min_length=1, max_length=MAX_SELECTED_ENZYMES,
+        json_schema_extra={"maxItems": MAX_SELECTED_ENZYMES},
+    )
+    simulation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    idempotency_key: str = Field(min_length=1, max_length=255, pattern=r".*\S.*")
+    persistence_mode: Literal["operation_only", "operation_and_fragments"]
+    fragment_name_prefix: str | None = Field(
+        default=None, min_length=1, max_length=128, pattern=r".*\S.*",
+    )
+
+    @field_validator("enzyme_ids")
+    @classmethod
+    def unique_enzyme_ids(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value) or any(not item or len(item) > 128 for item in value):
+            raise ValueError("enzyme IDs must be unique bounded nonempty strings")
+        return value
+
+
+class DigestOutputIdentity(StrictResponse):
+    fragment_index: int
+    document_id: str
+    revision_id: str
+    output_edge_id: str
+    name: str
+    topology: Literal["linear", "circular"]
+    content_sha256: str
+    content_length: int
+
+
+class SavedDigestResponse(StrictResponse):
+    schema_: Literal["bms.molbio.restriction-digest-saved-result.v1"] = Field(alias="schema")
+    operation_id: str
+    source_revision_id: str
+    catalog_id: str
+    catalog_sha256: str
+    request_sha256: str
+    result_sha256: str
+    simulation: DigestSimulation
+    outputs: list[DigestOutputIdentity]
+
+
 _ANALYZE_EXAMPLE = {
     "schema": "bms.molbio.restriction-analysis-request.v1",
     "source": {
@@ -368,9 +460,9 @@ def _receipt(authority: CatalogAuthority) -> CatalogReceipt:
     readiness = authority.readiness()
     if not readiness.get("ready"):
         raise CatalogUnavailable()
-    return CatalogReceipt.model_validate(
-        {key: value for key, value in readiness.items() if key not in {"required", "ready", "status"}}
-    )
+    payload = {key: value for key, value in readiness.items() if key not in {"required", "ready", "status"}}
+    payload["digest_enabled"] = True
+    return CatalogReceipt.model_validate(payload)
 
 
 def _parse_bool(value: str | None) -> bool | None:
@@ -860,3 +952,379 @@ async def analyze_restriction_sites(
     except Exception as exc:
         raise _error(500, "analysis_failed", "restriction analysis failed") from exc
     return Response(content=output.canonical_bytes, media_type="application/json")
+
+
+def _digest_records(view: CatalogView, enzyme_ids: list[str]) -> tuple[RestrictionRecord, ...]:
+    missing = [enzyme_id for enzyme_id in enzyme_ids if enzyme_id not in view.by_id]
+    if missing:
+        raise _error(404, "enzyme_not_found", "restriction enzyme was not found")
+    return tuple(view.by_id[enzyme_id] for enzyme_id in enzyme_ids)
+
+
+def _complete_digest_pipeline(
+    *, payload: DigestSimulationRequest, authority: CatalogAuthority,
+    resolved_revision: _ResolvedRevisionSource | None,
+) -> DigestSimulation:
+    view = _require_view(authority)
+    if payload.catalog.catalog_id != view.catalog_id:
+        raise _error(404, "catalog_not_found", "restriction catalog was not found")
+    if payload.catalog.expected_catalog_sha256 != view.content_sha256:
+        raise _error(409, "catalog_digest_mismatch", "restriction catalog digest does not match")
+    sequence, topology, source_receipt = _analysis_source(payload.source, resolved_revision)
+    return simulate_digest(
+        sequence=sequence, topology=topology, catalog=view,
+        records=_digest_records(view, payload.enzyme_ids),
+        selected_enzyme_ids=tuple(payload.enzyme_ids),
+        source_receipt=source_receipt.model_dump(mode="json", by_alias=True),
+        catalog_receipt=_receipt(authority).model_dump(mode="json", by_alias=True),
+    )
+
+
+def _digest_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, DigestGeometryError):
+        return _error(409, exc.code, str(exc))
+    if isinstance(exc, (DigestLimitError, AnalysisLimitError)):
+        return _error(413, "request_too_large", "restriction digest request is too large")
+    if isinstance(exc, InvalidDNAError):
+        return _error(422, "invalid_dna", "DNA input is invalid")
+    if isinstance(exc, AnalysisTimeoutError):
+        return _error(504, "analysis_timeout", "restriction digest exceeded its wait timeout")
+    return _error(500, "digest_failed", "restriction digest failed")
+
+
+@router.post("/digests/simulate", response_model=DigestSimulation)
+async def simulate_restriction_digest(
+    payload: DigestSimulationRequest,
+    authority: CatalogAuthority = Depends(get_catalog_authority),
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+) -> Response:
+    try:
+        _reserve_analysis_capacity()
+    except AnalysisBusyError as exc:
+        raise _error(503, "analysis_busy", "restriction digest capacity is busy") from exc
+    try:
+        resolved = (
+            await _resolve_revision_source(payload.source, molbio_session)
+            if isinstance(payload.source, MolecularRevisionSource) else None
+        )
+    except BaseException:
+        _analysis_capacity.release()
+        raise
+    try:
+        simulation = await _run_capacity_owned(
+            _complete_digest_pipeline, payload=payload, authority=authority,
+            resolved_revision=resolved,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _digest_http_error(exc) from exc
+    return Response(content=simulation.canonical_bytes(), media_type="application/json")
+
+
+def _save_fingerprint(payload: DigestSaveRequest) -> str:
+    normalized = payload.model_dump(mode="json", by_alias=True)
+    normalized["enzyme_ids"] = list(payload.enzyme_ids)
+    if normalized.get("fragment_name_prefix") is not None:
+        normalized["fragment_name_prefix"] = normalized["fragment_name_prefix"].strip()
+    return hashlib.sha256(rfc8785.dumps(normalized)).hexdigest()
+
+
+def _digest_persistence_stage_hook(_stage: str) -> None:
+    """Transaction-bound fault-injection seam; production behavior is a no-op."""
+
+
+async def _load_saved_digest(
+    session: AsyncSession, operation_id: str,
+) -> SavedDigestResponse:
+    result = (
+        await session.execute(
+            select(RestrictionDigestResult).where(
+                RestrictionDigestResult.operation_id == operation_id
+            )
+        )
+    ).scalar_one_or_none()
+    if result is None:
+        raise _error(404, "digest_operation_not_found", "saved restriction digest was not found")
+    try:
+        raw = str(result.result).encode("utf-8")
+        document = json.loads(raw)
+        if raw != rfc8785.dumps(document):
+            raise ValueError("noncanonical result")
+        response = SavedDigestResponse.model_validate_json(raw, strict=True)
+        if (
+            response.operation_id != str(result.operation_id)
+            or response.source_revision_id != str(result.source_revision_id)
+            or response.catalog_id != str(result.catalog_id)
+            or response.catalog_sha256 != str(result.catalog_sha256)
+            or response.request_sha256 != str(result.request_sha256)
+            or response.result_sha256 != str(result.result_sha256)
+            or response.simulation.simulation_sha256 != response.result_sha256
+            or hashlib.sha256(response.simulation.canonical_unsigned_bytes()).hexdigest()
+            != response.result_sha256
+        ):
+            raise ValueError("row binding mismatch")
+        operation = await session.get(MolecularOperation, operation_id)
+        source_revision = await session.get(MolecularRevision, response.source_revision_id)
+        inputs = (
+            await session.execute(
+                select(MolecularOperationInput).where(
+                    MolecularOperationInput.operation_id == operation_id
+                ).order_by(MolecularOperationInput.position)
+            )
+        ).scalars().all()
+        outputs = (
+            await session.execute(
+                select(MolecularOperationOutput).where(
+                    MolecularOperationOutput.operation_id == operation_id
+                ).order_by(MolecularOperationOutput.position)
+            )
+        ).scalars().all()
+        if (
+            operation is None or operation.operation_kind != "restriction_digest"
+            or operation.status != "completed"
+            or source_revision is None
+            or source_revision.content_sha256 != response.simulation.source.content_sha256
+            or source_revision.content_length != response.simulation.source.content_length
+            or len(inputs) != 1 or inputs[0].position != 0 or inputs[0].role != "digest_source"
+            or str(inputs[0].revision_id) != response.source_revision_id
+            or inputs[0].snapshot.get("content_sha256") != source_revision.content_sha256
+            or len(outputs) != len(response.outputs)
+        ):
+            raise ValueError("lineage cardinality mismatch")
+        for ordinal, (edge, identity) in enumerate(zip(outputs, response.outputs, strict=True)):
+            revision = await session.get(MolecularRevision, identity.revision_id)
+            document_row = await session.get(MolecularDocument, identity.document_id)
+            expected_fragment = response.simulation.fragments[ordinal]
+            revision_snapshot = revision.snapshot if revision is not None and isinstance(revision.snapshot, dict) else {}
+            revision_provenance = revision.provenance if revision is not None and isinstance(revision.provenance, dict) else {}
+            if (
+                edge.position != ordinal or edge.role != "digest_fragment"
+                or str(edge.id) != identity.output_edge_id
+                or str(edge.revision_id) != identity.revision_id
+                or revision is None or document_row is None
+                or str(revision.document_id) != identity.document_id
+                or str(document_row.current_revision_id) != identity.revision_id
+                or revision.operation_id != operation_id
+                or revision.content_sha256 != identity.content_sha256
+                or revision.content_length != identity.content_length
+                or revision_snapshot.get("sequence") != expected_fragment.top_strand_sequence
+                or revision_snapshot.get("topology") != expected_fragment.topology
+                or hashlib.sha256(str(revision_snapshot.get("sequence", "")).encode("ascii")).hexdigest()
+                != identity.content_sha256
+                or revision_provenance.get("geometry")
+                != expected_fragment.model_dump(mode="json", by_alias=True)
+                or revision_provenance.get("fragment_index") != ordinal
+            ):
+                raise ValueError("fragment lineage mismatch")
+        if len(response.outputs) not in {0, len(response.simulation.fragments)}:
+            raise ValueError("fragment output count mismatch")
+        return response
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _error(
+            409, "digest_result_integrity_error",
+            "saved restriction digest evidence failed integrity verification",
+        ) from exc
+
+
+@router.post("/digests", response_model=SavedDigestResponse)
+async def save_restriction_digest(
+    payload: DigestSaveRequest,
+    authority: CatalogAuthority = Depends(get_catalog_authority),
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+) -> Response:
+    try:
+        _reserve_analysis_capacity()
+    except AnalysisBusyError as exc:
+        raise _error(503, "analysis_busy", "restriction digest capacity is busy") from exc
+    try:
+        resolved = await _resolve_revision_source(payload.source, molbio_session)
+    except BaseException:
+        _analysis_capacity.release()
+        raise
+    simulation_request = DigestSimulationRequest(
+        schema="bms.molbio.restriction-digest-simulation-request.v1",
+        source=payload.source, catalog=payload.catalog, enzyme_ids=payload.enzyme_ids,
+    )
+    try:
+        simulation = await _run_capacity_owned(
+            _complete_digest_pipeline, payload=simulation_request, authority=authority,
+            resolved_revision=resolved,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _digest_http_error(exc) from exc
+    if simulation.simulation_sha256 != payload.simulation_sha256:
+        raise _error(409, "simulation_digest_mismatch", "digest simulation digest does not match")
+
+    fingerprint = _save_fingerprint(payload)
+    existing = (
+        await molbio_session.execute(
+            select(MolecularOperation).where(
+                MolecularOperation.idempotency_key == payload.idempotency_key
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if existing.operation_kind != "restriction_digest" or existing.request_fingerprint != fingerprint:
+            raise _error(409, "idempotency_conflict", "idempotency key is bound to another request")
+        loaded = await _load_saved_digest(molbio_session, str(existing.id))
+        return Response(
+            content=rfc8785.dumps(loaded.model_dump(mode="json", by_alias=True)),
+            media_type="application/json",
+        )
+
+    operation_id = str(uuid.uuid4())
+    result_id = str(uuid.uuid4())
+    outputs: list[DigestOutputIdentity] = []
+    operation = MolecularOperation(
+        id=operation_id, operation_kind="restriction_digest",
+        implementation="services.restriction_digest.simulate_digest",
+        implementation_version=simulation.digest_algorithm_version,
+        status="completed",
+        parameters={
+            "schema": "bms.molbio.restriction-digest-operation-parameters.v1",
+            "selected_enzyme_ids": list(payload.enzyme_ids),
+            "persistence_mode": payload.persistence_mode,
+            "fragment_name_prefix": payload.fragment_name_prefix,
+            "simulation_sha256": payload.simulation_sha256,
+        },
+        warnings=list(simulation.warnings),
+        provenance={
+            "source_revision_id": payload.source.revision_id,
+            "catalog_id": payload.catalog.catalog_id,
+            "catalog_sha256": payload.catalog.expected_catalog_sha256,
+            "request_sha256": simulation.request_sha256,
+        },
+        idempotency_key=payload.idempotency_key,
+        request_fingerprint=fingerprint,
+    )
+    try:
+        molbio_session.add(operation)
+        molbio_session.add(MolecularOperationInput(
+            id=str(uuid.uuid4()), operation_id=operation_id,
+            revision_id=payload.source.revision_id, role="digest_source", position=0,
+            snapshot={
+                "content_sha256": payload.source.expected_content_sha256,
+                "sequence_id": payload.source.sequence_id,
+            },
+        ))
+        await molbio_session.flush()
+        _digest_persistence_stage_hook("operation")
+        if payload.persistence_mode == "operation_and_fragments":
+            prefix = (payload.fragment_name_prefix or f"{resolved.document_name} digest fragment").strip()
+            for fragment in simulation.fragments:
+                document_id = str(uuid.uuid4())
+                revision_id = str(uuid.uuid4())
+                edge_id = str(uuid.uuid4())
+                name = f"{prefix} {fragment.fragment_index + 1}"
+                sequence = fragment.top_strand_sequence
+                content_sha = hashlib.sha256(sequence.encode("ascii")).hexdigest()
+                document_row = MolecularDocument(
+                    id=document_id, document_kind="dna", name=name, current_revision_id=None,
+                )
+                revision = MolecularRevision(
+                    id=revision_id, document_id=document_id, revision_number=1,
+                    change_kind="restriction_digest_fragment", content_sha256=content_sha,
+                    content_length=len(sequence),
+                    snapshot={
+                        "sequence_type": "dna", "sequence": sequence,
+                        "is_circular": fragment.topology == "circular",
+                        "topology": fragment.topology, "name": name,
+                    },
+                    provenance={
+                        "schema": "bms.molbio.restriction-digest-fragment-provenance.v1",
+                        "source_revision_id": payload.source.revision_id,
+                        "operation_id": operation_id,
+                        "simulation_sha256": simulation.simulation_sha256,
+                        "fragment_index": fragment.fragment_index,
+                        "geometry": fragment.model_dump(mode="json", by_alias=True),
+                    },
+                    operation_id=operation_id, created_by=None,
+                )
+                edge = MolecularOperationOutput(
+                    id=edge_id, operation_id=operation_id, revision_id=revision_id,
+                    role="digest_fragment", position=fragment.fragment_index,
+                    snapshot={
+                        "fragment_index": fragment.fragment_index,
+                        "simulation_sha256": simulation.simulation_sha256,
+                    },
+                )
+                molbio_session.add(document_row)
+                await molbio_session.flush()
+                _digest_persistence_stage_hook("document")
+                molbio_session.add(revision)
+                await molbio_session.flush()
+                _digest_persistence_stage_hook("revision")
+                document_row.current_revision_id = revision_id
+                await molbio_session.flush()
+                molbio_session.add(edge)
+                await molbio_session.flush()
+                _digest_persistence_stage_hook("edge")
+                outputs.append(DigestOutputIdentity(
+                    fragment_index=fragment.fragment_index, document_id=document_id,
+                    revision_id=revision_id, output_edge_id=edge_id, name=name,
+                    topology=fragment.topology, content_sha256=content_sha,
+                    content_length=len(sequence),
+                ))
+        response = SavedDigestResponse(
+            schema="bms.molbio.restriction-digest-saved-result.v1",
+            operation_id=operation_id, source_revision_id=payload.source.revision_id,
+            catalog_id=payload.catalog.catalog_id,
+            catalog_sha256=payload.catalog.expected_catalog_sha256,
+            request_sha256=simulation.request_sha256,
+            result_sha256=simulation.simulation_sha256,
+            simulation=simulation, outputs=outputs,
+        )
+        canonical = rfc8785.dumps(response.model_dump(mode="json", by_alias=True)).decode("utf-8")
+        molbio_session.add(RestrictionDigestResult(
+            id=result_id, operation_id=operation_id,
+            source_revision_id=payload.source.revision_id,
+            catalog_id=payload.catalog.catalog_id,
+            catalog_sha256=payload.catalog.expected_catalog_sha256,
+            request_sha256=simulation.request_sha256,
+            result_sha256=simulation.simulation_sha256,
+            result=canonical,
+        ))
+        await molbio_session.flush()
+        _digest_persistence_stage_hook("result")
+        await molbio_session.commit()
+    except IntegrityError as exc:
+        await molbio_session.rollback()
+        concurrent = (
+            await molbio_session.execute(
+                select(MolecularOperation).where(
+                    MolecularOperation.idempotency_key == payload.idempotency_key
+                )
+            )
+        ).scalar_one_or_none()
+        if concurrent is None or concurrent.request_fingerprint != fingerprint:
+            raise _error(409, "idempotency_conflict", "idempotency key is bound to another request") from exc
+        response = await _load_saved_digest(molbio_session, str(concurrent.id))
+    except BaseException:
+        await molbio_session.rollback()
+        raise
+    return Response(
+        content=rfc8785.dumps(response.model_dump(mode="json", by_alias=True)),
+        media_type="application/json",
+    )
+
+
+@router.get("/digests/{operation_id}", response_model=SavedDigestResponse)
+async def get_saved_restriction_digest(
+    operation_id: str,
+    request: Request,
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+) -> Response:
+    if request.query_params:
+        raise _error(422, "invalid_digest_request", "restriction digest request is invalid")
+    if not operation_id or len(operation_id) > 128:
+        raise _error(404, "digest_operation_not_found", "saved restriction digest was not found")
+    response = await _load_saved_digest(molbio_session, operation_id)
+    return Response(
+        content=rfc8785.dumps(response.model_dump(mode="json", by_alias=True)),
+        media_type="application/json",
+    )

@@ -8,13 +8,15 @@ import json
 import os
 import sqlite3
 import uuid
+
+import rfc8785
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from sqlalchemy import func, select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from molbio_database import create_molbio_engine, init_molbio_db, make_molbio_session_factory
 from molbio_models import (
@@ -23,6 +25,7 @@ from molbio_models import (
     NucleotideSequence,
     Primer,
     PrimerRevision,
+    RestrictionDigestResult,
 )
 from services.sqlite_backup import backup_sqlite_database
 from services.nucleotide_validation import canonicalize_nucleotide_sequence
@@ -34,6 +37,202 @@ class MigrationConflictError(RuntimeError):
 
 class MigrationVerificationError(RuntimeError):
     pass
+
+
+RESTRICTION_DIGEST_MIGRATION_VERSION = "0007_restriction_digest_results"
+RESTRICTION_DIGEST_MIGRATION_NAME = "immutable exact restriction digest results"
+
+
+def validate_restriction_digest_result(
+    result_text: object,
+    operation_id: object,
+    source_revision_id: object,
+    catalog_id: object,
+    catalog_sha256: object,
+    request_sha256: object,
+    result_sha256: object,
+) -> int:
+    """SQLite UDF: strict JCS, closed models, digest, and row-binding validation."""
+
+    try:
+        from services.restriction_digest import DigestSimulation
+
+        if not isinstance(result_text, str):
+            return 0
+        payload = json.loads(result_text)
+        if not isinstance(payload, dict) or set(payload) != {
+            "schema", "operation_id", "source_revision_id", "catalog_id",
+            "catalog_sha256", "request_sha256", "result_sha256", "simulation", "outputs",
+        }:
+            return 0
+        if rfc8785.dumps(payload).decode("utf-8") != result_text:
+            return 0
+        expected = {
+            "operation_id": str(operation_id), "source_revision_id": str(source_revision_id),
+            "catalog_id": str(catalog_id), "catalog_sha256": str(catalog_sha256),
+            "request_sha256": str(request_sha256), "result_sha256": str(result_sha256),
+        }
+        if payload.get("schema") != "bms.molbio.restriction-digest-saved-result.v1" or any(
+            payload.get(key) != value for key, value in expected.items()
+        ):
+            return 0
+        simulation = DigestSimulation.model_validate(payload.get("simulation"))
+        if (
+            simulation.source.kind != "molecular_revision"
+            or simulation.source.revision_id != str(source_revision_id)
+            or simulation.catalog.catalog_id != str(catalog_id)
+            or simulation.catalog.catalog_sha256 != str(catalog_sha256)
+            or simulation.request_sha256 != str(request_sha256)
+            or simulation.simulation_sha256 != str(result_sha256)
+            or hashlib.sha256(simulation.canonical_unsigned_bytes()).hexdigest() != str(result_sha256)
+        ):
+            return 0
+        outputs = payload.get("outputs")
+        output_keys = {
+            "fragment_index", "document_id", "revision_id", "output_edge_id",
+            "name", "topology", "content_sha256", "content_length",
+        }
+        if not isinstance(outputs, list):
+            return 0
+        if outputs and len(outputs) != len(simulation.fragments):
+            return 0
+        identity_fields = ("document_id", "revision_id", "output_edge_id")
+        if any(
+            len({str(output.get(field)) for output in outputs}) != len(outputs)
+            for field in identity_fields
+        ):
+            return 0
+        for ordinal, output in enumerate(outputs):
+            fragment = simulation.fragments[ordinal]
+            fragment_bytes = fragment.top_strand_sequence.encode("ascii")
+            if (
+                not isinstance(output, dict) or set(output) != output_keys
+                or output.get("fragment_index") != ordinal
+                or output.get("topology") != fragment.topology
+                or not isinstance(output.get("content_length"), int)
+                or output.get("content_length") != len(fragment_bytes)
+                or output.get("content_sha256")
+                != hashlib.sha256(fragment_bytes).hexdigest()
+                or any(not isinstance(output.get(field), str) or not output[field] for field in identity_fields)
+            ):
+                return 0
+        return 1
+    except Exception:
+        return 0
+
+
+_RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL = """
+CREATE TRIGGER molbio_restriction_digest_results_integrity_insert
+BEFORE INSERT ON restriction_digest_results
+WHEN bms_restriction_digest_result_valid(
+       NEW.result, NEW.operation_id, NEW.source_revision_id, NEW.catalog_id,
+       NEW.catalog_sha256, NEW.request_sha256, NEW.result_sha256
+     ) != 1
+  OR json_valid(NEW.result) != 1
+  OR json(NEW.result) != NEW.result
+  OR json_type(NEW.result) != 'object'
+  OR (SELECT count(*) FROM json_each(NEW.result)) != 9
+  OR json_extract(NEW.result, '$.schema') != 'bms.molbio.restriction-digest-saved-result.v1'
+  OR json_extract(NEW.result, '$.operation_id') IS NOT NEW.operation_id
+  OR json_extract(NEW.result, '$.source_revision_id') IS NOT NEW.source_revision_id
+  OR json_extract(NEW.result, '$.catalog_id') IS NOT NEW.catalog_id
+  OR json_extract(NEW.result, '$.catalog_sha256') IS NOT NEW.catalog_sha256
+  OR json_extract(NEW.result, '$.request_sha256') IS NOT NEW.request_sha256
+  OR json_extract(NEW.result, '$.result_sha256') IS NOT NEW.result_sha256
+  OR json_extract(NEW.result, '$.simulation.schema') != 'bms.molbio.restriction-digest-simulation.v1'
+  OR json_extract(NEW.result, '$.simulation.simulation_sha256') IS NOT NEW.result_sha256
+  OR json_type(NEW.result, '$.outputs') != 'array'
+  OR length(NEW.catalog_sha256) != 64
+  OR length(NEW.request_sha256) != 64
+  OR length(NEW.result_sha256) != 64
+BEGIN
+  SELECT RAISE(ABORT, 'restriction digest result integrity violation');
+END
+""".strip()
+def restriction_digest_integrity_trigger_sql() -> str:
+    return _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL
+
+
+def restriction_digest_migration_attestation() -> dict[str, object]:
+    """Return the complete deterministic Phase 3 migration identity."""
+
+    return {
+        "schema": "bms.molbio.restriction-digest-migration-attestation.v1",
+        "version": RESTRICTION_DIGEST_MIGRATION_VERSION,
+        "name": RESTRICTION_DIGEST_MIGRATION_NAME,
+        "table": {
+            "name": "restriction_digest_results",
+            "columns": [
+                ["id", "VARCHAR(36)", False, True],
+                ["operation_id", "VARCHAR(36)", False, False],
+                ["source_revision_id", "VARCHAR(36)", False, False],
+                ["catalog_id", "VARCHAR(128)", False, False],
+                ["catalog_sha256", "VARCHAR(64)", False, False],
+                ["request_sha256", "VARCHAR(64)", False, False],
+                ["result_sha256", "VARCHAR(64)", False, False],
+                ["result", "TEXT", False, False],
+                ["created_at", "DATETIME", False, False],
+            ],
+            "foreign_keys": [
+                ["operation_id", "molecular_operations", "id", "NO ACTION", "RESTRICT"],
+                ["source_revision_id", "molecular_revisions", "id", "NO ACTION", "RESTRICT"],
+            ],
+            "unique": [["operation_id"]],
+            "indexes": [["source_revision_id", "created_at"]],
+        },
+        "objects": {
+            "tables": ["restriction_digest_results"],
+            "indexes": [
+                "ix_restriction_digest_results_source_created",
+                "sqlite_autoindex_restriction_digest_results_1",
+                "sqlite_autoindex_restriction_digest_results_2",
+            ],
+            "triggers": [
+                "molbio_immutable_restriction_digest_results_delete",
+                "molbio_immutable_restriction_digest_results_update",
+                "molbio_restriction_digest_results_integrity_insert",
+            ],
+        },
+        "integrity_trigger_sha256": hashlib.sha256(
+            _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL.encode("utf-8")
+        ).hexdigest(),
+    }
+
+
+RESTRICTION_DIGEST_MIGRATION_CHECKSUM = hashlib.sha256(
+    rfc8785.dumps(restriction_digest_migration_attestation())
+).hexdigest()
+
+
+async def apply_restriction_digest_result_migration(connection: AsyncConnection) -> None:
+    """Add the exact immutable digest result table and insert-time binding guard."""
+
+    existing_trigger = (
+        await connection.execute(text(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' "
+            "AND name='molbio_restriction_digest_results_integrity_insert'"
+        ))
+    ).scalar_one_or_none()
+    normalize = lambda value: " ".join(str(value).strip().rstrip(";").split()).casefold()
+    if (
+        existing_trigger is not None
+        and normalize(existing_trigger) != normalize(_RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL)
+    ):
+        raise RuntimeError("counterfeit restriction digest trigger blocks migration")
+    await connection.run_sync(
+        lambda sync_connection: RestrictionDigestResult.__table__.create(
+            sync_connection, checkfirst=True,
+        )
+    )
+    await connection.execute(text(
+        "DROP TRIGGER IF EXISTS molbio_restriction_digest_results_integrity_insert"
+    ))
+    await connection.execute(text(_RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL))
+    violations = (await connection.execute(text("PRAGMA foreign_key_check"))).fetchall()
+    if violations:
+        raise MigrationVerificationError(
+            "Restriction digest migration foreign-key verification failed"
+        )
 
 
 async def _acquire_destination_extraction_lock(destination: Path) -> int:

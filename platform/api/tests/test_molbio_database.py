@@ -218,6 +218,7 @@ async def test_initialization_applies_ordered_migrations_and_sqlite_invariants(t
             "0004_sequence_parent_foreign_key",
             "0005_authoritative_import_batches",
             "0006_project_plasmid_metadata",
+            "0007_restriction_digest_results",
         ]
         async with engine.connect() as connection:
             foreign_keys = (await connection.execute(text("PRAGMA foreign_keys"))).scalar_one()
@@ -226,22 +227,27 @@ async def test_initialization_applies_ordered_migrations_and_sqlite_invariants(t
         assert foreign_keys == 1
         assert str(journal_mode).lower() == "wal"
         assert busy_timeout == 30000
-        assert await molbio_health(engine=engine) == {
+        health = await molbio_health(engine=engine)
+        restriction_digest = health.pop("restriction_digest")
+        assert health == {
             "owner": "molbio",
             "database_kind": "sqlite",
             "status": "healthy",
             "quick_check": "ok",
             "foreign_key_violations": 0,
-            "migration_count": 6,
-            "latest_migration": "0006_project_plasmid_metadata",
+            "migration_count": 7,
+            "latest_migration": "0007_restriction_digest_results",
             "migrations_current": True,
             "database_schema_current": True,
             "database_schema_issue_count": 0,
-            "immutable_trigger_count": 22,
+            "immutable_trigger_count": 24,
             "immutable_triggers_current": True,
             "sequence_parent_foreign_key_current": True,
             "sequence_parent_cycle_count": 0,
         }
+        from readiness import _restriction_digest_readiness_is_exact
+
+        assert _restriction_digest_readiness_is_exact(restriction_digest) is True
     finally:
         await engine.dispose()
 
@@ -291,17 +297,33 @@ async def test_immutable_revision_rows_reject_update_and_delete(tmp_path: Path) 
 async def test_api_health_aggregates_molbio_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
     import main as api_main
 
+    async def deterministic_readiness(*, molbio, molbio_ngs):
+        ready = molbio.get("status") == "healthy"
+        return {
+            "mode": "native",
+            "ready": ready,
+            "checks": {
+                "molbio_database": {
+                    "required": True,
+                    "ready": ready,
+                    "status": "ready" if ready else "degraded",
+                }
+            },
+        }
+
+    monkeypatch.setattr(api_main, "collect_runtime_readiness", deterministic_readiness)
+
     async def healthy():
         return {
             "status": "healthy",
             "quick_check": "ok",
             "foreign_key_violations": 0,
-            "migration_count": 6,
-            "latest_migration": "0006_project_plasmid_metadata",
+            "migration_count": 7,
+            "latest_migration": "0007_restriction_digest_results",
             "migrations_current": True,
             "database_schema_current": True,
             "database_schema_issue_count": 0,
-            "immutable_trigger_count": 22,
+            "immutable_trigger_count": 24,
             "immutable_triggers_current": True,
             "sequence_parent_foreign_key_current": True,
             "sequence_parent_cycle_count": 0,
@@ -310,7 +332,7 @@ async def test_api_health_aggregates_molbio_diagnostics(monkeypatch: pytest.Monk
     monkeypatch.setattr(api_main, "molbio_health", healthy)
     payload = await api_main.health_check()
     assert payload["status"] == "healthy"
-    assert payload["molbio"]["latest_migration"] == "0006_project_plasmid_metadata"
+    assert payload["molbio"]["latest_migration"] == "0007_restriction_digest_results"
 
     async def degraded():
         return {
@@ -653,7 +675,7 @@ async def test_existing_database_migration_adds_restricting_sequence_parent_fore
     try:
         await init_molbio_db(engine=engine)
         assert (await get_applied_molbio_migrations(engine=engine))[-1] == (
-            "0006_project_plasmid_metadata"
+            "0007_restriction_digest_results"
         )
     finally:
         await engine.dispose()
@@ -698,7 +720,7 @@ async def test_health_rejects_counterfeit_immutable_trigger_with_matching_prefix
             )
 
         health = await molbio_health(engine=engine)
-        assert health["immutable_trigger_count"] == 22
+        assert health["immutable_trigger_count"] == 24
         assert health["immutable_triggers_current"] is False
         assert health["status"] == "degraded"
     finally:
@@ -727,7 +749,7 @@ async def test_health_rejects_same_name_noop_immutable_trigger(tmp_path: Path) -
             )
 
         health = await molbio_health(engine=engine)
-        assert health["immutable_trigger_count"] == 22
+        assert health["immutable_trigger_count"] == 24
         assert health["immutable_triggers_current"] is False
         assert health["status"] == "degraded"
     finally:
