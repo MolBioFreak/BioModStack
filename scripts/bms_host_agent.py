@@ -328,6 +328,15 @@ def ont_route_payload(path: str) -> dict[str, Any] | None:
     """Return host-agent ONT route payloads or None for unknown/not-found routes."""
     parsed = urlparse(path)
     route_path = parsed.path.rstrip("/") or "/"
+    if route_path.startswith("/ont/runs/"):
+        minknow_run_id = unquote(route_path.removeprefix("/ont/runs/")).strip()
+        return {
+            "status": "unknown",
+            "minknow_run_id": minknow_run_id,
+            "output_files": {"fastq": [], "pod5": [], "bam": []},
+            "detail": "MinKNOW run status polling is not implemented until live run-control wiring is validated",
+            "fake_or_demo_devices": False,
+        }
     if route_path not in {"/ont/status", "/ont/positions"} and not route_path.startswith("/ont/positions/"):
         return None
 
