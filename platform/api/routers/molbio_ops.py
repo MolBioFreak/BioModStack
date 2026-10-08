@@ -5,7 +5,7 @@ Provides digest, PCR, ligation, mutagenesis, Gibson, and Golden Gate workflows.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, List, Literal, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,7 @@ from Bio.SeqUtils import MeltingTemp as mt
 
 from molbio_database import get_molbio_session
 from molbio_models import (
+    MolecularRevision,
     NucleotideSequence,
     PCRExperiment,
     PCRExperimentRevision,
@@ -80,9 +81,180 @@ from services.sequence_alignment import (
     SequenceAlignmentError,
     align_sequences,
 )
+from database import Job, MolBioNgsReceipt, get_session
+from services.molbio_ngs_workup import project_ngs_workup, safe_job_result_root
+from services.molbio_ngs_receipts import issue_molbio_ngs_receipt
+from services.molbio_ngs_receipts import consume_molbio_ngs_receipt
+from services.ngs_comparison_panels import issue_comparison_panel_receipt, list_approved_panels, seed_approved_panel
+from services.sequence_qc_manifest import SequenceQcManifestError, load_sequence_qc_manifest
 
 
 router = APIRouter(prefix="/api/molbio", tags=["molbio"])
+
+
+class ApprovedPanelEntryRequest(BaseModel):
+    sequence_id: str = Field(min_length=1)
+    revision_id: str = Field(min_length=1)
+    role: Literal["host", "plasmid_decoy"]
+
+
+class ApprovedPanelSeedRequest(BaseModel):
+    entries: list[ApprovedPanelEntryRequest] = Field(min_length=1, max_length=64)
+
+
+class ComparisonPanelReceiptRequest(BaseModel):
+    expected_receipt_id: str = Field(min_length=1)
+
+
+def _require_panel_seed_authority(value: str | None) -> str:
+    configured = os.getenv("BMS_NGS_PANEL_SEED_KEY", "")
+    if not configured or value != configured:
+        raise HTTPException(status_code=403, detail="approved comparison-panel seeding is disabled or unauthorized")
+    return "restricted_data_seed"
+
+
+@router.get("/ngs-comparison-panels")
+async def get_approved_ngs_comparison_panels(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    """Normal operators receive opaque approved IDs and server labels only."""
+    panels = await list_approved_panels(session)
+    return {"schema": "bms.ngs.approved-comparison-panels.v1", "panels": [
+        {"id": panel.id, "version": panel.version, "status": panel.status, "label": panel.label,
+         "snapshot_sha256": panel.snapshot_sha256}
+        for panel in panels
+    ], "absence_label": "No approved comparison panels are available." if not panels else None}
+
+
+@router.post("/admin/ngs-comparison-panels", status_code=201)
+async def seed_approved_ngs_comparison_panel(
+    payload: ApprovedPanelSeedRequest,
+    x_bms_ngs_panel_seed_key: str | None = Header(default=None),
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    actor = _require_panel_seed_authority(x_bms_ngs_panel_seed_key)
+    entries: list[dict[str, Any]] = []
+    for entry in payload.entries:
+        revision = await molbio_session.get(MolecularRevision, entry.revision_id)
+        sequence = await molbio_session.get(NucleotideSequence, entry.sequence_id)
+        if revision is None or sequence is None or revision.document_id != sequence.id:
+            raise HTTPException(status_code=422, detail="panel entries must name a saved sequence and its immutable revision")
+        entries.append({"sequence_id": sequence.id, "revision": revision, "role": entry.role, "sequence_name": sequence.name})
+    try:
+        panel = await seed_approved_panel(session, entries=entries, actor=actor)
+        await session.commit()
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"id": panel.id, "version": panel.version, "status": panel.status, "label": panel.label,
+            "snapshot_sha256": panel.snapshot_sha256}
+
+
+@router.post("/ngs-comparison-panels/{panel_id}/receipts", status_code=201)
+async def issue_ngs_comparison_panel_receipt(
+    panel_id: str,
+    payload: ComparisonPanelReceiptRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    try:
+        # This verifies that an unconsumed expected-construct receipt existed
+        # before a panel receipt may be requested; it does not consume either.
+        await consume_molbio_ngs_receipt(session, receipt_id=payload.expected_receipt_id)
+        receipt = await issue_comparison_panel_receipt(session, panel_id=panel_id, expected_receipt_id=payload.expected_receipt_id)
+        await session.commit()
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"schema": "bms.ngs.comparison-panel-receipt.v1", "receipt_id": receipt.id,
+            "panel_id": receipt.panel_id, "panel_version": receipt.panel_version,
+            "panel_snapshot_sha256": receipt.panel_snapshot_sha256, "expires_at": receipt.expires_at.isoformat() + "Z"}
+
+
+@router.get("/sequences/{sequence_id}/ngs-workup")
+async def get_sequence_ngs_workup(
+    sequence_id: str,
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Return only validated NGS evidence explicitly receipt-bound to this revision."""
+    sequence = await molbio_session.get(NucleotideSequence, sequence_id)
+    revision = await current_molecular_revision(molbio_session, sequence_id) if sequence else None
+    if sequence is None or revision is None:
+        raise HTTPException(status_code=404, detail="Saved molecular sequence or immutable revision not found")
+    candidates = (await session.execute(select(Job).where(Job.model_id == "nanopore"))).scalars().all()
+    workups: list[dict[str, Any]] = []
+    for job in candidates:
+        binding = (job.params or {}).get("molbio_revision_binding")
+        if not isinstance(binding, dict) or binding.get("sequence_id") != sequence_id:
+            continue
+        receipt_id = binding.get("receipt_id")
+        receipt = await session.get(MolBioNgsReceipt, receipt_id) if isinstance(receipt_id, str) else None
+        if (
+            receipt is None or receipt.consumed_job_id != job.id
+            or receipt.sequence_id != binding.get("sequence_id")
+            or receipt.revision_id != binding.get("revision_id")
+            or receipt.revision_sha256 != binding.get("revision_sha256")
+            or receipt.reference_snapshot_sha256 != binding.get("reference_snapshot_sha256")
+        ):
+            continue
+        manifest: dict[str, Any] | None = None
+        try:
+            root = safe_job_result_root(job)
+            manifest_path = root / "verification" / "qc_manifest.json"
+            if manifest_path.is_file():
+                manifest = load_sequence_qc_manifest(manifest_path)
+        except (SequenceQcManifestError, ValueError, OSError):
+            manifest = None
+        try:
+            comparison_summary = None
+            summary_path = root / "comparison_panel" / "comparison_panel_summary.json" if manifest is not None else None
+            if summary_path is not None and summary_path.is_file():
+                import json
+                comparison_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                declared = comparison_summary.get("artifacts") if isinstance(comparison_summary, dict) else None
+                valid_kinds = {"comparison_panel_alignment_bam", "comparison_panel_alignment_bai"}
+                comparison_summary["artifacts_integrity_valid"] = isinstance(declared, list) and all(
+                    isinstance(item, dict)
+                    and item.get("kind") in valid_kinds
+                    and isinstance(item.get("path"), str)
+                    and (root / "comparison_panel" / item["path"]).is_file()
+                    and hashlib.sha256((root / "comparison_panel" / item["path"]).read_bytes()).hexdigest() == item.get("sha256")
+                    and (root / "comparison_panel" / item["path"]).stat().st_size == item.get("size_bytes")
+                    for item in declared
+                ) and {item.get("kind") for item in declared} == valid_kinds
+            workups.append(project_ngs_workup(job, manifest, revision, comparison_summary))
+        except ValueError:
+            # A malformed receipt is not evidence and must not be silently projected.
+            continue
+    return {
+        "schema": "bms.molbio.ngs-workup-list.v1",
+        "sequence_id": sequence_id,
+        "current_revision_id": revision.id,
+        "current_revision_sha256": revision.content_sha256,
+        "workups": workups,
+        "read_only": True,
+    }
+
+
+@router.post("/sequences/{sequence_id}/ngs-receipts")
+async def issue_sequence_ngs_receipt(
+    sequence_id: str,
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Materialize a one-time expected-reference snapshot from immutable revision content."""
+    sequence = await molbio_session.get(NucleotideSequence, sequence_id)
+    revision = await current_molecular_revision(molbio_session, sequence_id) if sequence else None
+    if sequence is None or revision is None:
+        raise HTTPException(status_code=404, detail="Saved molecular sequence or immutable revision not found")
+    try:
+        receipt = await issue_molbio_ngs_receipt(session, sequence_id=sequence_id, revision=revision)
+        await session.commit()
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"schema": "bms.molbio.ngs-receipt.v2", "receipt_id": receipt.id,
+            "sequence_id": sequence_id, "revision_id": revision.id,
+            "revision_sha256": revision.content_sha256, "reference_snapshot_sha256": receipt.reference_snapshot_sha256,
+            "expires_at": receipt.expires_at.isoformat() + "Z", "one_time": True}
 
 
 def _annotation_source_http_error(error: Exception) -> HTTPException:

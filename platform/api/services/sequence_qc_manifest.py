@@ -43,6 +43,9 @@ SCHEMA_BY_KIND = {
     "clone_validation_report": "sequence_qc.clone_validation_report.v1",
     "clone_validation_runtime_provenance": "biomodstack.wf_clone_validation_runtime_provenance.v1",
     "construct_verification": "biomodstack.construct_verification.v2",
+    "comparison_panel_summary": "bms.ngs.comparison-attribution-summary.v1",
+    "comparison_panel_alignment_bam": "bms.ngs.comparison-panel-alignment-bam.v1",
+    "comparison_panel_alignment_bai": "bms.ngs.comparison-panel-alignment-index.v1",
 }
 
 ARTIFACT_STATES = {

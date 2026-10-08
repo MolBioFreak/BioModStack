@@ -159,6 +159,56 @@ class Job(Base):
     designs = relationship("Design", back_populates="job", cascade="all, delete-orphan")
 
 
+class MolBioNgsReceipt(Base):
+    """One-time server-issued binding from an immutable MolBio revision to ONT input."""
+
+    __tablename__ = "molbio_ngs_receipts"
+
+    id = Column(String(36), primary_key=True)
+    sequence_id = Column(String(36), nullable=False, index=True)
+    revision_id = Column(String(36), nullable=False, index=True)
+    revision_sha256 = Column(String(64), nullable=False)
+    reference_snapshot_path = Column(String(1000), nullable=False)
+    reference_snapshot_sha256 = Column(String(64), nullable=False)
+    expires_at = Column(LenientSQLiteDateTime, nullable=False, index=True)
+    consumed_at = Column(LenientSQLiteDateTime, nullable=True)
+    consumed_job_id = Column(String(36), ForeignKey("jobs.id"), nullable=True, unique=True)
+    created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow, nullable=False)
+
+
+class ApprovedNgsComparisonPanel(Base):
+    """Server-owned immutable comparison reference panel version."""
+
+    __tablename__ = "approved_ngs_comparison_panels"
+
+    id = Column(String(36), primary_key=True)
+    version = Column(Integer, nullable=False)
+    status = Column(String(16), nullable=False, default="APPROVED")
+    label = Column(String(255), nullable=False)
+    manifest_path = Column(String(1000), nullable=False)
+    snapshot_sha256 = Column(String(64), nullable=False)
+    provenance = Column(JSON, nullable=False, default=dict)
+    created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow, nullable=False)
+    created_by = Column(String(255), nullable=False)
+
+
+class NgsComparisonPanelReceipt(Base):
+    """One-time server receipt for an APPROVED panel snapshot."""
+
+    __tablename__ = "ngs_comparison_panel_receipts"
+
+    id = Column(String(36), primary_key=True)
+    panel_id = Column(String(36), ForeignKey("approved_ngs_comparison_panels.id"), nullable=False, index=True)
+    panel_version = Column(Integer, nullable=False)
+    panel_snapshot_path = Column(String(1000), nullable=False)
+    panel_snapshot_sha256 = Column(String(64), nullable=False)
+    expected_receipt_id = Column(String(36), ForeignKey("molbio_ngs_receipts.id"), nullable=False)
+    expires_at = Column(LenientSQLiteDateTime, nullable=False, index=True)
+    consumed_at = Column(LenientSQLiteDateTime, nullable=True)
+    consumed_job_id = Column(String(36), ForeignKey("jobs.id"), nullable=True, unique=True)
+    created_at = Column(LenientSQLiteDateTime, default=datetime.utcnow, nullable=False)
+
+
 class ViewerSnapshotRecord(Base):
     """Immutable, job-owned M6A viewer snapshot metadata and canonical JSON."""
 

@@ -16,6 +16,7 @@ include { FastqAlign } from '../../modules/ngs/fastq_align.nf'
 include { FastqPlasmidQC as Pod5PlasmidQC; FastqPlasmidQC as BamPlasmidQC; FastqPlasmidQC as InputFastqPlasmidQC } from '../../modules/ngs/fastq_plasmid_qc.nf'
 include { FastqDimerAnalysis as Pod5DimerAnalysis; FastqDimerAnalysis as BamDimerAnalysis; FastqDimerAnalysis as InputFastqDimerAnalysis; BuildDimerCanonicalOutputs as Pod5DimerCanonicalOutputs; BuildDimerCanonicalOutputs as BamDimerCanonicalOutputs; BuildDimerCanonicalOutputs as InputFastqDimerCanonicalOutputs } from '../../modules/ngs/fastq_dimer_qc.nf'
 include { ConstructVerify as Pod5ConstructVerify; ConstructVerify as BamConstructVerify; ConstructVerify as InputFastqConstructVerify } from '../../modules/ngs/construct_verify.nf'
+include { ComparisonPanelAttribution as Pod5ComparisonPanelAttribution; ComparisonPanelAttribution as BamComparisonPanelAttribution; ComparisonPanelAttribution as InputComparisonPanelAttribution } from '../../modules/ngs/comparison_panel_attribution.nf'
 
 def reportStage(params, stageName, files) {
     def jobId = params.containsKey('job_id') ? params.job_id : null
@@ -149,6 +150,14 @@ workflow ONT_PLASMID_QC {
                         "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
                     ])
                 }
+                if (params.comparison_panel_snapshot && params.comparison_panel_snapshot.toString().trim()) {
+                    def comparisonSnapshot = file(params.comparison_panel_snapshot)
+                    if (!comparisonSnapshot.exists()) error("Comparison panel snapshot not found")
+                    Pod5ComparisonPanelAttribution(Pod5BamToFastqForQC.out.fastq, Channel.of(reference_file), Channel.of(comparisonSnapshot))
+                    Pod5ComparisonPanelAttribution.out.summary.subscribe { _ignored ->
+                        reportStage(params, "comparison_panel", ["${params.out_dir}/comparison_panel/comparison_panel_summary.json", "${params.out_dir}/comparison_panel/comparison_panel.bam", "${params.out_dir}/comparison_panel/comparison_panel.bam.bai"])
+                    }
+                }
             }
         } else {
             PrepareBamForAnalysis(DoradoBasecall.out.bam)
@@ -232,6 +241,14 @@ workflow ONT_PLASMID_QC {
                     "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
                 ])
             }
+            if (params.comparison_panel_snapshot && params.comparison_panel_snapshot.toString().trim()) {
+                def comparisonSnapshot = file(params.comparison_panel_snapshot)
+                if (!comparisonSnapshot.exists()) error("Comparison panel snapshot not found")
+                BamComparisonPanelAttribution(BamInputToFastqForQC.out.fastq, Channel.of(reference_file), Channel.of(comparisonSnapshot))
+                BamComparisonPanelAttribution.out.summary.subscribe { _ignored ->
+                    reportStage(params, "comparison_panel", ["${params.out_dir}/comparison_panel/comparison_panel_summary.json", "${params.out_dir}/comparison_panel/comparison_panel.bam", "${params.out_dir}/comparison_panel/comparison_panel.bam.bai"])
+                }
+            }
         }
     }
 
@@ -285,6 +302,18 @@ workflow ONT_PLASMID_QC {
                     "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
                     "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
                 ])
+            }
+            if (params.comparison_panel_snapshot && params.comparison_panel_snapshot.toString().trim()) {
+                def comparisonSnapshot = file(params.comparison_panel_snapshot)
+                if (!comparisonSnapshot.exists()) error("Comparison panel snapshot not found")
+                InputComparisonPanelAttribution(Channel.of(fastq_input), Channel.of(reference_file), Channel.of(comparisonSnapshot))
+                InputComparisonPanelAttribution.out.summary.subscribe { _ignored ->
+                    reportStage(params, "comparison_panel", [
+                        "${params.out_dir}/comparison_panel/comparison_panel_summary.json",
+                        "${params.out_dir}/comparison_panel/comparison_panel.bam",
+                        "${params.out_dir}/comparison_panel/comparison_panel.bam.bai",
+                    ])
+                }
             }
         }
     }
