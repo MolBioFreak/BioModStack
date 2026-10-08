@@ -24,6 +24,8 @@ export interface StructureSceneProvenance {
     readonly jobId?: string;
 }
 
+export type StructureRenderingProfile = 'auto' | 'atomic-detail' | 'polymer-cartoon';
+
 export interface StructureSceneState {
     readonly schemaVersion: 1;
     readonly ref: StructureSceneRef;
@@ -32,10 +34,22 @@ export interface StructureSceneState {
     readonly activeDocumentId: string;
     readonly provenance: StructureSceneProvenance;
     readonly presentation?: StructureScenePresentation;
+    /** Result-contract rendering preference; undefined uses the general data-class default. */
+    readonly renderingProfile?: StructureRenderingProfile;
     readonly molecularDynamics?: MDSceneState;
 }
 
 export type StructureSceneStateInput = Omit<StructureSceneState, 'schemaVersion'>;
+
+/**
+ * Result-contract override wins. Otherwise, ordinary structures are cartoon and
+ * MD scenes delegate representation choice to Mol*'s data-aware automatic preset.
+ */
+export const resolveSceneRenderingProfile = (
+    scene: Pick<StructureSceneState, 'molecularDynamics' | 'renderingProfile'>,
+): StructureRenderingProfile => (
+    scene.renderingProfile ?? (scene.molecularDynamics ? 'auto' : 'polymer-cartoon')
+);
 
 const SHA256 = /^[0-9a-f]{64}$/i;
 const unique = (values: readonly string[]): boolean => new Set(values).size === values.length;
@@ -68,6 +82,9 @@ export const createStructureSceneState = (input: StructureSceneStateInput): View
     }
     if (!input.provenance.createdBy.trim() || !input.provenance.createdAt.trim()) {
         return viewerUnsupported('Scene provenance requires createdBy and createdAt', 'provenance');
+    }
+    if (input.renderingProfile !== undefined && !['auto', 'atomic-detail', 'polymer-cartoon'].includes(input.renderingProfile)) {
+        return viewerUnsupported('renderingProfile must be auto, atomic-detail, or polymer-cartoon', 'scene-rendering');
     }
     if (input.molecularDynamics) {
         const md = validateMDSceneState(input.molecularDynamics);
@@ -136,6 +153,7 @@ export const restoreViewerSnapshot = (
         activeDocumentId: snapshot.scene.activeDocumentId,
         provenance: snapshot.scene.provenance,
         presentation: snapshot.scene.presentation,
+        renderingProfile: snapshot.scene.renderingProfile,
         molecularDynamics: snapshot.scene.molecularDynamics,
     });
 };

@@ -4,6 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { validateMDSceneState } from '../src/structureViewer/contracts/mdTrajectory.js';
+import { resolveSceneRenderingProfile } from '../src/structureViewer/contracts/sceneState.js';
 import { StructureSceneController } from '../src/structureViewer/runtime/StructureSceneController.js';
 import { viewerOk } from '../src/structureViewer/contracts/viewerResults.js';
 
@@ -81,6 +82,14 @@ test('controller keeps unsupported playback fail-closed without invoking the ada
     assert.equal(selected.status, 'unsupported');
     assert.equal(frameCalls, 0);
     await controller.dispose();
+});
+
+test('scene data uses explicit render profiles and defaults non-MD structures to cartoon', () => {
+    const adapter = readFileSync(path.resolve(process.cwd(), 'src/structureViewer/adapters/MolstarDirectAdapter.ts'), 'utf8');
+    assert.equal(resolveSceneRenderingProfile({}), 'polymer-cartoon');
+    assert.equal(resolveSceneRenderingProfile({ molecularDynamics: {} as never }), 'auto');
+    assert.equal(resolveSceneRenderingProfile({ renderingProfile: 'atomic-detail' }), 'atomic-detail');
+    assert.match(adapter, /representationPreset: resolveSceneRenderingProfile\(scene\)/);
 });
 
 test('MD pane exposes analysis retry and labels the checksum-bound terminal structure honestly', () => {
