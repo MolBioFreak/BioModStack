@@ -83,6 +83,17 @@ This is an implementation tracking table, not an executable catalog or acceptanc
 | rfdiffusion | monomer_motifscaff | True/True | rfd_ckpt_override, rfd_mask_loops | `platform/api/config/models/rfdiffusion.yaml` | Unestablished; resolve native compiler/dependencies/gates/input-result contract per phase |
 | rfdiffusion | monomer_partialdiff | True/True | rfd_ckpt_override, rfd_mask_loops | `platform/api/config/models/rfdiffusion.yaml` | Unestablished; resolve native compiler/dependencies/gates/input-result contract per phase |
 | unidock | dock | True/True | scoring_function, search_mode | `platform/api/config/models/unidock.yaml` | Unestablished; resolve native compiler/dependencies/gates/input-result contract per phase |
+| antibody_denovo | default | Alias; not a YAML mode | canonical antibody pipeline normalization | `workflows/antibody_denovo.nf` | Existing entrypoint mapping; worker callback migration and acceptance unestablished |
+| template_antibody_denovo | antibody_denovo_pipeline | Internal/template mapping | canonical antibody stage selectors | `workflows/antibody_denovo.nf` | Existing alias; same native scientific authority, not a separate worker implementation |
+| template_antibody_denovo | antibody_refinement_pipeline | Internal/template mapping | canonical antibody refinement selectors | `workflows/antibody_denovo.nf` | Existing alias; same native scientific authority, not a separate worker implementation |
+| template_antibody_denovo | default | Internal/template mapping | canonical antibody pipeline normalization | `workflows/antibody_denovo.nf` | Existing alias; admission/worker migration unestablished |
+| template_antibody_denovo | maturation_child | Internal child mapping | parent-declared maturation settings | `workflows/maturation_child.nf` | Computational descendant; cannot be omitted from parent coverage |
+| esmfold2 | complex | Entrypoint-only mode | typed complex components and MSA identities | `workflows/structure_prediction.nf` | Native entrypoint exists; public admission and exact-release parity unestablished |
+| esmfold2_experimental | complex | Entrypoint-only alias | typed complex components and MSA identities | `workflows/structure_prediction.nf` | Alias of shared ESMFold compiler; acceptance unestablished |
+| ppiflow | generator_backbone_refine | Entrypoint-only mapping | typed generator/refinement and checkpoint decisions | `workflows/ppiflow_generator_design.nf` | P6/P7 shared lifecycle/gate migration required; no support inferred from mapping |
+| unidock | ntp_dock | Entrypoint-only mode | native nucleotide/scoring selectors | `workflows/docking.nf` | Same docking authority; admission and result integration unestablished |
+| rfantibody_child | antibody_backbone | Internal child mapping | parent-declared backbone settings | `workflows/rfantibody_backbone.nf` | Computational descendant; resource/identity/result joins require parent coverage |
+| frustrampnn | analyze | Embedded component mapping | canonical grouping/settings and required candidate roster | `workflows/frustrampnn_analysis.nf` | Shared grouping ledger exists; all consumer migration and behavioral acceptance remain separate |
 
 ## Known migration blockers
 
