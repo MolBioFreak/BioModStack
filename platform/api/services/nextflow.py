@@ -5676,6 +5676,12 @@ def compile_nextflow_invocation(
         effective_profile = resolve_ont_workflow_alias(effective_profile)
         params = normalize_ont_launch_params(effective_profile, params)
         params['workflow_id'] = effective_profile
+        if (effective_profile == 'wf_clone_validation' or
+                (effective_profile == 'ont_construct_screening' and params.get('run_assembly') is True)):
+            from scripts.validate_wf_clone_runtime import resolve_nextflow_home
+            # Carry the installed engine selection into the plan and argv. The
+            # task must not invent a different cache after inventory selected it.
+            params['wf_clone_nxf_home'] = str(resolve_nextflow_home(params.get('wf_clone_nxf_home')))
     is_fastq_only_ont_command = (
         effective_profile == 'ont_fastq_qc'
         and str(params.get('ont_input_mode') or params.get('input_mode') or '').strip() == 'fastq'

@@ -1234,7 +1234,7 @@ def ngs_clone_runtime_dependencies(params):
     import os
     from pathlib import Path
     from component_runtime import SelectedDependency
-    from scripts.validate_wf_clone_runtime import resolve_lock_path, selected_images
+    from scripts.validate_wf_clone_runtime import resolve_lock_path, resolve_nextflow_home, selected_images
     root = Path(__file__).resolve().parents[2]
     lock_path = Path(params.get('wf_clone_runtime_lock') or os.environ.get('BMS_WF_CLONE_RUNTIME_LOCK') or
                      root / 'config/ngs/wf_clone_validation_v1.8.4.lock.json').resolve()
@@ -1257,7 +1257,7 @@ def ngs_clone_runtime_dependencies(params):
     add('runtime_data', prefix + '/compatibility.patch',
         resolve_lock_path(lock_path, lock['compatibility_patch']['path']),
         lock['compatibility_patch']['sha256'])
-    home = Path(params.get('wf_clone_nxf_home') or os.environ.get('NXF_HOME') or Path.home() / '.nextflow')
+    home = resolve_nextflow_home(params.get('wf_clone_nxf_home'))
     version = lock['nextflow']['version']
     jar = f'framework/{version}/nextflow-{version}-one.jar'
     add('runtime_data', prefix + '/nxf-home/' + jar, home / jar)

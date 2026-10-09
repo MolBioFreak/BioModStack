@@ -23,7 +23,11 @@ def test_nested_wf_clone_has_shared_singularity_and_nxf_caches() -> None:
 
     assert "BMS_WF_CLONE_SINGULARITY_CACHE" in config_text
     assert 'wf_clone_singularity_cache = System.getenv(\'BMS_WF_CLONE_SINGULARITY_CACHE\') ?: "${bmsContainerRootFallback}/singularity_cache"' in config_text
-    assert 'wf_clone_nxf_home = System.getenv(\'BMS_WF_CLONE_NXF_HOME\') ?: "${cacheRoot}/nextflow/wf-clone"' in config_text
+    assert "wf_clone_nxf_home = System.getenv('BMS_WF_CLONE_NXF_HOME') ?: null" in config_text
+    assert '${cacheRoot}/nextflow/wf-clone' not in config_text
     assert 'apptainer.cacheDir = System.getenv(\'NXF_APPTAINER_CACHEDIR\') ?: ensureDir("${cacheRoot}/apptainer")' in config_text
     assert 'export NXF_SINGULARITY_CACHEDIR="${wfCloneSingularityCache}"' in module_text
-    assert 'export NXF_HOME="${wfCloneNxfHome}"' in module_text
+    assert 'export NXF_HOME=${shellQuote(wfCloneNxfHome)}' in module_text
+    assert 'export NXF_VER=${shellQuote(runtimeLock.nextflow.version)}' in module_text
+    assert 'export NXF_DIST="\\${NXF_HOME}/framework"' in module_text
+    assert '${task.workDir}/.nextflow' not in module_text

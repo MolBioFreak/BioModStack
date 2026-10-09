@@ -83,6 +83,21 @@ def git(source: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def resolve_nextflow_home(selected: str | Path | None = None) -> Path:
+    """Use the installed engine home, shared by inventory and native compilation.
+
+    Clone-specific/retained placement wins; otherwise inherit the managed
+    launcher home. Cache roots do not select an independently installed engine.
+    This resolves a path only: native launch retains its existing error behavior.
+    """
+    explicit = (selected or os.environ.get("BMS_WF_CLONE_NXF_HOME")
+                or os.environ.get("NXF_HOME") or os.environ.get("BMS_NEXTFLOW_HOME"))
+    if explicit:
+        return Path(explicit)
+    data = os.environ.get("BMS_DATA")
+    return Path(data) / "nextflow" if data else Path.home() / ".nextflow"
+
+
 def selected_images(lock: dict[str, Any], assembly_tool: str = "flye") -> list[dict[str, Any]]:
     """Only Canu is conditional; annotation and reporting always execute."""
     return [image for image in lock["containers"]["images"]

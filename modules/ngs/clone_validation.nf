@@ -77,14 +77,16 @@ process RunCloneValidation {
     def validator = shellQuote("${codeRoot}/scripts/validate_wf_clone_runtime.py")
     def lock = shellQuote(lockPath)
     def wfCloneSingularityCache = runtimeLock.containers.cache_dir
-    def wfCloneNxfHome = (params.wf_clone_nxf_home ?: System.getenv("NXF_HOME") ?: "${task.workDir}/.nextflow").toString()
+    def wfCloneNxfHome = (params.wf_clone_nxf_home ?: System.getenv("NXF_HOME") ?: "${System.getenv('HOME')}/.nextflow").toString()
     """
     set -euo pipefail
     export NXF_OFFLINE=true
     export NXF_DISABLE_CHECK_LATEST=true
     export NXF_DOCKER_ENABLED=false
     export NXF_SINGULARITY_CACHEDIR="${wfCloneSingularityCache}"
-    export NXF_HOME="${wfCloneNxfHome}"
+    export NXF_HOME=${shellQuote(wfCloneNxfHome)}
+    export NXF_VER=${shellQuote(runtimeLock.nextflow.version)}
+    export NXF_DIST="\${NXF_HOME}/framework"
     mkdir -p "\${NXF_HOME}"
 
     ${apiPython} ${validator} \
