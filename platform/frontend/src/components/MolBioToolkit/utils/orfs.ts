@@ -93,7 +93,8 @@ export function findOpenReadingFrames(
             nextStops[position] = STOP_CODONS.has(scanSeq.slice(position, position + 3))
                 ? position : nextStops[position + 3];
         }
-        for (let start = 0; start <= sequenceLength - 3; start += 1) {
+        // A circular start codon can itself straddle the origin.
+        for (let start = 0; start <= (circular ? sequenceLength - 1 : sequenceLength - 3); start += 1) {
             if (scanSeq.slice(start, start + 3) !== 'ATG') {
                 continue;
             }
