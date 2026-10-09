@@ -407,6 +407,43 @@ async def test_shared_remote_digest_and_transaction_with_result_projection_seam(
             assert (await session.get(NgsComparisonPanelReceipt, launch.panel_receipt.id)).consumed_job_id == job.id
 
 
+@pytest.mark.asyncio
+async def test_final_commit_failure_rolls_back_job_and_claims_not_snapshots(launch):
+    first = await prepare(launch, payload(launch, panel=True), "ont_plasmid_qc")
+    rolled_back = []
+    async def dependency():
+        async with launch.factory() as session:
+            rollback = session.rollback
+            async def fail_commit():
+                raise RuntimeError("controlled final commit failure")
+            async def track_rollback():
+                rolled_back.append(True)
+                await rollback()
+            session.commit = fail_commit
+            session.rollback = track_rollback
+            yield session
+    launch.app.dependency_overrides[ont_runs.get_session] = dependency
+    with pytest.raises(RuntimeError, match="controlled final commit failure"):
+        await launch.client.post("/api/ont/ngs/ont_plasmid_qc/submit", json=first["request"])
+    assert rolled_back == [True]
+    await no_claims(launch)
+    assert await prepare(launch, first["request"], "ont_plasmid_qc") == first
+
+
+@pytest.mark.asyncio
+async def test_saved_placement_omission_and_explicit_local_are_distinct(launch):
+    request = ont_runs.OntNgsSubmitRequest(params={"pod5_dir": str(launch.pod5)})
+    omitted = ont_runs._job_create_for_ont_submit("basecall_dna", request)
+    local = ont_runs._job_create_for_ont_submit("basecall_dna", ont_runs.OntNgsSubmitRequest.model_validate({
+        **request.model_dump(exclude_unset=True), "execution_target_id": None,
+    }))
+    assert "execution_target_id" not in omitted.model_fields_set
+    assert "execution_target_id" in local.model_fields_set
+    assert omitted.execution_target_id is local.execution_target_id is None
+    response = await launch.client.post("/api/ont/ngs/basecall_dna/submit", json=request.model_dump(exclude_unset=True))
+    assert response.status_code == 201, response.text
+
+
 ORDINARY_IDS = sorted(identity for identity in set(CANONICAL_ONT_WORKFLOWS) | set(ONT_WORKFLOW_ALIASES)
                       if ont_runs.resolve_ont_workflow_alias(identity) != "ont_pooled_reference_assignment")
 
