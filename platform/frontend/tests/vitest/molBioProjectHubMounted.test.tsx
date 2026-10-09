@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ProjectHubReadModel } from '../../src/lib/api';
 
 const apiMocks = vi.hoisted(() => ({
     fetchProjectHub: vi.fn(),
@@ -68,7 +69,7 @@ vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
 import DomainExperimentWorkspace from '../../src/components/molbio-ngs/DomainExperimentWorkspace';
 import { projectHubDNASequencesToConstructShelf } from '../../src/components/MolBioToolkit/utils/projectConstructShelf';
 
-const plasmids = [
+const plasmids: ProjectHubReadModel['plasmids'] = [
     {
         sequence_id: 'sequence-pl1480', revision_id: 'revision-pl1480', revision_number: 1,
         receipt_id: 'receipt-pl1480', receipt_sha256: 'receipt-sha-pl1480', content_digest: 'content-sha-pl1480',
@@ -91,11 +92,11 @@ const plasmids = [
         cmv_promoter: true, neor_kanr: true, replication_origin_count: 1,
         saved_experiment_count: 1, organism_host_context: null, project_tags: [], project_notes: '',
         reopen_href: '/designer?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=plasmids&molbio_sequence_id=sequence-pl2190',
-        map_segments: [{ start: 700, end: 1400, tone: 'success' }],
+        map_segments: [{ start: 700, end: 1400, tone: 'success', label: 'ori', feature_type: 'rep_origin', strand: 'forward' }],
     },
 ];
 
-const readModel = {
+const readModel: ProjectHubReadModel = {
     schema: 'bms.project-hub.v1',
     project: {
         id: 'project-1', name: 'Syenex New Plasmids', objective: 'Routine new plasmid onboarding.',
@@ -178,10 +179,12 @@ function buttonNamed(name: string) {
 }
 
 describe('mounted MolBio project hub', () => {
-    it('builds the default Construct Shelf only from exact Project membership', () => {
+    it('projects exactly the supplied Project membership into latest Construct Shelf links', () => {
         const shelf = projectHubDNASequencesToConstructShelf(readModel);
         expect(shelf.map((item) => item.name)).toEqual(['PL1480', 'PL2190']);
-        expect(shelf.map((item) => item.name)).not.toContain('pGM12_pEb-HS2-fluc');
+        const otherProject = { ...readModel, plasmids: [{ ...plasmids[0], sequence_id: 'other-sequence', name: 'pGM12_pEb-HS2-fluc' }] };
+        expect(projectHubDNASequencesToConstructShelf(otherProject).map(item => item.id)).toEqual(['other-sequence']);
+        expect(shelf.map(item => item.id)).toEqual(['sequence-pl1480', 'sequence-pl2190']);
         expect(shelf[0]?.revision_id).toBeUndefined();
         expect(shelf[0]?.reopen_href).toContain('molbio_sequence_id=sequence-pl1480');
         expect(shelf[0]?.reopen_href).not.toContain('molbio_revision_id');
@@ -274,6 +277,11 @@ describe('mounted MolBio project hub', () => {
     });
 
     it('shows only persisted saved work and filters it by plasmid through readable query state', async () => {
+        apiMocks.fetchProjectHub.mockResolvedValue({ ...readModel, experiments: [...readModel.experiments, {
+            ...readModel.experiments[0], id: 'off-plasmid', title: 'Saved off-plasmid PCR',
+            plasmid_sequence_id: 'sequence-pl1480', plasmid_sequence_ids: ['sequence-pl1480'],
+            input_sequence_ids: ['sequence-pl1480'], output_sequence_ids: [], plasmid_name: 'PL1480',
+        }] });
         await renderWorkspace('workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=experiments&plasmid=sequence-pl2190');
 
         expect(container.textContent).toContain('Validation PCR');
@@ -281,6 +289,7 @@ describe('mounted MolBio project hub', () => {
         expect(container.textContent).toContain('Inputs: PL1480');
         expect(container.textContent).toContain('Outputs: PL2190');
         expect(container.textContent).not.toContain('Transient alignment');
+        expect(container.textContent).not.toContain('Saved off-plasmid PCR');
         expect(container.querySelector('[aria-pressed="true"]')?.textContent).toBe('PL2190');
         expect(container.textContent).toContain('Syenex New Plasmids');
         expect(container.textContent).toContain('2 DNA sequences');
@@ -291,6 +300,11 @@ describe('mounted MolBio project hub', () => {
 
         await act(async () => buttonNamed('PL1480')?.click());
         expect(contextMocks.updateQueryParams).toHaveBeenCalledWith({ plasmid: 'sequence-pl1480' });
+        await renderWorkspace('workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=experiments&plasmid=sequence-pl1480');
+        expect(container.textContent).toContain('Saved off-plasmid PCR');
+        expect(container.textContent).toContain('Saved Gibson assembly');
+        expect(container.textContent).not.toContain('Validation PCR');
+        expect(container.textContent).not.toContain('Transient alignment');
     });
 
     it('opens the readable edit dialog, traps focus, closes on Escape, and restores the invoking control', async () => {
@@ -310,6 +324,18 @@ describe('mounted MolBio project hub', () => {
         expect(dialog?.textContent).toContain('Project tags');
         expect(dialog?.textContent).toContain('Project notes');
         expect(document.activeElement).toBe(dialog?.querySelector('input[name="name"]'));
+        const first = dialog!.querySelector<HTMLButtonElement>('button[aria-label="Close edit dialog"]')!;
+        const last = Array.from(dialog!.querySelectorAll<HTMLButtonElement>('button')).find(button => button.type === 'submit')!;
+        expect(last).toBeTruthy();
+        last.focus();
+        const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+        await act(async () => last.dispatchEvent(tab));
+        expect(tab.defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(first);
+        const reverseTab = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+        await act(async () => first.dispatchEvent(reverseTab));
+        expect(reverseTab.defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(last);
 
         await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
         expect(container.querySelector('[role="dialog"]')).toBeNull();
@@ -391,7 +417,7 @@ describe('mounted MolBio project hub', () => {
         expect(contextMocks.setStateRevisionId).toHaveBeenCalledWith('state-refreshed');
     });
 
-    it('renders populated Sequence Data from persisted typed summaries without bulk read payloads', async () => {
+    it('renders populated Sequence Data from a resolved mocked summary DTO', async () => {
         apiMocks.fetchProjectHub.mockResolvedValue({
             ...readModel,
             sequence_data: {
@@ -408,7 +434,14 @@ describe('mounted MolBio project hub', () => {
         expect(container.textContent).toContain('Basecalled read set available.');
         expect(container.querySelector('a[href*="run_id=run-42"][href*="observed_generation=3"]')).not.toBeNull();
         expect(container.textContent).not.toContain('No ONT sequencing data attached');
-        expect(JSON.stringify(apiMocks.fetchProjectHub.mock.results)).not.toContain('fastq');
+        // Inspect fulfilled fixture DTOs, not Promise wrappers; no backend/transport claim.
+        expect(apiMocks.fetchProjectHub).toHaveBeenCalled();
+        const payloads = await Promise.all(apiMocks.fetchProjectHub.mock.results.map(result => result.value));
+        expect(payloads[0].sequence_data.items).toEqual([{
+            id: 'run-42', plasmid_sequence_id: 'sequence-pl1480', plasmid_name: 'PL1480', kind: 'run',
+            title: 'ONT run 42', summary: 'Basecalled read set available.', status: 'completed',
+            created_at: '2026-08-26T12:00:00Z', reopen_href: '/ngs?run_id=run-42&observed_generation=3',
+        }]);
     });
 
     it('renders persisted Results and readable Activity without exposing technical envelopes by default', async () => {

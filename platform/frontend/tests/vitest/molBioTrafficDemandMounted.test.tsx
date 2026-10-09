@@ -21,7 +21,7 @@ const assemblyProps = { sequenceData: seq, selection: null, selectedSequenceId: 
 const primerProps = { sequenceData: seq, selection: null, onHighlight: noop, onAddPrimer: vi.fn(), onRemovePrimer: noop, tmOptions: null, tmSettings: settings, onTmSettingsChange: noop };
 let root: Root, host: HTMLDivElement, client: QueryClient;
 let requests: InternalAxiosRequestConfig[];
-let held: string | null;
+let held: string | string[] | null;
 let complete: (() => void)[];
 const originalAdapter = api.defaults.adapter;
 function count(path: string) { return requests.filter(r => r.url?.endsWith(path)); }
@@ -48,7 +48,7 @@ beforeEach(() => {
         else if (config.url?.endsWith('/pcr')) data = { product: { sequence: 'ACGT', length: 4 }, experiment_id: null, experiment_revision_id: null };
         else throw Error(`Unexpected transport: ${config.url}`);
         // Deliberately complete even after abort, to exercise stale-result guards.
-        if (held && config.url?.endsWith(held)) await new Promise<void>(resolve => complete.push(resolve));
+        if (held && (Array.isArray(held) ? held : [held]).some(path => config.url?.endsWith(path))) await new Promise<void>(resolve => complete.push(resolve));
         return { data, status: 200, statusText: 'OK', headers: {}, config };
     };
 });
@@ -140,13 +140,24 @@ it('Primer debounce sends final draft only, aborts superseded Tm/QC and keeps in
     const field = host.querySelector<HTMLInputElement>('input[placeholder="Sequence (5\'→3\')"]')!;
     await input(field, 'ACGTACGTACGT'); await input(field, 'ACGTACGTACGTACGT');
     expect(count('/primer-tm/calculate')).toHaveLength(0);
-    held = '/primer-tm/calculate'; await flush(250); const first = count('/primer-tm/calculate')[0];
-    expect(JSON.parse(first.data).primers).toHaveLength(1);
-    await input(field, 'ACGTACGTACGTACGTACGT'); expect(first.signal?.aborted).toBe(true);
-    await flush(250); expect(count('/primer-tm/calculate')).toHaveLength(2);
-    const second = count('/primer-tm/calculate')[1]; await click('Library'); expect(second.signal?.aborted).toBe(true);
+    expect(count('/primer-qc')).toHaveLength(0);
+    held = ['/primer-tm/calculate', '/primer-qc']; await flush(250);
+    const first = count('/primer-tm/calculate')[0], firstQc = count('/primer-qc')[0];
+    const assertDraft = (tm: InternalAxiosRequestConfig, qc: InternalAxiosRequestConfig, sequence: string) => {
+        expect(JSON.parse(tm.data)).toEqual({ primers: [{ sequence, sequence_type: 'dna' }], settings });
+        expect(JSON.parse(qc.data)).toEqual({ primers: [{ sequence, sequence_type: 'dna' }], template_sequence: seq.sequence, template_sequence_type: 'dna', template_is_circular: false, include_pairwise: false });
+    };
+    assertDraft(first, firstQc, 'ACGTACGTACGTACGT');
+    await input(field, 'ACGTACGTACGTACGTACGT');
+    expect(first.signal?.aborted).toBe(true); expect(firstQc.signal?.aborted).toBe(true);
+    await flush(250);
+    expect(count('/primer-tm/calculate')).toHaveLength(2); expect(count('/primer-qc')).toHaveLength(2);
+    const second = count('/primer-tm/calculate')[1], secondQc = count('/primer-qc')[1];
+    assertDraft(second, secondQc, 'ACGTACGTACGTACGTACGT');
+    await click('Library');
+    expect(second.signal?.aborted).toBe(true); expect(secondQc.signal?.aborted).toBe(true);
     await act(async () => complete.splice(0).forEach(resolve => resolve())); await flush(30_000);
-    expect(count('/primer-tm/calculate')).toHaveLength(2);
+    expect(count('/primer-tm/calculate')).toHaveLength(2); expect(count('/primer-qc')).toHaveLength(2);
 });
 it('explicit primer design and vendor plan abort on changed inputs without automatic replacement computation', async () => {
     held = '/primer-design'; await render(<PrimerPanel {...primerProps} />); await click('Design');

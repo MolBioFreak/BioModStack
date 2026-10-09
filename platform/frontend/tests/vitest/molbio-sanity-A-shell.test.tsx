@@ -78,9 +78,16 @@ it('opening another construct switches the route and closing tabs leaves no phan
 it('failed selection cannot publish a workspace or its URL', async () => {
  await act(async()=>mocks.input.onSelectSequence('saved-a'));
  const before=host.querySelector('[data-route-search]')!.textContent;
- mocks.get.mockRejectedValueOnce(new Error('sequence unavailable'));
- await act(async()=>mocks.input.onSelectSequence('missing'));
+ const priorSequence = mocks.header.sequenceData.sequence;
+ let reject!: (error: Error) => void;
+ mocks.get.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+ let pending!: Promise<unknown>;
+ await act(async()=>{ pending = mocks.input.onSelectSequence('missing'); });
+ expect(host.querySelector('[data-route-search]')!.textContent).toBe(before);
+ await act(async()=>{ reject(new Error('sequence unavailable')); await pending; });
  expect(mocks.header.sequenceData.name).toBe('A');
+ expect(mocks.header.sequenceData.sequence).toBe(priorSequence);
+ expect(host.querySelectorAll('button[title="Close workspace"]')).toHaveLength(1);
  expect(host.querySelector('[data-route-search]')!.textContent).toBe(before);
 });
 it('superseded selection cannot replace an already-open workspace or its URL', async () => {
@@ -105,19 +112,21 @@ it('demo activation supersedes an older saved load and clears all saved URL keys
  for(const key of ['molbio_sequence_id','molbio_revision_id','sequence_id','revision_id']) expect(query.has(key),key).toBe(false);
 });
 
-it.each(['molbio_', ''])('exact %sURL revision stays immutable rather than publishing current editable content', async prefix => {
+it.each(['empty workspace', 'already-open editable workspace'])('canonical exact URL revision stays immutable from %s', async initialState => {
+ if (initialState === 'already-open editable workspace') await act(async()=>mocks.input.onSelectSequence('saved-a'));
  const revision={sequence_id:'saved-a',document_id:'saved-a',revision_id:'revision-a',revision_number:3,document_name:'Historical',
    change_kind:'import',created_at:'2026-01-01T00:00:00Z',relation:'root',content_sha256:'a'.repeat(64),
    reopen_destination:{params:{sequence_id:'saved-a',revision_id:'revision-a'}},
    snapshot:{...saved,name:'Historical',sequence:'TTTT'.repeat(30)}};
  mocks.revision.mockResolvedValue(revision);
  vi.mocked(fetch).mockResolvedValue({ok:true,json:async()=>revision} as Response);
- await act(async()=>mocks.navigate(`/?${prefix}sequence_id=saved-a&${prefix}revision_id=revision-a`));
+ await act(async()=>mocks.navigate(`/?molbio_sequence_id=saved-a&molbio_revision_id=revision-a`));
  await act(async()=>{await new Promise(resolve=>setTimeout(resolve,30));});
  expect(mocks.header.sequenceData.name).toBe('Historical');
  expect(mocks.header.sequenceData.sequence).toBe('TTTT'.repeat(30));
  expect(mocks.header.onSave).toBeUndefined();
- expect(host.querySelector('[data-route-search]')!.textContent).toContain('revision_id=revision-a');
+ expect(new URLSearchParams(host.querySelector('[data-route-search]')!.textContent!).get('molbio_revision_id')).toBe('revision-a');
+ expect(mocks.revision).toHaveBeenCalledWith('saved-a', 'revision-a');
 });
 
 it('real panel batch callbacks preserve one undo step and completion ownership', async () => {

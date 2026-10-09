@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { DigestPanel, getQuickMapEnzymeNames } from '../../src/components/MolBioToolkit/panels/DigestPanel';
+import { DigestPanel } from '../../src/components/MolBioToolkit/panels/DigestPanel';
 import { GibsonDesignWorkspace } from '../../src/components/MolBioToolkit/panels/GibsonDesignWorkspace';
 import { AssemblyPanel } from '../../src/components/MolBioToolkit/panels/AssemblyPanel';
 import { api, saveGibsonAssembly, saveGoldenGateAssembly, saveDesignedGibsonAssembly } from '../../src/lib/api';
@@ -156,10 +156,18 @@ it('mounted full/compact inventory has identical filters, every bulk-map group a
     const map = vi.fn(), analyze = vi.fn();
     const props = { sequenceData: seq, sequenceId: null, onHighlight: noop, catalog: receipt, analysis, authorityLoading: false, authorityError: null, digestSimulation: null, digestLoading: false, digestError: null, onDigestSelectionChange: noop, onSimulateDigest: noop, onEnzymesChange: map, onAnalyzeAll: analyze };
     const expected = full.map((record, i) => ({ record, summary: analysis.analysis.enzyme_summaries[i], cuts: [], selectionCuts: 0 }));
+    // IDs follow the synthetic fixture's index assignment, never the UI selector.
+    const quickMapIds = {
+        unique: full.filter((_, i) => i % 4 === 1).map(r => r.enzyme_id),
+        double: full.filter((_, i) => i % 4 === 2).map(r => r.enzyme_id),
+        three_plus: full.filter((_, i) => i % 4 === 3).map(r => r.enzyme_id),
+        nicking: full.filter(r => r.analysis_capability === 'nicking_analysis').map(r => r.enzyme_id),
+        type_iis: full.filter(r => fixture.catalog.golden_gate_compatible_ids.includes(r.enzyme_id)).map(r => r.enzyme_id),
+    };
     for (const records of [full, compact]) {
         await render(null); await render(<DigestPanel {...props} catalogRecords={records} />);
         for (const [group, label] of [['unique', 'Map all 1x'], ['double', 'Map all 2x'], ['three_plus', 'Map all 3x+'], ['nicking', 'Map nicking'], ['type_iis', 'Map Golden Gate']] as const) {
-            await click(label); expect(map).toHaveBeenLastCalledWith(getQuickMapEnzymeNames(expected, group));
+            await click(label); expect(map).toHaveBeenLastCalledWith(quickMapIds[group]);
         }
         for (const [label, count] of [['1x',1],['2x',2],['3x+',3],['0x',0]] as const) {
             await click(label);
