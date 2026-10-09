@@ -2,6 +2,8 @@ import { useState, type ReactNode } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data } from 'plotly.js';
+import { useThemeColors } from './useThemeColors';
+import './StructurePredictionResults.css';
 import { fetchChainMetrics, fetchDesignResidueMetrics, fetchJobDesignMetrics, fetchPAEData, type ChainMetric, type Design } from '../lib/api';
 import { parseScientificNativeMetric, parseScientificPae, type NativePaeToken } from '../lib/scientificViewerIdentity';
 import type { ScientificPoint } from '../lib/scientificAnalytics';
@@ -16,8 +18,8 @@ export const isStandaloneStructurePrediction = (modelId?: string | null) =>
 const asRecord = (value: unknown): Record<string, unknown> | null => value != null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const chainId = (ref: AtomRef) => ref.authAsymId ?? ref.labelAsymId ?? '';
 const axisLabel = (ref: AtomRef) => `${chainId(ref)}:${ref.authSeqId ?? ref.labelSeqId}${ref.insertionCode ?? ''} ${ref.componentId ?? ''}${ref.labelAtomId ? ` / ${ref.labelAtomId}` : ''}`;
-const tokenLabel = (token: NativePaeToken) => `Token ${token.index}`;
-const nativeSummaryKeys: Record<string, string> = { plddt_mean: 'Native token-mean pLDDT (fraction)', plddt: 'Native summary pLDDT (0–100)', complex_plddt: 'Complex pLDDT (fraction)', complex_iplddt: 'Interface pLDDT (fraction)', ptm: 'pTM', iptm: 'iPTM', ranking_score: 'Producer ranking score', confidence_score: 'Producer confidence score', gpde: 'gPDE (Å)', complex_pde: 'Complex PDE (Å)', complex_ipde: 'Interface PDE (Å)' };
+const tokenLabel = (token: NativePaeToken) => String(token.index);
+const nativeSummaryKeys: Record<string, string> = { plddt_mean: 'Mean pLDDT (fraction)', plddt: 'Mean pLDDT (0–100)', complex_plddt: 'Complex pLDDT (fraction)', complex_iplddt: 'Interface pLDDT (fraction)', ptm: 'pTM', iptm: 'iPTM', ranking_score: 'Producer ranking score', confidence_score: 'Producer confidence score', gpde: 'gPDE (Å)', complex_pde: 'Complex PDE (Å)', complex_ipde: 'Interface PDE (Å)' };
 type ScalarDisplay = { key: string; label: string; display: string; title: string };
 type ScalarEvidence = { entries: ScalarDisplay[]; reason?: string };
 const canonicalScalars = (design: Design) => design.core_protein_scientific_contract === 1 || design.confidence_metrics?.core_protein_scientific_contract === 1 || !!design.scientific_structure_document || !!design.confidence_metrics?.core_protein_scientific;
@@ -44,7 +46,7 @@ function scalarEvidence(design: Design, point?: ScientificPoint, reason?: string
         if (!(key in nativeSummaryKeys)) return [];
         const descriptor = point.metric_descriptors[key];
         const plddt = key.includes('plddt');
-        const label = plddt ? `${descriptor.scope === 'model_token_mean' ? 'Native token-mean' : descriptor.scope === 'model_atom_mean' ? 'Native atom-mean' : key === 'complex_plddt' ? 'Complex' : 'Native summary'} pLDDT (0–100)` : nativeSummaryKeys[key];
+        const label = plddt ? `${key === 'complex_iplddt' ? 'Interface' : key === 'complex_plddt' ? 'Complex' : 'Mean'} pLDDT` : nativeSummaryKeys[key];
         const title = state.state === 'ok' ? `${state.value} ${descriptor.unit}; ${descriptor.scope}` : state.reason_code;
         if (state.state !== 'ok') return [{ key, label, display: '—', title }];
         if (plddt && !['fraction', 'percent'].includes(descriptor.unit)) return [{ key, label, display: '—', title: `Unsupported native pLDDT unit: ${descriptor.unit}` }];
@@ -55,15 +57,43 @@ const scalarCell = (evidence: ScalarEvidence, keys: string[]) => {
     const entry = keys.map(key => evidence.entries.find(e => e.key === key)).find(Boolean);
     return <td title={entry ? `${entry.label}: ${entry.title}` : evidence.reason ?? 'Not reported'}>{entry?.display ?? '—'}</td>;
 };
-const chainTicks = (refs: AtomRef[]) => {
-    const blocks: { id: string; start: number; end: number }[] = [];
-    refs.forEach((ref, i) => {
-        const id = chainId(ref), last = blocks[blocks.length - 1];
-        if (last?.id === id) last.end = i;
-        else blocks.push({ id, start: i, end: i });
-    });
-    return { tickmode: 'array' as const, tickvals: blocks.map(b => axisLabel(refs[Math.floor((b.start + b.end) / 2)])), ticktext: blocks.map(b => b.id), showticklabels: refs.length > 0 };
+const sparseTicks = (labels: string[]) => {
+    const positions = [...new Set(Array.from({ length: Math.min(5, labels.length) }, (_, i) =>
+        Math.round(i * (labels.length - 1) / Math.max(1, Math.min(5, labels.length) - 1))))];
+    return { tickmode: 'array' as const, tickvals: positions, ticktext: positions.map(i => labels[i]), tickangle: 0 };
 };
+const residueTick = (ref: AtomRef) => `${chainId(ref)}:${ref.authSeqId ?? ref.labelSeqId}${ref.insertionCode ?? ''}`;
+
+/** Display positions preserve native matrix order, including ligand atoms and unmapped axes. */
+function PaePlot({ matrix, rowLabels, columnLabels, rowTicks = rowLabels, columnTicks = columnLabels,
+    axisTitle, onInspect, compact = false }: {
+    matrix: number[][]; rowLabels: string[]; columnLabels: string[];
+    rowTicks?: string[]; columnTicks?: string[]; axisTitle: string;
+    onInspect?: (row: number, column: number) => void; compact?: boolean;
+}) {
+    const colors = useThemeColors();
+    return <div className="prediction-pae-plot"><Plot
+        data={[{ type: 'heatmap', z: matrix, x: columnLabels.map((_, i) => i), y: rowLabels.map((_, i) => i),
+            customdata: rowLabels.map(row => columnLabels.map(column => `Row ${row}<br>Column ${column}`)),
+            zmin: 0, zmax: 30, zsmooth: false, colorscale: 'YlGnBu',
+            colorbar: { title: { text: 'Å', side: 'top' }, thickness: 10, len: 0.85, tickvals: [0, 10, 20, 30], outlinewidth: 0, xpad: 5 },
+            hovertemplate: '%{customdata}<br>PAE %{z:.2f} Å<extra></extra>' } as Data]}
+        layout={{ autosize: true, paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+            font: { color: colors.textSecondary, size: 11 }, margin: { l: compact ? 46 : 58, r: 40, t: 26, b: compact ? 42 : 54 },
+            xaxis: { type: 'linear', title: { text: axisTitle, standoff: 10 }, ...sparseTicks(columnTicks),
+                constrain: 'domain', range: [-0.5, columnLabels.length - 0.5], showgrid: false, zeroline: false, automargin: true },
+            yaxis: { type: 'linear', title: { text: axisTitle, standoff: 10 }, ...sparseTicks(rowTicks),
+                range: [rowLabels.length - 0.5, -0.5], scaleanchor: 'x', constrain: 'domain', showgrid: false, zeroline: false, automargin: true },
+            hoverlabel: { bgcolor: colors.bgSecondary, font: { color: colors.textPrimary } },
+        }}
+        onClick={event => {
+            const point = event.points[0];
+            if (typeof point?.x === 'number' && typeof point.y === 'number') onInspect?.(Math.round(point.y), Math.round(point.x));
+        }}
+        config={{ responsive: true, displayModeBar: 'hover', displaylogo: false, toImageButtonOptions: { format: 'svg', filename: 'predicted-aligned-error' } }}
+        useResizeHandler style={{ width: '100%', height: '100%' }} />
+    </div>;
+}
 const missingPae = (reason: string) => reason === 'full_pae_not_requested' || reason === 'pae_not_requested' ? 'Full PAE was not requested for this prediction.' : reason;
 const protein = new Set(['ALA','ARG','ASN','ASP','CYS','GLN','GLU','GLY','HIS','ILE','LEU','LYS','MET','PHE','PRO','SER','THR','TRP','TYR','VAL']);
 
@@ -86,7 +116,7 @@ export function confidenceProfile(raw: unknown, design: Design): { chains: Recor
             chain.length++;
         });
         for (const chain of Object.values(chains)) chain.avg_plddt = chain.plddt.reduce((a, b) => a + b, 0) / chain.length;
-        return { chains, description: native.metric === 'atom_plddt' ? 'Native Cα atom pLDDT (fraction displayed as 0–100); no atom averaging.' : native.confidenceSource ? 'Native collapsed-CIF-residue pLDDT (stored percent; transported fraction displayed as 0–100). Not a token-mean summary.' : 'Native residue pLDDT (fraction displayed as 0–100). Not a token-mean summary.' };
+        return { chains, description: native.metric === 'atom_plddt' ? 'Confidence by residue, using its Cα atom. Higher is better.' : 'Confidence by residue. Higher is better.' };
     }
     return { chains: {}, description: 'Legacy per-chain confidence' };
 }
@@ -127,25 +157,33 @@ function PredictionEvidence({ design, structure, fullPaeRequested, scalars }: { 
     const columns = nativePae.status === 'ok' ? nativePae.columns : [];
     const ri = matrix?.map((_, i) => i).filter(i => tokenPae || !rowChain || chainId(rows[i]) === rowChain) ?? [];
     const ci = matrix?.[0]?.map((_, i) => i).filter(i => tokenPae || !columnChain || chainId(columns[i]) === columnChain) ?? [];
+    const axisTitle = tokenPae || !rows.length ? 'Prediction position' : rows.some(ref => ref.labelAtomId || ref.authAtomId) ? 'Residue / atom' : 'Residue';
     return <>
-        <dl aria-label="Native confidence summary" className="flex flex-wrap gap-4">{scalars.entries.map(entry => <div key={entry.key}><dt className="text-xs text-[var(--text-secondary)]">{entry.label}</dt><dd className="font-mono" title={entry.title}>{entry.display}</dd></div>)}{scalars.reason && <div role="status">{scalars.reason}</div>}</dl>
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <section aria-label="Selected prediction structure" className="min-w-0">{typeof structure === 'function' ? structure(inspection, acceptSelection) : structure}</section>
-            <section aria-label="Predicted Aligned Error" className="min-w-0 rounded-xl border border-[var(--border-color)] p-3">
-                <h3>Predicted Aligned Error (Å)</h3>
-                <p className="text-xs text-[var(--text-secondary)]">Native row/column order; token axes may include ligand atoms. Fixed 0–30 Å color scale.</p>
-                {tokenPae && <p className="text-xs">Native model-token indices (zero-based); structure mapping unavailable. Orientation: {tokenPae.rowAxis.orientation}. Mapping evidence: {tokenPae.rowAxis.mapping_reason}. No residue or chain selections.</p>}
-                {rows.length > 0 && <div className="flex flex-wrap gap-3 py-2">{(['Row', 'Column'] as const).map((name, i) => <label key={name}>{name} chain <select aria-label={`${name} chain`} value={i ? columnChain : rowChain} onChange={e => (i ? setColumnChain : setRowChain)(e.target.value)}><option value="">All</option>{[...new Set((i ? columns : rows).map(chainId))].map(id => <option key={id}>{id}</option>)}</select></label>)}</div>}
-                {matrix ? <Plot onClick={event => {
-                    if (tokenPae) return;
-                    const point = event.points[0];
-                    const row = rows.find(ref => axisLabel(ref) === point?.y);
-                    const column = columns.find(ref => axisLabel(ref) === point?.x);
-                    if (row && column) setInspection([row, column]);
-                }} data={[{ type: 'heatmap', z: ri.map(r => ci.map(c => matrix[r][c])), x: ci.map(i => tokenPae ? tokenLabel(tokenPae.columnTokens[i]) : columns[i] ? axisLabel(columns[i]) : String(i)), y: ri.map(i => tokenPae ? tokenLabel(tokenPae.rowTokens[i]) : rows[i] ? axisLabel(rows[i]) : String(i)), zmin: 0, zmax: 30, colorscale: 'YlGnBu', colorbar: { title: { text: 'PAE (Å)' } }, hovertemplate: 'Column %{x}<br>Row %{y}<br>PAE %{z:.2f} Å<extra></extra>' } as Data]} layout={{ paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: { color: '#94a3b8' }, margin: { l: 65, r: 65, t: 20, b: 65 }, xaxis: { title: { text: rows.length ? 'Native column token' : 'Native column index (mapping unavailable)' }, type: 'category', constrain: 'domain', ...(tokenPae ? { showticklabels: true } : chainTicks(ci.flatMap(i => columns[i] ? [columns[i]] : []))) }, yaxis: { title: { text: rows.length ? 'Native row token' : 'Native row index' }, type: 'category', autorange: 'reversed', scaleanchor: 'x', constrain: 'domain', ...(tokenPae ? { showticklabels: true } : chainTicks(ri.flatMap(i => rows[i] ? [rows[i]] : []))) } }} config={{ responsive: true, displayModeBar: true, toImageButtonOptions: { format: 'svg' } }} style={{ width: '100%', aspectRatio: '1 / 1' }} /> : <p role="status" className="py-10">{pae.isPending ? 'Loading PAE…' : fullPaeRequested === false ? 'Full PAE was not requested for this prediction.' : pae.isError ? 'PAE request failed. Structure and other scores remain available.' : nativePae.status === 'unavailable' ? missingPae(nativePae.reason) : 'Full PAE not retained.'}</p>}
-            </section>
+        <dl aria-label="Native confidence summary" className="prediction-summary">{scalars.entries.map(entry => <div key={entry.key}><dt>{entry.label}</dt><dd title={entry.title}>{entry.display}</dd></div>)}{scalars.reason && <div role="status">{scalars.reason}</div>}</dl>
+        <div className={`prediction-workspace${structure ? ' prediction-workspace-with-structure' : ''}`}>
+            {structure && <section aria-label="Selected prediction structure" className="prediction-structure">{typeof structure === 'function' ? structure(inspection, acceptSelection) : structure}</section>}
+            <div className="prediction-charts">
+                <section aria-label="Predicted Aligned Error" className="prediction-card">
+                    <h3>Predicted aligned error</h3>
+                    <p className="prediction-caption">Expected position error in Å. Lower is better.</p>
+                    {rows.length > 0 && <div className="prediction-chain-controls">{(['Row', 'Column'] as const).map((name, i) => <label key={name}><span>{name} chain</span><select aria-label={`${name} chain`} value={i ? columnChain : rowChain} onChange={e => (i ? setColumnChain : setRowChain)(e.target.value)}><option value="">All</option>{[...new Set((i ? columns : rows).map(chainId))].map(id => <option key={id}>{id}</option>)}</select></label>)}</div>}
+                    {matrix ? <PaePlot matrix={ri.map(r => ci.map(c => matrix[r][c]))}
+                        rowLabels={ri.map(i => tokenPae ? tokenLabel(tokenPae.rowTokens[i]) : rows[i] ? axisLabel(rows[i]) : String(i))}
+                        columnLabels={ci.map(i => tokenPae ? tokenLabel(tokenPae.columnTokens[i]) : columns[i] ? axisLabel(columns[i]) : String(i))}
+                        rowTicks={ri.map(i => tokenPae ? tokenLabel(tokenPae.rowTokens[i]) : rows[i] ? residueTick(rows[i]) : String(i))}
+                        columnTicks={ci.map(i => tokenPae ? tokenLabel(tokenPae.columnTokens[i]) : columns[i] ? residueTick(columns[i]) : String(i))}
+                        axisTitle={axisTitle} onInspect={tokenPae ? undefined : (r, c) => {
+                            const row = rows[ri[r]], column = columns[ci[c]];
+                            if (row && column) setInspection([row, column]);
+                        }} /> : <p role="status" className="py-8">{pae.isPending ? 'Loading PAE…' : fullPaeRequested === false ? 'Full PAE was not requested for this prediction.' : pae.isError ? 'PAE request failed. Structure and other scores remain available.' : nativePae.status === 'unavailable' ? missingPae(nativePae.reason) : 'Full PAE not retained.'}</p>}
+                    {tokenPae && <p className="prediction-caption">Zero-based prediction positions; residue mapping unavailable.</p>}
+                </section>
+                <section aria-label="Confidence profile" className="prediction-card">
+                    <h3>pLDDT by residue</h3><p className="prediction-caption">{chains.unmapped ? 'Residue confidence; chain mapping unavailable.' : profile.description}</p>
+                    {Object.keys(chains).length ? <ConfidenceProfile chainMetrics={chains} onInspect={ref => setInspection([ref])} /> : <p role="status">{residue.isPending || chain.isPending ? 'Loading confidence…' : profile.reason ?? 'Per-chain confidence was not retained.'}</p>}
+                </section>
+            </div>
         </div>
-        <section aria-label="Confidence profile"><h3>Per-Residue pLDDT Profile</h3><p className="text-xs text-[var(--text-secondary)]">{chains.unmapped ? 'Retained legacy residue confidence; chain mapping unavailable.' : profile.description}</p>{Object.keys(chains).length ? <ConfidenceProfile chainMetrics={chains} onInspect={ref => setInspection([ref])} /> : <p role="status">{residue.isPending || chain.isPending ? 'Loading confidence…' : profile.reason ?? 'Per-chain confidence was not retained.'}</p>}</section>
         {inspection.length > 0 && <div aria-label="Confidence selection" className="text-sm">{inspection.map(axisLabel).join(' × ')} <button onClick={() => setInspection([])}>Clear inspection</button></div>}
         {nativeChain.status === 'ok' && <details><summary>Native chain-pair iPTM</summary><p>Directional entries are retained as published; no symmetrization.</p><table><thead><tr><th>Row chain</th><th>Column chain</th><th>iPTM</th><th>Inspect</th></tr></thead><tbody>{nativeChain.chains.flatMap(a => nativeChain.chains.map(b => <tr key={`${a.providerIndex}:${b.providerIndex}`}><td>{a.chainId}</td><td>{b.chainId}</td><td>{nativeChain.pairChainsIptm[a.providerIndex][b.providerIndex]}</td><td><button onClick={() => { setRowChain(a.chainId); setColumnChain(b.chainId); setInspection([...a.residues, ...b.residues]); }}>PAE block</button></td></tr>))}</tbody></table></details>}
         <details><summary>Raw confidence details</summary><pre className="max-h-80 overflow-auto text-xs">{JSON.stringify({ residue: residue.data, chains: chain.data, ...(tokenPae ? { paeAxes: { row: tokenPae.rowAxis, column: tokenPae.columnAxis, nativeShape: tokenPae.nativeShape, sampledRows: tokenPae.sampledRowIndices, sampledColumns: tokenPae.sampledColumnIndices } } : {}) }, null, 2)}</pre></details>
@@ -155,12 +193,15 @@ function PredictionEvidence({ design, structure, fullPaeRequested, scalars }: { 
 function PaeComparison({ design, onSelect, fullPaeRequested }: { design: Design; onSelect: () => void; fullPaeRequested?: boolean }) {
     const query = useQuery({ queryKey: ['prediction-pae', design.id], queryFn: () => fetchPAEData(design.id).then(r => r.data), retry: false, staleTime: 60_000 });
     const native = parseScientificPae(query.data, design.scientific_structure_document, design.id);
-    return <article className="min-w-0 rounded-lg border border-[var(--border-color)] p-2">
-        <button onClick={onSelect}>{design.name}</button>
-        {native.status === 'ok' && native.axisKind === 'model_token' && <p className="text-xs">Native model-token indices; structure mapping unavailable. {native.rowAxis.orientation} · {native.rowAxis.mapping_reason}</p>}
-        {native.status === 'ok' ? <Plot data={[{ type: 'heatmap', z: native.matrix, x: native.axisKind === 'model_token' ? native.columnTokens.map(tokenLabel) : native.columns.map(axisLabel), y: native.axisKind === 'model_token' ? native.rowTokens.map(tokenLabel) : native.rows.map(axisLabel), zmin: 0, zmax: 30, colorscale: 'YlGnBu', showscale: false, hovertemplate: 'Column %{x}<br>Row %{y}<br>PAE %{z:.2f} Å<extra></extra>' } as Data]}
-            layout={{ paper_bgcolor: 'transparent', margin: { l: 5, r: 5, t: 5, b: 5 }, xaxis: { type: 'category', showticklabels: false, constrain: 'domain' }, yaxis: { type: 'category', showticklabels: false, autorange: 'reversed', scaleanchor: 'x', constrain: 'domain' } }}
-            config={{ responsive: true, toImageButtonOptions: { format: 'svg' } }} style={{ width: '100%', aspectRatio: '1 / 1' }} /> : <p className="text-xs">{query.isPending ? 'Loading…' : fullPaeRequested === false ? 'Full PAE was not requested.' : query.isError ? 'PAE request failed.' : missingPae(native.reason)}</p>}
+    return <article className="prediction-card">
+        <button className="prediction-sample-link" onClick={onSelect}>{design.name}</button>
+        {native.status === 'ok' ? <PaePlot matrix={native.matrix}
+            rowLabels={native.axisKind === 'model_token' ? native.rowTokens.map(tokenLabel) : native.rows.map(axisLabel)}
+            columnLabels={native.axisKind === 'model_token' ? native.columnTokens.map(tokenLabel) : native.columns.map(axisLabel)}
+            rowTicks={native.axisKind === 'model_token' ? native.rowTokens.map(tokenLabel) : native.rows.map(residueTick)}
+            columnTicks={native.axisKind === 'model_token' ? native.columnTokens.map(tokenLabel) : native.columns.map(residueTick)}
+            axisTitle={native.axisKind === 'model_token' ? 'Prediction position' : 'Residue / atom'} compact /> : <p className="prediction-caption">{query.isPending ? 'Loading…' : fullPaeRequested === false ? 'Full PAE was not requested.' : query.isError ? 'PAE request failed.' : missingPae(native.reason)}</p>}
+        {native.status === 'ok' && native.axisKind === 'model_token' && <p className="prediction-caption">Residue mapping unavailable.</p>}
     </article>;
 }
 
@@ -184,12 +225,12 @@ export function StructurePredictionResults({ designs, selectedDesignId, onSelect
     const select = onSelectDesign ?? setLocalId;
     const labels: Record<string, string> = { protenix: 'Protenix', boltz2: 'Boltz-2', boltz_cp_experimental: 'Boltz-2 via Fold-CP', esmfold2: 'Biohub ESMFold2', esmfold2_experimental: 'Biohub ESMFold2' };
     const modelLabel = labels[modelId ?? String(design.provenance?.producer_model_id ?? design.provenance?.model_id ?? '')] ?? 'Structure prediction';
-    return <section aria-label="Structure prediction confidence" className="space-y-4 p-4 text-[var(--text-primary)]">
+    return <section aria-label="Structure prediction confidence" className="prediction-results space-y-4 text-[var(--text-primary)]">
         <h2 className="text-lg font-semibold">{modelLabel} confidence</h2>
-        <label>Selected prediction <select aria-label="Selected prediction" value={design.id} onChange={e => select(e.target.value)}>{designs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label>
+        <label className="prediction-selector"><span>Selected prediction</span><select aria-label="Selected prediction" value={design.id} onChange={e => select(e.target.value)}>{designs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label>
         <PredictionEvidence key={design.id} design={design} structure={structure} fullPaeRequested={fullPaeRequested} scalars={scalarsFor(design)} />
         <details onToggle={event => setCompare(event.currentTarget.open)}><summary>Compare native PAE — fixed 0–30 Å scale</summary>
-            <p className="text-xs">Native token order for each saved prediction; no rescaling, matrix averaging or symmetrization.</p>
+            <p className="text-xs">Same 0–30 Å scale for every prediction; each matrix keeps its original order.</p>
             {compare && <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">{designs.map(d => <PaeComparison key={d.id} fullPaeRequested={fullPaeRequested} design={d} onSelect={() => select(d.id)} />)}</div>}
         </details>
         <details open><summary>Saved predictions ({designs.length})</summary><p className="text-xs">Saved sample identities, not a new ranking. Missing scores are not zero. pLDDT is not evidence of correct inter-chain placement.</p><div className="overflow-auto"><table className="w-full text-left text-sm"><thead><tr><th>Prediction</th><th>pLDDT (0–100)</th><th>pTM</th><th>iPTM</th></tr></thead><tbody>{designs.map(d => <tr key={d.id} aria-selected={design.id === d.id}><td><button onClick={() => select(d.id)}>{d.name}</button></td>{scalarCell(scalarsFor(d), ['complex_plddt', 'plddt', 'plddt_mean', 'plddt_overall'])}{scalarCell(scalarsFor(d), ['ptm'])}{scalarCell(scalarsFor(d), ['iptm'])}</tr>)}</tbody></table></div></details>

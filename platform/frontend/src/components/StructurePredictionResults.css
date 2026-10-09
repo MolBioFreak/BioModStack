@@ -1,0 +1,56 @@
+.prediction-results {
+    container: prediction-results / inline-size;
+    min-width: 0;
+}
+.prediction-selector {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+}
+.prediction-selector select,
+.prediction-chain-controls select {
+    min-width: 0;
+    max-width: 100%;
+    padding: 0.4rem 0.65rem;
+    border: 1px solid var(--border-primary);
+    border-radius: 0.5rem;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+.prediction-selector select { flex: 0 1 32rem; }
+.prediction-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 2rem;
+    padding: 0.75rem 0;
+}
+.prediction-summary dt { color: var(--text-secondary); font-size: 0.75rem; }
+.prediction-summary dd { margin: 0.15rem 0 0; font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.prediction-workspace, .prediction-charts { display: grid; min-width: 0; gap: 1rem; align-items: start; }
+.prediction-workspace { grid-template-columns: minmax(0, 1fr); }
+.prediction-charts { grid-template-columns: minmax(0, 1fr); }
+.prediction-structure { min-width: 0; }
+.prediction-card {
+    min-width: 0;
+    padding: 0.875rem;
+    border: 1px solid var(--border-primary);
+    border-radius: 0.75rem;
+    background: var(--bg-secondary);
+}
+.prediction-card h3 { margin: 0; font-size: 0.875rem; font-weight: 600; line-height: 1.5; }
+.prediction-caption { margin: 0.25rem 0 0; color: var(--text-secondary); font-size: 0.75rem; line-height: 1.5; overflow-wrap: anywhere; }
+.prediction-chain-controls { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; padding-top: 0.5rem; }
+.prediction-chain-controls label { display: flex; align-items: center; gap: 0.5rem; min-width: 0; font-size: 0.75rem; }
+.prediction-pae-plot { width: 100%; max-width: 400px; aspect-ratio: 1; margin-inline: auto; }
+.prediction-sample-link { max-width: 100%; text-align: left; overflow-wrap: anywhere; font-size: 0.875rem; }
+.prediction-results details > summary { cursor: pointer; padding-block: 0.5rem; }
+.prediction-results table th, .prediction-results table td { padding: 0.5rem 0.75rem; }
+@container prediction-results (min-width: 700px) {
+    .prediction-charts { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@container prediction-results (min-width: 1100px) {
+    .prediction-workspace-with-structure { grid-template-columns: minmax(0, 1fr) 400px; }
+    .prediction-workspace-with-structure .prediction-charts { grid-template-columns: minmax(0, 1fr); }
+}

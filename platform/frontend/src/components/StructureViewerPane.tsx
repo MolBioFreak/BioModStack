@@ -2974,11 +2974,19 @@ export default function StructureViewerPane({
         return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '—';
     };
 
+    const metricStatus = (nativeMetrics || scientificPae || requiresBoundMetrics) && (nativeResidue.status !== 'ok' || nativeChains.status !== 'ok' || scientificPae?.status === 'unavailable') && (
+                            <div role="status" className={confidenceCompanion && !isFullscreen ? "mt-2 rounded-lg border border-[var(--border-primary)] p-2 text-xs text-[var(--text-secondary)]" : "absolute bottom-2 left-2 right-2 bg-slate-950/90 p-2 text-xs text-amber-200"}>
+                                {scientificPae?.status === 'unavailable' ? `${scientificPae.reason}. ` : ''}Structure viewing remains available.
+                                {residueQuery.isPending ? ' Loading confidence…' : residueQuery.isError ? ' Confidence request failed.' : nativeResidue.status === 'unavailable' ? ` Confidence unavailable: ${nativeResidue.reason}` : ''}
+                                {!nativeMetrics ? '' : chainQuery.isPending ? ' Loading chain metrics…' : chainQuery.isError ? ' Chain metric request failed.' : nativeChains.status === 'unavailable' ? ` Chain metrics unavailable: ${nativeChains.reason}` : ''}
+                            </div>
+                        );
+
     return (
         <div
             ref={containerRef}
             data-structure-viewer-analytics-open={analyticsPanelOpen ? 'true' : 'false'}
-            className={`${isFullscreen ? 'fixed inset-0 z-50 bg-slate-950' : 'p-4'}`}
+            className={`${isFullscreen ? 'fixed inset-0 z-50 bg-slate-950' : confidenceCompanion ? 'min-w-0' : 'p-4'}`}
         >
             {/* Main layout container - always present */}
             <div
@@ -3042,7 +3050,7 @@ export default function StructureViewerPane({
                             ? 'absolute inset-0'
                             : 'relative rounded-lg overflow-hidden border border-slate-700'
                         }
-                        style={isFullscreen ? undefined : { height: viewerLayout.viewerHeight }}
+                        style={isFullscreen ? undefined : { height: confidenceCompanion ? 'clamp(560px, 72vh, 800px)' : viewerLayout.viewerHeight }}
                     >
                         {awaitingGovernedWorkbenchIdentity ? (
                             <div className="flex h-full items-center justify-center text-sm text-slate-400">Preparing governed structure resources…</div>
@@ -3083,13 +3091,7 @@ export default function StructureViewerPane({
                             />
                         )}
 
-                        {(nativeMetrics || scientificPae || requiresBoundMetrics) && (nativeResidue.status !== 'ok' || nativeChains.status !== 'ok' || scientificPae?.status === 'unavailable') && (
-                            <div role="status" className="absolute bottom-2 left-2 right-2 bg-slate-950/90 p-2 text-xs text-amber-200">
-                                {scientificPae?.status === 'unavailable' ? `${scientificPae.reason}. ` : ''}Structure viewing remains available.
-                                {residueQuery.isPending ? ' Loading confidence…' : residueQuery.isError ? ' Confidence request failed.' : nativeResidue.status === 'unavailable' ? ` Confidence unavailable: ${nativeResidue.reason}` : ''}
-                                {!nativeMetrics ? '' : chainQuery.isPending ? ' Loading chain metrics…' : chainQuery.isError ? ' Chain metric request failed.' : nativeChains.status === 'unavailable' ? ` Chain metrics unavailable: ${nativeChains.reason}` : ''}
-                            </div>
-                        )}
+                        {(!confidenceCompanion || isFullscreen) && metricStatus}
                         {showReferenceDock && (
                             <div
                                 className="absolute z-30 rounded-xl border border-slate-700/70 bg-slate-950/92 shadow-2xl backdrop-blur-sm overflow-hidden"
@@ -3168,6 +3170,7 @@ export default function StructureViewerPane({
                             </div>
                         )}
                     </div>
+                    {confidenceCompanion && !isFullscreen && metricStatus}
                 </div>
 
                 {/* Right Column: Analytics Sidebar - hidden in fullscreen */}
