@@ -38,12 +38,13 @@ def _request(path: str, token: str | None = None) -> Request:
     )
 
 
-def test_stage_callback_credential_is_digest_only_and_wired_end_to_end() -> None:
+def test_stage_callback_token_digest_authorization_and_source_wiring_inventory() -> None:
     token, digest = stage_reporting.issue_stage_report_token()
     provenance = {stage_reporting.PROVENANCE_DIGEST_KEY: digest}
     assert token not in json.dumps(provenance)
     assert stage_reporting.token_is_authorized(provenance, token)
     assert not stage_reporting.token_is_authorized(provenance, token + "x")
+    # Lexical inventory only: receiving execution is not exercised here.
     nextflow_source = (Path(__file__).resolve().parents[1] / "services" / "nextflow.py").read_text(encoding="utf-8")
     reporter_source = (Path(__file__).resolve().parents[3] / "scripts" / "stage_reporter.py").read_text(encoding="utf-8")
     assert "env[stage_reporting.ENV_TOKEN_KEY] = stage_report_token" in nextflow_source

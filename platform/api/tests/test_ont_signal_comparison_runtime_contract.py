@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import create_engine, select
 
 from database import (
     InputFile,
@@ -321,16 +322,6 @@ def test_comparison_compatibility_requires_complete_real_authority() -> None:
     assert complete["disposition"] == "approximate_profile"
     assert complete["evidence"]["mapping_profile_kmer_length"] == 2
 
-    current = service._derive_ideal_comparison_compatibility(
-        simulated_profile=simulated,
-        mapping_profile={"molecule_type": "dna", "basecall_model_id": "dna_r10.4.1_e8.2_400bps_sup@v4.3.0", "kmer_length": 2},
-        move_source={"molecule_type": "dna", "basecall_model_id": "dna_r10.4.1_e8.2_400bps_sup@v4.3.0",
-                     "source_runtime_identity": {"authority_state": "verified"}},
-        raw_header={"sample_frequency": "5000", "digitisation": "8192", "range": "1536.598389"},
-        run_receipt={"flow_cell_generation": "R10.4.1", "device_class": "MinION"},
-    )
-    assert current["disposition"] == "approximate_profile"
-
     unknown = service._derive_ideal_comparison_compatibility(
         simulated_profile=simulated,
         mapping_profile={"molecule_type": "dna", "basecall_model_id": "dna_r10.4.1_e8.2_400bps_sup@v4.3.0", "kmer_length": 2},
@@ -353,7 +344,7 @@ def test_comparison_compatibility_requires_complete_real_authority() -> None:
     assert mismatch["mismatches"]
 
 
-def test_eight_profile_constants_match_v050_executable_source() -> None:
+def test_profile_inventory_r10_dna_constants_and_approximate_labels() -> None:
     contract = _load(CONFIG_ROOT / "squigulator_ideal_comparison_schema_v1.json")
     profiles = contract["profiles"]
     assert set(profiles) == {
@@ -545,16 +536,28 @@ def test_producer_rejects_sam_alignment_shape_that_diverges_from_truth(
 ) -> None:
     source = tmp_path / "source.sam"
     destination = tmp_path / "normalized.sam"
-    source.write_text(
+    valid = (
         "@SQ\tSN:input-1\tLN:8\n"
-        "generated-1\t0\tinput-1\t1\t255\t1M\t*\t0\t0\tAACCGGTT\t*\n",
-        encoding="ascii",
+        "generated-1\t0\tinput-1\t1\t255\t8M\t*\t0\t0\tAACCGGTT\t*"
+        "\tsi:Z:0,80,0,8\tss:Z:10,10,10,10,10,10,10,10,\n"
     )
-    with pytest.raises(ValueError, match="SAM .*invalid"):
-        producer_runtime._normalize_sam(
-            source, destination, generated_id="generated-1", contig="plasmid",
-            contig_length=100, start=10, orientation="forward", sequence="AACCGGTT",
-        )
+    kwargs = dict(generated_id="generated-1", contig="plasmid",
+                  contig_length=100, start=10, orientation="forward", sequence="AACCGGTT")
+    source.write_text(valid, encoding="ascii")
+    producer_runtime._normalize_sam(source, destination, **kwargs)
+    assert destination.read_text(encoding="ascii") == (
+        "@HD\tVN:1.6\n@SQ\tSN:plasmid\tLN:100\n"
+        "generated-1\t0\tplasmid\t10\t255\t8M\t*\t0\t0\tAACCGGTT\t*"
+        "\tsi:Z:0,80,0,8\tss:Z:10,10,10,10,10,10,10,10,\n"
+    )
+    source.write_text(valid.replace("\t8M\t", "\t1M\t"), encoding="ascii")
+    with pytest.raises(ValueError, match="^Squigulator SAM alignment shape is invalid$"):
+        producer_runtime._normalize_sam(source, destination, **kwargs)
+
+    # Preserve the old malformed-record obligation, separately from bad CIGAR.
+    source.write_text(valid.split("\tsi:Z:")[0] + "\n", encoding="ascii")
+    with pytest.raises(ValueError, match="^Squigulator SAM sequence identity is invalid$"):
+        producer_runtime._normalize_sam(source, destination, **kwargs)
 
 
 def test_renderer_creates_real_and_simulated_tracks_before_shared_x_output(
@@ -841,8 +844,8 @@ async def test_comparison_worker_retains_every_real_and_generated_parent_before_
     domain_rows = {(MolBioNGSReferenceRevision, "rev-1"): reference_revision,
                    (MolBioNGSReferenceArtifact, "reference-artifact-1"): reference_artifact}
 
-    class Result:
-        rowcount = 1
+    expire_at_publication = False
+    published_rows = []
 
     class Session:
         def __init__(self, values): self.values = values
@@ -850,11 +853,29 @@ async def test_comparison_worker_retains_every_real_and_generated_parent_before_
         async def __aexit__(self, *_args): return None
         async def get(self, model, identifier): return self.values.get((model, identifier))
         async def execute(self, statement):
-            for column, value in getattr(statement, "_values", {}).items():
-                key = getattr(column, "key", str(column)); resolved = getattr(value, "value", value)
-                if key in {"state", "generated_read_id", "stage_receipts", "output_manifest"}:
-                    setattr(job, key, resolved)
-            return Result()
+            # Execute the actual owner UPDATE, not a fixed-rowcount success.
+            # Parent loading/artifact insertion remain doubles; this proves only
+            # the bounded publication predicate, not full ORM/FK integration.
+            engine = create_engine("sqlite:///:memory:")
+            table = OntSignalComparisonJob.__table__
+            try:
+                table.create(engine)
+                with engine.begin() as connection:
+                    seed = {key: value for key, value in vars(job).items() if key in table.c}
+                    seed.update(viewer_session_revision=1, preview_digest="c" * 64,
+                                request_fingerprint="d" * 64)
+                    if expire_at_publication:
+                        # Expire only after the owner's earlier in-memory checks.
+                        seed["lease_expires_at"] = datetime(2000, 1, 1)
+                    connection.execute(table.insert().values(**seed))
+                    result = connection.execute(statement)
+                    row = connection.execute(select(table)).mappings().one()
+                    published_rows.append(dict(row))
+                    for key in ("state", "generated_read_id", "stage_receipts", "output_manifest"):
+                        setattr(job, key, row[key])
+                    return result
+            finally:
+                engine.dispose()
         async def commit(self): return None
         async def rollback(self): return None
         def add_all(self, _values): return None
@@ -961,4 +982,22 @@ async def test_comparison_worker_retains_every_real_and_generated_parent_before_
             "index_sha256": hashlib.sha256(files["real.blow5.idx"].read_bytes()).hexdigest(),
         }],
     }
+    assert Parents.instance is not None and Parents.instance.closed is True
+    assert len(published_rows) == 1
+    assert published_rows[0]["state"] == "ready"
+    assert published_rows[0]["claim_token"] is None
+
+    # Same valid parents and worker path; only the stored lease expires.
+    job.state = "running"
+    job.generated_read_id = None
+    job.stage_receipts = {}
+    job.output_manifest = {}
+    expire_at_publication = True
+    with pytest.raises(worker_module.TerminalFenceLost, match="publication fence was lost"):
+        await worker._process_comparison("comparison-1", "token-1")
+    assert len(published_rows) == 2
+    assert published_rows[1]["state"] == "running"
+    assert published_rows[1]["claim_token"] == "token-1"
+    assert published_rows[1]["generated_read_id"] is None
+    assert published_rows[1]["output_manifest"] == {}
     assert Parents.instance is not None and Parents.instance.closed is True
