@@ -432,6 +432,8 @@ def _published_runtime_records(source: Path, prefix: str, *, publication=None, r
         rows = published_asset_rows(logical, index=publication, resolved=resolved)
     elif logical.startswith('containers/'):
         name = logical.removeprefix('containers/')
+        if not _is_runtime_image(source, name):
+            return None  # Nested regular .img leaves use their actual file records.
         path, digest = image_reference(name, get_container_dir().resolve())
         if source != path.resolve():
             if name not in IMAGE_SELECTORS:

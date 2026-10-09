@@ -173,7 +173,7 @@ def test_released_closure_real_compiler_relocation_and_native_validation(release
             subprocess.run(['cp', '-a', '--reflink=auto', str(source), str(destination)], check=True)
         else:
             subprocess.run(['cp', '--reflink=auto', str(source), str(destination)], check=True)
-        rows = bundle._records_for_source(source, 'runtime/' + name, 'runtime')
+        rows = bundle._runtime_records(source, 'runtime/' + name, publication={})
         hashes.update({r.relative_path.removeprefix('runtime/'): r.sha256 for r in rows if r.link_target is None})
     bundle.verify_selected_runtime_hashes(invocation.execution_plan, hashes)
     # The selected critical launcher remains the actual engine entrypoint. JVM is
