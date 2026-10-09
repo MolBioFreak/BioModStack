@@ -368,11 +368,26 @@ def build_result_manifest(attempt_dir: Path, envelope: dict[str, Any], exit_code
         raise RuntimeError("Invalid shared root generation")
     output_root = Path(str(envelope["output_directory"]))
     artifacts: list[dict[str, Any]] = []
+    existing_directories: set[str] = set()
+    declared_directories: set[str] = set()
     for path in sorted(output_root.rglob("*")):
         if path.is_symlink():
             raise RuntimeError(f"result tree contains a symlink: {path.relative_to(output_root)}")
+        if path.is_dir():
+            existing_directories.add(path.relative_to(output_root).as_posix())
+            continue
         if not path.is_file():
             continue
+        if path.parent.name == ".bms-stage-receipts":
+            # Declarations retain their native directory meaning, including empty
+            # outputs. Only existing stage-declared directories enter the wire.
+            payload = load_json(path)
+            prefix = path.parent.parent.relative_to(output_root)
+            for value in payload.get("outputs", []):
+                relative = safe_relative(value)
+                if value != relative.as_posix() or "\\" in value or "\x00" in value:
+                    raise RuntimeError("unsafe declared result directory")
+                declared_directories.add((prefix / relative).as_posix())
         if path == output_root / RESULT_MANIFEST_FILE:
             continue
         relative = path.relative_to(output_root).as_posix()
@@ -385,7 +400,8 @@ def build_result_manifest(attempt_dir: Path, envelope: dict[str, Any], exit_code
             }
         )
     return {
-        "schema": "bms.remote-result-manifest.v1",
+        "schema": "bms.remote-result-manifest.v2",
+        "directories": sorted(existing_directories & declared_directories),
         "generation": generation,
         "attempt_id": str(envelope["attempt_id"]),
         "job_id": str(envelope["job_id"]),

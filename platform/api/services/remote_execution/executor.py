@@ -1673,6 +1673,10 @@ def _verify_result_package(
         or manifest.generation != status.generation
     ):
         raise RemoteExecutionError("Remote result manifest identity does not match the BMS Job")
+    for relative in manifest.directories:
+        path = _safe_result_path(incoming, relative)
+        if path.is_symlink() or not path.is_dir():
+            raise RemoteExecutionError(f"Returned directory is missing: {relative}")
     declared: set[str] = set()
     for artifact in manifest.artifacts:
         path = _safe_result_path(incoming, artifact.relative_path)
@@ -1793,6 +1797,9 @@ async def _fetch_result_manifest(
         handle.flush()
         os.fsync(handle.fileno())
     move(temporary, incoming / "result-manifest.json")
+    for relative in manifest.directories:
+        directory = checked(_safe_result_path(incoming, relative))
+        directory.mkdir(parents=True, exist_ok=True)
     return manifest
 
 
@@ -2871,7 +2878,15 @@ def _native_result_view(job, status, artifact_root, manifest):
         records.append(artifact.model_copy(update={'relative_path': local.as_posix()}))
     # This is a native path projection of authenticated entries, not a new
     # transport manifest or any changed scientific bytes/digests.
-    return relative, root, manifest.model_copy(update={'artifacts': records})
+    directories = []
+    for directory in manifest.directories:
+        try:
+            local = PurePosixPath(directory).relative_to(relative)
+        except ValueError:
+            continue
+        if local.parts:
+            directories.append(local.as_posix())
+    return relative, root, manifest.model_copy(update={'artifacts': records, 'directories': directories})
 
 
 def retained_result_view(job, *, diagnostics: bool = False):
@@ -3062,7 +3077,7 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
                 output_root=local_output, manifest=native_manifest,
             )
         await session.flush()
-        if job.model_id == "nanopore" and ngs_completion_path != "shared_native_import":
+        if job.model_id == "nanopore" and ngs_completion_path not in {"shared_native_import", "pooled_review"}:
             job.completed_at = job.completed_at or datetime.utcnow()
         elif job.model_id == "msa_batch":
             msa_manifest = local_output / "msa_manifest.json"

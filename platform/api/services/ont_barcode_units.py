@@ -19,19 +19,23 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+class BarcodeProductContainmentError(ValueError):
+    """Unsafe product paths are custody failures, not unavailable provenance."""
+
+
 def _confined(path: Path, root: Path, label: str) -> Path:
     if path.is_symlink():
-        raise ValueError(f"{label} symlink is forbidden")
+        raise BarcodeProductContainmentError(f"{label} symlink is forbidden")
     resolved = path.resolve(strict=True)
     try:
         relative = resolved.relative_to(root)
     except ValueError as exc:
-        raise ValueError(f"{label} must be confined beneath the authoritative result root") from exc
+        raise BarcodeProductContainmentError(f"{label} must be confined beneath the authoritative result root") from exc
     cursor = root
     for part in relative.parts:
         cursor = cursor / part
         if cursor.is_symlink():
-            raise ValueError(f"{label} symlink is forbidden")
+            raise BarcodeProductContainmentError(f"{label} symlink is forbidden")
     if not resolved.is_file():
         raise ValueError(f"{label} must be a regular file")
     return resolved
@@ -111,7 +115,7 @@ def _resolve_barcode_unit(
         raise ValueError(f"unknown or duplicate barcode unit: {requested}")
     raw_path = Path(str(item.get("bam_path") or ""))
     if raw_path.is_absolute() or not raw_path.parts:
-        raise ValueError("barcode BAM path must be a confined relative path")
+        raise BarcodeProductContainmentError("barcode BAM path must be a confined relative path")
     bam = _confined(manifest.parent / raw_path, root, "barcode BAM")
     expected = str(item.get("bam_sha256") or "").lower()
     observed = _sha256(bam)
@@ -120,7 +124,7 @@ def _resolve_barcode_unit(
     raw_unit_manifest = Path(str(item.get("unit_manifest_path") or ""))
     expected_unit_manifest_sha = str(item.get("unit_manifest_sha256") or "").lower()
     if raw_unit_manifest.is_absolute() or not raw_unit_manifest.parts:
-        raise ValueError("barcode unit manifest path must be a confined relative path")
+        raise BarcodeProductContainmentError("barcode unit manifest path must be a confined relative path")
     unit_manifest = _confined(manifest.parent / raw_unit_manifest, root, "barcode unit manifest")
     try:
         unit_manifest_bytes = unit_manifest.read_bytes()

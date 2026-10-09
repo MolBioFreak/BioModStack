@@ -1337,7 +1337,11 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
     native_generation = (generation_result_contract(p)
         if model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
         and p.get('generator', 'rfd3') == 'rfd3' else None)
-    if native_generation is not None:
+    if model_id == 'nanopore':
+        from services.ont_ngs_completion import ont_native_result_contract
+        result_payload = ont_native_result_contract(model_id, mode, p)
+        retrieval_authority = result_payload['native_contract_authority']
+    elif native_generation is not None:
         result_payload = native_generation
         retrieval_authority = native_generation['native_contract_authority']
     elif reviewed and model_id == 'protonpottsmpnn' and workflow == 'protonpottsmpnn_design':

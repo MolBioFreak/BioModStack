@@ -6,7 +6,7 @@ from pathlib import PurePosixPath
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator, model_serializer
 from schemas import JobCreate
 from services.shape_requests import SubmittedShapeRequest
 
@@ -449,7 +449,7 @@ class RemoteAttemptStatus(StrictModel):
 
 class RemoteResultManifest(StrictModel):
     generation: int = Field(default=0, ge=0, strict=True)
-    schema_name: Literal["bms.remote-result-manifest.v1"] = Field(
+    schema_name: Literal["bms.remote-result-manifest.v1", "bms.remote-result-manifest.v2"] = Field(
         default="bms.remote-result-manifest.v1", alias="schema", serialization_alias="schema"
     )
     attempt_id: str
@@ -457,6 +457,37 @@ class RemoteResultManifest(StrictModel):
     exit_code: int
     completed_at: datetime
     artifacts: list[RemoteFileRecord]
+    directories: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def directory_wire_revision(cls, value):
+        if isinstance(value, dict):
+            schema = value.get("schema", value.get("schema_name", "bms.remote-result-manifest.v1"))
+            if schema == "bms.remote-result-manifest.v1" and "directories" in value:
+                raise ValueError("v1 does not declare directories")
+            if schema == "bms.remote-result-manifest.v2" and "directories" not in value:
+                raise ValueError("v2 requires explicit directories")
+        return value
+
+    @model_serializer(mode="wrap")
+    def serialize_revision(self, handler):
+        value = handler(self)
+        if self.schema_name == "bms.remote-result-manifest.v1":
+            value.pop("directories", None)
+        return value
+
+    @field_validator("directories")
+    @classmethod
+    def clean_directories(cls, values):
+        for value in values:
+            _clean_relative_posix_path(value, field="directories")
+            if "\\" in value or "\x00" in value:
+                raise ValueError("unsafe directory path")
+        if len(values) != len(set(values)):
+            raise ValueError("duplicate directory paths")
+        return values
+
     source_revision: str
     source_tree: str
     execution_envelope_sha256: str = Field(pattern=SHA256_PATTERN)
@@ -466,4 +497,11 @@ class RemoteResultManifest(StrictModel):
         paths = [artifact.relative_path for artifact in self.artifacts]
         if len(paths) != len(set(paths)):
             raise ValueError("artifacts contains duplicate relative_path values")
+        files = set(paths)
+        directories = set(self.directories)
+        for path in [*paths, *self.directories]:
+            if path in directories and path in files:
+                raise ValueError("file/directory path collision")
+            if any(parent.as_posix() in files for parent in PurePosixPath(path).parents):
+                raise ValueError("file path is an ancestor of another entry")
         return self

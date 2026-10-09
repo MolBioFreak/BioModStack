@@ -5127,6 +5127,10 @@ async def _ingest_job_results(
     with session.no_autoflush:
         job_result = await session.execute(select(Job).where(Job.id == job_id))
         current_job = job_result.scalar_one_or_none()
+    if current_job is not None and current_job.model_id == "nanopore":
+        # NGS products are read by their native package/domain owners. A protein
+        # CSV/PDB scan can manufacture Designs from unrelated native sidecars.
+        return 0
     if current_job is not None:
         from services.result_state_integrity import _sequence_native_publication_owner
         native_owner = _sequence_native_publication_owner(current_job)

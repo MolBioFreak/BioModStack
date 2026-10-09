@@ -11,7 +11,17 @@ class JobResultRootError(ValueError):
     """Raised when persisted result-root authority is missing or unsafe."""
 
 
+def resolve_job_result_destination(job: Any) -> Path:
+    """Project a confined destination identity without opening absent results."""
+    return _resolve_job_result_root(job, must_exist=False)
+
+
 def resolve_persisted_job_result_root(job: Any) -> Path:
+    """Open only an existing confined persisted result directory."""
+    return _resolve_job_result_root(job, must_exist=True)
+
+
+def _resolve_job_result_root(job: Any, *, must_exist: bool) -> Path:
     """Resolve only ``child_output_dir`` or ``output_dir`` below results.
 
     A job ID is never interpreted as a directory name. Relative persisted
@@ -49,15 +59,15 @@ def resolve_persisted_job_result_root(job: Any) -> Path:
             raise JobResultRootError("persisted job result root traverses a symlink")
 
     try:
-        resolved = lexical.resolve(strict=True)
+        resolved = lexical.resolve(strict=must_exist)
         resolved.relative_to(root)
     except OSError as exc:
         raise JobResultRootError("persisted job result root is unavailable") from exc
     except ValueError as exc:
         raise JobResultRootError("persisted job result root escapes configured results") from exc
-    if not resolved.is_dir():
+    if (must_exist or resolved.exists()) and not resolved.is_dir():
         raise JobResultRootError("persisted job result root is not a directory")
     return resolved
 
 
-__all__ = ["JobResultRootError", "resolve_persisted_job_result_root"]
+__all__ = ["JobResultRootError", "resolve_persisted_job_result_root", "resolve_job_result_destination"]

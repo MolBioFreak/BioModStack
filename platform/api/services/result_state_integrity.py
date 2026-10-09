@@ -600,7 +600,7 @@ async def finalize_successful_job(
                 raise RuntimeError('Antibody root native closeout lacks its declared parent candidate rows')
         count = await _authoritative_result_count(session, job)
         idempotent_prior_results = False
-        result_kind = "design"
+        result_kind = "ngs_native" if job.model_id == "nanopore" else "design"
         if sequence_owner is not None:
             await sequence_owner.read_published_native_results(job, session)
             result_kind = sequence_owner.DIRECTORY + "_native"

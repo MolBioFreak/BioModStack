@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import rfc8785
+from fastapi import HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from database import Job
 from services import ngs_alignment_sessions
-from services.job_result_roots import resolve_persisted_job_result_root
+from services.job_result_roots import resolve_persisted_job_result_root, resolve_job_result_destination
 from services.ont_ngs_contract import resolve_ont_workflow_alias
 from services.resource_usage_evidence import (
     ResourceUsageEvidenceError,
@@ -65,6 +66,196 @@ _REQUIRED_STAGE_OUTPUT_SUFFIXES = {
     ),
 }
 _MAX_MANIFEST_ARTIFACTS = 256
+
+
+class DoradoProductsUnavailable(HTTPException):
+    """Optional product evidence is absent/invalid, not transport authority."""
+
+
+def prepare_dorado_demux_products(job: Any, *, read_root: Path, persisted_root: Path) -> dict[str, Any]:
+    """Build the immutable server-side anchor for one terminal Dorado demux stage."""
+    from services import ont_ngs_contract
+    from services.ont_barcode_units import _resolve_barcode_catalogs, BarcodeProductContainmentError
+
+    if job.model_id != "nanopore" or job.mode != "basecall_dna" or str((job.params or {}).get("barcode_kit") or "") != "SQK-RBK114-96":
+        raise DoradoProductsUnavailable(status_code=422, detail="dorado_demux is valid only for locked barcoded DNA jobs")
+    if not persisted_root.is_absolute():
+        raise OntNgsCompletionError("Dorado persisted destination must be absolute")
+    root = Path(read_root).expanduser()
+    if root.is_symlink():
+        raise HTTPException(status_code=409, detail="Dorado result root symlink is forbidden")
+    try:
+        root = root.resolve(strict=True)
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail="Dorado result root is unavailable") from exc
+    expected = {
+        "demux_manifest": root / "demux" / "demux_manifest.json",
+        "barcode_units_manifest": root / "demux" / "per_barcode_units.json",
+        "dorado_preflight": root / "basecall" / "dorado_preflight.json",
+        "dorado_runtime_provenance": root / "basecall" / "dorado_runtime_provenance.json",
+    }
+    for label, path in expected.items():
+        if path.is_symlink():
+            raise HTTPException(status_code=409, detail=f"unsafe Dorado product symlink: {label}")
+        if not path.is_file():
+            raise DoradoProductsUnavailable(status_code=409, detail=f"terminal Dorado product is unavailable or unsafe: {label}")
+        try:
+            resolved_product = path.resolve(strict=True)
+            relative_product = resolved_product.relative_to(root)
+            cursor = root
+            for part in relative_product.parts:
+                cursor = cursor / part
+                if cursor.is_symlink():
+                    raise ValueError(f"terminal Dorado product contains a symlink: {label}")
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=f"terminal Dorado product escapes result root: {label}") from exc
+    try:
+        manifest_stats = {expected[label]: expected[label].stat() for label in ("demux_manifest", "barcode_units_manifest")}
+        product_bytes = {label: path.read_bytes() for label, path in expected.items()}
+        product_digests = {
+            label: hashlib.sha256(payload).hexdigest() for label, payload in product_bytes.items()
+        }
+        demux = json.loads(product_bytes["demux_manifest"].decode("utf-8"))
+        preflight = json.loads(product_bytes["dorado_preflight"].decode("utf-8"))
+        runtime = json.loads(product_bytes["dorado_runtime_provenance"].decode("utf-8"))
+        unit_catalog = json.loads(product_bytes["barcode_units_manifest"].decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise DoradoProductsUnavailable(status_code=409, detail="terminal Dorado product is unreadable or malformed") from exc
+    if not all(isinstance(payload, dict) for payload in (demux, preflight, runtime, unit_catalog)):
+        raise DoradoProductsUnavailable(status_code=409, detail="terminal Dorado product documents must be JSON objects")
+    # Narrow JSON values for both runtime safety and static analysis.
+    demux = dict(demux)
+    preflight = dict(preflight)
+    runtime = dict(runtime)
+    unit_catalog = dict(unit_catalog)
+    preflight_sha256 = product_digests["dorado_preflight"]
+    params = dict(job.params or {})
+    expected_lock_sha256 = str(params.get("dorado_lock_sha256") or "").strip().lower()
+    expected_model_id = str(params.get("dorado_resolved_model_id") or "").strip()
+    expected_mode = str(params.get("dorado_basecall_mode") or "").strip().lower()
+    try:
+        approved_lock_bytes = ont_ngs_contract.DORADO_LOCK_PATH.read_bytes()
+        approved_lock = json.loads(approved_lock_bytes.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise DoradoProductsUnavailable(status_code=409, detail="approved Dorado lock is unavailable or malformed") from exc
+    if not isinstance(approved_lock, dict) or hashlib.sha256(approved_lock_bytes).hexdigest() != expected_lock_sha256:
+        raise DoradoProductsUnavailable(status_code=409, detail="terminal Dorado job lock is not the approved lock")
+    approved_dorado = approved_lock.get("dorado")
+    approved_models = approved_lock.get("models")
+    if not isinstance(approved_dorado, dict) or not isinstance(approved_models, dict):
+        raise DoradoProductsUnavailable(status_code=409, detail="approved Dorado lock has invalid runtime/model sections")
+    approved_dna_models = approved_models.get("dna")
+    if not isinstance(approved_dna_models, dict):
+        raise DoradoProductsUnavailable(status_code=409, detail="approved Dorado lock has no DNA model section")
+    approved_model = next(
+        (entry for entry in approved_dna_models.values() if isinstance(entry, dict) and entry.get("id") == expected_model_id),
+        None,
+    )
+    if not isinstance(approved_model, dict):
+        raise DoradoProductsUnavailable(status_code=409, detail="terminal Dorado model is not retained by the approved lock")
+    preflight_lock = preflight.get("lock")
+    if not isinstance(preflight_lock, dict):
+        preflight_lock = {}
+    preflight_lock_sha256 = str(preflight_lock.get("sha256") or "").lower()
+    preflight_selection = preflight.get("selection")
+    if not isinstance(preflight_selection, dict):
+        preflight_selection = {}
+    preflight_runtime = preflight.get("runtime")
+    if not isinstance(preflight_runtime, dict):
+        preflight_runtime = {}
+    runtime_assets = preflight_runtime.get("assets")
+    if not isinstance(runtime_assets, dict):
+        runtime_assets = {}
+    runtime_sif = runtime_assets.get("runtime_sif")
+    if not isinstance(runtime_sif, dict):
+        runtime_sif = {}
+    runtime_calls = runtime.get("calls_bam")
+    if not isinstance(runtime_calls, dict):
+        runtime_calls = {}
+    demux_source = demux.get("source_calls")
+    if not isinstance(demux_source, dict):
+        demux_source = {}
+    anchored_read_count = runtime_calls.get("read_count")
+    if isinstance(anchored_read_count, bool) or not isinstance(anchored_read_count, int) or anchored_read_count < 0:
+        raise DoradoProductsUnavailable(status_code=409, detail="terminal Dorado calls read count is invalid")
+    preflight_barcoding = preflight.get("barcoding")
+    if not isinstance(preflight_barcoding, dict):
+        preflight_barcoding = {}
+    demux_units = demux.get("units")
+    catalog_units = unit_catalog.get("units")
+    if (
+        demux.get("schema") != "biomodstack.dorado_demux.v1"
+        or preflight.get("schema") != "biomodstack.dorado_preflight.v1"
+        or runtime.get("schema") != "biomodstack.dorado_runtime_provenance.v1"
+        or unit_catalog.get("schema") != "biomodstack.dorado_barcode_units.v1"
+        or demux.get("preflight_sha256") != preflight_sha256
+        or runtime.get("preflight_sha256") != preflight_sha256
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_lock_sha256)
+        or preflight_lock_sha256 != expected_lock_sha256
+        or not expected_model_id
+        or preflight_selection.get("model_id") != expected_model_id
+        or preflight_selection.get("molecule") != "dna"
+        or preflight_selection.get("model_aggregate_sha256") != approved_model.get("aggregate_sha256")
+        or preflight_selection.get("quality") != params.get("dorado_quality_mode")
+        or preflight_selection.get("modified_bases") != "none"
+        or preflight_selection.get("modified_bases_model_id") is not None
+        or preflight_selection.get("stereo_model_id") is not None
+        or runtime.get("model_id") != expected_model_id
+        or expected_mode != "simplex"
+        or preflight_selection.get("mode") != expected_mode
+        or runtime.get("mode") != expected_mode
+        or preflight_barcoding.get("kit") != params.get("barcode_kit")
+        or preflight_runtime.get("version") != approved_dorado.get("version")
+        or runtime.get("runtime_sha256") != approved_dorado.get("sif_sha256")
+        or runtime_sif.get("sha256") != runtime.get("runtime_sha256")
+        or preflight_runtime.get("sif_sha256") != runtime.get("runtime_sha256")
+        or runtime_calls.get("sha256") != demux_source.get("sha256")
+        or runtime_calls.get("read_count") != demux_source.get("read_count")
+        or runtime_calls.get("read_count") != demux.get("total_reads")
+        or not isinstance(demux_units, list)
+        or demux_units != catalog_units
+    ):
+        raise DoradoProductsUnavailable(status_code=409, detail="terminal Dorado product identities are inconsistent")
+    try:
+        anchored_units, catalog_verified_units = _resolve_barcode_catalogs(
+            [
+                (expected["demux_manifest"], demux, product_digests["demux_manifest"]),
+                (expected["barcode_units_manifest"], unit_catalog, product_digests["barcode_units_manifest"]),
+            ],
+            root,
+            manifest_stats=manifest_stats,
+            expected_source_calls_sha256=str(runtime_calls.get("sha256") or ""),
+            expected_preflight_sha256=preflight_sha256,
+        )
+    except BarcodeProductContainmentError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (OSError, ValueError) as exc:
+        raise DoradoProductsUnavailable(status_code=409, detail="terminal Dorado barcode units are inconsistent") from exc
+    identity_fields = (
+        "unit_id", "bam_sha256", "read_count", "unit_manifest_sha256",
+        "source_calls_sha256", "preflight_sha256",
+    )
+    if [tuple(unit[field] for field in identity_fields) for unit in anchored_units] != [
+        tuple(unit[field] for field in identity_fields) for unit in catalog_verified_units
+    ]:
+        raise DoradoProductsUnavailable(status_code=409, detail="terminal Dorado unit catalog does not match demux products")
+    return {
+        "schema": "biomodstack.ont_dorado_terminal_products.v1",
+        "stage": "dorado_demux",
+        "identities": {
+            "lock_sha256": expected_lock_sha256,
+            "model_id": expected_model_id,
+            "mode": expected_mode,
+            "runtime_sha256": str(runtime.get("runtime_sha256")),
+            "calls_bam_sha256": str(runtime_calls.get("sha256")),
+            "read_count": anchored_read_count,
+            "unit_count": len(anchored_units),
+        },
+        "products": {
+            label: {"path": path.relative_to(root).as_posix(), "sha256": product_digests[label]}
+            for label, path in expected.items()
+        },
+    }
 
 
 class OntNgsCompletionError(RuntimeError):
@@ -129,8 +320,8 @@ def is_ont_signal_alignment_job(job: Job) -> bool:
 def ont_native_completion_path(job: Any) -> str:
     """Select the existing local native owner, not a remote scientific recipe.
 
-    Pooled assignment has a dedicated atomic review submission, not the ordinary
-    NGS Job lifecycle. Instrument/raw-signal control is not admitted by this
+    Pooled assignment retains its dedicated operator-review result branch.
+    Instrument/raw-signal control is not admitted by this
     selector; ordinary Nextflow launch admission remains with its existing owner.
     """
     from services.ont_ngs_contract import get_ont_workflow_spec
@@ -154,13 +345,39 @@ def ont_native_completion_path(job: Any) -> str:
         spec = get_ont_workflow_spec(workflow)
     except KeyError as exc:
         raise OntNgsCompletionError("NGS completion workflow is not registered") from exc
-    if workflow == "ont_pooled_reference_assignment" or next(iter(inputs)) not in spec.input_modes:
+    if next(iter(inputs)) not in spec.input_modes:
         raise OntNgsCompletionError("NGS completion requires an ordinary supported Job input mode")
+    if workflow == "ont_pooled_reference_assignment":
+        return "pooled_review"
     if is_ont_fastq_qc_job(job):
         return "fastq_qc"
     if is_ont_signal_alignment_job(job):
         return "signal_alignment"
     return "shared_native_import"
+
+
+def ont_native_result_contract(model_id: str, mode: str, params: dict[str, Any]) -> dict[str, Any]:
+    """One metadata-only projection of the existing native workflow authority."""
+    from types import SimpleNamespace
+    from services.ont_ngs_contract import get_ont_workflow_spec
+
+    job = SimpleNamespace(model_id=model_id, mode=mode, params=params)
+    completion = ont_native_completion_path(job)
+    workflow = next(resolve_ont_workflow_alias(str(params[key]).strip())
+                    for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
+                    if params.get(key))
+    spec = get_ont_workflow_spec(workflow)
+    return {
+        "model_id": model_id, "mode": mode, "workflow_id": spec.workflow_id,
+        "input_mode": params.get("ont_input_mode") or params.get("input_mode"),
+        "native_contract_authority": "platform/api/services/ont_ngs_contract.py:get_ont_workflow_spec",
+        "completion_authority": "platform/api/services/ont_ngs_completion.py:ont_native_completion_path",
+        "completion_path": completion, "manifest_schema": spec.manifest_schema,
+        "artifact_schema_version": spec.artifact_schema_version,
+        "artifact_kinds": list(spec.artifact_kinds),
+        "artifact_conditions": [[kind, list(modes)] for kind, modes in spec.artifact_conditions],
+        "lifecycle": spec.lifecycle,
+    }
 
 
 async def validate_and_prepare_remote_ont_completion(
@@ -191,7 +408,7 @@ async def validate_and_prepare_remote_ont_completion(
             or getattr(job, "remote_state", None) != "returning"):
         raise OntNgsCompletionError("NGS return lost current attempt authority")
     completion_path = ont_native_completion_path(job)
-    persisted_root = resolve_persisted_job_result_root(job)
+    persisted_root = resolve_job_result_destination(job)
     root = Path(output_root)
     if not root.is_absolute() or root != root.resolve() or not root.is_dir():
         raise OntNgsCompletionError("NGS incoming generation must be a real confined directory")
@@ -232,7 +449,21 @@ async def validate_and_prepare_remote_ont_completion(
         # Never accept unbound observations or make their absence science failure.
         staged.params = original_params
         resource_usage_receipt = None
-    if completion_path == "shared_native_import":
+    if terminals.get("dorado_demux", {}).get("status") == "complete":
+        try:
+            anchor = await run_in_threadpool(prepare_dorado_demux_products, job,
+                read_root=root, persisted_root=persisted_root)
+        except DoradoProductsUnavailable as exc:
+            # Optional product evidence is not a new completion/yield condition.
+            staged.provenance.pop("ont_dorado_terminal_products", None)
+            staged.provenance["ont_dorado_products_unavailable"] = {"reason": exc.detail}
+        else:
+            prior = provenance.get("ont_dorado_terminal_products")
+            if prior is not None and prior != anchor:
+                raise OntNgsCompletionError("Dorado terminal product anchor is immutable")
+            staged.provenance["ont_dorado_terminal_products"] = anchor
+            staged.provenance.pop("ont_dorado_products_unavailable", None)
+    if completion_path in {"shared_native_import", "pooled_review"}:
         # Native stage declarations are authenticated above, not manufactured from
         # exit status. The ordinary importer still owns terminal success/failure.
         job.params = staged.params
@@ -241,6 +472,9 @@ async def validate_and_prepare_remote_ont_completion(
                                 if terminal["status"] == "complete"]
         job.stage_outputs = {stage: list(terminal["outputs"])
                              for stage, terminal in terminals.items()}
+        if completion_path == "pooled_review":
+            job.provenance = dict(job.provenance, scientific_status="REVIEW",
+                                  release_state="awaiting_operator_release")
         return {"completion_path": completion_path, "state": "pending_native_import"}
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
     descriptor = os.open(root, flags)
@@ -268,7 +502,8 @@ async def validate_and_prepare_ont_signal_alignment_completion(
 ) -> dict[str, Any]:
     """Validate and persist authority for one bounded external signal alignment."""
 
-    persisted_result_root = resolve_persisted_job_result_root(job)
+    persisted_result_root = (resolve_job_result_destination(job) if pinned_result_root is not None
+                             else resolve_persisted_job_result_root(job))
     if pinned_result_root is not None:
         return await _validate_signal_alignment_from_pinned_root(
             job,
@@ -585,7 +820,8 @@ async def validate_and_prepare_ont_fastq_qc_completion(
 ) -> dict[str, Any]:
     """Pin the result-root inode for the full terminal validation interval."""
 
-    persisted_result_root = resolve_persisted_job_result_root(job)
+    persisted_result_root = (resolve_job_result_destination(job) if pinned_result_root is not None
+                             else resolve_persisted_job_result_root(job))
     if pinned_result_root is not None:
         return await _validate_and_prepare_from_pinned_root(
             job,

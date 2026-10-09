@@ -184,6 +184,10 @@ def current_source_identity(source_root: Path | None = None) -> tuple[str, str]:
 
 def resolve_job_result_contract(job: Any) -> dict[str, Any]:
     """Resolve the exact local ingestion contract bound into a remote attempt."""
+    if job.model_id == 'nanopore':
+        from services.ont_ngs_completion import ont_native_result_contract
+        params = job.params if isinstance(job.params, dict) else json.loads(job.params or '{}')
+        return ont_native_result_contract(job.model_id, job.mode, params)
     if job.model_id == 'caliby_experimental':
         from services.caliby_native import SUPPORTED_MODES, result_contract
         if job.mode in SUPPORTED_MODES:
