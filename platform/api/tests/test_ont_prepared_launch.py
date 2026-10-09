@@ -24,7 +24,6 @@ from services.ont_ngs_contract import ONT_WORKFLOW_ALIASES, CANONICAL_ONT_WORKFL
 async def launch(tmp_path, monkeypatch):
     from fastapi import FastAPI
     import paths
-    import services.nextflow as nextflow
     import services.job_result_roots as result_roots
 
     data = tmp_path / "data"
@@ -46,8 +45,6 @@ async def launch(tmp_path, monkeypatch):
     monkeypatch.setattr(ont_runs, "get_allowed_roots", lambda: {"inputs": inputs, "results": results})
     monkeypatch.setattr(jobs, "get_allowed_roots", lambda: {"inputs": inputs, "results": results})
     monkeypatch.setattr(paths, "get_allowed_roots", lambda: {"inputs": inputs, "results": results})
-    # Compiler work roots must be private; this does not replace the compiler.
-    monkeypatch.setattr(nextflow, "get_work_dir", lambda: data / "work", raising=False)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core.db'}")
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as conn:
@@ -323,6 +320,16 @@ async def test_review_digest_binds_edits_and_context_not_historical_source_label
         assert contextual["preview"]["approval_digest"] != first["preview"]["approval_digest"]
     finally:
         ont_runs.current_launch_context_id.reset(token)
+    await no_claims(launch)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["ont_input_provenance", "comparison_panel_binding", "molbio_revision_binding"])
+async def test_prepare_never_accepts_browser_provenance(launch, field):
+    body = payload(launch)
+    body["params"][field] = {"source": "caller"}
+    response = await launch.client.post("/api/ont/ngs/ont_fastq_qc/prepare", json=body)
+    assert response.status_code == 422 and "server-controlled" in response.text
     await no_claims(launch)
 
 

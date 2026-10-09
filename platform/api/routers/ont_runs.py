@@ -1068,6 +1068,8 @@ async def _prepare_ont_ngs_workflow(
     managed_launch = None
     try:
         submitted = dict(request.params)
+        if {"ont_input_provenance", "comparison_panel_binding"}.intersection(submitted):
+            raise ValueError("ONT input provenance and comparison-panel bindings are server-controlled")
         caller_managed_evidence = sorted(
             ONT_MANAGED_REFERENCE_EVIDENCE_PARAMS.intersection(submitted)
         )
