@@ -1861,20 +1861,100 @@ def _sequence_manifest_candidates(job_root: Path, input_mode: str) -> tuple[Path
     return (canonical, job_root / "qc_manifest.json")
 
 
+# These are the existing modules/ngs and pooled workflow publishDir owners,
+# not the job's work directory or an unrestricted recursive files endpoint.
+_NATIVE_OUTPUT_DIRECTORIES = (
+    "assembly", "align", "methylation", "multimer_qc",
+    "pooled_reference_assignment", "comparison_panel", "basecall", "demux",
+    "fastq_qc", "verification",
+)
+
+
+def _native_artifact_kind(path: Path) -> str:
+    if path.name == "wf-clone-validation-report.html":
+        return "clone_report"
+    if path.name.endswith(".final.fasta"):
+        return "consensus"
+    if path.name.endswith(".bam.bai"):
+        return "alignment_bai"
+    if path.suffix == ".bam":
+        return "alignment_bam"
+    return path.stem
+
+
+def _native_package_artifacts(job_id: str, job_root: Path) -> list[dict[str, Any]]:
+    """Expose retained native publication, without claiming QC verification.
+
+    IDs bind Job, relative path and observed bytes. No generated manifest, new
+    database owner or success gate is needed to download a native result.
+    The existing no-follow digest/snapshot owners check every served leaf.
+    """
+    artifacts = []
+    for source in _NATIVE_OUTPUT_DIRECTORIES:
+        directory = job_root / source
+        if not directory.exists() or directory.is_symlink():
+            continue
+        for parent, directories, filenames in os.walk(directory, followlinks=False):
+            directories[:] = sorted(name for name in directories
+                                    if not name.startswith(".") and not (Path(parent) / name).is_symlink())
+            for filename in sorted(filenames):
+                path = Path(parent) / filename
+                if filename.startswith(".") or path.is_symlink() or not path.is_file():
+                    continue
+                descriptor = _package_artifact_descriptor(
+                    job_id, job_root, path, kind=_native_artifact_kind(path), source=source,
+                )
+                descriptor.pop("_path")
+                descriptor["filename"] = filename
+                artifacts.append(descriptor)
+    return artifacts
+
+
+def native_igv_references(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project native co-published BAM/FASTA pairs to job-scoped IGV URLs.
+
+    This is a viewer configuration, not a sequence-QC verification session.
+    In particular a clone final assembly is not assumed to be its BAM reference.
+    """
+    by_path = {a.get("relative_path"): a for a in artifacts if a.get("state") == "present"}
+    configurations = []
+    for name, directory, bam, reference in (
+        ("primary", "align", "aligned.bam", "reference.fasta"),
+        ("dimer_candidates", "multimer_qc", "dimer_candidates.aligned.bam", "dimer_reference.fasta"),
+        ("intended_pool", "pooled_reference_assignment", "pooled_assignment.bam", "combined_intended_reference.fasta"),
+    ):
+        paths = [f"{directory}/{leaf}" for leaf in (bam, bam + ".bai", reference, reference + ".fai")]
+        if not all(path in by_path for path in paths):
+            continue
+        alignment, index, fasta, fai = [by_path[path] for path in paths]
+        tracks = [{"name": name, "type": "alignment", "format": "bam",
+                   "url": alignment["url"], "indexURL": index["url"]}]
+        methylation = by_path.get("methylation/methylation.bed")
+        if name == "primary" and methylation:
+            tracks.append({"name": "Methylation", "type": "annotation", "format": "bed",
+                           "url": methylation["url"]})
+        configurations.append({"name": name,
+                               "reference": {"fastaURL": fasta["url"], "indexURL": fai["url"]},
+                               "tracks": tracks})
+    return configurations
+
+
 def build_ngs_package_artifacts(
     job_id: str,
     *,
-    source_reference_sha256: str,
-    workflow_id: str,
-    input_mode: str,
-    source_input_path: str | Path,
+    source_reference_sha256: str = "",
+    workflow_id: str = "",
+    input_mode: str = "",
+    source_input_path: str | Path = "",
+    native_outputs: bool = False,
+    include_native_outputs: bool = False,
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
     pinned_root_descriptor: bool = False,
     published_artifacts: list[dict[str, Any]] | None = None,
     verify_source_input: bool = False,
 ) -> list[dict[str, Any]]:
-    """Build a digest-bound inventory from canonical persisted NGS manifests."""
+    """Build content-bound artifacts from canonical manifests or native publication."""
     from services.sequence_qc_manifest import SequenceQcManifestError, load_sequence_qc_manifest
 
     safe_job_id, job_root = _safe_job_root(
@@ -1883,6 +1963,19 @@ def build_ngs_package_artifacts(
         job_output_dir,
         pinned_root_descriptor=pinned_root_descriptor,
     )
+    if native_outputs or include_native_outputs:
+        native = _native_package_artifacts(safe_job_id, job_root)
+        if native_outputs:
+            return native
+        canonical = build_ngs_package_artifacts(
+            job_id, source_reference_sha256=source_reference_sha256,
+            workflow_id=workflow_id, input_mode=input_mode, source_input_path=source_input_path,
+            results_dir=results_dir, job_output_dir=job_output_dir,
+            pinned_root_descriptor=pinned_root_descriptor, published_artifacts=published_artifacts,
+            verify_source_input=verify_source_input,
+        )
+        declared = {item.get("relative_path") for item in canonical}
+        return canonical + [item for item in native if item["relative_path"] not in declared]
     if re.fullmatch(r"[0-9a-f]{64}", source_reference_sha256) is None:
         raise AlignmentSessionError("authorized source reference identity is required")
     if published_artifacts is not None:

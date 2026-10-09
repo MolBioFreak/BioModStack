@@ -760,9 +760,8 @@ def test_presentation_generation_lock_is_nonblocking(
     operations: list[int] = []
     monkeypatch.setattr(service, "get_analysis_cache_dir", lambda: tmp_path)
     monkeypatch.setattr(service.fcntl, "flock", lambda _fd, operation: operations.append(operation))
-    wrapped = service._serialize_alignment_presentation_generation(lambda: "complete")
-
-    assert wrapped() == "complete"
+    with service._alignment_presentation_generation_slot():
+        assert operations
     assert operations[0] & service.fcntl.LOCK_NB
 
 
@@ -904,7 +903,8 @@ async def test_presentation_get_rejects_unready_session_before_materializing(
     for name in ("resolve_session_alignment_bundle", "build_alignment_presentation"):
         monkeypatch.setattr(service, name, lambda *_args, **_kwargs: pytest.fail("unready session reached derivative creation"))
     with pytest.raises(service.AlignmentSessionError, match="not prepared"):
-        await router._prepare_presentation("job-a", "1" * 24, job)
+        async with router._prepared_presentation("job-a", "1" * 24, job):
+            pytest.fail("unready session entered presentation")
 
 
 @pytest.mark.asyncio
@@ -939,8 +939,10 @@ async def test_presentation_route_lazily_builds_verified_source_after_session_ad
     monkeypatch.setattr(service, "resolve_alignment_session", session)
     monkeypatch.setattr(service, "resolve_session_alignment_bundle", bundle)
     assert not (tmp_path / ".alignment-presentations").exists()
-    first = await router._prepare_presentation("job-a", "1" * 24, job)
-    second = await router._prepare_presentation("job-a", "1" * 24, job)
+    async with router._prepared_presentation("job-a", "1" * 24, job) as (first, _root):
+        assert _root.is_dir()
+    async with router._prepared_presentation("job-a", "1" * 24, job) as (second, _root):
+        assert _root.is_dir()
     assert calls == ["session", "bundle", "session", "bundle"]
     assert first["manifest_metadata"]["sha256"] == second["manifest_metadata"]["sha256"]
     assert first["manifest"]["source_alignment_sha256"] == bam_sha
@@ -1864,7 +1866,7 @@ async def test_signal_inventory_route_uses_pinned_root_without_fastq_projection(
     )
 
     response = await router.list_ngs_package_artifacts(job.id, job)
-    assert response == {"job_id": job.id, "artifacts": [{"artifact": "package"}]}
+    assert response == {"job_id": job.id, "artifacts": [{"artifact": "package"}], "igv": []}
     assert Path(calls[0]["job_output_dir"]).name.isdigit()
 
     assert calls == [
@@ -1874,6 +1876,7 @@ async def test_signal_inventory_route_uses_pinned_root_without_fastq_projection(
             "input_mode": "bam",
             "source_input_path": str(tmp_path / "source.bam"),
             "published_artifacts": None,
+            "include_native_outputs": True,
             "job_output_dir": Path(calls[0]["job_output_dir"]),
             "pinned_root_descriptor": True,
         }
@@ -2924,7 +2927,7 @@ def test_ngs_package_routes_support_authenticated_inventory_and_http_range(
     inventory = client.get("/api/jobs/job-a/ngs-artifacts")
     assert inventory.status_code == 200
     expected_public_descriptor = {key: value for key, value in descriptor.items() if key != "relative_path"}
-    assert inventory.json() == {"job_id": "job-a", "artifacts": [expected_public_descriptor]}
+    assert inventory.json() == {"job_id": "job-a", "artifacts": [expected_public_descriptor], "igv": []}
     ranged = client.get(
         f"/api/jobs/job-a/ngs-artifacts/{digest}",
         headers={"Range": "bytes=2-5"},
@@ -3409,7 +3412,8 @@ def test_missing_cached_snapshot_releases_accounted_bytes(
     monkeypatch.setattr(service, "_snapshot_cache", service.OrderedDict([(digest, 17)]))
     monkeypatch.setattr(service, "_snapshot_cache_bytes", 17)
 
-    assert service._cached_snapshot(digest, 17) is None
+    with service._snapshot_cache_condition:
+        assert service._cached_snapshot_locked(digest, 17) is None
     assert service._snapshot_cache == {}
     assert service._snapshot_cache_bytes == 0
 
@@ -4024,10 +4028,10 @@ def test_warm_presentation_reads_do_not_compete_for_generation_slot(tmp_path, mo
                   max_output_bytes=1_000_000)
     first = service.build_alignment_presentation(source, **common)
     entered, release = threading.Event(), threading.Event()
-    def competing_producer():
-        entered.set()
-        assert release.wait(10)
-    producer = service._serialize_alignment_presentation_generation(competing_producer)
+    def producer():
+        with service._alignment_presentation_generation_slot():
+            entered.set()
+            assert release.wait(10)
     with ThreadPoolExecutor(max_workers=4) as pool:
         running = pool.submit(producer)
         assert entered.wait(5)
@@ -4071,10 +4075,10 @@ def test_presentation_receipt_admits_concurrent_http_ranges_without_regeneration
         receipt = first.json()
         descriptors = [receipt["preview"]["bam"], receipt["preview"]["index"], receipt["coverage"]["artifact"]]
         entered, release = threading.Event(), threading.Event()
-        def competing_producer():
-            entered.set()
-            assert release.wait(10)
-        producer = service._serialize_alignment_presentation_generation(competing_producer)
+        def producer():
+            with service._alignment_presentation_generation_slot():
+                entered.set()
+                assert release.wait(10)
         with ThreadPoolExecutor(max_workers=4) as pool:
             running = pool.submit(producer)
             assert entered.wait(5)

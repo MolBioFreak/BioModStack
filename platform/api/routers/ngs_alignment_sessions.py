@@ -762,7 +762,17 @@ def _job_session_authority(job: Job) -> dict[str, Any]:
     return {**authority, "package_artifact_set_sha256": package_digest, "manifest_digests": _job_manifest_digests(job)}
 
 
+def _uses_native_artifact_catalog(job: Job) -> bool:
+    return (str(getattr(job, "model_id", "") or "").lower() == "nanopore"
+            and not _is_canonical_fastq(job) and not is_ont_signal_alignment_job(job))
+
+
 def _job_package_authority(job: Job) -> dict[str, Any]:
+    # Native publication already belongs to this persisted Job/root. Clone,
+    # methylation and pooled outputs do not carry ordinary FASTQ-QC manifests
+    # or necessarily a reference/input selector (e.g. historical pooled jobs).
+    if _uses_native_artifact_catalog(job):
+        return {"native_outputs": True}
     authority = _job_authority(job)
     params = getattr(job, "params", None)
     params = params if isinstance(params, dict) else {}
@@ -777,7 +787,8 @@ def _job_package_authority(job: Job) -> dict[str, Any]:
         observed = canonical_ngs_package_authority(inventory)
         if observed["artifact_set_sha256"] != integrity.get("artifact_set_sha256"):
             raise service.AlignmentSessionError("persisted artifact inventory identity disagrees")
-    return {**authority, "source_input_path": source_path, "published_artifacts": inventory}
+    return {**authority, "source_input_path": source_path, "published_artifacts": inventory,
+            "include_native_outputs": True}
 
 
 
@@ -1143,6 +1154,10 @@ async def list_alignment_sessions(
     authorized_job: Job = Depends(require_alignment_job),
 ):
     try:
+        if _uses_native_artifact_catalog(authorized_job):
+            # These native outputs have no ordinary verification session. Their
+            # co-published IGV references are exposed by the artifact catalog.
+            return {"schema": "bms.ngs.alignment-session-list.v1", "job_id": job_id, "sessions": []}
         async with _validated_pinned_result_root(authorized_job) as pinned_root:
             sessions = await run_in_threadpool(
                 service.build_alignment_sessions,
@@ -1266,9 +1281,10 @@ async def list_ngs_package_artifacts(
         return {
             "job_id": job_id,
             "artifacts": [
-                {key: value for key, value in artifact.items() if key != "relative_path"}
+                {key: value for key, value in artifact.items() if key != "relative_path" and not key.startswith("_")}
                 for artifact in artifacts
             ],
+            "igv": service.native_igv_references(artifacts),
         }
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
