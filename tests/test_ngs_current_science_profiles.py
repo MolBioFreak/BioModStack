@@ -46,6 +46,15 @@ def test_pod5_native_profile_default_and_saved_declaration_are_distinct():
         request['wf_clone_basecaller_model'] = 'dna_r10.4.1_e8.2_400bps_hac@v5.0.0'
         p = normalize_ont_launch_params('wf_clone_validation', request)
         assert p['wf_clone_basecaller_model'] == request['wf_clone_basecaller_model']
+    fast = normalize_ont_launch_params('wf_clone_validation', {
+        'pod5_dir': '/input/pod5', 'dorado_quality_mode': 'fast'})
+    assert fast['dorado_resolved_model_id'] == 'dna_r10.4.1_e8.2_400bps_fast@v5.2.0'
+    # FAST remains selectable; the separate declared polisher is not evidence
+    # of a native FAST-trained Medaka model or of read origin.
+    assert fast['wf_clone_basecaller_model'] == 'dna_r10.4.1_e8.2_400bps_hac@v6.0.0'
+    disabled = normalize_ont_launch_params('ont_construct_screening', {
+        'pod5_dir': '/input/pod5', 'dorado_quality_mode': 'sup', 'run_assembly': False})
+    assert 'wf_clone_basecaller_model' not in disabled
 
 
 @pytest.mark.parametrize('backend', ['apptainer', 'udocker'])
