@@ -73,6 +73,14 @@ def _worker_attempt(tmp_path: Path, command: list[str]) -> Path:
         }],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    # The detached worker imports diagnostic filtering from its staged source,
+    # not the controller's pytest sys.path. Keep this transport fixture runnable.
+    diagnostic = source_dir / 'scripts/lib/native_diagnostics.py'
+    diagnostic.parent.mkdir(parents=True)
+    diagnostic.write_bytes((Path(__file__).resolve().parents[3] /
+                            'scripts/lib/native_diagnostics.py').read_bytes())
+    envelope['files'].append(bundle_module._record_file(
+        diagnostic, 'source/scripts/lib/native_diagnostics.py', 'source').model_dump(mode='json'))
     (attempt_dir / worker.ENVELOPE_FILE).write_text(
         json.dumps(envelope, sort_keys=True, separators=(",", ":")),
         encoding="utf-8",
