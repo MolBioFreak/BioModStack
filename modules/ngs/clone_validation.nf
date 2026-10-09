@@ -69,6 +69,10 @@ process RunCloneValidation {
     if (!referencePath) {
         error("wf_clone_validation requires a full reference FASTA for construct verification")
     }
+    def apiPython = shellQuote(params.api_python ?: System.getenv("BMS_API_PYTHON") ?: "python3")
+    // The nested executor consumes this task's existing scheduler allocation;
+    // it must not independently guess host memory/CPU or reserve another slot.
+    def nestedMemory = task.memory ? "-executor.memory ${shellQuote(task.memory.toString())}" : ''
     def modelValidator = shellQuote("${codeRoot}/scripts/validate_clone_input_model.py")
     def validator = shellQuote("${codeRoot}/scripts/validate_wf_clone_runtime.py")
     def lock = shellQuote(lockPath)
@@ -83,14 +87,14 @@ process RunCloneValidation {
     export NXF_HOME="${wfCloneNxfHome}"
     mkdir -p "\${NXF_HOME}"
 
-    python3 ${validator} \
+    ${apiPython} ${validator} \
         --lock ${lock} \
         --model "${basecallerModel}" \
         --assembly-tool "${assemblyTool}" \
         --output runtime_provenance.json
 
     # The explicit profile is a declaration, never fabricated input provenance.
-    python3 ${modelValidator} \
+    ${apiPython} ${modelValidator} \
         --bam "${bam}" \
         --runtime-lock ${lock} \
         --expected-model "${basecallerModel}" \
@@ -98,7 +102,7 @@ process RunCloneValidation {
 
     export NXF_SINGULARITY_ENABLED=true
     export NXF_APPTAINER_ENABLED=false
-    python3 - ${shellQuote(codeRoot)} ${lock} ${shellQuote(assemblyTool)} <<'PY'
+    ${apiPython} - ${shellQuote(codeRoot)} ${lock} ${shellQuote(assemblyTool)} <<'PY'
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
@@ -111,6 +115,7 @@ PY
     set +e
     "\${BMS_NEXTFLOW_EXECUTABLE:-${runtimeLock.nextflow.executable}}" -log wf_clone.log run ${shellQuote(runtimeLock.patched_source.path)} \
         -offline \
+        -executor.cpus ${task.cpus} ${nestedMemory} \
         --disable_ping \
         "\${runtime_args[@]}" \
         -w wf_clone_work \

@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -11,7 +12,11 @@ def test_dorado_module_requires_preflight_and_exact_locked_paths() -> None:
     assert "biomodstack.dorado_preflight.v1" in text
     assert 'base_model="\\$PWD/sealed_models/\\${model_id}"' in text
     assert 'pod5_root="\\$PWD/sealed_pod5"' in text
-    assert "--net --network none" in (ROOT / "nextflow.config").read_text(encoding="utf-8")
+    # Backend-specific namespace flags no longer live in scientific labels.
+    # Check the current immutable scientific policy, not a retired CLI spelling.
+    lock = json.loads((ROOT / "config/ngs/dorado_v2.1.2.lock.json").read_text())
+    assert lock["policy"]["runtime_network"] == "forbidden"
+    assert lock["policy"]["model_download"] == "forbidden"
     assert '--batchsize "\\${batch_size}"' in text
     assert '--models-directory "\\$PWD/sealed_models"' in text
     assert "snapshot_model" in text
@@ -64,9 +69,13 @@ def test_all_pod5_routes_publish_canonical_basecall_provenance_and_fail_closed_r
         text = (ROOT / "workflows/ngs" / name).read_text(encoding="utf-8")
         assert '"${params.out_dir}/basecall/dorado_preflight.json"' in text, name
         assert '"${params.out_dir}/basecall/dorado_runtime_provenance.json"' in text, name
-        assert "Stage reporting failed" in text, name
+        assert "include { reportStage } from '../../modules/ngs/stage_reporting.nf'" in text, name
+        assert "reportStage(params," in text, name
         assert "Warning: Failed to report stage" not in text, name
 
+    shared_reporter = (ROOT / "modules/ngs/stage_reporting.nf").read_text(encoding="utf-8")
+    assert "if (rc != 0) throw new IllegalStateException" in shared_reporter
+    assert "Stage reporting failed" in shared_reporter
     reporter = (ROOT / "scripts/stage_reporter.py").read_text(encoding="utf-8")
     assert "sys.exit(1)" in reporter
     assert 'os.environ.get("API_BASE_URL", "").strip()' in reporter

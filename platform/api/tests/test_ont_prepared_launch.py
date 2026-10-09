@@ -368,26 +368,9 @@ async def test_panel_commit_consumes_both_receipts_and_retains_staging(launch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("family", ["fastq", "molbio", "managed", "panel"])
-async def test_shared_remote_digest_and_transaction_with_result_projection_seam(launch, managed, monkeypatch, family):
-    """Test only this lane's handoff; native result projection has a separate owner.
-
-    The compiler, canonical digest, target validation, approval comparator and SQL
-    insertion remain real. On the pre-integration base, the one known result-
-    contract blocker is isolated at the preview admissibility seam, not replaced
-    with a fabricated native result contract. Integrated acceptance must remove
-    that blocker in the real projection owner; this control is NOT that evidence.
-    """
+async def test_shared_remote_digest_and_transaction_with_native_result_projection(launch, managed, family):
+    """Real native compiler/result projection, approval comparator and SQL commit."""
     from database import ExecutionTarget
-    original = jobs._execution_plan_preview
-    def preview(job, *args, **kwargs):
-        result = original(job, *args, **kwargs)
-        if not result["admissible"]:
-            assert len(result["blockers"]) == 1, result["blockers"]
-            blocker = result["blockers"][0]
-            assert blocker["field"] == "result_contract" and blocker["component_or_dependency_id"] == "nanopore"
-            result = {**result, "admissible": True}
-        return result
-    monkeypatch.setattr(jobs, "_execution_plan_preview", preview)
     async with launch.factory() as session:
         session.add(ExecutionTarget(id="fixture-worker", provider="vast", provider_instance_id="fixture", active=True,
             state="ready", provider_metadata={"inventory": {"checked_at": datetime.utcnow().isoformat(),
@@ -396,6 +379,7 @@ async def test_shared_remote_digest_and_transaction_with_result_projection_seam(
     body = managed.request if family == "managed" else payload(launch, panel=family == "panel")
     workflow = "ont_fastq_qc" if family in {"fastq", "managed"} else "ont_plasmid_qc"
     first = await prepare(launch, {**body, "execution_target_id": "fixture-worker"}, workflow)
+    assert first["preview"]["admissible"], first["preview"]["blockers"]
     approved = {**first["request"], "execution_plan_approval": first["preview"]["approval_digest"]}
     stale = await launch.client.post(f"/api/ont/ngs/{workflow}/submit", json={**approved, "name": "edited"})
     assert stale.status_code == 409 and "stale" in stale.text, stale.text
@@ -474,6 +458,42 @@ async def test_fastq_descriptor_does_not_expand_other_workflow_custody(launch):
     response = await launch.client.post("/api/ont/ngs/ont_plasmid_qc/prepare", json=first["request"])
     assert response.status_code == 422 and "only to ordinary FASTQ QC" in response.text
     await no_claims(launch)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [
+    "dna_r10.4.1_e8.2_400bps_hac@v6.0.0",
+    "dna_r10.4.1_e8.2_400bps_sup@v5.2.0",
+    "dna_r10.4.1_e8.2_400bps_hac@v5.2.0",
+    "dna_r10.4.1_e8.2_400bps_hac@v5.0.0",
+    "dna_r10.4.1_e8.2_400bps_sup@v5.0.0",
+])
+async def test_current_clone_profile_and_files_survive_typed_http_and_sql(launch, model):
+    body = payload(launch)
+    controls = {"wf_clone_basecaller_model": model, "wf_clone_assembly_tool": "canu",
+                "wf_clone_canu_fast": True, "wf_clone_trim_length": 0,
+                "wf_clone_expected_identity": 97.5}
+    for name, content in {
+        "wf_clone_primers": "name\tforward\treverse\ncontrol\tACGT\tACGT\n",
+        "wf_clone_insert_reference": ">insert\nACGT\n",
+        "wf_clone_host_reference": ">host\nACGT\n",
+        "wf_clone_regions_bedfile": "host\t0\t4\n",
+    }.items():
+        path = launch.inputs / name
+        path.write_text(content)
+        controls[name] = str(path)
+    body["params"].update(controls)
+    first = await prepare(launch, body, "wf_clone_validation")
+    assert {key: first["request"]["params"][key] for key in controls} == controls
+    assert {key: first["preview"]["request"]["params"][key] for key in controls} == controls
+    assert await prepare(launch, first["request"], "wf_clone_validation") == first
+    response = await launch.client.post("/api/ont/ngs/wf_clone_validation/submit", json=first["request"])
+    assert response.status_code == 201, response.text
+    async with launch.factory() as session:
+        job = await session.get(Job, response.json()["id"])
+        assert {key: job.params[key] for key in controls} == controls
+        from services.ont_ngs_contract import DORADO_LOCK_PATH
+        assert job.params["dorado_lock_sha256"] == hashlib.sha256(DORADO_LOCK_PATH.read_bytes()).hexdigest()
 
 
 ORDINARY_IDS = sorted(identity for identity in set(CANONICAL_ONT_WORKFLOWS) | set(ONT_WORKFLOW_ALIASES)

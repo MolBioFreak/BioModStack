@@ -22,7 +22,7 @@ COMMIT_ENV = {
     "GIT_COMMITTER_EMAIL": "runtime-pin@biomodstack.local",
     "GIT_COMMITTER_DATE": "1784473200 +0000",
 }
-COMMIT_MESSAGE = "compat: make wf-clone-validation v1.8.4 parse on Nextflow 25\n"
+COMMIT_MESSAGE = "compat: wf-clone-validation v1.8.4 on Nextflow 25 with Medaka 2.2.2 profiles\n"
 
 
 def sha256_file(path: Path) -> str:
