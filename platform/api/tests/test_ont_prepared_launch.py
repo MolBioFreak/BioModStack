@@ -451,6 +451,31 @@ async def test_saved_placement_omission_and_explicit_local_are_distinct(launch):
     assert response.status_code == 201, response.text
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("family", ["fastq", "managed"])
+async def test_retained_snapshot_digest_tamper_is_rejected_before_claims(launch, managed, family):
+    first = await prepare(launch, managed.request if family == "managed" else payload(launch))
+    if family == "managed":
+        snapshot = launch.inputs / "molbio_ngs_managed_launch_snapshots" / first["request"]["managed_reference"]["launch_snapshot_id"] / "reference.fasta"
+    else:
+        snapshot = launch.inputs / "ont_fastq_launch_snapshots" / first["request"]["fastq_snapshot"]["relative_path"]
+    snapshot.chmod(0o600)
+    content = snapshot.read_bytes()
+    snapshot.write_bytes(b"X" + content[1:])
+    response = await launch.client.post("/api/ont/ngs/ont_fastq_qc/submit", json=first["request"])
+    assert response.status_code == 422 and ("digest mismatch" in response.text or "bytes changed" in response.text)
+    await no_claims(launch)
+    assert snapshot.is_file()
+
+
+@pytest.mark.asyncio
+async def test_fastq_descriptor_does_not_expand_other_workflow_custody(launch):
+    first = await prepare(launch, payload(launch))
+    response = await launch.client.post("/api/ont/ngs/ont_plasmid_qc/prepare", json=first["request"])
+    assert response.status_code == 422 and "only to ordinary FASTQ QC" in response.text
+    await no_claims(launch)
+
+
 ORDINARY_IDS = sorted(identity for identity in set(CANONICAL_ONT_WORKFLOWS) | set(ONT_WORKFLOW_ALIASES)
                       if ont_runs.resolve_ont_workflow_alias(identity) != "ont_pooled_reference_assignment")
 
