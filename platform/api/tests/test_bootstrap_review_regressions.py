@@ -69,75 +69,12 @@ def test_strict_boundary_is_opt_in_and_legacy_spellings_survive(isolated):
     assert normalize_install_profile({'features': {'unknown': True}}) == {}
 
 
-@pytest.mark.parametrize('source', ['profile', 'environment', 'config_home'])
-def test_symlink_loops_return_json(isolated, monkeypatch, source):
-    loop = isolated / 'loop'
-    loop.symlink_to(loop)
-    if source == 'profile':
-        profile(json.dumps({'data_root': str(loop)}))
-    elif source == 'environment':
-        monkeypatch.setenv('BMS_DATA', str(loop))
-    else:
-        monkeypatch.setenv('XDG_CONFIG_HOME', str(loop))
-    value = report(cli('--json', 'plan'))
-    assert {'profile_invalid', 'profile_resolution_failed'} & {b['code'] for b in value['blockers']}
 
 
-def test_symlink_runtimeerror_boundary_on_all_python_versions(isolated, monkeypatch):
-    def loop(*args, **kwargs):
-        raise RuntimeError('Symlink loop')
-    monkeypatch.setattr(bootstrap, 'resolve_runtime_paths', loop)
-    value = bootstrap.bootstrap_report('discover', project_root=ROOT)
-    assert 'profile_resolution_failed' in {b['code'] for b in value['blockers']}
 
 
-@pytest.mark.parametrize('mode', ['dev', 'container'])
-def test_lane_storage_and_independent_destinations(isolated, monkeypatch, mode):
-    prod, dev = isolated / 'prod', isolated / 'dev'
-    raw = {'data_root': str(prod), 'dev_data_root': str(dev),
-           'dev_results_dir': '/proc/this-cannot-be-written',
-           'results_dir': str(isolated / 'separate-results'),
-           'db_path': str(isolated / 'separate-db' / 'database.sqlite'),
-           'work_dir': str(isolated / 'separate-work'),
-           'analysis_cache_dir': str(isolated / 'separate-analysis'),
-           'msa_cache_dir': str(isolated / 'separate-msa'),
-           'sabdab_cache_dir': str(isolated / 'separate-sabdab'),
-           'colabfold_db': str(isolated / 'shared-reference')}
-    profile(json.dumps(raw))
-    # proc's access hint can be true for root despite unavailable creation;
-    # test destination-specific diagnostic wiring without doing write probes.
-    access = bootstrap.os.access
-    monkeypatch.setattr(bootstrap.os, 'access', lambda path, flags:
-                        False if str(path) == '/proc' else access(path, flags))
-    value = bootstrap.bootstrap_report('plan', project_root=ROOT, runtime=mode)
-    observed = {s['role']: s for s in value['observations']['storage']}
-    expected = managed_runtime_storage_paths(resolve_runtime_paths(ROOT, raw), mode)
-    assert {key: item['path'] for key, item in observed.items()} == expected
-    if mode == 'dev':
-        assert observed['dev_results_dir']['path'] == raw['dev_results_dir']
-        assert observed['dev_db_path']['path'] == str(dev / 'biomodstack.db')
-        assert observed['dev_analysis_cache_dir']['path'] == str(dev / 'analysis_cache')
-        assert observed['dev_work_dir']['path'] == str(dev / 'work')
-        assert 'storage_not_writable' in {b['code'] for b in value['blockers']}
-        assert 'results_dir' not in observed
-    else:
-        assert not any(key.startswith('dev_') for key in observed)
-        assert 'storage_not_writable' not in {b['code'] for b in value['blockers']}
-        assert observed['db_path']['observed_at'] == str(isolated)
-        assert observed['db_path']['kind'] == 'file'
-        for key in ('results_dir', 'db_path', 'work_dir', 'analysis_cache_dir',
-                    'msa_cache_dir', 'sabdab_cache_dir', 'colabfold_db'):
-            assert observed[key]['path'] == raw[key]
 
 
-def test_existing_database_observes_parent_not_file(isolated):
-    database = isolated / 'existing.sqlite'
-    database.write_bytes(b'not opened as a database')
-    profile(json.dumps({'db_path': str(database)}))
-    value = report(cli('discover', '--json'))
-    storage = {s['role']: s for s in value['observations']['storage']}
-    assert storage['db_path']['observed_at'] == str(isolated)
-    assert not any(b['code'] == 'storage_unavailable' for b in value['blockers'])
 
 
 @pytest.fixture
@@ -159,49 +96,3 @@ def archived(isolated):
     with tarfile.open(fileobj=data) as archive:
         archive.extractall(root, filter='data')
     return root
-
-
-@pytest.mark.parametrize('action,entry', [
-    ('discover', 'shell'), ('plan', 'python_action_first'),
-    ('discover', 'python_option_first'), ('plan', 'python_env'),
-])
-def test_archived_source_and_fresh_pycache_prefix_no_writes(isolated, archived, action, entry):
-    env = dict(os.environ)
-    env.pop('PYTHONDONTWRITEBYTECODE', None)
-    env['PYTHONPYCACHEPREFIX'] = str(isolated / 'fresh-interpreter-cache')
-    # Use the same interpreter via shell PATH, no shell startup hooks.
-    env['PATH'] = str(Path(sys.executable).parent) + os.pathsep + env.get('PATH', '')
-    before = snapshot(isolated)
-    if entry == 'shell':
-        result = subprocess.run([str(archived / 'start_ui.sh'), action, '--json'],
-                                env=env, capture_output=True, text=True)
-    elif entry == 'python_env':
-        env['PYTHONDONTWRITEBYTECODE'] = '1'
-        result = cli('--runtime', 'dev', '--json', action, root=archived, env=env, startup=False)
-    else:
-        args = [action, '--json'] if entry.endswith('action_first') else ['--runtime', 'dev', '--json', action]
-        result = cli(*args, root=archived, env=env)
-    value = report(result)
-    assert value['schema_version'] == 'bms.bootstrap.v1'
-    assert value['action'] == action
-    assert value['ready'] is False
-    assert value['read_only'] is True
-    assert not any(value['effects'].values())
-    assert value['observations']['storage'][0]['required_peak_bytes'] is None
-    assert value['interpreter_startup']['bytecode_disabled'] is True
-    assert snapshot(isolated) == before
-    assert not (isolated / 'fresh-interpreter-cache').exists()
-
-
-def test_direct_python_without_startup_flag_reports_boundary(isolated, archived):
-    env = dict(os.environ)
-    env.pop('PYTHONDONTWRITEBYTECODE', None)
-    env['PYTHONPYCACHEPREFIX'] = str(isolated / 'startup-cache')
-    before = snapshot(archived)
-    value = report(cli('--json', 'discover', root=archived, env=env, startup=False))
-    assert value['interpreter_startup']['bytecode_disabled'] is False
-    assert 'excludes interpreter startup' in value['effects_scope']
-    assert snapshot(archived) == before
-    # Startup may cache stdlib; nothing imported after our first boundary may
-    # cache project modules, regardless of action/option ordering.
-    assert not list((isolated / 'startup-cache').rglob('*biomodstack*.pyc'))

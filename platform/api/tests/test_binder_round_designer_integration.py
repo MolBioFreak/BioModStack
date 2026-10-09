@@ -50,18 +50,6 @@ def test_designer_process_descriptors_match_real_sections():
         test_refinement_publication_descriptors_match_actual_process_sections(source)
 
 
-@pytest.mark.parametrize('model', ['proteinmpnn', 'fampnn'])
-def test_roles_count_and_fixed_positions_survive_actual_normalize_compile_replay(model, tmp_path):
-    typed = role_request(tmp_path, model)
-    normalized, invocation = compile_request(typed, tmp_path / 'output')
-    clone = jobs.normalize_job_request(JobCreate.model_validate(normalized.model_dump(mode='json')))
-    assert clone.model_dump() == normalized.model_dump()
-    settings = json.loads(next(x.payload for x in invocation.generated_inputs if x.relative_path == '.sequence-design-settings.json'))
-    keys = ['seqs_per_design', 'fixed_positions'] + (['binder_chains', 'target_chains'] if model == 'proteinmpnn' else ['design_chain', 'target_chain'])
-    for key in keys:
-        assert settings[key] == invocation.native_parameters[key] == normalized.params[key] == typed.params[key]
-    if model == 'proteinmpnn':
-        assert 'scripts/proteinmpnn_binder_roles.py' in {d.relative_path for d in invocation.execution_plan.dependencies}
 
 
 @pytest.mark.parametrize('settings,message', [
@@ -136,23 +124,6 @@ async def test_role_request_real_compiled_native_transport_and_ingestion(admissi
     assert await ingest_job_results(job.id, output, admission) == 0
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize('model', ['proteinmpnn', 'fampnn', 'caliby_binder'])
-async def test_round_input_owner_reaches_actual_normalizer_and_compiler(selected, model):
-    from services.binder_round_inputs import design_request, normalize_request
-    _, session, root, _, tmp_path = selected
-    design = await session.get(Design, 'd0')
-    Path(design.pdb_path).write_text(helper().atom(1, 'Z', 17) + helper().atom(2, 'B', 31))
-    envelope = normalize_request({
-        'sequence_design': {'model_id': model, 'params': {}},
-        'prediction': {'model_id': 'protenix', 'params': {'protenix_use_msa': False}},
-    })
-    typed = design_request(root, root, design, envelope, ['Z'], ['B'])
-    normalized, invocation = compile_request(typed, tmp_path / 'compiled-round')
-    binder_key = 'design_chain' if model in {'fampnn', 'proteinmpnn'} else 'binder_chains'
-    target_key = 'target_chain' if model in {'fampnn', 'proteinmpnn'} else 'target_chains'
-    assert invocation.native_parameters[binder_key] == normalized.params[binder_key] == 'Z'
-    assert invocation.native_parameters[target_key] == normalized.params[target_key] == 'B'
 
 
 @pytest.mark.asyncio

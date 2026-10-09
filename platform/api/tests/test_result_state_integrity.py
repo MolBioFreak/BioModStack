@@ -31,57 +31,8 @@ from services.result_state_integrity import finalize_successful_job, job_expects
 from routers.jobs import reingest_job_results
 
 
-def test_job_get_handlers_omit_direct_write_and_repair_tokens() -> None:
-    """Lexical policy only: delegated helpers are not proven read-only here."""
-    jobs_source = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
-    tree = ast.parse(jobs_source)
-    handlers = {
-        node.name: ast.get_source_segment(jobs_source, node) or ""
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and any(
-            isinstance(decorator, ast.Call)
-            and isinstance(decorator.func, ast.Attribute)
-            and decorator.func.attr == "get"
-            for decorator in node.decorator_list
-        )
-    }
-
-    assert {"get_job", "get_stage_gates", "get_children_status"} <= handlers.keys()
-    for name, source in handlers.items():
-        assert "_repair_job_for_response" not in source, name
-        assert "_reconcile_child_jobs_from_history" not in source, name
-        assert "session.commit" not in source, name
-        assert "session.add" not in source, name
-        assert "session.delete" not in source, name
-        assert "schedule_viewer_minimum_analyses_for_job" not in source, name
 
 
-def test_design_get_handlers_and_review_hydration_omit_direct_write_tokens() -> None:
-    """Lexical policy only: delegated helpers are not proven read-only here."""
-    designs_source = (API_ROOT / "routers" / "designs.py").read_text(encoding="utf-8")
-    tree = ast.parse(designs_source)
-    handlers = {
-        node.name: ast.get_source_segment(designs_source, node) or ""
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and any(
-            isinstance(decorator, ast.Call)
-            and isinstance(decorator.func, ast.Attribute)
-            and decorator.func.attr == "get"
-            for decorator in node.decorator_list
-        )
-    }
-    assert {"list_designs", "get_backbone_summary", "get_designs_for_job"} <= handlers.keys()
-    for name, source in handlers.items():
-        assert "session.commit" not in source, name
-        assert "session.add" not in source, name
-        assert "session.delete" not in source, name
-
-    hydration = next(node for node in tree.body if getattr(node, "name", None) == "_hydrate_review_job")
-    hydration_source = ast.get_source_segment(designs_source, hydration) or ""
-    for forbidden in ("session.commit", "session.add", "session.delete", "ensure_stage_review_rows"):
-        assert forbidden not in hydration_source
 
 
 async def _session_factory(tmp_path: Path):

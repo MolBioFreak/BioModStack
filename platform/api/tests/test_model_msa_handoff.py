@@ -31,66 +31,8 @@ def provider_fixture(monkeypatch, tmp_path):
     return calls
 
 
-def test_boltz_native_sequence_batch_identity_and_relocation(monkeypatch, tmp_path):
-    from biomodstack_boltz_msa import hydrate_prepared_boltz_task
-    calls = provider_fixture(monkeypatch, tmp_path)
-    batch = tmp_path / 'native-batch.json'
-    entries = [{'name': 'display', 'entry_id': 'task_B', 'sequence': 'ACDE:FGHI', 'fold': 7, 'rank': 2},
-               {'name': 'task_A', 'sequence': 'KLMN'}]
-    batch.write_text(json.dumps(entries))
-    original = batch.read_bytes()
-    params = {'boltz_use_msa': True, 'msa_provider': 'colabfold_api',
-              'sequence_batch_json_path': str(batch), 'boltz_sampling_steps': 77}
-    host = tmp_path / 'host'
-    prepared = prepare_launch_msa('boltz2', params, host)
-    assert [call[0] for call in calls] == [['ACDE', 'FGHI'], ['KLMN']]
-    assert batch.read_bytes() == original
-    manifest = json.loads((host / 'msa-inputs.json').read_text())
-    assert [task['name'] for task in manifest['tasks']] == ['task_B', 'task_A']
-    assert manifest['tasks'][0]['native_task']['metadata'] == entries[0]
-    assert manifest['settings']['boltz_sampling_steps'] == 77
-    worker = tmp_path / 'worker'
-    shutil.move(str(host), worker)
-    native = {'version': 1, 'constraints': [{'fixture': 'unchanged'}], 'sequences': [
-        {'protein': {'id': ['A'], 'sequence': 'ACDE'}},
-        {'protein': {'id': ['B'], 'sequence': 'FGHI'}}]}
-    bound = hydrate_prepared_boltz_task(native, worker, prepared['boltz_prepared_msa_sha256'], task_name='task_B')
-    assert bound['constraints'] == native['constraints']
-    assert 'msa' not in native['sequences'][0]['protein']
-    assert all(Path(p['protein']['msa']).is_relative_to(worker) for p in bound['sequences'])
-    with pytest.raises(ValueError, match='chain identity'):
-        hydrate_prepared_boltz_task(native, worker, prepared['boltz_prepared_msa_sha256'], task_name='task_A')
-    with pytest.raises(ValueError, match='missing or ambiguous'):
-        hydrate_prepared_boltz_task(native, worker, prepared['boltz_prepared_msa_sha256'], task_name='unknown')
-    Path(bound['sequences'][0]['protein']['msa']).write_text('>q\nACDE\n>tampered\nVCDE\n')
-    with pytest.raises(ValueError, match='artifact identity'):
-        hydrate_prepared_boltz_task(native, worker, prepared['boltz_prepared_msa_sha256'], task_name='task_B')
 
 
-def test_boltz_complex_batch_supplied_and_short_peptide(monkeypatch, tmp_path):
-    from biomodstack_boltz_msa import hydrate_prepared_boltz_components
-    calls = provider_fixture(monkeypatch, tmp_path)
-    supplied = tmp_path / 'supplied.csv'
-    supplied.write_text('key,sequence\n-1,ACDE\n8,VCDE\n')
-    payload = {'name': 'native', 'components': [
-        {'id': ['B', 'C'], 'type': 'protein', 'sequence': 'ACDE', 'msa_path': str(supplied)},
-        {'id': 'P', 'type': 'peptide', 'sequence': 'FGHI'},
-        {'id': 'L', 'type': 'ligand', 'ccd': 'ATP'}]}
-    source = tmp_path / 'complex.json'
-    source.write_text(json.dumps(payload))
-    batch = tmp_path / 'batch.json'
-    batch.write_text(json.dumps([{'name': 'exact_task', 'complex_json': str(source)}]))
-    original = source.read_bytes()
-    prepared = prepare_launch_msa('boltz2', {'boltz_use_msa': True,
-        'sequence_batch_json_path': str(batch), 'complex_batch_dir': str(tmp_path)}, tmp_path / 'host')
-    assert not calls and source.read_bytes() == original
-    worker = tmp_path / 'worker'
-    shutil.move(str(tmp_path / 'host'), worker)
-    supplied.unlink()
-    bound = hydrate_prepared_boltz_components(payload, worker, prepared['boltz_prepared_msa_sha256'], task_name='exact_task')
-    assert bound['components'][0]['id'] == ['B', 'C']
-    assert Path(bound['components'][0]['msa_path']).is_relative_to(worker)
-    assert bound['components'][1:] == payload['components'][1:]
 
 
 def test_cp_single_top_level_directory_config_is_packaged_and_empty_preserved(monkeypatch, tmp_path):

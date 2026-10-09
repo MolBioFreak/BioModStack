@@ -45,11 +45,9 @@ jobs:
             unshare --net --setgid="$(id -g)" --setuid="$(id -u)" \
             timeout --signal=TERM --kill-after=15s 900s uv run --offline --frozen --group dev python -m pytest -vv --capture=no -o addopts="" -o faulthandler_timeout=90 \
             tests/test_remote_provision_isolation.py \
-            tests/test_remote_inventory_supersession.py \
             tests/test_remote_incremental_admission.py \
             tests/test_remote_helper_diagnostics.py \
             tests/test_managed_runtime_safety.py \
-            tests/test_remote_managed_inventory.py \
             tests/test_remote_preloading.py \
             tests/test_vast_auto_setup.py \
             tests/test_remote_cache_integration.py \

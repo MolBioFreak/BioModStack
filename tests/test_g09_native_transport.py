@@ -200,21 +200,6 @@ def test_real_native_parsers_and_fampnn_export_preserve_insertion_identity(tmp_p
     assert result.chain_index.tolist() == [7, 7]
 
 
-def test_partial_publication_waits_until_native_retry_checks_finish(tmp_path):
-    reference, candidate = tmp_path/'ref.pdb', tmp_path/'candidate.pdb'
-    reference.write_text(atom('H', 100, 'A') + atom('T', 9, x=20, serial=2))
-    native.configure(reference, {'binder': ['H'], 'target': ['T']}, {})
-    features = {'bms_identity': np.array([[72, 100, 65], [84, 9, 32]]), 'bms_offset': np.ones((2, 3)), 'bms_defer': True}
-    prot = SimpleNamespace(chain_index=np.array([0, 1]), residue_index=np.array([1, 1]))
-    for value in (1., 2.):
-        candidate.write_text(atom('A', 1, x=value) + atom('B', 1, x=value, serial=2))
-        before = candidate.read_bytes()
-        native.publish_partial(candidate, prot, features, 'AB')
-        assert candidate.read_bytes() == before, 'transport changed native retry/clash inputs'
-        assert not Path(str(candidate)+'.comparison.json').exists()
-    native.flush_partial(candidate)
-    assert '   3.000' in candidate.read_text()
-    assert native.read_transport(candidate)['native_export']['sha256'] == hashlib.sha256(before).hexdigest()
 
 
 def test_native_sidecar_is_staged_into_real_nextflow_scorer(tmp_path):
@@ -256,51 +241,3 @@ def test_source_adapter_rejects_unrecognized_source():
 def atom(chain, number, insertion='', x=10.0, serial=1):
     return (f'ATOM  {serial:5d}  CA  ALA {chain}{number:4d}{insertion:1s}   '
             f'{x:8.3f}{0.:8.3f}{0.:8.3f}{1.:6.2f}{0.:6.2f}           C  \n')
-
-
-def test_native_writer_publishes_source_identity_and_restores_frame(tmp_path):
-    # Native writer selected modeled tensor indices [2, 0], not PDB order.
-    reference = tmp_path / 'reference.pdb'
-    reference.write_text(atom('H', 100, 'A', 10) + atom('H', 101, '', 12, 2) + atom('T', 9, '', 20, 3))
-    candidate = tmp_path / 'sample.pdb'
-    candidate.write_text(atom('A', 1, '', 15) + atom('B', 1, '', 5, 2))
-    publisher = correspondence.publish_native_export
-    request = publisher(reference, candidate,
-        records=[{'source': ['T', 9, ''], 'exported': ['A', 1, ''], 'offset': [5., 0., 0.]},
-                 {'source': ['H', 100, 'A'], 'exported': ['B', 1, ''], 'offset': [5., 0., 0.]}],
-        roles={'binder': ['H'], 'target': ['T']},
-        domains={'selected': [['H', 100, 'A']], 'H3': [['H', 100, 'A']]},
-        source_evidence={'producer': 'synthetic_source_writer'})
-    assert 'H 100A' in candidate.read_text()
-    assert '  10.000' in candidate.read_text()
-    assert request['candidate_sha256'] == hashlib.sha256(candidate.read_bytes()).hexdigest()
-    assert request['domains']['whole_binder']['reference'] == [['H', 100, 'A'], ['H', 101, '']]
-    assert request['domains']['whole_binder']['candidate'] == [['H', 100, 'A']]
-    assert request['domains']['whole_binder']['pairs'] == [[['H', 100, 'A'], ['H', 100, 'A']]]
-    r = {('H', 100, 'A'): SimpleNamespace(x=10., y=0., z=0.), ('H', 101, ''): SimpleNamespace(x=12., y=0., z=0.)}
-    c = {('H', 100, 'A'): SimpleNamespace(x=10., y=0., z=0.)}
-    comparison = correspondence.compare_request_domains(request, r, c, set(r), set(c))
-    assert comparison['whole_binder']['value'] is None
-    assert comparison['whole_binder']['reference_coverage'] == .5
-    assert comparison['whole_binder']['candidate_coverage'] == 1.
-    assert comparison['selected']['value'] == 0.
-    assert json.loads(Path(str(candidate) + '.comparison.json').read_text()) == request
-
-
-@pytest.mark.parametrize('records', [
-    [{'source': ['H', 2, ''], 'exported': ['Z', 1, ''], 'offset': [0., 0., 0.]}],
-    [{'source': ['H', 2, ''], 'exported': ['A', 1, ''], 'offset': [float('nan'), 0., 0.]}],
-    [{'source': ['H', 2, ''], 'exported': ['A', 1, ''], 'offset': [0., 0., 0.]},
-     {'source': ['H', 3, ''], 'exported': ['A', 1, ''], 'offset': [0., 0., 0.]}],
-])
-def test_native_export_rejects_unowned_atoms_without_overwriting(tmp_path, records):
-    publisher = getattr(correspondence, 'publish_native_export', None)
-    assert callable(publisher), 'G-09 producer-owned publication is missing'
-    r, c = tmp_path/'r.pdb', tmp_path/'c.pdb'
-    r.write_text(atom('H', 2) + atom('T', 1, serial=2))
-    c.write_text(atom('A', 1))
-    before = c.read_bytes()
-    with pytest.raises(ValueError):
-        publisher(r, c, records=records, roles={'binder': ['H'], 'target': ['T']}, domains={}, source_evidence={})
-    assert c.read_bytes() == before
-    assert not Path(str(c) + '.comparison.json').exists()

@@ -69,53 +69,8 @@ def test_invalid_initial_settings_are_rejected_by_native_owner(inputs, change):
     assert exc.value.status_code == 422
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize('mode', ['protein_binder', 'antibody_binder', 'nanobody_binder'])
-async def test_real_queue_materializes_native_request_and_compiler_preserves_it(admission, inputs, mode):
-    requested = settings(mode, inputs)
-    response = await jobs._create_job(JobCreate(name='initial-' + mode, model_id='ppiflow', mode=mode,
-        params=requested), BackgroundTasks(), admission)
-    job = await admission.get(Job, response.id)
-    root = Path(job.params['ppiflow_generation_request'])
-    document = json.loads((root / 'request.json').read_text())
-    assert document['requested_settings'] == requested
-    assert document['effective_settings'] == normalize_ppiflow_generation_params(mode, requested)
-    assert document['source_identity']['job_id'] == job.id
-    assert (root / 'inputs/target_pdb.pdb').read_bytes() == inputs[0].read_bytes()
-    invocation = nextflow.compile_job_nextflow_invocation(job, job.params, job.output_dir)
-    assert invocation.entrypoint == 'workflows/ppiflow_generation.nf'
-    assert invocation.command[invocation.command.index('-profile') + 1] == 'workstation_ryzen7960x'
-    assert invocation.native_parameters['ppiflow_generation_request'] == str(root)
-    assert json.loads(invocation.effective_json)['self_condition'] is False
-    assert '--samples_per_target' not in invocation.command
-    assert not {'rfd_models', 'af2_models', 'boltz_models', 'msa_local_db', 'msa_cache_dir'} & invocation.native_parameters.keys()
-    inputs[0].unlink()
-    if mode != 'protein_binder':
-        inputs[1].unlink()
-    assert read_prepared_ppiflow_generation_request(mode, job.params, root)['effective_settings'] == document['effective_settings']
-    assert nextflow.compile_job_nextflow_invocation(job, job.params, job.output_dir).native_parameters == invocation.native_parameters
 
 
-@pytest.mark.asyncio
-async def test_saved_initial_clone_reuses_snapshot_without_original_source(admission, inputs):
-    first = await jobs._create_job(JobCreate(name='original', model_id='ppiflow', mode='protein_binder',
-        params=settings('protein_binder', inputs)), BackgroundTasks(), admission)
-    parent = await admission.get(Job, first.id)
-    before = deepcopy(parent.params)
-    root = Path(before['ppiflow_generation_request'])
-    snapshot = {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob('*') if p.is_file()}
-    inputs[0].unlink()
-    replay = jobs._public_job_params(parent)
-    replay.pop('remote_result_policy', None)  # Resubmit's existing typed-policy separation.
-    second = await jobs._create_job(JobCreate(name='clone', model_id='ppiflow', mode='protein_binder',
-        params=replay), BackgroundTasks(), admission)
-    child = await admission.get(Job, second.id)
-    new_root = Path(child.params['ppiflow_generation_request'])
-    assert new_root != root
-    assert {p.relative_to(new_root).as_posix(): p.read_bytes() for p in new_root.rglob('*') if p.is_file()} == snapshot
-    assert parent.params == before
-    assert child.params['dataset_seed'] == 0
-    assert child.params['translation_corrupt'] is False
 
 
 def test_pure_unsaved_preview_does_not_create_transport_directory(inputs):

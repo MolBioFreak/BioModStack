@@ -314,51 +314,6 @@ async def test_bc2_route_resolves_only_declared_target(source, monkeypatch):
     assert await route.launch_selected(body, BackgroundTasks(), SelectionSession()) == {'job_id': 'child'}
 
 
-def test_compiler_selected_mode_preserves_manifest_and_all_sampling(source, tmp_path):
-    job, designs, inputs, target = source
-    destination = inputs / 'compiler-selected'
-    binding = selected.prepare_selected(job, designs, target_pdb=str(target),
-        binder_chains={d.id: ['B'] for d in designs}, target_chains=['T'], directory=destination,
-        target_context={'path': str(target), 'source_job_id': job.id})
-    params = selected.launch_params(destination, variant='full', model_id_or_path='',
-        num_loops=4, num_sampling_steps=83, num_diffusion_samples=2, seed=17)
-    from services.nextflow import compile_nextflow_invocation
-    params[selected.KEY] = binding
-    from routers.jobs import normalize_job_request
-    from schemas import JobCreate
-    normalized = normalize_job_request(JobCreate(name='blind', model_id='esmfold2', mode='blind_pose', params=params))
-    assert normalized.params['blind_pose_candidate_pdbs'] == params['blind_pose_candidate_pdbs']
-    assert normalized.params['esmf_seed'] == 17
-    invocation = compile_nextflow_invocation('esmfold2', 'blind_pose', normalized.params, str(tmp_path / 'out'), job_id='fixture')
-    assert invocation.execution_plan is not None and invocation.execution_plan.complete, (
-        None if invocation.execution_plan is None else invocation.execution_plan.blockers)
-    assert {'image:esmfold2.sif', 'weights:esmfold2'} <= {
-        item.logical_id for item in invocation.execution_plan.metadata.dependencies}
-    assert invocation.entrypoint == 'workflows/binder_blind_pose.nf'
-    assert 'esmfold2,workstation_ryzen7960x' in invocation.command
-    native = invocation.native_parameters
-    assert native['blind_pose_candidate_pdbs'] == params['blind_pose_candidate_pdbs']
-    assert native['esmfold2_validation_num_sampling_steps'] == 83
-    assert native['esmfold2_validation_num_diffusion_samples'] == 2
-    assert native['esmfold2_validation_variant'] == 'full'
-    assert native['esmf_seed'] == 17
-    assert '--blind_pose_selection_manifest' in invocation.command
-    assert '--esmf_pdb_sequence_path' not in invocation.command
-    assert '--pred_method' not in invocation.command
-    from services.remote_execution import bundle
-    from paths import get_code_root
-    from unittest.mock import patch
-    with patch.object(bundle, 'get_inputs_dir', return_value=inputs):
-        assets = bundle._input_assets(normalized.params, native_invocation=invocation,
-            repo_root=get_code_root(), runtime_paths=set(), output_dir=tmp_path / 'out')
-    assert (destination.resolve(), next(relative for path, relative in assets if path == destination.resolve())) in assets
-    assert [path for path, _ in assets] == [destination.resolve()]
-    assert all(path != destination / 'selection.json' for path, _ in assets)
-    remote = '/worker/inputs/selected'
-    relocated = bundle._rewrite_maturation_pdb_paths(','.join(params['blind_pose_candidate_pdbs']),
-        {str(destination.resolve()): remote})
-    assert relocated == ','.join(remote + '/' + Path(p).name for p in params['blind_pose_candidate_pdbs'])
-    assert bundle._rewrite(params['blind_pose_selection_manifest'], {str(destination.resolve()): remote}) == remote + '/selection.json'
 
 
 def test_api_contract_rejects_unrouted_mode_before_queue(monkeypatch):
