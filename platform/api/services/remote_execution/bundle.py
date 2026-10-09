@@ -500,7 +500,9 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
              'runtime_data': get_data_root().resolve()}
     prefixes = {'image': 'containers', 'weights': 'weights', 'database': 'data',
                 'reference_database': 'data', 'runtime_data': 'data'}
-    source_root = get_code_root().resolve()
+    source_root = (Path(params['code_root']).resolve()
+        if model_id == 'nanopore' and params.get('resume_work_dir') and params.get('code_root')
+        else get_code_root().resolve())
     clone_paths = {}
     if any(row.logical_id == 'runtime_data:ngs/wf-clone-validation/runtime.lock.json'
            for row in plan.dependencies):
@@ -1285,6 +1287,17 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
     return expected
 
 
+def stage_retained_ont_source(source: SourceIdentity) -> Path:
+    """Recover a private ONT source tree through the existing archive owner."""
+    repo = get_code_root().resolve()
+    if _git(repo, 'rev-parse', f'{source.revision}^{{tree}}') != source.tree:
+        raise RemoteBundleError('Inherited source tree does not match the inherited revision')
+    data = get_data_root().resolve()
+    root = data / 'remote-execution' / 'staging' / str(uuid.uuid4()) / 'source'
+    _staged_source_archive(repo, data, source.revision, root)
+    return root
+
+
 def prepare_remote_bundle(
     *,
     job: Any,
@@ -1341,7 +1354,9 @@ def prepare_remote_bundle(
     current_revision, current_tree = current_source_identity(repo_root)
     if native_invocation.source_identity != SourceIdentity(revision, inherited_tree):
         raise RemoteBundleError("Native invocation source identity does not match the Remote Job")
-    if current_revision != revision or current_tree != inherited_tree:
+    retained_ont = (job.model_id == 'nanopore' and
+                    bool((job.params or {}).get('resume_work_dir')))
+    if (current_revision != revision or current_tree != inherited_tree) and not retained_ont:
         raise RemoteBundleError(
             "Job source identity no longer matches the code compiling this remote command"
         )
@@ -1350,6 +1365,30 @@ def prepare_remote_bundle(
         raise RemoteBundleError("Inherited source tree does not match the inherited revision")
     source_archive_sha256 = _staged_source_archive(repo_root, data_root, revision, source_root)
     archive_copy = source_root / '.bms-source.tar.gz'
+    if current_revision != revision or current_tree != inherited_tree:
+        # Historical NGS was compiled in its private verified source tree. Check
+        # those exact executable bytes against this bundle's Git-owned archive;
+        # accepting an old identity on a current compiler is not sufficient.
+        import filecmp
+        compiled_root = Path(native_invocation.native_parameters['code_root'])
+        if compiled_root == repo_root:
+            raise RemoteBundleError('Retained ONT command was compiled from current source')
+        with tarfile.open(archive_copy, 'r:gz') as archive:
+            for member in archive:
+                if member.isdir():
+                    continue
+                original = source_root / member.name
+                compiled = compiled_root / member.name
+                if member.issym():
+                    matches = compiled.is_symlink() and os.readlink(compiled) == member.linkname
+                else:
+                    matches = (not any(p.is_symlink() for p in (compiled, *compiled.parents))
+                        and compiled.is_file() and
+                        (compiled.stat().st_mode & 0o111) == (original.stat().st_mode & 0o111) and
+                        filecmp.cmp(original, compiled, shallow=False))
+                if not matches:
+                    raise RemoteBundleError('Retained ONT compiler source changed: ' + member.name)
+        repo_root = compiled_root
 
     # Byte-addressed cache objects are shared; runnable trees never are.
     remote_source = f"{remote_attempt}/materialized/source"

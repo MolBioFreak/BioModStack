@@ -189,6 +189,12 @@ def test_runner_hands_ont_success_resource_receipt_to_terminal_cas(
     tmp_path: Path,
 ) -> None:
     template = _job(model_id="nanopore")
+    template.mode = 'fastq_qc'
+    containers = tmp_path / 'containers'
+    containers.mkdir()
+    (containers / 'dorado.sif').write_bytes(b'completion-CAS fixture; never executed')
+    monkeypatch.setenv('BMS_CONTAINER_DIR', str(containers))
+    monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(containers / '.image-store'))
     template.params.update({"ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"})
     configure_valid_ont_terminal_completion(monkeypatch, template, tmp_path, production_validation=True)
     execution = ownership.latest_execution_attempt(template.params)
@@ -610,3 +616,35 @@ async def test_startup_reconciliation_marks_missing_unit_without_relaunch(
     assert report["interrupted"] == 1
     assert job.status == "failed"
     assert ownership.latest_execution_attempt(job.params)["terminal_reason"] == "INTERRUPTED_OWNER"
+
+
+@pytest.mark.parametrize('cached,recorded,expected', [
+    (True, '/retained/dorado.sif', '/retained/dorado.sif'),
+    (False, '/retained/dorado.sif', '/current/dorado.sif'),
+    (True, None, '/current/dorado.sif'),
+    (False, None, '/current/dorado.sif'),
+])
+def test_ont_runner_preserves_recorded_runtime_only_for_cached_resume(
+    monkeypatch, transient_identity, cached, recorded, expected,
+):
+    job = _job(model_id='nanopore')
+    if cached:
+        job.params.update(resume_job_id='old-job', resume_work_dir='/retained/work')
+    if recorded:
+        job.params['dorado_runtime_sif'] = recorded
+    monkeypatch.setenv('BMS_NGS_RUNTIME_SIF', '/current/dorado.sif')
+    monkeypatch.setattr(database, 'async_session', lambda: _Session(job))
+    monkeypatch.setattr(runner, 'show_unit_properties', lambda *_: ownership.UnitProperties(
+        'active', 'running', '', '42', '0', 'success',
+        ownership.workflow_slice_for_lane('development'), 'invocation-1'))
+    calls = []
+
+    async def launch(**kwargs):
+        calls.append(kwargs)
+        job.status = job.queue_status = 'completed'
+
+    monkeypatch.setattr(nextflow, 'launch_nextflow_job', launch)
+    assert asyncio.run(runner.run_workflow_job('job-1', 'development')) == 0
+    assert calls[0]['params']['dorado_runtime_sif'] == expected
+    # Runtime launch binding does not silently rewrite the persisted request.
+    assert job.params.get('dorado_runtime_sif') == recorded

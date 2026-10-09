@@ -2293,6 +2293,18 @@ async def _prepare_launch_msa_on_controller(session, job, model_id, params, dest
         return result
 
 
+def _local_nextflow_source_root(invocation, params, environment):
+    """Bind the compiled retained source and the original cache at local spawn."""
+    root = (Path(invocation.native_parameters['code_root'])
+        if invocation.model_id == 'nanopore' and params.get('resume_work_dir')
+        else PROJECT_ROOT)
+    if root != PROJECT_ROOT:
+        environment['BMS_HOME'] = str(root)
+        if invocation.native_parameters.get('resume_source_dir'):
+            environment['NXF_CACHE_DIR'] = str(Path(invocation.native_parameters['resume_source_dir']) / '.nextflow')
+    return root
+
+
 async def _compile_launch_nextflow_invocation(session, job, params, output_dir, *, prepared_invocation=None):
     """One execution-owner handoff for local retry and ordinary remote launch."""
     from dataclasses import replace
@@ -3251,6 +3263,7 @@ async def launch_nextflow_job(
                         env.pop(key)
                 env.update(image_environment)
                 cmd = list(invocation.command)
+                launch_source_root = _local_nextflow_source_root(invocation, launch_params, env)
                 from services import rf_filter_task_roster
                 await rf_filter_task_roster.begin_command(session, job, cmd)
                 cmd = _component_launch_command(invocation, job, cmd, env,
@@ -3451,7 +3464,7 @@ async def launch_nextflow_job(
                     with open(log_path, "ab", buffering=0) as log_sink:
                         process = await asyncio.create_subprocess_exec(
                             *cmd,
-                            cwd=str(PROJECT_ROOT),
+                            cwd=str(launch_source_root),
                             stdout=log_sink,
                             stderr=asyncio.subprocess.STDOUT,
                             env=env,
@@ -3481,7 +3494,7 @@ async def launch_nextflow_job(
                         attempt=attempt,
                         command=cmd,
                         environment=env,
-                        working_directory=PROJECT_ROOT,
+                        working_directory=launch_source_root,
                         log_path=log_path,
                     )
                     # systemd-run is the atomic claim. There is intentionally no
@@ -4097,6 +4110,88 @@ def build_job_nextflow_command(job, params, output_dir, *, compiled_parameters=N
     return list(invocation.command)
 
 
+def _bind_ont_runtime(invocation, params):
+    """Keep the system-owned image selector even when old FASTQ normalization
+    discarded dormant dorado_* scientific settings. This is runtime transport,
+    not a different historical compiler or a new scientific selection.
+    """
+    from dataclasses import replace
+    from component_runtime import canonical_bytes, NativeInvocation
+    selected = params.get('dorado_runtime_sif')
+    if (not selected or invocation.native_parameters.get('dorado_runtime_sif')
+            or not any(row.kind == 'image' and row.selector == 'dorado_runtime_sif'
+                       for row in invocation.execution_plan.dependencies)):
+        return invocation
+    native = canonical_bytes(dict(invocation.native_parameters, dorado_runtime_sif=selected))
+    effective = canonical_bytes(dict(json.loads(invocation.effective_json), dorado_runtime_sif=selected))
+    plan = replace(invocation.execution_plan, native_parameters_json=native, effective_json=effective)
+    fields = dict(native_parameters_json=native, effective_json=effective, execution_plan=plan)
+    if isinstance(invocation, NativeInvocation):
+        fields['command'] = (*invocation.command, '--dorado_runtime_sif', str(selected))
+    return replace(invocation, **fields)
+
+
+def _compile_retained_ont_invocation(job, params, output_dir, source, *, preview_only):
+    """Run the recorded compiler, not today's compiler with an old source label.
+
+    The existing bundle archive owner recovers and verifies committed bytes.
+    A separate interpreter keeps historical imports out of the controller and
+    gives its metadata/config readers the same source root as its compiler.
+    """
+    import pickle
+    import subprocess
+    import sys
+    from paths import get_code_root
+    from services.remote_execution.bundle import stage_retained_ont_source
+    from component_runtime import NativeInvocation, NativeInvocationPreview
+
+    repo = get_code_root().resolve()
+    root = stage_retained_ont_source(source)
+    # stdout is a private pipe from verified, executable Git source, never a
+    # deserialization boundary for a request, worker or retained output file.
+    bootstrap = '''
+import contextlib, json, pickle, sys
+from types import SimpleNamespace
+with contextlib.redirect_stdout(sys.stderr):
+    from component_runtime import SourceIdentity, canonical_bytes
+    from services.core_protein_scientific_contract import workflow_params
+    from services.ont_ngs_contract import replay_expected_plasmid_size
+    from services.nextflow import compile_nextflow_invocation
+    value = json.load(sys.stdin)
+    job = SimpleNamespace(**value['job'])
+    prepared = workflow_params(job, value['params'])
+    prepared = replay_expected_plasmid_size(prepared, job.provenance, mode=job.mode)
+    invocation = compile_nextflow_invocation(job.model_id, job.mode, prepared,
+        value['output_dir'], job_id=job.id,
+        source_identity=SourceIdentity(**value['source']),
+        requested_identity_json=canonical_bytes(job.params),
+        _preview_only=value['preview_only'])
+pickle.dump(invocation, sys.stdout.buffer)
+'''
+    prepared = dict(params, code_root=str(root))
+    # Legacy cached Jobs store "work" relative to the controller checkout.
+    # Moving the launch cwd to the archived source must not move their cache.
+    for key in ('resume_work_dir', 'resume_source_dir'):
+        if prepared.get(key) and not Path(str(prepared[key])).is_absolute():
+            prepared[key] = str((repo / str(prepared[key])).resolve())
+    payload = dict(job=dict(id=job.id, model_id=job.model_id, mode=job.mode,
+                           params=dict(job.params or {}), provenance=dict(job.provenance or {})),
+                   params=prepared, output_dir=str(output_dir),
+                   source=dict(revision=source.revision, tree=source.tree), preview_only=preview_only)
+    result = subprocess.run([sys.executable, '-c', bootstrap], cwd=root,
+        env={**os.environ, 'BMS_HOME': str(root),
+             'PYTHONPATH': os.pathsep.join((str(root / 'platform/api'), str(root))),
+             'PYTHONDONTWRITEBYTECODE': '1'},
+        input=json.dumps(payload).encode(), capture_output=True, timeout=180)
+    if result.returncode:
+        raise ValueError('Retained ONT compiler failed: ' + result.stderr.decode(errors='replace'))
+    invocation = pickle.loads(result.stdout)
+    expected_type = NativeInvocationPreview if preview_only else NativeInvocation
+    if type(invocation) is not expected_type or invocation.source_identity != source:
+        raise ValueError('Retained ONT compiler source identity changed')
+    return _bind_ont_runtime(invocation, params)
+
+
 @overload
 def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: Literal[True]) -> 'NativeInvocationPreview': ...
 
@@ -4119,6 +4214,9 @@ def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: b
     pinned_tree = getattr(job, 'execution_source_tree', None)
     if pinned_revision is not None or pinned_tree is not None:
         if SourceIdentity(pinned_revision, pinned_tree) != source:
+            if job.model_id == 'nanopore' and params.get('resume_work_dir'):
+                return _compile_retained_ont_invocation(job, params, output_dir,
+                    SourceIdentity(pinned_revision, pinned_tree), preview_only=_preview_only)
             raise ValueError('Job source identity changed; explicit re-preview is required')
     requested = (job.provenance or {}).get('core_protein_requested_params')
     # Preserve request identity separately from the existing native provenance
@@ -4142,6 +4240,8 @@ def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: b
     if SourceIdentity.from_checkout(get_code_root()) != source:
         raise ValueError('Source identity changed during native compilation')
     invocation = replace(invocation, source_identity=source, requested_json=requested_json)
+    if job.model_id == 'nanopore':
+        invocation = _bind_ont_runtime(invocation, params)
     # Prepared package transport is an executable launch binding, not preview
     # authority. Its paired identity is validated by the real launch below.
     return invocation if _preview_only else _bind_protenix_msa_transport(invocation, params)

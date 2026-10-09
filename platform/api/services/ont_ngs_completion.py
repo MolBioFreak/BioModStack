@@ -133,10 +133,28 @@ def prepare_dorado_demux_products(job: Any, *, read_root: Path, persisted_root: 
     expected_lock_sha256 = str(params.get("dorado_lock_sha256") or "").strip().lower()
     expected_model_id = str(params.get("dorado_resolved_model_id") or "").strip()
     expected_mode = str(params.get("dorado_basecall_mode") or "").strip().lower()
+    import subprocess
+    import sys
+    from component_runtime import SourceIdentity
+    from services.remote_execution.bundle import RemoteBundleError, stage_retained_ont_source
     try:
-        approved_lock_bytes = ont_ngs_contract.DORADO_LOCK_PATH.read_bytes()
+        revision = getattr(job, 'execution_source_revision', None)
+        tree = getattr(job, 'execution_source_tree', None)
+        if params.get('resume_work_dir') and revision and tree:
+            # Terminal evidence belongs to the same retained source as native
+            # execution, including the historical module's lock filename. Do not
+            # approve an old declared digest against today's installation lock.
+            source = stage_retained_ont_source(SourceIdentity(revision, tree))
+            approved_lock_bytes = subprocess.run([sys.executable, '-c',
+                'import sys; from services.ont_ngs_contract import DORADO_LOCK_PATH; '
+                'sys.stdout.buffer.write(DORADO_LOCK_PATH.read_bytes())'], cwd=source,
+                env={**os.environ, 'BMS_HOME': str(source), 'PYTHONDONTWRITEBYTECODE': '1',
+                     'PYTHONPATH': os.pathsep.join((str(source / 'platform/api'), str(source)))},
+                check=True, capture_output=True, timeout=60).stdout
+        else:
+            approved_lock_bytes = ont_ngs_contract.DORADO_LOCK_PATH.read_bytes()
         approved_lock = json.loads(approved_lock_bytes.decode("utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, ValueError, subprocess.SubprocessError, RemoteBundleError) as exc:
         raise DoradoProductsUnavailable(status_code=409, detail="approved Dorado lock is unavailable or malformed") from exc
     if not isinstance(approved_lock, dict) or hashlib.sha256(approved_lock_bytes).hexdigest() != expected_lock_sha256:
         raise DoradoProductsUnavailable(status_code=409, detail="terminal Dorado job lock is not the approved lock")
