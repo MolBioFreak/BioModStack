@@ -578,6 +578,19 @@ async def _manifest_row_for_job(
         )
     ).scalar_one_or_none()
     if row is None:
+        # Recomputations reuse retained scientific authority, not execution IDs.
+        job = await session.get(Job, assignment_job_id)
+        if job is not None and job.model_id == "nanopore" and job.mode == ASSIGNMENT_MODE:
+            params = dict(job.params or {})
+            binding = params.get("reference_set_binding") or {}
+            reference_set_id = binding.get("reference_set_id") if isinstance(binding, dict) else None
+            if reference_set_id:
+                candidate = await session.get(NgsReferenceSetManifest, reference_set_id)
+                if (candidate is not None and candidate.mode == REFERENCE_SET_MODE
+                        and candidate.target_workflow == ASSIGNMENT_WORKFLOW_ID
+                        and candidate.manifest_sha256 == params.get("reference_set_manifest_sha256")):
+                    row = candidate
+    if row is None:
         raise PooledAssignmentError(
             "pooled assignment reference-set manifest not found",
             status_code=404,
@@ -1153,7 +1166,11 @@ async def _load_release_context(
         or params.get("release_state") != "awaiting_operator_release"
     ):
         raise PooledAssignmentError("assignment job launch binding is invalid", status_code=409)
-    output_root = _confined_directory(Path(str(job.output_dir or "")), get_results_dir(), "assignment output")
+    from services.job_result_roots import resolve_persisted_job_result_root
+    try:
+        output_root = resolve_persisted_job_result_root(job)
+    except (OSError, ValueError) as exc:
+        raise PooledAssignmentError("assignment output is unavailable", status_code=409) from exc
     evidence_root = _confined_directory(
         output_root / "pooled_reference_assignment", output_root, "pooled assignment evidence"
     )

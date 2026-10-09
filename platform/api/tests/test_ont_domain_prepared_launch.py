@@ -275,3 +275,101 @@ async def test_retained_manifest_tamper_does_not_consume_or_delete(domain, famil
     assert response.status_code == 409, response.text
     await assert_unclaimed(ctx)
     assert leaf.exists()
+
+
+@pytest.mark.asyncio
+async def test_pooled_resubmit_reads_retained_authority_and_collector_root(domain):
+    import shutil
+    from tests.test_ont_pooled_reference_assignment import _write_assignment_summary
+    ctx = domain
+    submitted = await ctx.client.post("/api/ont/ngs/pooled-reference-assignment/submit", json=pooled_request(ctx))
+    assert submitted.status_code == 201, submitted.text
+    original = submitted.json()
+    async with ctx.factory() as session:
+        job = await session.get(Job, original["assignment_job_id"])
+        job.status = "failed"
+        await session.commit()
+    response = await ctx.client.post(f"/api/jobs/{original['assignment_job_id']}/resubmit", json={})
+    assert response.status_code == 200, response.text
+    replay_id = response.json()["new_job_id"]
+    read = await ctx.client.get(f"/api/jobs/{replay_id}/pooled-assignment/manifest")
+    assert read.status_code == 200, read.text
+    assert read.json()["reference_set_id"] == original["reference_set_id"]
+    replay_result = {**original, "assignment_job_id": replay_id}
+    summary = _write_assignment_summary(SimpleNamespace(results_root=ctx.results, fastq=ctx.reads), replay_result)
+    collector = ctx.results / replay_id / "collector"
+    collector.mkdir()
+    shutil.move(str(summary.parent), collector)
+    async with ctx.factory() as session:
+        replay = await session.get(Job, replay_id)
+        replay.status = "completed"
+        replay.child_output_dir = str(collector)
+        await session.commit()
+    path = f"/api/jobs/{replay_id}/pooled-assignment/release/prepare"
+    prepared = await ctx.client.post(path, json={"idempotency_key": "replay-release", "target_workflow": "ont_plasmid_qc", "target_ids": ["target1"]})
+    assert prepared.status_code == 200, prepared.text
+    async with ctx.factory() as session:
+        context = await pooled._load_release_context(session, replay_id)
+        assert context["summary_path"] == collector / "pooled_reference_assignment/assignment_summary.json"
+        assert str(context["manifest_row"].id) == original["reference_set_id"]
+
+
+@pytest.mark.asyncio
+async def test_pooled_real_return_fresh_review_and_explicit_release(domain, tmp_path, monkeypatch):
+    import shutil
+    import uuid
+    import sys
+    from database import Design, NgsPooledAssignmentRelease
+    from services.remote_execution import executor as ex, transport
+    from tests.test_ngs_native_remote_return import stage, seal, bind_contract, transfer
+    from tests.test_ont_pooled_reference_assignment import _write_assignment_summary
+    ctx = domain
+    submitted = await ctx.client.post("/api/ont/ngs/pooled-reference-assignment/submit", json=pooled_request(ctx))
+    assert submitted.status_code == 201, submitted.text
+    submitted = submitted.json()
+    job_id = submitted["assignment_job_id"]
+    # Retained native-shape fixture; actual transport/publication, not science.
+    _write_assignment_summary(SimpleNamespace(results_root=ctx.results, fastq=ctx.reads), submitted)
+    worker = tmp_path / "worker"
+    output = worker / "results"
+    worker.mkdir()
+    shutil.move(str(ctx.results / job_id), output)
+    shim = tmp_path / "ssh-fixture"
+    shim.write_text('#!' + sys.executable + '\nimport os,sys\nargs = sys.argv[sys.argv.index("rsync"):] if "rsync" in sys.argv else sys.argv[2:]\nos.execvp("sh", ["sh", "-c", " ".join(args)])\n')
+    shim.chmod(0o700)
+    monkeypatch.setattr(transport, "_ssh_base", lambda _connection: [str(shim), "fixture-host"])
+    connection = SimpleNamespace(username="fixture", host="fixture-host", provision_operation_id=None)
+    async with ctx.factory() as session:
+        job = await session.get(Job, job_id)
+        job.remote_attempt_id = str(uuid.uuid4())
+        job.execution_target_id = "chosen-worker"
+        from services.remote_execution.bundle import current_source_identity
+        job.execution_source_revision, job.execution_source_tree = current_source_identity()
+        job.nextflow_run_id = "remote:" + job.remote_attempt_id
+        job.remote_state = "returning"
+        job.awaiting_input = False
+        stage(monkeypatch, output, job.remote_attempt_id, "pooled_reference_assignment", ["pooled_reference_assignment"], job_id=job_id)
+        _, raw, status = seal(worker, output, job)
+        bind_contract(job, output)
+        await session.commit()
+        manifest, incoming = await transfer(connection, output, job, status)
+        assert await ex._finalize_pulled_results(session, job, status, manifest, incoming)
+        await ex._recover_result_generation(session, job)
+    shutil.rmtree(worker)
+    async with ctx.factory() as session:
+        job = await session.get(Job, job_id)
+        assert job.status == "completed" and job.remote_state == "ingested"
+        assert job.provenance["scientific_status"] == "REVIEW"
+        assert await session.scalar(select(func.count()).select_from(Design)) == 0
+        assert await session.scalar(select(func.count()).select_from(NgsPooledAssignmentRelease)) == 0
+        context = await pooled._load_release_context(session, job_id)
+        assert context["summary"]["release_state"] == "awaiting_operator_release"
+    targets = await ctx.client.get(f"/api/jobs/{job_id}/pooled-assignment/targets?read_limit=10")
+    assert targets.status_code == 200 and len(targets.json()["read_assignments"]) == 2, targets.text
+    released = await ctx.client.post(f"/api/jobs/{job_id}/pooled-assignment/release", json={
+        "idempotency_key": "returned-release", "target_workflow": "ont_plasmid_qc", "target_ids": ["target1"]})
+    assert released.status_code == 201, released.text
+    async with ctx.factory() as session:
+        child = await session.get(Job, released.json()["child_job_ids"][0])
+        assert child.execution_target_id is None and child.parent_job_id is None
+        assert child.source_stage_job_id == job_id

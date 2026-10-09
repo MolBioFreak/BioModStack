@@ -95,6 +95,8 @@ async def pooled_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(pooled, "get_inputs_dir", lambda: inputs_root)
     monkeypatch.setattr(pooled, "get_results_dir", lambda: results_root)
+    from services import job_result_roots
+    monkeypatch.setattr(job_result_roots, "get_results_dir", lambda: results_root)
     monkeypatch.setattr(molbio_ngs_receipts, "get_inputs_dir", lambda: inputs_root)
     monkeypatch.setattr(
         ont_runs,
