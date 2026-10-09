@@ -437,6 +437,7 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
     assert "Environment=BMS_COLABFOLD_DB=/srv/biomodstack/colabfold_db" in units[services.API_SERVICE]
     assert "Environment=BMS_WEIGHTS=/srv/biomodstack-dev/weights" not in units[services.API_SERVICE]
     assert "Environment=BMS_COLABFOLD_DB=/srv/biomodstack-dev/colabfold_db" not in units[services.API_SERVICE]
+    assert "BMS_ONT_BLOW5_CONVERSION_QUALIFIED" not in units[services.API_SERVICE]
     assert "Environment=BMS_ONT_LIVE_CONVERSION_ENABLED=1" in units[services.API_SERVICE]
     assert "Environment=BMS_ONT_RAW_SIGNAL_RETENTION_POLICY=pod5_and_blow5" in units[services.API_SERVICE]
     for key, (_, digest) in policies.items():
@@ -940,6 +941,21 @@ def test_render_user_units_support_container_runtime_mode(tmp_path: Path) -> Non
     )
     assert services.API_SERVICE not in target_unit
     assert services.FRONTEND_SERVICE not in target_unit
+
+
+@pytest.mark.parametrize("runtime_mode", ["dev", "container"])
+def test_install_retains_candidate_settings_but_retires_dev_raw_image_pins(tmp_path: Path, monkeypatch, runtime_mode: str) -> None:
+    user_dir = tmp_path / "systemd"
+    dropin = user_dir / f"{services.API_SERVICE}.d" / "zzzzzzzz-ont-exact-candidate.conf"
+    dropin.parent.mkdir(parents=True)
+    retained = "[Service]\nEnvironment=BMS_ONT_EXTERNAL_MOVE_BAM_ROOT=/retained/bam\nEnvironment=BMS_ONT_RAW_SIGNAL_RETENTION_POLICY=pod5_and_blow5\n"
+    original = retained + "Environment=BMS_ONT_SLOW5TOOLS_IMAGE=sha256:old\nEnvironment=BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST=old\n"
+    dropin.write_text(original)
+    monkeypatch.setattr(services, "ensure_development_proxy_identity", lambda: None)
+    monkeypatch.setattr(services, "render_user_units", lambda *args, **kwargs: {services.API_SERVICE: "[Service]\n"})
+    for _ in range(2):
+        services.install_user_units(project_root=tmp_path, systemd_dir=user_dir, runtime_mode=runtime_mode)
+        assert dropin.read_text() == (retained if runtime_mode == "dev" else original)
 
 
 def test_install_user_units_writes_expected_files(tmp_path: Path) -> None:

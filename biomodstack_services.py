@@ -1592,7 +1592,6 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         str(shared_data_root / "ont-raw-signal-staging"),
     ).strip()
     ont_acquisition_pressure = os.environ.get("BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE", "unknown").strip() or "unknown"
-    ont_conversion_qualified = os.environ.get("BMS_ONT_BLOW5_CONVERSION_QUALIFIED", "0").strip() or "0"
     ont_live_conversion_enabled = "1" if os.environ.get("BMS_ONT_LIVE_CONVERSION_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"} else "0"
     ont_retention_policy = os.environ.get("BMS_ONT_RAW_SIGNAL_RETENTION_POLICY", "pod5_and_blow5").strip().lower()
     if ont_retention_policy not in {"pod5_and_blow5", "blow5_only"}:
@@ -1792,7 +1791,6 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST={ont_comparison_digest}")}
         Environment={systemd_value(f"BMS_ONT_RAW_SIGNAL_STAGING_ROOT={ont_staging_root}")}
         Environment={systemd_value(f"BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE={ont_acquisition_pressure}")}
-        Environment={systemd_value(f"BMS_ONT_BLOW5_CONVERSION_QUALIFIED={ont_conversion_qualified}")}
         Environment={systemd_value(f"BMS_ONT_LIVE_CONVERSION_ENABLED={ont_live_conversion_enabled}")}
         Environment={systemd_value(f"BMS_ONT_RAW_SIGNAL_RETENTION_POLICY={ont_retention_policy}")}
         Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
@@ -1888,6 +1886,16 @@ def install_user_units(
     target_dir.mkdir(parents=True, exist_ok=True)
     if resolve_runtime_mode(runtime_mode) == DEV_RUNTIME_MODE:
         ensure_development_proxy_identity()
+        # Retire only the old candidate's raw-image pins. The generated release
+        # policy owns these; unrelated external-BAM and retention settings stay.
+        legacy = target_dir / f"{API_SERVICE}.d" / "zzzzzzzz-ont-exact-candidate.conf"
+        if legacy.is_file():
+            original = legacy.read_text(encoding="utf-8")
+            retained = "".join(line for line in original.splitlines(keepends=True)
+                               if not line.startswith(("Environment=BMS_ONT_SLOW5TOOLS_IMAGE=",
+                                                       "Environment=BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST=")))
+            if retained != original:
+                legacy.write_text(retained, encoding="utf-8")
 
     written_paths: list[Path] = []
     for unit_name, content in render_user_units(root, runtime_mode=runtime_mode).items():
