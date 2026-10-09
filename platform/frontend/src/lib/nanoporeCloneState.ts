@@ -4,6 +4,10 @@ import { normalizeResultPolicy } from './executionPolicy';
 export function normalizeNanoporeCloneState(job: Job | null): Record<string, unknown> | undefined {
     if (!job) return undefined;
     const p = job.params || {};
+    const molecular = p.molbio_revision_binding && typeof p.molbio_revision_binding === 'object'
+        ? p.molbio_revision_binding as Record<string, unknown> : {};
+    const panel = p.comparison_panel_binding && typeof p.comparison_panel_binding === 'object'
+        ? p.comparison_panel_binding as Record<string, unknown> : {};
     const pinnedGpus = (Array.isArray(p.pinned_gpus) ? p.pinned_gpus : (job.pinned_gpu != null ? [job.pinned_gpu] : []))
         .map((value) => Number(value))
         .filter((value) => Number.isInteger(value) && value >= 0);
@@ -38,6 +42,9 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         selectedWorkflow,
         ontWorkflowId: workflowId,
         jobName: job.name,
+        molbioSequenceId: typeof molecular.sequence_id === 'string' ? molecular.sequence_id : '',
+        molbioRevisionId: typeof molecular.revision_id === 'string' ? molecular.revision_id : '',
+        approvedComparisonPanelId: typeof panel.panel_id === 'string' ? panel.panel_id : '',
         pinnedGpus,
         lockGpus: p.lock_gpus === true,
         inputSource,

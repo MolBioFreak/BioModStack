@@ -1515,22 +1515,42 @@ export interface OntManagedReferenceRequest {
     global_domain_experiment_id: string;
     molbio_ngs_state_revision_id: string;
     ngs_reference_revision_id: string;
+    launch_snapshot_id?: string | null;
+}
+
+export interface OntFastqLaunchSnapshot {
+    relative_path: string;
+    sha256: string;
+    size_bytes: number;
 }
 
 export interface OntNgsSubmitRequest extends ExecutionPlacement {
-    name?: string;
+    name?: string | null;
     params: Record<string, unknown>;
     pinned_gpu?: number | null;
     source_instrument_run_id?: string | null;
     managed_reference?: OntManagedReferenceRequest | null;
+    fastq_snapshot?: OntFastqLaunchSnapshot | null;
+    comparison_launch_id?: string | null;
+    execution_plan_approval?: string | null;
 }
 
-export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) => {
+export interface OntNgsPreparedReview {
+    workflow_id: string;
+    request: OntNgsSubmitRequest;
+    preview: import('../components/ExecutionPlanApproval').ExecutionPlanPreview;
+}
+
+export const prepareOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) =>
+    api.post<OntNgsPreparedReview>(`/api/ont/ngs/${workflowId}/prepare`, prepareExecutionPlacement(request));
+
+export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest, launchContextId?: string | null) => {
     const payload = prepareExecutionPlacement(request);
     if (payload.execution_target_id && payload.pinned_gpu != null) {
         throw new Error('Controller GPU pins cannot be used on a worker. Choose worker scheduler assignment explicitly.');
     }
-    return api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, payload);
+    return api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, payload, launchContextId === undefined
+        ? undefined : jobLaunchContextConfig({ launch_context_id: launchContextId }, { launchContext: false }));
 };
 
 export interface MolBioNgsReceiptRequest {

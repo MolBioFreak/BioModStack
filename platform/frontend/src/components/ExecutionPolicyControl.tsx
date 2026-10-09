@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { initialExecutionPolicy, newJobExecutionPolicy, normalizeResultPolicy, saveNewJobExecutionPolicy, setDraftExecutionPolicy } from '../lib/executionPolicy';
 
-export function ExecutionPolicyControl({ initialPolicy }: { initialPolicy?: ReturnType<typeof initialExecutionPolicy> } = {}) {
+export function ExecutionPolicyControl({ initialPolicy, onChange }: { initialPolicy?: ReturnType<typeof initialExecutionPolicy>; onChange?: (policy: ReturnType<typeof initialExecutionPolicy>) => void } = {}) {
     const [policy, setPolicy] = useState(() => initialPolicy ?? initialExecutionPolicy());
     const [saved, setSaved] = useState(() => newJobExecutionPolicy().remote_result_policy);
     useEffect(() => {
@@ -10,7 +10,7 @@ export function ExecutionPolicyControl({ initialPolicy }: { initialPolicy?: Retu
     }, [policy]);
     return <section aria-label="Result return policy" className="mb-5 space-y-2 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4">
         <label className="block text-xs font-medium text-[var(--text-secondary)]" htmlFor="remote-result-policy">Successful remote results</label>
-        <select id="remote-result-policy" aria-label="Successful remote results" className="block w-full max-w-xl rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)]" value={policy.remote_result_policy} onChange={event => setPolicy({ remote_result_policy: normalizeResultPolicy(event.target.value) })}>
+        <select id="remote-result-policy" aria-label="Successful remote results" className="block w-full max-w-xl rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)]" value={policy.remote_result_policy} onChange={event => { const next = { remote_result_policy: normalizeResultPolicy(event.target.value) }; setPolicy(next); onChange?.(next); }}>
             <option value="manual">Manual — ask before pulling (default)</option>
             <option value="automatic">Automatic — pull after successful completion</option>
         </select>

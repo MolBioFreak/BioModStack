@@ -1,5 +1,6 @@
 import ontConsensusSchema from '../../../../schemas/ngs_molbio/ngs-ont-fastq_qc-v1.schema.json';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
+import { ExecutionPlanApproval } from './ExecutionPlanApproval';
 import { ExecutionPolicyControl } from './ExecutionPolicyControl';
 import { newJobExecutionPolicy, normalizeResultPolicy, type ExecutionPolicy } from '../lib/executionPolicy';
 /**
@@ -11,7 +12,7 @@ import { newJobExecutionPolicy, normalizeResultPolicy, type ExecutionPolicy } fr
  * Pattern follows OligoDesignerTemplate for consistency.
  */
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import {
@@ -26,6 +27,8 @@ import {
     issueMolBioNgsReceipt,
     previewMolBioSequenceImport,
     submitOntNgsJob,
+    prepareOntNgsJob,
+    type OntNgsPreparedReview,
     prepareExecutionPlacement,
     submitPooledReferenceAssignment,
     type MolBioSequenceImportCommitResponse,
@@ -57,7 +60,8 @@ type AssemblyTool = 'flye' | 'canu';
 type FlyeReadQuality = 'nano-hq' | 'nano-corr' | 'nano-raw';
 type MinimapPreset = 'map-ont' | 'map-hifi' | 'map-pb' | 'sr';
 type InputSource = 'pod5' | 'bam' | 'fastq';
-type PathField = 'pod5Dir' | 'bamPath' | 'fastqPath';
+type CloneFileField = 'wfClonePrimers' | 'wfCloneInsertReference' | 'wfCloneHostReference' | 'wfCloneRegionsBedfile';
+type PathField = 'pod5Dir' | 'bamPath' | 'fastqPath' | CloneFileField;
 type PathPickerMode = 'file' | 'directory';
 type ReferenceTab = 'managed' | 'paste' | 'create' | 'legacy';
 
@@ -779,8 +783,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [{ molbioSequenceId, molbioRevisionId }] = useState(() => {
         const params = new URLSearchParams(window.location.search);
         return {
-            molbioSequenceId: params.get('molbio_sequence_id') || '',
-            molbioRevisionId: params.get('molbio_revision_id') || '',
+            molbioSequenceId: params.get('molbio_sequence_id') || String(initialValues?.molbioSequenceId ?? ''),
+            molbioRevisionId: params.get('molbio_revision_id') || String(initialValues?.molbioRevisionId ?? ''),
         };
     });
     const [selectedMolbioSequenceId, setSelectedMolbioSequenceId] = useState(molbioSequenceId);
@@ -788,7 +792,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const molbioRevisionPairError = Boolean(selectedMolbioSequenceId) !== Boolean(selectedMolbioRevisionId)
         ? 'Exact molecular sequence and revision IDs must be supplied together.'
         : null;
-    const [approvedComparisonPanelId, setApprovedComparisonPanelId] = useState('');
+    const [approvedComparisonPanelId, setApprovedComparisonPanelId] = useState(String(initialValues?.approvedComparisonPanelId ?? ''));
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     // Pinning remains operator-selected; available labels are read from the
@@ -813,6 +817,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (initialValues?.doradoMode === 'duplex') return 'duplex';
         return 'dna';
     });
+    const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
     const [pod5Dir, setPod5Dir] = useState(initialValues?.pod5Dir as string || '');
     const [bamPath, setBamPath] = useState(initialValues?.bamPath as string || '');
     const [bamForceRealign, setBamForceRealign] = useState<boolean>(
@@ -956,6 +961,12 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [assemblyCoverage, setAssemblyCoverage] = useState<number>(initialValues?.assemblyCoverage as number || 60);
     const [assemblyTrimLength, setAssemblyTrimLength] = useState<number>(initialValues?.assemblyTrimLength as number || 0);
     const [assemblyMinQuality, setAssemblyMinQuality] = useState<number>(initialValues?.assemblyMinQuality as number ?? 9);
+    const [cloneFiles, setCloneFiles] = useState<Record<CloneFileField, string>>(() => ({
+        wfClonePrimers: String(initialValues?.wfClonePrimers ?? ''),
+        wfCloneInsertReference: String(initialValues?.wfCloneInsertReference ?? ''),
+        wfCloneHostReference: String(initialValues?.wfCloneHostReference ?? ''),
+        wfCloneRegionsBedfile: String(initialValues?.wfCloneRegionsBedfile ?? ''),
+    }));
     const [wfCloneSample, setWfCloneSample] = useState(initialValues?.wfCloneSample as string || '');
     const [wfCloneLargeConstruct, setWfCloneLargeConstruct] = useState(initialValues?.wfCloneLargeConstruct === true);
     const [wfCloneFlyeQuality, setWfCloneFlyeQuality] = useState<FlyeReadQuality>(
@@ -982,7 +993,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [singleRefSplitMaxQueryGapBp, setSingleRefSplitMaxQueryGapBp] = useState(() => coerceIntegerInput(initialValues?.singleRefSplitMaxQueryGapBp, 500, 0, 1_000_000));
     const [executionTargetId, setExecutionTargetId] = useState<string | null>(() =>
         typeof initialValues?.execution_target_id === 'string' ? initialValues.execution_target_id : null);
-    const [initialReturnPolicy] = useState(() => initialValues?.execution_policy
+    const [initialReturnPolicy, setReturnPolicy] = useState(() => initialValues?.execution_policy
         ? { remote_result_policy: normalizeResultPolicy((initialValues.execution_policy as ExecutionPolicy).remote_result_policy) }
         : newJobExecutionPolicy());
     const [pinnedGpus, setPinnedGpus] = useState<number[]>(() => {
@@ -1086,7 +1097,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     );
 
     useEffect(() => {
-        if (selectedManagedReferenceRevisionId || !exactStateRevisionQuery.isSuccess) return;
+        if (!requiresReference || usesMolBioReceiptLane || selectedManagedReferenceRevisionId || !exactStateRevisionQuery.isSuccess) return;
         const firstStateBoundReference = exactStateReferenceRevisionIds.values().next().value;
         if (firstStateBoundReference) {
             setManagedReferenceSelection({ domainId: exactDomainExperimentId, revisionId: firstStateBoundReference });
@@ -1094,6 +1105,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     }, [
         exactDomainExperimentId,
         exactStateReferenceRevisionIds,
+        requiresReference, usesMolBioReceiptLane,
         exactStateRevisionQuery.isSuccess,
         selectedManagedReferenceRevisionId,
     ]);
@@ -1108,7 +1120,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         && isIntegerInRange(igvReportFlankingBp, 0, FASTQ_MAX_IGV_REPORT_FLANKING_BP)
     ), [hasValidExpectedPlasmidSize, igvReportFlankingBp, igvReportMaxSites, igvTrackWindowBp, minFastqReadLength]);
 
-    const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
     const exactStateMolecularRevisionKeys = useMemo(() => new Set(
         (exactStateRevisionQuery.data?.members ?? [])
             .filter((member) => member.entity_kind === 'molecular_revision')
@@ -1143,6 +1154,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (!exactDomainExperimentId) return 'Select an exact NGS/MolBio Domain Experiment.';
         if (!exactStateRevisionId) return 'Select an exact local state revision.';
         if (!availability.canMutateDomain) return availability.reason;
+        if (!requiresReference && !selectedMolbioSequenceId && !selectedManagedReferenceRevisionId) return null;
         if (selectedReferenceDetailQuery.isError) return 'The selected immutable reference revision could not be loaded.';
         if (exactStateRevisionQuery.isError) return 'The exact local state revision could not be loaded.';
         if (usesMolBioReceiptLane) {
@@ -1155,6 +1167,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (!selectedReferenceIsExactStateMember) return 'The selected reference revision is not a member of the exact selected local state revision.';
         return null;
     }, [
+        requiresReference, selectedMolbioSequenceId, selectedManagedReferenceRevisionId,
         availability.canMutateDomain,
         availability.reason,
         exactDomainExperimentId,
@@ -1185,7 +1198,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         || (usesMolBioReceiptLane ? Boolean(selectedMolbioSequenceId && selectedMolbioRevisionId) : Boolean(selectedManagedReference && selectedReferenceIsExactStateMember));
     const getSubmissionBlockers = (): string[] => {
         const blockers: string[] = [];
-        if (executionTargetId && inputSource === 'pod5') blockers.push('Raw POD5/instrument execution is not portable. Choose Local explicitly or provide a supported managed FASTQ / bounded move-BAM input.');
         if (selectedWorkflow === 'pooledAssignment') blockers.push('Use the pooled assignment panel to submit this workflow.');
         if (!jobName.trim()) blockers.push('Enter a job name.');
         if (!executionTargetId && inputSource !== 'fastq' && pinnedGpus.length > 1) blockers.push('Select one GPU or Scheduler auto before submitting this NGS job.');
@@ -1291,9 +1303,138 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // ============================================================================
     // Job Submission
     // ============================================================================
+    const workflowId = selectedWorkflow === 'clone'
+        ? 'wf_clone_validation'
+        : selectedWorkflow === 'constructScreening'
+            ? 'ont_construct_screening'
+            : selectedWorkflow === 'fastqQc'
+                ? 'ont_fastq_qc'
+                : selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc'
+            ? 'ont_plasmid_qc'
+            : selectedWorkflow === 'rna'
+                ? 'ont_basecall_rna'
+                : selectedWorkflow === 'modified'
+                    ? 'ont_methylation_analysis'
+                    : 'ont_basecall_dna';
+    const buildRequest = (molbioNgsReceiptId = '', comparisonPanelReceiptId = '') => {
+        return {
+            name: jobName,
+            ...prepareExecutionPlacement({ execution_target_id: executionTargetId, execution_policy: initialReturnPolicy }),
+            pinned_gpu: !executionTargetId && inputSource !== 'fastq' && pinnedGpus.length === 1 ? pinnedGpus[0] : null,
+            params: {
+                ...(molbioNgsReceiptId && { molbio_ngs_receipt_id: molbioNgsReceiptId }),
+                ...(comparisonPanelReceiptId && { ngs_comparison_panel_receipt_id: comparisonPanelReceiptId }),
+                min_qscore: inputSource === 'pod5' ? minQscore : undefined,
+                run_modkit: runModkit && canRunModkit,
+                ...buildNanoporeOperatorStageParams({
+                    selectedWorkflow,
+                    inputSource,
+                    runFastqQc,
+                    runAssembly,
+                }),
+                ...(inputSource === 'pod5' && {
+                    pod5_dir: pod5Dir,
+                    dorado_quality_mode: doradoModel,
+                    dorado_basecall_mode: doradoMode,
+                    ont_molecule_type: doradoMolecule,
+                    modified_bases: modifiedBases,
+                    duplex_pairs: doradoMode === 'duplex' ? duplexPairs : undefined,
+                    barcode_kit: barcodeKit || undefined,
+                    sample_sheet: barcodeKit ? (sampleSheet || undefined) : undefined,
+                    trim_adapters: trimAdapters,
+                    emit_summary: emitSummary,
+                    emit_moves: doradoMode === 'simplex' ? emitMoves : false,
+                    ...(batchSize !== null && { dorado_batch_size: batchSize }),
+                }),
+                ...(inputSource === 'bam' && {
+                    bam_path: bamPath,
+                    bam_force_realign: bamForceRealign,
+                    bam_min_mapq: bamMinMapq,
+                }),
+                ...(usesExpectedPlasmidSize && { expected_plasmid_size: autoExpectedPlasmidSize ? null : Number(expectedPlasmidSize) }),
+                ...(inputSource === 'fastq' && {
+                    fastq_path: fastqPath,
+                    min_fastq_read_length: minFastqReadLength,
+                    fastq_minimap2_preset: fastqMinimap2Preset,
+                    fastq_minimap2_allow_secondary: fastqMinimap2AllowSecondary,
+                    igv_track_window_bp: igvTrackWindowBp,
+                    igv_report_max_sites: igvReportMaxSites,
+                    igv_report_flanking_bp: igvReportFlankingBp,
+                }),
+                ...((selectedWorkflow === 'clone' || (selectedWorkflow === 'constructScreening' && runAssembly)) && {
+                    ...(cloneFiles.wfClonePrimers && { wf_clone_primers: cloneFiles.wfClonePrimers }),
+                    ...(cloneFiles.wfCloneInsertReference && { wf_clone_insert_reference: cloneFiles.wfCloneInsertReference }),
+                    ...(cloneFiles.wfCloneHostReference && { wf_clone_host_reference: cloneFiles.wfCloneHostReference }),
+                    ...(cloneFiles.wfCloneRegionsBedfile && { wf_clone_regions_bedfile: cloneFiles.wfCloneRegionsBedfile }),
+                    wf_clone_assembly_tool: assemblyTool,
+                    wf_clone_approx_size: assemblyApproxSize,
+                    wf_clone_assm_coverage: assemblyCoverage,
+                    wf_clone_trim_length: assemblyTrimLength,
+                    wf_clone_min_quality: assemblyMinQuality,
+                    wf_clone_large_construct: wfCloneLargeConstruct,
+                    wf_clone_flye_quality: wfCloneFlyeQuality,
+                    wf_clone_non_uniform_coverage: wfCloneNonUniformCoverage,
+                    wf_clone_canu_fast: wfCloneCanuFast,
+                    wf_clone_cutsite_mismatch: wfCloneCutsiteMismatch,
+                    wf_clone_primer_mismatch: wfClonePrimerMismatch,
+                    wf_clone_expected_coverage: wfCloneExpectedCoverage,
+                    wf_clone_expected_identity: wfCloneExpectedIdentity,
+                    ...(wfCloneSample.trim() && { wf_clone_sample: wfCloneSample.trim() }),
+                }),
+                ...((selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc') && {
+                    samtools_consensus_config: samtoolsConsensusConfig,
+                    enable_rotating_reference_frames: enableRotatingReferenceFrames,
+                    rotation_scan_step_bp: rotationScanStepBp,
+                    single_ref_split_min_mapq: singleRefSplitMinMapq,
+                    single_ref_split_min_segment_bp: singleRefSplitMinSegmentBp,
+                    single_ref_split_max_query_gap_bp: singleRefSplitMaxQueryGapBp,
+                }),
+                ...(runModkit && canRunModkit && modkitFilterThreshold != null && { modkit_filter_threshold: modkitFilterThreshold }),
+            },
+            ...(!molbioNgsReceiptId && exactDomainExperimentId && exactStateRevisionId && selectedManagedReference && {
+                managed_reference: {
+                    global_domain_experiment_id: exactDomainExperimentId,
+                    molbio_ngs_state_revision_id: exactStateRevisionId,
+                    ngs_reference_revision_id: selectedManagedReference.revision.id,
+                },
+            }),
+        };
+    };
+    // One prepared request per scientific/placement/context generation. UI-only
+    // disclosures and query refreshes do not invalidate retained snapshots.
+    const requestSignature = JSON.stringify([workflowId, buildRequest(), selectedMolbioSequenceId,
+        selectedMolbioRevisionId, approvedComparisonPanelId, exactDomainExperimentId,
+        exactStateRevisionId, window.location.search]);
+    const generation = useRef({ signature: requestSignature, version: 0 });
+    if (generation.current.signature !== requestSignature) {
+        generation.current = { signature: requestSignature, version: generation.current.version + 1 };
+    }
+    const requestKey = String(generation.current.version);
+    const currentRequestKey = useRef(requestKey);
+    currentRequestKey.current = requestKey;
+    const retainedReview = useRef<{ key: string; prepared: OntNgsPreparedReview } | null>(null);
+    const [review, setReview] = useState<{ key: string; prepared: OntNgsPreparedReview; finish: (approved: boolean) => void } | null>(null);
+    useEffect(() => {
+        if (retainedReview.current?.key !== requestKey) retainedReview.current = null;
+        if (review && review.key !== requestKey) { review.finish(false); setReview(null); }
+    }, [requestKey, review]);
+    useEffect(() => () => { currentRequestKey.current = ''; }, []);
+    useEffect(() => () => { review?.finish(false); }, [review]);
+
     const submitMutation = useMutation({
-        mutationFn: async () => {
-            const placement = prepareExecutionPlacement({ execution_target_id: executionTargetId });
+        mutationFn: async (key: string) => {
+            const search = window.location.search;
+            const isCurrent = () => currentRequestKey.current === key && window.location.search === search;
+            const reviewAndSubmit = async (prepared: OntNgsPreparedReview) => {
+                if (!isCurrent()) return null;
+                const approved = await new Promise<boolean>(finish => setReview({ key, prepared, finish }));
+                setReview(current => current?.key === key ? null : current);
+                if (!approved || !isCurrent()) return null;
+                return submitOntNgsJob(prepared.workflow_id, {
+                    ...prepared.request, execution_plan_approval: prepared.preview.approval_digest,
+                }, prepared.preview.request.launch_context_id ?? null);
+            };
+            if (retainedReview.current?.key === key) return reviewAndSubmit(retainedReview.current.prepared);
             let molbioNgsReceiptId = '';
             let comparisonPanelReceiptId = '';
 
@@ -1302,6 +1443,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             }
             if (selectedMolbioSequenceId && selectedMolbioRevisionId) {
                 const receiptResponse = await issueMolBioNgsReceipt(selectedMolbioSequenceId, { revision_id: selectedMolbioRevisionId });
+                if (!isCurrent()) return null;
                 molbioNgsReceiptId = receiptResponse.data.receipt_id.trim();
                 if (!molbioNgsReceiptId) throw new Error('The immutable MolBio handoff did not return a receipt.');
                 if (approvedComparisonPanelId) {
@@ -1314,107 +1456,29 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     comparisonPanelReceiptId = String(panelReceipt.receipt_id || '').trim();
                     if (!comparisonPanelReceiptId) throw new Error('The approved comparison panel did not return a receipt.');
                 }
-            } else {
+            } else if (requiresReference || selectedManagedReferenceRevisionId) {
                 if (managedReferenceBlocker) throw new Error(managedReferenceBlocker);
                 if (!exactDomainExperimentId || !exactStateRevisionId || !selectedManagedReference) {
                     throw new Error('Exact Domain Experiment, state revision, and managed reference revision are required.');
                 }
             }
 
-            const workflowId = selectedWorkflow === 'clone'
-                ? 'wf_clone_validation'
-                : selectedWorkflow === 'constructScreening'
-                    ? 'ont_construct_screening'
-                    : selectedWorkflow === 'fastqQc'
-                        ? 'ont_fastq_qc'
-                        : selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'bamQc'
-                    ? 'ont_plasmid_qc'
-                    : selectedWorkflow === 'rna'
-                        ? 'ont_basecall_rna'
-                        : selectedWorkflow === 'modified'
-                            ? 'ont_methylation_analysis'
-                            : 'ont_basecall_dna';
-            const jobPayload = {
-                name: jobName || `nanopore_${Date.now()}`,
-                ...placement,
-                pinned_gpu: !executionTargetId && inputSource !== 'fastq' && pinnedGpus.length === 1 ? pinnedGpus[0] : null,
-                params: {
-                    ...(molbioNgsReceiptId && { molbio_ngs_receipt_id: molbioNgsReceiptId }),
-                    ...(comparisonPanelReceiptId && { ngs_comparison_panel_receipt_id: comparisonPanelReceiptId }),
-                    min_qscore: inputSource === 'pod5' ? minQscore : undefined,
-                    run_modkit: runModkit && canRunModkit,
-                    ...buildNanoporeOperatorStageParams({
-                        selectedWorkflow,
-                        inputSource,
-                        runFastqQc,
-                        runAssembly,
-                    }),
-                    ...(inputSource === 'pod5' && {
-                        pod5_dir: pod5Dir,
-                        dorado_quality_mode: doradoModel,
-                        dorado_basecall_mode: doradoMode,
-                        ont_molecule_type: doradoMolecule,
-                        modified_bases: modifiedBases,
-                        duplex_pairs: doradoMode === 'duplex' ? duplexPairs : undefined,
-                        barcode_kit: barcodeKit || undefined,
-                        sample_sheet: barcodeKit ? (sampleSheet || undefined) : undefined,
-                        trim_adapters: trimAdapters,
-                        emit_summary: emitSummary,
-                        emit_moves: doradoMode === 'simplex' ? emitMoves : false,
-                        ...(batchSize !== null && { dorado_batch_size: batchSize }),
-                    }),
-                    ...(inputSource === 'bam' && {
-                        bam_path: bamPath,
-                        bam_force_realign: bamForceRealign,
-                        bam_min_mapq: bamMinMapq,
-                    }),
-                    ...(usesExpectedPlasmidSize && { expected_plasmid_size: autoExpectedPlasmidSize ? null : Number(expectedPlasmidSize) }),
-                    ...(inputSource === 'fastq' && {
-                        fastq_path: fastqPath,
-                        min_fastq_read_length: minFastqReadLength,
-                        fastq_minimap2_preset: fastqMinimap2Preset,
-                        fastq_minimap2_allow_secondary: fastqMinimap2AllowSecondary,
-                        igv_track_window_bp: igvTrackWindowBp,
-                        igv_report_max_sites: igvReportMaxSites,
-                        igv_report_flanking_bp: igvReportFlankingBp,
-                    }),
-                    ...((selectedWorkflow === 'clone' || (selectedWorkflow === 'constructScreening' && runAssembly)) && {
-                        wf_clone_assembly_tool: assemblyTool,
-                        wf_clone_approx_size: assemblyApproxSize,
-                        wf_clone_assm_coverage: assemblyCoverage,
-                        wf_clone_trim_length: assemblyTrimLength,
-                        wf_clone_min_quality: assemblyMinQuality,
-                        wf_clone_large_construct: wfCloneLargeConstruct,
-                        wf_clone_flye_quality: wfCloneFlyeQuality,
-                        wf_clone_non_uniform_coverage: wfCloneNonUniformCoverage,
-                        wf_clone_canu_fast: wfCloneCanuFast,
-                        wf_clone_cutsite_mismatch: wfCloneCutsiteMismatch,
-                        wf_clone_primer_mismatch: wfClonePrimerMismatch,
-                        wf_clone_expected_coverage: wfCloneExpectedCoverage,
-                        wf_clone_expected_identity: wfCloneExpectedIdentity,
-                        ...(wfCloneSample.trim() && { wf_clone_sample: wfCloneSample.trim() }),
-                    }),
-                    ...((selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc') && {
-                        samtools_consensus_config: samtoolsConsensusConfig,
-                        enable_rotating_reference_frames: enableRotatingReferenceFrames,
-                        rotation_scan_step_bp: rotationScanStepBp,
-                        single_ref_split_min_mapq: singleRefSplitMinMapq,
-                        single_ref_split_min_segment_bp: singleRefSplitMinSegmentBp,
-                        single_ref_split_max_query_gap_bp: singleRefSplitMaxQueryGapBp,
-                    }),
-                    ...(runModkit && canRunModkit && modkitFilterThreshold != null && { modkit_filter_threshold: modkitFilterThreshold }),
-                },
-                ...(!molbioNgsReceiptId && exactDomainExperimentId && exactStateRevisionId && selectedManagedReference && {
-                    managed_reference: {
-                        global_domain_experiment_id: exactDomainExperimentId,
-                        molbio_ngs_state_revision_id: exactStateRevisionId,
-                        ngs_reference_revision_id: selectedManagedReference.revision.id,
-                    },
-                }),
-            };
-            return submitOntNgsJob(workflowId, jobPayload);
+            if (!isCurrent()) return null;
+            const jobPayload = buildRequest(molbioNgsReceiptId, comparisonPanelReceiptId);
+            if (!jobPayload.execution_target_id) return submitOntNgsJob(workflowId, jobPayload);
+            const prepared = (await prepareOntNgsJob(workflowId, jobPayload)).data;
+            if (!isCurrent()) return null;
+            if (prepared.workflow_id !== workflowId || !/^[0-9a-f]{64}$/.test(prepared.preview.approval_digest)
+                || prepared.request.execution_target_id !== jobPayload.execution_target_id
+                || prepared.preview.request.execution_target_id !== jobPayload.execution_target_id) {
+                throw new Error('Execution-plan preparation does not bind this workflow. Refresh and review again.');
+            }
+            retainedReview.current = { key, prepared };
+            return reviewAndSubmit(prepared);
         },
-        onSuccess: (response) => {
+        onSuccess: (response, key) => {
+            if (!response || currentRequestKey.current !== key) return;
+            retainedReview.current = null;
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             const submittedJobId = response.data?.id;
             if (submittedJobId) {
@@ -1423,11 +1487,13 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             }
             navigate(contextHref('/ngs'));
         },
-        onError: (err: unknown) => {
+        onError: (err: unknown, key) => {
+            if (currentRequestKey.current !== key) return;
             setError(extractApiErrorMessage(err));
         }
     });
 
+    const submissionPending = submitMutation.isPending && submitMutation.variables === requestKey;
     const handleSubmit = () => {
         const blockers = getSubmissionBlockers();
         if (blockers.length > 0) {
@@ -1435,13 +1501,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             return;
         }
         setError(null);
-        submitMutation.mutate();
+        submitMutation.mutate(requestKey);
     };
 
     const getPathFieldValue = (field: PathField): string => {
         if (field === 'pod5Dir') return pod5Dir;
         if (field === 'bamPath') return bamPath;
-        return fastqPath;
+        if (field === 'fastqPath') return fastqPath;
+        return cloneFiles[field];
     };
 
     const setPathFieldValue = (field: PathField, value: string) => {
@@ -1455,7 +1522,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         }
         if (field === 'fastqPath') {
             setFastqPath(value);
+            return;
         }
+        setCloneFiles(current => ({ ...current, [field]: value }));
     };
 
     const openPathPicker = (next: PathPickerState) => {
@@ -1587,8 +1656,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // ============================================================================
     return (
         <div className="nanopore-template mx-auto max-w-[1480px] space-y-6 rounded-2xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-secondary)_25%,#000)] p-4 shadow-[0_28px_90px_rgba(0,0,0,0.38)] lg:p-6">
-            <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} disabled={submitMutation.isPending} />
-            <div hidden={selectedWorkflow === 'pooledAssignment'}><ExecutionPolicyControl initialPolicy={initialReturnPolicy} /></div>
+            {review && review.key === requestKey && <ExecutionPlanApproval preview={review.prepared.preview} finish={review.finish} />}
+            <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} />
+            <div hidden={selectedWorkflow === 'pooledAssignment'}><ExecutionPolicyControl initialPolicy={initialReturnPolicy} onChange={setReturnPolicy} /></div>
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -1629,7 +1699,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 text-[var(--text-primary)]"
                     />
                     {executionTargetId ? (
-                        <p className="mt-4 text-xs text-[var(--text-secondary)]">Worker scheduler owns GPU assignment; controller GPU pins are not sent. Remote admission supports managed FASTQ and bounded external move-BAM, not raw/instrument input.</p>
+                        <p className="mt-4 text-xs text-[var(--text-secondary)]">Worker scheduler owns GPU assignment; controller GPU pins are not sent. Existing POD5, FASTQ and supported BAM computations can run on the selected worker. Instrument acquisition and control remain local.</p>
                     ) : inputSource === 'fastq' ? (
                         <div className="mt-4 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/60 px-3 py-2" data-testid="ngs-gpu-cpu-only">
                             <div className="text-sm font-medium text-[var(--text-secondary)]">GPU assignment</div>
@@ -1793,10 +1863,14 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     />
                 ) : (
                     <>
+                    {!requiresReference && <button type="button" onClick={() => {
+                        setSelectedMolbioSequenceId(''); setSelectedMolbioRevisionId('');
+                        setSelectedManagedReferenceRevisionId(''); setApprovedComparisonPanelId('');
+                    }}>No reference — basecalling only</button>}
                     <div className="mb-3">
                         <h3 className="text-sm font-semibold text-[var(--text-primary)]">Shared Experiment reference</h3>
-                        <p className="mt-1 text-xs text-[var(--text-secondary)]">Choose a saved reference revision attached to this Experiment.</p>
-                        {exactDomainExperimentId && molbioSequences.length === 0 && !molbioSequencesQuery.isLoading && !exactStateRevisionQuery.isLoading && (
+                        <p className="mt-1 text-xs text-[var(--text-secondary)]">{requiresReference ? 'Choose a saved reference revision attached to this Experiment.' : 'Reference-free basecalling is supported. Optionally choose an attached reference for alignment; Experiment and state grouping are retained.'}</p>
+                        {requiresReference && exactDomainExperimentId && molbioSequences.length === 0 && !molbioSequencesQuery.isLoading && !exactStateRevisionQuery.isLoading && (
                             <p role="alert" className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">No shared reference is attached to this scientific-state revision. Return to the Experiment’s Molecular Inputs section to add one or more references.</p>
                         )}
                     </div>
@@ -1956,14 +2030,14 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             <input value={sampleSheet} onChange={(event) => setSampleSheet(event.target.value)} disabled={!barcodeKit} placeholder="Optional confined sample sheet" className="bg-[var(--bg-tertiary)] rounded p-2 disabled:opacity-40" />
                         </div>
                     )}
-                    <div className="text-xs text-[var(--text-secondary)]">Locked basecalling settings are applied automatically for this workflow.</div>
+                    <div className="text-xs text-[var(--text-secondary)]">Quality is operator-selected. The server resolves the installed native model and version; remote execution review shows the effective settings before launch. Retained runs keep their recorded model identity.</div>
                 </div>
             )}
 
             {/* Basecalling Model */}
             {inputSource === 'pod5' && (
                 <div className={TASK_FLOW_CARD}>
-                    <label className="block text-sm font-medium text-[var(--text-secondary)] mb-3">Basecalling Model</label>
+                    <label className="block text-sm font-medium text-[var(--text-secondary)] mb-3">Basecalling quality</label>
                     <div className="grid grid-cols-3 gap-3">
                         {(Object.entries(DORADO_MODELS) as [DoradoModel, typeof DORADO_MODELS[DoradoModel]][]).map(([key, model]) => (
                             <button
@@ -2501,6 +2575,17 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                             className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         />
                                     </label>
+                                    {([
+                                        ['wfClonePrimers', 'Primers FASTA'],
+                                        ['wfCloneInsertReference', 'Insert reference FASTA'],
+                                        ['wfCloneHostReference', 'Host reference FASTA'],
+                                        ['wfCloneRegionsBedfile', 'Regions BED file'],
+                                    ] as const).map(([field, label]) => <div key={field} className="text-xs text-[var(--text-secondary)]">
+                                        <label>{label} (optional)
+                                            <input aria-label={label} value={cloneFiles[field]} onChange={event => setPathFieldValue(field, event.target.value)} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5" />
+                                        </label>
+                                        <button type="button" onClick={() => openPathPicker({ field, title: `Select ${label}`, mode: 'file', filter: 'unknown' })}>Browse {label}</button>
+                                    </div>)}
                                     <label className="text-xs text-[var(--text-secondary)]">
                                         Flye read quality
                                         <select value={wfCloneFlyeQuality} onChange={(e) => setWfCloneFlyeQuality(e.target.value as FlyeReadQuality)} disabled={assemblyTool !== 'flye'} className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm disabled:opacity-40">
@@ -2559,7 +2644,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                         <span data-testid="ngs-review-workflow" className="text-violet-200">WORKFLOW · {reviewWorkflowLabel}</span>
                         <span data-testid="ngs-review-input" className={reviewInputReady ? 'text-emerald-300' : 'text-amber-200'}>● {reviewInputReady ? 'INPUT READY' : 'INPUT REQUIRED'} · {inputSource.toUpperCase()}</span>
                         <span data-testid="ngs-review-mode" className="text-cyan-200">MODE · {reviewModeLabel}</span>
-                        <span data-testid="ngs-review-model" className="text-[var(--text-secondary)]">MODEL · {reviewModelLabel}</span>
+                        <span data-testid="ngs-review-model" className="text-[var(--text-secondary)]">QUALITY · {reviewModelLabel}</span>
                         <span data-testid="ngs-review-gpu" className="text-emerald-300">GPU · {reviewGpuLabel}</span>
                         <span data-testid="ngs-review-reference" className={reviewReferenceReady ? 'text-emerald-300' : 'text-amber-200'}>{reviewReferenceLabel}</span>
                     </div>
@@ -2571,12 +2656,12 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                         <button
                             type="button"
                             onClick={handleSubmit}
-                            disabled={!canSubmit || submitMutation.isPending}
+                            disabled={!canSubmit || submissionPending}
                             title={reviewBlocker || undefined}
-                            className={`rounded-lg px-4 py-2 text-xs font-semibold transition-all ${canSubmit && !submitMutation.isPending ? 'text-[var(--text-primary)] shadow-lg' : 'cursor-not-allowed bg-[var(--bg-secondary)] text-[var(--text-secondary)]'}`}
-                            style={canSubmit && !submitMutation.isPending ? { backgroundColor: 'var(--accent-secondary)', boxShadow: '0 10px 20px color-mix(in srgb, var(--accent-secondary) 30%, transparent)' } : undefined}
+                            className={`rounded-lg px-4 py-2 text-xs font-semibold transition-all ${canSubmit && !submissionPending ? 'text-[var(--text-primary)] shadow-lg' : 'cursor-not-allowed bg-[var(--bg-secondary)] text-[var(--text-secondary)]'}`}
+                            style={canSubmit && !submissionPending ? { backgroundColor: 'var(--accent-secondary)', boxShadow: '0 10px 20px color-mix(in srgb, var(--accent-secondary) 30%, transparent)' } : undefined}
                         >
-                            {submitMutation.isPending ? 'Submitting…' : 'Review and submit'}
+                            {submissionPending ? 'Submitting…' : 'Review and submit'}
                         </button>
                     )}
                 </div>
