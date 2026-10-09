@@ -62,11 +62,13 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
         -o "${IGV_JS_PATH}" "https://cdn.jsdelivr.net/npm/igv@${IGV_JS_VERSION}/dist/igv.min.js"
     printf '%s  %s\n' "${IGV_JS_SHA256}" "${IGV_JS_PATH}" | sha256sum -c -
 
-    # ── Dorado v1.3.1 (Jan 2026) ──────────────────────────────────────────
-    # Pre-built Linux x86_64 binary with CUDA support
-    DORADO_VERSION="1.3.1"
-    wget -qO- "https://cdn.oxfordnanoportal.com/software/analysis/dorado-${DORADO_VERSION}-linux-x64.tar.gz" \
-        | tar xzf - -C /opt
+    # Native release archive, independently downloaded and hashed.
+    DORADO_VERSION="2.1.2"
+    DORADO_SHA256="f4ed83acfb75cf07ffe8a0fc78e26828fc911fcfc8177920be6104e1d0e02485"
+    curl -fsSL --retry 3 -o /tmp/dorado.tar.gz "https://cdn.oxfordnanoportal.com/software/analysis/dorado-${DORADO_VERSION}-linux-x64.tar.gz"
+    printf '%s  %s\n' "${DORADO_SHA256}" /tmp/dorado.tar.gz | sha256sum -c -
+    tar xzf /tmp/dorado.tar.gz -C /opt
+    rm /tmp/dorado.tar.gz
     ln -s /opt/dorado-${DORADO_VERSION}-linux-x64/bin/dorado /usr/local/bin/dorado
 
     # ── modkit v0.6.4, pinned ABI-compatible release asset ─────────────────
