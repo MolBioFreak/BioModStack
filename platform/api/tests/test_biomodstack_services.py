@@ -391,19 +391,22 @@ def test_runtime_port_settings_preserve_profile_and_save_dev_and_prod_ports(tmp_
 
 def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "biomodstack"
-    policy_path = (
-        project_root
-        / "platform"
-        / "api"
-        / "config"
-        / "ont_signal_workbench"
-        / "runtime_policy_v1.json"
-    )
-    policy_path.parent.mkdir(parents=True)
-    policy_path.write_text(
-        '{"runtime_id":"sha256:' + ("a" * 64) + '","oci_digest":"sha256:' + ("a" * 64) + '"}',
-        encoding="utf-8",
-    )
+    policy_root = project_root / "platform/api/config/ont_signal_workbench"
+    policy_root.mkdir(parents=True)
+    policies = {
+        "SQUIGUALISER": ("runtime_policy_v1.json", "a" * 64),
+        "SLOW5TOOLS": ("raw_signal_runtime_policy_v1.json", "b" * 64),
+        "SQUIGULATOR": ("squigulator_runtime_policy_v1.json", "c" * 64),
+        "SQUIGUALISER_COMPARISON": ("comparison_render_runtime_policy_v1.json", "d" * 64),
+    }
+    for key, (filename, digest) in policies.items():
+        (policy_root / filename).write_text(
+            '{"runtime_id":"sha256:' + digest + '","oci_digest":"sha256:' + digest + '"}',
+            encoding="utf-8",
+        )
+        # A service refresh uses the release policy, not stale caller selectors.
+        monkeypatch.setenv(f"BMS_ONT_{key}_IMAGE", f"sha256:{'e' * 64}")
+        monkeypatch.setenv(f"BMS_ONT_{key}_IMAGE_DIGEST", "e" * 64)
     monkeypatch.setattr(
         services,
         "install_profile_snapshot",
@@ -436,8 +439,9 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
     assert "Environment=BMS_COLABFOLD_DB=/srv/biomodstack-dev/colabfold_db" not in units[services.API_SERVICE]
     assert "Environment=BMS_ONT_LIVE_CONVERSION_ENABLED=1" in units[services.API_SERVICE]
     assert "Environment=BMS_ONT_RAW_SIGNAL_RETENTION_POLICY=pod5_and_blow5" in units[services.API_SERVICE]
-    assert f"Environment=BMS_ONT_SQUIGUALISER_IMAGE=sha256:{'a' * 64}" in units[services.API_SERVICE]
-    assert f"Environment=BMS_ONT_SQUIGUALISER_IMAGE_DIGEST={'a' * 64}" in units[services.API_SERVICE]
+    for key, (_, digest) in policies.items():
+        assert f"Environment=BMS_ONT_{key}_IMAGE=sha256:{digest}" in units[services.API_SERVICE]
+        assert f"Environment=BMS_ONT_{key}_IMAGE_DIGEST={digest}" in units[services.API_SERVICE]
     assert "ExecStartPre=/usr/bin/mkdir -p /srv/biomodstack-dev" in units[services.API_SERVICE]
     assert "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18279" in units[services.FRONTEND_SERVICE]
     assert "Environment=BMS_DEV_WEB_HOST_PORT=18278" in units[services.FRONTEND_SERVICE]

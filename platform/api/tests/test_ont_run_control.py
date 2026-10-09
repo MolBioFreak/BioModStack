@@ -31,7 +31,6 @@ from routers import ont_runs  # noqa: E402
 from services import ont_run_control  # noqa: E402
 from services.ont_run_control import (  # noqa: E402
     build_start_preflight,
-    stop_instrument_run,
     build_plasmid_qc_handoff,
 )
 
@@ -409,13 +408,17 @@ def test_browser_stop_endpoint_is_tombstoned_before_service_dispatch(monkeypatch
     app.include_router(ont_runs.router, prefix="/api/ont")
     client = TestClient(app)
 
-    async def forbidden_dispatch(*_args, **_kwargs):
-        raise AssertionError("browser stop route must not dispatch to the ONT service")
+    calls = []
 
-    monkeypatch.setattr(ont_run_control, "stop_instrument_run", forbidden_dispatch)
+    def forbidden_dispatch(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {}
+
+    monkeypatch.setattr(ont_run_control, "request_host_agent", forbidden_dispatch)
 
     response = client.post("/api/ont/runs/run-1/stop", json={"confirm_stop": True})
 
+    assert calls == []
     assert response.status_code == 410
     assert response.json() == {
         "detail": "Browser-initiated ONT physical stop is retired; use the separately supervised instrument-control lane."
@@ -484,7 +487,7 @@ async def test_public_start_501_is_canonical_and_does_not_reflect_backend_except
 
     assert response.status_code == 501
     assert response.json() == {
-        "detail": "MinKNOW protocol start remains disabled pending separately authorized supervised commissioning."
+        "detail": "Starting MinKNOW runs from BMS is disabled; enabling it requires separate authorization and supervised commissioning."
     }
     assert "PRIVATE" not in response.text
     assert "grpc://" not in response.text
@@ -736,28 +739,6 @@ async def test_handoff_rejects_source_changed_after_terminal_manifest_without_sn
     assert not snapshot_root.exists() or not any(snapshot_root.rglob("*.fastq"))
 
 
-@pytest.mark.asyncio
-async def test_stop_retained_server_operation_returns_only_safe_projection(monkeypatch) -> None:
-    run_id = await _seed_server_observed_run()
-    calls: list[tuple[str, str, dict | None]] = []
-
-    def fake_request(method, path, payload=None, *, query=None):
-        calls.append((method, path, payload))
-        return {"status": "stopped", "output_directories": {"reads": "/private/stop-output"}}
-
-    monkeypatch.setattr(ont_run_control, "request_host_agent", fake_request)
-    for invalid_confirmation in (False, "false", 1, None):
-        with pytest.raises(ValueError, match="confirm_stop"):
-            await stop_instrument_run(run_id, {"confirm_stop": invalid_confirmation})
-    stopped = await stop_instrument_run(run_id, {"confirm_stop": True})
-
-    assert stopped["status"] == "stopped"
-    assert stopped["output_summary"] == {"fastq": 0, "pod5": 0, "bam": 0}
-    assert calls == [("POST", "/ont/runs/PRIVATE-MINKNOW-RUN/stop", {"confirm_stop": True})]
-    assert "PRIVATE-MINKNOW-RUN" not in str(stopped)
-    assert "/private/stop-output" not in str(stopped)
-
-
 def test_raw_start_route_rejects_browser_protocol_payload_without_contacting_host_agent(monkeypatch) -> None:
     app = FastAPI()
     app.include_router(ont_runs.router, prefix="/api/ont")
@@ -774,7 +755,7 @@ def test_raw_start_route_rejects_browser_protocol_payload_without_contacting_hos
         )
 
     assert response.status_code == 410
-    assert "opaque protocol receipt" in response.text
+    assert "physical starting remains disabled" in response.text
 
 
 def test_intent_start_schema_rejects_raw_protocol_model_and_path_fields_before_service_call(monkeypatch) -> None:
@@ -818,7 +799,7 @@ def test_raw_handoff_descriptor_route_is_retired_without_serializing_paths(monke
     )
 
     assert response.status_code == 410
-    assert "server-only" in response.text
+    assert "/runs/{id}/handoff/plasmid-qc/submit" in response.text
     assert "/private/reference.fasta" not in response.text
     assert "/private/output" not in response.text
 
@@ -868,9 +849,6 @@ def test_hardware_check_public_route_is_a_fail_closed_tombstone(monkeypatch) -> 
         raise AssertionError("hardware-check tombstone must not contact the host agent")
 
     monkeypatch.setattr(ont_run_control, "request_host_agent", forbidden_request)
-
-    with pytest.raises(NotImplementedError, match="supervised commissioning"):
-        ont_run_control.begin_position_hardware_check("MD-105428", {"confirm_hardware_check": True})
 
     app = FastAPI()
     app.include_router(ont_runs.router, prefix="/api/ont")

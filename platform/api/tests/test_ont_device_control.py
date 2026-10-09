@@ -132,8 +132,11 @@ def test_manual_mk1d_reconnect_local_proxy_denies_direct_and_forged_forwarding_h
     assert remote.post("/api/ont/devices/reconnect", json={"confirm_reconnect": True}).status_code == 401
 
 
-def test_reconnect_socket_uses_native_primary_group_permission_shape(monkeypatch, tmp_path: Path) -> None:
-    path = tmp_path / "mk1d-reconnect.sock"
+def test_reconnect_socket_uses_native_primary_group_permission_shape(monkeypatch, tmp_path: Path, request) -> None:
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    request.addfinalizer(lambda: os.close(directory_fd))
+    # Keep the actual scratch directory without exceeding AF_UNIX's path limit.
+    path = Path(f"/proc/self/fd/{directory_fd}/mk1d-reconnect.sock")
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(str(path))
     os.chown(path, os.geteuid(), os.getegid())

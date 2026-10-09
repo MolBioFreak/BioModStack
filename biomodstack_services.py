@@ -1265,34 +1265,7 @@ def render_workflow_slice(lane: str) -> str:
     )
 
 
-def _ont_squigualiser_runtime_identity(project_root: Path) -> tuple[str, str]:
-    policy_path = (
-        project_root
-        / "platform"
-        / "api"
-        / "config"
-        / "ont_signal_workbench"
-        / "runtime_policy_v1.json"
-    )
-    if not policy_path.is_file():
-        return "", ""
-    try:
-        policy = json.loads(policy_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ServiceManagerError("ONT Squigualiser runtime policy is unreadable") from exc
-    if not isinstance(policy, Mapping):
-        raise ServiceManagerError("ONT Squigualiser runtime policy must be an object")
-    runtime_id = str(policy.get("runtime_id", "")).strip().lower()
-    oci_digest = str(policy.get("oci_digest", "")).strip().lower()
-    if (
-        runtime_id != oci_digest
-        or not re.fullmatch(r"sha256:[0-9a-f]{64}", runtime_id)
-    ):
-        raise ServiceManagerError("ONT Squigualiser runtime policy identity is invalid")
-    return runtime_id, runtime_id.removeprefix("sha256:")
-
-
-def _ont_comparison_runtime_identity(
+def _ont_runtime_identity(
     project_root: Path, policy_name: str, label: str
 ) -> tuple[str, str]:
     policy_path = (
@@ -1600,13 +1573,16 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         )
     )
     ont_container_runtime = os.environ.get("BMS_ONT_CONTAINER_RUNTIME", "docker").strip() or "docker"
-    ont_runtime_image = os.environ.get("BMS_ONT_SLOW5TOOLS_IMAGE", "").strip()
-    ont_runtime_digest = os.environ.get("BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST", "").strip()
-    ont_squigualiser_image, ont_squigualiser_digest = _ont_squigualiser_runtime_identity(root)
-    ont_squigulator_image, ont_squigulator_digest = _ont_comparison_runtime_identity(
+    ont_runtime_image, ont_runtime_digest = _ont_runtime_identity(
+        root, "raw_signal_runtime_policy_v1.json", "raw signal"
+    )
+    ont_squigualiser_image, ont_squigualiser_digest = _ont_runtime_identity(
+        root, "runtime_policy_v1.json", "Squigualiser"
+    )
+    ont_squigulator_image, ont_squigulator_digest = _ont_runtime_identity(
         root, "squigulator_runtime_policy_v1.json", "Squigulator producer"
     )
-    ont_comparison_image, ont_comparison_digest = _ont_comparison_runtime_identity(
+    ont_comparison_image, ont_comparison_digest = _ont_runtime_identity(
         root,
         "comparison_render_runtime_policy_v1.json",
         "Squigualiser comparison renderer",
