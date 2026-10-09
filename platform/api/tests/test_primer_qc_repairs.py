@@ -102,7 +102,21 @@ def test_antiparallel_coordinate_oracle(alphabet, monkeypatch):
     for left, right in cases:
         assert qc._longest_contiguous_complement(left, right) == _paired_run(left, right)
         assert qc._three_prime_dimer_length(left, right) == _paired_run(left, right, True)
-    for left, right in cases[:45]:
+    # Reachable equal-stem, equal-left-start tie: loops 6 and 8 both pair.
+    # Include it outside the random prefix so every alphabet protects tie order.
+    witness = "TGACATGTATACGAGGGATTTCTCTCTGCT"
+    if alphabet == "ACGU":
+        witness = witness.replace("T", "U")
+    assert _hairpin_oracle(witness) == (3, 6)
+    assert qc._find_hairpin(witness) == (3, 6)
+    hairpins = [(witness, witness)] + cases[:45]
+    if alphabet == "ACGTNRYSWKMBDHV":
+        # Literal IUPAC complements, not permissive set-overlap pairing.
+        for sequence, expected in [("RYSAAASRY", (3, 3)), ("RRRAAATTT", (0, None))]:
+            assert _hairpin_oracle(sequence) == expected
+            assert qc._find_hairpin(sequence) == expected
+            hairpins.append((sequence, sequence))
+    for left, right in hairpins:
         for limits in ({}, {"min_stem": 2, "min_loop": 1, "max_loop": 5}):
             assert qc._find_hairpin(left, **limits) == _hairpin_oracle(left, **limits)
         if not left:

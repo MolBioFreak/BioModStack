@@ -201,14 +201,31 @@ async def test_primer_create_update_validate_sequence_geometry_and_explicit_null
                     name="geometry",
                     sequence="ATGCGTAC",
                     target_sequence_id=template.id,
-                    binding_start=-99,
-                    binding_end=999,
+                    binding_start=0,
+                    binding_end=8,
                     binding_strand=7,
                 ),
             ):
                 with pytest.raises(HTTPException) as error:
                     await create_primer(payload, session)
                 assert error.value.status_code == 400
+                if payload.binding_strand == 7:
+                    assert error.value.detail == "binding_strand must be -1 or 1"
+
+            # Isolate each bad coordinate from the strand check.
+            for start, end in [(-1, 8), (0, template.length + 1)]:
+                with pytest.raises(HTTPException) as error:
+                    await create_primer(PrimerCreate(
+                        name="bounds", sequence="GTACGCAT", target_sequence_id=template.id,
+                        binding_start=start, binding_end=end, binding_strand=-1,
+                    ), session)
+                assert error.value.status_code == 400
+                assert error.value.detail == f"Binding coordinates must be within target length {template.length}"
+            reverse = await create_primer(PrimerCreate(
+                name="reverse", sequence="GTACGCAT", target_sequence_id=template.id,
+                binding_start=0, binding_end=8, binding_strand=-1,
+            ), session)
+            assert (reverse.binding_start, reverse.binding_end, reverse.binding_strand) == (0, 8, -1)
 
             created = await create_primer(
                 PrimerCreate(
@@ -306,10 +323,16 @@ async def test_mutagenesis_rejects_non_residue_and_preserves_molecular_metadata(
                 session,
             )
             assert result.sequence is not None
-            persisted = await session.get(NucleotideSequence, result.sequence.id)
-            assert persisted is not None
-            assert persisted.molecule_strandedness == "double"
-            assert persisted.molecule_orientation == "both"
+            expected = "ACGCGTACGTTAGCTAGCTAGGCTAACCGGTTACGATCGATCGTACGTTAGC"
+            assert result.sequence.sequence == expected
+            async with sessions() as reopened:
+                persisted = await reopened.get(NucleotideSequence, result.sequence.id)
+                assert persisted is not None
+                assert persisted.sequence == expected
+                assert persisted.molecule_strandedness == "double"
+                assert persisted.molecule_orientation == "both"
+                parent = await reopened.get(NucleotideSequence, template.id)
+                assert parent.sequence == "ATGCGTACGTTAGCTAGCTAGGCTAACCGGTTACGATCGATCGTACGTTAGC"
     finally:
         await engine.dispose()
 
@@ -688,13 +711,29 @@ async def test_health_reports_missing_migrations_and_connection_errors(tmp_path:
     from molbio_database import molbio_health
 
     stale = tmp_path / "stale.db"
-    with sqlite3.connect(stale) as connection:
-        connection.execute("CREATE TABLE molbio_schema_migrations (migration_id TEXT PRIMARY KEY, applied_at DATETIME)")
     engine = create_molbio_engine(f"sqlite+aiosqlite:///{stale}")
     try:
+        await init_molbio_db(engine=engine)
+        healthy = await molbio_health(engine=engine)
+        assert healthy["status"] == "healthy" and healthy["migrations_current"] is True
+        async with engine.begin() as connection:
+            await connection.execute(text("DELETE FROM molbio_schema_migrations WHERE version = :version"),
+                                     {"version": healthy["latest_migration"]})
         snapshot = await molbio_health(engine=engine)
         assert snapshot["status"] == "degraded"
         assert snapshot["migrations_current"] is False
+        assert "error" not in snapshot and snapshot["quick_check"] == "ok"
+        assert isinstance(healthy["migration_count"], int)
+        assert snapshot["migration_count"] == healthy["migration_count"] - 1
+        assert snapshot["database_schema_current"] is True
+        assert snapshot["immutable_triggers_current"] is True
+
+        # A malformed ledger is a separate SQL-error path, not missing versions.
+        async with engine.begin() as connection:
+            await connection.execute(text("ALTER TABLE molbio_schema_migrations RENAME COLUMN version TO migration_id"))
+        malformed = await molbio_health(engine=engine)
+        assert malformed["status"] == "degraded" and malformed["quick_check"] == "error"
+        assert isinstance(malformed["error"], str) and str(stale) not in malformed["error"]
     finally:
         await engine.dispose()
 
