@@ -91,6 +91,7 @@ test('selection transform remaps split primer sites and their strand together', 
         }],
     };
     const edited = applyTransformEdit(sequenceData, 2, 8, 'reverse');
+    assert.equal(edited.sequence, 'AATTGGCCAA');
     assert.deepEqual(edited.primers?.[0], {
         ...sequenceData.primers?.[0],
         sequence: 'TTGGCC',

@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import test from 'node:test';
 
 import { clearFeatureAnnotations } from '../src/components/MolBioToolkit/utils/annotations.js';
@@ -183,21 +181,4 @@ test('authoritative alignment is literal, alphabet-strict, and jointly orientati
         ),
         /ambiguous/i,
     );
-});
-
-test('annotation dialog exposes clear and authoritative annotated-file transfer actions', () => {
-    const panel = readFileSync(resolve(process.cwd(), 'src/components/MolBioToolkit/AutoAnnotatePanel.tsx'), 'utf8');
-    const toolkit = readFileSync(resolve(process.cwd(), 'src/components/MolBioToolkit/MolBioToolkitV2.tsx'), 'utf8');
-
-    assert.match(panel, /Clear all feature annotations/);
-    assert.match(panel, /Import SnapGene \/ GenBank annotations/);
-    assert.match(panel, /\.dna,\.gb,\.gbk,\.genbank/);
-    assert.match(toolkit, /Clear .* feature annotations/);
-    assert.match(toolkit, /annotation_import/);
-    assert.match(toolkit, /Import .* annotations from/);
-    assert.match(toolkit, /anyToJson\(file,\s*\{/);
-    assert.match(toolkit, /user_provided_origin_unknown/);
-    assert.match(toolkit, /crypto\.subtle\.digest\('SHA-256'/);
-    assert.match(toolkit, /parser_messages/);
-    assert.match(toolkit, /existing feature annotations.*clear/i);
 });

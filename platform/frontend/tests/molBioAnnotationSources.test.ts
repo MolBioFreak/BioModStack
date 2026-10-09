@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createRequire } from 'node:module';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
@@ -79,8 +80,9 @@ test('Addgene retrieval uses only a normalized numeric path segment', async () =
 test('status discovery exposes availability booleans only', async () => {
     const module = await sources();
     const fetchImpl = async () => new Response(JSON.stringify({
-        ncbi: { available: true },
-        addgene: { available: false },
+        ncbi: { available: true, endpoint: '/private/provider' },
+        addgene: { available: false, token: 'synthetic-not-a-credential' },
+        internal: { diagnostics: 'not part of the client status contract' },
     }), { status: 200, headers: { 'content-type': 'application/json' } });
     assert.deepEqual(await module.fetchAnnotationSourceStatus(fetchImpl), {
         ncbi: { available: true },
@@ -121,8 +123,23 @@ test('annotation menu renders NCBI and Addgene retrieval controls', () => {
     assert.doesNotMatch(html, /Addgene API token is not configured/);
 });
 
-test('annotation menu leaves Addgene visible but disabled when token is unavailable', () => {
-    const html = renderToStaticMarkup(React.createElement(AutoAnnotatePanel, {
+test('annotation menu leaves Addgene visible but disabled when token is unavailable', async () => {
+    const { JSDOM } = createRequire(import.meta.url)('jsdom');
+    const dom = new JSDOM('<div id="root"></div>', { pretendToBeVisual: true });
+    const globals = {
+        window: dom.window,
+        document: dom.window.document,
+        HTMLElement: dom.window.HTMLElement,
+    };
+    const previous = new Map(Object.keys(globals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+    for (const [key, value] of Object.entries(globals)) {
+        Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+    }
+    const { createRoot } = await import('react-dom/client');
+    const { flushSync } = await import('react-dom');
+    const host = dom.window.document.getElementById('root') as HTMLDivElement;
+    const root = createRoot(host);
+    const render = (available: boolean) => flushSync(() => root.render(React.createElement(AutoAnnotatePanel, {
         isOpen: true,
         onClose: () => undefined,
         onAnnotate: () => undefined,
@@ -130,15 +147,42 @@ test('annotation menu leaves Addgene visible but disabled when token is unavaila
         onImportAnnotations: async () => 'imported',
         onRetrieveNcbi: async () => 'imported',
         onRetrieveAddgene: async () => 'imported',
-        annotationSourceStatus: { ncbi: { available: true }, addgene: { available: false } },
+        annotationSourceStatus: { ncbi: { available: true }, addgene: { available } },
         isAnnotating: false,
         hasSequence: true,
         featureCount: 0,
         sequenceLength: 100,
         isCircular: true,
-    }));
-    assert.match(html, /Addgene API token is not configured/);
-    assert.match(html, /<button[^>]*disabled=""[^>]*>Retrieve Addgene annotations<\/button>/);
+    })));
+    try {
+        render(true);
+        const input = host.querySelector<HTMLInputElement>('#annotation-source-addgene')!;
+        const button = Array.from(host.querySelectorAll('button')).find((node) => node.textContent === 'Retrieve Addgene annotations')!;
+        assert.equal(input.disabled, false);
+        // Enter a valid ID through the real input handler before changing availability.
+        const setValue = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
+        flushSync(() => {
+            setValue.call(input, '10878');
+            input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+        });
+        assert.equal(button.disabled, false, 'available provider and valid ID enable retrieval');
+        render(false);
+        assert.equal(input.value, '10878');
+        assert.equal(button.disabled, true, 'availability alone disables a valid request');
+        assert.match(host.textContent!, /Addgene API token is not configured/);
+        render(true);
+        assert.equal(button.disabled, false);
+        assert.doesNotMatch(host.textContent!, /Addgene API token is not configured/);
+    } finally {
+        flushSync(() => root.unmount());
+        // Let React drain its queued scheduler callbacks before removing the DOM.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        dom.window.close();
+        for (const [key, descriptor] of previous) {
+            if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+            else Reflect.deleteProperty(globalThis, key);
+        }
+    }
 });
 
 test('controlled backend detail is surfaced and malformed success payloads fail closed', async () => {
