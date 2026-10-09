@@ -464,7 +464,7 @@ class _NativeAnnotations:
             if label in LABEL_ASSETS:
                 image, selector, weights, weight_selector = LABEL_ASSETS[label]
                 deps.append(self.asset('image', image, 'nextflow.config:process.withLabel.' + label, selector))
-                if weights and native_name not in {'RunPPIFlowGeneration', 'RunBoltz', 'RunShapeBoltzValidator'}:
+                if weights and native_name not in {'RunPPIFlowGeneration', 'RunBoltz', 'RunShapeBoltzValidator', 'DoradoBasecall'}:
                     deps.append(self.asset('weights', weights, authority, weight_selector))
         for helper in helpers:
             deps.append(self.asset('support_tool', helper, authority))
@@ -1223,6 +1223,75 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
 
 
 
+def ngs_clone_runtime_dependencies(params):
+    """Select the native lock's installed leaves; critical runtime owns JVM/Git/engine.
+
+    The source directory deliberately includes its real .git object database: the
+    native validator checks the released commit/tree and clean working tree.
+    """
+    import hashlib
+    import json
+    import os
+    from pathlib import Path
+    from component_runtime import SelectedDependency
+    from scripts.validate_wf_clone_runtime import resolve_lock_path, selected_images
+    root = Path(__file__).resolve().parents[2]
+    lock_path = Path(params.get('wf_clone_runtime_lock') or os.environ.get('BMS_WF_CLONE_RUNTIME_LOCK') or
+                     root / 'config/ngs/wf_clone_validation_v1.8.4.lock.json').resolve()
+    lock_bytes = lock_path.read_bytes()
+    lock = json.loads(lock_bytes)
+    authority = 'modules/ngs/clone_validation.nf:RunCloneValidation'
+    dependencies, paths = [], {}
+
+    def add(kind, relative, path, sha256=None):
+        key = kind + ':' + relative
+        dependencies.append(SelectedDependency(key, kind, relative, authority,
+            semantic_release='sha256:' + sha256 if sha256 else None))
+        paths[key] = Path(path)
+
+    prefix = 'ngs/wf-clone-validation'
+    add('runtime_data', prefix + '/runtime.lock.json', lock_path,
+        hashlib.sha256(lock_bytes).hexdigest())
+    add('runtime_data', prefix + '/source',
+        resolve_lock_path(lock_path, lock['patched_source']['path']))
+    add('runtime_data', prefix + '/compatibility.patch',
+        resolve_lock_path(lock_path, lock['compatibility_patch']['path']),
+        lock['compatibility_patch']['sha256'])
+    home = Path(params.get('wf_clone_nxf_home') or os.environ.get('NXF_HOME') or Path.home() / '.nextflow')
+    version = lock['nextflow']['version']
+    jar = f'framework/{version}/nextflow-{version}-one.jar'
+    add('runtime_data', prefix + '/nxf-home/' + jar, home / jar)
+    cache = resolve_lock_path(lock_path, lock['containers']['cache_dir'])
+    for image in selected_images(lock, params.get('wf_clone_assembly_tool') or 'flye'):
+        add('image', prefix + '/images/' + image['cache_file'],
+            cache / image['cache_file'], image['sha256'])
+    return tuple(dependencies), paths
+
+
+def ngs_dorado_model_dependencies(params, workflow):
+    """Only POD5's selected current model members, not the entire Dorado store."""
+    import json
+    from pathlib import Path
+    from component_runtime import SelectedDependency
+    root = Path(__file__).resolve().parents[2]
+    lock_path = Path(params.get('dorado_lock_manifest') or
+                     root / 'config/ngs/dorado_v2.1.2.lock.json')
+    lock = json.loads(lock_path.read_bytes())
+    molecule = params.get('ont_molecule_type') or ('rna' if workflow == 'ont_basecall_rna' else 'dna')
+    quality = params.get('dorado_quality_mode') or 'sup'
+    models = [lock['models'][molecule][quality]]
+    if params.get('dorado_basecall_mode') == 'duplex':
+        models.append(lock['models']['stereo'])
+    modified = params.get('modified_bases') or 'none'
+    if modified != 'none':
+        models.append(lock['models']['modified_bases'][modified])
+    version = lock['dorado']['version'].split('+')[0]
+    return tuple(SelectedDependency('weights:dorado/' + version + '/' + model['id'],
+        'weights', 'dorado/' + version + '/' + model['id'],
+        'modules/ngs/dorado_basecall.nf:DoradoPreflight',
+        selector='dorado_model_root', selector_subpath=model['id']) for model in models)
+
+
 def _append_ngs(a, workflow, yes):
     p = a.p
     if workflow == 'ont_pooled_reference_assignment':
@@ -1237,7 +1306,11 @@ def _append_ngs(a, workflow, yes):
     methylation = workflow == 'ont_methylation_analysis'
     after = ()
     if pod5:
-        after = a.chain(['DoradoPreflight', 'DoradoBasecall'])
+        dependencies = ngs_dorado_model_dependencies(p, workflow)
+        for dependency in dependencies:
+            a.dependencies[dependency.logical_id] = dependency
+        after = (a.stage('DoradoPreflight', extra=tuple(row.logical_id for row in dependencies)),)
+        after = (a.stage('DoradoBasecall', after, extra=tuple(row.logical_id for row in dependencies)),)
         if workflow == 'ont_basecall_dna' and p.get('barcode_kit'):
             a.chain(['DoradoDemux'], after)
         if reference and (not methylation or p.get('run_modkit') is not False):
@@ -1272,12 +1345,11 @@ def _append_ngs(a, workflow, yes):
         assembly = workflow == 'wf_clone_validation' or yes('run_assembly')
         adapter = ()
         if assembly:
-            clone = a.chain(['RunCloneValidation'], after)
-            a.asset('runtime_data', 'wf-clone-validation',
-                'modules/ngs/clone_validation.nf:/mnt/BioModStack/ngs/wf-clone-validation/v1.8.4-bms.1')
-            a.unresolved('RunCloneValidation', 'dependency_closure',
-                'modules/ngs/clone_validation.nf:RunCloneValidation',
-                'Bind existing wf-clone runtime release and all selected nested process SIFs from native runtime provenance before provisioning')
+            dependencies, _ = ngs_clone_runtime_dependencies(p)
+            for dependency in dependencies:
+                a.dependencies[dependency.logical_id] = dependency
+            clone = (a.stage('RunCloneValidation', after,
+                extra=tuple(row.logical_id for row in dependencies)),)
             adapter = a.chain(['CloneValidationAdapter'], tuple(dict.fromkeys((*clone, *after))))
         qc, dimer_after = (), ()
         if run_qc:

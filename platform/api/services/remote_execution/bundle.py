@@ -352,6 +352,10 @@ def _under(path: Path, root: Path) -> bool:
 
 def _is_runtime_image(path: Path, relative: str) -> bool:
     """Only SIF runtime leaves use immutable references, never inputs/weights trees."""
+    # Nested clone .img files deliberately remain ordinary authenticated runtime
+    # leaves. Its native lock requires same-directory, non-symlink images; SIF CAS
+    # semantic aliases are symlinks. The regular artifact cache already dedupes
+    # and materializes these leaves without changing that native contract.
     return relative.lower().endswith(".sif") and path.is_file()
 
 
@@ -495,6 +499,11 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
     prefixes = {'image': 'containers', 'weights': 'weights', 'database': 'data',
                 'reference_database': 'data', 'runtime_data': 'data'}
     source_root = get_code_root().resolve()
+    clone_paths = {}
+    if any(row.logical_id == 'runtime_data:ngs/wf-clone-validation/runtime.lock.json'
+           for row in plan.dependencies):
+        from native_components import ngs_clone_runtime_dependencies
+        _, clone_paths = ngs_clone_runtime_dependencies(params)
     assets = {}
     for dependency in plan.dependencies:
         if only_kinds is not None and dependency.kind not in only_kinds:
@@ -519,7 +528,9 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
         root = roots[dependency.kind]
         relative = dependency.relative_path
         selected = params.get(dependency.selector) if dependency.selector else None
-        if dependency.kind == 'image' and relative:
+        if dependency.logical_id in clone_paths:
+            path = clone_paths[dependency.logical_id]
+        elif dependency.kind == 'image' and relative:
             if relative in IMAGE_SELECTORS or not selected:
                 path, digest = image_reference(relative, root, params)
                 from .hf_assets import published_asset_rows
@@ -557,7 +568,14 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
         path = path.resolve()
         allowed = (get_container_dir().resolve(), get_weights_root().resolve(), get_data_root().resolve(),
             Path(os.environ.get('BMS_RUNTIME_IMAGE_STORE') or get_container_dir() / '.image-store').resolve())
-        if not any(_under(path, allowed_root) for allowed_root in allowed):
+        # Lock/patch are source-owned; the selected framework JAR is supplied by
+        # the existing critical-runtime cache, which need not live under BMS_DATA.
+        clone_source_leaf = (dependency.logical_id in clone_paths and
+            (relative in {'ngs/wf-clone-validation/runtime.lock.json',
+                          'ngs/wf-clone-validation/compatibility.patch'}
+             and _under(path, source_root)
+             or (relative or '').startswith('ngs/wf-clone-validation/nxf-home/framework/')))
+        if not clone_source_leaf and not any(_under(path, allowed_root) for allowed_root in allowed):
             raise RemoteBundleError('Selected runtime dependency escapes managed storage: ' + dependency.logical_id)
         if not path.exists():
             raise RemoteBundleError('Required runtime asset is unavailable: ' + dependency.logical_id)
@@ -632,7 +650,8 @@ def _input_assets(
         system_roots.add(Path(params["runtime_image_store"]).resolve())
     destinations = {"work_dir", "out_dir", "out", "data_root", "code_root",
                     "weights_root", "container_dir", "msa_cache_dir", "cm_api_runtime_dir",
-                    "runtime_image_store", *(flag for flag, _ in IMAGE_SELECTORS.values())}
+                    "runtime_image_store", "wf_clone_nxf_home",
+                    *(flag for flag, _ in IMAGE_SELECTORS.values())}
     if native_invocation.model_id == 'bindcraft2':
         # The prepared tree is one native input. Its campaign destination is
         # writable output, never the read-only transported compilation folder.
@@ -895,6 +914,35 @@ def _rewrite_maturation_pdb_paths(value: str, path_map: dict[str, str]) -> str:
     return ','.join(_rewrite(part.strip(), path_map) for part in value.split(','))
 
 
+def _relocate_ngs_clone_lock(params, *, staging_root, remote_runtime, remote_source,
+                             nextflow_executable, expected_lock_sha256):
+    """Project only host-owned lock locations; retain every scientific identity."""
+    from native_components import ngs_clone_runtime_dependencies
+    from scripts.validate_wf_clone_runtime import resolve_lock_path, selected_images
+    _, paths = ngs_clone_runtime_dependencies(params)
+    original = paths['runtime_data:ngs/wf-clone-validation/runtime.lock.json']
+    lock_bytes = original.read_bytes()
+    if hashlib.sha256(lock_bytes).hexdigest() != expected_lock_sha256:
+        raise RemoteBundleError('Selected clone runtime lock changed during relocation')
+    lock = json.loads(lock_bytes)
+    prefix = remote_runtime + '/data/ngs/wf-clone-validation'
+    lock['patched_source']['path'] = prefix + '/source'
+    lock['compatibility_patch']['path'] = prefix + '/compatibility.patch'
+    lock['nextflow']['executable'] = nextflow_executable
+    lock['containers']['cache_dir'] = remote_runtime + '/containers/ngs/wf-clone-validation/images'
+    lock['containers']['images'] = selected_images(lock, params.get('wf_clone_assembly_tool') or 'flye')
+    for image in lock['containers']['images']:
+        if image.get('definition'):
+            definition = resolve_lock_path(original, image['definition'])
+            image['definition'] = _rewrite(str(definition), {str(get_code_root().resolve()): remote_source})
+    relocated = staging_root / 'wf-clone-relocated.lock.json'
+    relocated.write_bytes(_canonical_bytes(lock))
+    destination = prefix + '/relocated.lock.json'
+    return (TransferPlan(relocated, destination, origin=original),
+            _record_file(relocated, 'runtime/data/ngs/wf-clone-validation/relocated.lock.json', 'runtime'),
+            prefix + '/nxf-home', lock['nextflow']['version'])
+
+
 def compile_remote_dependencies(
     model_id: str, mode: str, command: list[str], *, native_invocation: NativeInvocation,
 ) -> tuple[list[str], dict[str, Any]]:
@@ -916,8 +964,7 @@ def compile_remote_dependencies(
             'no local fallback or partial scientific execution was performed.'
         )
     params = native_invocation.native_parameters
-    from services.ont_ngs_contract import CANONICAL_ONT_WORKFLOWS, resolve_ont_workflow_alias
-    if resolve_ont_workflow_alias(model_id) in CANONICAL_ONT_WORKFLOWS:
+    if any(row.kind == 'image' and row.relative_path == 'dorado.sif' for row in plan.dependencies):
         # Dorado preflight rejects symlink runtime_sif. Pin the supported typed
         # selector explicitly rather than letting Nextflow choose our name alias.
         if not params.get("dorado_runtime_sif"):
@@ -927,6 +974,20 @@ def compile_remote_dependencies(
         selected = params["dorado_runtime_sif"]
         if not isinstance(selected, str) or not Path(selected).is_absolute():
             raise RemoteBundleError("Dorado runtime SIF selector must be an absolute managed path")
+    if (any(row.logical_id == 'runtime_data:ngs/wf-clone-validation/runtime.lock.json'
+            for row in plan.dependencies) and not params.get('wf_clone_runtime_lock')):
+        selected = os.environ.get('BMS_WF_CLONE_RUNTIME_LOCK') or str(
+            get_code_root() / 'config/ngs/wf_clone_validation_v1.8.4.lock.json')
+        params['wf_clone_runtime_lock'] = selected
+        command.extend(['--wf_clone_runtime_lock', selected])
+    if any(row.selector == 'dorado_model_root' for row in plan.dependencies):
+        for key, value in {
+            'dorado_lock_manifest': str(get_code_root() / 'config/ngs/dorado_v2.1.2.lock.json'),
+            'dorado_model_root': str(get_weights_root() / 'dorado/2.1.2'),
+        }.items():
+            if not params.get(key):
+                params[key] = value
+                command.extend(['--' + key, value])
     # The compiler emits these shared system defaults even when their native
     # runtime role is not selected. Classify by the selected dependency closure,
     # never by top-level model or by containment in biological input storage.
@@ -1448,6 +1509,17 @@ def prepare_remote_bundle(
         manifest_sha256 = manifest_record.sha256
         runtime_records.append(manifest_record)
         runtime_transfers.append(TransferPlan(manifest, manifest_destination, origin=manifest))
+    clone_placement = None
+    if any(row.logical_id == 'runtime_data:ngs/wf-clone-validation/runtime.lock.json'
+           for row in native_invocation.execution_plan.dependencies):
+        engine = binding['paths']['nextflow'] if binding else f'{remote_root}/runner/nextflow'
+        clone_transfer, clone_record, clone_home, clone_version = _relocate_ngs_clone_lock(
+            effective_params, staging_root=staging_root, remote_runtime=remote_runtime,
+            remote_source=remote_source, nextflow_executable=engine,
+            expected_lock_sha256=runtime_hashes['data/ngs/wf-clone-validation/runtime.lock.json'])
+        runtime_transfers.append(clone_transfer)
+        runtime_records.append(clone_record)
+        clone_placement = (clone_transfer.remote_destination, clone_home, engine, clone_version)
     runtime_payload = [record.model_dump(mode="json") for record in runtime_records]
     runtime_identity = hashlib.sha256(_canonical_bytes(
         {"files": runtime_payload, "critical_runtime": binding} if binding else runtime_payload
@@ -1556,6 +1628,13 @@ def prepare_remote_bundle(
     elif translated_command and Path(nextflow_executable).name in {"python", "python3"}:
         translated_command[0] = f"{support_root}/venv/bin/python"
 
+    if clone_placement:
+        for flag, value in zip(('--wf_clone_runtime_lock', '--wf_clone_nxf_home'), clone_placement[:2]):
+            if flag in translated_command:
+                translated_command[translated_command.index(flag) + 1] = value
+            else:
+                translated_command.extend([flag, value])
+
     if images or weight_entries:
         # The normal worker authenticates this small manifest as a regular bundle file.
         # This stdlib-only boundary verifies immutable objects and all semantic aliases
@@ -1626,6 +1705,14 @@ def prepare_remote_bundle(
 
     if binding:
         effective_environment.update(binding["environment"])
+
+    if clone_placement:
+        # Keep the selected bridge (including udocker's CLI adapter), not the
+        # controller's lock executable. Validation and launch see the same path.
+        effective_environment['BMS_NEXTFLOW_EXECUTABLE'] = clone_placement[2]
+        effective_environment['NXF_HOME'] = clone_placement[1]
+        effective_environment['NXF_VER'] = clone_placement[3]
+        effective_environment['NXF_OFFLINE'] = 'true'
 
     for name, (_, selector) in IMAGE_SELECTORS.items():
         alias = f"{remote_runtime}/containers/{name}"

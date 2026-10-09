@@ -1,4 +1,6 @@
 import React, { act } from 'react';
+import cloneSchema from '../../../../schemas/ngs_molbio/ngs-ont-clone_validation-v1.schema.json';
+import doradoLock from '../../../../config/ngs/dorado_v2.1.2.lock.json';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -115,6 +117,111 @@ const submits = () => calls.filter(call => call.url.endsWith('/submit'));
 async function remoteReview() { await click('Vast · Test worker'); await click('Review and submit'); await until(() => expect(button('Approve and submit')).toBeTruthy()); }
 
 describe('ordinary NGS prepared launch through mounted consumers and real API transport', () => {
+    const profileSelect = 'select[aria-label="Declared clone consensus profile"]';
+    const cloneBase = { ...base, selectedWorkflow: 'clone', runAssembly: true, ngsReferenceRevisionId: 'reference-revision-1' };
+    async function quality(value: string) {
+        const label = value === 'hac' ? 'High Accuracy (HAC)' : value === 'sup' ? 'Super Accurate (SUP)' : 'Fast';
+        const node = Array.from(container.querySelectorAll('button')).find(node => node.textContent?.includes(label))!;
+        await act(async () => node.click()); await settle();
+    }
+    function capturedRequest() {
+        // Exact Axios wire request, not a fabricated native execution result.
+        console.log('NGS_OPERATOR_REQUEST ' + JSON.stringify({ url: submits().at(-1)!.url, request: submits().at(-1)!.body }));
+        return submits().at(-1)!.body;
+    }
+    it.each(cloneSchema.properties.wf_clone_basecaller_model.enum)('edits and reopens the exact native declaration %s', async (model) => {
+        await mount({ ...cloneBase, inputSource: 'fastq', fastqPath: '/data/reads.fastq' });
+        const select = container.querySelector<HTMLSelectElement>(profileSelect)!;
+        expect(Array.from(select.options).map(option => option.value)).toEqual(cloneSchema.properties.wf_clone_basecaller_model.enum);
+        expect(select.value).toBe(cloneSchema.properties.wf_clone_basecaller_model.default);
+        expect(container.textContent).toContain('not proof of historical read origin');
+        expect(container.textContent).toContain('medaka=2.2.2');
+        await input(profileSelect, model);
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        const request = capturedRequest();
+        expect(request.params.wf_clone_basecaller_model).toBe(model);
+        const saved = JSON.parse(JSON.stringify(normalizeNanoporeCloneState({ name: request.name, params: { ...request.params, ont_workflow_id: 'wf_clone_validation' } } as unknown as Job)));
+        expect(saved.wfCloneBasecallerModel).toBe(model);
+        await act(async () => root.unmount()); root = createRoot(container);
+        await mount({ ...saved, ngsReferenceRevisionId: 'reference-revision-1' });
+        expect(container.querySelector<HTMLSelectElement>(profileSelect)!.value).toBe(model);
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(2));
+        expect(capturedRequest().params.wf_clone_basecaller_model).toBe(model);
+    });
+    it.each(['hac', 'sup', 'fast'])('defaults undeclared POD5 %s without inventing FAST compatibility', async mode => {
+        await mount({ ...cloneBase, doradoModel: mode });
+        const model = mode === 'fast' ? cloneSchema.properties.wf_clone_basecaller_model.default
+            : doradoLock.models.dna[mode as 'hac' | 'sup'].id;
+        expect(container.querySelector<HTMLSelectElement>(profileSelect)!.value).toBe(model);
+        if (mode === 'fast') expect(container.textContent).toContain('FAST has no native Medaka mapping');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ dorado_quality_mode: mode, wf_clone_basecaller_model: model });
+    });
+    it('changes the absent-declaration recommendation but preserves explicit historical declarations across quality and remote review edits', async () => {
+        await mount({ ...cloneBase, doradoModel: 'hac' });
+        await quality('sup');
+        expect(container.querySelector<HTMLSelectElement>(profileSelect)!.value).toBe(doradoLock.models.dna.sup.id);
+        const historical = cloneSchema.properties.wf_clone_basecaller_model.enum.at(-1)!;
+        await input(profileSelect, historical); await quality('fast');
+        expect(container.querySelector<HTMLSelectElement>(profileSelect)!.value).toBe(historical);
+        await remoteReview();
+        expect(prepares()[0].body.params.wf_clone_basecaller_model).toBe(historical);
+        await input(profileSelect, doradoLock.models.dna.hac.id);
+        await until(() => expect(button('Approve and submit')).toBeUndefined());
+        await click('Review and submit'); await until(() => expect(button('Approve and submit')).toBeTruthy());
+        await click('Approve and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ dorado_quality_mode: 'fast', wf_clone_basecaller_model: doradoLock.models.dna.hac.id });
+    });
+    it.each(['dna', 'rna'].flatMap(molecule => ['fast', 'hac', 'sup'].map(mode => [molecule, mode])))('preserves %s %s and displays its exact current source pin', async (molecule, mode) => {
+        await mount({ ...base, selectedWorkflow: molecule, doradoMolecule: molecule, doradoModel: mode });
+        expect(container.textContent).toContain(doradoLock.models[molecule as 'dna' | 'rna'][mode as 'fast' | 'hac' | 'sup'].id);
+        expect(container.textContent).toContain(doradoLock.dorado.version);
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ ont_molecule_type: molecule, dorado_quality_mode: mode });
+        expect(submits()[0].body.params).not.toHaveProperty('wf_clone_basecaller_model');
+    });
+    it('reopens a saved POD5 historical declaration without replacing it with the current basecaller', async () => {
+        const historical = cloneSchema.properties.wf_clone_basecaller_model.enum[2];
+        const saved = JSON.parse(JSON.stringify(normalizeNanoporeCloneState({ name: 'historical-pod5', params: {
+            ont_workflow_id: 'wf_clone_validation', pod5_dir: '/data/pod5', run_assembly: true,
+            dorado_quality_mode: 'hac', wf_clone_basecaller_model: historical,
+        } } as unknown as Job)));
+        await mount({ ...saved, ngsReferenceRevisionId: 'reference-revision-1' });
+        expect(container.querySelector<HTMLSelectElement>(profileSelect)!.value).toBe(historical);
+        await quality('sup');
+        expect(container.querySelector<HTMLSelectElement>(profileSelect)!.value).toBe(historical);
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ dorado_quality_mode: 'sup', wf_clone_basecaller_model: historical });
+    });
+    it('submits the profile through optional construct assembly with the retained assembler controls', async () => {
+        const historical = cloneSchema.properties.wf_clone_basecaller_model.enum.at(-1)!;
+        await mount({ ...cloneBase, selectedWorkflow: 'constructScreening', inputSource: 'fastq', fastqPath: '/data/reads.fastq',
+            wfCloneBasecallerModel: historical, assemblyTool: 'canu', wfCloneCanuFast: true, assemblyMinQuality: 0,
+            wfCloneFlyeQuality: 'nano-raw', wfCloneNonUniformCoverage: false });
+        expect(container.querySelector<HTMLSelectElement>(profileSelect)!.value).toBe(historical);
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ run_assembly: true, wf_clone_basecaller_model: historical,
+            wf_clone_assembly_tool: 'canu', wf_clone_canu_fast: true, wf_clone_min_quality: 0,
+            wf_clone_flye_quality: 'nano-raw', wf_clone_non_uniform_coverage: false });
+    });
+    it('preserves barcode and sample-sheet controls', async () => {
+        await mount({ ...base, selectedWorkflow: 'barcode', barcodeKit: 'SQK-RBK114-96', sampleSheet: '/data/samples.csv' });
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ barcode_kit: 'SQK-RBK114-96', sample_sheet: '/data/samples.csv' });
+    });
+    it('retains explicit duplex settings and stereo source identity', async () => {
+        await mount({ ...base, selectedWorkflow: 'duplex', doradoMode: 'duplex', duplexPairs: '/data/pairs.txt' });
+        expect(container.textContent).toContain(doradoLock.models.stereo.id);
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ dorado_basecall_mode: 'duplex', duplex_pairs: '/data/pairs.txt', emit_moves: false });
+    });
+    it.each(['5mC_5hmC', '6mA'])('preserves the native modification branch %s', async modification => {
+        await mount({ ...base, selectedWorkflow: 'modified', doradoModel: 'hac', modifiedBases: modification, runModkit: true, ngsReferenceRevisionId: 'reference-revision-1' });
+        expect(container.textContent).toContain(doradoLock.models.modified_bases[modification as '5mC_5hmC' | '6mA'].id);
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(capturedRequest().params).toMatchObject({ modified_bases: modification, dorado_quality_mode: 'hac', run_modkit: true });
+    });
+
     it('keeps Local reference-free, grouping context and all 11 choices; no remote preparation', async () => {
         await mount({ ...base, doradoModel: 'fast', batchSize: 0, emitSummary: false, emitMoves: false });
         expect(container.querySelectorAll('[data-ngs-workflow-key]')).toHaveLength(11);

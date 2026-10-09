@@ -1,4 +1,6 @@
 import ontConsensusSchema from '../../../../schemas/ngs_molbio/ngs-ont-fastq_qc-v1.schema.json';
+import ontCloneSchema from '../../../../schemas/ngs_molbio/ngs-ont-clone_validation-v1.schema.json';
+import doradoLock from '../../../../config/ngs/dorado_v2.1.2.lock.json';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { ExecutionPlanApproval } from './ExecutionPlanApproval';
 import { ExecutionPolicyControl } from './ExecutionPolicyControl';
@@ -886,6 +888,15 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     const [doradoModel, setDoradoModel] = useState<DoradoModel>(initialValues?.doradoModel as DoradoModel || 'sup');
     const [doradoMolecule, setDoradoMolecule] = useState<DoradoMolecule>(initialValues?.doradoMolecule as DoradoMolecule || 'dna');
     const [doradoMode, setDoradoMode] = useState<DoradoMode>(initialValues?.doradoMode as DoradoMode || 'simplex');
+    // Absence is distinct from an explicit historical/operator declaration.
+    const [wfCloneBasecallerModel, setWfCloneBasecallerModel] = useState<string | undefined>(
+        initialValues?.wfCloneBasecallerModel as string | undefined,
+    );
+    const cloneModelSchema = ontCloneSchema.properties.wf_clone_basecaller_model;
+    const pinnedBasecallerModel = doradoLock.models[doradoMolecule][doradoModel].id;
+    const recommendedCloneModel = inputSource === 'pod5' && cloneModelSchema.enum.includes(pinnedBasecallerModel)
+        ? pinnedBasecallerModel : cloneModelSchema.default;
+    const declaredCloneModel = wfCloneBasecallerModel ?? recommendedCloneModel;
     const [duplexPairs, setDuplexPairs] = useState(initialValues?.duplexPairs as string || '');
     const [barcodeKit, setBarcodeKit] = useState<'' | 'SQK-RBK114-96'>(initialValues?.barcodeKit as '' | 'SQK-RBK114-96' || '');
     const [sampleSheet, setSampleSheet] = useState(initialValues?.sampleSheet as string || '');
@@ -1366,6 +1377,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     ...(cloneFiles.wfCloneInsertReference && { wf_clone_insert_reference: cloneFiles.wfCloneInsertReference }),
                     ...(cloneFiles.wfCloneHostReference && { wf_clone_host_reference: cloneFiles.wfCloneHostReference }),
                     ...(cloneFiles.wfCloneRegionsBedfile && { wf_clone_regions_bedfile: cloneFiles.wfCloneRegionsBedfile }),
+                    wf_clone_basecaller_model: declaredCloneModel,
                     wf_clone_assembly_tool: assemblyTool,
                     wf_clone_approx_size: assemblyApproxSize,
                     wf_clone_assm_coverage: assemblyCoverage,
@@ -2030,7 +2042,9 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                             <input value={sampleSheet} onChange={(event) => setSampleSheet(event.target.value)} disabled={!barcodeKit} placeholder="Optional confined sample sheet" className="bg-[var(--bg-tertiary)] rounded p-2 disabled:opacity-40" />
                         </div>
                     )}
-                    <div className="text-xs text-[var(--text-secondary)]">Quality is operator-selected. The server resolves the installed native model and version; remote execution review shows the effective settings before launch. Retained runs keep their recorded model identity.</div>
+                    <div className="text-xs text-[var(--text-secondary)]">Current source pin: Dorado {doradoLock.dorado.version}; model <code>{pinnedBasecallerModel}</code>. Quality is operator-selected. The server resolves the runtime identity; remote execution review shows effective settings, not proof of execution.
+                        {doradoMode === 'duplex' && <> Stereo model: <code>{doradoLock.models.stereo.id}</code>.</>}
+                        {modifiedBases !== 'none' && <> Modification model: <code>{doradoLock.models.modified_bases[modifiedBases].id}</code>.</>}</div>
                 </div>
             )}
 
@@ -2083,6 +2097,28 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 <div className="text-xs text-[var(--text-secondary)] mt-1">{opt.description}</div>
                             </button>
                         ))}
+                    </div>
+                </div>
+            )}
+
+            {cloneValidationControlsActive && (
+                <div className={TASK_FLOW_CARD}>
+                    <label className="block text-sm text-[var(--text-secondary)]">
+                        Declared clone consensus profile
+                        <select aria-label="Declared clone consensus profile" value={declaredCloneModel}
+                            onChange={event => setWfCloneBasecallerModel(event.target.value)}
+                            className="mt-1 w-full bg-[var(--bg-tertiary)] rounded p-2">
+                            {!cloneModelSchema.enum.includes(declaredCloneModel) && <option value={declaredCloneModel}>{declaredCloneModel} (retained declaration)</option>}
+                            {cloneModelSchema.enum.map(model => <option key={model} value={model}>{model}</option>)}
+                        </select>
+                    </label>
+                    <div className="mt-2 text-xs text-[var(--text-secondary)]">
+                        {cloneModelSchema['x-bms-supported-runtime-range']}. {cloneModelSchema['x-bms-scientific-meaning']}
+                        {' '}{wfCloneBasecallerModel !== undefined ? 'Explicit declaration retained; changing basecalling quality does not replace it.'
+                            : inputSource === 'pod5' && cloneModelSchema.enum.includes(pinnedBasecallerModel)
+                                ? 'Recommended default matches the current POD5 basecaller; edit to declare another profile.'
+                                : 'Schema default is an independent polisher declaration, not an inferred read-origin model.'}
+                        {inputSource === 'pod5' && doradoModel === 'fast' && ' FAST has no native Medaka mapping; this separate declaration does not establish FAST compatibility.'}
                     </div>
                 </div>
             )}
