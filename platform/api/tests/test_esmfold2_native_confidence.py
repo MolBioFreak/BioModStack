@@ -50,18 +50,99 @@ HETATM 4 O O1 . LIG Z 2 . ? 4 5 6 1 40 1 L 1
 '''
 
 
+# Exact pinned writer's 19-column layout; deliberately inert coordinates and
+# confidence, not a captured prediction. Occupancy is the only omitted column.
+NATIVE_CIF = '''data_fixture
+#
+loop_
+_atom_site.group_PDB
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.auth_seq_id
+_atom_site.auth_comp_id
+_atom_site.auth_asym_id
+_atom_site.auth_atom_id
+_atom_site.B_iso_or_equiv
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.pdbx_PDB_model_num
+_atom_site.id
+ATOM C CA . ALA X 1 7 A 42 ALA A CA 0.5 1 2 3 1 1
+ATOM C CA . ALA Y 1 1 ? 42 ALA B CA 80 2 3 4 1 2
+HETATM C C1 . LIG Z 2 . ? 1 LIG L C1 40 3 4 5 1 3
+HETATM O O1 . LIG Z 2 . ? 1 LIG L O1 40 4 5 6 1 4
+#
+'''
+
+
+@pytest.mark.parametrize('suffix', ['.cif', '.mmcif'])
+def test_native_cif_compatibility_preserves_geometry_identity_and_confidence(suffix):
+    from services.core_protein_result_contract import _structure_confidence
+    from services.md.starting_structures import _parse_mmcif_structure
+
+    data = NATIVE_CIF.encode()
+    original = bytes(data)
+    atoms = list(_parse_mmcif_structure(data).get_atoms())
+    assert [atom.occupancy for atom in atoms] == [1.0] * 4
+    np.testing.assert_array_equal([atom.coord for atom in atoms],
+                                  [[1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6]])
+    assert [atom.get_parent().get_parent().id for atom in atoms] == ['A', 'B', 'L', 'L']
+    assert [atom.name for atom in atoms] == ['CA', 'CA', 'C1', 'O1']
+    assert atoms[0].get_parent().id == (' ', 42, 'A')
+    assert [atom.bfactor for atom in atoms] == [.5, 80, 40, 40]
+    assert _structure_confidence(data, 'native' + suffix) == (40.25, [.5, 80])
+    assert data == original and b'_atom_site.occupancy' not in data
+
+
+@pytest.mark.parametrize('damage', ['nonnumeric_coordinate', 'nonfinite_coordinate',
+                                   'missing_coordinate', 'missing_atom_identity',
+                                   'missing_chain_identity', 'missing_residue_identity',
+                                   'invalid_present_occupancy'])
+def test_native_occupancy_compatibility_does_not_repair_other_damage(damage):
+    from services.core_protein_result_contract import CandidateIntegrityError, _structure_confidence
+
+    content = NATIVE_CIF
+    if damage in {'nonnumeric_coordinate', 'nonfinite_coordinate'}:
+        value = 'broken' if damage == 'nonnumeric_coordinate' else 'nan'
+        content = content.replace('0.5 1 2 3', f'0.5 {value} 2 3')
+    elif damage == 'invalid_present_occupancy':
+        content = content.replace('_atom_site.id\n', '_atom_site.id\n_atom_site.occupancy\n')
+        content = '\n'.join(line + ' broken' if line.startswith(('ATOM ', 'HETATM ')) else line
+                            for line in content.split('\n'))
+    else:
+        column = {'missing_coordinate': 'Cartn_x', 'missing_atom_identity': 'label_atom_id',
+                  'missing_chain_identity': 'auth_asym_id',
+                  'missing_residue_identity': 'label_comp_id'}[damage]
+        lines = content.splitlines()
+        headers = [line for line in lines if line.startswith('_atom_site.')]
+        index = headers.index('_atom_site.' + column)
+        content = '\n'.join(' '.join(line.split()[:index] + line.split()[index + 1:])
+                            if line.startswith(('ATOM ', 'HETATM ')) else line
+                            for line in lines if line != '_atom_site.' + column) + '\n'
+    with pytest.raises(CandidateIntegrityError) as error:
+        _structure_confidence(content.encode(), 'native.cif')
+    assert error.value.reason['code'] == 'candidate_structure_invalid'
+
+
 @pytest.fixture(autouse=True)
 def isolated_artifacts(monkeypatch, tmp_path):
     monkeypatch.setenv('BMS_SCIENTIFIC_ARTIFACT_ROOT', str(tmp_path / 'scientific_artifacts'))
 
 
-def produce(tmp_path, monkeypatch, *, confidence=True, pae=True):
+def produce(tmp_path, monkeypatch, *, confidence=True, pae=True, cif=CIF):
     """Run the real CLI writer against an explicitly inert fold result."""
     import sys
     output = tmp_path / 'esmfold2_results'
     output.mkdir()
     matrix = np.arange(25, dtype=np.float32).reshape(5, 5) / 2
-    samples = [SimpleNamespace(complex=SimpleNamespace(to_mmcif=lambda: CIF),
+    samples = [SimpleNamespace(complex=SimpleNamespace(to_mmcif=lambda: cif),
         plddt=np.array([0, .2, .6, .8, 1], dtype=np.float32), ptm=.7, iptm=0,
         pae=matrix + index if pae else None,
         pair_chains_iptm=np.array([[.2, .4], [.8, .6]]),
@@ -120,8 +201,9 @@ async def app_for(factory):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('model_id', ['esmfold2', 'esmfold2_experimental'])
-async def test_producer_ingest_fresh_api_sample_binding(tmp_path, monkeypatch, model_id):
-    root, samples = produce(tmp_path, monkeypatch)
+@pytest.mark.parametrize('cif', [CIF, NATIVE_CIF], ids=['occupancy_present', 'native_occupancy_absent'])
+async def test_producer_ingest_fresh_api_sample_binding(tmp_path, monkeypatch, model_id, cif):
+    root, samples = produce(tmp_path, monkeypatch, cif=cif)
     manifest = json.loads((root / 'manifest.json').read_text())
     assert manifest['sample_count'] == 2
     for entry, sample in zip(manifest['samples'], samples):

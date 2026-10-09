@@ -86,17 +86,20 @@ def _structure_confidence(content: bytes, path: str):
     from io import StringIO
     import math
     from pathlib import Path
-    from Bio.PDB import MMCIFParser, PDBParser
+    from Bio.PDB import PDBParser
 
     try:
         suffix = Path(path).suffix.lower()
         if suffix == '.pdb':
-            parser = PDBParser(PERMISSIVE=False, QUIET=True)
+            structure = PDBParser(PERMISSIVE=False, QUIET=True).get_structure(
+                'candidate', StringIO(content.decode('utf-8')))
         elif suffix in {'.cif', '.mmcif'}:
-            parser = MMCIFParser(QUIET=True)
+            # Reuse the native predictor compatibility reader: absent optional
+            # occupancy is supplied only in memory, never in the hashed bytes.
+            from services.md.starting_structures import _parse_mmcif_structure
+            structure = _parse_mmcif_structure(content)
         else:
             raise ValueError('unsupported structure format')
-        structure = parser.get_structure('candidate', StringIO(content.decode('utf-8')))
         atoms = [atom for model in structure for chain in model
                  for residue in chain.get_unpacked_list() for atom in residue.get_unpacked_list()]
         if not atoms:
