@@ -1,4 +1,5 @@
 import React from 'react';
+import { readFileSync } from 'node:fs';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -7,7 +8,7 @@ import { api } from '../../src/lib/api';
 import { AnalyticsDashboard } from '../../src/components/AnalyticsDashboard';
 import { ResultsViewer } from '../../src/components/ResultsViewer';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
-import { confidenceProfile, isStandaloneStructurePrediction } from '../../src/components/StructurePredictionResults';
+import { confidenceProfile, isStandaloneStructurePrediction, StructurePredictionResults } from '../../src/components/StructurePredictionResults';
 import { esmfold2Fixture } from '../fixtures/scientificViewerEsmfold2Fixture';
 import { nativeAtomFixture, unavailable } from '../fixtures/nativeAtomViewerFixture';
 
@@ -243,4 +244,127 @@ it.each(['Charts', 'Structure'])('real Results %s routing mounts shared structur
     expect(profilePlot().data[0].y).toEqual([42]);
     expect(tree!.root.findAll(n => n.type === 'div' && n.props['data-native-url'] === '/api/designs/other/pdb').length).toBeGreaterThan(0);
     expect(calls.filter(c => c.method !== 'get').every(c => /plotly-metrics|designs\/query/.test(c.url))).toBe(true);
+});
+
+// Inert Boltz wire shape: producer identifiers are not the public Design/document IDs.
+function boltzScalarWire() {
+    const source = { candidate_id: 'native-sample', document_id: 'native-sample/model_0.pdb', artifact_sha256: 'a'.repeat(64) };
+    const records = [
+        { metric_key: 'ptm', value: 0.7550473809242249, unit: 'dimensionless', scope: 'overall' },
+        { metric_key: 'complex_plddt', value: 0.7823242545127869, unit: 'fraction', scope: 'complex' },
+    ].map(r => ({ ...r, state: 'ok', reason_code: null, source, producer_version: '7ebf1be087d4d61a02234c878402838bf3712d8b', derivation_version: 'boltz-native-scalar-v1', direction: 'higher_is_better' }));
+    const design = { ...designs[0], plddt_overall: null, ptm: null, iptm: null,
+        confidence_metrics: { core_protein_scientific_contract: 1, core_protein_scientific: {
+            schema_name: 'boltz_scientific_design', schema_version: 1, design_id: designs[0].id,
+            candidate_id: source.candidate_id, document_id: source.document_id,
+            identity: { vector_unit: 'fraction', source_axis: 'boltz_native_tokens' },
+            artifacts: { metrics: { path: 'confidence.json', sha256: source.artifact_sha256 }, structure: { path: 'model_0.pdb', sha256: a.document.contentSha256 } }, metrics: records,
+        } } };
+    const point: any = { id: design.id, name: design.name, contract_revision: 1, source_job_id: design.job_id, cohort_key: `v1:fixture:${design.job_id}`, publication_state: null,
+        metrics: Object.fromEntries(records.map(r => [r.metric_key, r.value])),
+        metric_states: Object.fromEntries(records.map(r => [r.metric_key, { state: r.state, value: r.value, reason_code: r.reason_code }])),
+        metric_sources: Object.fromEntries(records.map(r => [r.metric_key, r.source])),
+        metric_descriptors: Object.fromEntries(records.map(r => [r.metric_key, { metric_id: r.metric_key, source: 'canonical_artifact', scope: r.scope, unit: r.unit, direction: 'higher', producer_version: r.producer_version, derivation_version: r.derivation_version }])),
+    };
+    return { design, points: [point] };
+}
+function scalarTransport(points: unknown, fail = false) {
+    transport();
+    const rest = api.defaults.adapter as any;
+    api.defaults.adapter = async config => {
+        if (String(config.url).startsWith('/api/analytics/job/')) {
+            calls.push({ url: String(config.url), method: config.method ?? 'get' });
+            expect(config.params).toEqual({ include_children: false });
+            if (fail) throw new Error('offline');
+            return { config, data: points, status: 200, statusText: 'OK', headers: {} };
+        }
+        return rest(config);
+    };
+}
+it('saved samples share a source-verified job read but never share selected scalars', async () => {
+    const { design, points } = boltzScalarWire();
+    const other = { ...design, id: 'other', name: 'other sample', scientific_structure_document: b.document };
+    const second = structuredClone(points[0]); second.id = 'other'; second.name = other.name;
+    second.metrics.ptm = 0.125; second.metric_states.ptm.value = 0.125;
+    second.metrics.complex_plddt = 0.42; second.metric_states.complex_plddt.value = 0.42;
+    scalarTransport([...points, second]);
+    await mount(<StructurePredictionResults designs={[design, other]} />);
+    expect(savedCells().map(row => row.slice(1).map(text))).toEqual([['78.23', '0.7550', '—'], ['42.00', '0.1250', '—']]);
+    await act(async () => tree!.root.findByProps({ 'aria-label': 'Selected prediction' }).props.onChange({ target: { value: 'other' } })); await flush();
+    expect(summary().findAllByType('dd').map(text)).toEqual(['0.1250', '42.00']);
+    expect(profilePlot().data[0].y).toEqual([42]);
+    expect(calls.filter(c => c.url.startsWith('/api/analytics/job/'))).toHaveLength(1);
+});
+const summary = () => tree!.root.findByProps({ 'aria-label': 'Native confidence summary' });
+const savedCells = () => tree!.root.findAllByType('tr').filter(n => n.props['aria-selected'] !== undefined).map(row => row.findAllByType('td'));
+it('native Boltz null-column wire renders canonical summary and saved row without inventing iPTM', async () => {
+    // Optional retained real files exercise exactly the same mounted consumer, not a generated response.
+    const wire = process.env.BMS_NATIVE_SCALAR_DESIGN && process.env.BMS_NATIVE_SCALAR_POINTS
+        ? { design: JSON.parse(readFileSync(process.env.BMS_NATIVE_SCALAR_DESIGN, 'utf8')), points: JSON.parse(readFileSync(process.env.BMS_NATIVE_SCALAR_POINTS, 'utf8')) }
+        : boltzScalarWire();
+    expect(wire.design.plddt_overall).toBeNull(); expect(wire.design.ptm).toBeNull(); expect(wire.design.iptm).toBeNull();
+    expect(wire.design.confidence_metrics.core_protein_scientific.metrics.map((r: any) => r.metric_key)).toEqual(['ptm', 'complex_plddt']);
+    scalarTransport(wire.points);
+    await mount(<StructurePredictionResults modelId="boltz2" designs={[wire.design]} structure={<div data-structure />} />);
+    expect(summary().findAllByType('dd').map(text)).toEqual(['0.7550', '78.23']);
+    expect(text(summary())).toContain('Complex pLDDT (0–100)');
+    expect(text(summary())).not.toContain('iPTM');
+    expect(savedCells()[0].slice(1).map(text)).toEqual(['78.23', '0.7550', '—']);
+    expect(savedCells()[0][1].props.title).toContain('0.7823242545127869 fraction');
+    expect(summary().findAllByType('dd')[0].props.title).toContain('0.7550473809242249');
+    expect(calls.every(c => c.method === 'get')).toBe(true);
+});
+it.each([
+    ['esmfold2', 'fraction', 'model_token_mean', 0.7823242545127869, 'Native token-mean'],
+    ['esmfold2_experimental', 'fraction', 'model_token_mean', 0.7823242545127869, 'Native token-mean'],
+    ['protenix', 'percent', 'model_atom_mean', 78.23242545127869, 'Native atom-mean'],
+])('%s scalar scope and units remain distinct from the profile', async (model, unit, scope, value, label) => {
+    if (model === 'protenix' && process.env.BMS_PROTENIX_SCALAR_DESIGNS && process.env.BMS_PROTENIX_SCALAR_POINTS) {
+        const saved = JSON.parse(readFileSync(process.env.BMS_PROTENIX_SCALAR_DESIGNS, 'utf8')).designs;
+        scalarTransport(JSON.parse(readFileSync(process.env.BMS_PROTENIX_SCALAR_POINTS, 'utf8')));
+        await mount(<StructurePredictionResults modelId="protenix" designs={saved} />);
+        expect(text(summary())).toContain('Native atom-mean pLDDT (0–100)');
+        expect(savedCells()[0].slice(1).map(text)).toEqual(['62.03', '0.6251', '0.0000']);
+        expect(savedCells()[0][1].props.title).toContain('62.0338020324707 percent');
+        return;
+    }
+    const { design, points } = boltzScalarWire(); const point = points[0];
+    point.metrics = { plddt: value, ptm: 0 };
+    point.metric_states = { plddt: { state: 'ok', value, reason_code: null }, ptm: { state: 'ok', value: 0, reason_code: null } };
+    point.metric_descriptors = { plddt: { ...point.metric_descriptors.complex_plddt, metric_id: 'plddt', unit, scope }, ptm: point.metric_descriptors.ptm };
+    point.metric_sources = { plddt: point.metric_sources.complex_plddt, ptm: point.metric_sources.ptm };
+    scalarTransport(points);
+    await mount(<StructurePredictionResults modelId={String(model)} designs={[design]} />);
+    expect(text(summary())).toContain(`${label} pLDDT (0–100)`);
+    expect(savedCells()[0].slice(1).map(text)).toEqual(['78.23', '0.0000', '—']);
+    expect(savedCells()[0][1].props.title).toContain(`${value} ${unit}`);
+    expect(profilePlot().data[0].y).toEqual([90]);
+});
+it.each(['unavailable', 'invalid', 'wrong-design', 'wrong-job', 'wrong-document', 'request-failed', 'malformed', 'publication'])('native %s never falls back to contradictory legacy scores', async mode => {
+    const { design, points } = boltzScalarWire();
+    design.plddt_overall = 99; design.ptm = 0.99; design.iptm = 0.99;
+    const point = points[0];
+    if (mode === 'unavailable' || mode === 'invalid') {
+        for (const key of Object.keys(point.metric_states)) point.metric_states[key] = { state: mode, value: null, reason_code: 'native_not_reported' };
+        point.metrics = {};
+    } else if (mode === 'wrong-design') point.id = 'other';
+    else if (mode === 'wrong-job') { point.source_job_id = 'other-job'; point.cohort_key = 'v1:fixture:other-job'; }
+    else if (mode === 'wrong-document') design.scientific_structure_document = { ...design.scientific_structure_document, candidateId: 'other' };
+    else if (mode === 'malformed') point.metrics.ptm = 'not numeric';
+    else if (mode === 'publication') point.publication_state = { state: 'invalid', value: null, reason_code: 'invalid_canonical_publication' };
+    scalarTransport(points, mode === 'request-failed');
+    await mount(<StructurePredictionResults designs={[design]} structure={<div data-structure />} />);
+    expect(savedCells()[0].slice(1).map(text)).toEqual(['—', '—', '—']);
+    expect(text(summary())).not.toContain('0.9900');
+    expect(tree!.root.findByProps({ 'data-structure': true })).toBeTruthy();
+    if (mode !== 'wrong-document') expect(profilePlot().data[0].y).toEqual([90]);
+});
+it.each(['boltz_cp_experimental', 'protenix'])('%s retained legacy scores remain available without canonical requests', async modelId => {
+    transport({ legacy: true });
+    const design = { ...designs[0], scientific_structure_document: undefined, core_protein_scientific_contract: undefined,
+        confidence_metrics: { complex_plddt: 0.7823242545127869, ptm: 0.7550473809242249 }, plddt_overall: null, ptm: null, iptm: null };
+    await mount(<StructurePredictionResults modelId={modelId} designs={[design]} />);
+    expect(savedCells()[0].slice(1).map(text)).toEqual(['78.23', '0.7550', '—']);
+    expect(calls.some(c => c.url.startsWith('/api/analytics/'))).toBe(false);
+    expect(profilePlot().data[0].y).toEqual([80,90]);
 });

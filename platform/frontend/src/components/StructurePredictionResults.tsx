@@ -1,9 +1,10 @@
 import { useState, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data } from 'plotly.js';
-import { fetchChainMetrics, fetchDesignResidueMetrics, fetchPAEData, type ChainMetric, type Design } from '../lib/api';
+import { fetchChainMetrics, fetchDesignResidueMetrics, fetchJobDesignMetrics, fetchPAEData, type ChainMetric, type Design } from '../lib/api';
 import { parseScientificNativeMetric, parseScientificPae, type NativePaeToken } from '../lib/scientificViewerIdentity';
+import type { ScientificPoint } from '../lib/scientificAnalytics';
 import type { MetricSelection } from '../structureViewer/metrics/metricContracts';
 import type { AtomRef } from '../structureViewer/contracts/structureIdentity';
 import { ConfidenceProfile, type ConfidenceChainMetric } from './ConfidenceProfile';
@@ -17,7 +18,43 @@ const chainId = (ref: AtomRef) => ref.authAsymId ?? ref.labelAsymId ?? '';
 const axisLabel = (ref: AtomRef) => `${chainId(ref)}:${ref.authSeqId ?? ref.labelSeqId}${ref.insertionCode ?? ''} ${ref.componentId ?? ''}${ref.labelAtomId ? ` / ${ref.labelAtomId}` : ''}`;
 const tokenLabel = (token: NativePaeToken) => `Token ${token.index}`;
 const nativeSummaryKeys: Record<string, string> = { plddt_mean: 'Native token-mean pLDDT (fraction)', plddt: 'Native summary pLDDT (0–100)', complex_plddt: 'Complex pLDDT (fraction)', complex_iplddt: 'Interface pLDDT (fraction)', ptm: 'pTM', iptm: 'iPTM', ranking_score: 'Producer ranking score', confidence_score: 'Producer confidence score', gpde: 'gPDE (Å)', complex_pde: 'Complex PDE (Å)', complex_ipde: 'Interface PDE (Å)' };
-const nativeSummary = (design: Design) => Object.entries(asRecord(design.confidence_metrics) ?? {}).filter(([key, value]) => key in nativeSummaryKeys && typeof value === 'number' && Number.isFinite(value)) as [string, number][];
+type ScalarDisplay = { key: string; label: string; display: string; title: string };
+type ScalarEvidence = { entries: ScalarDisplay[]; reason?: string };
+const canonicalScalars = (design: Design) => design.core_protein_scientific_contract === 1 || design.confidence_metrics?.core_protein_scientific_contract === 1 || !!design.scientific_structure_document || !!design.confidence_metrics?.core_protein_scientific;
+const finiteScalar = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+/** Consume the existing source-verified analytics transport, not nullable DB projections. */
+function scalarEvidence(design: Design, point?: ScientificPoint, reason?: string): ScalarEvidence {
+    if (!canonicalScalars(design)) {
+        const values = { ...asRecord(design.confidence_metrics) };
+        values.plddt_overall ??= design.plddt_overall;
+        values.ptm ??= design.ptm;
+        values.iptm ??= design.iptm;
+        return { entries: Object.entries(values).flatMap(([key, value]) => {
+            if (!finiteScalar(value) || !(key in nativeSummaryKeys || key === 'plddt_overall')) return [];
+            const fractionPlddt = ['plddt_mean', 'complex_plddt', 'complex_iplddt'].includes(key);
+            const plddt = key.includes('plddt');
+            return [{ key, label: (nativeSummaryKeys[key] ?? 'Overall pLDDT (0–100)').replace('(fraction)', '(0–100; native fraction)'),
+                display: (fractionPlddt ? value * 100 : value).toFixed(plddt ? 2 : 4), title: String(value) }];
+        }) };
+    }
+    if (!point) return { entries: [], reason: reason ?? 'Native scalar evidence not retained.' };
+    if (point.id !== design.id || point.source_job_id !== design.job_id || (design.scientific_structure_document && design.scientific_structure_document.candidateId !== design.id)) return { entries: [], reason: 'Native scalar identity mismatch.' };
+    if (point.publication_state) return { entries: [], reason: point.publication_state.reason_code ?? 'Native publication unavailable.' };
+    return { entries: Object.entries(point.metric_states).flatMap(([key, state]) => {
+        if (!(key in nativeSummaryKeys)) return [];
+        const descriptor = point.metric_descriptors[key];
+        const plddt = key.includes('plddt');
+        const label = plddt ? `${descriptor.scope === 'model_token_mean' ? 'Native token-mean' : descriptor.scope === 'model_atom_mean' ? 'Native atom-mean' : key === 'complex_plddt' ? 'Complex' : 'Native summary'} pLDDT (0–100)` : nativeSummaryKeys[key];
+        const title = state.state === 'ok' ? `${state.value} ${descriptor.unit}; ${descriptor.scope}` : state.reason_code;
+        if (state.state !== 'ok') return [{ key, label, display: '—', title }];
+        if (plddt && !['fraction', 'percent'].includes(descriptor.unit)) return [{ key, label, display: '—', title: `Unsupported native pLDDT unit: ${descriptor.unit}` }];
+        return [{ key, label, display: (plddt && descriptor.unit === 'fraction' ? state.value * 100 : state.value).toFixed(plddt ? 2 : 4), title }];
+    }) };
+}
+const scalarCell = (evidence: ScalarEvidence, keys: string[]) => {
+    const entry = keys.map(key => evidence.entries.find(e => e.key === key)).find(Boolean);
+    return <td title={entry ? `${entry.label}: ${entry.title}` : evidence.reason ?? 'Not reported'}>{entry?.display ?? '—'}</td>;
+};
 const chainTicks = (refs: AtomRef[]) => {
     const blocks: { id: string; start: number; end: number }[] = [];
     refs.forEach((ref, i) => {
@@ -61,7 +98,7 @@ function legacyChains(raw: unknown): Record<string, ChainMetric> {
     }));
 }
 
-function PredictionEvidence({ design, structure, fullPaeRequested }: { design: Design; structure?: ConfidenceStructure; fullPaeRequested?: boolean }) {
+function PredictionEvidence({ design, structure, fullPaeRequested, scalars }: { design: Design; structure?: ConfidenceStructure; fullPaeRequested?: boolean; scalars: ScalarEvidence }) {
     const [inspection, setInspection] = useState<readonly AtomRef[]>([]);
     const acceptSelection = (selection: MetricSelection) => setInspection(selection.identities.flatMap(identity => {
         if ('first' in identity && 'second' in identity) return [identity.first, identity.second] as AtomRef[];
@@ -91,7 +128,7 @@ function PredictionEvidence({ design, structure, fullPaeRequested }: { design: D
     const ri = matrix?.map((_, i) => i).filter(i => tokenPae || !rowChain || chainId(rows[i]) === rowChain) ?? [];
     const ci = matrix?.[0]?.map((_, i) => i).filter(i => tokenPae || !columnChain || chainId(columns[i]) === columnChain) ?? [];
     return <>
-        <dl aria-label="Native confidence summary" className="flex flex-wrap gap-4">{nativeSummary(design).map(([key, value]) => <div key={key}><dt className="text-xs text-[var(--text-secondary)]">{nativeSummaryKeys[key]}</dt><dd className="font-mono" title={String(value)}>{value.toPrecision(4)}</dd></div>)}</dl>
+        <dl aria-label="Native confidence summary" className="flex flex-wrap gap-4">{scalars.entries.map(entry => <div key={entry.key}><dt className="text-xs text-[var(--text-secondary)]">{entry.label}</dt><dd className="font-mono" title={entry.title}>{entry.display}</dd></div>)}{scalars.reason && <div role="status">{scalars.reason}</div>}</dl>
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <section aria-label="Selected prediction structure" className="min-w-0">{typeof structure === 'function' ? structure(inspection, acceptSelection) : structure}</section>
             <section aria-label="Predicted Aligned Error" className="min-w-0 rounded-xl border border-[var(--border-color)] p-3">
@@ -130,6 +167,17 @@ function PaeComparison({ design, onSelect, fullPaeRequested }: { design: Design;
 export function StructurePredictionResults({ designs, selectedDesignId, onSelectDesign, structure, enabled = true, fullPaeRequested, modelId }: { modelId?: string | null; fullPaeRequested?: boolean; enabled?: boolean; designs: Design[]; selectedDesignId?: string | null; onSelectDesign?: (id: string) => void; structure?: ConfidenceStructure }) {
     const [localId, setLocalId] = useState('');
     const [compare, setCompare] = useState(false);
+    const jobs = [...new Set(designs.filter(canonicalScalars).map(d => d.job_id))];
+    const scalarQueries = useQueries({ queries: jobs.map(jobId => ({
+        queryKey: ['prediction-native-scalars', jobId],
+        queryFn: () => fetchJobDesignMetrics(jobId, false).then(r => r.data),
+        enabled, retry: false, staleTime: 60_000,
+    })) });
+    const scalarsFor = (d: Design) => {
+        const query = scalarQueries[jobs.indexOf(d.job_id)];
+        const point = query?.data?.find(p => p.id === d.id && p.contract_revision === 1) as ScientificPoint | undefined;
+        return scalarEvidence(d, point, query?.isPending ? 'Loading native scalar evidence…' : query?.isError ? 'Native scalar request failed. Structure and other confidence remain available.' : undefined);
+    };
     const design = selectedDesignId ? designs.find(d => d.id === selectedDesignId) : designs.find(d => d.id === localId) ?? designs[0];
     if (!enabled) return <>{typeof structure === 'function' ? structure([], () => {}) : structure}</>;
     if (!design) return <p>No saved predictions loaded.</p>;
@@ -139,11 +187,11 @@ export function StructurePredictionResults({ designs, selectedDesignId, onSelect
     return <section aria-label="Structure prediction confidence" className="space-y-4 p-4 text-[var(--text-primary)]">
         <h2 className="text-lg font-semibold">{modelLabel} confidence</h2>
         <label>Selected prediction <select aria-label="Selected prediction" value={design.id} onChange={e => select(e.target.value)}>{designs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label>
-        <PredictionEvidence key={design.id} design={design} structure={structure} fullPaeRequested={fullPaeRequested} />
+        <PredictionEvidence key={design.id} design={design} structure={structure} fullPaeRequested={fullPaeRequested} scalars={scalarsFor(design)} />
         <details onToggle={event => setCompare(event.currentTarget.open)}><summary>Compare native PAE — fixed 0–30 Å scale</summary>
             <p className="text-xs">Native token order for each saved prediction; no rescaling, matrix averaging or symmetrization.</p>
             {compare && <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">{designs.map(d => <PaeComparison key={d.id} fullPaeRequested={fullPaeRequested} design={d} onSelect={() => select(d.id)} />)}</div>}
         </details>
-        <details open><summary>Saved predictions ({designs.length})</summary><p className="text-xs">Saved sample identities, not a new ranking. Missing scores are not zero. pLDDT is not evidence of correct inter-chain placement.</p><div className="overflow-auto"><table className="w-full text-left text-sm"><thead><tr><th>Prediction</th><th>pLDDT (0–100)</th><th>pTM</th><th>iPTM</th></tr></thead><tbody>{designs.map(d => <tr key={d.id} aria-selected={design.id === d.id}><td><button onClick={() => select(d.id)}>{d.name}</button></td><td title={String(d.plddt_overall ?? '')}>{d.plddt_overall?.toFixed(2) ?? '—'}</td><td title={String(d.ptm ?? '')}>{d.ptm?.toFixed(4) ?? '—'}</td><td title={String(d.confidence_metrics?.iptm ?? d.iptm ?? '')}>{(typeof d.confidence_metrics?.iptm === 'number' ? d.confidence_metrics.iptm : d.iptm)?.toFixed(4) ?? '—'}</td></tr>)}</tbody></table></div></details>
+        <details open><summary>Saved predictions ({designs.length})</summary><p className="text-xs">Saved sample identities, not a new ranking. Missing scores are not zero. pLDDT is not evidence of correct inter-chain placement.</p><div className="overflow-auto"><table className="w-full text-left text-sm"><thead><tr><th>Prediction</th><th>pLDDT (0–100)</th><th>pTM</th><th>iPTM</th></tr></thead><tbody>{designs.map(d => <tr key={d.id} aria-selected={design.id === d.id}><td><button onClick={() => select(d.id)}>{d.name}</button></td>{scalarCell(scalarsFor(d), ['complex_plddt', 'plddt', 'plddt_mean', 'plddt_overall'])}{scalarCell(scalarsFor(d), ['ptm'])}{scalarCell(scalarsFor(d), ['iptm'])}</tr>)}</tbody></table></div></details>
     </section>;
 }
