@@ -46,6 +46,57 @@ def test_invalid_request_fails_before_command(params):
         compile_request({'core_protein_scientific_contract': 1, **params})
 
 
+@pytest.mark.parametrize('key', ['msa_path', 'pdb_sequence_path'])
+@pytest.mark.parametrize('plain,native', [(None, ''), ('', None)])
+def test_optional_path_aliases_both_absent(key, plain, native):
+    requested = {'sequence': 'ACDE', key: plain}
+    request = {'core_protein_scientific_contract': 1, **requested,
+               'esmf_' + key: native,
+               'esmf_requested_settings_json': json.dumps(requested)}
+    snapshot = json.dumps(request, sort_keys=True)
+    argv, receipt = compile_request(request)
+    assert getattr(runner.build_parser().parse_args(argv), key) == ''
+    assert receipt['settings'][key]['requested'] is plain
+    assert receipt['settings'][key]['origin'] == 'request'
+    assert receipt['sources'] == []
+    assert json.dumps(request, sort_keys=True) == snapshot
+
+
+@pytest.mark.parametrize('key', ['msa_path', 'pdb_sequence_path'])
+@pytest.mark.parametrize('plain,native', [
+    (None, 'supplied'), ('supplied', None), ('', 'supplied'), ('supplied', ''),
+    ('one', 'two'), (False, ''), (None, False), (0, ''), ([], None),
+])
+def test_optional_path_alias_conflicts_remain_errors(key, plain, native):
+    with pytest.raises(ValueError, match='conflicting aliases'):
+        compile_request({'core_protein_scientific_contract': 1,
+                         key: plain, 'esmf_' + key: native})
+
+
+@pytest.mark.parametrize('key', ['msa_path', 'pdb_sequence_path'])
+def test_equal_supplied_path_aliases_are_still_staged(tmp_path, key):
+    source = tmp_path / 'source'
+    source.write_text('fixture bytes')
+    argv, receipt = compile_request({'core_protein_scientific_contract': 1,
+        'sequence': 'ACDE', key: 'supplied', 'esmf_' + key: 'supplied'},
+        {'supplied': str(source)})
+    assert getattr(runner.build_parser().parse_args(argv), key) == str(source)
+    assert receipt['sources'][0]['requested_path'] == 'supplied'
+    assert receipt['sources'][0]['sha256'] == hashlib.sha256(source.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match='missing staged file'):
+        compile_request({'core_protein_scientific_contract': 1, 'sequence': 'ACDE',
+                         key: 'supplied', 'esmf_' + key: 'supplied'})
+
+
+@pytest.mark.parametrize('key,plain,native', [
+    ('seed', 0, False), ('num_loops', 3, '3'), ('sequence', None, ''),
+])
+def test_non_path_aliases_remain_strict(key, plain, native):
+    with pytest.raises(ValueError, match='conflicting aliases'):
+        compile_request({'core_protein_scientific_contract': 1,
+                         key: plain, 'esmf_' + key: native})
+
+
 def test_component_msa_keeps_own_scope(tmp_path):
     msa = tmp_path / 'component.a3m'
     msa.write_text('>x\nAC\n')
@@ -90,8 +141,10 @@ def test_api_marked_alias_conflict(tmp_path, monkeypatch):
         }, output_dir=str(tmp_path / 'out'), job_id='wp06')
 
 
-@pytest.mark.parametrize('component_mode', [False, True, 'multi', 'hosted', 'hosted-wire'])
-@pytest.mark.parametrize('remove', [False, True, None])
+@pytest.mark.parametrize('remove,component_mode', [
+    (remove, mode) for mode in [False, True, 'multi', 'hosted', 'hosted-wire']
+    for remove in [False, True, None]
+] + [(None, 'native-defaults')])
 def test_real_workflow_non_model_capture(tmp_path, monkeypatch, component_mode, remove):
     import os
     import subprocess
@@ -130,6 +183,19 @@ workflow {{
         input_settings['complex_components'].append({'type': 'protein', 'id': 'C',
             'sequence': 'WQRS', 'msa_path': str(msa2), 'msa_format': 'stockholm',
             'msa_max_sequences': 3, 'msa_remove_insertions': False})
+    if component_mode == 'native-defaults':
+        # Production params carries both the shared nullable path and the native
+        # empty-path default. The old harness omitted this global-default seam.
+        import re
+        defaults = re.findall(r'^\s+(?:msa_path|esmf_msa_path)\s*=.*$',
+                              (ROOT / 'nextflow.config').read_text(), re.M)
+        assert len(defaults) == 2
+        with config.open('a') as stream:
+            stream.write('\nparams {\n' + '\n'.join(defaults) + '\n}\n')
+        input_settings = {'sequence': 'ACDE', 'model_variant': 'fast',
+                          'esmf_use_msa': False, 'num_loops': 3,
+                          'num_sampling_steps': 50, 'num_diffusion_samples': 1,
+                          'seed': 42, 'local_files_only': True, 'run_frustrampnn': False}
     original = {'seed': 0, **input_settings}
     preparation = None
     if component_mode in {'hosted', 'hosted-wire'}:
@@ -226,6 +292,17 @@ workflow {{
     path = captures[0].parent / 'effective_settings.json'
     validated = prepare_receipt(owner, captures[0].parent, path)
     assert len(validated['receipt']['sources']) == len(receipt['sources'])
+    if component_mode == 'native-defaults':
+        assert captured['parsed']['msa_path'] == ''
+        assert captured['msa_sha256'] is None
+        assert captured['parser_calls'] == receipt['sources'] == []
+        for key in ('sequence', 'model_variant', 'num_loops', 'num_sampling_steps',
+                    'num_diffusion_samples', 'seed', 'local_files_only'):
+            assert captured['parsed'][key] == original[key]
+            assert receipt['settings'][key]['requested'] == original[key]
+        assert receipt['settings']['msa_path']['origin'] == 'workflow_default'
+        assert original['run_frustrampnn'] is False
+        return
     damaged = {**receipt, 'sources': []}
     damaged_path = captures[0].parent / 'missing_sources.json'
     damaged_path.write_text(json.dumps(damaged))

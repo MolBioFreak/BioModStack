@@ -776,7 +776,13 @@ def compile_workflow_request(request: dict, staged_paths: dict) -> tuple[list[st
     for key in defaults:
         alias = 'esmf_' + key
         if alias in normalized:
-            if key in normalized and (type(normalized[key]) is not type(normalized[alias]) or normalized[key] != normalized[alias]):
+            # Shared Nextflow defaults use null; native optional paths use ''.
+            # Only two absent paths are equivalent, never a supplied path or a
+            # false/zero/container value. Keep every other alias type-strict.
+            absent_paths = (key in ('msa_path', 'pdb_sequence_path')
+                            and normalized.get(key) in (None, '')
+                            and normalized[alias] in (None, ''))
+            if key in normalized and not absent_paths and (type(normalized[key]) is not type(normalized[alias]) or normalized[key] != normalized[alias]):
                 raise ValueError(f'conflicting aliases: {key}/{alias}')
             normalized[key] = normalized[alias]
     original = normalized
