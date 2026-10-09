@@ -37,7 +37,7 @@ async def launch(tmp_path, monkeypatch):
     monkeypatch.setenv("BMS_RESULTS_DIR", str(results))
     monkeypatch.setenv("BMS_MOLBIO_NGS_REFERENCE_ROOT", str(data / "references"))
     from services import molbio_ngs_references as references
-    for owner in (paths, ont_runs, jobs, receipts, panels, custody, references):
+    for owner in (paths, jobs, receipts, panels, custody, references):
         monkeypatch.setattr(owner, "get_inputs_dir", lambda: inputs)
     monkeypatch.setattr(paths, "get_data_root", lambda: data)
     monkeypatch.setattr(jobs, "get_data_root", lambda: data)

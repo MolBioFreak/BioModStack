@@ -44,7 +44,6 @@ from services.ngs_comparison_panels import (
 )
 from paths import (
     get_allowed_roots,
-    get_inputs_dir,
     get_molbio_ngs_reference_root,
     resolve_allowed_path,
 )
@@ -1187,9 +1186,8 @@ async def _prepare_ont_ngs_workflow(
                     ont_submission_trust.materialize_fastq_launch_custody, job.params,
                 )
             provenance = job.params["ont_input_provenance"]
-            retained.fastq_snapshot = OntFastqLaunchSnapshot(
-                relative_path=str(Path(job.params["fastq_path"]).relative_to(get_inputs_dir() / "ont_fastq_launch_snapshots")),
-                sha256=provenance["sha256"], size_bytes=provenance["size_bytes"],
+            retained.fastq_snapshot = OntFastqLaunchSnapshot.model_validate(
+                ont_submission_trust.fastq_launch_snapshot_descriptor(job.params)
             )
             retained.params["fastq_path"] = provenance["submitted_path"]
         elif replay_fastq is not None:

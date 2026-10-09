@@ -578,6 +578,14 @@ def validate_fastq_snapshot_selector(relative_path: str, sha256: str) -> str:
     return relative_path
 
 
+def fastq_launch_snapshot_descriptor(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a server-materialized custody selection into its closed replay selector."""
+    provenance = params["ont_input_provenance"]
+    relative = str(Path(params["fastq_path"]).relative_to(get_inputs_dir() / "ont_fastq_launch_snapshots"))
+    validate_fastq_snapshot_selector(relative, provenance["sha256"])
+    return {"relative_path": relative, "sha256": provenance["sha256"], "size_bytes": provenance["size_bytes"]}
+
+
 def resolve_fastq_launch_custody(
     *, relative_path: str, sha256: str, size_bytes: int, submitted_path: str,
 ) -> dict[str, Any]:
