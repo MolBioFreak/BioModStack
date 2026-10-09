@@ -27,13 +27,17 @@ def run_result_journey(here, root, case):
         for(let n=0;n<200;n++){await wait(100); if(roots().some(r=>r.querySelector('.igv-track-label')) && !document.body.innerText.includes('Loading IGV')) break;}
         await wait(2000); opened=snapshot();
         opened.exportControls=roots().flatMap(r=>[...r.querySelectorAll('[title]')]).map(e=>e.getAttribute('title')).filter(t=>/svg|export|save/i.test(t));
-        const svg=roots().flatMap(r=>[...r.querySelectorAll('[title]')]).find(e=>/save.*svg|svg.*save/i.test(e.getAttribute('title')));
-        if(svg){svg.click();await wait(500);opened.exportDialog=document.body.innerText;}
+        const svg=roots().flatMap(r=>[...r.querySelectorAll('[title]')]).find(e=>/^Save Image$/i.test(e.getAttribute('title')));
+        if(svg){svg.click();await wait(100);
+          const item=roots().flatMap(r=>[...r.querySelectorAll('div')]).find(e=>e.textContent.trim()==='Save as SVG');
+          if(item){item.click();await wait(500);opened.exportClicked=true;}
+        }
         const close=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')?.includes('Close IGV') || b.textContent.trim()==='Close');
         if(close) {close.click(); await wait(200);button('Open IGV')?.click();await wait(2500);reopened=snapshot();}
       }
       return {catalog_status:response.status,report,opened,reopened,downloads};
     })()""".replace('JOB', job_id)
+    before_exports = set((root / 'downloads').glob('*.svg'))
     evidence = root / f'journey-{job_id}.json'
     subprocess.run([sys.executable, str(here / 'ont_cdp.py'), '--alignment-job', job_id,
                     '--url', f'http://127.0.0.1:18762/browser-tests/ont-suite.html?section=analyses&job_id={job_id}',
@@ -46,7 +50,15 @@ def run_result_journey(here, root, case):
     for item in result['downloads']:
         assert item['status']==200 and item['size_bytes']==item['declared_size'] and item['sha256']==item['declared_sha256'] and item['sha256'] in hashes, item
     missing=[s for s in case.get('expected_text',[]) if ''.join(s.split()) not in ''.join(result['report']['text'].split())]
-    return {'job_id':job_id,'download_count':len(result['downloads']),'missing_text':missing,
+    import hashlib
+    import xml.etree.ElementTree as ET
+    exports=[]
+    for path in set((root / 'downloads').glob('*.svg')) - before_exports:
+        payload=path.read_bytes()
+        assert ET.fromstring(payload).tag.endswith('svg') and len(payload)>1000
+        exports.append({'path':str(path),'size_bytes':len(payload),'sha256':hashlib.sha256(payload).hexdigest()})
+    assert exports, f'No native IGV SVG export for {job_id}'
+    return {'exports':exports,'job_id':job_id,'download_count':len(result['downloads']),'missing_text':missing,
             'igv_tracks':result['opened']['tracks'] if result['opened'] else [],
             'igv_canvas_count':len(result['opened']['canvases']) if result['opened'] else 0,
             'reopened':bool(result['reopened'] and result['reopened']['tracks']),

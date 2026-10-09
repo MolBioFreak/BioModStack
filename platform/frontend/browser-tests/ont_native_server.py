@@ -3,7 +3,9 @@
 Run inside a loopback-only user/net namespace. Required env: ONT_ACCEPTANCE_ROOT,
 ONT_ACCEPTANCE_CLONE_OUTPUT (real prior wf-clone output), ONT_ACCEPTANCE_TOKEN.
 Start via the locked API Python, then uvicorn serves native routers on 127.0.0.1.
-No scientific calls or instrument mutations are allowed by this harness.
+No execution worker or application lifespan is started. Optional pooled acceptance
+reclassifies retained BAM on CPU and allows only explicit private release/prepare.
+No provider, SSH, GPU execution or instrument mutations are allowed.
 """
 from pathlib import Path
 import asyncio
@@ -116,6 +118,12 @@ async def seed():
 
 if __name__ == '__main__':
     asyncio.run(seed())
+    import paths
+    root_readback = {key: os.environ[key] for key in os.environ if key.startswith(('BMS_', 'XDG_')) and any(word in key for word in ('DIR', 'ROOT', 'PATH', 'HOME', 'DATA', 'INPUTS', 'WORK', 'CACHE', 'WEIGHTS', 'REFERENCES'))}
+    assert paths.get_inputs_dir().resolve().is_relative_to(ROOT)
+    root_readback['resolved_inputs'] = str(paths.get_inputs_dir())
+    root_readback['core_database'] = str(engine.url)
+    (ROOT / 'isolation-root-readback.json').write_text(json.dumps(root_readback, indent=2))
     from ont_result_fixtures import seed_pooled
     asyncio.run(seed_pooled(ROOT, async_session))
     import uvicorn

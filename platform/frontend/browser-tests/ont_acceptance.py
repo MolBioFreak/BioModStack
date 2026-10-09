@@ -103,7 +103,7 @@ try:
     (ROOT / 'verified-downloads.json').write_text(json.dumps(verified_downloads, indent=2))
     summary = {'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=FRONTEND, text=True).strip(),
         'routes': routes, 'netns': os.readlink('/proc/self/ns/net'), 'pids': [p.pid for p in processes],
-        'synthetic_auth': True, 'science_executed': False,
+        'synthetic_auth': True, 'new_basecalling_or_alignment_executed': False,
         'passed': ['native scratch job list/detail/stages', 'Runs to Reuse Params with one cache', 'clone workflow advanced controls and saved assembler'],
         'download_count': len(verified_downloads),
         'blocked': [] if catalog_pass and verified_downloads else ['native clone catalog/downloads incomplete: ' + str(value['catalog']['status'])],
