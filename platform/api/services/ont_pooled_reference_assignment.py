@@ -12,7 +12,8 @@ import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping, Sequence
+from typing import Annotated, Any, Mapping, Sequence
+from fastapi import HTTPException
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select, text
@@ -28,7 +29,7 @@ from database import (
     NgsReferenceSetManifest,
 )
 from paths import get_inputs_dir, get_results_dir
-from schemas import JobCreate, JobStatus
+from schemas import ExecutionPolicy, JobCreate, JobStatus
 from services import alignment_access, ont_submission_trust
 from services.molbio_ngs_receipts import consume_molbio_ngs_receipt
 
@@ -120,6 +121,10 @@ class PooledReferenceAssignmentRequest(BaseModel):
     )
     name: str | None = Field(default=None, max_length=128)
     pinned_gpu: int | None = Field(default=None, ge=0, le=15)
+    reference_set_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    execution_target_id: str | None = None
+    execution_policy: ExecutionPolicy | None = None
+    execution_plan_approval: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @field_validator("idempotency_key")
     @classmethod
@@ -153,6 +158,10 @@ class PooledAssignmentReleaseRequest(BaseModel):
     target_ids: list[str] = Field(min_length=1, max_length=96)
     name_prefix: str | None = Field(default=None, max_length=128)
     pinned_gpu: int | None = Field(default=None, ge=0, le=15)
+    release_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    execution_target_id: str | None = None
+    execution_policy: ExecutionPolicy | None = None
+    execution_plan_approvals: dict[str, Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]] = Field(default_factory=dict)
 
     @field_validator("idempotency_key")
     @classmethod
@@ -331,6 +340,7 @@ def _normalized_submit_request(request: PooledReferenceAssignmentRequest, fastq_
         "min_alignment_score_margin": request.min_alignment_score_margin,
         "name": request.name,
         "pinned_gpu": request.pinned_gpu,
+        **request.model_dump(mode="json", include={"execution_target_id", "execution_policy"}, exclude_unset=True),
     }
 
 
@@ -351,6 +361,7 @@ def _normalized_release_request(
         "name_prefix": request.name_prefix,
         "pinned_gpu": request.pinned_gpu,
         "assignment_summary_sha256": summary_sha256,
+        **request.model_dump(mode="json", include={"execution_target_id", "execution_policy"}, exclude_unset=True),
     }
 
 
@@ -450,6 +461,7 @@ async def _validate_receipts(
 def _stage_reference_set(
     reference_set_id: str,
     validated: Sequence[dict[str, Any]],
+    *, replay: bool = False,
 ) -> tuple[Path, dict[str, Any], str, str]:
     inputs_root = get_inputs_dir()
     parent = inputs_root / REFERENCE_SET_ROOT_NAME
@@ -460,22 +472,28 @@ def _stage_reference_set(
     if parent.resolve() != inputs_root.resolve() / REFERENCE_SET_ROOT_NAME:
         raise PooledAssignmentError("reference-set staging root escaped the inputs root", status_code=409)
     destination = parent / reference_set_id
-    if destination.exists() or destination.is_symlink():
+    if not replay and (destination.exists() or destination.is_symlink()):
         raise PooledAssignmentError("reference-set staging identity already exists", status_code=409)
-    temporary = Path(tempfile.mkdtemp(prefix=f".{reference_set_id}.", dir=parent))
+    temporary = destination if replay else Path(tempfile.mkdtemp(prefix=f".{reference_set_id}.", dir=parent))
     try:
         refs = temporary / "refs"
-        refs.mkdir()
+        if not replay:
+            refs.mkdir()
         entries: list[dict[str, Any]] = []
         for item in validated:
             target = item["request"]
             relative = f"refs/{target.target_id}.fasta"
             fasta_bytes = f">{target.target_id}\n{item['sequence']}\n".encode("ascii")
             path = temporary / relative
-            with path.open("xb") as handle:
-                handle.write(fasta_bytes)
-                handle.flush()
-                os.fsync(handle.fileno())
+            if replay:
+                path = _confined_file(path, inputs_root, "retained target FASTA")
+                if path.read_bytes() != fasta_bytes:
+                    raise PooledAssignmentError("retained target FASTA differs from receipt authority", status_code=409)
+            else:
+                with path.open("xb") as handle:
+                    handle.write(fasta_bytes)
+                    handle.flush()
+                    os.fsync(handle.fileno())
             entries.append(
                 {
                     "target_id": target.target_id,
@@ -498,11 +516,16 @@ def _stage_reference_set(
         payload["manifest_sha256"] = manifest_sha256
         manifest_bytes = canonical_json_bytes(payload)
         manifest_path = temporary / "reference_set.json"
-        with manifest_path.open("xb") as handle:
-            handle.write(manifest_bytes)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, destination)
+        if replay:
+            manifest_path = _confined_file(manifest_path, inputs_root, "retained reference set")
+            if manifest_path.read_bytes() != manifest_bytes:
+                raise PooledAssignmentError("retained reference set differs from receipt authority", status_code=409)
+        else:
+            with manifest_path.open("xb") as handle:
+                handle.write(manifest_bytes)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, destination)
         return (
             destination / "reference_set.json",
             payload,
@@ -510,7 +533,8 @@ def _stage_reference_set(
             _sha256_bytes(manifest_bytes),
         )
     except BaseException:
-        shutil.rmtree(temporary, ignore_errors=True)
+        if not replay:
+            shutil.rmtree(temporary, ignore_errors=True)
         raise
 
 
@@ -678,6 +702,7 @@ async def submit_pooled_reference_assignment(
     background_tasks: Any,
     http_request: Any,
     response: Any,
+    prepare_only: bool = False,
 ) -> dict[str, Any]:
     """Stage one immutable pooled set and atomically launch its review-only assignment job."""
 
@@ -693,6 +718,7 @@ async def submit_pooled_reference_assignment(
     staged_manifest_path: Path | None = None
     assignment_job_id: str | None = None
     committed = False
+    transaction_job_dirs: list[str] = []
     try:
         await _begin_immediate(session)
         existing = await _find_submit_replay(session, request.idempotency_key, fingerprint)
@@ -703,10 +729,10 @@ async def submit_pooled_reference_assignment(
         if _sha256_file(fastq) != fastq_sha256:
             raise PooledAssignmentError("pooled FASTQ changed during submission", status_code=409)
         validated = await _validate_receipts(session, request.targets)
-        reference_set_id = str(uuid.uuid4())
+        reference_set_id = request.reference_set_id or str(uuid.uuid4())
         assignment_job_id = str(uuid.uuid5(ASSIGNMENT_JOB_NAMESPACE, reference_set_id))
         staged_manifest_path, payload, manifest_sha256, manifest_file_sha256 = _stage_reference_set(
-            reference_set_id, validated
+            reference_set_id, validated, replay=bool(request.reference_set_id)
         )
         binding = {
             "reference_set_id": reference_set_id,
@@ -727,6 +753,7 @@ async def submit_pooled_reference_assignment(
             "reference_set_binding": binding,
             "ngs_reference_set_binding": binding,
             "ont_workflow_id": ASSIGNMENT_WORKFLOW_ID,
+            "ont_input_mode": "fastq",
             "scientific_status": "REVIEW",
             "release_state": "awaiting_operator_release",
             "lineage_root_job_id": assignment_job_id,
@@ -739,7 +766,19 @@ async def submit_pooled_reference_assignment(
             mode=ASSIGNMENT_MODE,
             params=params,
             pinned_gpu=request.pinned_gpu,
+            execution_target_id=request.execution_target_id,
+            execution_policy=request.execution_policy or ExecutionPolicy(),
+            execution_plan_approval=request.execution_plan_approval,
         )
+        if prepare_only:
+            from routers.jobs import preview_job_execution_plan
+            preview = await preview_job_execution_plan(job_data, session)
+            await session.rollback()
+            return {"request": request.model_copy(update={"reference_set_id": reference_set_id, "execution_plan_approval": None}).model_dump(mode="json", exclude_unset=True),
+                    "request_fingerprint": fingerprint, "preview": preview}
+        child_path = get_results_dir() / assignment_job_id
+        if not child_path.exists() and not child_path.is_symlink():
+            transaction_job_dirs.append(assignment_job_id)
         token, token_digest = alignment_access.issue_alignment_access_token()
         with ont_submission_trust.trusted_ont_job_creation(token_digest):
             from routers.jobs import create_job  # noqa: PLC0415
@@ -799,34 +838,18 @@ async def submit_pooled_reference_assignment(
         committed = True
         alignment_access.set_alignment_access_cookie(assignment_job_id, token, response, http_request)
         return _submit_result(manifest_row, payload)
-    except PooledAssignmentError:
-        if not committed:
-            await session.rollback()
+    except BaseException as exc:
+        if committed:
+            raise
+        await session.rollback()
+        if not request.reference_set_id and not prepare_only:
             _remove_reference_set(staged_manifest_path)
-            if assignment_job_id:
-                _remove_job_dirs([assignment_job_id])
-        raise
-    except IntegrityError as exc:
-        if not committed:
-            await session.rollback()
-            _remove_reference_set(staged_manifest_path)
-            if assignment_job_id:
-                _remove_job_dirs([assignment_job_id])
-        raise PooledAssignmentError(
-            "pooled assignment could not be committed atomically",
-            status_code=409,
-            code="POOLED_ASSIGNMENT_CONFLICT",
-        ) from exc
-    except Exception as exc:
-        if not committed:
-            await session.rollback()
-            _remove_reference_set(staged_manifest_path)
-            if assignment_job_id:
-                _remove_job_dirs([assignment_job_id])
-        raise PooledAssignmentError(
-            "pooled assignment was rolled back and could not be committed",
-            code="POOLED_ASSIGNMENT_ROLLED_BACK",
-        ) from exc
+        _remove_job_dirs(transaction_job_dirs)
+        if isinstance(exc, IntegrityError):
+            raise PooledAssignmentError("pooled assignment could not be committed atomically", status_code=409, code="POOLED_ASSIGNMENT_CONFLICT") from exc
+        if isinstance(exc, (PooledAssignmentError, HTTPException)) or not isinstance(exc, Exception):
+            raise
+        raise PooledAssignmentError("pooled assignment was rolled back and could not be committed", code="POOLED_ASSIGNMENT_ROLLED_BACK") from exc
 
 
 async def get_pooled_assignment_manifest(
@@ -1510,6 +1533,8 @@ async def _create_release_child(
     child_id: str,
     evidence: Mapping[str, Any],
     request: PooledAssignmentReleaseRequest,
+    summary_sha256: str,
+    prepare_only: bool = False,
 ) -> tuple[str, str]:
     target: NgsPooledReferenceTarget = evidence["target"]
     manifest_path = Path(str(manifest_row.manifest_path)).resolve()
@@ -1549,6 +1574,7 @@ async def _create_release_child(
         "assignment_job_id": str(assignment.id),
         "target_workflow": request.target_workflow,
         "binding_source": "operator_pooled_assignment_release",
+        "assignment_summary_sha256": summary_sha256,
     }
     params = {
         "fastq_path": str(evidence["fastq_path"]),
@@ -1578,6 +1604,9 @@ async def _create_release_child(
         ),
         params=params,
         pinned_gpu=request.pinned_gpu,
+        execution_target_id=request.execution_target_id,
+        execution_policy=request.execution_policy,
+        execution_plan_approval=request.execution_plan_approvals.get(str(target.target_id)),
     )
     trusted = frozenset(params)
     job_data = _job_create_for_ont_submit(
@@ -1587,12 +1616,14 @@ async def _create_release_child(
         trusted_result_paths=frozenset({"fastq_path"}),
     ).model_copy(
         update={
-            "parent_job_id": str(assignment.id),
-            "child_stage": f"pooled_assignment_release_{release_id[:8]}",
+            "parent_job_id": None,
             "batch_id": release_id,
             "batch_name": f"{assignment.name} pooled release",
         }
     )
+    if prepare_only:
+        from routers.jobs import preview_job_execution_plan
+        return await preview_job_execution_plan(job_data, session)
     token, token_digest = alignment_access.issue_alignment_access_token()
     with ont_submission_trust.trusted_ont_job_creation(token_digest):
         from routers.jobs import create_job  # noqa: PLC0415
@@ -1617,6 +1648,7 @@ async def release_pooled_assignment(
     background_tasks: Any,
     http_request: Any,
     response: Any,
+    prepare_only: bool = False,
 ) -> dict[str, Any]:
     """Atomically release selected, nonempty pooled targets into canonical consensus-QC jobs."""
 
@@ -1636,6 +1668,7 @@ async def release_pooled_assignment(
 
     child_ids: list[str] = []
     committed = False
+    transaction_job_dirs: list[str] = []
     try:
         await _begin_immediate(session)
         context = await _load_release_context(session, assignment_job_id)
@@ -1645,11 +1678,24 @@ async def release_pooled_assignment(
         if existing is not None:
             await session.rollback()
             return existing
-        release_id = str(uuid.uuid4())
+        release_id = request.release_id or str(uuid.uuid4())
         child_ids = [
             str(uuid.uuid5(RELEASE_CHILD_NAMESPACE, f"{release_id}:{target_id}"))
             for target_id in selected_ids
         ]
+        if prepare_only:
+            previews = {}
+            for target_id, child_id in zip(selected_ids, child_ids, strict=True):
+                previews[target_id] = await _create_release_child(
+                    session=session, background_tasks=background_tasks,
+                    assignment=context["job"], manifest_row=context["manifest_row"],
+                    release_id=release_id, child_id=child_id,
+                    evidence=context["target_evidence"][target_id], request=request,
+                    summary_sha256=summary_sha256, prepare_only=True,
+                )
+            await session.rollback()
+            return {"request": request.model_copy(update={"release_id": release_id, "execution_plan_approvals": {}}).model_dump(mode="json", exclude_unset=True),
+                    "request_fingerprint": fingerprint, "previews": previews}
         release_row = NgsPooledAssignmentRelease(
             id=release_id,
             assignment_job_id=assignment_job_id,
@@ -1668,6 +1714,9 @@ async def release_pooled_assignment(
         for target_id, child_id in zip(selected_ids, child_ids, strict=True):
             evidence = context["target_evidence"][target_id]
             target: NgsPooledReferenceTarget = evidence["target"]
+            child_path = get_results_dir() / child_id
+            if not child_path.exists() and not child_path.is_symlink():
+                transaction_job_dirs.append(child_id)
             created_id, token = await _create_release_child(
                 session=session,
                 background_tasks=background_tasks,
@@ -1677,6 +1726,7 @@ async def release_pooled_assignment(
                 child_id=child_id,
                 evidence=evidence,
                 request=request,
+                summary_sha256=summary_sha256,
             )
             tokens.append((created_id, token))
             manifest_path = Path(str(context["manifest_row"].manifest_path)).resolve()
@@ -1706,28 +1756,16 @@ async def release_pooled_assignment(
         for child_id, token in tokens:
             alignment_access.set_alignment_access_cookie(child_id, token, response, http_request)
         return _release_result(release_row, rows)
-    except PooledAssignmentError:
-        if not committed:
-            await session.rollback()
-            _remove_job_dirs(child_ids)
-        raise
-    except IntegrityError as exc:
-        if not committed:
-            await session.rollback()
-            _remove_job_dirs(child_ids)
-        raise PooledAssignmentError(
-            "pooled assignment release could not be committed atomically",
-            status_code=409,
-            code="POOLED_RELEASE_CONFLICT",
-        ) from exc
-    except Exception as exc:
-        if not committed:
-            await session.rollback()
-            _remove_job_dirs(child_ids)
-        raise PooledAssignmentError(
-            "pooled assignment release was rolled back and could not be committed",
-            code="POOLED_RELEASE_ROLLED_BACK",
-        ) from exc
+    except BaseException as exc:
+        if committed:
+            raise
+        await session.rollback()
+        _remove_job_dirs(transaction_job_dirs)
+        if isinstance(exc, IntegrityError):
+            raise PooledAssignmentError("pooled assignment release could not be committed atomically", status_code=409, code="POOLED_RELEASE_CONFLICT") from exc
+        if isinstance(exc, (PooledAssignmentError, HTTPException)) or not isinstance(exc, Exception):
+            raise
+        raise PooledAssignmentError("pooled assignment release was rolled back and could not be committed", code="POOLED_RELEASE_ROLLED_BACK") from exc
 
 
 __all__ = [

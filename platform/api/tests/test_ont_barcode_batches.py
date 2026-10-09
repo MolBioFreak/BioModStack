@@ -340,7 +340,7 @@ async def test_ten_child_atomic_success_preserves_bindings_and_aliases(batch_con
     assert len(manifests) == 1
     assert len(mappings) == 10
     assert len(children) == 10
-    assert all(child.parent_job_id == context.source_id for child in children)
+    assert all(child.parent_job_id is None for child in children)
     assert all(child.params["bam_force_realign"] is True for child in children)
     assert all(child.params["reference_fasta"].endswith("expected_reference.fasta") for child in children)
     assert all(child.params["reference_set_binding"]["manifest_sha256"] == result["manifest_sha256"] for child in children)

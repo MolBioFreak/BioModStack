@@ -492,7 +492,7 @@ async def test_submit_rejects_fastq_escape_symlink_and_receipt_tamper(pooled_con
 
     receipt = await context.session.get(MolBioNgsReceipt, context.receipt_ids[0])
     Path(receipt.reference_snapshot_path).write_text(">tampered\nTTTT\n", encoding="ascii")
-    with pytest.raises(pooled.PooledAssignmentError, match="digest"):
+    with pytest.raises(pooled.PooledAssignmentError, match="does not match the selected reference"):
         await _submit(context, _submit_request(context, key="tamper"))
 
 
@@ -616,7 +616,7 @@ async def test_atomic_child_release_preserves_bindings_and_replays(pooled_contex
     assert len(releases) == 1
     assert len(rows) == 2
     children = (await context.session.execute(select(Job).where(Job.id.in_(first["child_job_ids"])))).scalars().all()
-    assert all(child.parent_job_id == submitted["assignment_job_id"] for child in children)
+    assert all(child.parent_job_id is None for child in children)
     assert all(child.params["run_fastq_qc"] is True for child in children)
     assert all(child.params["pooled_assignment_target_binding"]["release_id"] == first["release_id"] for child in children)
     assert all(child.params["molbio_revision_binding"]["revision_sha256"] for child in children)

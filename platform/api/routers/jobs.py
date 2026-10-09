@@ -758,6 +758,33 @@ def _reconcile_child_jobs_from_history(children: List[Job]) -> int:
     return updated
 
 
+def _retain_ont_replay_lineage(source: Job, replay: Job) -> None:
+    """Copy data ancestry, never historical approval, leases or attempt state."""
+    params = dict(replay.params or {})
+    params["reorchestrated_from_job_id"] = source.id
+    for key in (
+        "lineage_root_job_id", "stage_family", "stage_mode", "source_stage_job_id",
+        "source_stage_family", "source_stage_mode", "selection_source_type",
+        "selection_source_job_id", "source_selection_count",
+    ):
+        value = params.get(key, getattr(source, key, None))
+        if key == "lineage_root_job_id":
+            value = value or source.id
+        if value is not None:
+            setattr(replay, key, value)
+            params[key] = value
+    independent = bool(params.get("barcode_mapping_binding") or params.get("pooled_assignment_release_binding"))
+    replay.parent_job_id = None if independent else source.parent_job_id
+    replay.child_stage = None if independent else source.child_stage
+    replay.params = params
+
+
+class ResubmitJobRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+    execution_target_id: str | None = Field(default=None, min_length=1, max_length=128)
+    execution_policy: ExecutionPolicy | None = None
+
+
 class ResumeJobRequest(BaseModel):
     """Resume overrides; omitted placement inherits, explicit null selects Local."""
     checkpoint_id: Optional[str] = None
@@ -9513,7 +9540,8 @@ async def resubmit_job(
     job_id: str,
     request: Request,
     response: Response,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    placement: ResubmitJobRequest | None = Body(default=None),
 ):
 
     """
@@ -9572,6 +9600,7 @@ async def resubmit_job(
 
     resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
     if original_job.model_id == "nanopore":
+        resubmit_params = ont_submission_trust.fresh_computation_params(resubmit_params)
         resubmit_params = ont_ngs_contract.replay_expected_plasmid_size(
             resubmit_params, original_job.provenance, mode=original_job.mode,
         )
@@ -9677,6 +9706,20 @@ async def resubmit_job(
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    resubmit_target = original_job.execution_target_id
+    resubmit_source_revision = original_job.execution_source_revision
+    resubmit_source_tree = original_job.execution_source_tree
+    if original_job.model_id == "nanopore":
+        resubmit_target = placement.execution_target_id if isinstance(placement, ResubmitJobRequest) else None
+        resubmit_source_revision = resubmit_source_tree = None
+        if resubmit_target:
+            from services.remote_execution.targets import target_eligible
+            target = await session.get(ExecutionTarget, resubmit_target, populate_existing=True)
+            if target is None or not target_eligible(target):
+                raise HTTPException(status_code=422, detail="execution_target_id is not an active ready execution target")
+            from services.remote_execution.bundle import current_source_identity
+            resubmit_source_revision, resubmit_source_tree = current_source_identity()
+
     new_job = Job(
         id=str(uuid.uuid4()),
         name=new_name,
@@ -9693,9 +9736,9 @@ async def resubmit_job(
         batch_name=original_job.batch_name,
         selected_input_artifact_class=resubmit_selected_input_artifact_class,
         selected_input_schema_version=resubmit_selected_input_schema_version,
-        execution_target_id=original_job.execution_target_id,
-        execution_source_revision=original_job.execution_source_revision,
-        execution_source_tree=original_job.execution_source_tree,
+        execution_target_id=resubmit_target,
+        execution_source_revision=resubmit_source_revision,
+        execution_source_tree=resubmit_source_tree,
         # GPU Orchestrator fields - let orchestrator pick it up
         queue_status='queued',
         vram_estimate_mb=resubmit_vram_estimate,
@@ -9708,6 +9751,9 @@ async def resubmit_job(
     )
 
     if new_job.model_id == "nanopore":
+        _retain_ont_replay_lineage(original_job, new_job)
+        if isinstance(placement, ResubmitJobRequest) and placement.execution_policy is not None:
+            new_job.params = {**new_job.params, "remote_result_policy": placement.execution_policy.remote_result_policy}
         new_job.provenance = alignment_access.grant_alignment_access(
             new_job.id,
             new_job.provenance,
@@ -10766,30 +10812,35 @@ async def resume_job(
     # Mirrors StructurePredictionUiState's GPU launcher model/mode mapping.
     placement_supported = (
         job.model_id in {"boltz2", "protenix", "esmfold2"} and job.mode in {"predict", "complex"}
-    ) or (job.model_id == "boltz_cp_experimental" and job.mode == "design")
+    ) or (job.model_id == "boltz_cp_experimental" and job.mode == "design") or job.model_id == "nanopore"
     fresh_execution_supported = (
         placement_supported
         and job.status in {"failed", "cancelled"}
-        and not (job.parent_job_id or job.child_stage or job.awaiting_input)
+        and not job.awaiting_input
+        and (not (job.parent_job_id or job.child_stage) or (
+            job.model_id == "nanopore" and bool((job.params or {}).get("barcode_mapping_binding")
+                                              or (job.params or {}).get("pooled_assignment_release_binding"))))
     )
     if target_changed and not fresh_execution_supported:
         raise HTTPException(
             status_code=422,
             detail="Execution placement changes require a terminal structure root; child and interactive continuations must retain their target",
         )
-    execution_source_revision = None
-    execution_source_tree = None
+    cached_ont = job.model_id == "nanopore" and not target_changed
+    execution_source_revision = job.execution_source_revision if cached_ont else None
+    execution_source_tree = job.execution_source_tree if cached_ont else None
     source_changed = False
     if execution_target_id:
         from services.remote_execution.targets import target_eligible
         target = await session.get(ExecutionTarget, execution_target_id, populate_existing=True)
         if target is None or not target_eligible(target):
             raise HTTPException(status_code=422, detail="execution_target_id is not an active ready execution target")
-        if not target_changed and (not job.execution_source_revision or not job.execution_source_tree):
+        if not cached_ont and not target_changed and (not job.execution_source_revision or not job.execution_source_tree):
             raise HTTPException(status_code=409, detail="Remote source Job is missing its immutable source identity")
         try:
             from services.remote_execution.bundle import current_source_identity
-            execution_source_revision, execution_source_tree = current_source_identity()
+            if not cached_ont:
+                execution_source_revision, execution_source_tree = current_source_identity()
         except Exception as exc:
             logger.exception("Unable to capture the re-orchestrated Job source identity")
             raise HTTPException(status_code=503, detail="Committed BMS source identity is unavailable") from exc
@@ -10973,6 +11024,8 @@ async def resume_job(
         merged_params = ont_ngs_contract.replay_expected_plasmid_size(
             merged_params, job.provenance, mode=job.mode,
         )
+        if fresh_execution:
+            merged_params = ont_submission_trust.fresh_computation_params(merged_params)
     from services.msa_policy import apply_msa_policy
     try:
         merged_params = apply_msa_policy(job.model_id, merged_params)
@@ -11137,6 +11190,7 @@ async def resume_job(
         job.decision_history = history
     
     if new_job.model_id == "nanopore":
+        _retain_ont_replay_lineage(job, new_job)
         new_job.provenance = alignment_access.grant_alignment_access(
             new_job.id,
             new_job.provenance,

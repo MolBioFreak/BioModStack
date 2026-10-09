@@ -99,6 +99,16 @@ ONT_SERVER_CONTROLLED_RUNTIME_PARAMS = frozenset(
 
 ONT_SERVER_CONTROLLED_PARAMS = ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS | ONT_SERVER_CONTROLLED_RUNTIME_PARAMS
 
+
+def fresh_computation_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Retain scientific selections, not a previous execution's resolved runtime."""
+    runtime = ONT_SERVER_CONTROLLED_RUNTIME_PARAMS - {
+        "managed_reference_fasta_path", "managed_reference_path",
+    }
+    return {key: value for key, value in params.items()
+            if key not in runtime and not key.startswith("resume_")}
+
+
 _trusted_ont_job_creation: ContextVar[bool] = ContextVar("trusted_ont_job_creation", default=False)
 _alignment_capability_digest: ContextVar[str | None] = ContextVar("ont_alignment_capability_digest", default=None)
 

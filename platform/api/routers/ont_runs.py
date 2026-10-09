@@ -1037,6 +1037,7 @@ async def ont_handoff_plasmid_qc(run_id: str, payload: dict[str, Any]) -> dict[s
 
 
 @router.post("/ngs/pooled-reference-assignment/submit", status_code=201)
+@router.post("/ngs/pooled-reference-assignment/prepare")
 async def ont_submit_pooled_reference_assignment(
     request: PooledReferenceAssignmentRequest,
     background_tasks: BackgroundTasks,
@@ -1047,6 +1048,7 @@ async def ont_submit_pooled_reference_assignment(
     """Atomically stage receipts and launch one review-only pooled assignment."""
     try:
         return await submit_pooled_reference_assignment(
+            prepare_only=http_request.url.path.endswith("/prepare"),
             session=session,
             request=request,
             background_tasks=background_tasks,
@@ -1332,6 +1334,7 @@ async def ont_get_pooled_assignment_targets(
 
 
 @barcode_router.post("/{assignment_job_id}/pooled-assignment/release", status_code=201)
+@barcode_router.post("/{assignment_job_id}/pooled-assignment/release/prepare")
 async def ont_release_pooled_assignment(
     assignment_job_id: str,
     request: PooledAssignmentReleaseRequest,
@@ -1343,6 +1346,7 @@ async def ont_release_pooled_assignment(
     """Atomically release selected reviewed targets into consensus-QC children."""
     try:
         return await release_pooled_assignment(
+            prepare_only=http_request.url.path.endswith("/prepare"),
             session=session,
             assignment_job_id=assignment_job_id,
             request=request,
@@ -1389,6 +1393,7 @@ async def ont_get_barcode_unit(
 
 
 @barcode_router.post("/{source_job_id}/barcode-batches", status_code=201)
+@barcode_router.post("/{source_job_id}/barcode-batches/prepare")
 async def ont_submit_barcode_batch(
     source_job_id: str,
     request: BarcodeBatchRequest,
@@ -1403,6 +1408,7 @@ async def ont_submit_barcode_batch(
     )
     try:
         return await create_barcoded_reference_set(
+            prepare_only=http_request.url.path.endswith("/prepare"),
             session=session,
             source_job=source_job,
             source_root=output_dir,
