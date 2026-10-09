@@ -16,7 +16,7 @@ from sqlalchemy import select, func
 
 from database import Job, Design
 from model_registry import selected_execution_metadata
-from services import job_result_roots, ont_ngs_completion as ngs
+from services import job_result_roots, ont_ngs_completion as ngs, ont_ngs_contract
 from services.remote_execution import executor as ex, result_generation as gen, transport
 from services.remote_execution.contracts import RemoteResultManifest, RemoteAttemptStatus
 from services.remote_stage_receipts import write_remote_stage_receipt, validate_remote_stage_receipts
@@ -171,7 +171,9 @@ async def test_dorado_real_return_fresh_consumers(store, tmp_path, monkeypatch, 
         prepare_job(job, tmp_path, monkeypatch)
         worker = tmp_path / 'worker'
         output = worker / 'results'
-        _, params = _write_terminal_product_tree(output)
+        # Exercise current acceptance with explicitly inert products; the shared
+        # helper keeps its historical lock default for retained-history tests.
+        _, params = _write_terminal_product_tree(output, lock_path=ont_ngs_contract.DORADO_LOCK_PATH)
         job.params = dict(job.params, **params)
         if anchor_state == 'missing':
             (output / 'basecall/dorado_runtime_provenance.json').unlink()
@@ -384,7 +386,9 @@ async def test_return_integrity_and_transaction_failures_keep_prior_generation(
         (destination / 'prior.txt').write_bytes(b'previous-canonical-result')
         worker = tmp_path / 'worker'
         output = worker / 'results'
-        _, params = _write_terminal_product_tree(output)
+        # Exercise current acceptance with explicitly inert products; the shared
+        # helper keeps its historical lock default for retained-history tests.
+        _, params = _write_terminal_product_tree(output, lock_path=ont_ngs_contract.DORADO_LOCK_PATH)
         job.params = dict(job.params, **params)
         if fault == 'product-path':
             for relative in ['demux/demux_manifest.json', 'demux/per_barcode_units.json']:

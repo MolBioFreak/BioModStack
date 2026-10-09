@@ -85,7 +85,10 @@ def _terminal_anchor(manifest: Path) -> dict[str, Any]:
     }
 
 
-def _write_terminal_product_tree(output: Path) -> tuple[Path, dict[str, Any]]:
+def _write_terminal_product_tree(
+    output: Path, *, lock_path: Path | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    """Write inert product bytes; default to the retained historical identity."""
     basecall = output / "basecall"
     demux_dir = output / "demux"
     unit_dir = demux_dir / "demux" / "units"
@@ -93,7 +96,8 @@ def _write_terminal_product_tree(output: Path) -> tuple[Path, dict[str, Any]]:
     basecall.mkdir(parents=True)
     unit_dir.mkdir(parents=True)
     unit_manifest_dir.mkdir(parents=True)
-    lock_path = Path(__file__).resolve().parents[3] / "config" / "ngs" / "dorado_v1.3.1.lock.json"
+    if lock_path is None:
+        lock_path = Path(__file__).resolve().parents[3] / "config" / "ngs" / "dorado_v1.3.1.lock.json"
     lock_bytes = lock_path.read_bytes()
     lock = json.loads(lock_bytes)
     lock_sha = hashlib.sha256(lock_bytes).hexdigest()
