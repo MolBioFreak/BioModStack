@@ -45,17 +45,17 @@ def stage(monkeypatch, root, attempt, name, outputs, *, job_id='job'):
                                job_root_relative=True)
 
 
-def seal(worker, output, job):
+def seal(worker, output, job, *, exit_code=0):
     envelope = dict(output_directory=str(output), job_id=job.id, attempt_id=job.remote_attempt_id,
                     source_revision=job.execution_source_revision, source_tree=job.execution_source_tree)
     atomic_json(envelope_path(worker), envelope)
     # The test uses the real envelope bytes as launch-bound identity.
     job.execution_bundle_sha256 = hashlib.sha256(envelope_path(worker).read_bytes()).hexdigest()
-    payload = build_result_manifest(worker, envelope, 0)
+    payload = build_result_manifest(worker, envelope, exit_code)
     atomic_json(output / 'result-manifest.json', payload)
     raw = (output / 'result-manifest.json').read_bytes()
     status = RemoteAttemptStatus(job_id=job.id, attempt_id=job.remote_attempt_id,
-        state='succeeded', exit_code=0, quiescent=True,
+        state='succeeded' if exit_code == 0 else 'failed', exit_code=exit_code, quiescent=True,
         result_manifest_sha256=hashlib.sha256(raw).hexdigest())
     return payload, raw, status
 
@@ -481,3 +481,61 @@ async def test_v1_file_only_publication_keeps_exact_wire_identity(store, tmp_pat
         assert job.status == 'completed'
         assert (Path(job.child_output_dir) / 'result-manifest.json').read_bytes() == raw
         assert job.provenance['remote_result_generation']['manifest_sha256'] == hashlib.sha256(raw).hexdigest()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('terminal_state', ['failed', 'cancelled'])
+async def test_real_diagnostic_collection_does_not_replace_canonical_results(
+        store, tmp_path, monkeypatch, loopback_transport, terminal_state):
+    from database import ExecutionTarget
+    from fastapi import BackgroundTasks
+    worker = tmp_path / 'worker'
+    output = worker / 'results'
+    async with store() as session:
+        job = await session.get(Job, 'job')
+        prepare_job(job, tmp_path, monkeypatch)
+        canonical = Path(job.output_dir)
+        canonical.mkdir()
+        (canonical / 'successful-result.txt').write_bytes(b'prior-success')
+        output.mkdir(parents=True)
+        (output / 'diagnostic.log').write_bytes(b'native command failed honestly')
+        (output / 'empty-output').mkdir()
+        stage(monkeypatch, output, job.remote_attempt_id, 'native', ['empty-output'])
+        _, raw, status = seal(worker, output, job, exit_code=17)
+        status = status.model_copy(update={'state': terminal_state})
+        bind_contract(job, output)
+        job.status = job.queue_status = job.remote_state = terminal_state
+        job.error_message = 'original native failure'
+        job.provenance = dict(job.provenance, remote_execution_receipt=dict(
+            job.provenance['remote_execution_receipt'], state=terminal_state, exit_code=17,
+            result_manifest_sha256=status.result_manifest_sha256))
+        (await session.get(ExecutionTarget, 'target')).leased_job_id = 'successor'
+        await session.commit()
+    async def provider_already_proved(*args, **kwargs):
+        pass  # No provider/rental in this isolated filesystem/DB test.
+    async def terminal_observation(*args):
+        return status
+    monkeypatch.setattr(ex, '_prove_pull_endpoint', provider_already_proved)
+    monkeypatch.setattr(ex, 'remote_status', terminal_observation)
+    monkeypatch.setattr(ex, '_connection_for_attempt', lambda *_args: (loopback_transport, str(worker)))
+    tasks = BackgroundTasks()
+    async with store() as session:
+        await ex.request_remote_diagnostic_pull(session, await session.get(Job, 'job'), tasks)
+    await tasks()  # Real collect_remote_results, archive publication and commit.
+    shutil.rmtree(worker)
+    async with store() as session:
+        job = await session.get(Job, 'job')
+        assert (job.status, job.queue_status, job.remote_state) == (terminal_state,) * 3
+        assert job.error_message == 'original native failure'
+        assert (canonical / 'successful-result.txt').read_bytes() == b'prior-success'
+        assert not (canonical / 'diagnostic.log').exists()
+        record = job.provenance['remote_diagnostics']
+        assert record['state'] == 'returned', record
+        archive = Path(record['output_dir'])
+        assert (archive / 'diagnostic.log').read_bytes() == b'native command failed honestly'
+        assert (archive / 'result-manifest.json').read_bytes() == raw
+        assert (archive / 'empty-output').is_dir()
+        assert (await session.get(ExecutionTarget, 'target')).leased_job_id == 'successor'
+        again = BackgroundTasks()
+        await ex.request_remote_diagnostic_pull(session, job, again)
+        assert not again.tasks
