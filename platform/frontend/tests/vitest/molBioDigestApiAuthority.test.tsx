@@ -1,6 +1,4 @@
 import React, { act } from 'react';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import './setup';
@@ -110,23 +108,31 @@ describe('DigestPanel backend authority', () => {
         expect(rows()).toEqual([]);expect(button('Next enzymes').disabled).toBe(true);expect(container.textContent).toContain('0 enzymes');
     });
 
-    it('keeps catalog/all-analysis authority and digest highlights stable across map-only selection changes', async () => {
-        const toolkitSource = readFileSync(resolve(process.cwd(), 'src/components/MolBioToolkit/MolBioToolkitV2.tsx'), 'utf8');
-        const authorityEffect = toolkitSource.slice(toolkitSource.indexOf('const restrictionSource ='), toolkitSource.indexOf('const runRestrictionDigest ='));
-        expect(authorityEffect).not.toContain('restrictionSelectionKey');
-        expect(authorityEffect).toContain('}, [restrictionSource]);');
-        expect(authorityEffect).toContain('fetchRestrictionAnalysisBatch');
-
+    it('keeps supplied analysis, digest request values and highlights stable across controlled map changes', async () => {
+        // This child owns map/digest independence; parent catalog fetching is not exercised here.
         container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
-        const highlight = vi.fn();
-        const mapChange = vi.fn();
-        await act(async () => root?.render(<DigestPanel sequenceData={sequence} sequenceId={null} onHighlight={highlight} selectedEnzymes={[]} onEnzymesChange={mapChange} catalog={catalog} productEvidence={products} catalogRecords={[record]} analysis={analysis} authorityLoading={false} authorityError={null} digestSimulation={simulation} digestLoading={false} digestError={null} onDigestSelectionChange={vi.fn()} onSimulateDigest={vi.fn()} />));
-        const highlighted = highlight.mock.calls.at(-1)?.[0];
-        const map = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Map');
-        await act(async () => map?.click());
-        expect(mapChange).toHaveBeenCalledWith(['EcoRI']);
-        expect(highlight.mock.calls.at(-1)?.[0]).toBe(highlighted);
+        const highlight = vi.fn(), mapChange = vi.fn(), digestChange = vi.fn(), simulate = vi.fn();
+        const render = (mapped: string[]) => root?.render(<DigestPanel sequenceData={sequence} sequenceId={null} onHighlight={highlight} selectedEnzymes={mapped} onEnzymesChange={mapChange} catalog={catalog} productEvidence={products} catalogRecords={[record, bamRecord]} analysis={mixedAnalysis} authorityLoading={false} authorityError={null} digestSimulation={simulation} digestLoading={false} digestError={null} onDigestSelectionChange={digestChange} onSimulateDigest={simulate} />);
+        const button = (text: string) => [...container!.querySelectorAll('button')].find(b => b.textContent === text)!;
+        await act(async () => render([]));
+        await act(async () => button('Digest').click());
+        await act(async () => button('Run Digest (1 enzyme)').click());
+        expect(simulate).toHaveBeenLastCalledWith(['EcoRI']);
+        const highlighted = highlight.mock.calls.at(-1)![0];
+        expect(highlighted).toHaveLength(2);
+        digestChange.mockClear();
+        // Map BamHI, not the enzyme in the digest request, and feed the controlled value back.
+        const map = container.querySelector('[data-enzyme-name="BamHI"]')!.querySelector('button')!;
+        await act(async () => map.click());
+        expect(mapChange).toHaveBeenLastCalledWith(['BamHI']);
+        await act(async () => render(mapChange.mock.calls.at(-1)![0]));
+        expect(container.querySelector('[data-enzyme-name="BamHI"]')!.textContent).toContain('Unmap');
+        expect(container.querySelector('[data-enzyme-name="EcoRI"]')!.textContent).toContain('1 DSB');
+        expect(highlight.mock.calls.at(-1)![0]).toBe(highlighted);
         expect(container.querySelector('[data-fragment-index="0"]')).toBeTruthy();
+        expect(digestChange).not.toHaveBeenCalled();
+        await act(async () => button('Run Digest (1 enzyme)').click());
+        expect(simulate.mock.calls).toEqual([[['EcoRI']], [['EcoRI']]]);
     });
 
     it('renders complete catalog discovery without transient hash receipts', async () => {

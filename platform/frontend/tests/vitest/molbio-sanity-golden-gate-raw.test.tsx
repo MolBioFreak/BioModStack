@@ -195,7 +195,24 @@ describe('Result viewer and async ownership', () => {
     const first = deferred<{ core: GoldenGateDesignResult }>(); const second = deferred<{ core: GoldenGateDesignResult }>(); const design = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise); await mount(<Harness onDesign={design} />); await click('Design explicit parts'); await change('insert name', 'current owner'); expect(design.mock.calls[0][2].aborted).toBe(true); await click('Design explicit parts'); await act(async () => second.resolve({ core: { ...nativeResult, diagnostics: ['current result'] } })); await settle(); await act(async () => first.resolve({ core: { ...nativeResult, diagnostics: ['stale result'] } })); expect(host.textContent).toContain('current result'); expect(host.textContent).not.toContain('stale result');
   });
   it('ignores cancelled errors and aborts on unmount without a background design call', async () => {
-    const pending = deferred<{ core: GoldenGateDesignResult }>(); const design = vi.fn<GoldenGateDesignEditorProps['onDesign']>(() => pending.promise); await mount(<Harness onDesign={design} />); await click('Design explicit parts'); await click('Cancel preview'); expect(design.mock.calls[0][2].aborted).toBe(true); await act(async () => pending.reject(new Error('stale failure'))); expect(host.textContent).not.toContain('stale failure'); await act(async () => root.unmount()); expect(design).toHaveBeenCalledTimes(1);
+    const cancelled = deferred<{ core: GoldenGateDesignResult }>();
+    const active = deferred<{ core: GoldenGateDesignResult }>();
+    const design = vi.fn<GoldenGateDesignEditorProps['onDesign']>()
+      .mockReturnValueOnce(cancelled.promise).mockReturnValueOnce(active.promise);
+    await mount(<Harness onDesign={design} />);
+    expect(design).not.toHaveBeenCalled();
+    await click('Design explicit parts'); await click('Cancel preview');
+    expect(design.mock.calls[0][2].aborted).toBe(true);
+    await act(async () => cancelled.reject(new Error('stale failure')));
+    expect(host.textContent).not.toContain('stale failure');
+    await click('Design explicit parts');
+    const signal = design.mock.calls[1][2];
+    expect(signal.aborted).toBe(false);
+    await act(async () => root.unmount());
+    expect(signal.aborted).toBe(true);
+    await act(async () => active.reject(new Error('late unmounted failure')));
+    expect(host.textContent).toBe('');
+    expect(design).toHaveBeenCalledTimes(2);
   });
   it('keeps candidate selection and annotations explicit and invalidates late save when the selection changes', async () => {
     const result = structuredClone(nativeResult); result.solutions.push({ ...structuredClone(result.solutions[0]), id: 'alternative' }); const pending = deferred<{ label: string }>(); const saved = vi.fn(); await mount(<Harness onDesign={async () => ({ core: result })} onSave={() => pending.promise} onSaved={saved} />); await click('Design explicit parts'); await settle(); await click('Save selected design'); await change('Selected candidate', 'alternative'); await act(async () => pending.resolve({ label: 'wrong selection ACK' })); expect(saved).not.toHaveBeenCalled(); expect(host.textContent).not.toContain('wrong selection ACK'); expect((field('Selected candidate') as HTMLSelectElement).value).toBe('alternative');
