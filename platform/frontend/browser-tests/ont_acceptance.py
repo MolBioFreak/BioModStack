@@ -42,7 +42,12 @@ try:
     start([sys.executable, str(HERE / 'ont_native_server.py')], 'native')
     ready('http://127.0.0.1:18761/acceptance-health')
     env = {**os.environ, 'NODE_ENV': 'production', 'BMS_DEV_API_PROXY_TARGET': 'http://127.0.0.1:18761', 'BMS_VITE_CACHE_DIR': str(ROOT / 'vite-cache')}
-    start([str(FRONTEND / 'node_modules/.bin/vite'), '--host', '127.0.0.1', '--port', '18762', '--strictPort'], 'vite', env)
+    if os.environ.get('ONT_ACCEPTANCE_PRODUCTION') == '1':
+        env['BMS_FRONTEND_BUILD_OUT_DIR'] = str(ROOT / 'dist')
+        subprocess.run([str(FRONTEND / 'node_modules/.bin/vite'), 'build', '--config', str(HERE / 'ont.vite.config.ts')], cwd=FRONTEND, env=env, check=True, stdout=(ROOT / 'build.log').open('w'), stderr=subprocess.STDOUT)
+        start([str(FRONTEND / 'node_modules/.bin/vite'), 'preview', '--config', str(HERE / 'ont.vite.config.ts')], 'vite', env)
+    else:
+        start([str(FRONTEND / 'node_modules/.bin/vite'), '--host', '127.0.0.1', '--port', '18762', '--strictPort'], 'vite', env)
     ready('http://127.0.0.1:18762/browser-tests/ont-suite.html')
     temporary = ROOT / 'chrome-tmp'
     temporary.mkdir(exist_ok=True)

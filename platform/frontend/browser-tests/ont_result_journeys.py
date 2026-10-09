@@ -56,7 +56,9 @@ def run_result_journey(here, root, case):
     for path in set((root / 'downloads').glob('*.svg')) - before_exports:
         payload=path.read_bytes()
         assert ET.fromstring(payload).tag.endswith('svg') and len(payload)>1000
-        exports.append({'path':str(path),'size_bytes':len(payload),'sha256':hashlib.sha256(payload).hexdigest()})
+        destination=path.with_name(f'{job_id}-{path.name}')
+        path.rename(destination)
+        exports.append({'path':str(destination),'size_bytes':len(payload),'sha256':hashlib.sha256(payload).hexdigest()})
     assert exports, f'No native IGV SVG export for {job_id}'
     return {'exports':exports,'job_id':job_id,'download_count':len(result['downloads']),'missing_text':missing,
             'igv_tracks':result['opened']['tracks'] if result['opened'] else [],
