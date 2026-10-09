@@ -342,7 +342,7 @@ async def test_expired_receipt_cannot_be_replaced_under_retained_selection(launc
 async def test_generic_job_route_cannot_repost_prepared_authority(launch):
     first = await prepare(launch, payload(launch))
     response = await launch.client.post("/api/jobs", json=first["preview"]["request"])
-    assert response.status_code == 403, response.text
+    assert response.status_code == 422 and "typed /api/ont/ngs" in response.text
     await no_claims(launch)
 
 
@@ -357,6 +357,54 @@ async def test_panel_commit_consumes_both_receipts_and_retains_staging(launch):
         assert (await session.get(NgsComparisonPanelReceipt, launch.panel_receipt.id)).consumed_job_id == job.id
         assert Path(job.params["comparison_panel_snapshot"]).is_file()
         assert job.params["comparison_panel_binding"]["receipt_id"] == launch.panel_receipt.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("family", ["fastq", "molbio", "managed", "panel"])
+async def test_shared_remote_digest_and_transaction_with_result_projection_seam(launch, managed, monkeypatch, family):
+    """Test only this lane's handoff; native result projection has a separate owner.
+
+    The compiler, canonical digest, target validation, approval comparator and SQL
+    insertion remain real. On the pre-integration base, the one known result-
+    contract blocker is isolated at the preview admissibility seam, not replaced
+    with a fabricated native result contract. Integrated acceptance must remove
+    that blocker in the real projection owner; this control is NOT that evidence.
+    """
+    from database import ExecutionTarget
+    original = jobs._execution_plan_preview
+    def preview(job, *args, **kwargs):
+        result = original(job, *args, **kwargs)
+        if not result["admissible"]:
+            assert len(result["blockers"]) == 1, result["blockers"]
+            blocker = result["blockers"][0]
+            assert blocker["field"] == "result_contract" and blocker["component_or_dependency_id"] == "nanopore"
+            result = {**result, "admissible": True}
+        return result
+    monkeypatch.setattr(jobs, "_execution_plan_preview", preview)
+    async with launch.factory() as session:
+        session.add(ExecutionTarget(id="fixture-worker", provider="vast", provider_instance_id="fixture", active=True,
+            state="ready", provider_metadata={"inventory": {"checked_at": datetime.utcnow().isoformat(),
+                "status": "complete", "present": True, "running": True}}))
+        await session.commit()
+    body = managed.request if family == "managed" else payload(launch, panel=family == "panel")
+    workflow = "ont_fastq_qc" if family in {"fastq", "managed"} else "ont_plasmid_qc"
+    first = await prepare(launch, {**body, "execution_target_id": "fixture-worker"}, workflow)
+    approved = {**first["request"], "execution_plan_approval": first["preview"]["approval_digest"]}
+    stale = await launch.client.post(f"/api/ont/ngs/{workflow}/submit", json={**approved, "name": "edited"})
+    assert stale.status_code == 409 and "stale" in stale.text, stale.text
+    await no_claims(launch)
+    assert await prepare(launch, first["request"], workflow) == first
+    response = await launch.client.post(f"/api/ont/ngs/{workflow}/submit", json=approved)
+    assert response.status_code == 201, response.text
+    async with launch.factory() as session:
+        job = await session.get(Job, response.json()["id"])
+        assert job.execution_target_id == "fixture-worker"
+        assert job.provenance["execution_plan_approval"]["approval_digest"] == first["preview"]["approval_digest"]
+        assert job.params["fastq_path"] == first["preview"]["request"]["params"]["fastq_path"]
+        if family != "managed":
+            assert (await session.get(MolBioNgsReceipt, launch.receipt.id)).consumed_job_id == job.id
+        if family == "panel":
+            assert (await session.get(NgsComparisonPanelReceipt, launch.panel_receipt.id)).consumed_job_id == job.id
 
 
 ORDINARY_IDS = sorted(identity for identity in set(CANONICAL_ONT_WORKFLOWS) | set(ONT_WORKFLOW_ALIASES)
