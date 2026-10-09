@@ -15,7 +15,7 @@ from database import Base, Job
 from routers import jobs
 from routers import ont_runs
 from schemas import JobStatus
-from services import alignment_access, stage_reporting
+from services import alignment_access, ont_ngs_contract, stage_reporting
 
 
 def _request(path: str, token: str | None = None) -> Request:
@@ -424,7 +424,7 @@ async def test_barcode_unit_requires_completed_authorized_exact_source(tmp_path:
 
 def test_terminal_dorado_product_anchor_binds_demux_preflight_and_runtime(tmp_path: Path) -> None:
     output = tmp_path / "source"
-    manifest, params = _write_terminal_product_tree(output)
+    manifest, params = _write_terminal_product_tree(output, lock_path=ont_ngs_contract.DORADO_LOCK_PATH)
     source = Job(
         id="anchor-source",
         name="anchor source",
@@ -465,7 +465,13 @@ def test_terminal_anchor_rejects_cross_product_identity_contradictions(
     tmp_path: Path, target: str, field: str
 ) -> None:
     output = tmp_path / field
-    _, params = _write_terminal_product_tree(output)
+    _, params = _write_terminal_product_tree(output, lock_path=ont_ngs_contract.DORADO_LOCK_PATH)
+    # Prove this fixture is accepted before introducing the chosen contradiction;
+    # an unrelated obsolete-lock refusal must not satisfy every negative case.
+    control = Job(id=f"control-{field}", name="valid product control", model_id="nanopore",
+                  mode="basecall_dna", params=params, output_dir=str(output),
+                  status=JobStatus.RUNNING.value)
+    assert jobs._anchor_dorado_demux_products(control)["schema"] == "biomodstack.ont_dorado_terminal_products.v1"
     path = output / target
     if field == "bam_bytes":
         path.write_bytes(b"substituted-unit")
@@ -528,7 +534,7 @@ def test_terminal_anchor_rejects_cross_product_identity_contradictions(
 @pytest.mark.asyncio
 async def test_stage_completion_persists_immutable_dorado_anchor(tmp_path: Path) -> None:
     output = tmp_path / "source"
-    manifest, params = _write_terminal_product_tree(output)
+    manifest, params = _write_terminal_product_tree(output, lock_path=ont_ngs_contract.DORADO_LOCK_PATH)
     stage_token = "stage-report-token-0123456789abcdef"
     stage_digest = hashlib.sha256(stage_token.encode("ascii")).hexdigest()
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
