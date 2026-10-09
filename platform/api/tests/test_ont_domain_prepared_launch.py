@@ -229,3 +229,49 @@ async def test_replay_sql_preserves_science_ancestry_without_active_old_approval
             assert "dorado_resolved_model_id" not in replay.params
             assert replay.params["dorado_model"] == "sup"
             assert not any(key.startswith("resume_") for key in replay.params) or operation == "resume"
+
+
+@pytest.mark.parametrize("family,key", [(batches.BarcodeBatchRequest, "reference_set_id"),
+                                        (pooled.PooledReferenceAssignmentRequest, "reference_set_id"),
+                                        (pooled.PooledAssignmentReleaseRequest, "release_id")])
+@pytest.mark.parametrize("value", ["../x", "A" * 8 + "-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "a" * 32])
+def test_domain_replay_ids_are_canonical_not_repaired(family, key, value):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError) as exc:
+        family.model_validate({key: value})
+    assert any(error["loc"] == (key,) for error in exc.value.errors())
+
+
+def test_cached_normalization_preserves_recorded_runtime_not_current_identity():
+    from services.ont_ngs_contract import normalize_ont_launch_params
+    from services.ont_submission_trust import fresh_computation_params
+    old = {"resume_job_id": "retained", "dorado_quality_mode": "sup",
+           "dorado_model": "old-native-model", "dorado_resolved_model_id": "old-native-model",
+           "dorado_lock_sha256": "a" * 64, "dorado_runtime_sif": "/retained/runtime.sif",
+           "dorado_device": "cuda:3", "min_qscore": 17, "dorado_batch_size": 64}
+    cached = normalize_ont_launch_params("ont_basecall_dna", old)
+    for key in old:
+        assert cached[key] == old[key]
+    fresh = normalize_ont_launch_params("ont_basecall_dna", fresh_computation_params(old))
+    assert fresh["dorado_quality_mode"] == "sup" and fresh["min_qscore"] == 17
+    assert fresh["dorado_resolved_model_id"] != "old-native-model"
+    assert fresh["dorado_lock_sha256"] != "a" * 64
+    assert "resume_job_id" not in fresh
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("family", ["barcode", "pooled"])
+async def test_retained_manifest_tamper_does_not_consume_or_delete(domain, family):
+    ctx = domain
+    url = "/api/jobs/source-job/barcode-batches" if family == "barcode" else "/api/ont/ngs/pooled-reference-assignment"
+    submit = url if family == "barcode" else url + "/submit"
+    prepared = await ctx.client.post(url + "/prepare", json=(barcode_request if family == "barcode" else pooled_request)(ctx))
+    assert prepared.status_code == 200, prepared.text
+    request = prepared.json()["request"]
+    root = ctx.inputs / "ngs_reference_sets" / request["reference_set_id"]
+    leaf = root / "reference_set.json" if family == "barcode" else root / "refs/target1.fasta"
+    leaf.write_bytes(b"{}" if family == "barcode" else b">wrong\nTTTT\n")
+    response = await ctx.client.post(submit, json=request)
+    assert response.status_code == 409, response.text
+    await assert_unclaimed(ctx)
+    assert leaf.exists()

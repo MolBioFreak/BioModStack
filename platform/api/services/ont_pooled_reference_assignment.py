@@ -122,7 +122,7 @@ class PooledReferenceAssignmentRequest(BaseModel):
     name: str | None = Field(default=None, max_length=128)
     pinned_gpu: int | None = Field(default=None, ge=0, le=15)
     reference_set_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-    execution_target_id: str | None = None
+    execution_target_id: str | None = Field(default=None, min_length=1, max_length=128)
     execution_policy: ExecutionPolicy | None = None
     execution_plan_approval: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
@@ -159,7 +159,7 @@ class PooledAssignmentReleaseRequest(BaseModel):
     name_prefix: str | None = Field(default=None, max_length=128)
     pinned_gpu: int | None = Field(default=None, ge=0, le=15)
     release_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-    execution_target_id: str | None = None
+    execution_target_id: str | None = Field(default=None, min_length=1, max_length=128)
     execution_policy: ExecutionPolicy | None = None
     execution_plan_approvals: dict[str, Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]] = Field(default_factory=dict)
 
@@ -1535,7 +1535,7 @@ async def _create_release_child(
     request: PooledAssignmentReleaseRequest,
     summary_sha256: str,
     prepare_only: bool = False,
-) -> tuple[str, str]:
+) -> tuple[str, str] | dict[str, Any]:
     target: NgsPooledReferenceTarget = evidence["target"]
     manifest_path = Path(str(manifest_row.manifest_path)).resolve()
     reference_path = _confined_file(

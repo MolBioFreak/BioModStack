@@ -599,7 +599,8 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     lock = json.loads(lock_bytes)
     current_lock_sha256 = hashlib.sha256(lock_bytes).hexdigest()
     submitted_lock_sha256 = str(normalized.get("dorado_lock_sha256") or "").strip().lower()
-    if submitted_lock_sha256 and submitted_lock_sha256 != current_lock_sha256:
+    cached_resume = bool(normalized.get("resume_job_id"))
+    if not cached_resume and submitted_lock_sha256 and submitted_lock_sha256 != current_lock_sha256:
         raise ValueError("accepted Dorado lock identity changed before execution")
     submitted_model_id = str(normalized.get("dorado_resolved_model_id") or "").strip()
     supplied_model = str(normalized.get("dorado_model") or "").strip()
@@ -680,7 +681,8 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     min_qscore = int(raw_qscore)
     if min_qscore < 0 or min_qscore > 30:
         raise ValueError("min_qscore must be an integer from 0 through 30")
-    resolved_model = lock["models"][molecule_type][quality_mode]["id"]
+    resolved_model = (submitted_model_id if cached_resume and submitted_model_id
+                      else lock["models"][molecule_type][quality_mode]["id"])
     if submitted_model_id and submitted_model_id != resolved_model:
         raise ValueError("accepted Dorado model identity changed before execution")
 
@@ -691,7 +693,8 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     normalized["dorado_resolved_model_id"] = resolved_model
     normalized["dorado_basecall_mode"] = basecall_mode
     if basecall_mode == "duplex":
-        normalized["dorado_stereo_model"] = lock["models"]["stereo"]["id"]
+        if not cached_resume or not normalized.get("dorado_stereo_model"):
+            normalized["dorado_stereo_model"] = lock["models"]["stereo"]["id"]
     else:
         normalized.pop("dorado_stereo_model", None)
     normalized["dorado_batch_size"] = batch_size
@@ -702,8 +705,9 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
             normalized.pop(key, None)
         else:
             normalized[key] = value
-    normalized["dorado_lock_sha256"] = current_lock_sha256
-    normalized["dorado_device"] = ONT_QUALITY_MODE_CONTRACT["default_device"]
+    normalized["dorado_lock_sha256"] = submitted_lock_sha256 if cached_resume and submitted_lock_sha256 else current_lock_sha256
+    if not cached_resume or not normalized.get("dorado_device"):
+        normalized["dorado_device"] = ONT_QUALITY_MODE_CONTRACT["default_device"]
     normalized["manifest_contract"] = MANIFEST_SCHEMA
     raw_emit_moves = normalized.get("emit_moves", basecall_mode == "simplex")
     if not isinstance(raw_emit_moves, bool):

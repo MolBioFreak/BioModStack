@@ -92,7 +92,7 @@ class BarcodeBatchRequest(BaseModel):
     pinned_gpu: int | None = Field(default=None, ge=0, le=15)
     mappings: list[BarcodeBatchRequestMapping] = Field(min_length=1, max_length=96)
     reference_set_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-    execution_target_id: str | None = None
+    execution_target_id: str | None = Field(default=None, min_length=1, max_length=128)
     execution_policy: ExecutionPolicy | None = None
     execution_plan_approvals: dict[str, Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]] = Field(default_factory=dict)
 
@@ -601,7 +601,7 @@ async def _create_one_child(
     mapping_id: str,
     request: BarcodeBatchRequest,
     prepare_only: bool = False,
-) -> tuple[str, str]:
+) -> tuple[str, str] | dict[str, Any]:
     unit = source_products["unit_by_id"][mapping["unit_id"]]
     revision_binding = {
         "sequence_id": str(receipt.sequence_id),

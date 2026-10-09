@@ -767,7 +767,7 @@ def _retain_ont_replay_lineage(source: Job, replay: Job) -> None:
         "source_stage_family", "source_stage_mode", "selection_source_type",
         "selection_source_job_id", "source_selection_count",
     ):
-        value = params.get(key, getattr(source, key, None))
+        value = params.get(key, (source.params or {}).get(key, getattr(source, key, None)))
         if key == "lineage_root_job_id":
             value = value or source.id
         if value is not None:

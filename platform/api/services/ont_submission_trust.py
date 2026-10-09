@@ -81,6 +81,8 @@ ONT_SERVER_CONTROLLED_RUNTIME_PARAMS = frozenset(
         "out_dir",
         "output_dir",
         "pod5_python",
+        "resume_job_id",
+        "resume_root_job_id",
         "resume_source_dir",
         "resume_work_dir",
         "singularity_cache",
