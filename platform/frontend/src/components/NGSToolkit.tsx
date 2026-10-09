@@ -1,3 +1,4 @@
+import { ngsArtifactUrl, useNgsArtifacts, type NgsPackageArtifact } from '../lib/ngsArtifacts';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { JobStageProgress } from './JobStageProgress';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -465,24 +466,6 @@ function isAllowedRelativePath(path: string): boolean {
     return ALLOWED_ROOT_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
-function toDownloadHref(path: string, cacheKey?: string): string | null {
-    if (!isAllowedRelativePath(path)) return null;
-    const encoded = path.split('/').map((part) => encodeURIComponent(part)).join('/');
-    if (cacheKey) {
-        return `/api/files/download/${encoded}?v=${encodeURIComponent(cacheKey)}`;
-    }
-    return `/api/files/download/${encoded}`;
-}
-
-function toStreamHref(path: string, cacheKey?: string): string | null {
-    if (!isAllowedRelativePath(path)) return null;
-    const encoded = path.split('/').map((part) => encodeURIComponent(part)).join('/');
-    if (cacheKey) {
-        return `/api/files/stream/${encoded}?v=${encodeURIComponent(cacheKey)}`;
-    }
-    return `/api/files/stream/${encoded}`;
-}
-
 function normalizeAllowedRelativePath(path: string | null | undefined): string | null {
     if (!path) return null;
     const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -629,7 +612,10 @@ function formatIgvSourceLabel(path: string): string {
     return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
 }
 
-function resolveIgvArtifacts(job: Job | null, stageOutputs: StageOutputsMap): IgvArtifacts {
+function resolveIgvArtifacts(job: Job | null, stageOutputs: StageOutputsMap, artifacts: NgsPackageArtifact[]): IgvArtifacts {
+    const toStreamHref = (path: string, jobId?: string) => ngsArtifactUrl(path, jobId, artifacts);
+    const toDownloadHref = toStreamHref;
+
     if (!job) {
         return {
             bamPath: null,
@@ -765,7 +751,9 @@ function resolveIgvArtifacts(job: Job | null, stageOutputs: StageOutputsMap): Ig
     };
 }
 
-function resolveMethylationArtifacts(job: Job | null, stageOutputs: StageOutputsMap): MethylationArtifacts {
+function resolveMethylationArtifacts(job: Job | null, stageOutputs: StageOutputsMap, artifacts: NgsPackageArtifact[]): MethylationArtifacts {
+    const toStreamHref = (path: string, jobId?: string) => ngsArtifactUrl(path, jobId, artifacts);
+
     if (!job) {
         return {
             summaryPath: null,
@@ -810,7 +798,9 @@ function resolveMethylationArtifacts(job: Job | null, stageOutputs: StageOutputs
     };
 }
 
-function resolveMultimerArtifacts(job: Job | null, stageOutputs: StageOutputsMap): MultimerArtifacts {
+function resolveMultimerArtifacts(job: Job | null, stageOutputs: StageOutputsMap, artifacts: NgsPackageArtifact[]): MultimerArtifacts {
+    const toStreamHref = (path: string, jobId?: string) => ngsArtifactUrl(path, jobId, artifacts);
+
     if (!job) {
         return {
             summaryPath: null,
@@ -1138,12 +1128,15 @@ function parseNumericMetricsFromSummaryTable(table: SummaryTable | null): Record
 
 function parseReadLengths(text: string, maxRows = 250000): number[] {
     const values: number[] = [];
-    const lines = text.split(/\r?\n/);
-    for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line || line.startsWith('#')) continue;
-        const value = Number.parseInt(line, 10);
-        if (!Number.isFinite(value) || value <= 0) continue;
+    const lines = text.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+    const header = lines[0]?.split('\t') || [];
+    const nativeLengthColumn = header.indexOf('length_bp');
+    for (const line of nativeLengthColumn >= 0 ? lines.slice(1) : lines) {
+        // Native QC emits read_id/length_bp; legacy exports contain one length.
+        // Do not parse a numeric read-ID prefix as the read length.
+        const raw = nativeLengthColumn >= 0 ? line.split('\t')[nativeLengthColumn] : line;
+        const value = Number(raw);
+        if (!Number.isInteger(value) || value <= 0) continue;
         values.push(value);
         if (values.length >= maxRows) break;
     }
@@ -2586,17 +2579,21 @@ export function NGSToolkit() {
     const alignmentSessionsError = alignmentSessionsQueryError ?? alignmentAuthorityBinding.error;
     const shouldShowMethylationInspector = !isFastqOnlyRun;
     const shouldShowMultimerInspector = hasFastqInput;
+    const artifactQuery = useNgsArtifacts(selectedJob?.id || null);
+    const packageArtifacts = artifactQuery.data?.artifacts;
+    const toStreamHref = useCallback((path: string, jobId?: string) => ngsArtifactUrl(path, jobId, packageArtifacts), [packageArtifacts]);
+    const toDownloadHref = toStreamHref;
     const igvArtifacts = useMemo(
-        () => resolveIgvArtifacts(selectedJob, stageOutputs),
-        [selectedJob, stageOutputs]
+        () => resolveIgvArtifacts(selectedJob, stageOutputs, packageArtifacts || []),
+        [selectedJob, stageOutputs, packageArtifacts]
     );
     const multimerArtifacts = useMemo(
-        () => resolveMultimerArtifacts(selectedJob, stageOutputs),
-        [selectedJob, stageOutputs]
+        () => resolveMultimerArtifacts(selectedJob, stageOutputs, packageArtifacts || []),
+        [selectedJob, stageOutputs, packageArtifacts]
     );
     const methylationArtifacts = useMemo(
-        () => resolveMethylationArtifacts(selectedJob, stageOutputs),
-        [selectedJob, stageOutputs]
+        () => resolveMethylationArtifacts(selectedJob, stageOutputs, packageArtifacts || []),
+        [selectedJob, stageOutputs, packageArtifacts]
     );
     const igvSourcePaths = useMemo(() => {
         const allPaths = dedupePaths(collectStageOutputPaths(stageOutputs));
@@ -2624,7 +2621,7 @@ export function NGSToolkit() {
                 baiUrl: baiPath ? toStreamHref(baiPath, cacheKey) : null,
             };
         }).filter((source) => Boolean(source.bamUrl));
-    }, [igvSourcePaths, igvArtifacts.bamPath, selectedJob?.id]);
+    }, [igvSourcePaths, igvArtifacts.bamPath, selectedJob?.id, toStreamHref]);
     const igvReferenceSources = useMemo<IgvReferenceSource[]>(() => {
         const sourcePaths = dedupePaths([
             ...igvSourcePaths,
@@ -2646,7 +2643,7 @@ export function NGSToolkit() {
                 faiUrl: faiPath ? toStreamHref(faiPath, cacheKey) : null,
             };
         }).filter((source) => Boolean(source.fastaUrl));
-    }, [igvSourcePaths, igvArtifacts.fastaPath, selectedReferenceFastaPath, selectedJob?.id]);
+    }, [igvSourcePaths, igvArtifacts.fastaPath, selectedReferenceFastaPath, selectedJob?.id, toStreamHref]);
     const persistedAlignmentSessionId = signalViewerSession?.alignment_session_id
         || requestedViewerSessionQuery.data?.alignment_session_id
         || '';

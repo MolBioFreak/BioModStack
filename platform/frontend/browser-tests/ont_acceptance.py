@@ -54,18 +54,31 @@ try:
     expression = '''(async()=>{
         let reuse;
         for (let attempt=0; attempt<200; attempt++) {
-            reuse = [...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Reuse Params');
+            reuse = [...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Reuse Params' && !b.disabled);
             if (reuse && !reuse.disabled) break;
             await new Promise(r=>setTimeout(r,100));
         }
         const initial = document.body.innerText;
         const download = await fetch('/api/jobs/''' + job + '''/ngs-artifacts');
         const catalog = {status:download.status, body:await download.text()};
-        if (!reuse || reuse.disabled) throw Error('Native source job not ready for reuse');
+        const downloads = [];
+        if (catalog.status === 200) {
+            for (const artifact of JSON.parse(catalog.body).artifacts) {
+                if (artifact.state !== 'present' || !artifact.url) continue;
+                const response = await fetch(artifact.url);
+                const bytes = await response.arrayBuffer();
+                const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(n=>n.toString(16).padStart(2,'0')).join('');
+                downloads.push({artifact_id:artifact.artifact_id, filename:artifact.filename, url:artifact.url,
+                    status:response.status, size_bytes:bytes.byteLength, sha256,
+                    declared_size:artifact.size_bytes, declared_sha256:artifact.sha256});
+            }
+        }
+
+        if (!reuse || reuse.disabled) throw Error('Native source job not ready for reuse: '+document.body.innerText);
         reuse.click(); await new Promise(r=>setTimeout(r,1500));
         [...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Show advanced controls')?.click();
         await new Promise(r=>setTimeout(r,100));
-        return {initial, catalog, url:location.href, text:document.body.innerText,
+        return {initial, catalog, downloads, url:location.href, text:document.body.innerText,
             assembly:[...document.querySelectorAll('select')].find(e=>e.querySelector('option[value=flye]'))?.value,
             jobName:[...document.querySelectorAll('input')].find(e=>e.value==='Retained native Flye clone control')?.value};
     })()'''
@@ -77,12 +90,52 @@ try:
     assert value['jobName'] == 'Retained native Flye clone control' and value['assembly'] == 'flye', value
     assert 'Primers FASTA' in value['text'] and 'Regions BED file' in value['text']
     assert 'Run Inspector' in value['initial']
+    catalog_pass = value['catalog']['status'] == 200
+    imported = json.loads((ROOT / 'imported-artifacts.json').read_text())
+    imported_hashes = {a['sha256'] for a in imported['artifacts']}
+    verified_downloads = []
+    for item in value['downloads']:
+        assert item['status'] == 200, item
+        assert item['size_bytes'] == item['declared_size'], item
+        assert item['sha256'] == item['declared_sha256'], item
+        assert item['sha256'] in imported_hashes, item
+        verified_downloads.append(item)
+    (ROOT / 'verified-downloads.json').write_text(json.dumps(verified_downloads, indent=2))
     summary = {'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=FRONTEND, text=True).strip(),
         'routes': routes, 'netns': os.readlink('/proc/self/ns/net'), 'pids': [p.pid for p in processes],
         'synthetic_auth': True, 'science_executed': False,
         'passed': ['native scratch job list/detail/stages', 'Runs to Reuse Params with one cache', 'clone workflow advanced controls and saved assembler'],
-        'blocked': [] if value['catalog']['status'] == 200 else ['native clone artifact catalog: ' + str(value['catalog']['status'])],
+        'download_count': len(verified_downloads),
+        'blocked': [] if catalog_pass and verified_downloads else ['native clone catalog/downloads incomplete: ' + str(value['catalog']['status'])],
         'catalog': value['catalog']}
+    cases_file = os.environ.get('ONT_ACCEPTANCE_RETAINED_JOBS')
+    summary['retained_cases'] = []
+    if cases_file:
+        for case in json.loads(Path(cases_file).read_text()):
+            case_id = case['job_id']
+            case_probe = ROOT / f'browser-{case_id}.json'
+            case_expression = """(async()=>{
+                await new Promise(r=>setTimeout(r,3000));
+                const catalogResponse = await fetch('/api/jobs/""" + case_id + """/ngs-artifacts');
+                const catalog = {status:catalogResponse.status, body:await catalogResponse.text()};
+                return {text:document.body.innerText, url:location.href, catalog,
+                    links:[...document.querySelectorAll('a[href]')].map(a=>({text:a.textContent,url:a.getAttribute('href')})),
+                    tables:[...document.querySelectorAll('table')].map(t=>t.innerText),
+                    svg_count:document.querySelectorAll('svg').length};
+            })()"""
+            subprocess.run([sys.executable, str(HERE / 'ont_cdp.py'), '--alignment-job', case_id,
+                '--url', f'http://127.0.0.1:18762/browser-tests/ont-suite.html?section=analyses&job_id={case_id}',
+                '--wait', '3', '--expression', case_expression, '--evidence', str(case_probe)],
+                check=True, stdout=(ROOT / f'browser-{case_id}.stdout').open('w'))
+            result = json.loads(case_probe.read_text())['result']['result']['value']
+            missing = [text for text in case.get('expected_text', []) if ''.join(text.split()) not in ''.join(result['text'].split())]
+            case_result = {'job_id': case_id, 'source_output': case['source_output'], 'reused_native_output': True,
+                'catalog_status': result['catalog']['status'], 'missing_expected_text': missing,
+                'generic_download_links': [a for a in result['links'] if a['url'].startswith('/api/files/')],
+                'status': 'passed' if result['catalog']['status'] == 200 and case.get('expected_text') and not missing else 'blocked'}
+            assert not case_result['generic_download_links'], case_result
+            summary['retained_cases'].append(case_result)
+            (ROOT / 'retained-cases.json').write_text(json.dumps(summary['retained_cases'], indent=2))
     (ROOT / 'acceptance.json').write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
 finally:

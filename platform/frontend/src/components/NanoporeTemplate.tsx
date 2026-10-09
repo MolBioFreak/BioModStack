@@ -1038,7 +1038,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // State: Advanced (collapsed by default)
     // ============================================================================
     const [showAdvanced, setShowAdvanced] = useState(false);
-    const [batchSize, setBatchSize] = useState<number | null>((initialValues?.batchSize as number | null | undefined) ?? null);
+    const [batchSizeDraft, setBatchSizeDraft] = useState(String(initialValues?.batchSize ?? ''));
+    const batchSize = batchSizeDraft.trim() === '' ? null : Number(batchSizeDraft);
+    const validBatchSize = batchSize === null || (Number.isInteger(batchSize) && batchSize >= 0);
     const [emitSummary, setEmitSummary] = useState(initialValues?.emitSummary !== false);
     const [emitMoves, setEmitMoves] = useState(initialValues?.emitMoves !== false);
     const [modkitFilterThreshold, setModkitFilterThreshold] = useState<number | null>(
@@ -1239,6 +1241,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         if (managedReferenceBlocker) blockers.push(managedReferenceBlocker);
         if (usesExpectedPlasmidSize && runFastqQc && !hasValidExpectedPlasmidSize) blockers.push('Expected plasmid size must be Auto or an integer within the displayed bounds.');
         if (inputSource === 'fastq' && !hasValidFastqNumericControls) blockers.push('FASTQ QC numeric controls must be finite integers within the displayed bounds.');
+        if (inputSource === 'pod5' && !validBatchSize) blockers.push('Dorado batch size must be 0 (native auto) or a positive integer; leave blank for the default.');
         return [...new Set(blockers)];
     };
     const submissionBlockers = getSubmissionBlockers();
@@ -2392,12 +2395,16 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                     <div id="ngs-advanced-controls" className="mt-4 space-y-4 pl-6 border-l-2 border-[var(--border-primary)]">
                         {inputSource === 'pod5' && (
                             <div>
-                                <label className="text-xs text-[var(--text-secondary)] mb-1 block">Dorado batch size (GPU memory tuning)</label>
+                                <label className="text-xs text-[var(--text-secondary)] mb-1 block">Dorado batch size (0 = native auto; positive integer)</label>
                                 <input
                                     type="number"
-                                    value={batchSize ?? ''}
-                                    onChange={(e) => setBatchSize(e.target.value ? parseInt(e.target.value) : null)}
-                                    placeholder="Auto"
+                                    value={batchSizeDraft}
+                                    aria-label="Dorado batch size"
+                                    aria-invalid={!validBatchSize}
+                                    min={0}
+                                    step={1}
+                                    onChange={(e) => setBatchSizeDraft(e.target.value)}
+                                    placeholder={doradoMode === 'duplex' ? '32 (default)' : '64 (default)'}
                                     className="w-32 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-1.5 text-[var(--text-primary)] text-sm"
                                 />
                             </div>

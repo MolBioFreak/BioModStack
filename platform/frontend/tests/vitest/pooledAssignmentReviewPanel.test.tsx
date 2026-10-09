@@ -20,6 +20,9 @@ vi.mock('../../src/lib/api', async (importOriginal) => ({
     releasePooledAssignment: pooled.release,
 }));
 
+import { api } from '../../src/lib/api';
+const originalAdapter = api.defaults.adapter;
+
 import { PooledAssignmentReviewPanel } from '../../src/components/ngs/PooledAssignmentReviewPanel';
 
 let container: HTMLDivElement;
@@ -119,6 +122,14 @@ async function renderPanel() {
 }
 
 beforeEach(() => {
+    api.defaults.adapter = async config => {
+        if (config.url !== '/api/jobs/assignment-job-001/ngs-artifacts') throw Error(`Unexpected request: ${config.url}`);
+        return { config, status: 200, statusText: 'OK', headers: {}, data: { job_id: 'assignment-job-001', artifacts:
+            ['assignment_summary.json', 'per_read_assignment.tsv', 'intended_pool.igv_session.json'].map((filename, i) => ({
+                filename, artifact_id: String(i), state: 'present', source: 'pooled_assignment', kind: 'report', size_bytes: 10,
+                url: `/api/jobs/assignment-job-001/ngs-artifacts/${i}`,
+            })) } };
+    };
     pooled.fetchManifest.mockReset();
     pooled.fetchTargets.mockReset();
     pooled.release.mockReset();
@@ -136,6 +147,7 @@ beforeEach(() => {
 afterEach(async () => {
     await act(async () => root.unmount());
     client.clear();
+    api.defaults.adapter = originalAdapter;
     document.body.replaceChildren();
 });
 
@@ -181,7 +193,9 @@ describe('PooledAssignmentReviewPanel', () => {
         expect(container.querySelectorAll('input[aria-label^="Explicitly select"]')).toHaveLength(2);
         expect(container.querySelector('[aria-label="Explicitly select ambiguous"]')).toBeNull();
         expect(container.querySelector('[aria-label="Explicitly select unclassified"]')).toBeNull();
-        expect(container.querySelector('[data-testid="pooled-assignment-review-artifacts"]')).not.toBeNull();
+        await waitUntil(() => expect(container.querySelector('[data-testid="pooled-assignment-review-artifacts"]')).not.toBeNull());
+        expect(container.querySelector('a[href^="/api/files/"]')).toBeNull();
+        expect(container.querySelectorAll('a[href^="/api/jobs/assignment-job-001/ngs-artifacts/"]')).toHaveLength(3);
         expect(container.textContent).toContain('sequence-a');
         expect(container.textContent).toContain('revision-a');
         expect(container.textContent).toContain('same-sequence-1');

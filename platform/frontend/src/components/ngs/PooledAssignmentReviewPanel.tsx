@@ -1,3 +1,4 @@
+import { ngsArtifactUrl, useNgsArtifacts, type NgsPackageArtifact } from '../../lib/ngsArtifacts';
 import { useEffect, useMemo, useState } from 'react';
 import { ExecutionTargetPicker } from '../ExecutionTargetPicker';
 import { ExecutionPolicyControl } from '../ExecutionPolicyControl';
@@ -164,12 +165,6 @@ function normalizeArtifactPath(value: string): string | null {
     return null;
 }
 
-function artifactHref(path: string, jobId: string): string | null {
-    if (path.startsWith('/api/') || /^https?:\/\//i.test(path)) return path;
-    const encoded = path.split('/').map((part) => encodeURIComponent(part)).join('/');
-    return `/api/files/download/${encoded}?v=${encodeURIComponent(jobId)}`;
-}
-
 function artifactMatches(key: ArtifactKey, path: string): boolean {
     const candidate = path.split('?')[0].replace(/\\/g, '/');
     if (key === 'assignment_summary') return /(?:^|\/)assignment_summary(?:\.[^/]+)?$/i.test(candidate);
@@ -177,7 +172,7 @@ function artifactMatches(key: ArtifactKey, path: string): boolean {
     return /(?:^|\/)intended_pool(?:\.igv_session)?(?:\.[^/]+)?$/i.test(candidate);
 }
 
-function resolveArtifactLinks(jobId: string, sources: unknown[]): ArtifactLink[] {
+function resolveArtifactLinks(jobId: string, sources: unknown[], artifacts: NgsPackageArtifact[]): ArtifactLink[] {
     const values: string[] = [];
     sources.forEach((source) => collectStrings(source, values));
     const deduped = [...new Set(values)];
@@ -188,8 +183,9 @@ function resolveArtifactLinks(jobId: string, sources: unknown[]): ArtifactLink[]
     ];
     return definitions.flatMap(({ key, label }) => {
         const rawPath = deduped.find((value) => artifactMatches(key, value));
-        const path = rawPath ? normalizeArtifactPath(rawPath) : null;
-        const href = path ? artifactHref(path, jobId) : null;
+        const catalogPath = artifacts.find(a => a.filename && artifactMatches(key, a.filename))?.filename;
+        const path = catalogPath || (rawPath ? normalizeArtifactPath(rawPath) : null);
+        const href = path ? ngsArtifactUrl(path, jobId, artifacts) : null;
         return path && href ? [{ key, label, path, href }] : [];
     });
 }
@@ -243,9 +239,10 @@ export function PooledAssignmentReviewPanel({
         () => new Set(targets.filter(isSelectableTarget).map((target) => target.target_id)),
         [targets],
     );
+    const artifactQuery = useNgsArtifacts(jobId, pooledAssignmentJob && executionComplete);
     const artifactLinks = useMemo(
-        () => resolveArtifactLinks(jobId, [stageOutputs, files, results]),
-        [files, jobId, results, stageOutputs],
+        () => resolveArtifactLinks(jobId, [stageOutputs, files, results, artifactQuery.data?.artifacts.map(a => a.filename)], artifactQuery.data?.artifacts || []),
+        [files, jobId, results, stageOutputs, artifactQuery.data],
     );
     const executionStatus = manifestQuery.data?.execution_status
         || manifestQuery.data?.execution?.status

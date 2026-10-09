@@ -80,6 +80,33 @@ async def seed():
         job = await session.get(Job, jid)
         job.provenance = {**job.provenance, 'alignment_access_scheme': 'opaque_job_capability_v1', 'alignment_access_token_sha256': hashlib.sha256(TOKEN.encode()).hexdigest()}
         await session.commit()
+    # Optional retained native job roots. Only metadata is synthetic; all result
+    # bytes are copied unchanged and inventoried. No scientific response replay.
+    cases_file = os.environ.get('ONT_ACCEPTANCE_RETAINED_JOBS')
+    if cases_file:
+        cases = json.loads(Path(cases_file).read_text())
+        for case in cases:
+            source = Path(case['source_output']).resolve(strict=True)
+            job_id = case['job_id']
+            import uuid
+            assert str(uuid.UUID(job_id)) == job_id
+            target = ROOT / 'state/bms_results' / job_id
+            if not target.exists(): shutil.copytree(source, target, symlinks=False)
+            outputs = sorted(p for p in target.rglob('*') if p.is_file())
+            inventory = [{'path': str(p.relative_to(target)), 'sha256': hashlib.sha256(p.read_bytes()).hexdigest(), 'size_bytes': p.stat().st_size} for p in outputs]
+            (ROOT / f'imported-{job_id}.json').write_text(json.dumps({'source': str(source), 'job_id': job_id, 'artifacts': inventory}, indent=2))
+            stages = {}
+            for path in outputs:
+                stages.setdefault(path.relative_to(target).parts[0], []).append(str(path))
+            async with async_session() as session:
+                if await session.get(Job, job_id) is None:
+                    session.add(Job(id=job_id, name=case['name'], model_id='nanopore', mode=case['mode'],
+                        status='completed', queue_status='completed', params=case['params'], output_dir=str(target),
+                        completed_stages=list(stages), stage_outputs=stages,
+                        provenance={'acceptance_fixture': 'Imported real prior native output; no science executed',
+                            'alignment_access_scheme': 'opaque_job_capability_v1',
+                            'alignment_access_token_sha256': hashlib.sha256(TOKEN.encode()).hexdigest()}))
+                    await session.commit()
 
 if __name__ == '__main__':
     asyncio.run(seed())

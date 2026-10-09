@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseOntFastqQcResult } from '../../src/lib/ontFastqQcResult';
 import React, { act, useLayoutEffect } from 'react';
@@ -158,6 +158,50 @@ afterEach(async () => {
     document.body.replaceChildren();
     vi.useRealTimers();
 });
+
+// Opt-in retained-byte receiving controls: real UI/parsers with an explicitly
+// synthetic transport catalog, not native HTTP or newly executed science.
+if (process.env.ONT_ACCEPTANCE_RETAINED_JOBS) {
+    const retained = JSON.parse(readFileSync(process.env.ONT_ACCEPTANCE_RETAINED_JOBS, 'utf8')) as Array<{ name: string; mode: string; params: Record<string, unknown>; source_output: string }>;
+    describe('retained native bytes through mounted rich result parsers (transport fixture)', () => {
+        it.each(retained)('$name', async fixture => {
+            Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+            const files = readdirSync(fixture.source_output, { recursive: true, withFileTypes: true }).filter(e => e.isFile());
+            const entries = files.map((entry, i) => {
+                const path = resolve(entry.parentPath, entry.name);
+                return { path, filename: path.slice(fixture.source_output.length + 1), url: `/api/jobs/job-123/ngs-artifacts/${i}` };
+            });
+            const job = { id: 'job-123', name: fixture.name, model_id: 'nanopore', mode: fixture.mode, status: 'completed',
+                params: fixture.params, output_dir: 'bms_results/job-123', created_at: '2026-09-01T00:00:00Z',
+                stage_outputs: { native: entries.map(e => `bms_results/job-123/${e.filename}`) } };
+            ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [job], total: 1 } });
+            ngsApiMocks.fetchFullJob.mockResolvedValue(job);
+            ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { job_id: job.id, stage_outputs: job.stage_outputs } });
+            vi.mocked(api.get).mockImplementation(async url => {
+                if (url !== '/api/jobs/job-123/ngs-artifacts') throw Error(`Unrelated fixture read ${url}`);
+                return { data: { job_id: job.id, artifacts: entries.map((e, i) => ({ ...e, artifact_id: String(i), kind: 'native', source: 'fixture', state: 'present', size_bytes: readFileSync(e.path).length })) } };
+            });
+            const reads: string[] = [];
+            vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+                const entry = entries.find(e => e.url === url);
+                if (!entry) throw Error(`Not a catalog URL: ${url}`);
+                reads.push(url);
+                return { ok: true, status: 200, text: async () => readFileSync(entry.path, 'utf8') };
+            }));
+            await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/ngs?section=analyses&job_id=job-123']}><NGSToolkit /></MemoryRouter></QueryClientProvider>));
+            const expected = fixture.mode === 'basecall_dna' ? 'modkit_summary.tsv' : 'fastq_qc_summary.tsv';
+            const expectedEntry = entries.find(e => e.filename.endsWith(expected))!;
+            await vi.waitFor(async () => { await flush(); expect(reads).toContain(expectedEntry.url); });
+            await vi.waitFor(async () => {
+                await flush();
+                expect(container.textContent).toContain(fixture.mode === 'basecall_dna' ? 'C_total_mod_calls257' : 'Read lengths rows30');
+            });
+            if (process.env.ONT_ACCEPTANCE_ROOT) writeFileSync(resolve(process.env.ONT_ACCEPTANCE_ROOT, `mounted-${fixture.mode}.txt`), container.textContent || '');
+            expect(container.querySelector('a[href^="/api/files/"]')).toBeNull();
+            expect(reads.every(url => url.startsWith('/api/jobs/job-123/ngs-artifacts/'))).toBe(true);
+        });
+    });
+}
 
 describe('NGS authoritative stage presentation', () => {
     it('reuses a populated run in the real authoring form without the old runs effect selecting it again', async () => {

@@ -117,6 +117,37 @@ const submits = () => calls.filter(call => call.url.endsWith('/submit'));
 async function remoteReview() { await click('Vast · Test worker'); await click('Review and submit'); await until(() => expect(button('Approve and submit')).toBeTruthy()); }
 
 describe('ordinary NGS prepared launch through mounted consumers and real API transport', () => {
+    it.each([['simplex', '64 (default)'], ['duplex', '32 (default)']])('preserves the %s default when batch is omitted', async (doradoMode, placeholder) => {
+        await mount({ ...base, doradoMode, duplexPairs: '/data/pairs.txt' }); await click('Show advanced controls');
+        const control = container.querySelector<HTMLInputElement>('input[aria-label="Dorado batch size"]')!;
+        expect(control.value).toBe(''); expect(control.placeholder).toBe(placeholder);
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.params).not.toHaveProperty('dorado_batch_size');
+    });
+    it.each([0, 1, 257, 4096])('edits native batch %s and submits it without a copied maximum', async value => {
+        await mount({ ...base, batchSize: 0 });
+        await click('Show advanced controls');
+        const selector = 'input[aria-label="Dorado batch size"]';
+        expect(container.querySelector<HTMLInputElement>(selector)!.value).toBe('0');
+        expect(container.querySelector(selector)!.hasAttribute('max')).toBe(false);
+        await input(selector, String(value));
+        await click('Review and submit');
+        await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.params.dorado_batch_size).toBe(value);
+    });
+    it.each(['-1', '1.5'])('keeps invalid batch %s visible without silently truncating it', async value => {
+        await mount(); await click('Show advanced controls');
+        const selector = 'input[aria-label="Dorado batch size"]';
+        await input(selector, value);
+        expect(container.querySelector<HTMLInputElement>(selector)!.value).toBe(value);
+        expect(container.querySelector(selector)!.getAttribute('aria-invalid')).toBe('true');
+        expect(button('Review and submit').disabled).toBe(true);
+        expect(submits()).toHaveLength(0);
+        await input(selector, '');
+        expect(container.querySelector<HTMLInputElement>(selector)!.placeholder).toBe('64 (default)');
+        await click('Review and submit'); await until(() => expect(submits()).toHaveLength(1));
+        expect(submits()[0].body.params).not.toHaveProperty('dorado_batch_size');
+    });
     const profileSelect = 'select[aria-label="Declared clone consensus profile"]';
     const cloneBase = { ...base, selectedWorkflow: 'clone', runAssembly: true, ngsReferenceRevisionId: 'reference-revision-1' };
     async function quality(value: string) {
