@@ -74,24 +74,30 @@ test('dirty transitions continue only after discard or a successful save', async
     assert.equal(saves, 2);
 });
 
-test('identity persistence contains no sequence payload or unsaved edits', () => {
-    const tabs: PersistedMolecularWorkspace[] = [{
-        id: molecularWorkspaceId('seq-1'),
-        sequenceId: 'seq-1',
-        lens: 'historical',
+test('identity restore strips sequence payload and unsaved fields before clean serialization', () => {
+    const identity: PersistedMolecularWorkspace = {
+        id: 'molecular_sequence_seq-1', sequenceId: 'seq-1', lens: 'historical',
         exactRevisionId: 'rev-2',
         viewContext: { activePanel: 'history', viewMode: 'both', displayStrand: 'minus' },
-    }];
-    const serialized = serializeMolecularWorkspaceIdentity(tabs, tabs[0].id);
-
+    };
+    // Exercise the receiving parser, not a test-side projection of clean input.
+    // The serializer itself is not a sanitizer, nor is this a mounted caller test.
+    const restored = deserializeMolecularWorkspaceIdentity(JSON.stringify({
+        version: 1, activeWorkspaceId: identity.id,
+        tabs: [{ ...identity, sequenceData: { sequence: 'ACTG' },
+            historyState: { unsaved: 'ACTG' }, dirty: true,
+            viewContext: { ...identity.viewContext, unsaved: 'ACTG' } }],
+    }));
+    assert.deepEqual(restored, {
+        tabs: [identity], activeWorkspaceId: 'molecular_sequence_seq-1',
+        invalidCount: 0, notice: null,
+    });
+    const serialized = serializeMolecularWorkspaceIdentity(restored.tabs, restored.activeWorkspaceId);
     assert.doesNotMatch(serialized, /ACTG|sequenceData|historyState|dirty|unsaved/i);
     assert.deepEqual(JSON.parse(serialized), {
-        version: 1,
-        activeWorkspaceId: molecularWorkspaceId('seq-1'),
-        tabs,
+        version: 1, activeWorkspaceId: 'molecular_sequence_seq-1', tabs: [identity],
     });
 });
-
 test('restore deduplicates invalid identities and reports one notice', () => {
     const validId = molecularWorkspaceId('seq-1');
     const restored = deserializeMolecularWorkspaceIdentity(JSON.stringify({

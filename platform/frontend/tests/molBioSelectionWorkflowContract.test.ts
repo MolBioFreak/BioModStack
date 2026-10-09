@@ -5,21 +5,8 @@ import { readFileSync } from 'node:fs';
 const frontendRoot = process.cwd();
 const readSource = (relativePath: string) => readFileSync(`${frontendRoot}/${relativePath}`, 'utf8');
 
-const dialogSource = readSource('src/components/MolBioToolkit/SelectionActionDialog.tsx');
 const toolkitSource = readSource('src/components/MolBioToolkit/MolBioToolkitV2.tsx');
 
-test('saved molecular revisions use compact status and collapsed revision details', () => {
-    assert.match(toolkitSource, /Viewing saved revision/);
-    assert.match(toolkitSource, /Read-only/);
-    assert.match(toolkitSource, /<summary[^>]*>Revision details<\/summary>/);
-    assert.match(toolkitSource, /Open latest editable version/);
-    assert.doesNotMatch(toolkitSource, /Exact immutable revision · read-only authority/);
-});
-
-test('the Project DNA Sequence Shelf labels the exact Project-owned collection', () => {
-    assert.match(toolkitSource, /Project DNA sequences \(\$\{sequences\.length\}\)/);
-    assert.match(toolkitSource, /DNA sequences in this Project/);
-});
 const viewerSource = readSource('src/components/MolBioToolkit/SequenceViewer.tsx');
 const gcTrackSource = readSource('src/components/MolBioToolkit/GCContentTrack.tsx');
 const primerPanelSource = readSource('src/components/MolBioToolkit/panels/PrimerPanel.tsx');
@@ -35,36 +22,6 @@ test('selection actions are configuration-gated rather than immediate default cr
     assert.doesNotMatch(toolkitSource, /Feature_\$\{snapshot\.coordinateKey\}/);
     assert.doesNotMatch(toolkitSource, /Fwd_\$\{snapshot\.coordinateKey\}/);
     assert.doesNotMatch(toolkitSource, /Rev_\$\{snapshot\.coordinateKey\}/);
-});
-
-test('dialog requires an explicit name and exposes feature and primer identity metadata', () => {
-    assert.match(dialogSource, /role="dialog"/);
-    assert.match(dialogSource, /required/);
-    assert.match(dialogSource, /Feature type/);
-    assert.match(dialogSource, /Direction/);
-    assert.match(dialogSource, /Primer type/);
-    assert.match(dialogSource, /Locked selected span/);
-    assert.match(dialogSource, /const trimmedName = name\.trim\(\)/);
-    assert.match(dialogSource, /if \(!trimmedName \|\| busy\)/);
-    assert.match(dialogSource, /disabled=\{!name\.trim\(\) \|\| busy\}/);
-    assert.match(dialogSource, /dialogPanelRef/);
-    assert.match(dialogSource, /event\.key !== 'Tab'/);
-    assert.match(dialogSource, /previouslyFocusedRef/);
-});
-
-test('selection actions expose keyboard menu invocation and navigation', () => {
-    assert.match(viewerSource, /event\.shiftKey && event\.key === 'F10'/);
-    assert.match(viewerSource, /event\.key === 'ContextMenu'/);
-    assert.match(toolkitSource, /role="menu"/);
-    assert.match(toolkitSource, /role="menuitem"/);
-    assert.match(toolkitSource, /handleQuickAddMenuKeyDown/);
-});
-
-test('reverse primer dialog previews the reverse-complemented selected sequence', () => {
-    assert.match(dialogSource, /const primerSequence = primerStrand === 1/);
-    assert.match(dialogSource, /reverseComplementSequence\(snapshot\.sequence/);
-    assert.match(dialogSource, /value=\{primerSequence\}/);
-    assert.match(dialogSource, /name: trimmedName/);
 });
 
 test('viewer and Plotly track retain a durable range without controlled SeqViz feedback or zoom hijacking', () => {

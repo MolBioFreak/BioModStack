@@ -220,14 +220,11 @@ function artifact(artifactId: string, sha256: string, sizeBytes: number, mimeTyp
     };
 }
 
-test('detail scan exhaustion remains a distinct visible state', () => {
-    const error = new AlignmentReadScanTruncatedError('scan budget exhausted; absence is not proven');
-    assert.equal(isAlignmentReadScanTruncatedError(error), true);
-    assert.equal(error.scanTruncated, true);
-    assert.match(error.message, /absence is not proven/u);
-});
-
 test('typed backend scan truncation becomes the scientist-facing integrity state and rejects open envelopes', async () => {
+    const custom = new AlignmentReadScanTruncatedError('scan budget exhausted; absence is not proven');
+    assert.equal(isAlignmentReadScanTruncatedError(custom), true);
+    assert.equal(custom.scanTruncated, true);
+    assert.equal(custom.message, 'scan budget exhausted; absence is not proven');
     const originalGet = api.get;
     const canonical = {
         schema: 'bms.ngs.error.v1', code: 'NGS_READ_SCAN_TRUNCATED',
@@ -241,7 +238,12 @@ test('typed backend scan truncation becomes the scientist-facing integrity state
     try {
         await assert.rejects(
             fetchAlignmentRead('job-a', 'session-a', 'read-a'),
-            (error: unknown) => isAlignmentReadScanTruncatedError(error),
+            (error: unknown) => {
+                assert.ok(isAlignmentReadScanTruncatedError(error));
+                assert.equal(error.scanTruncated, true);
+                assert.equal(error.message, canonical.message);
+                return true;
+            },
         );
         for (const malformed of [
             { ...canonical, unexpected: true },

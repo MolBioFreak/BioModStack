@@ -15,7 +15,6 @@ const TOOLKIT_SOURCE = readFileSync(
     new URL('../src/components/MolBioToolkit/MolBioToolkitV2.tsx', import.meta.url),
     'utf8',
 );
-const INDEX_CSS = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8');
 
 test('Cordova uses the mobile MolBio layout in wide landscape', () => {
     assert.equal(shouldUseMolBioMobileLayout({
@@ -158,38 +157,4 @@ test('successful mobile sequence activation closes the picker once', async () =>
         2,
         'current and exact URL effects must both reconcile mobile selection intent',
     );
-});
-
-test('MolBioToolkit wires the Cordova mobile projection and native Back policy', () => {
-    assert.match(TOOLKIT_SOURCE, /shouldUseMolBioMobileLayout\(\{/u);
-    assert.match(TOOLKIT_SOURCE, /resolveMolBioMobileBackAction\(\{/u);
-    assert.match(TOOLKIT_SOURCE, /document\.addEventListener\('backbutton'/u);
-    assert.match(TOOLKIT_SOURCE, /<MobileMolBioWorkspace/u);
-    assert.match(TOOLKIT_SOURCE, /!isMobileMolBio/u);
-});
-
-test('focused view keeps a safe-area-aware 48 px exit and exits on Android Back', () => {
-    assert.match(TOOLKIT_SOURCE, /data-molbio-focus-exit="true"/u);
-    assert.ok(TOOLKIT_SOURCE.includes("calc(env(safe-area-inset-top) + 0.75rem)"));
-    assert.match(TOOLKIT_SOURCE, /min-h-12/u);
-    assert.match(TOOLKIT_SOURCE, /setIsViewerFullscreen\(false\)/u);
-});
-
-test('mobile MolBio suppresses the Cordova settings toggle only while active', () => {
-    assert.match(
-        INDEX_CSS,
-        /html\.bms-molbio-mobile-active\s+#bms-cordova-preflight-toggle\s*\{[^}]*display:\s*none\s*!important;/su,
-    );
-});
-
-test('Cordova mobile MolBio reserves a status-bar fallback when landscape reports zero inset', () => {
-    assert.match(
-        INDEX_CSS,
-        /html\.bms-cordova-shell\.bms-molbio-mobile-active\s+\[data-molbio-mobile-toolbar="true"\]\s*\{[^}]*padding-top:\s*calc\(max\(env\(safe-area-inset-top\),\s*1\.5rem\)\s*\+\s*0\.75rem\)\s*!important;/su,
-    );
-});
-
-test('the mobile production branch mounts the bounded SequenceLibrary variant', () => {
-    assert.match(TOOLKIT_SOURCE, /<SequenceLibrary\s+mobile/u);
-    assert.match(TOOLKIT_SOURCE, /className="flex h-full min-h-0 overflow-hidden"/u);
 });

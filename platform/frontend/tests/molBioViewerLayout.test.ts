@@ -59,37 +59,6 @@ test('fullscreen viewer layout collapses side menus while preserving tuned width
     assert.equal(normal.rightPanelWidth, 628);
 });
 
-test('manual panel collapse can hide either side while keeping the central viewer open', () => {
-    const libraryHidden = resolveMolBioViewerLayout({
-        activePanel: 'view',
-        viewportWidth: 1440,
-        leftPanelWidth: 280,
-        rightPanelWidth: 320,
-        isViewerFullscreen: false,
-        isLibraryPanelCollapsed: true,
-        isToolPanelCollapsed: false,
-    });
-    const bothHidden = resolveMolBioViewerLayout({
-        activePanel: 'view',
-        viewportWidth: 1440,
-        leftPanelWidth: 280,
-        rightPanelWidth: 320,
-        isViewerFullscreen: false,
-        isLibraryPanelCollapsed: true,
-        isToolPanelCollapsed: true,
-    });
-
-    assert.equal(libraryHidden.showLibraryPanel, false);
-    assert.equal(libraryHidden.showToolPanel, true);
-    assert.equal(libraryHidden.showLibraryResizeHandle, false);
-    assert.equal(libraryHidden.showToolResizeHandle, true);
-
-    assert.equal(bothHidden.showLibraryPanel, false);
-    assert.equal(bothHidden.showToolPanel, false);
-    assert.equal(bothHidden.showLibraryResizeHandle, false);
-    assert.equal(bothHidden.showToolResizeHandle, false);
-});
-
 test('narrow viewports keep a minimum center viewer width when both side panels are visible', () => {
     const layout = resolveMolBioViewerLayout({
         activePanel: 'assembly',
@@ -147,6 +116,8 @@ test('wide layouts budget both resize handles and preserve manual panel visibili
                 assert.ok(width - consumed >= MOLBIO_VIEWER_MIN_WIDTH);
                 assert.equal(layout.showLibraryPanel, !leftCollapsed);
                 assert.equal(layout.showToolPanel, !rightCollapsed);
+                assert.equal(layout.showLibraryResizeHandle, !leftCollapsed);
+                assert.equal(layout.showToolResizeHandle, !rightCollapsed);
             }
         }
     }

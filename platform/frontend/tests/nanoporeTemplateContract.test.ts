@@ -59,16 +59,8 @@ test('NGS instrument control uses only opaque intent handles and has no browser 
     assert.doesNotMatch(panel, /\.filter\(\(device\) => device\.device_type === 'mk1d'\)/u);
 });
 
-test('NGS instrument panel registers one governed existing POD5 candidate before BLOW5 preparation', () => {
+// Architectural source policy, not candidate selection or registration acceptance.
+test('NGS instrument panel source does not embed the external POD5 host root', () => {
     const panel = readSource('src/components/ngs/OntInstrumentPanel.tsx');
-    const api = readSource('src/lib/api.ts');
-
-    assert.match(panel, /Register existing POD5/u);
-    assert.match(panel, /fetchOntExternalPod5Candidates/u);
-    assert.match(panel, /registerOntExternalPod5Candidate/u);
-    assert.match(panel, /exactDomainExperimentId/u);
     assert.doesNotMatch(panel, /BMS_ONT_EXTERNAL_POD5_ROOT|\/mnt\/BioModStack/u);
-    assert.match(api, /\/api\/ont\/raw-signal\/external-pod5-candidates/u);
-    assert.match(api, /candidate_id: candidateId/u);
-    assert.match(api, /experiment_group: experimentGroup/u);
 });

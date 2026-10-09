@@ -76,4 +76,6 @@ test('Clone validation restores bounded vendor and plasmid-dimer tuning selectio
     assert.equal(restored?.enableRotatingReferenceFrames, false);
     assert.equal(restored?.rotationScanStepBp, 5);
     assert.equal(restored?.singleRefSplitMinMapq, 30);
+    assert.equal(restored?.singleRefSplitMinSegmentBp, 300);
+    assert.equal(restored?.singleRefSplitMaxQueryGapBp, 700);
 });
