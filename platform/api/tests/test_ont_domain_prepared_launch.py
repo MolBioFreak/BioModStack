@@ -347,6 +347,8 @@ async def test_pooled_real_return_fresh_review_and_explicit_release(domain, tmp_
         job.execution_source_revision, job.execution_source_tree = current_source_identity()
         job.nextflow_run_id = "remote:" + job.remote_attempt_id
         job.remote_state = "returning"
+        job.status = "running"
+        job.queue_status = "running"
         job.awaiting_input = False
         stage(monkeypatch, output, job.remote_attempt_id, "pooled_reference_assignment", ["pooled_reference_assignment"], job_id=job_id)
         _, raw, status = seal(worker, output, job)
