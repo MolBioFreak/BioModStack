@@ -148,6 +148,26 @@ async function render(options: { selectedReadId?: string; onViewerSessionChange?
 }
 
 describe('OntSignalIdealComparison', () => {
+    it('keeps edited simulation settings after reopening a saved comparison', async () => {
+        mocks.fetchJob.mockResolvedValue(comparisonJob({ state: 'ready' }));
+        await act(async () => root.render(<OntSignalIdealComparison datasetId="dataset-1"
+            viewerSession={{ ...viewer, signal_state: { comparison_job_id: 'comparison-1' } } as never}
+            selectedReadId="read-42" contig="chr7" start={500} end={560} mappingJobId="ref-map-1"
+            mappingArtifactId="mapping-artifact-1" renderParams={renderParams as never} onViewerSessionChange={vi.fn()} />));
+        await settle();
+        const seed = container.querySelector<HTMLInputElement>('[aria-label="Simulation seed"]')!;
+        expect(seed.value).toBe('19');
+        await act(async () => {
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(seed, '23');
+            seed.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        await settle();
+        expect(seed.value).toBe('23');
+        expect(mocks.fetchJob).toHaveBeenCalledTimes(1);
+        await act(async () => findButton('Preview').click());
+        await settle();
+        expect(mocks.preview.mock.calls[0][0].simulation_settings.seed).toBe(23);
+    });
     it('requires a current preview digest and invalidates it after an operator edit', async () => {
         await render();
         expect(container.textContent).toContain('Ideal comparison');

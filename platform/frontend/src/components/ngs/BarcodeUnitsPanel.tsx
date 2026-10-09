@@ -1,4 +1,8 @@
 import { useState } from 'react';
+import { ExecutionTargetPicker } from '../ExecutionTargetPicker';
+import { ExecutionPolicyControl } from '../ExecutionPolicyControl';
+import { useOntDomainSubmission } from './useOntDomainSubmission';
+import type { ExecutionPolicy } from '../../lib/executionPolicy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     fetchMolBioSequenceRevisions,
@@ -6,6 +10,10 @@ import {
     fetchOntBarcodeUnits,
     issueMolBioNgsReceipt,
     submitOntBarcodeBatch,
+    prepareOntBarcodeBatch,
+    prepareExecutionPlacement,
+    type OntBarcodeBatchSubmitRequest,
+
     type MolBioSequenceRevision,
     type NucleotideSequenceListItem,
     type OntBarcodeUnit,
@@ -44,7 +52,7 @@ interface BarcodeMappingCellsProps {
 
 function BarcodeMappingCells({ unitId, sequences, mapping, onChange }: BarcodeMappingCellsProps) {
     const revisionsQuery = useQuery<MolBioSequenceRevision[]>({
-        queryKey: ['ont-barcode-revisions', unitId, mapping.sequenceId],
+        queryKey: ['ont-barcode-revisions', mapping.sequenceId],
         queryFn: async () => (await fetchMolBioSequenceRevisions(mapping.sequenceId)).data,
         enabled: Boolean(mapping.sequenceId),
         retry: false,
@@ -118,7 +126,7 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
             sort_by: 'name',
             sort_desc: false,
         })).data,
-        enabled,
+        enabled: enabled && Boolean(unitsQuery.data?.some(unit => unit.unit_id !== 'unclassified')),
         staleTime: 30_000,
         retry: false,
     });
@@ -128,8 +136,11 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
     const unclassifiedUnit = allUnits.find((unit) => unit.unit_id === 'unclassified');
     const sequences = sequencesQuery.data || [];
 
+    const [executionTargetId, setExecutionTargetId] = useState<string | null>(null);
+    const [executionPolicy, setExecutionPolicy] = useState<ExecutionPolicy | undefined>();
+    const submission = useOntDomainSubmission<OntBarcodeBatchSubmitRequest>(JSON.stringify([jobId, targetWorkflow, namePrefix, pinnedGpu, mappingByUnit, executionTargetId, executionPolicy]));
     const submitMutation = useMutation({
-        mutationFn: async () => {
+        mutationFn: () => submission.submit(async () => {
             const drafts = units.map((unit) => ({
                 unit,
                 draft: mappingByUnit[unit.unit_id] || {
@@ -141,7 +152,7 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
                 throw new Error('Choose a saved sequence and revision for every barcode before submitting.');
             }
             const selected = drafts;
-            const parsedPinnedGpu = pinnedGpu.trim() ? Number.parseInt(pinnedGpu, 10) : null;
+            const parsedPinnedGpu = !executionTargetId && pinnedGpu.trim() ? Number(pinnedGpu) : null;
             if (parsedPinnedGpu !== null && (!Number.isInteger(parsedPinnedGpu) || parsedPinnedGpu < 0)) {
                 throw new Error('Pinned GPU must be a non-negative integer.');
             }
@@ -157,15 +168,18 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
                 };
             }));
 
-            return submitOntBarcodeBatch(jobId, {
+            return {
                 idempotency_key: newIdempotencyKey('ont-barcode-batch'),
                 target_workflow: targetWorkflow,
                 ...(namePrefix.trim() ? { name_prefix: namePrefix.trim() } : {}),
                 ...(parsedPinnedGpu !== null ? { pinned_gpu: parsedPinnedGpu } : {}),
                 mappings,
-            });
-        },
+                ...prepareExecutionPlacement({ execution_target_id: executionTargetId, execution_policy: executionPolicy }),
+            };
+        }, async request => (await prepareOntBarcodeBatch(jobId, request)).data,
+        (request, approvals) => submitOntBarcodeBatch(jobId, { ...request, ...(request.execution_target_id ? { execution_plan_approvals: approvals } : {}) })),
         onSuccess: (response) => {
+            if (!response) return;
             setMessage(`Submitted ${response.data.child_job_ids.length} barcode children in reference set ${response.data.reference_set_id}.`);
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
         },
@@ -176,6 +190,9 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
 
     return (
         <section className="w-full space-y-3 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4" data-testid="ont-barcode-units-panel">
+            {submission.review}
+            <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} />
+            <ExecutionPolicyControl onChange={setExecutionPolicy} />
             <div>
                 <h4 className="text-sm font-semibold text-[var(--text-primary)]">Demultiplexed barcode units</h4>
                 <p className="text-xs text-[var(--text-secondary)]">Choose a saved sequence revision for each barcode. All barcode jobs are submitted together, or none are created.</p>
@@ -186,7 +203,7 @@ export function BarcodeUnitsPanel({ jobId, enabled }: BarcodeUnitsPanelProps) {
                     <option value="ont_construct_screening">Construct screening</option>
                 </select>
                 <input value={namePrefix} onChange={(event) => setNamePrefix(event.target.value)} placeholder="Optional name prefix" className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-sm text-[var(--text-primary)]" />
-                <input value={pinnedGpu} onChange={(event) => setPinnedGpu(event.target.value)} inputMode="numeric" placeholder="Optional pinned GPU" className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-sm text-[var(--text-primary)]" />
+                <input disabled={Boolean(executionTargetId)} value={pinnedGpu} onChange={(event) => setPinnedGpu(event.target.value)} inputMode="numeric" placeholder="Optional pinned GPU" className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-sm text-[var(--text-primary)]" />
                 <button type="button" disabled={submitMutation.isPending || units.length === 0} onClick={() => submitMutation.mutate()} className="rounded bg-blue-600 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-40">
                     {submitMutation.isPending ? 'Submitting batch…' : 'Submit mapped batch'}
                 </button>

@@ -3,6 +3,7 @@ import ontCloneSchema from '../../../../schemas/ngs_molbio/ngs-ont-clone_validat
 import doradoLock from '../../../../config/ngs/dorado_v2.1.2.lock.json';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { ExecutionPlanApproval } from './ExecutionPlanApproval';
+import { useOntDomainSubmission } from './ngs/useOntDomainSubmission';
 import { ExecutionPolicyControl } from './ExecutionPolicyControl';
 import { newJobExecutionPolicy, normalizeResultPolicy, type ExecutionPolicy } from '../lib/executionPolicy';
 /**
@@ -33,6 +34,7 @@ import {
     type OntNgsPreparedReview,
     prepareExecutionPlacement,
     submitPooledReferenceAssignment,
+    preparePooledReferenceAssignment,
     type MolBioSequenceImportCommitResponse,
     type MolBioSequenceImportError,
     type MolBioSequenceImportPayload,
@@ -670,20 +672,24 @@ function PooledTargetRow({ target, sequences, onChange }: PooledTargetRowProps) 
 }
 
 interface PooledReferenceAssignmentPanelProps {
+    executionTargetId: string | null;
+    executionPolicy?: ExecutionPolicy;
     fastqPath: string;
     sequences: NucleotideSequenceListItem[];
     onFastqBrowse: () => void;
 }
 
-function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse }: PooledReferenceAssignmentPanelProps) {
+function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse, executionTargetId, executionPolicy }: PooledReferenceAssignmentPanelProps) {
+    const navigate = useNavigate();
     const queryClient = useQueryClient();
     const [targets, setTargets] = useState<PooledTargetDraft[]>(() => [createPooledTarget(0), createPooledTarget(1)]);
     const [minMapq, setMinMapq] = useState(20);
     const [minAlignmentScoreMargin, setMinAlignmentScoreMargin] = useState(5);
     const [message, setMessage] = useState('');
+    const submission = useOntDomainSubmission<PooledReferenceAssignmentSubmitRequest>(JSON.stringify([fastqPath, targets, minMapq, minAlignmentScoreMargin, executionTargetId, executionPolicy]));
 
     const submitMutation = useMutation({
-        mutationFn: async () => {
+        mutationFn: () => submission.submit(async () => {
             if (!fastqPath.trim()) throw new Error('Select a FASTQ input before submitting pooled assignment.');
             if (targets.length < 2 || targets.length > 96) throw new Error('Pooled assignment requires 2-96 targets.');
             const targetIds = targets.map((target) => target.targetId.trim());
@@ -715,11 +721,19 @@ function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse }:
                 targets: receiptTargets,
                 min_mapq: minMapq,
                 min_alignment_score_margin: minAlignmentScoreMargin,
+                ...prepareExecutionPlacement({ execution_target_id: executionTargetId, execution_policy: executionPolicy }),
             };
-            return submitPooledReferenceAssignment(payload);
-        },
+            return payload;
+        }, async request => {
+            const prepared = (await preparePooledReferenceAssignment(request)).data;
+            return { request: prepared.request, previews: { assignment: prepared.preview } };
+        }, (request, approvals) => submitPooledReferenceAssignment({ ...request, ...(request.execution_target_id ? { execution_plan_approval: approvals.assignment } : {}) })),
         onSuccess: (response) => {
+            if (!response) return;
             setMessage(`Submitted pooled assignment ${response.data.assignment_job_id}.`);
+            const search = new URLSearchParams(window.location.search);
+            search.set('section', 'analyses'); search.set('job_id', response.data.assignment_job_id);
+            navigate(`/ngs?${search}`);
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
         },
         onError: (error: unknown) => setMessage(extractApiErrorMessage(error)),
@@ -727,6 +741,7 @@ function PooledReferenceAssignmentPanel({ fastqPath, sequences, onFastqBrowse }:
 
     return (
         <section className="space-y-3 rounded-lg border border-[var(--accent-secondary)] bg-[var(--bg-secondary)] p-4 xl:col-span-12" data-testid="pooled-reference-assignment-panel">
+            {submission.review}
             <div>
                 <h2 className="text-base font-semibold text-[var(--text-primary)]">Pooled FASTQ reference assignment</h2>
                 <p className="mt-1 text-xs text-[var(--text-secondary)]">Select 2-96 exact saved MolBio revisions. The job stops at REVIEW and requires explicit target release before consensus.</p>
@@ -1670,7 +1685,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         <div className="nanopore-template mx-auto max-w-[1480px] space-y-6 rounded-2xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-secondary)_25%,#000)] p-4 shadow-[0_28px_90px_rgba(0,0,0,0.38)] lg:p-6">
             {review && review.key === requestKey && <ExecutionPlanApproval preview={review.prepared.preview} finish={review.finish} />}
             <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} />
-            <div hidden={selectedWorkflow === 'pooledAssignment'}><ExecutionPolicyControl initialPolicy={initialReturnPolicy} onChange={setReturnPolicy} /></div>
+            <ExecutionPolicyControl initialPolicy={initialReturnPolicy} onChange={setReturnPolicy} />
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -1866,9 +1881,10 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             {/* Shared MolBio and NGS reference library */}
             <section className={TASK_FLOW_PANEL} data-testid="immutable-molbio-reference-panel" data-ngs-section="reference" aria-labelledby="ngs-reference-heading">
                 <h2 id="ngs-reference-heading" className={`${TASK_FLOW_LABEL} mb-3`}>2 · Reference / sample</h2>
-                {selectedWorkflow === 'pooledAssignment' ? (executionTargetId
-                    ? <p role="alert" className="text-sm text-amber-200">Pooled assignment uses its independent local workflow. Choose Local explicitly before submitting; it will not fall back from the selected worker.</p>
-                    : <PooledReferenceAssignmentPanel
+                {selectedWorkflow === 'pooledAssignment' ? (
+                    <PooledReferenceAssignmentPanel
+                        executionTargetId={executionTargetId}
+                        executionPolicy={initialReturnPolicy}
                         fastqPath={fastqPath}
                         sequences={molbioSequences}
                         onFastqBrowse={() => openPathPicker({ field: 'fastqPath', title: 'Select FASTQ File', mode: 'file', filter: 'fastq' })}
@@ -2546,7 +2562,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                 </div>
                             </div>
                         )}
-                        {runAssembly && !barcodeKit && (
+                        {cloneValidationControlsActive && (
                             <div className="space-y-3 border-t border-[var(--border-primary)] pt-3">
                                 <div className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">wf-clone-validation</div>
                                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">

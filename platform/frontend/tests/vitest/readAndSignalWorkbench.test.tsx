@@ -2215,6 +2215,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(contextMocks.updateQueryParams).toHaveBeenCalledWith({
             job_id: otherJob.id,
             viewer_session_id: null,
+            view: null, run_id: null, reference_set_id: null, assignment_id: null,
         });
 
         contextMocks.contextHref.mockClear();

@@ -63,6 +63,7 @@ import { NanoporeTemplate } from './NanoporeTemplate';
 import { OntInstrumentPanel } from './ngs/OntInstrumentPanel';
 import { RawReadInspector } from './ngs/RawReadInspector';
 import { ReadAndSignalWorkbench } from './ngs/ReadAndSignalWorkbench';
+import { NgsArtifactDownloads } from './ngs/NgsArtifactDownloads';
 import { isOwnedFullscreen, toggleOwnedFullscreen } from './ngs/ngsFullscreenOwner';
 import { BarcodeUnitsPanel } from './ngs/BarcodeUnitsPanel';
 import { PooledAssignmentReviewPanel } from './ngs/PooledAssignmentReviewPanel';
@@ -2226,7 +2227,7 @@ export function NGSToolkit() {
         queryFn: () => fetchPooledAssignmentManifest(requestedJobId as string),
         enabled: Boolean(requestedJobId && requestedAssignmentId),
     });
-    const [view, setView] = useState<ToolkitView>(() => ngsToolkitViewFromSearch(location.search));
+    const view = ngsToolkitViewFromSearch(location.search);
     const [initialValues, setInitialValues] = useState<Record<string, unknown> | undefined>(undefined);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
@@ -2248,9 +2249,6 @@ export function NGSToolkit() {
         selectedJobIdRef.current = selectedJobId;
         alignmentAccessRecoveryGenerationRef.current += 1;
     }, [selectedJobId]);
-    useEffect(() => {
-        setView(ngsToolkitViewFromSearch(location.search));
-    }, [location.search]);
     const selectView = useCallback((nextView: ToolkitView) => {
         navigate({
             pathname: location.pathname,
@@ -2531,7 +2529,7 @@ export function NGSToolkit() {
     const rawSignalCapabilitiesQuery = useQuery({
         queryKey: ['ont-raw-signal-for-job', rawSignalRunId, rawSignalObservedGeneration],
         queryFn: () => fetchOntRawSignalCapabilities(rawSignalRunId, rawSignalObservedGeneration as number, 'blow5'),
-        enabled: Boolean(rawSignalRunId && rawSignalObservedGeneration),
+        enabled: Boolean(igvModalOpen && igvInspectorOpen && rawSignalRunId && rawSignalObservedGeneration),
         staleTime: 30_000,
     });
     const rawSignalRepresentationId = rawSignalCapabilitiesQuery.data?.modes.raw_waveform.state === 'ready'
@@ -4600,7 +4598,7 @@ export function NGSToolkit() {
                                                 <td className="px-4 py-2">
                                                     <div className="flex gap-2">
                                                         <button
-                                                            onClick={() => updateQueryParams({ job_id: job.id, viewer_session_id: null })}
+                                                            onClick={() => updateQueryParams({ job_id: job.id, viewer_session_id: null, view: null, run_id: null, reference_set_id: null, assignment_id: null })}
                                                             className="px-2 py-1 text-xs rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] text-[var(--text-primary)]"
                                                         >
                                                             Inspect
@@ -4815,6 +4813,7 @@ export function NGSToolkit() {
                                 />
 
                                 <BarcodeUnitsPanel
+                                    key={`barcode-units-${selectedJob.id}`}
                                     jobId={selectedJob.id}
                                     enabled={selectedJob.status === 'completed' && selectedJob.model_id === 'nanopore' && selectedJob.mode === 'basecall_dna' && Boolean(selectedJob.params?.barcode_kit)}
                                 />
@@ -5483,6 +5482,7 @@ export function NGSToolkit() {
                                 {!isCanonicalFastqQcRun && (
                                 <div className="space-y-2">
                                     <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Stage Artifacts</h4>
+                                    {selectedJob.status === 'completed' && <NgsArtifactDownloads jobId={selectedJob.id} />}
                                     {Object.keys(stageOutputs).length === 0 ? (
                                         <p className="text-sm text-[var(--text-secondary)]">No stage outputs recorded yet.</p>
                                     ) : (
@@ -5495,20 +5495,10 @@ export function NGSToolkit() {
                                                     ) : (
                                                         <ul className="space-y-1">
                                                             {outputs.map((output) => {
-                                                                const href = toDownloadHref(output, selectedJob?.id || undefined);
                                                                 const name = output.split('/').pop() || output;
                                                                 return (
                                                                     <li key={`${stage}:${output}`} className="text-xs">
-                                                                        {href ? (
-                                                                            <a
-                                                                                href={href}
-                                                                                className="text-sky-300 hover:text-sky-200 underline break-all"
-                                                                            >
-                                                                                {name}
-                                                                            </a>
-                                                                        ) : (
-                                                                            <span className="text-[var(--text-secondary)] break-all">{name}</span>
-                                                                        )}
+                                                                        <span className="text-[var(--text-secondary)] break-all">{name}</span>
                                                                     </li>
                                                                 );
                                                             })}

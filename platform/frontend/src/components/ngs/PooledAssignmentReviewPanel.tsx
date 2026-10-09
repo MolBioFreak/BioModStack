@@ -1,9 +1,16 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { ExecutionTargetPicker } from '../ExecutionTargetPicker';
+import { ExecutionPolicyControl } from '../ExecutionPolicyControl';
+import { useOntDomainSubmission } from './useOntDomainSubmission';
+import type { ExecutionPolicy } from '../../lib/executionPolicy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     fetchPooledAssignmentManifest,
     fetchPooledAssignmentTargets,
     releasePooledAssignment,
+    preparePooledAssignmentRelease,
+    prepareExecutionPlacement,
+
     type Job,
     type PooledAssignmentManifest,
     type PooledAssignmentReleaseRequest,
@@ -217,7 +224,6 @@ export function PooledAssignmentReviewPanel({
     const [namePrefix, setNamePrefix] = useState('');
     const [pinnedGpu, setPinnedGpu] = useState('');
     const [releaseResponse, setReleaseResponse] = useState<PooledAssignmentReleaseResponse | null>(null);
-    const [idempotencyKey] = useState(newIdempotencyKey);
 
     const manifestQuery = useQuery({
         queryKey: ['pooled-assignment-manifest', jobId],
@@ -246,30 +252,38 @@ export function PooledAssignmentReviewPanel({
         || jobStatus;
     const scientificStatus = manifestQuery.data?.scientific_status || 'REVIEW';
 
+    const [executionTargetId, setExecutionTargetId] = useState<string | null>(null);
+    const [executionPolicy, setExecutionPolicy] = useState<ExecutionPolicy | undefined>();
+    const releaseKey = JSON.stringify([jobId, selectedTargetIds, targetWorkflow, namePrefix, pinnedGpu, executionTargetId, executionPolicy]);
+    const submission = useOntDomainSubmission<PooledAssignmentReleaseRequest>(releaseKey);
+    useEffect(() => { setReleaseResponse(null); }, [releaseKey]);
     const releaseMutation = useMutation({
-        mutationFn: async () => {
+        mutationFn: () => submission.submit(async () => {
             const targetIds = selectedTargetIds.filter((targetId) => selectableTargetIds.has(targetId));
             if (targetIds.length === 0) {
                 throw new Error('Select at least one target explicitly before release.');
             }
             const trimmedPinnedGpu = pinnedGpu.trim();
             let parsedPinnedGpu: number | undefined;
-            if (trimmedPinnedGpu) {
+            if (!executionTargetId && trimmedPinnedGpu) {
                 if (!/^\d+$/u.test(trimmedPinnedGpu)) {
                     throw new Error('Pinned GPU must be a non-negative integer.');
                 }
                 parsedPinnedGpu = Number.parseInt(trimmedPinnedGpu, 10);
             }
             const request: PooledAssignmentReleaseRequest = {
-                idempotency_key: idempotencyKey,
+                idempotency_key: newIdempotencyKey(),
                 target_workflow: targetWorkflow,
                 ...(namePrefix.trim() ? { name_prefix: namePrefix.trim() } : {}),
                 ...(parsedPinnedGpu === undefined ? {} : { pinned_gpu: parsedPinnedGpu }),
                 target_ids: targetIds,
+                ...prepareExecutionPlacement({ execution_target_id: executionTargetId, execution_policy: executionPolicy }),
             };
-            return releasePooledAssignment(jobId, request);
-        },
+            return request;
+        }, async request => (await preparePooledAssignmentRelease(jobId, request)).data,
+        (request, approvals) => releasePooledAssignment(jobId, { ...request, ...(request.execution_target_id ? { execution_plan_approvals: approvals } : {}) })),
         onSuccess: (response) => {
+            if (!response) return;
             setReleaseResponse(response.data);
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             queryClient.invalidateQueries({ queryKey: ['job-stages', jobId] });
@@ -283,6 +297,9 @@ export function PooledAssignmentReviewPanel({
             className="w-full min-w-0 space-y-4 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4"
             data-testid="pooled-assignment-review-panel"
         >
+            {submission.review}
+            <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} />
+            <ExecutionPolicyControl onChange={setExecutionPolicy} />
             <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                     <h4 className="text-base font-semibold text-[var(--text-primary)]">Pooled assignment review</h4>
@@ -446,6 +463,7 @@ export function PooledAssignmentReviewPanel({
                         <label className="space-y-1 text-xs text-[var(--text-secondary)]">
                             Optional pinned GPU
                             <input
+                                disabled={Boolean(executionTargetId)}
                                 value={pinnedGpu}
                                 onChange={(event) => setPinnedGpu(event.target.value)}
                                 inputMode="numeric"

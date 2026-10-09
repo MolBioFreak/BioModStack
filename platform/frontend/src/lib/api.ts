@@ -1602,6 +1602,10 @@ export interface OntBarcodeBatchSubmitRequest {
     name_prefix?: string;
     pinned_gpu?: number | null;
     mappings: OntBarcodeBatchMapping[];
+    execution_target_id?: string | null;
+    execution_policy?: ExecutionPolicy;
+    reference_set_id?: string | null;
+    execution_plan_approvals?: Record<string, string>;
 }
 
 export interface OntBarcodeBatchSubmitResponse {
@@ -1614,7 +1618,6 @@ export const submitOntBarcodeBatch = (
     sourceJobId: string,
     request: OntBarcodeBatchSubmitRequest,
 ) => {
-    assertLocalOnlySubmission('ONT barcode batch');
     return api.post<OntBarcodeBatchSubmitResponse>(
         `/api/jobs/${encodeURIComponent(sourceJobId)}/barcode-batches`,
         request,
@@ -1634,6 +1637,10 @@ export interface PooledReferenceAssignmentSubmitRequest {
     targets: PooledReferenceAssignmentTarget[];
     min_mapq: number;
     min_alignment_score_margin: number;
+    execution_target_id?: string | null;
+    execution_policy?: ExecutionPolicy;
+    reference_set_id?: string | null;
+    execution_plan_approval?: string | null;
 }
 
 export interface PooledReferenceAssignmentSubmitResponse {
@@ -1648,7 +1655,6 @@ export interface PooledReferenceAssignmentSubmitResponse {
 export const submitPooledReferenceAssignment = (
     request: PooledReferenceAssignmentSubmitRequest,
 ) => {
-    assertLocalOnlySubmission('Pooled reference assignment');
     return api.post<PooledReferenceAssignmentSubmitResponse>(
         '/api/ont/ngs/pooled-reference-assignment/submit',
         request,
@@ -1698,6 +1704,10 @@ export interface PooledAssignmentReleaseRequest {
     name_prefix?: string;
     pinned_gpu?: number;
     target_ids: string[];
+    execution_target_id?: string | null;
+    execution_policy?: ExecutionPolicy;
+    release_id?: string | null;
+    execution_plan_approvals?: Record<string, string>;
 }
 
 export interface PooledAssignmentReleaseResponse {
@@ -1722,6 +1732,28 @@ export const releasePooledAssignment = (
     `/api/jobs/${encodeURIComponent(assignmentJobId)}/pooled-assignment/release`,
     request,
 );
+
+export interface OntDomainPreparedReview<T> {
+    request: T;
+    request_fingerprint: string;
+    previews: Record<string, import('../components/ExecutionPlanApproval').ExecutionPlanPreview>;
+}
+
+export const prepareOntBarcodeBatch = (sourceJobId: string, request: OntBarcodeBatchSubmitRequest) =>
+    api.post<OntDomainPreparedReview<OntBarcodeBatchSubmitRequest>>(
+        `/api/jobs/${encodeURIComponent(sourceJobId)}/barcode-batches/prepare`, request,
+    );
+
+export const preparePooledReferenceAssignment = (request: PooledReferenceAssignmentSubmitRequest) =>
+    api.post<{ request: PooledReferenceAssignmentSubmitRequest; request_fingerprint: string;
+        preview: import('../components/ExecutionPlanApproval').ExecutionPlanPreview }>(
+        '/api/ont/ngs/pooled-reference-assignment/prepare', request,
+    );
+
+export const preparePooledAssignmentRelease = (assignmentJobId: string, request: PooledAssignmentReleaseRequest) =>
+    api.post<OntDomainPreparedReview<PooledAssignmentReleaseRequest>>(
+        `/api/jobs/${encodeURIComponent(assignmentJobId)}/pooled-assignment/release/prepare`, request,
+    );
 
 export interface BoltzGenPreviewResponse {
     yaml_text: string;

@@ -7,9 +7,14 @@ const pooled = vi.hoisted(() => ({
     fetchManifest: vi.fn(),
     fetchTargets: vi.fn(),
     release: vi.fn(),
+    prepare: vi.fn(),
+    executionTargets: vi.fn(async () => ({ data: [] as unknown[] })),
 }));
 
-vi.mock('../../src/lib/api', () => ({
+vi.mock('../../src/lib/api', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../../src/lib/api')>()),
+    fetchExecutionTargets: pooled.executionTargets,
+    preparePooledAssignmentRelease: pooled.prepare,
     fetchPooledAssignmentManifest: pooled.fetchManifest,
     fetchPooledAssignmentTargets: pooled.fetchTargets,
     releasePooledAssignment: pooled.release,
@@ -117,6 +122,8 @@ beforeEach(() => {
     pooled.fetchManifest.mockReset();
     pooled.fetchTargets.mockReset();
     pooled.release.mockReset();
+    pooled.prepare.mockReset();
+    pooled.executionTargets.mockResolvedValue({ data: [] });
     pooled.fetchManifest.mockResolvedValue({ data: manifest });
     pooled.fetchTargets.mockResolvedValue({ data: { assignment_job_id: manifest.assignment_job_id, reference_set_id: manifest.reference_set_id, targets } });
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -133,6 +140,37 @@ afterEach(async () => {
 });
 
 describe('PooledAssignmentReviewPanel', () => {
+    it('reviews both prepared targets once and reuses the retained release after a failed commit', async () => {
+        pooled.executionTargets.mockResolvedValue({ data: [{ id: 'worker-b', name: 'Independent worker', active: true, state: 'ready', capabilities: {} }] });
+        const plan = (digest: string) => ({ schema: 'bms.job.execution-preview.v1', approval_digest: digest.repeat(64), admissible: true,
+            request: { model_id: 'nanopore', mode: 'plasmid_qc', execution_target_id: 'worker-b' },
+            plan: { requested_json: {}, effective_json: {}, source_identity: { revision: 'source', tree: 'tree' },
+                metadata: { static_components: [], dynamic_templates: [], external_services: [] } }, deferred_preparation: [], blockers: [] });
+        pooled.prepare.mockImplementation(async (_job, request) => ({ data: { request: { ...request, release_id: 'retained-release' }, request_fingerprint: 'f'.repeat(64), previews: { 'target-a': plan('a'), 'target-b': plan('b') } } }));
+        pooled.release.mockRejectedValueOnce(new Error('retryable commit failure')).mockResolvedValueOnce({ data: releaseResponse });
+        await renderPanel();
+        await waitUntil(() => expect(container.textContent).toContain('Independent worker'));
+        const button = (text: string) => [...document.querySelectorAll('button')].find(b => b.textContent?.includes(text))!;
+        await act(async () => {
+            button('Independent worker').click();
+            container.querySelector<HTMLInputElement>('[aria-label="Explicitly select target-a"]')!.click();
+            container.querySelector<HTMLInputElement>('[aria-label="Explicitly select target-b"]')!.click();
+        });
+        await act(async () => button('Release selected targets').click());
+        await waitUntil(() => expect(document.body.textContent).toContain('Review remote execution plan'));
+        expect(document.body.textContent).toContain('target-a');
+        expect(document.body.textContent).toContain('target-b');
+        expect(pooled.release).not.toHaveBeenCalled();
+        await act(async () => button('Approve and submit').click());
+        await waitUntil(() => expect(container.textContent).toContain('retryable commit failure'));
+        await act(async () => button('Release selected targets').click());
+        await waitUntil(() => expect(document.body.textContent).toContain('Review remote execution plan'));
+        await act(async () => button('Approve and submit').click());
+        await waitUntil(() => expect(pooled.release).toHaveBeenCalledTimes(2));
+        expect(pooled.prepare).toHaveBeenCalledTimes(1);
+        expect(pooled.release.mock.calls[1]).toEqual(pooled.release.mock.calls[0]);
+        expect(pooled.release.mock.calls[0][1]).toMatchObject({ execution_target_id: 'worker-b', release_id: 'retained-release', execution_plan_approvals: { 'target-a': 'a'.repeat(64), 'target-b': 'b'.repeat(64) } });
+    });
     it('keeps scientific REVIEW distinct from completed execution and does not release automatically', async () => {
         await renderPanel();
         await waitUntil(() => expect(container.textContent).toContain('Target A'));
@@ -140,14 +178,14 @@ describe('PooledAssignmentReviewPanel', () => {
         expect(container.querySelector('[data-testid="pooled-assignment-execution-status"]')?.textContent).toContain('completed');
         expect(container.querySelector('[data-testid="pooled-assignment-scientific-status"]')?.textContent).toContain('REVIEW');
         expect(pooled.release).not.toHaveBeenCalled();
-        expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(2);
+        expect(container.querySelectorAll('input[aria-label^="Explicitly select"]')).toHaveLength(2);
         expect(container.querySelector('[aria-label="Explicitly select ambiguous"]')).toBeNull();
         expect(container.querySelector('[aria-label="Explicitly select unclassified"]')).toBeNull();
         expect(container.querySelector('[data-testid="pooled-assignment-review-artifacts"]')).not.toBeNull();
         expect(container.textContent).toContain('sequence-a');
         expect(container.textContent).toContain('revision-a');
         expect(container.textContent).toContain('same-sequence-1');
-        expect(container.querySelectorAll('button').length).toBe(1);
+        expect(container.querySelector('[aria-label="Execution target"]')).not.toBeNull();
         const releaseButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Release selected targets')) as HTMLButtonElement;
         expect(releaseButton.disabled).toBe(true);
     });
@@ -156,13 +194,13 @@ describe('PooledAssignmentReviewPanel', () => {
         await renderPanel();
         await waitUntil(() => expect(container.textContent).toContain('Target B'));
 
-        const checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+        const checkboxes = Array.from(container.querySelectorAll('input[aria-label^="Explicitly select"]')) as HTMLInputElement[];
         await act(async () => {
             checkboxes[0]?.click();
             checkboxes[1]?.click();
         });
 
-        const workflow = container.querySelector('select') as HTMLSelectElement;
+        const workflow = [...container.querySelectorAll('select')].find(select => select.querySelector('option[value="ont_construct_screening"]'))!;
         await act(async () => {
             workflow.value = 'ont_construct_screening';
             workflow.dispatchEvent(new Event('change', { bubbles: true }));
