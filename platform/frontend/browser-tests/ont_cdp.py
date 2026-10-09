@@ -20,7 +20,8 @@ args = parser.parse_args()
 pages = json.load(urlopen(f'http://127.0.0.1:{args.port}/json'))
 page = next(p for p in pages if p['type'] == 'page')
 events = []
-with connect(page['webSocketDebuggerUrl'], origin=None) as ws:
+# Native report bodies exceed websockets' default 1 MiB message limit.
+with connect(page['webSocketDebuggerUrl'], origin=None, max_size=64 * 1024 * 1024) as ws:
     serial = 0
     def call(method, **params):
         global serial
