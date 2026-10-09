@@ -2947,7 +2947,7 @@ function ResultsViewerContent() {
         if (!raw) return null;
         if (typeof raw === 'object' && 'schema_name' in raw && raw.schema_name === 'core_protein_viewer_metric') {
             const parsed = parseScientificPae(raw, selectedDesign?.scientific_structure_document,selectedDesignId ?? undefined);
-            return parsed.status === 'ok' ? `${parsed.rows.length} × ${parsed.columns.length} matrix` : parsed.reason;
+            return parsed.status === 'ok' ? `${parsed.matrix.length} × ${parsed.matrix[0].length} matrix` : parsed.reason;
         }
         return typeof raw === 'object' && 'size' in raw && typeof raw.size === 'number' && Number.isSafeInteger(raw.size)
             ? `${raw.size} × ${raw.size} matrix` : null;

@@ -8,6 +8,7 @@ import { AnalyticsDashboard } from '../../src/components/AnalyticsDashboard';
 import { ResultsViewer } from '../../src/components/ResultsViewer';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
 import { confidenceProfile, isStandaloneStructurePrediction } from '../../src/components/StructurePredictionResults';
+import { esmfold2Fixture } from '../fixtures/scientificViewerEsmfold2Fixture';
 import { nativeAtomFixture, unavailable } from '../fixtures/nativeAtomViewerFixture';
 
 vi.mock('react-plotly.js', () => ({ default: (props: any) => <div data-plot={props} /> }));
@@ -37,21 +38,25 @@ function other() {
 const b = other();
 const designs: any[] = [a, b].map((p, i) => ({ id: p.document.candidateId, job_id: 'job', name: `sample ${i}`, pdb_path: `sample-${i}.cif`, scientific_structure_document: p.document, core_protein_scientific_contract: 1, analysis_contract_id: 'structure_prediction_v1', review_artifact_manifest: { schema: 'bms.review-artifacts.v1', artifacts: { structure: { state: 'ready' } } }, review_profile_id: 'structure_prediction_v1', viewer_capabilities: ['structure_viewer'], supported_analyzers: [], provenance: { model_id: 'protenix', producer_model_id: 'protenix' }, confidence_metrics: { plddt: 90 - i, ptm: 0.9, iptm: 0.8 }, plddt_overall: 90 - i, ptm: 0.9 }));
 const job: any = { id: 'job', name: 'Prediction fixture', model_id: 'protenix', mode: 'complex', status: 'completed', design_count: 2, params: {}, created_at: '2026-09-01T00:00:00Z' };
-function transport({ missing = false, legacy = false, canonical = false, residueConfidence = false, paeRequestFails = false, legacyResidueOnly = false } = {}) {
+function transport({ missing = false, legacy = false, canonical = false, residueConfidence = false, paeRequestFails = false, legacyResidueOnly = false, sampledTokens = false, missingReason = 'full_pae_not_requested' } = {}) {
     calls.length = 0;
     vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
     const metricData = (url: string) => {
-        const p = url.includes('/other/') ? b : a;
-        if (url.includes('residue-metrics') && residueConfidence) {
-            const c = nativeAtomFixture(1).confidence;
-            c.metric = 'residue_plddt';
-            for (const ref of c.axis.residues) { delete ref.label_atom_id; delete ref.auth_atom_id; delete ref.element; }
-            return c;
+        const p = residueConfidence ? esmfold2Fixture(url.includes('/other/') ? 'other' : 'candidate', url.includes('/other/') ? 1 : 0) : url.includes('/other/') ? b : a;
+        if (residueConfidence) {
+            const expected = url.includes('/other/') ? b.document : a.document;
+            p.document = expected; p.confidence.document = expected; p.pae.document = expected;
+            p.confidence.axis.source_sha256 = expected.contentSha256;
+            p.pae.row_axis.source_sha256 = expected.contentSha256; p.pae.column_axis.source_sha256 = expected.contentSha256;
         }
         if (url.includes('residue-metrics')) return legacy ? { design_id: p.document.candidateId, length: 1, residue_numbers: [1], plddt: [80] } : p.confidence;
         if (url.includes('chain-metrics') && legacyResidueOnly) return {};
         if (url.includes('chain-metrics')) return legacy ? { A: { type: 'protein', length: 2, avg_plddt: 85, plddt: [80,90], residue_numbers: [10,12] } } : unavailable('chain_metrics');
-        if (url.includes('/pae')) return missing ? unavailable('pae', 'full_pae_not_requested') : legacy ? { pae_matrix: [[0,4],[8,0]], size: 2 } : p.pae;
+        if (sampledTokens) {
+            p.pae.sampled_row_indices = [0,4]; p.pae.sampled_column_indices = [0,4]; p.pae.size = 2;
+            p.pae.pae_matrix = [0,4].map(r => [0,4].map(c => p.pae.pae_matrix[r][c]));
+        }
+        if (url.includes('/pae')) return missing ? unavailable('pae', missingReason) : legacy ? { pae_matrix: [[0,4],[8,0]], size: 2 } : p.pae;
         return null;
     };
     vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => metricData(url) })));
@@ -154,9 +159,63 @@ it('fixed-scale comparison is lazy and every tile keeps its own native values', 
 it.each(['esmfold2', 'esmfold2_experimental'])('%s uses native residue confidence, not a scalar token mean', async modelId => {
     transport({ residueConfidence: true });
     await mount(<AnalyticsDashboard modelId={modelId} designs={[designs[0]]} structure={<div />} />);
-    expect(profilePlot().data[0].y).toEqual([90]);
+    expect(profilePlot().data.map((trace: any) => trace.y)).toEqual([[.5],[80],[40]]);
+    expect(profilePlot().data[0].x).toEqual(['42A']);
+    expect(heatmap().data[0].z).toEqual(esmfold2Fixture().pae.pae_matrix);
+    expect(heatmap().data[0].x).toEqual(['Token 0','Token 1','Token 2','Token 3','Token 4']);
+    expect(tree!.root.findAllByProps({'aria-label':'Row chain'})).toHaveLength(0);
+    expect(text(tree!.root)).toContain('native_token_to_structure_mapping_unavailable');
+    expect(text(tree!.root)).toContain('native_output_order');
+    expect(text(tree!.root)).toContain('Native collapsed-CIF-residue pLDDT');
     expect(text(tree!.root)).toContain('Not a token-mean summary');
     expect(text(tree!.root)).not.toContain('Native Cα atom pLDDT');
+});
+it('native token clicks never emit scene selections; collapsed CIF profile selections still do', async () => {
+    transport({residueConfidence: true});
+    await mount(<MemoryRouter initialEntries={['/designs/job?design_id=candidate&tab=charts']}><ThemeProvider><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></ThemeProvider></MemoryRouter>);
+    await flush();
+    const engine = () => tree!.root.findAll(n => n.type === 'div' && !!n.props['data-native-url'])[0];
+    const focused = () => engine().props['data-native-queries'].filter((query: any) => query.color?.g === 185);
+    expect(focused()).toEqual([]);
+    await act(async () => heatmap().onClick({points:[{x:'Token 4',y:'Token 0'}]}));
+    expect(focused()).toEqual([]);
+    expect(tree!.root.findAllByProps({'aria-label':'Confidence selection'})).toHaveLength(0);
+    await act(async () => profilePlot().onClick({points:[{customdata:profilePlot().data[0].customdata[0]}]}));
+    expect(focused().length).toBeGreaterThan(0);
+    expect(text(tree!.root.findByProps({'aria-label':'Confidence selection'}))).toContain('A:42A ALA');
+    const before = focused();
+    await act(async () => heatmap().onClick({points:[{x:'Token 1',y:'Token 2'}]}));
+    expect(focused()).toEqual(before);
+    const disclosure = tree!.root.findAllByType('details').find(d => text(d.findAllByType('summary')[0]).startsWith('Compare native PAE'))!;
+    await act(async () => disclosure.props.onToggle({currentTarget:{open:true}})); await flush();
+    const maps = plots().filter(p => p.data[0]?.type === 'heatmap' && p.data[0].zmax === 30);
+    expect(maps).toHaveLength(3);
+    expect(maps[2].data[0].z).toEqual(esmfold2Fixture('other',1).pae.pae_matrix);
+    expect(maps[2].data[0].x[4]).toBe('Token 4');
+    await act(async () => tree!.root.findByProps({'aria-label':'Selected prediction'}).props.onChange({target:{value:'other'}})); await flush();
+    expect(engine().props['data-native-url']).toBe('/api/designs/other/pdb');
+    expect(focused()).toEqual([]);
+    expect(heatmap().data[0].z).toEqual(esmfold2Fixture('other',1).pae.pae_matrix);
+    expect(calls.filter(c=>c.method!=='get').every(c=>/plotly-metrics|designs\/query/.test(c.url))).toBe(true);
+});
+it.each(['native_pae_not_reported','not_retained_by_producer','missing_or_invalid_esmfold2_native_evidence'])('ESMFold2 %s retains the collapsed confidence chart and structure', async missingReason => {
+    transport({residueConfidence:true,missing:true,missingReason});
+    await mount(<AnalyticsDashboard modelId="esmfold2" designs={[designs[0]]} structure={<div data-structure />} />);
+    expect(heatmap()).toBeUndefined();
+    expect(text(tree!.root)).toContain(missingReason);
+    expect(profilePlot().data.map((trace: any)=>trace.y)).toEqual([[.5],[80],[40]]);
+    expect(tree!.root.findByProps({'data-structure':true})).toBeTruthy();
+    expect(calls.every(c=>c.method==='get')).toBe(true);
+});
+it('sampled token plots retain source indices instead of relabeling as residues or dense positions', async () => {
+    transport({residueConfidence:true,sampledTokens:true});
+    await mount(<AnalyticsDashboard modelId="esmfold2" designs={[designs[0]]} structure={<div />} />);
+    expect(heatmap().data[0].x).toEqual(['Token 0','Token 4']);
+    expect(heatmap().data[0].y).toEqual(['Token 0','Token 4']);
+    expect(heatmap().data[0].z).toEqual([[0,2],[10,12]]);
+    expect(heatmap().layout.xaxis.constrain).toBe('domain');
+    expect(heatmap().layout.yaxis.constrain).toBe('domain');
+    expect(heatmap().layout.yaxis.scaleanchor).toBe('x');
 });
 it('scope excludes conformational mapping, ConforNets and historical launchers', () => {
     for (const id of ['conformational_mapping','confornets_experimental','rf3','alphafold2']) expect(isStandaloneStructurePrediction(id)).toBe(false);

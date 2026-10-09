@@ -630,6 +630,7 @@ export default function StructureViewerPane({
     const scientificPae = useMemo(() => paeRaw != null && (requiresBoundMetrics || nativeMetrics || asRecord(paeRaw)?.schema_name === 'core_protein_viewer_metric')
         ? parseScientificPae(paeRaw,nativeDocument,selectedDesignId ?? undefined) : null,
     [paeRaw,requiresBoundMetrics,nativeMetrics,nativeDocument,selectedDesignId]);
+    const tokenPae = scientificPae?.status === 'ok' && scientificPae.axisKind === 'model_token' ? scientificPae : null;
     const paeMatrix = requiresBoundMetrics || nativeMetrics || scientificPae ? (scientificPae?.status === 'ok' ? scientificPae.matrix : null) : paeData?.pae_matrix ?? null;
     const paeBusy = viewerAnalyses?.paeMatrixBusy ?? false;
     const onRunPaeMatrix = nativeDocument ? undefined : viewerAnalyses?.onRunPaeMatrix;
@@ -2203,6 +2204,7 @@ export default function StructureViewerPane({
                 {overlayView === 'pae' && (
                     <div>
                         <div className="text-xs text-slate-400 mb-2">Predicted Aligned Error Matrix</div>
+                        {tokenPae && <p className="text-xs">Native model-token indices; structure mapping unavailable. {tokenPae.rowAxis.orientation} · {tokenPae.rowAxis.mapping_reason}</p>}
                         {paeMatrix ? (
                             <div className="flex flex-col items-center">
                                 {/* Canvas container with chain labels */}
@@ -2215,7 +2217,7 @@ export default function StructureViewerPane({
 
                                     {/* Chain boundary labels on X-axis (bottom) */}
                                     <div className="absolute -bottom-4 left-0 right-0 flex" style={{ height: '16px' }}>
-                                        {chainBoundaries.map((chain, idx) => {
+                                        {(tokenPae ? [] : chainBoundaries).map((chain, idx) => {
                                             const totalResidues = paeMatrix.length;
                                             const leftPct = (chain.start / totalResidues) * 100;
                                             const widthPct = ((chain.end - chain.start) / totalResidues) * 100;
@@ -2238,7 +2240,7 @@ export default function StructureViewerPane({
 
                                     {/* Chain boundary labels on Y-axis (left) */}
                                     <div className="absolute -left-3 top-0 bottom-0 flex flex-col" style={{ width: '12px' }}>
-                                        {chainBoundaries.map((chain, idx) => {
+                                        {(tokenPae ? [] : chainBoundaries).map((chain, idx) => {
                                             const totalResidues = paeMatrix.length;
                                             const topPct = (chain.start / totalResidues) * 100;
                                             const heightPct = ((chain.end - chain.start) / totalResidues) * 100;
