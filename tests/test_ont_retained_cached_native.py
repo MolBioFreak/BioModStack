@@ -81,6 +81,9 @@ workflow { RetainedRuntimeControl() }
     commit(repo, 'bounded retained native control')
     from component_runtime import SourceIdentity
     from services import nextflow
+    # Another root control may already have imported the owner before this
+    # private checkout existed. Bind its captured launch cwd as well as BMS_HOME.
+    monkeypatch.setattr(nextflow, 'PROJECT_ROOT', repo)
     old = SourceIdentity.from_checkout(repo)
     params = dict(ont_workflow_id='ont_basecall_dna', ont_input_mode='pod5',
                   pod5_dir=str(tmp_path / 'inputs'), dorado_runtime_sif=str(sif),
