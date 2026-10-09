@@ -6,10 +6,11 @@ from contextlib import contextmanager
 from contextvars import ContextVar, Token
 import hashlib
 import os
+import re
 from pathlib import Path
 import stat
 from typing import Any, Mapping
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from paths import get_inputs_dir
 
@@ -542,6 +543,11 @@ def verify_managed_reference_snapshot(
     path = _canonical_absolute_path(params.get("reference_fasta"))
     if root is None or path is None:
         raise ValueError("managed reference snapshot path is invalid")
+    verify_managed_reference_bytes(path, root, snapshot_sha256, expected_bytes)
+
+
+def verify_managed_reference_bytes(path: Path, root: Path, snapshot_sha256: str, expected_bytes: int) -> None:
+    """Shared no-follow byte check for resolved revisions and final launch authority."""
     file_fd = _open_runtime_snapshot(path, root, label="managed reference")
     digest = hashlib.sha256()
     byte_count = 0
@@ -555,6 +561,42 @@ def verify_managed_reference_snapshot(
         raise ValueError("managed reference snapshot size mismatch before consumption")
     if digest.hexdigest() != snapshot_sha256:
         raise ValueError("managed reference snapshot digest mismatch before consumption")
+
+
+def canonical_launch_snapshot_id(value: str) -> str:
+    """Validate, never repair, a public retained snapshot selector."""
+    if not isinstance(value, str) or str(UUID(value)) != value:
+        raise ValueError("launch snapshot ID must be a canonical UUID")
+    return value
+
+
+def validate_fastq_snapshot_selector(relative_path: str, sha256: str) -> str:
+    if (not isinstance(relative_path, str) or len(relative_path) > 4096
+            or re.fullmatch(r"[0-9a-f]{64}/[0-9a-f]{64}/launch-[0-9a-f]{32}\.fastq(?:\.gz)?", relative_path) is None
+            or relative_path.split("/")[1] != sha256):
+        raise ValueError("invalid managed FASTQ launch snapshot selector")
+    return relative_path
+
+
+def resolve_fastq_launch_custody(
+    *, relative_path: str, sha256: str, size_bytes: int, submitted_path: str,
+) -> dict[str, Any]:
+    """Verify retained bytes; the original requested path is only a source label."""
+    validate_fastq_snapshot_selector(relative_path, sha256)
+    root = get_inputs_dir()
+    label = _canonical_absolute_path(submitted_path)
+    if label is None or label == root or root not in label.parents:
+        raise ValueError("ordinary FASTQ source label is outside the input root")
+    path = root / "ont_fastq_launch_snapshots" / relative_path
+    params = {
+        "fastq_path": str(path), "ont_input_mode": "fastq",
+        "ont_input_provenance": {
+            "mode": "fastq", "path": str(path), "source": "managed_fastq_launch_snapshot",
+            "submitted_path": str(label), "sha256": sha256, "size_bytes": size_bytes,
+        },
+    }
+    verify_fastq_launch_custody(params)
+    return params
 
 
 def materialize_fastq_launch_custody(params: Mapping[str, Any]) -> dict[str, Any]:

@@ -270,7 +270,8 @@ async def test_actual_submit_binds_only_server_consumed_receipt(monkeypatch, tmp
 
     def build(_workflow, request):
         seen["submitted"] = request.params
-        return SimpleNamespace(params={})
+        from schemas import JobCreate
+        return JobCreate(name="Receipt fixture", model_id="nanopore", mode="plasmid_qc", params={})
 
     async def create(job, _background, session, *_args, commit):
         assert commit is False

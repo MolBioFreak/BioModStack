@@ -222,24 +222,58 @@ async def consume_comparison_panel_receipt(session: AsyncSession, *, receipt_id:
     return receipt
 
 
-def materialize_comparison_launch(*, expected_fasta: str, expected_sha256: str, panel_receipt: NgsComparisonPanelReceipt) -> dict[str, str]:
-    """Atomically copy all comparison inputs to a unique server task input root."""
+def materialize_comparison_launch(
+    *, expected_fasta: str, expected_sha256: str,
+    panel_receipt: NgsComparisonPanelReceipt, comparison_launch_id: str | None = None,
+) -> dict[str, str]:
+    """Publish once or verify the exact receipt-derived retained task inputs."""
+    from services.ont_submission_trust import _open_runtime_snapshot, canonical_launch_snapshot_id
+
     expected = Path(expected_fasta).resolve(strict=True)
     if _sha256(expected) != expected_sha256:
         raise ValueError("expected reference receipt changed before comparison materialization")
     manifest = Path(panel_receipt.panel_snapshot_path).resolve(strict=True)
-    root = get_inputs_dir() / "ngs_comparison_task_inputs" / str(uuid.uuid4())
+    # The receipt validator retains current APPROVED/expiry/expected-receipt rules.
+    source = _validated_panel_manifest(ApprovedNgsComparisonPanel(
+        id=panel_receipt.panel_id, version=panel_receipt.panel_version, status="APPROVED",
+        manifest_path=str(manifest), snapshot_sha256=panel_receipt.panel_snapshot_sha256,
+    ))
+    snapshot = {
+        "schema": "bms.ngs.comparison-panel.v1", "panel_id": source["panel_id"],
+        "panel_version": source["version"], "panel_manifest_sha256": panel_receipt.panel_snapshot_sha256,
+        "entries": [{"id": entry["id"], "label": entry["label"], "role": entry["role"],
+                     "fasta_path": entry["fasta_filename"], "fasta_sha256": entry["fasta_sha256"]}
+                    for entry in source["entries"]],
+    }
+    snapshot_bytes = (json.dumps(snapshot, sort_keys=True, indent=2) + "\n").encode("utf-8")
+    family_root = get_inputs_dir() / "ngs_comparison_task_inputs"
+    root = family_root / (canonical_launch_snapshot_id(comparison_launch_id)
+                          if comparison_launch_id is not None else str(uuid.uuid4()))
 
     def build(stage: Path) -> None:
         shutil.copy2(expected, stage / "expected_reference.fasta")
-        source = json.loads(manifest.read_text(encoding="utf-8"))
-        snapshot_entries = []
         for entry in source["entries"]:
-            filename = str(entry["fasta_filename"])
+            filename = entry["fasta_filename"]
             shutil.copy2(manifest.parent / filename, stage / filename)
-            snapshot_entries.append({"id": entry["id"], "label": entry["label"], "role": entry["role"], "fasta_path": filename, "fasta_sha256": entry["fasta_sha256"]})
-        snapshot = {"schema": "bms.ngs.comparison-panel.v1", "panel_id": source["panel_id"], "panel_version": source["version"], "panel_manifest_sha256": panel_receipt.panel_snapshot_sha256, "entries": snapshot_entries}
-        (stage / "comparison_panel_snapshot.json").write_text(json.dumps(snapshot, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        (stage / "comparison_panel_snapshot.json").write_bytes(snapshot_bytes)
 
-    _atomic_directory(root, build)
-    return {"input_root": str(root.resolve()), "reference_fasta": str((root / "expected_reference.fasta").resolve()), "comparison_panel_snapshot": str((root / "comparison_panel_snapshot.json").resolve())}
+    if comparison_launch_id is None:
+        _atomic_directory(root, build)
+    else:
+        expected_files = {
+            "expected_reference.fasta": expected_sha256,
+            "comparison_panel_snapshot.json": hashlib.sha256(snapshot_bytes).hexdigest(),
+            **{entry["fasta_filename"]: entry["fasta_sha256"] for entry in source["entries"]},
+        }
+        for filename, expected_digest in expected_files.items():
+            descriptor = _open_runtime_snapshot(root / filename, family_root, label="comparison panel")
+            digest = hashlib.sha256()
+            try:
+                while chunk := os.read(descriptor, 1024 * 1024):
+                    digest.update(chunk)
+            finally:
+                os.close(descriptor)
+            if digest.hexdigest() != expected_digest:
+                raise ValueError("comparison launch snapshot bytes changed")
+    return {"input_root": str(root), "reference_fasta": str(root / "expected_reference.fasta"),
+            "comparison_panel_snapshot": str(root / "comparison_panel_snapshot.json")}

@@ -206,6 +206,9 @@ def _snapshot_managed_reference(
     source_parent_fd = _open_absolute_directory_nofollow(source.parent)
     source_fd = -1
     destination_fd = -1
+    snapshot_root = None
+    published = False
+    created_root = False
     try:
         source_fd = os.open(source.name, file_flags, dir_fd=source_parent_fd)
         source_stat = os.fstat(source_fd)
@@ -218,6 +221,7 @@ def _snapshot_managed_reference(
             / str(uuid.uuid4())
         )
         snapshot_root.mkdir(parents=True, exist_ok=False)
+        created_root = True
         destination_parent_fd = _open_absolute_directory_nofollow(snapshot_root)
         try:
             create_flags = (
@@ -258,6 +262,7 @@ def _snapshot_managed_reference(
             os.fsync(destination_fd)
         finally:
             os.close(destination_parent_fd)
+        published = True
         return snapshot_root / "reference.fasta", digest.hexdigest(), copied
     except (AttributeError, NotImplementedError) as exc:
         raise StateIntegrityError(
@@ -269,6 +274,9 @@ def _snapshot_managed_reference(
         if source_fd >= 0:
             os.close(source_fd)
         os.close(source_parent_fd)
+        if not published and created_root and snapshot_root is not None:
+            (snapshot_root / "reference.fasta").unlink(missing_ok=True)
+            snapshot_root.rmdir()
 
 
 def _write_managed_bytes(relative: str, content: bytes) -> None:
@@ -698,6 +706,7 @@ async def resolve_managed_reference_for_launch(
     global_domain_experiment_id: str,
     molbio_ngs_state_revision_id: str,
     ngs_reference_revision_id: str,
+    launch_snapshot_id: str | None = None,
 ) -> ManagedReferenceLaunch:
     """Resolve one state-member reference to a verified server-managed FASTA path."""
 
@@ -773,13 +782,20 @@ async def resolve_managed_reference_for_launch(
 
     source_path = _managed_path(artifact.managed_relative_path)
     try:
-        snapshot_path, snapshot_sha256, snapshot_size_bytes = (
-            _snapshot_managed_reference(
+        if launch_snapshot_id is None:
+            snapshot_path, snapshot_sha256, snapshot_size_bytes = _snapshot_managed_reference(
                 source_path,
                 expected_sha256=revision.canonical_fasta_sha256,
                 expected_size_bytes=revision.canonical_fasta_size_bytes,
             )
-        )
+        else:
+            from services.ont_submission_trust import canonical_launch_snapshot_id, verify_managed_reference_bytes
+
+            snapshot_root = get_inputs_dir() / "molbio_ngs_managed_launch_snapshots"
+            snapshot_path = snapshot_root / canonical_launch_snapshot_id(launch_snapshot_id) / "reference.fasta"
+            snapshot_sha256 = revision.canonical_fasta_sha256
+            snapshot_size_bytes = revision.canonical_fasta_size_bytes
+            verify_managed_reference_bytes(snapshot_path, snapshot_root, snapshot_sha256, snapshot_size_bytes)
     except OSError as exc:
         raise StateIntegrityError(
             "managed reference launch snapshot could not be created"

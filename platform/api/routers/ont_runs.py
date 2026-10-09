@@ -13,6 +13,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StrictBool,
+    StrictInt,
     ValidationError,
     field_validator,
     model_validator,
@@ -43,10 +44,12 @@ from services.ngs_comparison_panels import (
 )
 from paths import (
     get_allowed_roots,
+    get_inputs_dir,
     get_molbio_ngs_reference_root,
     resolve_allowed_path,
 )
 from schemas import ExecutionPolicy, JobCreate, JobResponse
+from routers.jobs import JobExecutionPlanPreview
 from starlette.concurrency import run_in_threadpool
 from services import alignment_access, ont_raw_signal, ont_run_control, ont_submission_trust
 from services.ont_barcode_batches import (
@@ -204,13 +207,33 @@ class OntManagedReferenceRequest(BaseModel):
     molbio_ngs_state_revision_id: str = Field(min_length=1, max_length=128)
     ngs_reference_revision_id: str = Field(min_length=1, max_length=128)
 
-    @field_validator("*")
+    launch_snapshot_id: str | None = None
+
+    @field_validator("launch_snapshot_id")
+    @classmethod
+    def validate_snapshot_id(cls, value: str | None) -> str | None:
+        return ont_submission_trust.canonical_launch_snapshot_id(value) if value is not None else None
+
+    @field_validator("global_domain_experiment_id", "molbio_ngs_state_revision_id", "ngs_reference_revision_id")
     @classmethod
     def require_nonempty_identity(cls, value: str) -> str:
         normalized = value.strip()
         if not normalized:
             raise ValueError("managed reference identities must be nonempty")
         return normalized
+
+
+class OntFastqLaunchSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    relative_path: str = Field(min_length=1, max_length=4096)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: StrictInt = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_selector(self) -> "OntFastqLaunchSnapshot":
+        ont_submission_trust.validate_fastq_snapshot_selector(self.relative_path, self.sha256)
+        return self
 
 
 class OntNgsSubmitRequest(BaseModel):
@@ -225,6 +248,14 @@ class OntNgsSubmitRequest(BaseModel):
     execution_policy: ExecutionPolicy | None = None
     source_instrument_run_id: str | None = Field(default=None)
     managed_reference: OntManagedReferenceRequest | None = None
+    fastq_snapshot: OntFastqLaunchSnapshot | None = None
+    comparison_launch_id: str | None = None
+    execution_plan_approval: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("comparison_launch_id")
+    @classmethod
+    def validate_comparison_launch_id(cls, value: str | None) -> str | None:
+        return ont_submission_trust.canonical_launch_snapshot_id(value) if value is not None else None
 
     @model_validator(mode="after")
     def validate_managed_reference_exclusivity(self) -> "OntNgsSubmitRequest":
@@ -237,6 +268,10 @@ class OntNgsSubmitRequest(BaseModel):
             for key in ("managed_reference_path", "managed_reference_fasta_path")
         ):
             raise ValueError("managed_reference is accepted only as the typed top-level object")
+        if self.comparison_launch_id is not None and not (
+            self.params.get("molbio_ngs_receipt_id") and self.params.get("ngs_comparison_panel_receipt_id")
+        ):
+            raise ValueError("comparison launch replay requires both receipt identities")
         if self.managed_reference is None:
             return self
         conflicting = sorted(
@@ -254,6 +289,14 @@ class OntNgsSubmitRequest(BaseModel):
                 + ", ".join(conflicting)
             )
         return self
+
+
+class OntNgsPreparedReview(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    workflow_id: str
+    request: OntNgsSubmitRequest
+    preview: JobExecutionPlanPreview
 
 
 class OntRunIntentRequest(BaseModel):
@@ -627,7 +670,10 @@ def _job_create_for_ont_submit(
         mode=model_mode,
         params=params,
         pinned_gpu=request.pinned_gpu,
-        execution_target_id=request.execution_target_id,
+        launch_context_id=current_launch_context_id.get(),
+        **({"execution_target_id": request.execution_target_id}
+           if "execution_target_id" in request.model_fields_set else {}),
+        execution_plan_approval=request.execution_plan_approval,
         execution_policy=request.execution_policy if request.execution_policy is not None else ExecutionPolicy(),
     )
 
@@ -642,13 +688,14 @@ async def _create_pipeline_job(
     *,
     commit: bool = True,
 ) -> JobResponse:
-    # Import lazily so importing the ONT router does not import the entire jobs
-    # router stack unless a launch request actually reaches this endpoint.
     from routers.jobs import create_job  # noqa: PLC0415
 
-    launch_context_id = current_launch_context_id.get()
-    if launch_context_id:
-        job = job.model_copy(update={"launch_context_id": launch_context_id})
+    # Ordinary prepare projects context before review (including explicit None).
+    # Preserve legacy internal callers which have not passed through that adapter.
+    if "launch_context_id" not in getattr(job, "model_fields_set", set()):
+        launch_context_id = current_launch_context_id.get()
+        if launch_context_id:
+            job = job.model_copy(update={"launch_context_id": launch_context_id})
     token, token_digest = alignment_access.issue_alignment_access_token()
     with ont_submission_trust.trusted_ont_job_creation(token_digest):
         created = await create_job(
@@ -1014,24 +1061,11 @@ async def ont_submit_pooled_reference_assignment(
         ) from exc
 
 
-@router.post("/ngs/{workflow_id}/submit", response_model=JobResponse, status_code=201)
-async def ont_submit_ngs_workflow(
-    workflow_id: str,
-    request: OntNgsSubmitRequest,
-    background_tasks: BackgroundTasks,
-    http_request: Request,
-    response: Response,
-    session: AsyncSession = Depends(get_session),
-    experiment_session: AsyncSession = Depends(get_experiment_session),
-    molbio_ngs_session: AsyncSession = Depends(get_molbio_ngs_session),
-) -> JobResponse:
-    """Submit an ONT/NGS Nextflow analysis job.
-
-    This is the typed ONT product-family launch seam. It normalizes workflow
-    aliases/defaults through the ONT registry, then delegates to the canonical
-    job creation path so queueing, runtime policy, validation, and orchestrator
-    behavior remain identical to other BioModStack jobs.
-    """
+async def _prepare_ont_ngs_workflow(
+    workflow_id: str, request: OntNgsSubmitRequest,
+    session: AsyncSession, molbio_ngs_session: AsyncSession,
+) -> tuple[JobCreate, OntNgsSubmitRequest, str, str]:
+    """Resolve current authority and publish or reuse only governed input snapshots."""
     managed_launch = None
     try:
         submitted = dict(request.params)
@@ -1071,6 +1105,8 @@ async def ont_submit_ngs_workflow(
                 global_domain_experiment_id=request.managed_reference.global_domain_experiment_id,
                 molbio_ngs_state_revision_id=request.managed_reference.molbio_ngs_state_revision_id,
                 ngs_reference_revision_id=request.managed_reference.ngs_reference_revision_id,
+                **({"launch_snapshot_id": request.managed_reference.launch_snapshot_id}
+                   if request.managed_reference.launch_snapshot_id is not None else {}),
             )
             submitted.update(
                 {
@@ -1105,8 +1141,20 @@ async def ont_submit_ngs_workflow(
                 expected_fasta=receipt_authority.reference_snapshot_path,
                 expected_sha256=receipt_authority.reference_snapshot_sha256,
                 panel_receipt=panel_receipt_authority,
+                **({"comparison_launch_id": request.comparison_launch_id}
+                   if request.comparison_launch_id is not None else {}),
             )
             submitted["reference_fasta"] = staged["reference_fasta"]
+        retained = request.model_copy(deep=True)
+        replay_fastq = None
+        if request.fastq_snapshot is not None:
+            if canonical_id != "ont_fastq_qc" or not submitted.get("fastq_path"):
+                raise ValueError("FASTQ snapshot replay applies only to ordinary FASTQ QC")
+            replay_fastq = await run_in_threadpool(
+                ont_submission_trust.resolve_fastq_launch_custody,
+                **request.fastq_snapshot.model_dump(), submitted_path=submitted["fastq_path"],
+            )
+            submitted["fastq_path"] = replay_fastq["fastq_path"]
         submit_request = request.model_copy(update={"params": submitted})
         if managed_launch is not None:
             job = _job_create_for_ont_submit(
@@ -1132,9 +1180,32 @@ async def ont_submit_ngs_workflow(
                 "binding_source": "server_approved_panel_receipt",
             }
         if canonical_id == "ont_fastq_qc" and job.params.get("ont_input_mode") == "fastq":
-            job.params = await run_in_threadpool(
-                ont_submission_trust.materialize_fastq_launch_custody, job.params,
+            if replay_fastq is not None:
+                job.params.update(replay_fastq)
+            else:
+                job.params = await run_in_threadpool(
+                    ont_submission_trust.materialize_fastq_launch_custody, job.params,
+                )
+            provenance = job.params["ont_input_provenance"]
+            retained.fastq_snapshot = OntFastqLaunchSnapshot(
+                relative_path=str(Path(job.params["fastq_path"]).relative_to(get_inputs_dir() / "ont_fastq_launch_snapshots")),
+                sha256=provenance["sha256"], size_bytes=provenance["size_bytes"],
             )
+            retained.params["fastq_path"] = provenance["submitted_path"]
+        elif replay_fastq is not None:
+            raise ValueError("FASTQ snapshot replay requires the ordinary FASTQ input branch")
+        if managed_launch is not None:
+            ont_submission_trust.verify_managed_reference_snapshot(job.params)
+            retained.managed_reference = request.managed_reference.model_copy(update={
+                "launch_snapshot_id": managed_launch.reference_fasta_path.parent.name,
+            })
+        if panel_receipt_authority is not None:
+            retained.comparison_launch_id = Path(staged["input_root"]).name
+        retained.name = job.name
+        retained.execution_policy = ExecutionPolicy.model_validate(job.execution_policy.model_dump())
+        retained.execution_plan_approval = None
+    except OSError as exc:
+        raise HTTPException(status_code=422, detail="retained ONT launch input is unavailable") from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except DomainStateNotFound as exc:
@@ -1144,6 +1215,47 @@ async def ont_submit_ngs_workflow(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    return job, retained, receipt_id, panel_receipt_id
+
+
+@router.post("/ngs/{workflow_id}/prepare", response_model=OntNgsPreparedReview, response_model_exclude_unset=True)
+async def ont_prepare_ngs_workflow(
+    workflow_id: str, request: OntNgsSubmitRequest,
+    session: AsyncSession = Depends(get_session),
+    molbio_ngs_session: AsyncSession = Depends(get_molbio_ngs_session),
+) -> OntNgsPreparedReview:
+    """Materialize stable selections without claiming receipts or inserting a Job."""
+    from routers.jobs import _execution_plan_preview
+
+    job, retained, _, _ = await _prepare_ont_ngs_workflow(workflow_id, request, session, molbio_ngs_session)
+    try:
+        preview = await run_in_threadpool(_execution_plan_preview, job)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return OntNgsPreparedReview(workflow_id=workflow_id, request=retained, preview=JobExecutionPlanPreview.model_validate(preview))
+
+
+@router.post("/ngs/{workflow_id}/submit", response_model=JobResponse, status_code=201)
+async def ont_submit_ngs_workflow(
+    workflow_id: str,
+    request: OntNgsSubmitRequest,
+    background_tasks: BackgroundTasks,
+    http_request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
+    molbio_ngs_session: AsyncSession = Depends(get_molbio_ngs_session),
+) -> JobResponse:
+    """Submit an ONT/NGS Nextflow analysis job.
+
+    This is the typed ONT product-family launch seam. It normalizes workflow
+    aliases/defaults through the ONT registry, then delegates to the canonical
+    job creation path so queueing, runtime policy, validation, and orchestrator
+    behavior remain identical to other BioModStack jobs.
+    """
+    job, retained, receipt_id, panel_receipt_id = await _prepare_ont_ngs_workflow(
+        workflow_id, request, session, molbio_ngs_session,
+    )
     try:
         receipt = None
         panel_receipt = None
@@ -1168,16 +1280,16 @@ async def ont_submit_ngs_workflow(
             http_request,
             commit=not receipt_id and not panel_receipt_id,
         )
+        if receipt is not None:
+            receipt.consumed_job_id = created.id
+        if panel_receipt is not None:
+            panel_receipt.consumed_job_id = created.id
+        if receipt is not None or panel_receipt is not None:
+            await session.commit()
     except Exception:
         await session.rollback()
         raise
-    if receipt is not None:
-        receipt.consumed_job_id = created.id
-    if panel_receipt is not None:
-        panel_receipt.consumed_job_id = created.id
-    if receipt is not None or panel_receipt is not None:
-        await session.commit()
-    if managed_launch is not None:
+    if retained.managed_reference is not None:
         public_params = dict(created.params)
         public_params.pop("reference_fasta", None)
         created = created.model_copy(update={"params": public_params})
