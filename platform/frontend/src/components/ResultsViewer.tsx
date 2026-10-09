@@ -103,6 +103,7 @@ const DesignComparePane = lazy(() => import('./DesignComparePane').then(module =
 const DataViewerLanding = lazy(() => import('./DataViewerLanding').then(module => ({ default: module.DataViewerLanding })));
 const AnalyticsDashboard = lazy(() => import('./AnalyticsDashboard').then(module => ({ default: module.AnalyticsDashboard })));
 const StructureViewerPane = lazy(() => import('./StructureViewerPane'));
+const StructurePredictionResults = lazy(() => import('./StructurePredictionResults').then(module => ({ default: module.StructurePredictionResults })));
 const ShapeDocumentInspector = lazy(() => import('./StructureViewerPane').then(module => ({ default: module.ShapeDocumentInspector })));
 const MDResultsPane = lazy(() => import('./MDResultsPane'));
 const BindCraft2JobResults = lazy(() => import('./BindCraft2JobResults').then(module => ({ default: module.BindCraft2JobResults })));
@@ -7077,7 +7078,14 @@ function ResultsViewerContent() {
                                     {activeTab === 'structure' && exactArtifactId && <p>Exact native document {exactArtifactId} is inspected in Selected candidate workspace → Sources. The Design primary structure is not substituted.</p>}
                                     {activeTab === 'structure' && !exactArtifactId && selectedDesignSupportsStructureViewer && (
                                         <div className="p-4 space-y-3">
-                                            <StructureViewerPane
+                                            <StructurePredictionResults
+                                                modelId={activeJob?.model_id}
+                                                fullPaeRequested={typeof activeJob?.params?.write_full_pae === 'boolean' ? activeJob.params.write_full_pae : undefined}
+                                                enabled={['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(activeJob?.model_id ?? '')}
+                                                designs={selectedDesign && !tableDesigns.some(d => d.id === selectedDesign.id) ? [selectedDesign, ...tableDesigns] : tableDesigns} selectedDesignId={selectedDesignId} onSelectDesign={selectDesign}
+                                                structure={(selection, onSelection) => <StructureViewerPane
+                                                confidenceSelection={selection} onConfidenceSelection={onSelection}
+                                                confidenceCompanion={['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(activeJob?.model_id ?? '')}
                                                 selectedDesignId={selectedDesignId}
                                                 setSelectedDesignId={selectDesign}
                                                 designs={selectedDesign && !tableDesigns.some(design => design.id === selectedDesign.id) ? [selectedDesign, ...tableDesigns] : tableDesigns}
@@ -7092,7 +7100,7 @@ function ResultsViewerContent() {
                                                 getMetricColor={getMetricColor}
                                                 rfMetricScope={rfMetricScope}
                                                 setRfMetricScope={setRfMetricScope}
-                                            />
+                                            />} />
                                         </div>
                                     )}
 
@@ -8746,7 +8754,18 @@ function ResultsViewerContent() {
                                     {/* CHARTS TAB - Full Analytics Dashboard */}
                                     {activeTab === 'charts' && (
                                         <AnalyticsDashboard
-                                            designs={analyticsChartDesigns}
+                                            designs={selectedDesign && !analyticsChartDesigns.some(d => d.id === selectedDesign.id) ? [selectedDesign, ...analyticsChartDesigns] : analyticsChartDesigns}
+                                            fullPaeRequested={typeof activeJob?.params?.write_full_pae === 'boolean' ? activeJob.params.write_full_pae : undefined}
+                                            modelId={activeJob?.model_id}
+                                            selectedDesignId={selectedDesignId}
+                                            onSelectDesign={selectDesign}
+                                            structure={(selection, onSelection) => selectedDesignSupportsStructureViewer && !exactArtifactId ? <StructureViewerPane confidenceCompanion
+                                                confidenceSelection={selection} onConfidenceSelection={onSelection}
+                                                selectedDesignId={selectedDesignId} setSelectedDesignId={selectDesign}
+                                                designs={analyticsChartDesigns} selectedDesign={selectedDesign}
+                                                colorMode={colorMode} setColorMode={setColorMode} structureFormat={structureFormat}
+                                                viewerAnalyses={structureViewerAnalyses} activeJob={activeJob} getMetricColor={getMetricColor}
+                                            /> : <p>Structure document unavailable for this selection.</p>}
                                             jobName={activeJob?.name}
                                             jobId={activeJob?.id}
                                             preferredAnalysisLens={preferredAnalysisLens}

@@ -31,6 +31,8 @@ import {
 import { inferDesignAnalysisLens, inferDesignOutputSource, getValidationOutputLabel } from './designOutputSource';
 import { buildMetricLayerFromExplicitMaps } from '../lib/molstar-metrics';
 import type { MolstarResidueMetricLayer } from '../lib/molstar-metrics';
+import type { AtomRef } from '../structureViewer/contracts/structureIdentity';
+import type { MetricSelection } from '../structureViewer/metrics/metricContracts';
 import type { MetricLayer } from '../structureViewer/metrics/metricContracts.js';
 import type { DerivedStructureComponent } from '../structureViewer/contracts/complexAnalysis.js';
 import { resolveGovernedStructureWorkbenchContext } from '../structureViewer/contracts/governedStructureWorkbenchContext.js';
@@ -92,6 +94,9 @@ interface ViewerAnalysisBundle {
 }
 
 interface Props {
+    confidenceCompanion?: boolean;
+    confidenceSelection?: readonly AtomRef[];
+    onConfidenceSelection?: (selection: MetricSelection) => void;
     selectedDesignId: string | null;
     setSelectedDesignId: (id: string) => void;
     designs: Design[];
@@ -323,6 +328,9 @@ export function ShapeDocumentInspector({ design, document }: { design: Design; d
 }
 
 export default function StructureViewerPane({
+    confidenceCompanion = false,
+    confidenceSelection,
+    onConfidenceSelection,
     selectedDesignId,
     setSelectedDesignId,
     designs,
@@ -345,7 +353,7 @@ export default function StructureViewerPane({
     const [viewportHeight, setViewportHeight] = useState(() => (
         typeof window === 'undefined' ? 720 : window.innerHeight
     ));
-    const [analyticsPanelOpen, setAnalyticsPanelOpen] = useState(true);
+    const [analyticsPanelOpen, setAnalyticsPanelOpen] = useState(!confidenceCompanion);
     // The molecular structure is the primary scientific result. Keep auxiliary
     // metric/export controls collapsed until the operator asks for them.
     const [metricWorkbenchOpen, setMetricWorkbenchOpen] = useState(false);
@@ -2826,8 +2834,8 @@ export default function StructureViewerPane({
     // Shared toolbar for design/color selection
     const renderViewerToolbar = (isCompact = false) => (
         <div className={`flex items-center gap-2 ${isCompact ? 'flex-wrap' : 'mb-3 flex-wrap'}`}>
-            {/* Design Selector */}
-            <div className="relative">
+            {/* The companion owns sample selection; retain the picker in fullscreen. */}
+            {(!confidenceCompanion || isFullscreen) && <div className="relative">
                 <select
                     value={selectedDesignId ?? ''}
                     onChange={(e) => setSelectedDesignId(e.target.value)}
@@ -2840,7 +2848,7 @@ export default function StructureViewerPane({
                     ))}
                 </select>
                 <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">▾</div>
-            </div>
+            </div>}
 
             {conforNetsNavigation && conforNetsConformerSet && conforNetsNavigation.totalCount > 1 && (
                 <div
@@ -3047,6 +3055,9 @@ export default function StructureViewerPane({
                                 overlayStructures={viewerOverlayStructures}
                                 residueMetricLayer={residueMetricLayer}
                                 metricLayers={allMetricLayers}
+                                residueSelections={confidenceCompanion ? confidenceSelection : undefined}
+                                onMetricSelection={confidenceCompanion ? onConfidenceSelection : undefined}
+                                controlledResidueSelection={confidenceCompanion && confidenceSelection !== undefined}
                                 showComplexWorkbench={false}
                                 showM6Workbench={!shapeMetrics && metricWorkbenchOpen}
                                 showMeasurements={!shapeMetrics && metricWorkbenchOpen}

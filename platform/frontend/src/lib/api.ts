@@ -2021,7 +2021,7 @@ export const fetchJobLogs = (jobId: string): Promise<{ data: JobLogs }> => {
 export interface ExecutionStage {
     id: string;
     label: string;
-    state: 'planned' | 'running' | 'completed' | 'awaiting_input' | 'failed' | 'cancelled' | 'unknown';
+    state: 'planned' | 'running' | 'completed' | 'awaiting_input' | 'failed' | 'cancelled' | 'unknown' | 'not_requested' | 'skipped';
     source: 'plan' | 'recorded' | 'model';
 }
 
@@ -4211,8 +4211,8 @@ export interface PAEData {
     confidence_file?: string | null;
 }
 
-export const fetchPAEData = (designId: string) =>
-    api.get<unknown>(`/api/designs/${designId}/pae`);
+export const fetchPAEData = (designId: string, maxSize = 1024) =>
+    api.get<unknown>(`/api/designs/${designId}/pae`, { params: { max_size: maxSize } });
 
 // ============================================================
 // DEBUG ORCHESTRATOR OVERRIDES

@@ -1,3 +1,5 @@
+import { ConfidenceProfile } from './ConfidenceProfile';
+import { StructurePredictionResults, isStandaloneStructurePrediction } from './StructurePredictionResults';
 import { ScientificAnalytics } from './ScientificAnalytics';
 import { PlotlyLab } from './PlotlyLab';
 import { CohortAnalytics } from './CohortAnalytics';
@@ -46,6 +48,11 @@ interface MetricOption {
 
 interface AnalyticsDashboardProps {
     designs: Design[];
+    modelId?: string | null;
+    fullPaeRequested?: boolean;
+    selectedDesignId?: string | null;
+    onSelectDesign?: (id: string) => void;
+    structure?: import('./StructurePredictionResults').ConfidenceStructure;
     jobName?: string;
     jobId?: string | null;
     preferredAnalysisLens?: AnalysisLens | 'auto';
@@ -434,7 +441,21 @@ function pearson(valuesX: number[], valuesY: number[]): number {
 export function AnalyticsDashboard(props: AnalyticsDashboardProps & { nativeCohort?: ComponentProps<typeof CohortAnalytics> }) {
     // Native publications already carry their metric authority. Do not query or
     // reinterpret them through the legacy binder Design score adapter.
-    return props.nativeCohort ? <CohortAnalytics {...props.nativeCohort} /> : <GovernedAnalyticsDashboard {...props} />;
+    if (props.nativeCohort) return <CohortAnalytics {...props.nativeCohort} />;
+    if (isStandaloneStructurePrediction(props.modelId)) return <>
+        <StructurePredictionResults {...props} />
+        <ScalarAnalyticsDisclosure {...props} />
+    </>;
+    return <GovernedAnalyticsDashboard {...props} />;
+}
+
+function ScalarAnalyticsDisclosure(props: AnalyticsDashboardProps) {
+    const [opened, setOpened] = useState(false);
+    return <details className="m-4 rounded-xl border border-[var(--border-color)] p-4"
+        onToggle={event => { if (event.currentTarget.open) setOpened(true); }}>
+        <summary>Exploratory scalar analytics and Plotly Lab</summary>
+        {opened && <GovernedAnalyticsDashboard {...props} />}
+    </details>;
 }
 
 function GovernedAnalyticsDashboard(props: AnalyticsDashboardProps) {
@@ -1549,62 +1570,7 @@ function LegacyAnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLe
                     {chainLoading ? (
                         <div className="flex h-[380px] items-center justify-center text-slate-400">Loading per-chain confidence...</div>
                     ) : (
-                        <Plot
-                            data={Object.entries(chainMetrics || {})
-                                .filter(([, metric]) => metric.type !== 'ligand')
-                                .sort(([leftId, leftMetric], [rightId, rightMetric]) => {
-                                    const order: Record<string, number> = { protein: 0, dna: 1, rna: 2, ligand: 3 };
-                                    return (order[leftMetric.type] ?? 4) - (order[rightMetric.type] ?? 4) || leftId.localeCompare(rightId);
-                                })
-                                .map(([chainId, metric], index) => ({
-                                    type: 'scatter' as const,
-                                    mode: 'lines',
-                                    x: metric.residue_numbers ?? Array.from({ length: metric.length }, (_, value) => value + 1),
-                                    y: metric.plddt,
-                                    name: `Chain ${chainId} (${metric.type}, avg ${metric.avg_plddt?.toFixed(1) ?? 'n/a'})`,
-                                    line: {
-                                        width: 2.4,
-                                        color: ['#60a5fa', '#2dd4bf', '#f59e0b', '#a78bfa'][index % 4],
-                                        shape: 'spline' as const,
-                                    },
-                                    hovertemplate: `<b>Chain ${chainId}</b><br>Residue %{x}<br>pLDDT: %{y:.1f}<extra></extra>`,
-                                })) as Data[]}
-                            layout={{
-                                ...make2DLayout('plddt_overall', 'plddt_overall', {
-                                    xaxis: {
-                                        title: { text: 'Residue Number', font: { color: AXIS_COLOR } },
-                                        gridcolor: GRID_COLOR,
-                                        color: AXIS_COLOR,
-                                        zeroline: false,
-                                    },
-                                    yaxis: {
-                                        title: { text: 'pLDDT', font: { color: AXIS_COLOR } },
-                                        gridcolor: GRID_COLOR,
-                                        color: AXIS_COLOR,
-                                        range: [0, 100],
-                                        dtick: 20,
-                                        zeroline: false,
-                                    },
-                                    margin: { l: 60, r: 36, t: 20, b: 60 },
-                                    legend: {
-                                        orientation: 'h',
-                                        y: -0.18,
-                                        x: 0.5,
-                                        xanchor: 'center',
-                                        font: { size: 11, color: '#cbd5e1' },
-                                    },
-                                    shapes: [
-                                        { type: 'rect', x0: 0, x1: 1, xref: 'paper', y0: 90, y1: 100, fillcolor: '#1d4ed820', line: { width: 0 } },
-                                        { type: 'rect', x0: 0, x1: 1, xref: 'paper', y0: 70, y1: 90, fillcolor: '#0d948820', line: { width: 0 } },
-                                        { type: 'rect', x0: 0, x1: 1, xref: 'paper', y0: 50, y1: 70, fillcolor: '#ca8a0420', line: { width: 0 } },
-                                        { type: 'rect', x0: 0, x1: 1, xref: 'paper', y0: 0, y1: 50, fillcolor: '#dc262620', line: { width: 0 } },
-                                    ],
-                                }),
-                                hovermode: 'x unified',
-                            }}
-                            config={DEFAULT_PLOT_CONFIG}
-                            style={{ width: '100%', height: '380px' }}
-                        />
+                        <ConfidenceProfile chainMetrics={chainMetrics || {}} />
                     )}
                 </PlotCard>
                 )}
