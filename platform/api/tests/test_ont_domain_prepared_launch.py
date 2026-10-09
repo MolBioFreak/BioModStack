@@ -131,3 +131,101 @@ async def test_second_barcode_child_failure_rolls_back_sql_but_retains_review(do
     assert response.json()["detail"]["code"] == "CONTROLLED_SECOND_CHILD_FAILURE"
     await assert_unclaimed(ctx)
     assert (ctx.inputs / "ngs_reference_sets" / prepared["request"]["reference_set_id"]).is_dir()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", [None, "chosen-worker"])
+async def test_pooled_explicit_release_retained_review_and_independent_target(domain, target):
+    from tests.test_ont_pooled_reference_assignment import _write_assignment_summary
+    from database import NgsPooledAssignmentRelease
+    ctx = domain
+    submitted = await ctx.client.post("/api/ont/ngs/pooled-reference-assignment/submit", json=pooled_request(ctx))
+    assert submitted.status_code == 201, submitted.text
+    submitted = submitted.json()
+    assignment_id = submitted["assignment_job_id"]
+    _write_assignment_summary(SimpleNamespace(results_root=ctx.results, fastq=ctx.reads), submitted)
+    async with ctx.factory() as session:
+        job = await session.get(Job, assignment_id)
+        job.status = "completed"
+        job.execution_target_id = "deleted-source-rental"
+        await session.commit()
+    path = f"/api/jobs/{assignment_id}/pooled-assignment/release"
+    body = {"idempotency_key": "release", "target_workflow": "ont_plasmid_qc",
+            "target_ids": ["target1", "target2"], "execution_target_id": target}
+    prepared = await ctx.client.post(path + "/prepare", json=body)
+    assert prepared.status_code == 200, prepared.text
+    prepared = prepared.json()
+    again = await ctx.client.post(path + "/prepare", json=prepared["request"])
+    assert again.status_code == 200 and again.json() == prepared, again.text
+    async with ctx.factory() as session:
+        assert await session.scalar(select(func.count()).select_from(NgsPooledAssignmentRelease)) == 0
+        assert await session.scalar(select(func.count()).select_from(Job)) == 2
+    approved = {**prepared["request"], "execution_plan_approvals": {
+        key: value["approval_digest"] for key, value in prepared["previews"].items()}}
+    if target:
+        stale = await ctx.client.post(path, json={**approved, "name_prefix": "changed"})
+        assert stale.status_code == 409 and "stale" in stale.text, stale.text
+    released = await ctx.client.post(path, json=approved)
+    assert released.status_code == 201, released.text
+    async with ctx.factory() as session:
+        for cid in released.json()["child_job_ids"]:
+            child = await session.get(Job, cid)
+            assert child.parent_job_id is None and child.execution_target_id == target
+            assert child.source_stage_job_id == assignment_id
+            assert child.params["pooled_assignment_release_binding"]["assignment_summary_sha256"]
+    repeated = await ctx.client.post(path, json=approved)
+    assert repeated.status_code == 201 and repeated.json() == released.json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation,target", [("resubmit", None), ("resubmit", "chosen-worker"),
+                                              ("resume", None), ("resume", "chosen-worker")])
+async def test_replay_sql_preserves_science_ancestry_without_active_old_approval(domain, operation, target):
+    ctx = domain
+    source_id = "replay-source"
+    source_params = {"ont_workflow_id": "ont_plasmid_qc", "ont_input_mode": "fastq",
+                     "fastq_path": str(ctx.reads), "reference_fasta": str(ctx.inputs / "molbio_ngs_receipts" / ctx.receipt_ids[0] / "expected_reference.fasta"),
+                     "dorado_quality_mode": "sup", "dorado_model": "old-model", "dorado_resolved_model_id": "old-model",
+                     "dorado_lock_sha256": "a" * 64, "dorado_runtime_sif": "/old/runtime.sif",
+                     "run_assembly": False, "min_qscore": 17, "expected_plasmid_size": 4811,
+                     "barcode_mapping_binding": {"mapping_id": "historical"},
+                     "lineage_root_job_id": "source-job", "source_stage_job_id": "source-job",
+                     "source_stage_family": "ont_ngs", "source_stage_mode": "basecall_dna",
+                     "selection_source_type": "ont_dorado_demux", "selection_source_job_id": "source-job",
+                     "source_selection_count": 2}
+    output = ctx.results / source_id
+    output.mkdir()
+    async with ctx.factory() as session:
+        session.add(Job(id=source_id, name="replay", model_id="nanopore", mode="plasmid_qc",
+            status="failed", params=source_params, output_dir=str(output),
+            execution_target_id="chosen-worker", execution_source_revision="b" * 40,
+            execution_source_tree="c" * 40, provenance={"execution_plan_approval": {"old": True}},
+            parent_job_id="source-job", child_stage="old_data_parent"))
+        await session.commit()
+    # An omitted cached-resume target retains the actual prior execution owner.
+    body = {} if operation == "resume" and target == "chosen-worker" else {"execution_target_id": target}
+    response = await ctx.client.post(f"/api/jobs/{source_id}/{operation}", json=body)
+    assert response.status_code == 200, response.text
+    async with ctx.factory() as session:
+        replay = await session.get(Job, response.json()["new_job_id"])
+        source = await session.get(Job, source_id)
+        assert replay.execution_target_id == target
+        assert replay.parent_job_id is None
+        assert replay.lineage_root_job_id == replay.params["lineage_root_job_id"] == "source-job"
+        assert replay.source_stage_job_id == "source-job"
+        assert replay.source_selection_count == 2
+        assert replay.params["min_qscore"] == 17 and replay.params["expected_plasmid_size"] == 4811
+        assert "execution_plan_approval" not in replay.provenance
+        assert source.provenance["execution_plan_approval"] == {"old": True}
+        cached = operation == "resume" and target == "chosen-worker"
+        if cached:
+            assert replay.execution_source_revision == "b" * 40
+            assert replay.execution_source_tree == "c" * 40
+            assert replay.params["dorado_runtime_sif"] == "/old/runtime.sif"
+            assert replay.params["dorado_resolved_model_id"] == "old-model"
+            assert replay.output_dir == source.output_dir
+        else:
+            assert "dorado_runtime_sif" not in replay.params
+            assert "dorado_resolved_model_id" not in replay.params
+            assert replay.params["dorado_model"] == "sup"
+            assert not any(key.startswith("resume_") for key in replay.params) or operation == "resume"

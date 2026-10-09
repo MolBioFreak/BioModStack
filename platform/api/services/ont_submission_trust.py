@@ -105,7 +105,11 @@ def fresh_computation_params(params: dict[str, Any]) -> dict[str, Any]:
     runtime = ONT_SERVER_CONTROLLED_RUNTIME_PARAMS - {
         "managed_reference_fasta_path", "managed_reference_path",
     }
-    return {key: value for key, value in params.items()
+    selected = dict(params)
+    if (selected.get("dorado_quality_mode") and selected.get("dorado_resolved_model_id")
+            and selected.get("dorado_model") == selected["dorado_resolved_model_id"]):
+        selected["dorado_model"] = selected["dorado_quality_mode"]
+    return {key: value for key, value in selected.items()
             if key not in runtime and not key.startswith("resume_")}
 
 

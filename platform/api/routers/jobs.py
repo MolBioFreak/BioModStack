@@ -9752,6 +9752,8 @@ async def resubmit_job(
 
     if new_job.model_id == "nanopore":
         _retain_ont_replay_lineage(original_job, new_job)
+        output_dir = str(get_results_dir() / new_job.id)
+        new_job.output_dir = output_dir
         if isinstance(placement, ResubmitJobRequest) and placement.execution_policy is not None:
             new_job.params = {**new_job.params, "remote_result_policy": placement.execution_policy.remote_result_policy}
         new_job.provenance = alignment_access.grant_alignment_access(

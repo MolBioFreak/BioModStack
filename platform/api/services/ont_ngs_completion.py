@@ -337,6 +337,11 @@ def ont_native_completion_path(job: Any) -> str:
         for key in ("ont_input_mode", "input_mode")
         if params.get(key) is not None and str(params[key]).strip()
     }
+    # The dedicated pooled owner historically persisted mode + FASTQ selector,
+    # not the later ordinary-launch identity fields. Its native branch is exact.
+    if job.mode == "pooled_reference_assignment":
+        workflows = workflows or {"ont_pooled_reference_assignment"}
+        inputs = inputs or {"fastq"}
     if (str(job.model_id or "").strip().lower() != "nanopore"
             or len(workflows) != 1 or len(inputs) != 1):
         raise OntNgsCompletionError("NGS completion workflow/input identities conflict or are absent")
@@ -361,6 +366,12 @@ def ont_native_result_contract(model_id: str, mode: str, params: dict[str, Any])
     from types import SimpleNamespace
     from services.ont_ngs_contract import get_ont_workflow_spec
 
+    if mode == "pooled_reference_assignment":
+        params = dict(params)
+        if not any(params.get(key) for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")):
+            params["ont_workflow_id"] = "ont_pooled_reference_assignment"
+        if not any(params.get(key) for key in ("ont_input_mode", "input_mode")):
+            params["ont_input_mode"] = "fastq"
     job = SimpleNamespace(model_id=model_id, mode=mode, params=params)
     completion = ont_native_completion_path(job)
     workflow = next(resolve_ont_workflow_alias(str(params[key]).strip())

@@ -115,8 +115,9 @@ async def test_numerical_http_reader_and_explicit_release(policy_context, observ
     assert replay.status_code == 201 and replay.json() == release.json()
     record_property("release_response", json.dumps(release.json(), sort_keys=True))
     async with async_sessionmaker(context.engine)() as reader:
-        children = (await reader.execute(select(Job).where(Job.parent_job_id == job_id))).scalars().all()
+        children = (await reader.execute(select(Job).where(Job.source_stage_job_id == job_id))).scalars().all()
         assert len(children) == 2
+        assert all(child.parent_job_id is None for child in children)
         assert all(child.params["remote_result_policy"] == "manual" for child in children)
         assert len((await reader.execute(select(NgsPooledAssignmentRelease))).scalars().all()) == 1
     after = await context.client.get(path)
