@@ -171,6 +171,7 @@ export default defineConfig({
             './tests/vitest/projectWorkflowSetup.test.tsx',
             './tests/vitest/projectNativeOwnersMounted.test.tsx',
             './tests/vitest/devIssueLedgerScreenshot.test.tsx',
+            './tests/vitest/ngsArtifacts.test.ts',
             './tests/vitest/ngsResultRoutingMounted.test.tsx',
             './tests/vitest/ngsWorkflowChooserMounted.test.tsx',
             './tests/vitest/ngsProjectPanelMounted.test.tsx',
