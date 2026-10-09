@@ -162,7 +162,7 @@ async def test_native_methylation_multimer_and_pooled_igv_urls(native_http):
 
 
 @pytest.mark.asyncio
-async def test_native_readback_preserves_published_identity(native_http):
+async def test_native_readback_preserves_published_identity(native_http, monkeypatch):
     from services.ont_ngs_completion import canonical_ngs_package_authority
 
     client, output, factory = native_http
@@ -170,6 +170,16 @@ async def test_native_readback_preserves_published_identity(native_http):
     inventory = service.build_ngs_package_artifacts(
         "clone-native", results_dir=output.parents[1], job_output_dir=output, native_outputs=True,
     )
+    # Earlier persisted descriptors did not carry the public display filename.
+    inventory[0].pop("filename")
+    catalog_hashes = []
+    original_hash = service._sha256_file_and_size
+
+    def count_hash(leaf):
+        catalog_hashes.append(leaf)
+        return original_hash(leaf)
+
+    monkeypatch.setattr(service, "_sha256_file_and_size", count_hash)
     async with factory() as session:
         job = await session.get(Job, "clone-native")
         job.provenance = {**job.provenance, "result_integrity": {
@@ -180,6 +190,8 @@ async def test_native_readback_preserves_published_identity(native_http):
     response = await client.get("/api/jobs/clone-native/ngs-artifacts")
     assert response.status_code == 200
     artifact = response.json()["artifacts"][0]
+    assert catalog_hashes == []  # Existing publication identity needs no body reread.
+    assert artifact["filename"] == path.name
     assert artifact["artifact_id"] == inventory[0]["artifact_id"]
     assert artifact["sha256"] == inventory[0]["sha256"]
     changed = await client.get(artifact["url"])

@@ -1289,7 +1289,9 @@ async def list_ngs_package_artifacts(
         return {
             "job_id": job_id,
             "artifacts": [
-                {key: value for key, value in artifact.items() if key != "relative_path" and not key.startswith("_")}
+                {**{key: value for key, value in artifact.items() if key != "relative_path" and not key.startswith("_")},
+                 **({"filename": artifact.get("filename") or Path(str(artifact["relative_path"])).name}
+                    if artifact.get("filename") or artifact.get("relative_path") else {})}
                 for artifact in artifacts
             ],
             "igv": service.native_igv_references(artifacts),

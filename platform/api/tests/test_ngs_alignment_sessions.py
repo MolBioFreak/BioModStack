@@ -2927,6 +2927,8 @@ def test_ngs_package_routes_support_authenticated_inventory_and_http_range(
     inventory = client.get("/api/jobs/job-a/ngs-artifacts")
     assert inventory.status_code == 200
     expected_public_descriptor = {key: value for key, value in descriptor.items() if key != "relative_path"}
+    expected_public_descriptor["filename"] = "reads.fastq.gz"
+    assert "filename" not in descriptor
     assert inventory.json() == {"job_id": "job-a", "artifacts": [expected_public_descriptor], "igv": []}
     ranged = client.get(
         f"/api/jobs/job-a/ngs-artifacts/{digest}",

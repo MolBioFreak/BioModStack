@@ -1882,7 +1882,7 @@ def _native_artifact_kind(path: Path) -> str:
     return path.stem
 
 
-def _native_package_artifacts(job_id: str, job_root: Path) -> list[dict[str, Any]]:
+def _native_package_artifacts(job_id: str, job_root: Path, *, exclude: set[str] | None = None) -> list[dict[str, Any]]:
     """Expose retained native publication, without claiming QC verification.
 
     IDs bind Job, relative path and observed bytes. No generated manifest, new
@@ -1899,6 +1899,10 @@ def _native_package_artifacts(job_id: str, job_root: Path) -> list[dict[str, Any
                                     if not name.startswith(".") and not (Path(parent) / name).is_symlink())
             for filename in sorted(filenames):
                 path = Path(parent) / filename
+                # Published descriptors already own these identities. Do not
+                # rehash large BAMs merely to discard the duplicate descriptor.
+                if exclude and path.relative_to(job_root).as_posix() in exclude:
+                    continue
                 if filename.startswith(".") or path.is_symlink() or not path.is_file():
                     continue
                 descriptor = _package_artifact_descriptor(
@@ -1964,7 +1968,6 @@ def build_ngs_package_artifacts(
         pinned_root_descriptor=pinned_root_descriptor,
     )
     if native_outputs or include_native_outputs:
-        native = _native_package_artifacts(safe_job_id, job_root)
         if native_outputs:
             canonical = [dict(artifact) for artifact in published_artifacts or []]
         else:
@@ -1975,8 +1978,8 @@ def build_ngs_package_artifacts(
                 pinned_root_descriptor=pinned_root_descriptor, published_artifacts=published_artifacts,
                 verify_source_input=verify_source_input,
             )
-        declared = {item.get("relative_path") for item in canonical}
-        return canonical + [item for item in native if item["relative_path"] not in declared]
+        declared = {item["relative_path"] for item in canonical if item.get("relative_path")}
+        return canonical + _native_package_artifacts(safe_job_id, job_root, exclude=declared)
     if re.fullmatch(r"[0-9a-f]{64}", source_reference_sha256) is None:
         raise AlignmentSessionError("authorized source reference identity is required")
     if published_artifacts is not None:
