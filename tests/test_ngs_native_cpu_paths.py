@@ -109,6 +109,40 @@ def test_native_qc_and_screening(tmp_path, native_cpu, workflow, mode, qc):
         assert stats['secondary_alignments'] == stats['supplementary_alignments'] == '0'
 
 
+@pytest.mark.parametrize('assembler', ['flye', 'canu'])
+def test_native_clone_adapter_consumes_retained_assembly(tmp_path, native_cpu, assembler):
+    import shutil
+    run, tool = native_cpu
+    retained = os.environ.get('BMS_TEST_ONT_RETAINED_CONTROLS')
+    if not retained:
+        pytest.skip('requires retained genuine WP5 clone assemblies')
+    science = Path(retained).parent
+    assembly = science / 'finish-native' / ('published-canu' if assembler == 'canu' else 'published') / 'assembly'
+    output_root = tmp_path / 'wf_clone_out'; shutil.copytree(assembly / 'wf_clone_out', output_root)
+    provenance = tmp_path / 'runtime_provenance.json'; shutil.copyfile(assembly / provenance.name, provenance)
+    reference = tmp_path / 'reference.fasta'
+    shutil.copyfile(science / 'assets/wf-clone-patched/test_data/insert_reference.fasta', reference)
+    source = tmp_path / 'source.bam'
+    shutil.copyfile(science / 'finish-native/imported-no-rg.bam' if assembler == 'canu' else science / 'assets/wf-clone-patched/test_data/plasmid.bam', source)
+    bam = tmp_path / 'aligned.bam'
+    tool('bash', '-c', 'set -euo pipefail; dorado aligner "$1" "$2" --threads 2 | samtools sort -o "$3"; samtools index "$3"', 'bash', reference, source, bam)
+    digest = hashlib.sha256(''.join(l.strip().upper() for l in reference.read_text().splitlines() if not l.startswith('>')).encode()).hexdigest()
+    harness = tmp_path / 'main.nf'
+    harness.write_text(f"""include {{ CloneValidationAdapter }} from '{ROOT}/modules/ngs/clone_validation.nf'
+include {{ ConstructVerify }} from '{ROOT}/modules/ngs/construct_verify.nf'
+workflow {{
+ def aligned = Channel.value(tuple(file(params.bam), file(params.bai)))
+ CloneValidationAdapter(file(params.result),file(params.provenance),aligned,file(params.reference))
+ ConstructVerify(file(params.reference),CloneValidationAdapter.out.verification_input,CloneValidationAdapter.out.per_base_support,aligned,CloneValidationAdapter.out.alignment_stats,CloneValidationAdapter.out.breakpoint_call,CloneValidationAdapter.out.secondary_summary)
+}}
+""")
+    output = run(harness, dict(bam=str(bam),bai=str(bam)+'.bai',result=str(output_root),provenance=str(provenance),reference=str(reference),
+                              reference_sequence_sha256=digest,wf_clone_sample='upstream-bounded-control'))
+    assert (output / 'assembly/adapter/adapter_manifest.json').is_file()
+    assert (output / 'verification/qc_manifest.json').is_file()
+    assert (output / 'verification/variants.vcf').is_file()
+
+
 @pytest.mark.parametrize('bad_identity', [None, 'source', 'reference'])
 def test_native_prepared_bam_authenticates_source_not_transformed_bytes(tmp_path, native_cpu, bad_identity):
     run, tool = native_cpu
