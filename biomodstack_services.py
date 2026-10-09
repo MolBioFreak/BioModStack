@@ -365,7 +365,8 @@ def ensure_development_proxy_identity() -> Path:
 
     if path.exists():
         values = {}
-        for line in path.read_text(encoding="utf-8").splitlines():
+        original = path.read_text(encoding="utf-8")
+        for line in original.splitlines():
             if line and not line.startswith("#") and "=" in line:
                 key, value = line.split("=", 1)
                 values[key] = value
@@ -375,6 +376,14 @@ def ensure_development_proxy_identity() -> Path:
             raise ServiceManagerError(
                 f"Development Project proxy identity is invalid: {path}"
             )
+        # EnvironmentFile wins over generated unit Environment directives.
+        # Retire only the former candidate pins; retain proxy identity and inputs.
+        retired = ("BMS_ONT_SLOW5TOOLS_IMAGE=", "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST=",
+                   "BMS_ONT_BLOW5_CONVERSION_QUALIFIED=")
+        retained = "".join(line for line in original.splitlines(keepends=True)
+                           if not line.startswith(retired))
+        if retained != original:
+            path.write_text(retained, encoding="utf-8")
         path.chmod(0o600)
         return path
 
@@ -1587,6 +1596,20 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         "comparison_render_runtime_policy_v1.json",
         "Squigualiser comparison renderer",
     )
+    ont_runtime_environment = "\n        ".join(
+        "Environment=" + systemd_value(f"{key}={value}")
+        for key, value in {
+            "BMS_ONT_CONTAINER_RUNTIME": ont_container_runtime,
+            "BMS_ONT_SLOW5TOOLS_IMAGE": ont_runtime_image,
+            "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST": ont_runtime_digest,
+            "BMS_ONT_SQUIGUALISER_IMAGE": ont_squigualiser_image,
+            "BMS_ONT_SQUIGUALISER_IMAGE_DIGEST": ont_squigualiser_digest,
+            "BMS_ONT_SQUIGULATOR_IMAGE": ont_squigulator_image,
+            "BMS_ONT_SQUIGULATOR_IMAGE_DIGEST": ont_squigulator_digest,
+            "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE": ont_comparison_image,
+            "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST": ont_comparison_digest,
+        }.items()
+    )
     ont_staging_root = os.environ.get(
         "BMS_ONT_RAW_SIGNAL_STAGING_ROOT",
         str(shared_data_root / "ont-raw-signal-staging"),
@@ -1712,6 +1735,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_RUNTIME_IMAGE_STORE={runtime_image_store}")}
         Environment=BMS_RUNTIME_IMAGE_LANE=development
         {_runtime_reference_directive(runtime_image_store, 'development')}
+        {ont_runtime_environment}
         Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_PORT={DEVELOPMENT_WORKFLOW_ADAPTER_PORT}")}
         Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
@@ -1780,15 +1804,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_MSA_CACHE={dev_msa_cache_dir}")}
         Environment={systemd_value(f"BMS_SABDAB_CACHE={dev_sabdab_cache_dir}")}
         Environment=BMS_CPU_POWER_STRICT=0
-        Environment={systemd_value(f"BMS_ONT_CONTAINER_RUNTIME={ont_container_runtime}")}
-        Environment={systemd_value(f"BMS_ONT_SLOW5TOOLS_IMAGE={ont_runtime_image}")}
-        Environment={systemd_value(f"BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST={ont_runtime_digest}")}
-        Environment={systemd_value(f"BMS_ONT_SQUIGUALISER_IMAGE={ont_squigualiser_image}")}
-        Environment={systemd_value(f"BMS_ONT_SQUIGUALISER_IMAGE_DIGEST={ont_squigualiser_digest}")}
-        Environment={systemd_value(f"BMS_ONT_SQUIGULATOR_IMAGE={ont_squigulator_image}")}
-        Environment={systemd_value(f"BMS_ONT_SQUIGULATOR_IMAGE_DIGEST={ont_squigulator_digest}")}
-        Environment={systemd_value(f"BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE={ont_comparison_image}")}
-        Environment={systemd_value(f"BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST={ont_comparison_digest}")}
+        {ont_runtime_environment}
         Environment={systemd_value(f"BMS_ONT_RAW_SIGNAL_STAGING_ROOT={ont_staging_root}")}
         Environment={systemd_value(f"BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE={ont_acquisition_pressure}")}
         Environment={systemd_value(f"BMS_ONT_LIVE_CONVERSION_ENABLED={ont_live_conversion_enabled}")}

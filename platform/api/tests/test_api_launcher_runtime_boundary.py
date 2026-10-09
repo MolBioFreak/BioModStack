@@ -77,6 +77,7 @@ def test_dev_api_launcher_does_not_inherit_container_adapter_routing(tmp_path: P
         {
             "HOME": str(home),
             "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_CACHE_HOME": str(home / ".cache"),
             "PATH": f"{fake_bin}:{env.get('PATH', '')}",
             "BMS_HOME": str(project),
             "BMS_RUNTIME_MODE": "dev",

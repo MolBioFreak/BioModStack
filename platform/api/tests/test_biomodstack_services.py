@@ -440,9 +440,10 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
     assert "BMS_ONT_BLOW5_CONVERSION_QUALIFIED" not in units[services.API_SERVICE]
     assert "Environment=BMS_ONT_LIVE_CONVERSION_ENABLED=1" in units[services.API_SERVICE]
     assert "Environment=BMS_ONT_RAW_SIGNAL_RETENTION_POLICY=pod5_and_blow5" in units[services.API_SERVICE]
-    for key, (_, digest) in policies.items():
-        assert f"Environment=BMS_ONT_{key}_IMAGE=sha256:{digest}" in units[services.API_SERVICE]
-        assert f"Environment=BMS_ONT_{key}_IMAGE_DIGEST={digest}" in units[services.API_SERVICE]
+    for owner in (services.API_SERVICE, services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE):
+        for key, (_, digest) in policies.items():
+            assert f"Environment=BMS_ONT_{key}_IMAGE=sha256:{digest}" in units[owner]
+            assert f"Environment=BMS_ONT_{key}_IMAGE_DIGEST={digest}" in units[owner]
     assert "ExecStartPre=/usr/bin/mkdir -p /srv/biomodstack-dev" in units[services.API_SERVICE]
     assert "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18279" in units[services.FRONTEND_SERVICE]
     assert "Environment=BMS_DEV_WEB_HOST_PORT=18278" in units[services.FRONTEND_SERVICE]
@@ -1012,12 +1013,16 @@ def test_install_dev_units_creates_and_preserves_project_proxy_identity(tmp_path
     assert len(values["BMS_CM_TRUSTED_PROXY_SECRET"]) >= 43
     assert values["BMS_DEV_API_PROXY_SECRET"] == values["BMS_CM_TRUSTED_PROXY_SECRET"]
 
-    services.install_user_units(
-        project_root=tmp_path / "repo",
-        systemd_dir=systemd_dir,
-        runtime_mode="dev",
-    )
-    assert identity_path.read_bytes() == first
+    retained = first + b"# Local input settings\nBMS_ONT_EXTERNAL_POD5_ROOT=/retained/pod5\nBMS_ONT_RAW_SIGNAL_STAGING_ROOT=/retained/staging\n"
+    identity_path.write_bytes(retained + b"BMS_ONT_SLOW5TOOLS_IMAGE=sha256:old\nBMS_ONT_SLOW5TOOLS_IMAGE_DIGEST=old\nBMS_ONT_BLOW5_CONVERSION_QUALIFIED=1\n")
+    for _ in range(2):
+        services.install_user_units(
+            project_root=tmp_path / "repo",
+            systemd_dir=systemd_dir,
+            runtime_mode="dev",
+        )
+        assert identity_path.read_bytes() == retained
+        assert identity_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_rotate_log_file_bounds_append_only_service_logs(tmp_path: Path) -> None:
