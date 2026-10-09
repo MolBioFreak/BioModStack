@@ -129,6 +129,7 @@ test('annotation menu leaves Addgene visible but disabled when token is unavaila
     const globals = {
         window: dom.window,
         document: dom.window.document,
+        navigator: dom.window.navigator,
         HTMLElement: dom.window.HTMLElement,
     };
     const previous = new Map(Object.keys(globals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
