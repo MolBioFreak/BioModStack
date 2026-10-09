@@ -28,6 +28,13 @@ def _contained(path, roots):
     return resolved
 
 
+def file_stamp(path):
+    """Invocation-local change identity; access time is not a mutation."""
+    info = path.stat(follow_symlinks=False)
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
 def _identity(path):
     digest = hashlib.sha256()
     size = 0
@@ -253,7 +260,30 @@ def prepared_generation_source_fields(model_id, mode, params):
     return set()
 
 
-def discover_native_input_references(model_id, mode, params, generated_inputs, *, output_dir, allowed_roots, yaml_loader=None, runtime_references=None, document_owners=None):
+NGS_OPTIONAL_INPUTS = frozenset({"pod5_dir", "sample_sheet", "duplex_pairs",
+    "wf_clone_primers", "wf_clone_insert_reference", "wf_clone_host_reference",
+    "wf_clone_regions_bedfile", "reference_set_manifest"})
+
+
+def selected_ngs_input_fields(mode, params):
+    """Transport-only native selections; do not expand the approval roster."""
+    selected = set()
+    if params.get("pod5_dir"):
+        selected.update({"pod5_dir", "sample_sheet", "duplex_pairs"})
+    workflow = params.get("ont_workflow_id") or {
+        "clone_validation": "wf_clone_validation",
+        "construct_screening": "ont_construct_screening",
+        "pooled_reference_assignment": "ont_pooled_reference_assignment",
+    }.get(mode, mode)
+    if workflow == "wf_clone_validation" or (workflow == "ont_construct_screening"
+                                              and params.get("run_assembly") is True):
+        selected.update(key for key in NGS_OPTIONAL_INPUTS if key.startswith("wf_clone_"))
+    if workflow == "ont_pooled_reference_assignment":
+        selected.add("reference_set_manifest")
+    return {key: params[key] for key in sorted(selected) if params.get(key)}
+
+
+def discover_native_input_references(model_id, mode, params, generated_inputs, *, output_dir, allowed_roots, yaml_loader=None, runtime_references=None, document_owners=None, input_inventory=None):
     """Discover declared native closure. YAML uses the caller's native safe loader.
 
     Generated inputs must already be materialized; their immutable payload is
@@ -298,7 +328,9 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
                     visit(child, owner, selector + (child.relative_to(path).as_posix(),), role, lineage)
             return
         if path not in identities:
-            identities[path] = _identity(path)
+            observed = (input_inventory or {}).get(str(path))
+            identities[path] = (observed[:2] if observed is not None and
+                                observed[2] == file_stamp(path) else _identity(path))
         digest, size = identities[path]
         if role == "runtime-snapshot":
             if digest != snapshot_sha256:

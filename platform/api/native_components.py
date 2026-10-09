@@ -1234,17 +1234,19 @@ def _append_ngs(a, workflow, yes):
     fastq = bool(p.get('fastq_path')) or workflow == 'ont_fastq_qc'
     reference = bool(p.get('reference_fasta'))
     run_qc = p.get('run_fastq_qc', p.get('run_multimer_qc', True)) is not False
+    methylation = workflow == 'ont_methylation_analysis'
     after = ()
     if pod5:
         after = a.chain(['DoradoPreflight', 'DoradoBasecall'])
         if workflow == 'ont_basecall_dna' and p.get('barcode_kit'):
             a.chain(['DoradoDemux'], after)
-        if reference:
+        if reference and (not methylation or p.get('run_modkit') is not False):
             after = a.chain(['DoradoAlign'], after)
-        elif not basecall:
+        elif not basecall and not methylation:
             after = a.chain(['PrepareBamForAnalysis'], after)
     elif bam:
-        after = a.chain(['DoradoAlign' if reference and yes('bam_force_realign') else 'PrepareBamForAnalysis'])
+        realign = reference and yes('bam_force_realign') and not methylation
+        after = a.chain(['DoradoAlign' if realign else 'PrepareBamForAnalysis'])
         if reference and (workflow == 'ont_methylation_analysis' or
                 (workflow in {'ont_construct_screening', 'wf_clone_validation'} and not yes('bam_force_realign'))):
             after = a.chain(['ValidateMappedBam'], after)
@@ -1258,6 +1260,7 @@ def _append_ngs(a, workflow, yes):
     if workflow == 'ont_methylation_analysis':
         if reference:
             a.stage('PrepareReferenceForIGV')
+        if p.get('run_modkit') is not False:
             after = a.chain(['ValidateModifiedBaseBam'], after)
             a.stage('ModkitPileup', after)
             a.stage('ModkitSummary', after)

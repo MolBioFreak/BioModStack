@@ -246,7 +246,10 @@ def _record_file(
     role: Literal["source", "input", "runtime", "result", "log", "receipt"],
     *,
     staged_sha256: str | None = None,
+    input_inventory: dict | None = None,
 ) -> RemoteFileRecord:
+    from scripts.lib.portable_inputs import file_stamp
+    before = file_stamp(path) if input_inventory is not None else None
     if path.is_symlink() or not path.is_file():
         raise RemoteBundleError(f"Package input is not one regular file: {path}")
     if role == "input" and path.stat().st_nlink != 1:
@@ -260,6 +263,8 @@ def _record_file(
         digest = verify_image(path, path.parent.name)['sha256']
     else:
         digest = staged_sha256 if staged_sha256 is not None else _sha256_file(path)
+    if input_inventory is not None and before is not None and before == file_stamp(path):
+        input_inventory[str(path.resolve())] = (digest, before[4], before)
     return RemoteFileRecord(
         relative_path=relative_path,
         size_bytes=path.stat().st_size,
@@ -287,13 +292,14 @@ def _records_for_source(
     role: Literal["source", "input", "runtime", "result", "log", "receipt"],
     *,
     source_archive_sha256: str | None = None,
+    input_inventory: dict | None = None,
 ) -> list[RemoteFileRecord]:
     if source.is_symlink():
         if role != "runtime":
             raise RemoteBundleError(f"Package path cannot be a symlink: {source}")
         return [_record_runtime_symlink(source, prefix)]
     if source.is_file():
-        return [_record_file(source, prefix, role)]
+        return [_record_file(source, prefix, role, input_inventory=input_inventory)]
     if not source.is_dir():
         raise RemoteBundleError(f"Required package path is unavailable: {source}")
     records: list[RemoteFileRecord] = []
@@ -318,7 +324,7 @@ def _records_for_source(
                 if role == "source" and path == source / '.bms-source.tar.gz' else None)
             records.append(
                 _record_file(path, f"{prefix.rstrip('/')}/{path.relative_to(source).as_posix()}", role,
-                             staged_sha256=staged_sha256)
+                             staged_sha256=staged_sha256, input_inventory=input_inventory)
             )
     if not records:
         raise RemoteBundleError(f"Required package directory is empty: {source}")
@@ -567,7 +573,8 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
 
 
 def verify_approved_native_inputs(job: Any, runtime_references: dict[str, dict[str, Any]],
-                                  input_hashes: dict[str, tuple[str, int]] | None = None) -> None:
+                                  input_hashes: dict[str, tuple[str, int]] | None = None,
+                                  input_inventory: dict | None = None) -> None:
     """Carry reviewed static byte/membership authority through shared dispatch.
 
     Prepared/generated additions retain their existing compiler/service authority;
@@ -586,7 +593,8 @@ def verify_approved_native_inputs(job: Any, runtime_references: dict[str, dict[s
         current = discover_native_input_references(request['model_id'], request['mode'],
             request['params'], (), output_dir=Path(request['output_dir']),
             allowed_roots=(get_data_root(), get_inputs_dir(), get_results_dir()),
-            yaml_loader=yaml.safe_load, runtime_references=runtime_references)
+            yaml_loader=yaml.safe_load, runtime_references=runtime_references,
+            input_inventory=input_inventory)
     except (KeyError, OSError, ValueError) as exc:
         raise RemoteBundleError('Approved native input closure is no longer available') from exc
     if _canonical_bytes(current) != _canonical_bytes(expected):
@@ -611,6 +619,11 @@ def _input_assets(
     selected_remote_attempt: str | None = None,
 ) -> list[tuple[Path, str]]:
     selected: dict[Path, str] = {}
+    if native_invocation.model_id == 'nanopore':
+        from scripts.lib.portable_inputs import NGS_OPTIONAL_INPUTS, selected_ngs_input_fields
+        active = selected_ngs_input_fields(native_invocation.mode, params)
+        params = {key: value for key, value in params.items()
+                  if key not in NGS_OPTIONAL_INPUTS or key in active}
     input_roots = (get_data_root().resolve(), get_inputs_dir().resolve(), get_results_dir().resolve())
     runtime_roots = [path for path in runtime_paths if path.is_dir()]
     system_roots = {get_weights_root().resolve(), get_container_dir().resolve()}
@@ -748,6 +761,20 @@ def _input_assets(
         path = Path(reference["source_path"])
         digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
         selected.setdefault(path, f"{digest}/{path.name}")
+    if native_invocation.model_id == 'nanopore' and params.get('reference_set_manifest'):
+        # Native Nextflow stages the manifest's parent. Transfer only its declared
+        # siblings under that same destination, not unrelated retained revisions.
+        from scripts.pooled_ont_reference_assignment import _safe_snapshot_relative_path
+        from scripts.lib.portable_inputs import _contained
+        manifest = _contained(params['reference_set_manifest'], input_roots)
+        document = json.loads(manifest.read_bytes())
+        snapshot = manifest.parent
+        prefix = hashlib.sha256(str(snapshot).encode()).hexdigest()[:16] + '/' + snapshot.name
+        selected[manifest] = prefix + '/' + manifest.name
+        for entry in document['entries']:
+            relative = _safe_snapshot_relative_path(entry['fasta_path'])
+            path = _contained(snapshot / relative, (snapshot,))
+            selected[path] = prefix + '/' + relative.as_posix()
     # CM owns sibling request/plan/registry and relative registered assets, not
     # a synthetic job-output alias. Preserve that layout below a trusted root.
     cm_roots = {Path(ref["source_path"]).parent for ref in discovered if ref["format"] == "cm-request"}
@@ -957,14 +984,14 @@ def compile_remote_dependencies(
 
 
 def _input_records(path: Path, prefix: str, *, native_invocation: NativeInvocation,
-                   output_dir: Path, generated_by_path=None) -> list[RemoteFileRecord]:
+                   output_dir: Path, generated_by_path=None, input_inventory=None) -> list[RemoteFileRecord]:
     """Check compiler bytes using the hashes already required for transfer."""
     if generated_by_path is None:
         generated_by_path = {bound: item.reference for item in native_invocation.generated_inputs
                              if (bound := (output_dir / item.relative_path).resolve()) == path
                              or path in bound.parents}
     unmatched = set(generated_by_path)
-    records = _records_for_source(path, prefix, "input")
+    records = _records_for_source(path, prefix, "input", input_inventory=input_inventory)
     for record in records:
         suffix = record.relative_path[len(prefix):].lstrip('/')
         bound = path / suffix if suffix else path
@@ -981,7 +1008,8 @@ def _input_records(path: Path, prefix: str, *, native_invocation: NativeInvocati
 def _write_portable_bindings(*, staging_root: Path, remote_attempt: str,
                             references: list[dict[str, Any]], input_transfers: list[TransferPlan],
                             input_records: list[RemoteFileRecord], remote_runtime: str,
-                            remote_results: str, shared_weights: str | None = None) -> tuple[TransferPlan, RemoteFileRecord]:
+                            remote_results: str, shared_weights: str | None = None,
+                            selected_inputs: dict[str, str] | None = None) -> tuple[TransferPlan, RemoteFileRecord]:
     """Seal placement separately, using the already-recorded transfer identities."""
     files = {}
     directories = {}
@@ -1039,6 +1067,15 @@ def _write_portable_bindings(*, staging_root: Path, remote_attempt: str,
                          source_path=source, sha256=record.sha256, size_bytes=record.size_bytes,
                          role="input", format=Path(source).suffix.lstrip(".") or "binary",
                          owner="native-invocation", lineage=[], selector=[])
+        for key, value in sorted((selected_inputs or {}).items(),
+                                 key=lambda item: len(item[1]), reverse=True):
+            selected = Path(value)
+            if key == 'reference_set_manifest' and Path(source) != selected:
+                selected = selected.parent
+            if Path(source) == selected or selected in Path(source).parents:
+                suffix = Path(source).relative_to(selected).as_posix()
+                reference['selector'] = [key] + ([suffix] if suffix != '.' else [])
+                break
         bindings.append({"reference": reference, "path": destination})
     payload = {
         "schema": "bms.portable-input-bindings.v1",
@@ -1441,6 +1478,9 @@ def prepare_remote_bundle(
     input_transfers: list[TransferPlan] = []
     input_path_map: dict[str, str] = {}
     input_hashes: dict[str, tuple[str, int]] = {}
+    # Only this invocation may reuse these observations; missing/changed stamps
+    # take the existing body-read path, never a new refusal or persistent cache.
+    input_inventory: dict = {}
     generated_by_source = {path: {} for path, _ in input_assets}
     for item in native_invocation.generated_inputs:
         bound = (local_output / item.relative_path).resolve()
@@ -1452,7 +1492,8 @@ def prepare_remote_bundle(
     for path, relative in input_assets:
         prefix = f"inputs/{relative}"
         recorded = _input_records(path, prefix, native_invocation=native_invocation,
-                                  output_dir=local_output, generated_by_path=generated_by_source[path])
+                                  output_dir=local_output, generated_by_path=generated_by_source[path],
+                                  input_inventory=input_inventory)
         input_records.extend(recorded)
         for record in recorded:
             suffix = record.relative_path[len(prefix):].lstrip("/")
@@ -1466,16 +1507,19 @@ def prepare_remote_bundle(
             original_root = Path(effective_params['interface_context_manifest']).parent
             input_path_map[str(original_root)] = remote_destination
 
-    verify_approved_native_inputs(job, runtime_references, input_hashes)
+    verify_approved_native_inputs(job, runtime_references, input_hashes, input_inventory)
     verify_selected_preparation_inputs(native_invocation.execution_plan, input_hashes)
     source_records = _records_for_source(source_root, "source", "source",
                                          source_archive_sha256=source_archive_sha256)
     remote_results = f"{remote_attempt}/results"
+    from scripts.lib.portable_inputs import selected_ngs_input_fields
     bindings_transfer, bindings_record = _write_portable_bindings(
         staging_root=staging_root, remote_attempt=remote_attempt,
         references=native_references, input_transfers=input_transfers,
         input_records=input_records, remote_runtime=remote_runtime,
-        remote_results=remote_results, shared_weights=shared_weights if weight_entries else None)
+        remote_results=remote_results, shared_weights=shared_weights if weight_entries else None,
+        selected_inputs=selected_ngs_input_fields(job.mode, input_discovery_params)
+        if job.model_id == 'nanopore' else None)
     input_transfers.append(bindings_transfer)
     input_records.append(bindings_record)
     path_map: dict[str, str] = {
@@ -1564,6 +1608,7 @@ def prepare_remote_bundle(
         "BMS_RUNTIME_IMAGE_STORE": f"{remote_root}/cache/runtime-images",
         "BMS_CM_API_RUNTIME_DIR": support_root,
         "BMS_API_PYTHON": f"{support_root}/venv/bin/python",
+        "BMS_POD5_PYTHON": f"{support_root}/venv/bin/python",
         "BMS_MSA_CACHE": f"{remote_attempt}/msa-cache",
         "BMS_REMOTE_EXECUTION": "1",
         "BMS_REMOTE_ATTEMPT_ID": attempt_id,
