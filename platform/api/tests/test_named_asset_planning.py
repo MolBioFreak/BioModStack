@@ -144,7 +144,61 @@ def test_adoption_uses_retained_manifest_modes_and_not_asset_files(publication, 
     assert index['artifacts'][0]['mode'] == 0o555
     assert len(cache.independent_plan(SimpleNamespace(kind='model'))) == 2
     assert adopted.stat().st_mode & 0o777 == 0o444
+    assert index['digest_sizes'] == {}
     wrong = json.loads(json.dumps(preview))
     wrong['artifacts'][0]['sha256'] = 'd' * 64
     with pytest.raises(ValueError, match='exactly match'):
         owner.adopt(wrong, [manifest])
+
+
+@pytest.mark.parametrize('membership', ['verified', 'empty', 'missing', 'no_sidecar'])
+def test_independent_adoption_preserves_physical_membership_and_named_scopes(
+        publication, monkeypatch, membership):
+    p = publication
+    monkeypatch.setattr(cache, 'get_data_root', paths.get_data_root)
+    script = Path(__file__).resolve().parents[3] / 'scripts/adopt_hf_archive_index.py'
+    spec = importlib.util.spec_from_file_location('adopt_index', script)
+    owner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(owner)
+    # Both exceed the archive's size: cost heuristics must not hide false membership.
+    boltz = dict(name='weights/boltz/boltz/model', sha256='d' * 64,
+                 size_bytes=2000, mode=0o444)
+    esmfold = dict(name='weights/esmfold2/model', sha256='e' * 64,
+                   size_bytes=3000, mode=0o444)
+    physical = {boltz['sha256']: boltz['size_bytes']} if membership == 'verified' else {}
+    initial = dict(archive=p.index['archive'], publication_note='retain advisory metadata')
+    if membership in {'verified', 'empty'}:
+        initial['digest_sizes'] = physical
+    p.path.chmod(0o600)
+    p.path.write_text(json.dumps(initial))
+    if membership == 'no_sidecar':
+        p.path.unlink()
+    monkeypatch.setattr(bundle, '_sha256_file', fail)
+    expected_rows = {}
+    for scientific_row in (boltz, esmfold, esmfold, boltz):
+        root = '/'.join(scientific_row['name'].split('/')[:2])
+        monkeypatch.setattr(cache, '_independent_dependencies', lambda _, root=root: (
+            SimpleNamespace(kind='weights', relative_path=root.removeprefix('weights/')),))
+        selection = dict(kind='model', model_id=root.removeprefix('weights/'))
+        manifest = dict(selection=selection, source_revision='a' * 40, source_tree='b' * 40,
+                        artifacts=[scientific_row])
+        preview = dict(selection=selection, dependencies=[dict(name=root)], artifacts=[
+            {k: scientific_row[k] for k in ('name', 'sha256', 'size_bytes')}])
+        owner.adopt(preview, [manifest])
+        expected_rows[scientific_row['name']] = scientific_row
+        adopted = json.loads(p.path.read_bytes())
+        assert adopted['digest_sizes'] == physical
+        assert adopted['artifacts'] == [expected_rows[name] for name in sorted(expected_rows)]
+        assert adopted['dependencies'] == sorted({
+            '/'.join(name.split('/')[:2]) for name in expected_rows})
+        assert adopted['archive'] == initial['archive']
+        if membership != 'no_sidecar':
+            assert adopted['publication_note'] == initial['publication_note']
+        # Exercise the actual controller owner, not a replica of its selection logic.
+        assert cache._weights_archive_artifact([SimpleNamespace(**esmfold)]) is None
+        selected = cache._weights_archive_artifact([SimpleNamespace(**boltz)])
+        if physical:
+            assert selected.sha256 == initial['archive']['sha256']
+        else:
+            assert selected is None
+        assert cache.independent_plan(ProvisionSelection.model_validate(selection))[0].sha256 == scientific_row['sha256']
