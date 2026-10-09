@@ -151,8 +151,7 @@
       "simplex": 64,
       "duplex": 32
     },
-    "batch_size_min": 1,
-    "batch_size_max": 256,
+    "batch_size_min": 0,
     "runtime_network": "forbidden",
     "model_download": "forbidden"
   }

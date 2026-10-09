@@ -414,10 +414,9 @@ params:
 
   - name: dorado_batch_size
     type: integer
-    description: Explicit bounded Dorado batch size; automatic sizing is forbidden
+    description: Dorado inference batch size; 0 selects native auto, omitted uses simplex 64 or duplex 32
     required: false
-    minimum: 1
-    maximum: 256
+    minimum: 0
 
   - name: run_modkit
     type: boolean

@@ -503,9 +503,11 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
     if not DEVICE.fullmatch(str(device)):
         raise ValueError("device must be an explicit CUDA device selection")
     policy = lock["policy"]
-    batch = int(batch_size if batch_size is not None else policy["default_batch_size"][mode])
-    if batch < int(policy["batch_size_min"]) or batch > int(policy["batch_size_max"]):
-        raise ValueError("batch size is outside the locked bounded policy")
+    batch = batch_size if batch_size is not None else policy["default_batch_size"][mode]
+    if isinstance(batch, bool) or not isinstance(batch, int):
+        raise ValueError("batch size must be an integer")
+    if batch < int(policy["batch_size_min"]):
+        raise ValueError("batch size must be a non-negative integer (0 = native auto)")
     qscore = int(min_qscore)
     if qscore < 0 or qscore > 30:
         raise ValueError("min_qscore must be an integer from 0 through 30")

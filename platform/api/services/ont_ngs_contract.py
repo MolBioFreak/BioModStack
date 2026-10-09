@@ -671,8 +671,8 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
         raise ValueError("dorado_batch_size must be an integer")
     else:
         batch_size = int(raw_batch)
-    if not int(lock["policy"]["batch_size_min"]) <= batch_size <= int(lock["policy"]["batch_size_max"]):
-        raise ValueError("dorado_batch_size is outside the locked bounded policy")
+    if batch_size < int(lock["policy"]["batch_size_min"]):
+        raise ValueError("dorado_batch_size must be a non-negative integer (0 = native auto)")
     raw_qscore = normalized.get("min_qscore", 10)
     if isinstance(raw_qscore, bool) or not (
         isinstance(raw_qscore, int) or (isinstance(raw_qscore, str) and re.fullmatch(r"[0-9]+", raw_qscore.strip()))
