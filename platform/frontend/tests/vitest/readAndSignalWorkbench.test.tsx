@@ -791,7 +791,14 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             raw_representation_id: 'blow5-indexed-1',
             molecule_type: 'dna',
         });
-        const publicCandidate = apiMocks.fetchExternalMoveBamCandidates.mock.results[0]?.value;
+        expect(apiMocks.registerExternalMoveBamCandidate).toHaveBeenCalledTimes(1);
+        const publicCandidate = await apiMocks.fetchExternalMoveBamCandidates.mock.results[0]?.value;
+        expect(publicCandidate.items).toEqual([{
+            candidate_id: 'd'.repeat(64),
+            display_name: 'BFX6NB_1_JAN26-EL-Q2-01.bam',
+            size_bytes: 1234,
+            modified_at_ns: 1700000000000000000,
+        }]);
         expect(JSON.stringify(publicCandidate)).not.toContain('/mnt/');
         expect(JSON.stringify(publicCandidate)).not.toContain('path');
     });
@@ -2375,7 +2382,11 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         client.clear();
     });
 
-    it('rejects persisted viewer state whose dataset run or generation differs from the selected job', async () => {
+    it.each([
+        { dimension: 'dataset', identity: { dataset_id: 'dataset-other' } },
+        { dimension: 'run', identity: { run_id: 'run-other' } },
+        { dimension: 'generation', identity: { observed_generation: 99 } },
+    ])('rejects persisted viewer state whose $dimension alone differs from the selected job', async ({ identity }) => {
         const selectedJob = {
             id: 'alignment-job-1',
             name: 'Selected ONT job',
@@ -2391,9 +2402,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             },
         };
         const incompatible = viewerSession({
-            dataset_id: 'dataset-other',
-            run_id: 'run-other',
-            observed_generation: 99,
+            ...identity,
             selected_read_id: 'incompatible-read',
         });
         apiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [selectedJob], total: 1 } });

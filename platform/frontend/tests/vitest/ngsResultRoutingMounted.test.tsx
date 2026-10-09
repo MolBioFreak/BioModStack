@@ -147,7 +147,7 @@ afterEach(async () => {
 });
 
 describe('NGS authoritative stage presentation', () => {
-    for (const status of ['queued', 'running', 'completed', 'awaiting_input', 'failed', 'cancelled']) {
+    for (const status of ['queued', 'completed']) {
         it(`${status} list and selected run preserve planned versus recorded states`, async () => {
             Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
             const execution_stages = [

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-plotly.js', () => ({
     default: ({ data, layout }: { data?: Array<{ type?: string }>; layout?: { title?: { text?: string }; xaxis?: { title?: { text?: string } } } }) => (
-        <div data-testid="scientific-plot" data-trace-types={(data || []).map((trace) => trace.type || '').join(',')} data-xaxis-title={layout?.xaxis?.title?.text}>
+        <div data-testid="scientific-plot" data-traces={JSON.stringify(data)} data-trace-types={(data || []).map((trace) => trace.type || '').join(',')} data-xaxis-title={layout?.xaxis?.title?.text}>
             {layout?.title?.text || 'plot'}
         </div>
     ),
@@ -91,6 +91,15 @@ describe('ONT FASTQ-QC decision report', () => {
         const scientificPlots = container.querySelectorAll<HTMLElement>('[data-testid="scientific-plot"]');
         expect(scientificPlots).toHaveLength(2);
         expect(scientificPlots[1]?.dataset.traceTypes).toBe('scatter');
+        const [coverageTrace] = JSON.parse(scientificPlots[1]!.dataset.traces!) as Array<{ x: number[]; y: number[] }>;
+        // Literal fixture landmarks, not values derived through the plotted producer.
+        expect(coverageTrace.x).toHaveLength(1858);
+        expect(coverageTrace.y).toHaveLength(1858);
+        expect(coverageTrace.x.slice(0, 5)).toEqual([1, 6, 10, 12, 17]);
+        expect(coverageTrace.y.slice(0, 5)).toEqual([52314, 54653, 51896, 55482, 54857]);
+        expect(coverageTrace.y[coverageTrace.x.indexOf(3516)]).toBe(24840);
+        expect(coverageTrace.x.slice(-3)).toEqual([5568, 5569, 5570]);
+        expect(coverageTrace.y.slice(-3)).toEqual([53155, 52345, 49126]);
         expect(container.textContent).toContain('MIXED_ALLELES_DETECTED');
         expect(container.textContent).toContain('VARIANT_SUPPORT_AMBIGUOUS');
         expect(container.textContent).toContain('Affected interval');

@@ -178,6 +178,8 @@ describe('PooledAssignmentReviewPanel', () => {
         expect(pooled.release).toHaveBeenCalledTimes(1);
         const firstCall = pooled.release.mock.calls[0];
         expect(firstCall[0]).toBe('assignment-job-001');
+        expect(firstCall[1].idempotency_key).toEqual(expect.any(String));
+        expect(firstCall[1].idempotency_key).toMatch(/\S/);
         expect(firstCall[1]).toMatchObject({
             target_workflow: 'ont_construct_screening',
             target_ids: ['target-a', 'target-b'],

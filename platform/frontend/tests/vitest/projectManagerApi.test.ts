@@ -500,12 +500,18 @@ describe('Project Manager API contract', () => {
         });
         expect(transport.post).toHaveBeenCalledWith(
             '/api/projects/project-1/experiments/global-1/domains/domain-1/run-groups/group-1/clone',
-            expect.objectContaining({
+            {
                 schema: 'bms.run-clone-request.v1',
+                expected_run_group_generation: 3,
+                source_run_id: 'run-1',
+                source_attempt_id: 'attempt-1',
                 new_workflow_name: 'Cloned ubiquitin intent',
-                idempotency_key: expect.any(String),
-            }),
+                change_summary: 'Clone exact immutable intent',
+                expected_domain_revision_id: 'domain-revision-1',
+                idempotency_key: expect.stringMatching(/\S/),
+            },
         );
+        expect(transport.post).toHaveBeenCalledTimes(1);
         expect(transport.post.mock.calls[0]?.[1]).not.toHaveProperty('name');
     });
 });

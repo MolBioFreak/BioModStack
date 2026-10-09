@@ -148,9 +148,14 @@ describe('mounted NGS settings to submit payload', () => {
         await flush();
 
         expect(apiMocks.submitOntNgsJob).toHaveBeenCalledTimes(1);
-        const [workflowId, request] = apiMocks.submitOntNgsJob.mock.calls[0] as [string, { pinned_gpu: number | null; params: Record<string, unknown> }];
+        const [workflowId, request] = apiMocks.submitOntNgsJob.mock.calls[0] as [string, { pinned_gpu: number | null; managed_reference: Record<string, unknown>; params: Record<string, unknown> }];
         expect(workflowId).toBe('ont_construct_screening');
         expect(request.pinned_gpu).toBe(2);
+        expect(request.managed_reference).toEqual({
+            global_domain_experiment_id: 'domain-1',
+            molbio_ngs_state_revision_id: 'state-1',
+            ngs_reference_revision_id: 'reference-revision-1',
+        });
         expect(request.params).toMatchObject({
             pod5_dir: '/data/pod5',
             run_assembly: true,
