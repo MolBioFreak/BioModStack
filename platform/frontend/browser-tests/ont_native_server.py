@@ -27,6 +27,9 @@ for key, value in {
     'BMS_EXPERIMENT_DB_PATH': ROOT / 'experiments.db',
     'BMS_MOLBIO_NGS_DB_PATH': ROOT / 'molbio.db',
     'BMS_MOLBIO_NGS_REFERENCE_ROOT': ROOT / 'references',
+    'BMS_WEIGHTS': ROOT / 'weights', 'BMS_CONTAINER_DIR': ROOT / 'containers',
+    'BMS_MSA_CACHE': ROOT / 'msa', 'BMS_REFERENCES': ROOT / 'references',
+    'XDG_CACHE_HOME': ROOT / 'cache', 'TMPDIR': ROOT / 'tmp', 'NXF_HOME': ROOT / 'nxf-home',
 }.items():
     os.environ[key] = str(value)
     if key != 'BMS_HOME': (value.parent if key.endswith('_PATH') else value).mkdir(parents=True, exist_ok=True)
@@ -38,7 +41,7 @@ sys.path[:0] = [str(REPO / 'platform/api'), str(REPO)]
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from database import Base, Job, async_session, engine
-from routers import jobs, files, models, ngs_alignment_sessions, sequence_qc, ont_runs, ont_signal_workbench
+from routers import jobs, files, models, ngs_alignment_sessions, sequence_qc, ont_runs, ont_signal_workbench, execution_targets
 
 app = FastAPI()
 app.add_exception_handler(ngs_alignment_sessions.OntNgsRouteError, ngs_alignment_sessions.ont_ngs_route_error_handler)
@@ -46,11 +49,14 @@ app.add_exception_handler(ngs_alignment_sessions.OntNgsRouteError, ngs_alignment
 async def isolation(request: Request, call_next):
     if request.headers.get('x-ont-acceptance') != TOKEN and request.cookies.get('ont-acceptance') != TOKEN:
         return JSONResponse({'detail': 'Explicit synthetic acceptance auth required'}, 401)
-    if request.method not in {'GET', 'HEAD'}:
+    from ont_result_fixtures import POOLED_JOB
+    allowed_write = os.environ.get('ONT_ACCEPTANCE_POOLED_SOURCE') and request.method == 'POST' and request.url.path in {
+        f'/api/jobs/{POOLED_JOB}/pooled-assignment/release/prepare', f'/api/jobs/{POOLED_JOB}/pooled-assignment/release'}
+    if request.method not in {'GET', 'HEAD'} and not allowed_write:
         return JSONResponse({'detail': 'Read acceptance does not launch science'}, 405)
     return await call_next(request)
 
-for router, prefix in [(models.router, '/api/models'), (jobs.router, '/api/jobs'), (files.router, '/api/files'),
+for router, prefix in [(execution_targets.router, '/api/execution-targets'), (models.router, '/api/models'), (jobs.router, '/api/jobs'), (files.router, '/api/files'),
         (ngs_alignment_sessions.router, '/api'), (sequence_qc.router, '/api/sequence-qc'),
         (ont_runs.router, '/api/ont'), (ont_runs.barcode_router, '/api/jobs'),
         (ont_signal_workbench.router, '/api/ont/signal-workbench')]:
@@ -110,5 +116,7 @@ async def seed():
 
 if __name__ == '__main__':
     asyncio.run(seed())
+    from ont_result_fixtures import seed_pooled
+    asyncio.run(seed_pooled(ROOT, async_session))
     import uvicorn
     uvicorn.run(app, host='127.0.0.1', port=int(os.environ.get('ONT_ACCEPTANCE_API_PORT', '18761')))

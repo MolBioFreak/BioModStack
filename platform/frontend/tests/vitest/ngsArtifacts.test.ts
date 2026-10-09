@@ -6,6 +6,12 @@ describe('native public artifact URL resolution', () => {
         const a = artifact('methylation/modkit_summary.tsv');
         for (const path of ['/scratch/bms_results/job/methylation/modkit_summary.tsv', 'bms_results/job/methylation/modkit_summary.tsv', a.filename!, a.url!]) expect(ngsArtifactUrl(path, 'job', [a])).toBe(a.url);
     });
+    it('disambiguates native publish directories without guessing duplicated basenames', () => {
+        const first = { ...artifact('aligned.bam'), source: 'align' };
+        const second = { ...artifact('aligned.bam', 'b'), source: 'fastq_qc' };
+        expect(ngsArtifactUrl('/align/aligned.bam', 'job', [first, second])).toBe(first.url);
+        expect(ngsArtifactUrl('aligned.bam', 'job', [first, second])).toBeNull();
+    });
     it('supports a basename-only public catalog', () => {
         const a = artifact('modkit_summary.tsv');
         expect(ngsArtifactUrl('bms_results/job/methylation/modkit_summary.tsv', 'job', [a])).toBe(a.url);

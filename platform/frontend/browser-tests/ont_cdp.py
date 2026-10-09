@@ -33,6 +33,7 @@ with connect(page['webSocketDebuggerUrl'], origin=None) as ws:
                 return message.get('result', {})
             events.append(message)
     call('Network.enable')
+    call('Network.setCacheDisabled', cacheDisabled=True)
     call('Runtime.enable')
     call('Network.setExtraHTTPHeaders', headers={'x-ont-acceptance': 'synthetic-ont-ui-only'})
     call('Network.setCookie', name='ont-acceptance', value='synthetic-ont-ui-only', url='http://127.0.0.1:18762', httpOnly=True, sameSite='Strict')
@@ -41,6 +42,14 @@ with connect(page['webSocketDebuggerUrl'], origin=None) as ws:
     if args.url: call('Page.navigate', url=args.url)
     time.sleep(args.wait)
     value = call('Runtime.evaluate', expression=args.expression, awaitPromise=True, returnByValue=True)
+    responses = []
+    for event in list(events):
+        if event.get('method') != 'Network.responseReceived': continue
+        params = event['params']
+        if '/api/' not in params['response']['url']: continue
+        try: body = call('Network.getResponseBody', requestId=params['requestId'])
+        except Exception as exc: body = {'unavailable': str(exc)}
+        responses.append({'requestId': params['requestId'], 'url': params['response']['url'], 'status':params['response']['status'], 'body':body})
     args.evidence.parent.mkdir(parents=True, exist_ok=True)
-    args.evidence.write_text(json.dumps({'page': page, 'result': value, 'events': events}, indent=2))
+    args.evidence.write_text(json.dumps({'page': page, 'result': value, 'events': events, 'responses': responses}, indent=2))
     print(json.dumps(value, indent=2))

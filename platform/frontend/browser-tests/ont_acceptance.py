@@ -136,6 +136,13 @@ try:
             assert not case_result['generic_download_links'], case_result
             summary['retained_cases'].append(case_result)
             (ROOT / 'retained-cases.json').write_text(json.dumps(summary['retained_cases'], indent=2))
+    from ont_result_journeys import run_result_journey
+    summary['result_journeys'] = [run_result_journey(HERE, ROOT, case) for case in json.loads(Path(cases_file).read_text())] if cases_file else []
+    if os.environ.get('ONT_ACCEPTANCE_POOLED_SOURCE'):
+        from ont_result_fixtures import POOLED_JOB
+        from ont_result_journeys import run_pooled_release
+        summary['pooled_release'] = run_pooled_release(HERE, ROOT)
+        summary['result_journeys'].append(run_result_journey(HERE, ROOT, {'job_id':POOLED_JOB, 'expected_text':['Pooled assignment review', 'Target target-a']}))
     (ROOT / 'acceptance.json').write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
 finally:

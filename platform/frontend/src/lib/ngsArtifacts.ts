@@ -13,11 +13,17 @@ export interface NgsPackageArtifact {
     unavailable_reason?: string | null;
 }
 
+export interface NativeIgvConfiguration {
+    name: string;
+    reference: { fastaURL: string; indexURL: string };
+    tracks: { name: string; type: string; format: string; url: string; indexURL?: string }[];
+}
+
 export function useNgsArtifacts(jobId: string | null, enabled = true) {
     return useQuery({
         queryKey: ['ngs-package-artifacts', jobId],
         queryFn: () => withAlignmentAccessRecovery(jobId!, async () =>
-            (await api.get<{ job_id: string; artifacts: NgsPackageArtifact[] }>(`/api/jobs/${encodeURIComponent(jobId!)}/ngs-artifacts`)).data),
+            (await api.get<{ job_id: string; artifacts: NgsPackageArtifact[]; igv?: NativeIgvConfiguration[] }>(`/api/jobs/${encodeURIComponent(jobId!)}/ngs-artifacts`)).data),
         enabled: Boolean(jobId) && enabled,
         retry: false,
         staleTime: 30_000,
@@ -30,6 +36,8 @@ export function ngsArtifactUrl(path: string, jobId: string | undefined, artifact
     const prefix = `/api/jobs/${encodeURIComponent(jobId)}/ngs-artifacts/`;
     const present = artifacts.filter(a => a.state === 'present' && a.url?.startsWith(prefix));
     const normalized = path.replace(/\\/g, '/');
+    const scoped = present.filter(a => a.filename && (normalized === `${a.source}/${a.filename}` || normalized.endsWith(`/${a.source}/${a.filename}`)));
+    if (scoped.length === 1) return scoped[0].url;
     const exact = present.filter(a => a.url === path || (a.filename && (normalized === a.filename || normalized.endsWith(`/${a.filename}`))));
     if (exact.length === 1) return exact[0].url;
     // Older catalog owners publish a basename only. Never guess between duplicates.

@@ -169,17 +169,17 @@ if (process.env.ONT_ACCEPTANCE_RETAINED_JOBS) {
             const files = readdirSync(fixture.source_output, { recursive: true, withFileTypes: true }).filter(e => e.isFile());
             const entries = files.map((entry, i) => {
                 const path = resolve(entry.parentPath, entry.name);
-                return { path, filename: path.slice(fixture.source_output.length + 1), url: `/api/jobs/job-123/ngs-artifacts/${i}` };
+                return { path, filename: entry.name, source: path.slice(fixture.source_output.length + 1).split('/')[0], url: `/api/jobs/job-123/ngs-artifacts/${i}` };
             });
             const job = { id: 'job-123', name: fixture.name, model_id: 'nanopore', mode: fixture.mode, status: 'completed',
                 params: fixture.params, output_dir: 'bms_results/job-123', created_at: '2026-09-01T00:00:00Z',
-                stage_outputs: { native: entries.map(e => `bms_results/job-123/${e.filename}`) } };
+                stage_outputs: {} };
             ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [job], total: 1 } });
             ngsApiMocks.fetchFullJob.mockResolvedValue(job);
             ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { job_id: job.id, stage_outputs: job.stage_outputs } });
             vi.mocked(api.get).mockImplementation(async url => {
                 if (url !== '/api/jobs/job-123/ngs-artifacts') throw Error(`Unrelated fixture read ${url}`);
-                return { data: { job_id: job.id, artifacts: entries.map((e, i) => ({ ...e, artifact_id: String(i), kind: 'native', source: 'fixture', state: 'present', size_bytes: readFileSync(e.path).length })) } };
+                return { data: { job_id: job.id, artifacts: entries.map((e, i) => ({ ...e, artifact_id: String(i), kind: 'native', state: 'present', size_bytes: readFileSync(e.path).length })) } };
             });
             const reads: string[] = [];
             vi.stubGlobal('fetch', vi.fn(async (url: string) => {
@@ -197,6 +197,7 @@ if (process.env.ONT_ACCEPTANCE_RETAINED_JOBS) {
                 expect(container.textContent).toContain(fixture.mode === 'basecall_dna' ? 'C_total_mod_calls257' : 'Read lengths rows30');
             });
             if (process.env.ONT_ACCEPTANCE_ROOT) writeFileSync(resolve(process.env.ONT_ACCEPTANCE_ROOT, `mounted-${fixture.mode}.txt`), container.textContent || '');
+            if (fixture.mode === 'fastq_qc') expect(container.textContent).toContain('Consensus statusok');
             expect(container.querySelector('a[href^="/api/files/"]')).toBeNull();
             expect(reads.every(url => url.startsWith('/api/jobs/job-123/ngs-artifacts/'))).toBe(true);
         });

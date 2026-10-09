@@ -532,11 +532,10 @@ function filterPathsByRunPrefix(paths: string[], runPrefix: string | null): stri
 }
 
 function findFirstMatchingPath(paths: string[], patterns: RegExp[]): string | null {
-    for (const p of paths) {
-        const normalized = p.toLowerCase();
-        if (patterns.some((re) => re.test(normalized))) {
-            return p;
-        }
+    // Patterns are ordered from the preferred native output to legacy fallbacks.
+    for (const pattern of patterns) {
+        const match = paths.find(path => pattern.test(path.toLowerCase()));
+        if (match) return match;
     }
     return null;
 }
@@ -774,7 +773,7 @@ function resolveMethylationArtifacts(job: Job | null, stageOutputs: StageOutputs
     const candidateBase = runPrefix
         ? (scopedModkitPaths.length > 0 ? scopedModkitPaths : scopedPaths)
         : (modkitPaths.length > 0 ? modkitPaths : paths);
-    const candidates = dedupePaths(candidateBase);
+    const candidates = dedupePaths([...candidateBase, ...artifacts.filter(a => a.state === 'present' && a.filename).map(a => `/${a.source}/${a.filename}`)]);
 
     const summaryPath = findFirstMatchingPath(candidates, [/\/methylation\/modkit_summary\.tsv$/i, /(^|\/)modkit_summary\.tsv$/i]);
     const bedPath = findFirstMatchingPath(candidates, [/\/methylation\/methylation\.bed$/i, /\/methylation\/.*\.bed$/i]);
@@ -882,7 +881,7 @@ function resolveMultimerArtifacts(job: Job | null, stageOutputs: StageOutputsMap
     const candidateBase = runPrefix
         ? (scopedStagePaths.length > 0 ? scopedStagePaths : scopedPaths)
         : (stagePaths.length > 0 ? stagePaths : paths);
-    const candidates = dedupePaths(candidateBase);
+    const candidates = dedupePaths([...candidateBase, ...artifacts.filter(a => a.state === 'present' && a.filename).map(a => `/${a.source}/${a.filename}`)]);
 
     const summaryPath = findFirstMatchingPath(candidates, [/\/fastq_qc\/fastq_qc_summary\.tsv$/i, /(^|\/)fastq_qc_summary\.tsv$/i, /\/multimer_qc\/multimer_summary\.tsv$/i, /(^|\/)multimer_summary\.tsv$/i]);
     const lengthsPath = findFirstMatchingPath(candidates, [/\/fastq_qc\/read_lengths\.tsv$/i, /(^|\/)read_lengths\.tsv$/i]);
@@ -2805,6 +2804,12 @@ export function NGSToolkit() {
         igvTrackOperationGenerationRef.current += 1;
         igvTrackOperationActiveRef.current = false;
     }, [selectedAlignmentSession?.session_id]);
+    // Native publishDir configurations are not verified alignment sessions.
+    // Reuse the browser without granting session-only read/signal operations.
+    const [nativeIgvName, setNativeIgvName] = useState('');
+    const nativeIgv = !selectedAlignmentSession && !isCanonicalFastqQcRun
+        ? artifactQuery.data?.igv?.find(config => config.name === nativeIgvName) || artifactQuery.data?.igv?.[0] : undefined;
+    const nativeAlignment = nativeIgv?.tracks.find(track => track.type === 'alignment');
     const activeIgvBamPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment` : null;
     const igvAlignmentLoadDisposition = alignmentTrackAutoLoadDisposition(selectedAlignmentSession?.artifacts.alignment?.size_bytes);
     const browserAlignmentTrack: BrowserAlignmentTrackSource | null = selectedJob
@@ -2820,15 +2825,15 @@ export function NGSToolkit() {
             locusSlice: igvLocusSlice,
         })
         : null;
-    const activeIgvBamUrl = selectedAlignmentSession?.artifacts.alignment?.url || null;
+    const activeIgvBamUrl = selectedAlignmentSession?.artifacts.alignment?.url || nativeAlignment?.url || null;
     const activeIgvBaiPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment-index` : null;
-    const activeIgvBaiUrl = selectedAlignmentSession?.artifacts.alignment_index?.url || null;
+    const activeIgvBaiUrl = selectedAlignmentSession?.artifacts.alignment_index?.url || nativeAlignment?.indexURL || null;
     const activeIgvFastaPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:reference` : null;
-    const activeIgvFastaUrl = selectedAlignmentSession?.artifacts.reference?.url || null;
+    const activeIgvFastaUrl = selectedAlignmentSession?.artifacts.reference?.url || nativeIgv?.reference.fastaURL || null;
     const activeIgvFaiPath = selectedAlignmentSession?.artifacts.reference_index
         ? `${selectedAlignmentSession.mode}:reference-index`
         : null;
-    const activeIgvFaiUrl = selectedAlignmentSession?.artifacts.reference_index?.url || null;
+    const activeIgvFaiUrl = selectedAlignmentSession?.artifacts.reference_index?.url || nativeIgv?.reference.indexURL || null;
     const activeIgvSourceKey = selectedAlignmentSession?.session_id || '';
     const searchOwnedIgvNavigation = useCallback(async (
         browser: UntypedApiValue,
@@ -2947,7 +2952,7 @@ export function NGSToolkit() {
         navigateToLocalIgvRange(`${reference.contig}:${start}-${end}`, 'Read bases');
     }, [igvCurrentLocus, navigateToLocalIgvRange, selectedAlignmentSession]);
     const selectedReferenceFastaUrl = activeIgvFastaUrl;
-    const igvMissingReason = alignmentSessionsError
+    const igvMissingReason = nativeIgv ? null : alignmentSessionsError
         ? describeNgsError(alignmentSessionsError, 'Authoritative alignment session is unavailable.')
         : !selectedAlignmentSession
             ? 'No job-scoped alignment session was published.'
@@ -2962,7 +2967,7 @@ export function NGSToolkit() {
                             : !activeIgvFaiUrl
                                 ? 'Reference FASTA index (.fai) not found yet.'
                                 : null;
-    const igvReady = selectedAlignmentSession?.ready === true && !igvMissingReason;
+    const igvReady = (selectedAlignmentSession?.ready === true || Boolean(nativeIgv)) && !igvMissingReason;
     useEffect(() => {
         if (signalWorkbenchRequested && selectedJob && signalDatasetId && rawSignalRunId && rawSignalObservedGeneration) {
             setIgvModalOpen(true);
@@ -3947,7 +3952,7 @@ export function NGSToolkit() {
                     fastaUrl: igvFastaUrl,
                     faiUrl: activeIgvFaiUrl,
                     initialLocus: requestedLocus,
-                    auxiliaryTracks: [],
+                    auxiliaryTracks: nativeIgv?.tracks.map(track => ({ ...track, withCredentials: true })) || [],
                 });
                 igvBrowser = await createGenerationBoundResourceWithTimeout({
                     create: () => igvAny.createBrowser(igvMount, localIgvConfig),
@@ -3968,6 +3973,7 @@ export function NGSToolkit() {
                 ensureIgvThemeStyles(igvMount);
                 patchIgvRulerContrast(igvBrowser);
                 igvBrowserRef.current = igvBrowser;
+                if (nativeIgv) setIgvReadsTrackLoaded(Boolean(findIgvAlignmentTrack(igvBrowser)));
                 if (typeof igvBrowser.on === 'function') {
                     const locusHandler = (loci: unknown) => {
                         if (!isCurrentLoad() || cancelled || igvBrowserRef.current !== igvBrowser) return;
@@ -4107,6 +4113,7 @@ export function NGSToolkit() {
         igvMissingReason,
         searchOwnedIgvNavigation,
         selectedAlignmentSession?.session_id,
+        nativeIgv,
     ]);
 
     useEffect(() => {
@@ -5528,15 +5535,16 @@ export function NGSToolkit() {
                             </div>
                             <div className="flex flex-wrap items-center gap-1">
                                 <select
-                                    value={selectedAlignmentSession?.session_id || ''}
-                                    onChange={(event) => setSelectedAlignmentSessionId(event.target.value)}
-                                    disabled={igvLoading || igvReadsTrackLoading || alignmentSessions.length === 0}
+                                    value={selectedAlignmentSession?.session_id || nativeIgv?.name || ''}
+                                    onChange={(event) => nativeIgv ? setNativeIgvName(event.target.value) : setSelectedAlignmentSessionId(event.target.value)}
+                                    disabled={igvLoading || igvReadsTrackLoading || (alignmentSessions.length === 0 && !nativeIgv)}
                                     title="Choose alignment"
                                     className="max-w-[250px] bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
                                 >
-                                    {alignmentSessions.length === 0 && (
+                                    {alignmentSessions.length === 0 && !nativeIgv && (
                                         <option value="">No validated sessions</option>
                                     )}
+                                    {nativeIgv && artifactQuery.data?.igv?.map(config => <option key={config.name} value={config.name}>{config.name} · native published alignment</option>)}
                                     {alignmentSessions.map((session) => (
                                         <option key={session.session_id} value={session.session_id}>
                                             {session.mode === 'primary' ? 'Primary alignment' : 'Dimer candidates'} · {session.ready ? 'ready' : 'unavailable'}
@@ -5679,6 +5687,7 @@ export function NGSToolkit() {
                                 {igvInspectorOpen ? 'Hide reads' : 'Reads'}
                             </button>
                             <button
+                                aria-label="Close IGV"
                                 onClick={() => void closeIgvModal()}
                                 className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-lg leading-none px-1.5 py-0.5 transition-colors"
                             >
@@ -5720,7 +5729,7 @@ export function NGSToolkit() {
                                 )}
                                 {!igvLoading && !igvError && !browserAlignmentTrack && (
                                     <div className="absolute bottom-2 left-2 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)]/85 text-[var(--text-secondary)] text-xs px-2 py-1.5">
-                                        {igvAlignmentLoadDisposition.reason || 'Reference loaded; tracks autoload or use Load tracks.'}
+                                        {nativeIgv ? 'Native published reference and alignment tracks.' : igvAlignmentLoadDisposition.reason || 'Reference loaded; tracks autoload or use Load tracks.'}
                                     </div>
                                 )}
 
