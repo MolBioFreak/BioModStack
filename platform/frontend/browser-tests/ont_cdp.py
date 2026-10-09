@@ -35,6 +35,9 @@ with connect(page['webSocketDebuggerUrl'], origin=None) as ws:
     call('Network.enable')
     call('Network.setCacheDisabled', cacheDisabled=True)
     call('Runtime.enable')
+    download_dir = args.evidence.parent / 'downloads'
+    download_dir.mkdir(parents=True, exist_ok=True)
+    call('Browser.setDownloadBehavior', behavior='allow', downloadPath=str(download_dir.resolve()), eventsEnabled=True)
     call('Network.setExtraHTTPHeaders', headers={'x-ont-acceptance': 'synthetic-ont-ui-only'})
     call('Network.setCookie', name='ont-acceptance', value='synthetic-ont-ui-only', url='http://127.0.0.1:18762', httpOnly=True, sameSite='Strict')
     if args.alignment_job:

@@ -26,6 +26,9 @@ def run_result_journey(here, root, case):
         const open=button('Open IGV'); if(!open) throw Error('Open IGV unavailable'); open.click();
         for(let n=0;n<200;n++){await wait(100); if(roots().some(r=>r.querySelector('.igv-track-label')) && !document.body.innerText.includes('Loading IGV')) break;}
         await wait(2000); opened=snapshot();
+        opened.exportControls=roots().flatMap(r=>[...r.querySelectorAll('[title]')]).map(e=>e.getAttribute('title')).filter(t=>/svg|export|save/i.test(t));
+        const svg=roots().flatMap(r=>[...r.querySelectorAll('[title]')]).find(e=>/save.*svg|svg.*save/i.test(e.getAttribute('title')));
+        if(svg){svg.click();await wait(500);opened.exportDialog=document.body.innerText;}
         const close=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')?.includes('Close IGV') || b.textContent.trim()==='Close');
         if(close) {close.click(); await wait(200);button('Open IGV')?.click();await wait(2500);reopened=snapshot();}
       }
@@ -100,4 +103,43 @@ def run_pooled_release(here, root):
         row={'target':target,'browser':data,'sql_jobs':sql,'release_count':count}
         rows.append(row)
         (root/'pooled-release-readback.json').write_text(json.dumps(rows,indent=2))
+    for index, row in enumerate(rows, 1):
+        assert row['release_count'] == index and len(row['sql_jobs']) == index, row
+        assert row['browser']['initialChecked'] == 0 and row['browser']['initialReleaseDisabled'], row
+        assert len(row['browser']['jobs']) == 1 and row['browser']['jobs'][0]['status'] == 200, row
+        job = row['browser']['jobs'][0]['job']
+        assert job['execution_target_id'] == (None if row['target'] == 'local' else 'scratch-selected-target'), row
+        assert job['execution_policy']['remote_result_policy'] == ('manual' if row['target'] == 'local' else 'automatic'), row
+        assert job.get('remote_attempt_id') is None, row
+        if row['target'] == 'selected':
+            assert row['browser']['cancelled']['checked'] == 1 and row['browser']['cancelled']['name'] == 'native-selected-draft', row
     return rows
+
+
+def run_saved_continuations(here, root, releases):
+    result=[]
+    for release in releases:
+        for saved in release['browser']['jobs']:
+            job=saved['job']
+            expression=r"""(async()=>{
+              const wait=ms=>new Promise(r=>setTimeout(r,ms));
+              let reuse;
+              for(let i=0;i<100;i++){reuse=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Reuse Params'&&!b.disabled);if(reuse)break;await wait(100);}
+              if(!reuse)throw Error('Saved child could not be reopened');
+              reuse.click();await wait(1000);
+              return {text:document.body.innerText, placement:[...document.querySelectorAll('[aria-label="Execution target"] button[aria-pressed="true"]')].map(e=>e.textContent.trim()),
+                policy:document.querySelector('[aria-label="Successful remote results"]')?.value,
+                inputs:[...document.querySelectorAll('input')].map(e=>({value:e.value,type:e.type})),url:location.href};
+            })()"""
+            evidence=root/f"reopen-{job['id']}.json"
+            subprocess.run([sys.executable,str(here/'ont_cdp.py'),'--url',
+                f"http://127.0.0.1:18762/browser-tests/ont-suite.html?section=analyses&job_id={job['id']}",
+                '--wait','3','--expression',expression,'--evidence',str(evidence)],check=True,stdout=(root/f"reopen-{job['id']}.stdout").open('w'))
+            received=json.loads(evidence.read_text())['result']['result']['value']
+            expected_policy=job['execution_policy']['remote_result_policy']
+            expected_target='Local' if job['execution_target_id'] is None else 'Vast · synthetic-never-contact'
+            assert received['policy']==expected_policy, received
+            assert expected_target in received['placement'], received
+            assert any(i['value']==job['name'] for i in received['inputs']),received
+            result.append({'job_id':job['id'],'placement':received['placement'],'policy':received['policy'],'evidence':str(evidence)})
+    return result

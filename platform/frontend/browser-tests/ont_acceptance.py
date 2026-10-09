@@ -142,8 +142,13 @@ try:
         from ont_result_fixtures import POOLED_JOB
         from ont_result_journeys import run_pooled_release
         summary['pooled_release'] = run_pooled_release(HERE, ROOT)
+        from ont_result_journeys import run_saved_continuations
+        summary['saved_continuations'] = run_saved_continuations(HERE, ROOT, summary['pooled_release'])
+        summary['retained_bam_reclassified'] = True
+        summary['remote_execution_performed'] = False
         summary['result_journeys'].append(run_result_journey(HERE, ROOT, {'job_id':POOLED_JOB, 'expected_text':['Pooled assignment review', 'Target target-a']}))
     (ROOT / 'acceptance.json').write_text(json.dumps(summary, indent=2))
+    assert all(not row['missing_text'] and row['igv_tracks'] and row['reopened'] for row in summary['result_journeys']), summary['result_journeys']
     print(json.dumps(summary, indent=2))
 finally:
     for p in reversed(processes):
