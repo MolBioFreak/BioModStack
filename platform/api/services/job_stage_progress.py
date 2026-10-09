@@ -11,7 +11,7 @@ from typing import Literal, TypedDict
 class ExecutionStage(TypedDict):
     id: str
     label: str
-    state: Literal['planned', 'running', 'completed', 'awaiting_input', 'failed', 'cancelled', 'unknown']
+    state: Literal['planned', 'running', 'completed', 'awaiting_input', 'failed', 'cancelled', 'not_requested', 'skipped', 'unknown']
     source: Literal['plan', 'recorded', 'model']
 
 
@@ -91,7 +91,7 @@ def project_execution_stages(job) -> list[ExecutionStage]:
     for name, receipt in terminals.items():
         if (name := add(name, 'recorded')) is not None and stages[name]['state'] != 'completed':
             terminal = _mapping(receipt).get('status')
-            stages[name]['state'] = terminal if terminal in {'failed', 'cancelled'} else 'unknown'
+            stages[name]['state'] = terminal if terminal in {'failed', 'cancelled', 'not_requested', 'skipped'} else 'unknown'
 
     current = add(_get(job, 'current_stage'), 'recorded')
     if current is not None and current not in terminals and stages[current]['state'] != 'completed':

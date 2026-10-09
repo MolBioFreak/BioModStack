@@ -222,7 +222,7 @@ class ExecutionStageResponse(BaseModel):
 
     id: str
     label: str
-    state: Literal['planned', 'running', 'completed', 'awaiting_input', 'failed', 'cancelled', 'unknown']
+    state: Literal['planned', 'running', 'completed', 'awaiting_input', 'failed', 'cancelled', 'not_requested', 'skipped', 'unknown']
     source: Literal['plan', 'recorded', 'model']
 
 

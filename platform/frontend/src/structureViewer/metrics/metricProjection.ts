@@ -30,6 +30,21 @@ const finiteValues = (values: readonly MetricValue<ResidueRef>[]): number[] => v
     typeof entry.value === 'number' && Number.isFinite(entry.value) && entry.missingness === undefined ? [entry.value] : []
 ));
 
+/** Display precision only: native values and provenance remain in the metric layer. */
+const metricTooltip = (layer: MetricLayer, value: number, identity: ResidueRef | AtomRef): string => {
+    const nativePlddt = layer.descriptor.id === 'native-plddt' && layer.descriptor.units === 'fraction';
+    const rendered = nativePlddt ? `${(value * 100).toFixed(1)} /100`
+        : `${Number(value.toPrecision(4))}${layer.descriptor.units ? ` ${layer.descriptor.units}` : ''}`;
+    const author = identity.authAsymId !== undefined && identity.authSeqId !== undefined;
+    const chain = author ? identity.authAsymId : identity.labelAsymId;
+    const number = author ? identity.authSeqId : identity.labelSeqId;
+    const residue = `${identity.componentId ?? ''}${number ?? ''}${author ? identity.insertionCode ?? '' : ''}`;
+    const atom = (identity as AtomRef).authAtomId ?? (identity as AtomRef).labelAtomId;
+    const location = [chain, residue || undefined, atom, identity.altLoc ? `alt ${identity.altLoc}` : undefined]
+        .filter(Boolean).join(' · ');
+    return `${location ? `${location} — ` : ''}${layer.descriptor.label}: ${rendered}`;
+};
+
 export const projectAtomMetricLayer = (layer: MetricLayer) => {
     if (layer.descriptor.dimension !== 'atom-scalar' || layer.descriptor.projectionPolicy !== 'direct') return [];
     const domain = layer.descriptor.palette?.domain ?? layer.descriptor.valueRange;
@@ -39,7 +54,7 @@ export const projectAtomMetricLayer = (layer: MetricLayer) => {
     return (layer.values as readonly MetricValue<AtomRef>[]).flatMap(entry => {
         if (typeof entry.value !== 'number' || !Number.isFinite(entry.value) || entry.missingness !== undefined) return [];
         return [{identity:entry.identity, color: (entry.displayColor ? parseColor(entry.displayColor) : null) ?? paletteColor(palette, (entry.value-domain[0])/(domain[1]-domain[0])),
-            tooltip:`${layer.descriptor.label}: ${entry.value} ${layer.descriptor.units ?? ''} · ${layer.descriptor.provenance.source}`}];
+            tooltip: metricTooltip(layer, entry.value, entry.identity)}];
     });
 };
 
@@ -74,7 +89,7 @@ export const projectResidueMetricLayer = (layer: MetricLayer, options: MetricPro
             },
             value: entry.value,
             color: explicit ?? paletteColor(palette, fraction),
-            tooltip: `${layer.descriptor.label}: ${entry.value}${layer.descriptor.units ? ` ${layer.descriptor.units}` : ''} · ${layer.descriptor.provenance.source}`,
+            tooltip: metricTooltip(layer, entry.value, entry.identity),
         }];
     });
     const missing = parseColor(options.missingColor ?? layer.descriptor.palette?.missingColor ?? '#444444') ?? { r: 68, g: 68, b: 68 };

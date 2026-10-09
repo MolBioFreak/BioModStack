@@ -1230,10 +1230,17 @@ export class MolstarDirectAdapter {
             priority: 100,
             label: (loci: Loci) => {
                 if (!StructureElement.Loci.is(loci)) return undefined;
-                const labels = entries
+                // Cartoon/residue picks intersect every atom annotation. Keep
+                // the hover readable without changing atom values or coloring.
+                const labels = [...new Set(entries
                     .filter((entry) => StructureElement.Loci.areIntersecting(entry.loci, loci))
-                    .map((entry) => escapeLabel(entry.text));
-                return labels.length > 0 ? labels.join('<br/>') : undefined;
+                    .map((entry) => entry.text))];
+                if (labels.length === 0) return undefined;
+                const visible = labels.slice(0, 4).map(escapeLabel);
+                if (labels.length > visible.length) {
+                    visible.push(`${labels.length - visible.length} more matching annotations`);
+                }
+                return visible.join('<br/>');
             },
         };
         plugin.managers.lociLabels.addProvider(provider);
