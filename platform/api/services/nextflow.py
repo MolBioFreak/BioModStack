@@ -4457,8 +4457,7 @@ def _bind_prepared_boltz_plan(invocation, supplied):
     from dataclasses import replace
     from biomodstack_msa_handoff import digest
     from biomodstack_boltz_msa import hydrate_prepared_boltz_task
-    from services.model_msa_handoff import _boltz_roster, _boltz_task_proteins
-    from component_runtime import _LAUNCH_BINDING_KEYS
+    from services.model_msa_handoff import _boltz_roster, _boltz_task_proteins, boltz_msa_settings
 
     plan = invocation.execution_plan
     if plan is None:
@@ -4478,10 +4477,7 @@ def _bind_prepared_boltz_plan(invocation, supplied):
     if digest(raw) != sha256:
         raise ValueError('Prepared Boltz MSA manifest digest mismatch')
     manifest = json.loads(raw)
-    settings = {k: v for k, v in native.items()
-                if k.startswith(('msa_', 'colabfold_', 'boltz_'))
-                and not k.endswith(('_path', '_dir'))
-                and k not in _LAUNCH_BINDING_KEYS}
+    settings = boltz_msa_settings(native)
     if manifest.get('schema') != 'bms.boltz-msa-inputs.v1' or manifest.get('settings') != settings:
         raise ValueError('Prepared Boltz MSA schema/scientific settings mismatch')
     tasks = _boltz_roster(native)

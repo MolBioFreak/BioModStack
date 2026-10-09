@@ -226,7 +226,8 @@ def prepare_launch_msa(model_id: str, params: dict, destination: Path, *, native
     if model_id == 'boltz2' and (roster is not None or native_invocation is not None
             or effective.get('complex_json_path') or effective.get('sequence_batch_json_path')
             or ':' in str(effective.get('sequence_input') or effective.get('sequence') or '')):
-        return prepare_boltz_roster(effective, destination, roster=roster)
+        return prepare_boltz_roster(effective, destination, roster=roster,
+            native_parameters=native_invocation.native_parameters if native_invocation is not None else None)
     components = effective.get('complex_components')
     if isinstance(components, str):
         components = json.loads(components)
@@ -455,7 +456,7 @@ def _boltz_task_proteins(task, params):
              'msa': params.get('msa_path')} for i, s in enumerate(sequence.split(':'))]
 
 
-def prepare_boltz_roster(params, destination, *, roster=None):
+def prepare_boltz_roster(params, destination, *, roster=None, native_parameters=None):
     """Seal ordered task/chain artifacts; keep native input documents immutable."""
     import re
     tasks = copy.deepcopy(roster if roster is not None else _boltz_roster(params))
@@ -477,8 +478,8 @@ def prepare_boltz_roster(params, destination, *, roster=None):
         sealed.append({'name': task['name'], 'task_index': task_index, 'native_task': task,
                        'chains': chains, 'provenance': receipt})
     manifest = {'schema': 'bms.boltz-msa-inputs.v1', 'tasks': sealed,
-                'settings': {k: v for k, v in params.items() if k.startswith(('msa_', 'colabfold_', 'boltz_'))
-                             and not k.endswith(('_path', '_dir'))}}
+                # Request-only defaults stay in provenance, not compiled science.
+                'settings': boltz_msa_settings(params if native_parameters is None else native_parameters)}
     destination.mkdir(parents=True, exist_ok=True)
     path = destination / 'msa-inputs.json'
     path.write_text(json.dumps(manifest, sort_keys=True, indent=2))
@@ -486,11 +487,17 @@ def prepare_boltz_roster(params, destination, *, roster=None):
             'boltz_prepared_msa_sha256': digest(path.read_bytes())}
 
 
-def fold_cp_msa_settings(params):
+def boltz_msa_settings(params):
+    """Scientific MSA settings, excluding existing launch-only transport bindings."""
     from component_runtime import _LAUNCH_BINDING_KEYS
     return {k: v for k, v in params.items()
             if k.startswith(('msa_', 'colabfold_', 'boltz_'))
             and not k.endswith(('_path', '_dir')) and k not in _LAUNCH_BINDING_KEYS}
+
+
+def fold_cp_msa_settings(params):
+    return boltz_msa_settings(params)
+
 
 def _fold_cp_native_config(source: Path) -> tuple[Path, Path]:
     """Fold-CP executes exactly one top-level YAML, even for directory input."""
