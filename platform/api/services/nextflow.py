@@ -2336,7 +2336,7 @@ async def _pin_local_invocation_images(session, job, invocation):
     to release an image that a retry or retained execution may still need.
     """
     from paths import get_container_dir
-    from services.remote_execution.bundle import _runtime_assets
+    from services.remote_execution.bundle import _runtime_assets, _is_runtime_image
     from services.remote_execution.images import bind_local_image_references
 
     def pin():
@@ -2350,10 +2350,25 @@ async def _pin_local_invocation_images(session, job, invocation):
         from paths import get_weights_root
         import hashlib
         metadata_hashes = {}
+        # The selected native closure also declares hashed image/runtime leaves.
+        # Resolve those through the same owner as remote staging, not weights.
+        hashed_kinds = frozenset(d.kind for d in plan.dependencies
+            if d.kind != 'weights' and str(d.semantic_release or '').startswith('sha256:'))
+        if hashed_kinds:
+            from services.remote_execution.bundle import _sha256_file
+            hashed_paths = {d.relative_path for d in plan.dependencies
+                            if str(d.semantic_release or '').startswith('sha256:')}
+            for path, relative in _runtime_assets(invocation.model_id, invocation.mode,
+                    invocation.native_parameters, native_invocation=invocation,
+                    only_kinds=hashed_kinds):
+                if relative.partition('/')[2] in hashed_paths and path.is_file():
+                    metadata_hashes[relative] = _sha256_file(path)
         for dependency in plan.dependencies:
             if not str(dependency.semantic_release or '').startswith('sha256:'):
                 continue
-            if dependency.kind != 'weights' or not dependency.relative_path:
+            if dependency.kind != 'weights':
+                continue
+            if not dependency.relative_path:
                 raise ValueError('Local runtime metadata has no declared weights binding')
             data = _native_metadata_bytes(get_weights_root(), dependency.relative_path)
             metadata_hashes['weights/' + dependency.relative_path] = hashlib.sha256(data).hexdigest()
@@ -2371,6 +2386,8 @@ async def _pin_local_invocation_images(session, job, invocation):
                 if dependency.kind == 'image':
                     if not dependency.relative_path:
                         raise ValueError('Retained image lacks its declared semantic name')
+                    if not dependency.relative_path.lower().endswith('.sif'):
+                        continue  # Nested clone .img leaves stay native-lock owned.
                     name = Path(dependency.relative_path).name
                     selected[name] = Path(previous['environment'][image_environment_key(name)])
             if previous.get('store_root') != str(root):
@@ -2379,6 +2396,8 @@ async def _pin_local_invocation_images(session, job, invocation):
             for path, relative in _runtime_assets(invocation.model_id, invocation.mode,
                     invocation.native_parameters, native_invocation=invocation,
                     only_kinds=frozenset({'image'})):
+                if not _is_runtime_image(path, relative):
+                    continue  # Same regular nested-image boundary as remote bundling.
                 name = Path(relative).name
                 existing = selected.setdefault(name, path)
                 if existing != path:

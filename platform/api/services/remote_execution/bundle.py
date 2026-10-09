@@ -1298,6 +1298,42 @@ def stage_retained_ont_source(source: SourceIdentity) -> Path:
     return root
 
 
+def retained_ont_lock_bytes(source: SourceIdentity) -> bytes:
+    """Read the historical module's selected lock from the verified archive.
+
+    Only its path declaration is evaluated, not the module or another Python
+    interpreter. Completion needs two archive members, not a whole source tree.
+    """
+    import ast
+    import tempfile
+    repo = get_code_root().resolve()
+    if _git(repo, 'rev-parse', f'{source.revision}^{{tree}}') != source.tree:
+        raise RemoteBundleError('Inherited source tree does not match the inherited revision')
+    with tempfile.TemporaryDirectory(prefix='ont-lock-') as temporary:
+        root = Path(temporary) / 'source'
+        _staged_source_archive(repo, get_data_root().resolve(), source.revision, root, extract=False)
+        member = 'platform/api/services/ont_ngs_contract.py'
+        try:
+            with tarfile.open(root / '.bms-source.tar.gz', 'r:gz') as archive:
+                module_file = archive.extractfile(member)
+                if module_file is None:
+                    raise ValueError('Historical contract is not a file')
+                module = ast.parse(module_file.read())
+                declaration = next(node for node in module.body if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == 'DORADO_LOCK_PATH'
+                            for target in node.targets))
+                namespace = {'Path': Path, '__file__': str(root / member)}
+                exec(compile(ast.Module(body=[declaration], type_ignores=[]), member, 'exec'), namespace)
+                relative = namespace['DORADO_LOCK_PATH'].relative_to(root).as_posix()
+                lock_file = archive.extractfile(relative)
+                if lock_file is None:
+                    raise ValueError('Historical lock is not a file')
+                return lock_file.read()
+        except (KeyError, StopIteration, SyntaxError, NameError, AttributeError,
+                TypeError, ValueError, tarfile.TarError) as exc:
+            raise RemoteBundleError('Historical Dorado lock is unavailable or malformed') from exc
+
+
 def prepare_remote_bundle(
     *,
     job: Any,
@@ -1306,6 +1342,7 @@ def prepare_remote_bundle(
     native_invocation: NativeInvocation,
     environment: dict[str, str] | None = None,
     attempt_id: str | None = None,
+    cached_work_attempt_id: str | None = None,
 ) -> PreparedRemoteBundle:
     if not isinstance(native_invocation, NativeInvocation):
         raise RemoteBundleError("Remote bundling requires a NativeInvocation")
@@ -1337,6 +1374,13 @@ def prepare_remote_bundle(
         raise RemoteBundleError("Remote attempt identity is invalid")
     remote_root = str(target.remote_root).rstrip("/")
     remote_attempt = f"{remote_root}/attempts/{attempt_id}"
+    # Native cached resume shares only work + LevelDB/history, never the old
+    # attempt's launch/lease/PID state. Fresh computations keep private roots.
+    native_work_attempt = remote_attempt
+    if (cached_work_attempt_id and job.model_id == 'nanopore'
+            and (job.params or {}).get('resume_work_dir')):
+        uuid.UUID(cached_work_attempt_id)  # Existing attempt UUID, never a supplied path.
+        native_work_attempt = f"{remote_root}/attempts/{cached_work_attempt_id}"
     root_job_id = str(job.lineage_root_job_id or job.parent_job_id or job.id)
     safe_root_job_id = re.sub(r"[^A-Za-z0-9_.-]", "_", root_job_id)
     if not safe_root_job_id:
@@ -1580,6 +1624,10 @@ def prepare_remote_bundle(
         # is provenance, not a second live acquisition/transfer of the FASTQ.
         input_discovery_params = dict(effective_params, ont_input_provenance={
             key: value for key, value in custody.items() if key != 'submitted_path'})
+    if native_work_attempt != remote_attempt:
+        # These locate retained worker state, not controller-side input trees.
+        input_discovery_params = {key: value for key, value in input_discovery_params.items()
+                                  if key not in {'resume_work_dir', 'resume_source_dir'}}
     verify_approved_native_inputs(job, runtime_references)
     input_assets = _input_assets(
         input_discovery_params,
@@ -1647,7 +1695,7 @@ def prepare_remote_bundle(
         str(data_root): f"{remote_attempt}/data",
         str(local_output): remote_results,
     }
-    for flag, destination in {"-w": f"{remote_attempt}/work", "--work_dir": f"{remote_attempt}/work",
+    for flag, destination in {"-w": f"{native_work_attempt}/work", "--work_dir": f"{native_work_attempt}/work",
                               "--msa_cache_dir": f"{remote_attempt}/msa-cache",
                               "--cm_api_runtime_dir": support_root,
                               "--runtime_image_store": f"{remote_root}/cache/runtime-images"}.items():
@@ -1739,8 +1787,8 @@ def prepare_remote_bundle(
         "BMS_REMOTE_OUTPUT_ROOT": remote_results,
         "BMS_PORTABLE_INPUT_BINDINGS": bindings_transfer.remote_destination,
         "APPTAINERENV_BMS_PORTABLE_INPUT_BINDINGS": bindings_transfer.remote_destination,
-        "BMS_WORK": f"{remote_attempt}/work",
-        "NXF_CACHE_DIR": f"{remote_attempt}/.nextflow",
+        "BMS_WORK": f"{native_work_attempt}/work",
+        "NXF_CACHE_DIR": f"{native_work_attempt}/.nextflow",
         "NXF_HOME": f"{remote_root}/cache/nextflow",
         "NXF_APPTAINER_CACHEDIR": f"{remote_attempt}/apptainer-cache",
         "NXF_ANSI_LOG": "false",

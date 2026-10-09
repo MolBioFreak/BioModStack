@@ -144,3 +144,30 @@ def test_missing_source_observation_does_not_add_a_completion_gate(tmp_path):
     anchor = ont_ngs_completion.prepare_dorado_demux_products(job,
         read_root=output, persisted_root=output)
     assert anchor['identities']['lock_sha256'] == params['dorado_lock_sha256']
+
+
+def test_terminal_lock_reads_verified_archive_without_source_extraction(historical_dorado_source, tmp_path, monkeypatch):
+    from services.remote_execution import bundle
+    repo, old = historical_dorado_source
+    # Populate the existing archive as launch does, then prohibit extraction or
+    # another interpreter at completion. Its declared versioned filename wins.
+    bundle._staged_source_archive(repo, tmp_path / 'data', old.revision,
+                                  tmp_path / 'seed', extract=False)
+    expected = subprocess.check_output(['git', 'show',
+        old.revision + ':config/ngs/dorado_v1.3.1.lock.json'], cwd=repo)
+    monkeypatch.setattr(bundle, '_safe_extract', lambda *a, **kw: pytest.fail('whole-source extraction'))
+    original_run = bundle.subprocess.run
+    calls = []
+    def observed_run(argv, **kwargs):
+        calls.append(argv)
+        assert argv[0] == 'git', 'completion must not start a historical interpreter'
+        return original_run(argv, **kwargs)
+    monkeypatch.setattr(bundle.subprocess, 'run', observed_run)
+    assert bundle.retained_ont_lock_bytes(old) == expected
+    assert bundle.retained_ont_lock_bytes(old) == expected
+    assert all('archive' not in argv for argv in calls), 'warm completion must reuse the existing archive'
+    cached = tmp_path / 'data/remote-execution/source-archives' / (old.revision + '.tar.gz')
+    cached.write_bytes(b'corrupted source archive')
+    with pytest.raises(bundle.RemoteBundleError, match='Cached source archive changed'):
+        bundle.retained_ont_lock_bytes(old)
+    assert bundle.retained_ont_lock_bytes(old) == expected

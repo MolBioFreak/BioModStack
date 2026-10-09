@@ -193,6 +193,7 @@ def test_runner_hands_ont_success_resource_receipt_to_terminal_cas(
     containers = tmp_path / 'containers'
     containers.mkdir()
     (containers / 'dorado.sif').write_bytes(b'completion-CAS fixture; never executed')
+    monkeypatch.setenv('BMS_NGS_RUNTIME_SIF', str(containers / 'dorado.sif'))
     monkeypatch.setenv('BMS_CONTAINER_DIR', str(containers))
     monkeypatch.setenv('BMS_RUNTIME_IMAGE_STORE', str(containers / '.image-store'))
     template.params.update({"ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"})

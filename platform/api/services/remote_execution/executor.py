@@ -315,6 +315,29 @@ async def _stage_secret_environment(
     )
 
 
+async def _cached_ont_work_attempt(session, job):
+    """Find the existing native cache owner, not its lease/process authority.
+
+    Cached successors have new attempts but share the original work/cache. Walk
+    the existing resume ancestry so repeated resumes do not drift namespaces.
+    Legacy rows without ancestry/attempt observations keep the existing default.
+    """
+    if job.model_id != 'nanopore' or not (job.params or {}).get('resume_work_dir'):
+        return None
+    seen, attempt = {str(job.id)}, None
+    source_id = (job.params or {}).get('resume_job_id')
+    while source_id and str(source_id) not in seen:
+        seen.add(str(source_id))
+        source = await session.get(Job, str(source_id))
+        if source is None or source.execution_target_id != job.execution_target_id:
+            break
+        if source.remote_attempt_id:
+            attempt = str(source.remote_attempt_id)
+        source_id = ((source.params or {}).get('resume_job_id')
+                     if (source.params or {}).get('resume_work_dir') else None)
+    return attempt
+
+
 def _archive_envelope(bundle: PreparedRemoteBundle) -> None:
     envelope_root = get_data_root() / "remote-execution" / "envelopes"
     envelope_root.mkdir(parents=True, exist_ok=True)
@@ -613,10 +636,12 @@ async def _launch_remote_job_owned(
                 raise RemoteExecutionError("Remote target attachment or lease changed during preparation")
 
         await _verify_launch_runner(session, job, connection, target)
+        cached_work_attempt_id = await _cached_ont_work_attempt(session, job)
         preparation = asyncio.create_task(asyncio.to_thread(
             prepare_remote_bundle, job=job, target=target, command=command,
             native_invocation=native_invocation,
             environment=environment, attempt_id=requested_attempt_id,
+            cached_work_attempt_id=cached_work_attempt_id,
         ))
         try:
             bundle = await asyncio.shield(preparation)
