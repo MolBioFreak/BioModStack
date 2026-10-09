@@ -1,4 +1,4 @@
-/** Dorado 1.3.1: verify inputs and models, basecall, then optionally demultiplex. */
+/** Dorado 2.1.2: verify inputs and models, basecall, then optionally demultiplex. */
 def doradoShellQuote(value) {
     return "'" + value.toString().replace("'", "'\"'\"'") + "'"
 }
@@ -18,12 +18,12 @@ process DoradoPreflight {
     script:
     def python = doradoShellQuote(params.pod5_python ?: 'python3')
     def scriptPath = doradoShellQuote("${params.code_root}/scripts/dorado_p4_preflight.py")
-    def lockPath = doradoShellQuote(params.dorado_lock_manifest ?: "${params.code_root}/config/ngs/dorado_v1.3.1.lock.json")
+    def lockPath = doradoShellQuote(params.dorado_lock_manifest ?: "${params.code_root}/config/ngs/dorado_v2.1.2.lock.json")
     def expectedLockSha256 = (params.dorado_lock_sha256 ?: '').toString().trim().toLowerCase()
     if (expectedLockSha256 && !(expectedLockSha256 ==~ /[0-9a-f]{64}/)) {
         throw new IllegalArgumentException('dorado_lock_sha256 must be exactly 64 hexadecimal characters')
     }
-    def modelRoot = doradoShellQuote(params.dorado_model_root ?: "${params.weights_root}/dorado/1.3.1")
+    def modelRoot = doradoShellQuote(params.dorado_model_root ?: "${params.weights_root}/dorado/2.1.2")
     def runtimeSif = doradoShellQuote(params.dorado_runtime_sif ?: "${params.container_dir}/dorado.sif")
     def molecule = doradoShellQuote(params.ont_molecule_type ?: 'dna')
     def quality = doradoShellQuote(params.dorado_quality_mode ?: 'sup')
@@ -142,7 +142,7 @@ process DoradoBasecall {
     }
     snapshot_model() {
       local model_name="\$1" json_key="\$2"
-      local source="/weights/dorado/1.3.1/\${model_name}" target="sealed_models/\${model_name}"
+      local source="/weights/dorado/2.1.2/\${model_name}" target="sealed_models/\${model_name}"
       local expected_sha expected_files expected_bytes
       expected_sha="\$(jq -r "\${json_key}.aggregate_sha256" dorado_preflight.json)"
       expected_files="\$(jq -r "\${json_key}.files" dorado_preflight.json)"

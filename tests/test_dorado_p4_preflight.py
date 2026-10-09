@@ -74,7 +74,7 @@ def test_runtime_scientific_tools_are_version_bound(monkeypatch, tmp_path: Path)
     lock = module.load_lock(LOCK)
     responses = {
         ("samtools", "--version"): "samtools 1.24\nUsing htslib 1.24\n",
-        ("samtools", "consensus", "--help"): "Usage: samtools consensus [options] <in.bam>\n",
+        ("samtools", "help", "consensus"): "Usage: samtools consensus [options] <in.bam>\n",
         ("modkit", "--version"): "modkit 0.6.4\n",
         ("/opt/igv-reports/bin/pip", "show", "igv-reports"): "Name: igv-reports\nVersion: 1.16.3\n",
         ("create_report", "--help"): "usage: create_report [options]\n",

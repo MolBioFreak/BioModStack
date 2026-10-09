@@ -19,7 +19,7 @@ def test_quality_resolves_to_exact_locked_dna_and_rna_models() -> None:
 
     rna = normalize_ont_launch_params("ont_basecall_rna", {"dorado_quality_mode": "sup"})
     assert rna["ont_molecule_type"] == "rna"
-    assert rna["dorado_model"] == "rna004_130bps_sup@v5.2.0"
+    assert rna["dorado_model"] == "rna004_sup@v6.0.0"
 
 
 def test_p4_matrix_rejects_unsupported_combinations() -> None:
@@ -130,7 +130,7 @@ def test_duplex_and_barcode_server_contracts_are_exact() -> None:
 
 
 def test_api_model_matrix_matches_checked_in_lock() -> None:
-    lock = json.loads((ROOT / "config/ngs/dorado_v1.3.1.lock.json").read_text(encoding="utf-8"))
+    lock = json.loads((ROOT / "config/ngs/dorado_v2.1.2.lock.json").read_text(encoding="utf-8"))
     for molecule in ("dna", "rna"):
         for quality in ("fast", "hac", "sup"):
             workflow = "ont_basecall_rna" if molecule == "rna" else "ont_basecall_dna"

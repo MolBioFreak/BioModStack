@@ -130,16 +130,24 @@ def _stop_processes(processes: Sequence[Any], timeout: float = 10) -> bool:
 from scripts.lib.container_runtime import nextflow_container_config as task_container_config
 
 
-def wf_clone_container_config(lock_path: str | Path) -> str:
-    """Resolve the already validated EPI2ME offline image inventory."""
-    inventory = json.loads(Path(lock_path).read_text())['containers']
-    images = {}
-    for image in inventory['images']:
-        path = str(Path(inventory['cache_dir']) / image['cache_file'])
-        images[image['uri']] = path
-        images[image['uri'].removeprefix('docker://')] = path
-    # EPI2ME's pinned base.config uses -euo pipefail, unlike BMS's -ue.
-    return task_container_config(image_paths=images, shell_options=('-euo', 'pipefail'))
+def wf_clone_container_config(lock_path: str | Path, assembly_tool: str = "flye") -> str:
+    """Bind the selected native labels to their actual locked local images.
+
+    In particular the current Medaka pack is a reproducible BMS build, not the
+    older image named by upstream base.config. Both backends use these paths.
+    """
+    lock_path = Path(lock_path).resolve()
+    lock = json.loads(lock_path.read_text())
+    from scripts.validate_wf_clone_runtime import selected_images
+    cache = Path(lock['containers']['cache_dir'])
+    if not cache.is_absolute():
+        cache = lock_path.parent / cache
+    def groovy(value):
+        return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
+    lines = [task_container_config(shell_options=('-euo', 'pipefail')), 'process {']
+    for image in selected_images(lock, assembly_tool):
+        lines.append(f"    withLabel: {groovy(image['label'])} {{ container = {groovy(cache / image['cache_file'])} }}")
+    return '\n'.join([*lines, '}', ''])
 
 
 def native_resource_config(plan: dict, resources: dict, lock_path: str, source_root: Path,

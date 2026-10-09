@@ -33,7 +33,7 @@ workflow WF_CLONE_VALIDATION {
     println("  Assembly:    ${params.wf_clone_assembly_tool ?: 'flye'}")
     println("  Run QC:      ${runFastqQc}")
     println("  Approx size: ${params.wf_clone_approx_size ?: 7000}")
-    println("  Upstream model: ${params.wf_clone_basecaller_model ?: 'dna_r10.4.1_e8.2_400bps_hac@v5.0.0'}")
+    println("  Upstream model: ${params.wf_clone_basecaller_model ?: 'dna_r10.4.1_e8.2_400bps_hac@v6.0.0'}")
 
     // --- Input validation ---
     def has_pod5 = params.pod5_dir && params.pod5_dir.toString().trim()

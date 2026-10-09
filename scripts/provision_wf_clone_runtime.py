@@ -77,7 +77,7 @@ def provision_source(lock_path: Path, lock: dict[str, Any]) -> None:
         patch_path = resolve(lock_path, compatibility["path"])
         if sha256_file(patch_path) != compatibility["sha256"]:
             raise RuntimeError("checked-in compatibility patch does not match lock")
-        run("git", "-C", str(temporary), "apply", "--index", str(patch_path))
+        run("git", "-C", str(temporary), "apply", "--unidiff-zero", "--index", str(patch_path))
         tree = run("git", "-C", str(temporary), "write-tree")
         if tree != patched["tree"]:
             raise RuntimeError(f"patched tree {tree} does not match locked tree {patched['tree']}")
@@ -100,11 +100,12 @@ def provision_source(lock_path: Path, lock: dict[str, Any]) -> None:
             shutil.rmtree(temporary)
 
 
-def provision_images(lock_path: Path, lock: dict[str, Any], apptainer: str) -> None:
+def provision_images(lock_path: Path, lock: dict[str, Any], apptainer: str, assembly_tool: str = "flye", image_source_dir: Path | None = None) -> None:
     containers = lock["containers"]
     cache_dir = resolve(lock_path, containers["cache_dir"])
     cache_dir.mkdir(parents=True, exist_ok=True)
-    for image in containers["images"]:
+    from validate_wf_clone_runtime import selected_images
+    for image in selected_images(lock, assembly_tool):
         destination = cache_dir / image["cache_file"]
         if destination.exists():
             if destination.is_file() and not destination.is_symlink() and sha256_file(destination) == image["sha256"]:
@@ -115,7 +116,16 @@ def provision_images(lock_path: Path, lock: dict[str, Any], apptainer: str) -> N
         temporary = Path(temporary_name)
         temporary.unlink()
         try:
-            run(apptainer, "pull", "--disable-cache", str(temporary), image["uri"])
+            if image_source_dir is not None:
+                released = image_source_dir / image["cache_file"]
+                if not released.is_file() or released.is_symlink():
+                    raise RuntimeError(f"released image is missing or unsafe: {released}")
+                shutil.copyfile(released, temporary)
+            elif image.get("definition"):
+                definition = resolve(lock_path, image["definition"])
+                run(apptainer, "build", "--fakeroot", str(temporary), str(definition))
+            else:
+                run(apptainer, "pull", "--disable-cache", str(temporary), image["uri"])
             actual = sha256_file(temporary)
             if actual != image["sha256"]:
                 raise RuntimeError(f"downloaded image {image['uri']} SHA-256 is {actual}, expected {image['sha256']}")
@@ -128,14 +138,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lock", type=Path, default=Path("config/ngs/wf_clone_validation_v1.8.4.lock.json"))
     parser.add_argument("--apptainer", default="apptainer")
+    parser.add_argument("--assembly-tool", choices=("flye", "canu"), default="flye")
+    parser.add_argument("--image-source-dir", type=Path, help="Copy exact released SIF bytes instead of rebuilding (SIF build timestamps differ)")
     args = parser.parse_args()
     lock_path = args.lock.resolve()
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
-    provision_images(lock_path, lock, args.apptainer)
+    provision_images(lock_path, lock, args.apptainer, args.assembly_tool, args.image_source_dir)
     provision_source(lock_path, lock)
     model = lock["models"]["default"]
     validator = Path(__file__).with_name("validate_wf_clone_runtime.py")
-    run("python3", str(validator), "--lock", str(lock_path), "--model", model, "--output", "-")
+    run("python3", str(validator), "--lock", str(lock_path), "--model", model, "--assembly-tool", args.assembly_tool, "--output", "-")
     print("wf-clone-validation runtime is provisioned and matches the lock")
     return 0
 

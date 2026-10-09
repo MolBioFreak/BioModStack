@@ -157,6 +157,19 @@ def test_runtime_lock_validator_fails_closed(
     assert failure["reason_code"] == reason
 
 
+def test_unselected_canu_and_unused_dorado_directory_are_not_prerequisites(tmp_path):
+    from scripts.validate_wf_clone_runtime import validate_runtime, ValidationFailure
+    lock_path, lock = runtime_fixture(tmp_path)
+    canu = lock['containers']['images'][-1]
+    canu['assembly_tool'] = 'canu'
+    (Path(lock['containers']['cache_dir']) / canu['cache_file']).unlink()
+    shutil.rmtree(lock['models']['store'])
+    lock_path.write_text(json.dumps(lock))
+    assert len(validate_runtime(lock_path, lock['models']['default'], 'flye')['images']) == 4
+    with pytest.raises(ValidationFailure, match='locked image is missing'):
+        validate_runtime(lock_path, lock['models']['default'], 'canu')
+
+
 def adapter_fixture(root: Path, *, full_reference: bool = True) -> None:
     root.mkdir()
     (root / "sample02.final.fasta").write_text(">sample02\nACGTACGT\n", encoding="utf-8")
@@ -298,7 +311,7 @@ def test_runtime_wrapper_is_immutable_and_preserves_exact_selections() -> None:
     assert "--assembly_tool \"${assemblyTool}\"" in source
     assert "--override_basecaller_cfg \"${basecallerModel}\"" in source
     assert "['flye', 'canu']" in source
-    assert "dna_r10.4.1_e8.2_400bps_hac@v5.0.0" in source
+    assert "runtimeLock.models.accepted_upstream_ids" in source
     assert "doradoModel == \"fast\"" not in source
 
 

@@ -30,9 +30,12 @@ process RunCloneValidation {
     def minQuality = (params.wf_clone_min_quality != null ? params.wf_clone_min_quality : 9) as Integer
     def trimLength = (params.wf_clone_trim_length ?: 0) as Integer
     def assemblyTool = (params.wf_clone_assembly_tool ?: 'flye').toString().trim()
-    def basecallerModel = (params.wf_clone_basecaller_model ?: 'dna_r10.4.1_e8.2_400bps_hac@v5.0.0').toString().trim()
+    def codeRoot = params.code_root ?: projectDir
+    def lockPath = (params.wf_clone_runtime_lock ?: "${codeRoot}/config/ngs/wf_clone_validation_v1.8.4.lock.json").toString()
+    def runtimeLock = new groovy.json.JsonSlurper().parse(new File(lockPath))
+    def basecallerModel = (params.wf_clone_basecaller_model ?: runtimeLock.models.default).toString().trim()
     def allowedAssemblyTools = ['flye', 'canu'] as Set
-    def allowedModels = ['dna_r10.4.1_e8.2_400bps_hac@v5.0.0'] as Set
+    def allowedModels = runtimeLock.models.accepted_upstream_ids as Set
     if (!allowedAssemblyTools.contains(assemblyTool)) {
         error("Unsupported --wf_clone_assembly_tool '${assemblyTool}'. Supported exact values: ${allowedAssemblyTools.join(', ')}")
     }
@@ -66,12 +69,11 @@ process RunCloneValidation {
     if (!referencePath) {
         error("wf_clone_validation requires a full reference FASTA for construct verification")
     }
-    def codeRoot = params.code_root ?: projectDir
     def modelValidator = shellQuote("${codeRoot}/scripts/validate_clone_input_model.py")
     def validator = shellQuote("${codeRoot}/scripts/validate_wf_clone_runtime.py")
-    def lock = shellQuote("${codeRoot}/config/ngs/wf_clone_validation_v1.8.4.lock.json")
-    def wfCloneSingularityCache = '/mnt/BioModStack/apptainer/singularity_cache'
-    def wfCloneNxfHome = '/mnt/BioModStack/nextflow/wf-clone'
+    def lock = shellQuote(lockPath)
+    def wfCloneSingularityCache = runtimeLock.containers.cache_dir
+    def wfCloneNxfHome = (params.wf_clone_nxf_home ?: System.getenv("NXF_HOME") ?: "${task.workDir}/.nextflow").toString()
     """
     set -euo pipefail
     export NXF_OFFLINE=true
@@ -81,39 +83,33 @@ process RunCloneValidation {
     export NXF_HOME="${wfCloneNxfHome}"
     mkdir -p "\${NXF_HOME}"
 
-    # Validate the actual reads before supplying an upstream model override.
-    # Unknown imported FASTQ/RG provenance is rejected; it is never relabeled HAC.
-    python3 ${modelValidator} \
-        --bam "${bam}" \
-        --expected-model "${basecallerModel}" \
-        --output input_model_provenance.json
-
     python3 ${validator} \
         --lock ${lock} \
         --model "${basecallerModel}" \
+        --assembly-tool "${assemblyTool}" \
         --output runtime_provenance.json
 
-    # Keep the nested engine on the same trusted runtime, using the validated
-    # offline URI inventory rather than downloading or substituting images.
-    runtime_args=(-profile singularity)
-    if [[ \${BMS_CONTAINER_BACKEND:-apptainer} == udocker ]]; then
-        export NXF_SINGULARITY_ENABLED=true
-        export NXF_APPTAINER_ENABLED=false
-        python3 - ${shellQuote(codeRoot)} ${lock} <<'PY'
+    # The explicit profile is a declaration, never fabricated input provenance.
+    python3 ${modelValidator} \
+        --bam "${bam}" \
+        --runtime-lock ${lock} \
+        --expected-model "${basecallerModel}" \
+        --output input_model_provenance.json
+
+    export NXF_SINGULARITY_ENABLED=true
+    export NXF_APPTAINER_ENABLED=false
+    python3 - ${shellQuote(codeRoot)} ${lock} ${shellQuote(assemblyTool)} <<'PY'
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 from scripts.lib.component_adapter import wf_clone_container_config
-Path('wf-clone-container.config').write_text(wf_clone_container_config(sys.argv[2]))
+Path('wf-clone-container.config').write_text(wf_clone_container_config(sys.argv[2], sys.argv[3]))
 PY
-        runtime_args=(-c "\$PWD/wf-clone-container.config")
-    else
-        export NXF_SINGULARITY_ENABLED=true
-    fi
+    runtime_args=(-profile singularity -c "\$PWD/wf-clone-container.config")
 
     mkdir -p wf_clone_out
     set +e
-    "\${BMS_NEXTFLOW_EXECUTABLE:-/usr/local/bin/nextflow}" -log wf_clone.log run /mnt/BioModStack/ngs/wf-clone-validation/v1.8.4-bms.1 \
+    "\${BMS_NEXTFLOW_EXECUTABLE:-${runtimeLock.nextflow.executable}}" -log wf_clone.log run ${shellQuote(runtimeLock.patched_source.path)} \
         -offline \
         --disable_ping \
         "\${runtime_args[@]}" \

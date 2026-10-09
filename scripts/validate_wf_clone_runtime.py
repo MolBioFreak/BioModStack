@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -82,7 +83,13 @@ def git(source: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def validate_runtime(lock_path: Path, selected_model: str) -> dict[str, Any]:
+def selected_images(lock: dict[str, Any], assembly_tool: str = "flye") -> list[dict[str, Any]]:
+    """Only Canu is conditional; annotation and reporting always execute."""
+    return [image for image in lock["containers"]["images"]
+            if image.get("assembly_tool") in (None, assembly_tool)]
+
+
+def validate_runtime(lock_path: Path, selected_model: str, assembly_tool: str = "flye") -> dict[str, Any]:
     lock_path = lock_path.resolve()
     lock = load_object(lock_path)
     if lock.get("schema") != LOCK_SCHEMA or lock.get("lock_version") != 1:
@@ -126,7 +133,7 @@ def validate_runtime(lock_path: Path, selected_model: str) -> dict[str, Any]:
         fail("PATCH_IDENTITY_MISMATCH", "compatibility patch result identity does not match patched source identity")
 
     runtime = require_object(lock, "nextflow")
-    executable = resolve_lock_path(lock_path, require_string(runtime, "executable"))
+    executable = resolve_lock_path(lock_path, os.environ.get('BMS_NEXTFLOW_EXECUTABLE') or require_string(runtime, "executable"))
     if not executable.is_file():
         fail("NEXTFLOW_MISSING", f"Nextflow executable does not exist: {executable}")
     try:
@@ -148,9 +155,9 @@ def validate_runtime(lock_path: Path, selected_model: str) -> dict[str, Any]:
 
     containers = require_object(lock, "containers")
     cache_dir = resolve_lock_path(lock_path, require_string(containers, "cache_dir"))
-    images = containers.get("images")
-    if not isinstance(images, list) or len(images) != 5:
-        fail("LOCK_MALFORMED", "container lock must contain exactly five images")
+    images = selected_images(lock, assembly_tool)
+    if not images:
+        fail("LOCK_MALFORMED", "selected container inventory is empty")
     validated_images: list[dict[str, str]] = []
     for index, image in enumerate(images):
         if not isinstance(image, dict):
@@ -176,10 +183,7 @@ def validate_runtime(lock_path: Path, selected_model: str) -> dict[str, Any]:
         fail("LOCK_MALFORMED", "accepted_upstream_ids must be a non-empty string array")
     if selected_model not in accepted:
         fail("MODEL_ID_UNSUPPORTED", f"selected exact upstream model identity is unsupported: {selected_model}")
-    model_store = resolve_lock_path(lock_path, require_string(models, "store"))
-    selected_model_path = model_store / selected_model
-    if not selected_model_path.is_dir() or selected_model_path.is_symlink():
-        fail("MODEL_MISSING", f"selected locked model directory does not exist: {selected_model_path}")
+
 
     return {
         "schema": PROVENANCE_SCHEMA,
@@ -191,7 +195,8 @@ def validate_runtime(lock_path: Path, selected_model: str) -> dict[str, Any]:
         "nextflow": {"executable": str(executable), "version": expected_version, "build": expected_build},
         "images": validated_images,
         "selected_model_id": selected_model,
-        "selected_model_path": str(selected_model_path),
+        "selected_consensus_model": models.get("consensus_models", {}).get(selected_model),
+        "model_selection_basis": "declared_native_override",
         "network_policy": "forbidden",
         "nxf_offline": True,
     }
@@ -201,6 +206,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lock", required=True, type=Path)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--assembly-tool", choices=("flye", "canu"), default="flye")
     parser.add_argument("--output", required=True)
     return parser.parse_args()
 
@@ -208,7 +214,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
-        provenance = validate_runtime(args.lock, args.model)
+        provenance = validate_runtime(args.lock, args.model, args.assembly_tool)
     except ValidationFailure as exc:
         print(
             json.dumps(

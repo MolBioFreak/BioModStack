@@ -160,7 +160,7 @@ def _verify_scientific_tools(runtime_sif: Path, lock: dict[str, Any]) -> dict[st
 
     commands = {
         "samtools": ["samtools", "--version"],
-        "samtools_consensus": ["samtools", "consensus", "--help"],
+        "samtools_consensus": ["samtools", "help", "consensus"],
         "modkit": ["modkit", "--version"],
         "igv_reports": ["/opt/igv-reports/bin/pip", "show", "igv-reports"],
         "igv_create_report": ["create_report", "--help"],
@@ -394,7 +394,7 @@ def _validate_pairs(path: Path, root: Path, read_ids: set[str]) -> dict[str, Any
 
 def _validate_sample_sheet(path: Path, root: Path, barcode_kit: str, inventory: dict[str, Any]) -> dict[str, Any]:
     path = _confined_file(path, root, "sample sheet")
-    # Dorado 1.3.1 is not an RFC-4180 CSV parser: it performs a literal comma
+    # Dorado sample sheets are not an RFC-4180 CSV parser: it performs a literal comma
     # split, preserves field bytes, and requires every row to have the same
     # cardinality as its header map. Accept only a canonical subset with the
     # exact same interpretation; never normalize input that Dorado sees
@@ -405,7 +405,7 @@ def _validate_sample_sheet(path: Path, root: Path, barcode_kit: str, inventory: 
     except (OSError, UnicodeError) as exc:
         raise ValueError("sample sheet is unreadable or not UTF-8") from exc
     if "\x00" in raw_sheet or '"' in raw_sheet:
-        raise ValueError("sample sheet uses syntax unsupported by pinned Dorado 1.3.1")
+        raise ValueError("sample sheet uses syntax unsupported by the pinned Dorado sample-sheet contract")
     if "\r" in raw_sheet:
         without_crlf = raw_sheet.replace("\r\n", "")
         if "\r" in without_crlf or "\n" in without_crlf:

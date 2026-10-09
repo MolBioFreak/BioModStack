@@ -25,7 +25,7 @@ ONT_NGS_FAMILY_ID = "ont_ngs"
 ANALYSIS_OWNER = "nextflow_analysis"
 DEVICE_CONTROL_OWNER = "bms_service_api"
 MANIFEST_SCHEMA = "sequence_qc.manifest.v1"
-DORADO_LOCK_PATH = Path(__file__).resolve().parents[3] / "config" / "ngs" / "dorado_v1.3.1.lock.json"
+DORADO_LOCK_PATH = Path(__file__).resolve().parents[3] / "config" / "ngs" / "dorado_v2.1.2.lock.json"
 
 
 def normalized_fasta_sequence_identity(path: Path) -> tuple[str, int]:
@@ -372,9 +372,11 @@ ONT_WORKFLOW_ALIASES = {
 }
 
 
+WF_CLONE_MODEL_CONTRACT = json.loads((Path(__file__).resolve().parents[3] / "config/ngs/wf_clone_validation_v1.8.4.lock.json").read_text())["models"]
+
 WF_CLONE_DEFAULTS: dict[str, Any] = {
     "wf_clone_assembly_tool": "flye",
-    "wf_clone_basecaller_model": "dna_r10.4.1_e8.2_400bps_hac@v5.0.0",
+    "wf_clone_basecaller_model": WF_CLONE_MODEL_CONTRACT["default"],
     "wf_clone_large_construct": False,
     "wf_clone_approx_size": 7000,
     "wf_clone_assm_coverage": 60,
@@ -468,9 +470,8 @@ def _normalize_wf_clone_controls(normalized: dict[str, Any]) -> None:
     if assembly_tool not in {"flye", "canu"}:
         raise ValueError("wf_clone_assembly_tool must preserve an exact supported value: flye or canu")
     model_id = str(normalized.get("wf_clone_basecaller_model") or "").strip()
-    accepted_model = str(WF_CLONE_DEFAULTS["wf_clone_basecaller_model"])
-    if model_id != accepted_model:
-        raise ValueError(f"wf_clone_basecaller_model must equal the locked exact identity {accepted_model}")
+    if model_id not in WF_CLONE_MODEL_CONTRACT["accepted_upstream_ids"]:
+        raise ValueError("wf_clone_basecaller_model must select an installed exact native Medaka profile")
     normalized["wf_clone_assembly_tool"] = assembly_tool
     normalized["wf_clone_basecaller_model"] = model_id
 
@@ -702,6 +703,15 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     if basecall_mode == "duplex" and raw_emit_moves:
         raise ValueError("emit_moves is unavailable for duplex until move-tag semantics are qualified")
     normalized["emit_moves"] = raw_emit_moves
+
+    # A missing declaration on newly basecalled POD5 can use its exact native
+    # profile. Never replace an explicit/saved declaration, or infer read origin
+    # for imported BAM/FASTQ. FAST has no current native Medaka auto-mapping.
+    clone_selected = canonical_id == "wf_clone_validation" or (
+        canonical_id == "ont_construct_screening" and normalized.get("run_assembly") is True)
+    if (clone_selected and normalized.get("pod5_dir") and "wf_clone_basecaller_model" not in (params or {})
+            and resolved_model in WF_CLONE_MODEL_CONTRACT["accepted_upstream_ids"]):
+        normalized["wf_clone_basecaller_model"] = resolved_model
 
     if canonical_id == "ont_construct_screening":
         run_assembly = normalized.get("run_assembly", False)
