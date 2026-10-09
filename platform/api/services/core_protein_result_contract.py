@@ -113,7 +113,7 @@ def _structure_confidence(content: bytes, path: str):
 
 
 def _validate_esmfold2_inventory(root, candidates):
-    """Only structure and native per-sample metrics files are publications.
+    """Structures, native metrics and declared optional confidence are publications.
 
     Summaries, command captures and other ancillary JSON remain allowed.
     """
@@ -121,7 +121,7 @@ def _validate_esmfold2_inventory(root, candidates):
     expected = {Path(a['path']).resolve() for c in candidates.values() for a in c.values()}
     observed = {p.absolute() for p in Path(root).resolve().rglob('*')
                 if p.is_file() and (p.suffix.lower() in {'.pdb', '.cif', '.mmcif'}
-                                    or p.name.endswith('.metrics.json'))}
+                                    or p.name.endswith(('.metrics.json', '.confidence.npz')))}
     if observed != expected:
         raise CandidateIntegrityError('candidate_publication_mismatch', 'scientific publication inventory differs from manifest')
 
@@ -176,9 +176,15 @@ def prepare_esmfold2_publication(job, root, existing):
         from services.esmfold2_scientific_consumer import scalar_block
         block = scalar_block(payload, candidate_id=candidate, document_id=entry['metrics'],
                              artifact_sha256=metrics['sha256'])
+        artifacts = {'structure': structure, 'metrics': metrics}
+        snapshots = {'structure': structure_bytes}
+        if payload.get('native_confidence') is not None:
+            if payload['native_confidence'] != entry.get('native_confidence'):
+                raise CandidateIntegrityError('foreign_candidate_artifact', 'confidence differs from declared sample')
+            artifacts['native_confidence'], snapshots['native_confidence'] = _artifact(root, payload['native_confidence'], candidate)
         prepared[candidate] = {'block': block, 'payload': {**manifest, **entry, **payload},
                                'structure_confidence': confidence,
-                               'artifacts': {'structure': structure, 'metrics': metrics}}
+                               'artifacts': artifacts, 'snapshots': snapshots}
     params = job.params or {}
     counts = [params[key] for key in ('num_diffusion_samples', 'esmf_num_diffusion_samples') if key in params]
     if len(counts) == 2 and (type(counts[0]) is not type(counts[1]) or counts[0] != counts[1]):
@@ -238,6 +244,7 @@ def _persisted_candidate_artifacts(receipt, row):
         native_extra = (receipt['summary'].get('stage_id') == 'boltz'
                         and role in {'manifest', 'ledger', 'pae', 'plddt'})
         native_extra = native_extra or (receipt['summary'].get('stage_id') == 'boltzgen' and role == 'native')
+        native_extra = native_extra or (receipt['summary'].get('stage_id') == 'esmfold2' and role == 'native_confidence')
         field = row.pdb_path if role == 'structure' else row.json_path
         if not native_extra and field != evidence['path']:
             raise CandidateIntegrityError('candidate_publication_mismatch', 'persisted artifact identity differs from declaration')

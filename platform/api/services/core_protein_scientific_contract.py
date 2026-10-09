@@ -212,9 +212,8 @@ def validate_metrics(payloads: list, descriptors: list, *, expected_source: Mapp
 async def native_spatial_consumer(design, session):
     """Model applicability comes from the owning Job, never the revision alone.
 
-    ESMFold2's admitted native dialect proves token scalar means, not a spatial
-    correspondence ledger. The other marked families likewise must not borrow
-    Boltz axes or historical PDB B-factor semantics.
+    Native token arrays and structure-residue axes stay distinct. Marked
+    families must not borrow another model's B-factor or axis semantics.
     """
     from sqlalchemy import select
     from database import Job
@@ -228,6 +227,9 @@ async def native_spatial_consumer(design, session):
         if job.model_id == 'protenix':
             from services import protenix_scientific_consumer
             return protenix_scientific_consumer
+        if job.model_id in ('esmfold2', 'esmfold2_experimental'):
+            from services import esmfold2_scientific_consumer
+            return esmfold2_scientific_consumer
     return None
 
 

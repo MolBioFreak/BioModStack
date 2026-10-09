@@ -73,6 +73,7 @@ process ESMFold2MSAPredict {
     output:
     tuple val(producer_meta), path('esmfold2_results/*.cif'), emit: typed_cifs
     path 'esmfold2_results/*.metrics.json', emit: metrics
+    path 'esmfold2_results/*.confidence.npz', optional: true, emit: native_confidence
     path 'esmfold2_results/*.telemetry.json', emit: telemetry
     path 'esmfold2_results/manifest.json', emit: manifest
     path 'esmfold2_results/summary.tsv', emit: summary
@@ -112,6 +113,7 @@ process ESMFold2Predict {
 
     publishDir "${params.out_dir}/final/esmfold2/${sequence_name}", mode: 'copy', pattern: 'esmfold2_results/*.cif'
     publishDir "${params.out_dir}/final/esmfold2/${sequence_name}", mode: 'copy', pattern: 'esmfold2_results/*.json'
+    publishDir "${params.out_dir}/final/esmfold2/${sequence_name}", mode: 'copy', pattern: 'esmfold2_results/*.confidence.npz'
     publishDir "${params.out_dir}/final/esmfold2/${sequence_name}", mode: 'copy', pattern: 'esmfold2_results/*.tsv'
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: 'esmfold2_results/*.cif'
 
@@ -121,6 +123,7 @@ process ESMFold2Predict {
     output:
     tuple val(producer_meta), path('esmfold2_results/*.cif'), emit: typed_cifs
     path "esmfold2_results/*.metrics.json", emit: metrics
+    path 'esmfold2_results/*.confidence.npz', optional: true, emit: native_confidence
     tuple val(sequence_name), path('esmfold2_results/*.cif'), path('esmfold2_results/*.metrics.json'), emit: shape_result
     tuple val(sequence_name), path('esmfold2_results'), emit: shape_bundle
     path "esmfold2_results/*.telemetry.json", emit: telemetry

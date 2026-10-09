@@ -24,6 +24,11 @@ RNA_RE = re.compile(r"^[ACGUN]+$")
 MMCIF_DATA_BLOCK_SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 DEFAULT_FAST_MODEL = "biohub/ESMFold2-Fast"
 DEFAULT_FULL_MODEL = "biohub/ESMFold2"
+NATIVE_SCALAR_DIALECT = {
+    'name': 'biohub_esmfold2_token_scalar_v1',
+    'esm_commit': 'c94ed8d763bbd7088b296949e5b401e8ea12073a',
+    'transformers_commit': '3a8956fb4d4ea16b0ec8e71deef2c2909b6a5cbf',
+}
 
 PROTEIN_3TO1 = {
     "ALA": "A",
@@ -363,10 +368,7 @@ def native_scalar_metrics(sample: Any) -> dict:
     """
     import math
     import numpy as np
-    result = {'scalar_dialect': {
-        'name': 'biohub_esmfold2_token_scalar_v1',
-        'esm_commit': 'c94ed8d763bbd7088b296949e5b401e8ea12073a',
-        'transformers_commit': '3a8956fb4d4ea16b0ec8e71deef2c2909b6a5cbf'}, 'scalar_states': {}}
+    result = {'scalar_dialect': dict(NATIVE_SCALAR_DIALECT), 'scalar_states': {}}
     for key, attr in (('plddt_mean', 'plddt'), ('ptm', 'ptm'), ('iptm', 'iptm')):
         native = getattr(sample, attr, None)
         value, state = None, 'unavailable'
@@ -388,6 +390,45 @@ def native_scalar_metrics(sample: Any) -> dict:
                 value = None
         result[key] = value
         result['scalar_states'][key] = state
+    return result
+
+
+def retain_native_confidence(sample: Any, output_dir: Path, sample_id: str) -> dict:
+    """Retain optional decoded tensors without inventing a token→CIF mapping.
+
+    The pinned decoder removes the diffusion-sample dimension. Preserve those
+    arrays unchanged, including residue_index/entity_id (neither identifies a
+    unique chain instance). Invalid/absent evidence is not a prediction failure.
+    """
+    import numpy as np
+    arrays, states = {}, {}
+    for key in ('plddt', 'pae', 'pair_chains_iptm', 'distogram', 'residue_index', 'entity_id'):
+        value = getattr(sample, key, None)
+        states[key] = 'unavailable' if value is None else 'invalid'
+        if value is None:
+            continue
+        try:
+            if hasattr(value, 'detach'):
+                value = value.detach().cpu()
+                # NumPy cannot represent bfloat16; conversion preserves values.
+                if str(value.dtype) == 'torch.bfloat16':
+                    value = value.float()
+                value = value.numpy()
+            array = np.asarray(value)
+            if array.dtype.kind not in 'fiu' or not array.size:
+                continue
+            arrays[key] = array
+            states[key] = 'retained'
+        except (ValueError, TypeError, AttributeError, OverflowError):
+            continue
+    result: dict[str, Any] = {'confidence_dialect': {
+        'name': 'biohub_esmfold2_native_confidence_v1',
+        **{k: v for k, v in NATIVE_SCALAR_DIALECT.items() if k != 'name'}},
+        'confidence_states': states}
+    if arrays:
+        name = f'{sample_id}.confidence.npz'
+        np.savez_compressed(output_dir / name, sample_id=np.asarray(sample_id), **arrays)
+        result['native_confidence'] = name
     return result
 
 
@@ -971,6 +1012,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         if receipt_path:
             metrics.update(native_scalar_metrics(sample))
+            metrics.update(retain_native_confidence(sample, output_dir, sample_id))
         metrics_name = f"{sample_id}.metrics.json"
         (output_dir / metrics_name).write_text(json.dumps(metrics, indent=2, sort_keys=True, allow_nan=False), encoding="utf-8")
         samples.append({"sample_id": sample_id, "cif": cif_name, "metrics": metrics_name, **metrics})

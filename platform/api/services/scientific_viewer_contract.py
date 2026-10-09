@@ -57,6 +57,28 @@ class NativeAxis(ProducerBinding):
     residues: list[NativeResidue | NativeAtom]
 
 
+class NativeCifConfidenceAxis(NativeAxis):
+    producer_version: str
+    confidence_scope: Literal['collapsed_residue']
+    stored_units: Literal['percent']
+
+
+class NativeToken(IdentityWire):
+    index: int
+    residue_index: int | None
+    entity_id: int | None
+
+
+class NativeTokenAxis(ProducerBinding):
+    """Native positions, deliberately not molecular viewer selections."""
+    source_sha256: str
+    axis_kind: Literal['model_token']
+    producer_version: str
+    mapping_reason: Literal['native_token_to_structure_mapping_unavailable']
+    orientation: Literal['native_output_order']
+    tokens: list[NativeToken]
+
+
 class NativeChain(IdentityWire):
     native_asym_id: int
     source_chain_index: int
@@ -77,7 +99,7 @@ class NativeMetricBase(IdentityWire):
     document: ViewerDocument
     producer_binding: ProducerBinding
     artifact_sha256: str
-    axis: NativeAxis
+    axis: NativeCifConfidenceAxis | NativeAxis
     native_positions: list[int]
 
     @model_validator(mode='after')
@@ -174,8 +196,8 @@ class ScientificViewerMetric(IdentityWire):
     document: ViewerDocument | None
     producer_binding: ProducerBinding | None
     artifact_sha256: str | None
-    row_axis: NativeAxis | None
-    column_axis: NativeAxis | None
+    row_axis: NativeTokenAxis | NativeAxis | None
+    column_axis: NativeTokenAxis | NativeAxis | None
     native_row_positions: list[int] | None
     native_column_positions: list[int] | None
     native_shape: list[int] | None
@@ -210,20 +232,25 @@ class ScientificViewerMetric(IdentityWire):
             raise ValueError('invalid native shape')
         for axis, count, indexes in zip((self.row_axis, self.column_axis), self.native_shape,
                                        (self.sampled_row_indices, self.sampled_column_indices)):
+            positions = axis.tokens if isinstance(axis, NativeTokenAxis) else axis.residues
             if (axis.candidate_id != self.producer_binding.candidate_id
                     or axis.document_id != self.producer_binding.document_id
                     or axis.source_sha256 != self.document.contentSha256
-                    or len(axis.residues) != count):
+                    or len(positions) != count):
                 raise ValueError('foreign native axis')
-            if sorted(r.index for r in axis.residues) != list(range(count)):
+            if sorted(r.index for r in positions) != list(range(count)):
                 raise ValueError('invalid source positions')
             if not indexes or sorted(set(indexes)) != indexes or min(indexes) < 0 or max(indexes) >= count:
                 raise ValueError('missing/invalid sampled indexes')
-        if (self.native_row_positions != [r.index for r in self.row_axis.residues]
-                or self.native_column_positions != [r.index for r in self.column_axis.residues]):
+        if type(self.row_axis) is not type(self.column_axis):
+            raise ValueError('contradictory native axis types')
+        rows = self.row_axis.tokens if isinstance(self.row_axis, NativeTokenAxis) else self.row_axis.residues
+        columns = self.column_axis.tokens if isinstance(self.column_axis, NativeTokenAxis) else self.column_axis.residues
+        if (self.native_row_positions != [r.index for r in rows]
+                or self.native_column_positions != [r.index for r in columns]):
             raise ValueError('contradictory native position ledger')
-        by_index = {r.index: r for r in self.row_axis.residues}
-        if any(by_index.get(r.index) != r for r in self.column_axis.residues):
+        by_index = {r.index: r for r in rows}
+        if any(by_index.get(r.index) != r for r in columns):
             raise ValueError('contradictory native axes')
         if (self.size != len(self.sampled_row_indices) or len(self.pae_matrix) != self.size
                 or any(len(r) != len(self.sampled_column_indices) for r in self.pae_matrix)

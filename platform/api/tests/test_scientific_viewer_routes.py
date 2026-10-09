@@ -60,7 +60,7 @@ async def test_marked_endpoints_do_not_serve_positional_history(monkeypatch, vie
     if model_id == 'boltz2':
         assert payload['reason'].startswith('missing_producer_')
     else:
-        assert payload['reason'] == 'unsupported_model_native_spatial_metric'
+        assert payload['reason'] == 'missing_or_invalid_esmfold2_native_evidence'
     assert payload['pae_matrix'] is None
     cache.assert_not_awaited()
 
