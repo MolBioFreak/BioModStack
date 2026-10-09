@@ -148,6 +148,23 @@ async function render(options: { selectedReadId?: string; onViewerSessionChange?
 }
 
 describe('OntSignalIdealComparison', () => {
+    it('restores the saved comparison after its mapping artifact arrives later', async () => {
+        mocks.fetchJob.mockResolvedValue(comparisonJob({ state: 'ready' }));
+        const mount = async (mappingArtifactId: string | null) => {
+            await act(async () => root.render(<OntSignalIdealComparison datasetId="dataset-1"
+                viewerSession={{ ...viewer, signal_state: { comparison_job_id: 'comparison-1' } } as never}
+                selectedReadId="read-42" contig="chr7" start={500} end={560} mappingJobId="ref-map-1"
+                mappingArtifactId={mappingArtifactId} renderParams={renderParams as never} onViewerSessionChange={vi.fn()} />));
+            await settle();
+        };
+        await mount(null);
+        expect(container.textContent).toContain('Comparison comparison-1');
+        await mount('mapping-artifact-1');
+        expect(mocks.fetchJob).toHaveBeenCalledTimes(2);
+        expect(container.textContent).toContain('Comparison comparison-1');
+        expect((container.querySelector('[aria-label="Simulation seed"]') as HTMLInputElement).value).toBe('19');
+    });
+
     it('keeps edited simulation settings after reopening a saved comparison', async () => {
         mocks.fetchJob.mockResolvedValue(comparisonJob({ state: 'ready' }));
         await act(async () => root.render(<OntSignalIdealComparison datasetId="dataset-1"

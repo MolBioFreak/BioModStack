@@ -1682,9 +1682,12 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(await blobText(publishedBlob)).not.toContain('stale A');
     });
 
-    it('presents authenticated governed HTML through a network-silent CSP blob while preserving inline scripts', async () => {
+    it.each([false, true])('presents native governed HTML with confined Bokeh callbacks (embedded policy=%s)', async (embeddedPolicy) => {
+        const nativePolicy = "default-src 'none'; script-src 'unsafe-inline'; connect-src 'none'; form-action 'none'";
         const authenticatedBlob = new Blob([
-            '<!doctype html><html><head><title>Governed plot</title></head><body>'
+            '<!doctype html><html><head><title>Governed plot</title>'
+            + (embeddedPolicy ? `<meta http-equiv="Content-Security-Policy" content="${nativePolicy}">` : '')
+            + '</head><body>'
             + '<script>window.__selfContainedPlot = true;</script>'
             + '<img src="https://forbidden.example/subresource.png"></body></html>',
         ], { type: 'text/html' });
@@ -1707,7 +1710,15 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         const securedHtml = await blobText(securedBlob as Blob);
         expect(securedHtml).toContain('http-equiv="Content-Security-Policy"');
         expect(securedHtml).toContain("default-src 'none'");
-        expect(securedHtml).toContain("script-src 'unsafe-inline'");
+        expect(securedHtml).toContain("script-src 'unsafe-inline' 'unsafe-eval'");
+        const policies = new DOMParser().parseFromString(securedHtml, 'text/html').querySelectorAll<HTMLMetaElement>('meta[http-equiv="Content-Security-Policy"]');
+        expect(policies.length).toBe(embeddedPolicy ? 2 : 1);
+        for (const policy of policies) {
+            expect(policy.content).toContain("script-src 'unsafe-inline' 'unsafe-eval'");
+            expect(policy.content).toContain("default-src 'none'");
+            expect(policy.content).toContain("connect-src 'none'");
+            expect(policy.content).toContain("form-action 'none'");
+        }
         expect(securedHtml).toContain("connect-src 'none'");
         expect(securedHtml).toContain("navigate-to 'none'");
         expect(securedHtml.indexOf('Content-Security-Policy')).toBeLessThan(securedHtml.indexOf('<script>'));
@@ -2600,6 +2611,50 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(renderShift?.disabled).toBe(true);
         expect(renderShift?.value).toBe('5');
         expect(container.textContent).toContain('profile base shift 5');
+    });
+
+    it.each(['pending', 'wrong-saved', 'wrong-current'] as const)('reopens the exact persisted mapping while IGV is independent (%s)', async (caseId) => {
+        const persisted = viewerSession({ mapping_profile_id: approvedProfile.mapping_profile_id,
+            signal_state: { mode: 'reference', read_mapping_job_id: 'mapping-read-1', reference_mapping_job_id: 'mapping-reference-1' } });
+        apiMocks.fetchMapping.mockImplementation(async (id: string) => id === 'mapping-read-1' ? readyMapping() : {
+            ...readyMapping(id), mode: 'signal_to_reference', parent_mapping_job_id: 'mapping-read-1',
+            alignment_job_id: 'alignment-job-1', reference_revision_id: persisted.reference_revision_id,
+            alignment_session_id: caseId === 'wrong-saved' ? 'foreign-session' : persisted.alignment_session_id,
+        });
+        await renderWorkbench({ viewerSession: persisted, alignmentSession: caseId === 'wrong-current'
+            ? { ...alignmentSession, session_id: 'different-current-session' } : null });
+        await settlePromises();
+        expect(apiMocks.fetchMapping).toHaveBeenCalledWith('mapping-reference-1');
+        expect(container.textContent?.includes('Mapping job tuple does not match')).toBe(caseId !== 'pending');
+    });
+
+    it.each([false, true])('Save session preserves the immutable comparison tuple only for its selected read (changed=%s)', async (changed) => {
+        const comparisonState = {
+            mode: 'ideal_comparison' as const, render_params: renderParams, view_job_id: null,
+            read_mapping_job_id: 'mapping-read-1', reference_mapping_job_id: 'mapping-reference-1',
+            comparison_job_id: 'comparison-ready-1', comparison_preview_digest: 'a'.repeat(64),
+            comparison_settings: { simulation_settings: { profile_id: 'dna-r9-min' as const, seed: 1 },
+                render_params: { scale: 'none' as const, point_size: 0.5 as const, fixed_width: false,
+                    base_width: 10, base_limit: 100, signal_sample_limit: 10000,
+                    show_samples: true, show_base_colours: true, remove_signal_outliers: false } },
+            comparison_review_id: 'review-1',
+        };
+        const persisted = viewerSession({ selected_read_id: 'read-42', signal_state: comparisonState });
+        // A pending authority refresh must not erase already persisted mapping IDs.
+        apiMocks.fetchMapping.mockImplementation(() => new Promise(() => {}));
+        apiMocks.fetchComparison.mockImplementation(() => new Promise(() => {}));
+        await renderWorkbench({ viewerSession: persisted });
+        if (changed) await act(async () => {
+            const field = input('Exact read ID');
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, 'other-read');
+            field.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        await act(async () => { button('Save session').click(); await Promise.resolve(); });
+        const saved = apiMocks.updateViewerSession.mock.calls.at(-1)?.[1];
+        expect(saved.signal_state.read_mapping_job_id).toBe('mapping-read-1');
+        expect(saved.signal_state.reference_mapping_job_id).toBe('mapping-reference-1');
+        if (changed) expect(saved.signal_state.comparison_job_id).toBeUndefined();
+        else expect(saved.signal_state).toEqual(comparisonState);
     });
 
     it('restores persisted read, locus, and viewer identity and returns the bounded signal locus through a sandboxed frame', async () => {

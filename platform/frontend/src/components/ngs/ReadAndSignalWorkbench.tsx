@@ -43,7 +43,8 @@ import {
     type AlignmentReadFilterPreset,
     type AlignmentSession,
 } from '../../lib/ngsAlignmentSession';
-import { secureNgsHtml, type AlignmentReadLocus } from '../../lib/ngsAlignmentViewer';
+import { type AlignmentReadLocus } from '../../lib/ngsAlignmentViewer';
+import { secureOntSignalHtml } from './ontSignalHtml';
 import { GovernedRawSignalWaveform } from './RawReadInspector';
 import { OntSignalIdealComparison } from './OntSignalIdealComparison';
 
@@ -88,6 +89,9 @@ function isRenderParams(value: unknown): value is OntSignalRenderParams {
         && ['none', 'medmad', 'znorm', 'scaledpA'].includes(String(candidate.scale));
 }
 
+// Native Bokeh CustomJS compiles callbacks on the first pan/zoom. Evaluation is
+// confined to the opaque-origin, network-denied allow-scripts-only iframe; never
+// add allow-same-origin or apply this policy to the application document.
 const GOVERNED_HTML_CSP = [
     "default-src 'none'",
     "base-uri 'none'",
@@ -98,7 +102,7 @@ const GOVERNED_HTML_CSP = [
     "img-src data:",
     "media-src 'none'",
     "object-src 'none'",
-    "script-src 'unsafe-inline'",
+    "script-src 'unsafe-inline' 'unsafe-eval'",
     "style-src 'unsafe-inline'",
     "worker-src 'none'",
     "navigate-to 'none'",
@@ -306,8 +310,11 @@ export function ReadAndSignalWorkbench({
                     && mapping.alignment_session_id === null
                     && mapping.parent_mapping_job_id === null;
             }
-            return mapping.alignment_job_id === alignmentJobId
-                && mapping.alignment_session_id === alignmentSession?.session_id
+            // A retained signal view can reopen before its independent IGV
+            // session has loaded. Use the saved session's exact tuple then;
+            // a supplied current alignment still takes precedence.
+            return mapping.alignment_job_id === (alignmentJobId || viewerSession?.alignment_job_id || null)
+                && mapping.alignment_session_id === (alignmentSession?.session_id ?? viewerSession?.alignment_session_id ?? null)
                 && mapping.reference_revision_id === referenceRevisionId;
         };
         if (
@@ -602,7 +609,7 @@ export function ReadAndSignalWorkbench({
                 identityGeneration !== identityRef.current
                 || requestGeneration !== artifactRequestGenerationRef.current
             ) return;
-            const next = URL.createObjectURL(secureNgsHtml(source, GOVERNED_HTML_CSP));
+            const next = URL.createObjectURL(secureOntSignalHtml(source, GOVERNED_HTML_CSP));
             replaceArtifactUrl(next);
         }).catch((reason) => {
             if (
@@ -901,8 +908,21 @@ export function ReadAndSignalWorkbench({
                     mode,
                     render_params: renderParams,
                     view_job_id: viewJob?.view_job_id || null,
-                    read_mapping_job_id: readMapping?.mapping_job_id || null,
-                    reference_mapping_job_id: referenceMapping?.mapping_job_id || null,
+                    read_mapping_job_id: readMapping?.mapping_job_id || persistedReadMappingJobId,
+                    reference_mapping_job_id: referenceMapping?.mapping_job_id || persistedReferenceMappingJobId,
+                    // Save the receiving view, not a new comparison request. The
+                    // child owns the immutable job/settings/review tuple; dropping
+                    // it here makes a successful Save erase the reopened result.
+                    ...(mode === 'ideal_comparison'
+                        && viewerSession.selected_read_id === (readId.trim() || null)
+                        && viewerSession.contig === (contig.trim() || null)
+                        && viewerSession.locus_start === integer(start)
+                        && viewerSession.locus_end === integer(end) ? {
+                            comparison_job_id: viewerSession.signal_state.comparison_job_id,
+                            comparison_preview_digest: viewerSession.signal_state.comparison_preview_digest,
+                            comparison_settings: viewerSession.signal_state.comparison_settings,
+                            comparison_review_id: viewerSession.signal_state.comparison_review_id,
+                        } : {}),
                 },
             });
             if (generation !== identityRef.current) return;
