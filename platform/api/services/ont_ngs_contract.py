@@ -548,6 +548,14 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     spec = get_ont_workflow_spec(canonical_id)
     normalized: dict[str, Any] = dict(WORKFLOW_DEFAULTS.get(canonical_id, {}))
     normalized.update(dict(params or {}))
+    # Historical direct native requests predate the descriptive input identity.
+    # Derive it only from one selected native input; never overwrite an explicit
+    # choice or turn absent observations into an additional admission condition.
+    if not (normalized.get("ont_input_mode") or normalized.get("input_mode")):
+        selected_inputs = [mode for mode, keys in (("pod5", ("pod5_dir",)), ("bam", ("bam_path", "bam_input")), ("fastq", ("fastq_path", "fastq_input")))
+                           if any(normalized.get(key) for key in keys)]
+        if len(selected_inputs) == 1:
+            normalized["ont_input_mode"] = selected_inputs[0]
     if canonical_id in {"ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening", "wf_clone_validation"}:
         normalized["expected_plasmid_size"] = effective_expected_plasmid_size(normalized.get("expected_plasmid_size"))
         consensus_setting = samtools_consensus_setting()
