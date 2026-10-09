@@ -1,6 +1,7 @@
 """Publication metadata drives all download selections and warm runtime rows."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -99,6 +100,64 @@ def test_image_authority_change_does_not_reuse_old_named_identity(publication, m
     monkeypatch.setattr(images, 'image_reference', lambda *args: (image, 'd' * 64))
     rows = bundle._runtime_records(image, 'containers/fixture.sif')
     assert [(r.sha256, r.size_bytes) for r in rows] == [('d' * 64, 3)]
+
+
+@pytest.mark.parametrize('binding', ['published', 'absent', 'mismatch', 'leaf', 'ancestor', 'managed'])
+def test_published_legacy_image_binding_preserves_path_authority(publication, monkeypatch, binding):
+    """Inert Boltz bytes exercise the same local/remote selected-runtime owner."""
+    import hashlib
+    from component_runtime import SourceIdentity, canonical_bytes
+    from services.nextflow import build_selected_execution_plan
+    from lib.shared_runtime_images import publish_image
+    from lib.runtime_image_lifecycle import transaction, commit_release
+
+    p = publication
+    monkeypatch.setattr(bundle, 'get_data_root', lambda: p.weights.parent)
+    monkeypatch.setenv('BMS_RUNTIME_IMAGE_LANE', 'production')
+    source = p.containers / 'boltz2-version.sif'
+    source.write_bytes(b'INERT IMAGE BINDING FIXTURE, NOT SCIENCE')
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    alias = p.containers / 'boltz2.sif'
+    alias.symlink_to(source.name)
+    row = dict(name='containers/boltz2.sif', kind='runtime_image', source=str(source),
+               sha256=digest, size_bytes=source.stat().st_size, mode=0o644)
+    index = dict(dependencies=['containers/boltz2.sif'], artifacts=[row])
+    if binding == 'absent':
+        index = {}
+    elif binding == 'mismatch':
+        row['source'] = str(p.containers / 'other.sif')
+    elif binding in {'leaf', 'ancestor'}:
+        link = p.containers / 'published-link'
+        link.symlink_to(source if binding == 'leaf' else p.containers,
+                        target_is_directory=binding == 'ancestor')
+        row['source'] = str(link if binding == 'leaf' else link / source.name)
+    elif binding == 'managed':
+        store = Path(os.environ['BMS_RUNTIME_IMAGE_STORE'])
+        newer = p.containers / 'approved.sif'
+        newer.write_bytes(b'ANOTHER APPROVED INERT GENERATION')
+        digest = hashlib.sha256(newer.read_bytes()).hexdigest()
+        source = publish_image(newer, store, digest)
+        with transaction(store):
+            commit_release(store, 'production', {'BMS_RUNTIME_IMAGE_BOLTZ2_SIF':
+                dict(path=str(source), sha256=digest)})
+    params = dict(sequence='AAAA', boltz_use_msa=False, run_frustrampnn=False)
+    plan = build_selected_execution_plan(model_id='boltz2', mode='predict',
+        entrypoint='structure_prediction.nf', requested=canonical_bytes(params),
+        effective=canonical_bytes(params), native_parameters=params,
+        source_identity=SourceIdentity('a' * 40, 'b' * 40))
+    def selected():
+        return bundle._runtime_assets('boltz2', 'predict', params, selected_plan=plan,
+            only_kinds=frozenset({'image'}), publication=index)
+    if binding not in {'published', 'managed'}:
+        with pytest.raises(bundle.RemoteBundleError, match='no-follow'):
+            selected()
+        return
+    assets = selected()
+    assert (source, 'containers/boltz2.sif') in assets
+    records = bundle._runtime_records(source, 'containers/boltz2.sif', publication=index)
+    assert [(r.relative_path, r.sha256, r.size_bytes) for r in records] == [
+        ('containers/boltz2.sif', digest, source.stat().st_size)]
+    assert alias.is_symlink() and alias.readlink() == Path('boltz2-version.sif')
 
 
 def test_preview_digest_binds_named_modes_and_endpoint(publication, monkeypatch):

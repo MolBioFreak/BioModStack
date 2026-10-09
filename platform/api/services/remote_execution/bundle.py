@@ -513,9 +513,17 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
             if relative in IMAGE_SELECTORS or not selected:
                 path, digest = image_reference(relative, root, params)
                 from .hf_assets import published_asset_rows
-                if digest is None and published_asset_rows('containers/' + relative, index=publication,
-                                                           resolved=resolved) is None:
-                    path = resolve_image(relative, root, params)
+                if digest is None:
+                    rows = published_asset_rows('containers/' + relative, index=publication,
+                                                resolved=resolved)
+                    if rows is None:
+                        path = resolve_image(relative, root, params)
+                    elif (len(rows) == 1 and rows[0]['name'] == 'containers/' + relative
+                          and rows[0].get('source') == str(path.resolve())):
+                        # Adoption records the physical source for legacy aliases.
+                        # Bind that owner-published path, not an arbitrary referent;
+                        # retain the no-follow/managed-storage checks below.
+                        path = Path(rows[0]['source'])
             else:
                 path = Path(str(selected)).expanduser()
         else:
