@@ -262,7 +262,7 @@ def prepared_generation_source_fields(model_id, mode, params):
 
 NGS_OPTIONAL_INPUTS = frozenset({"pod5_dir", "sample_sheet", "duplex_pairs",
     "wf_clone_primers", "wf_clone_insert_reference", "wf_clone_host_reference",
-    "wf_clone_regions_bedfile", "reference_set_manifest"})
+    "wf_clone_regions_bedfile", "reference_set_manifest", "comparison_panel_snapshot"})
 
 
 def selected_ngs_input_fields(mode, params):
@@ -280,6 +280,11 @@ def selected_ngs_input_fields(mode, params):
         selected.update(key for key in NGS_OPTIONAL_INPUTS if key.startswith("wf_clone_"))
     if workflow == "ont_pooled_reference_assignment":
         selected.add("reference_set_manifest")
+    run_qc = params.get("run_fastq_qc", params.get("run_multimer_qc", True)) is not False
+    if workflow == "ont_construct_screening":
+        run_qc = params.get("run_fastq_qc") is not False
+    if workflow in {"ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening"} and run_qc and params.get("reference_fasta"):
+        selected.add("comparison_panel_snapshot")
     return {key: params[key] for key in sorted(selected) if params.get(key)}
 
 

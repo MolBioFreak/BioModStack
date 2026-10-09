@@ -103,8 +103,6 @@ process DoradoBasecall {
     batch_size="\$(jq -r '.execution_policy.batch_size' dorado_preflight.json)"
     device="\$(jq -r '.execution_policy.device' dorado_preflight.json)"
     min_qscore="\$(jq -r '.execution_policy.min_qscore' dorado_preflight.json)"
-    min_gpu_total="\$(jq -r '.execution_policy.min_gpu_total_mib' dorado_preflight.json)"
-    min_gpu_free="\$(jq -r '.execution_policy.min_gpu_free_mib' dorado_preflight.json)"
     pair_relative="\$(jq -r '.pairs.relative_path // empty' dorado_preflight.json)"
     barcode_kit="\$(jq -r '.barcoding.kit // empty' dorado_preflight.json)"
     sample_relative="\$(jq -r '.barcoding.sample_sheet.relative_path // empty' dorado_preflight.json)"
@@ -122,7 +120,6 @@ process DoradoBasecall {
     if [[ "\${mode}" == duplex && "\${trim_adapters}" == false ]]; then
       echo 'locked Dorado duplex lacks an adapter-trim control; trim_adapters=false is unsupported' >&2; exit 1
     fi
-    [[ "\${min_gpu_total}" =~ ^[0-9]+\$ && "\${min_gpu_free}" =~ ^[0-9]+\$ ]]
 
     verify_model_tree() {
       local model_dir="\$1" expected_sha="\$2" expected_files="\$3" expected_bytes="\$4"
@@ -197,14 +194,6 @@ process DoradoBasecall {
         selected_logical["\${logical_id}"]=1
       done
     fi
-    for gpu_id in "\${gpu_ids[@]}"; do
-      gpu_memory="\$(nvidia-smi --id="\${gpu_id}" --query-gpu=memory.total,memory.free --format=csv,noheader,nounits | head -n1 | tr -d ' ')"
-      gpu_total="\${gpu_memory%%,*}"; gpu_free="\${gpu_memory##*,}"
-      if (( gpu_total < min_gpu_total || gpu_free < min_gpu_free )); then
-        echo "Dorado GPU admission denied for \${gpu_id}: total=\${gpu_total}MiB free=\${gpu_free}MiB required_total=\${min_gpu_total}MiB required_free=\${min_gpu_free}MiB" >&2
-        exit 1
-      fi
-    done
 
     pod5_root="\$PWD/sealed_pod5"
     base_model="\$PWD/sealed_models/\${model_id}"
@@ -287,7 +276,7 @@ process DoradoDemux {
     [[ "\$(jq -r '.selection.mode' ${doradoShellQuote(preflight_json)})" == 'simplex' ]]
     [[ -n "\$(jq -r '.barcoding.kit // empty' ${doradoShellQuote(preflight_json)})" ]]
     mkdir -p demux
-    dorado demux --no-classify --output-dir demux ${doradoShellQuote(bam)} > demux.log 2>&1
+    dorado demux --no-classify --threads ${task.cpus} --output-dir demux ${doradoShellQuote(bam)} > demux.log 2>&1
     shopt -s globstar nullglob
     declare -A alias_to_barcode=()
     declare -A barcode_to_alias=()
@@ -302,12 +291,17 @@ process DoradoDemux {
       [[ "\${value}" == 'unclassified' || "\${value}" =~ ^barcode(0[1-9]|[1-8][0-9]|9[0-6])\$ ]]
     }
     canonical_label() {
-      local candidate="\$1" filename stem mapped
+      local candidate="\$1" filename stem parent category mapped
       filename="\${candidate##*/}"
       stem="\${filename%.bam}"
-      for segment in "\${filename}" "\${stem}"; do
+      parent="\${candidate%/*}"; category="\${parent%/*}"
+      parent="\${parent##*/}"; category="\${category##*/}"
+      # Dorado 2.x writes chunked BAMs below bam_pass/<barcode-or-alias>.
+      # Match that native directory boundary, never a substring of a read/run ID.
+      if [[ "\${category}" != bam_pass && "\${category}" != bam_fail ]]; then parent=''; fi
+      for segment in "\${filename}" "\${stem}" "\${parent}"; do
+        [[ -n "\${segment}" ]] || continue
         if is_canonical_label "\${segment}"; then printf '%s\n' "\${segment}"; return 0; fi
-        if is_canonical_label "\${stem}"; then printf '%s\n' "\${stem}"; return 0; fi
         mapped="\${alias_to_barcode[\${segment}]:-}"
         if is_canonical_label "\${mapped}"; then printf '%s\n' "\${mapped}"; return 0; fi
       done

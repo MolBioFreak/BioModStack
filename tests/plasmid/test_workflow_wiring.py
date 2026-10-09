@@ -30,4 +30,4 @@ def test_construct_screening_verifies_assembly_and_normalizes_all_inputs():
 
 def test_model_guard_precedes_upstream_override():
     text=(ROOT/'modules/ngs/clone_validation.nf').read_text()
-    assert text.index('python3 ${modelValidator}')<text.index('--override_basecaller_cfg')
+    assert text.index('${apiPython} ${modelValidator}')<text.index('--override_basecaller_cfg')

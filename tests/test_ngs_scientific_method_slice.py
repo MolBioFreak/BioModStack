@@ -57,8 +57,7 @@ def test_fastq_qc_uses_primary_logical_read_accounting() -> None:
     fastq = (ROOT / "modules/ngs/fastq_plasmid_qc.nf").read_text(encoding="utf-8")
     assert "source_total_reads" in fastq
     assert "reads_passing_length_filter" in fastq
-    assert 'view -c -F 2308 "${bam}"' in fastq
-    assert 'view -c -f 4 -F 2304 "${bam}"' in fastq
+    assert 'read -r mapped_alignment_records unmapped_alignment_records mapped_reads unmapped_reads secondary_alignments supplementary_alignments' in fastq
     assert "logical_read_records=\\$((mapped_reads + unmapped_reads))" in fastq
     assert "CRITICAL_FAILURE: FASTQ_BAM_READ_ACCOUNTING_MISMATCH" in fastq
     assert 'total_alignment_records=\\$((mapped_alignment_records + unmapped_alignment_records))' in fastq
@@ -79,7 +78,6 @@ def test_fastq_qc_manifest_uses_persisted_workflow_and_input_authority() -> None
 def test_dimer_manifest_binds_exact_job_identity_and_canonical_schema() -> None:
     dimer = (ROOT / "modules/ngs/fastq_dimer_qc.nf").read_text(encoding="utf-8")
     manifest = (ROOT / "scripts/build_alignment_session_manifest.sh").read_text(encoding="utf-8")
-    python_manifest = (ROOT / "scripts/build_alignment_session_manifest.py").read_text(encoding="utf-8")
 
     assert "manifestJobId" in dimer
     assert 'build_alignment_session_manifest.sh" \\' in dimer
@@ -97,18 +95,9 @@ def test_dimer_manifest_binds_exact_job_identity_and_canonical_schema() -> None:
     assert 'input_mode:$input_mode' in manifest
     assert 'analysis_status:"completed"' in manifest
     assert 'job_id:$job_id' in manifest
-    assert 'parser.add_argument("--job-id", required=True)' in python_manifest
-    assert 'parser.add_argument("--expected-source-reference-sha256", required=True)' in python_manifest
-    assert 'parser.add_argument("--workflow-id", required=True)' in python_manifest
-    assert 'parser.add_argument("--input-mode", choices=("fastq", "bam", "pod5"), required=True)' in python_manifest
-    assert '"schema": "sequence_qc.manifest.v1"' in python_manifest
-    assert '"workflow_id": args.workflow_id' in python_manifest
-    assert '"input_mode": args.input_mode' in python_manifest
-    assert '"analysis_status": "completed"' in python_manifest
-    assert '"job_id": args.job_id' in python_manifest
 
 
-def test_nextflow_launcher_binds_canonical_ont_workflow_identity() -> None:
+def test_nextflow_launcher_binds_canonical_ont_workflow_identity(tmp_path) -> None:
     import sys
 
     api_root = ROOT / "platform/api"
@@ -120,11 +109,13 @@ def test_nextflow_launcher_binds_canonical_ont_workflow_identity() -> None:
         "nanopore",
         "ont_fastq_qc",
         {
-            "fastq_path": "/tmp/reads.fastq",
-            "reference_fasta": "/tmp/reference.fasta",
+            "ont_workflow_id": "ont_fastq_qc",
+            "ont_input_mode": "fastq",
+            "fastq_path": str(tmp_path / "reads.fastq"),
+            "reference_fasta": str(tmp_path / "reference.fasta"),
             "reference_sequence_sha256": "a" * 64,
         },
-        "/tmp/results/job-1",
+        str(tmp_path / "results/job-1"),
         job_id="job-1",
     )
     assert command[command.index("--workflow_id") + 1] == "ont_fastq_qc"

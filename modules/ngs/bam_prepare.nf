@@ -152,11 +152,10 @@ process ValidateMappedBam {
             echo "ERROR: mapped BAM contigs lack @SQ M5; trusted bam_reference_sha256 and bam_source_sha256 provenance are both required." >&2
             exit 1
         fi
+        # PrepareBamForAnalysis already authenticates the original input before
+        # sort/filter/index. Its output has different BAM bytes (including PG
+        # records), so the original digest cannot authenticate this derived BAM.
         actual_source_sha256=\$(sha256sum "${bam}" | cut -d ' ' -f1)
-        if [[ "${declaredSourceSha256}" != "\${actual_source_sha256}" ]]; then
-            echo "ERROR: bam_source_sha256 does not match the exact BAM object being validated." >&2
-            exit 1
-        fi
         expected_reference_sha256=\$(awk '!/^>/ { gsub(/[[:space:]]/, ""); printf "%s", toupper(\$0) }' "${reference}" \\
             | sha256sum | cut -d ' ' -f1)
         if [[ "${declaredReferenceSha256}" != "\${expected_reference_sha256}" ]]; then
@@ -165,6 +164,7 @@ process ValidateMappedBam {
         fi
         {
             echo "reference_identity=trusted_source_bam_and_reference_sha256"
+            echo "authenticated_source_bam_sha256=${declaredSourceSha256}"
             echo "validated_bam_sha256=\${actual_source_sha256}"
             echo "validated_reference_sha256=\${expected_reference_sha256}"
         } >> bam_mapped_check.log

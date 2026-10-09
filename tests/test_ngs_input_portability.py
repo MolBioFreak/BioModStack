@@ -11,6 +11,37 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_comparison_siblings_relocate_without_unused_files(owners, tmp_path, monkeypatch):
+    bundle, portable = owners
+    from scripts.build_comparison_panel_attribution import load_panel_snapshot
+    root = tmp_path / 'panel'; root.mkdir()
+    fasta = root / 'decoy.fasta'; fasta.write_text('>decoy\nACGT\n')
+    (root / 'unrelated.fasta').write_text('unselected')
+    manifest = root / 'panel.json'
+    manifest.write_text(json.dumps(dict(schema='bms.ngs.comparison-panel.v1', entries=[
+        dict(id='decoy', role='plasmid_decoy', label='Decoy', fasta_path=fasta.name,
+             fasta_sha256=hashlib.sha256(fasta.read_bytes()).hexdigest())])))
+    reference = tmp_path / 'ref.fasta'; reference.write_text('>ref\nTGCA\n')
+    params = dict(comparison_panel_snapshot=str(manifest), reference_fasta=str(reference))
+    selected = dict(assets(bundle, tmp_path, params, 'ont_fastq_qc'))
+    assert set(selected) == {manifest, fasta, reference}
+    assert Path(selected[manifest]).parent == Path(selected[fasta]).parent
+    worker = tmp_path / 'worker'
+    for source, relative in selected.items():
+        target = worker / relative; target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    relocated = worker / selected[manifest]
+    assert relocated.read_bytes() == manifest.read_bytes()
+    assert load_panel_snapshot(relocated)['entries'][0]['fasta_path'] == str(worker / selected[fasta])
+    # Actual task staging uses a symlink; its parent is not the snapshot root.
+    task = tmp_path / 'task'; task.mkdir()
+    (task / manifest.name).symlink_to(relocated)
+    assert load_panel_snapshot(task / manifest.name) == load_panel_snapshot(relocated)
+    assert portable.selected_ngs_input_fields('ont_fastq_qc', params) == {'comparison_panel_snapshot': str(manifest)}
+    params.update(run_fastq_qc=False, comparison_panel_snapshot='/missing/inactive')
+    assert dict(assets(bundle, tmp_path, params, 'ont_fastq_qc')) == {reference: selected[reference]}
+
+
 @pytest.fixture
 def owners(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(ROOT))

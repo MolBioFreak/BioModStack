@@ -153,8 +153,6 @@
     },
     "batch_size_min": 1,
     "batch_size_max": 256,
-    "min_gpu_total_mib": 15360,
-    "min_gpu_free_mib": 8192,
     "runtime_network": "forbidden",
     "model_download": "forbidden"
   }

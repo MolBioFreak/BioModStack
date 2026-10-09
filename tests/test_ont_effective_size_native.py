@@ -57,7 +57,7 @@ else: pathlib.Path(str(p) + '.fai').write_text(name + '\\t' + str(len(seq)) + '\
     hook = tmp_path / "record.sh"
     hook.write_text("""record_size() {
   case "$BASH_COMMAND" in
-    mapped_alignment_records=*)
+    *'SAMTOOLS_CMD[@]'*' view '*)
       printf '%s\\t%s\\t%s\\t%s\\t%s\\n' "$expected_size" "$dimer_cutoff" "$trimer_cutoff" "$dimer_like_reads" "$estimated_copy_number_mean" > "$SIZE_RECORD"
       exit 42 ;;
     aligned_reads=0)

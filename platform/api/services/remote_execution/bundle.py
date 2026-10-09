@@ -782,20 +782,23 @@ def _input_assets(
         path = Path(reference["source_path"])
         digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
         selected.setdefault(path, f"{digest}/{path.name}")
-    if native_invocation.model_id == 'nanopore' and params.get('reference_set_manifest'):
-        # Native Nextflow stages the manifest's parent. Transfer only its declared
-        # siblings under that same destination, not unrelated retained revisions.
+    if native_invocation.model_id == 'nanopore':
+        # Both native reference readers resolve declared FASTAs beside their
+        # manifest. Preserve that layout, not unrelated retained revisions.
         from scripts.pooled_ont_reference_assignment import _safe_snapshot_relative_path
         from scripts.lib.portable_inputs import _contained
-        manifest = _contained(params['reference_set_manifest'], input_roots)
-        document = json.loads(manifest.read_bytes())
-        snapshot = manifest.parent
-        prefix = hashlib.sha256(str(snapshot).encode()).hexdigest()[:16] + '/' + snapshot.name
-        selected[manifest] = prefix + '/' + manifest.name
-        for entry in document['entries']:
-            relative = _safe_snapshot_relative_path(entry['fasta_path'])
-            path = _contained(snapshot / relative, (snapshot,))
-            selected[path] = prefix + '/' + relative.as_posix()
+        for key in ('reference_set_manifest', 'comparison_panel_snapshot'):
+            if not params.get(key):
+                continue
+            manifest = _contained(params[key], input_roots)
+            document = json.loads(manifest.read_bytes())
+            snapshot = manifest.parent
+            prefix = hashlib.sha256(str(snapshot).encode()).hexdigest()[:16] + '/' + snapshot.name
+            selected[manifest] = prefix + '/' + manifest.name
+            for entry in document['entries']:
+                relative = _safe_snapshot_relative_path(entry['fasta_path'])
+                path = _contained(snapshot / relative, (snapshot,))
+                selected[path] = prefix + '/' + relative.as_posix()
     # CM owns sibling request/plan/registry and relative registered assets, not
     # a synthetic job-output alias. Preserve that layout below a trusted root.
     cm_roots = {Path(ref["source_path"]).parent for ref in discovered if ref["format"] == "cm-request"}
@@ -1133,7 +1136,7 @@ def _write_portable_bindings(*, staging_root: Path, remote_attempt: str,
         for key, value in sorted((selected_inputs or {}).items(),
                                  key=lambda item: len(item[1]), reverse=True):
             selected = Path(value)
-            if key == 'reference_set_manifest' and Path(source) != selected:
+            if key in {'reference_set_manifest', 'comparison_panel_snapshot'} and Path(source) != selected:
                 selected = selected.parent
             if Path(source) == selected or selected in Path(source).parents:
                 suffix = Path(source).relative_to(selected).as_posix()

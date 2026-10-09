@@ -578,8 +578,6 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
             "device": str(device),
             "batch_size": batch,
             "min_qscore": qscore,
-            "min_gpu_total_mib": int(policy["min_gpu_total_mib"]),
-            "min_gpu_free_mib": int(policy["min_gpu_free_mib"]),
             "runtime_network": "forbidden",
             "model_download": "forbidden",
         },

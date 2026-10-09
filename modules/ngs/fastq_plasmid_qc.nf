@@ -194,13 +194,25 @@ process FastqPlasmidQC {
         else printf "0"
     }')
 
-    mapped_alignment_records=\$("\${SAMTOOLS_CMD[@]}" view -c -F 4 "${bam}")
-    unmapped_alignment_records=\$("\${SAMTOOLS_CMD[@]}" view -c -f 4 "${bam}")
-    mapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -F 2308 "${bam}")
-    unmapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -f 4 -F 2304 "${bam}")
+    # Decode the BAM once for all six flag counts. Keep independent secondary
+    # and supplementary bits, including records with both bits set; flagstat's
+    # mutually exclusive categories are not equivalent to the original filters.
+    "\${SAMTOOLS_CMD[@]}" view "${bam}" | awk -F '\t' '
+        {
+            unmapped = int(\$2 / 4) % 2
+            secondary = int(\$2 / 256) % 2
+            supplementary = int(\$2 / 2048) % 2
+            if (unmapped) u++; else m++
+            if (!secondary && !supplementary) {
+                if (unmapped) pu++; else pm++
+            }
+            s += secondary; x += supplementary
+        }
+        END { printf "%.0f %.0f %.0f %.0f %.0f %.0f\\n", m, u, pm, pu, s, x }
+    ' > bam.accounting.tmp
+    read -r mapped_alignment_records unmapped_alignment_records mapped_reads unmapped_reads secondary_alignments supplementary_alignments < bam.accounting.tmp
+    rm -f bam.accounting.tmp
     primary_mapped_reads="\${mapped_reads}"
-    secondary_alignments=\$("\${SAMTOOLS_CMD[@]}" view -c -f 256 "${bam}")
-    supplementary_alignments=\$("\${SAMTOOLS_CMD[@]}" view -c -f 2048 "${bam}")
     total_alignment_records=\$((mapped_alignment_records + unmapped_alignment_records))
     logical_read_records=\$((mapped_reads + unmapped_reads))
     if [[ "\${logical_read_records}" -ne "\${source_total_reads}" ]]; then

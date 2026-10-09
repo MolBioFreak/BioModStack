@@ -235,6 +235,9 @@ def _load_occurrence_map(
 
 def load_panel_snapshot(path: Path) -> dict[str, Any]:
     """Validate a self-contained snapshot; paths may never escape its directory."""
+    # Nextflow stages this manifest as a symlink. Its declared FASTA siblings
+    # belong beside the manifest target, not beside that task-local symlink.
+    path = path.resolve()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
