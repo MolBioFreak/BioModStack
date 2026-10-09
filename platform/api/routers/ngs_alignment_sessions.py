@@ -768,18 +768,8 @@ def _uses_native_artifact_catalog(job: Job) -> bool:
 
 
 def _job_package_authority(job: Job) -> dict[str, Any]:
-    # Native publication already belongs to this persisted Job/root. Clone,
-    # methylation and pooled outputs do not carry ordinary FASTQ-QC manifests
-    # or necessarily a reference/input selector (e.g. historical pooled jobs).
-    if _uses_native_artifact_catalog(job):
-        return {"native_outputs": True}
-    authority = _job_authority(job)
     params = getattr(job, "params", None)
     params = params if isinstance(params, dict) else {}
-    source_key = {"fastq": "fastq_path", "bam": "bam_path", "pod5": "pod5_dir"}.get(authority["input_mode"])
-    source_path = params.get(source_key) if source_key is not None else None
-    if not isinstance(source_path, str) or not source_path.strip():
-        raise service.AlignmentSessionError("authorized source input path is required")
     provenance = getattr(job, "provenance", None) or {}
     integrity = provenance.get("result_integrity")
     inventory = integrity.get("artifacts") if isinstance(integrity, dict) else None
@@ -787,6 +777,19 @@ def _job_package_authority(job: Job) -> dict[str, Any]:
         observed = canonical_ngs_package_authority(inventory)
         if observed["artifact_set_sha256"] != integrity.get("artifact_set_sha256"):
             raise service.AlignmentSessionError("persisted artifact inventory identity disagrees")
+    # Native publication already belongs to this persisted Job/root. Clone,
+    # methylation and pooled outputs do not require unrelated FASTQ-QC metadata.
+    # If an inventory was published, retain its identities rather than resealing.
+    if _uses_native_artifact_catalog(job):
+        input_mode = params.get("ont_input_mode") or params.get("input_mode")
+        source_key = {"fastq": "fastq_path", "bam": "bam_path", "pod5": "pod5_dir"}.get(input_mode or "")
+        return {"native_outputs": True, "published_artifacts": inventory,
+                "source_input_path": params.get(source_key, "") if source_key else ""}
+    authority = _job_authority(job)
+    source_key = {"fastq": "fastq_path", "bam": "bam_path", "pod5": "pod5_dir"}.get(authority["input_mode"])
+    source_path = params.get(source_key) if source_key is not None else None
+    if not isinstance(source_path, str) or not source_path.strip():
+        raise service.AlignmentSessionError("authorized source input path is required")
     return {**authority, "source_input_path": source_path, "published_artifacts": inventory,
             "include_native_outputs": True}
 
@@ -1154,15 +1157,20 @@ async def list_alignment_sessions(
     authorized_job: Job = Depends(require_alignment_job),
 ):
     try:
-        if _uses_native_artifact_catalog(authorized_job):
-            # These native outputs have no ordinary verification session. Their
-            # co-published IGV references are exposed by the artifact catalog.
+        try:
+            authority = _job_session_authority(authorized_job)
+        except service.AlignmentSessionError:
+            if not _uses_native_artifact_catalog(authorized_job):
+                raise
+            # Native publication need not have an ordinary verification session.
+            # Preserve one when present; otherwise the catalog's co-published
+            # IGV references remain available without invented QC evidence.
             return {"schema": "bms.ngs.alignment-session-list.v1", "job_id": job_id, "sessions": []}
         async with _validated_pinned_result_root(authorized_job) as pinned_root:
             sessions = await run_in_threadpool(
                 service.build_alignment_sessions,
                 job_id,
-                **_job_session_authority(authorized_job),
+                **authority,
                 job_output_dir=pinned_root,
                 pinned_root_descriptor=True,
             )

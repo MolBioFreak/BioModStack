@@ -1966,14 +1966,15 @@ def build_ngs_package_artifacts(
     if native_outputs or include_native_outputs:
         native = _native_package_artifacts(safe_job_id, job_root)
         if native_outputs:
-            return native
-        canonical = build_ngs_package_artifacts(
-            job_id, source_reference_sha256=source_reference_sha256,
-            workflow_id=workflow_id, input_mode=input_mode, source_input_path=source_input_path,
-            results_dir=results_dir, job_output_dir=job_output_dir,
-            pinned_root_descriptor=pinned_root_descriptor, published_artifacts=published_artifacts,
-            verify_source_input=verify_source_input,
-        )
+            canonical = [dict(artifact) for artifact in published_artifacts or []]
+        else:
+            canonical = build_ngs_package_artifacts(
+                job_id, source_reference_sha256=source_reference_sha256,
+                workflow_id=workflow_id, input_mode=input_mode, source_input_path=source_input_path,
+                results_dir=results_dir, job_output_dir=job_output_dir,
+                pinned_root_descriptor=pinned_root_descriptor, published_artifacts=published_artifacts,
+                verify_source_input=verify_source_input,
+            )
         declared = {item.get("relative_path") for item in canonical}
         return canonical + [item for item in native if item["relative_path"] not in declared]
     if re.fullmatch(r"[0-9a-f]{64}", source_reference_sha256) is None:

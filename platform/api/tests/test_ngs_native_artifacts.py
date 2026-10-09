@@ -162,6 +162,54 @@ async def test_native_methylation_multimer_and_pooled_igv_urls(native_http):
 
 
 @pytest.mark.asyncio
+async def test_native_readback_preserves_published_identity(native_http):
+    from services.ont_ngs_completion import canonical_ngs_package_authority
+
+    client, output, factory = native_http
+    path = publish(output, "methylation/modkit_summary.tsv", b"published native bytes")
+    inventory = service.build_ngs_package_artifacts(
+        "clone-native", results_dir=output.parents[1], job_output_dir=output, native_outputs=True,
+    )
+    async with factory() as session:
+        job = await session.get(Job, "clone-native")
+        job.provenance = {**job.provenance, "result_integrity": {
+            **canonical_ngs_package_authority(inventory), "artifacts": inventory,
+        }}
+        await session.commit()
+    path.write_bytes(b"changed native bytes")
+    response = await client.get("/api/jobs/clone-native/ngs-artifacts")
+    assert response.status_code == 200
+    artifact = response.json()["artifacts"][0]
+    assert artifact["artifact_id"] == inventory[0]["artifact_id"]
+    assert artifact["sha256"] == inventory[0]["sha256"]
+    changed = await client.get(artifact["url"])
+    assert changed.status_code == 409
+    assert changed.json()["code"] == "NGS_ARTIFACT_INTEGRITY_CONFLICT"
+
+
+@pytest.mark.asyncio
+async def test_native_jobs_retain_existing_alignment_session_authority(native_http, monkeypatch):
+    client, output, factory = native_http
+    async with factory() as session:
+        job = await session.get(Job, "clone-native")
+        job.params = {**job.params, "ont_input_mode": "fastq", "reference_sequence_sha256": "a" * 64}
+        job.provenance = {**job.provenance, "result_integrity": {"artifact_set_sha256": "b" * 64}}
+        await session.commit()
+    observed = []
+
+    def existing_sessions(job_id, **authority):
+        observed.append((job_id, authority))
+        return []
+
+    monkeypatch.setattr(service, "build_alignment_sessions", existing_sessions)
+    response = await client.get("/api/jobs/clone-native/alignment-sessions")
+    assert response.status_code == 200
+    assert observed[0][0] == "clone-native"
+    assert observed[0][1]["package_artifact_set_sha256"] == "b" * 64
+    assert observed[0][1]["pinned_root_descriptor"] is True
+
+
+@pytest.mark.asyncio
 async def test_native_catalog_keeps_persisted_root_confinement(native_http):
     client, output, factory = native_http
     outside = output.parents[2] / "outside-results"
