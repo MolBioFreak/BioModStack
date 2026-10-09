@@ -490,6 +490,46 @@ def test_producer_emits_complete_truth_and_coordinate_receipts(
     assert sam[9] == "AACCGGTTACGATGCA"
 
 
+@pytest.mark.parametrize("rna", [False, True])
+@pytest.mark.parametrize("orientation", ["forward", "reverse"])
+def test_native_full_contig_paf_preserves_rna_signal_direction(tmp_path, rna, orientation):
+    # Squigulator 0.5.0 uses descending target coordinates for RNA, independent
+    # of the reference strand. The same ss dwell order must reach Squigualiser.
+    left, right = (6, 0) if rna else (0, 6)
+    fields = ["read", "258", "0", "258", "+", "virtual", "6", str(left), str(right),
+              "6", "6", "255", "sc:f:1.0", "sh:f:0.0", "ss:Z:43,43,43,43,43,43,"]
+    path = tmp_path / "native.paf"
+    path.write_text("\t".join(fields) + "\n")
+    observed = producer_runtime._parse_paf(path, "read", "virtual", 10, 5, rna=rna)
+    normalized = producer_runtime._normalize_paf(
+        observed, contig="reference", contig_length=100, start=11, end=20,
+        orientation=orientation,
+    ).strip().split("\t")
+    assert normalized[4] == ("+" if orientation == "forward" else "-")
+    assert normalized[5:9] == ["reference", "100", str(10 + left), str(10 + right)]
+    assert normalized[12:15] == fields[12:15]
+    with pytest.raises(ValueError, match="coordinate span"):
+        producer_runtime._parse_paf(path, "read", "virtual", 10, 5, rna=not rna)
+
+
+@pytest.mark.parametrize("molecule_type", ["dna", "rna"])
+def test_comparison_native_tabix_preserves_descending_rna_truth(tmp_path, molecule_type):
+    import pysam
+
+    left, right = (16, 10) if molecule_type == "rna" else (10, 16)
+    line = f"read\t258\t0\t258\t+\tref\t100\t{left}\t{right}\t6\t6\t255\tss:Z:43,43,43,43,43,43,"
+    parent = tmp_path / "native.paf"
+    parent.write_text(line + "\n")
+    indexed, _ = renderer_runtime.indexed_simulated_reference_mapping(parent, tmp_path, molecule_type)
+    with pysam.TabixFile(str(indexed)) as source:
+        assert list(source.fetch("ref", 10, 16)) == [line]
+    bounded, _ = renderer_runtime.bounded_real_reference_mapping(
+        indexed, "read", tmp_path, "ref", 11, 16, molecule_type,
+    )
+    with pysam.TabixFile(str(bounded)) as source:
+        assert list(source.fetch("ref", 10, 16)) == [line]
+
+
 def test_producer_rejects_cross_artifact_signal_and_profile_calibration_mismatch() -> None:
     paf = ["read-1", "104", "0", "104"]
     coherent = {"signal_length": 104, "calibration_fields": {
@@ -610,7 +650,7 @@ def test_renderer_creates_real_and_simulated_tracks_before_shared_x_output(
     monkeypatch.setattr(
         renderer_runtime,
         "bounded_real_reference_mapping",
-        lambda source, read_id, _work, contig, start, end: (
+        lambda source, read_id, _work, contig, start, end, molecule_type: (
             source,
             {"selected_read_id": read_id, "region": f"{contig}:{start}-{end}"},
         ),
@@ -619,7 +659,7 @@ def test_renderer_creates_real_and_simulated_tracks_before_shared_x_output(
     monkeypatch.setattr(
         renderer_runtime,
         "indexed_simulated_reference_mapping",
-        lambda source, _work: (
+        lambda source, _work, molecule_type: (
             source,
             {"parent_sha256": hashlib.sha256(source.read_bytes()).hexdigest()},
         ),

@@ -1069,7 +1069,8 @@ async def workbench_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         await engine.dispose()
 
 
-def test_retained_parent_pin_rejects_intermediate_symlinks_beneath_governed_roots(
+@pytest.mark.asyncio
+async def test_retained_parent_pin_rejects_intermediate_symlinks_beneath_governed_roots(
     tmp_path: Path,
 ) -> None:
     governed = tmp_path / "governed"
@@ -1083,7 +1084,7 @@ def test_retained_parent_pin_rejects_intermediate_symlinks_beneath_governed_root
     escaped.write_bytes(b"escaped-parent")
     (governed / "linked-parent").symlink_to(outside, target_is_directory=True)
     with RetainedParentSet((governed,)) as parents:
-        retained = parents.pin(
+        retained = await parents.pin_async(
             regular,
             alias="regular.bin",
             expected_sha256=hashlib.sha256(regular.read_bytes()).hexdigest(),
@@ -1093,7 +1094,7 @@ def test_retained_parent_pin_rejects_intermediate_symlinks_beneath_governed_root
 
     with RetainedParentSet((governed,)) as parents:
         with pytest.raises(RuntimeError, match="governed root|symbolic links"):
-            parents.pin(
+            await parents.pin_async(
                 governed / "linked-parent" / escaped.name,
                 alias="escaped.bin",
                 expected_sha256=hashlib.sha256(escaped.read_bytes()).hexdigest(),
@@ -2344,7 +2345,7 @@ async def test_capabilities_route_rejects_partial_exact_alignment_authority(
         )
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "exact reference capability authority is incomplete"}
+    assert response.json() == {"detail": "Provide alignment_job_id, alignment_session_id and reference_revision_id together."}
 
 
 @pytest.mark.asyncio
@@ -4206,8 +4207,7 @@ async def test_registration_viewer_and_worker_full_file_work_are_offloaded(
         str(tmp_path),
     )
     with RetainedParentSet((tmp_path,)) as parents:
-        retained = await worker._pin_parent_async(
-            parents,
+        retained = await parents.pin_async(
             hashed,
             alias="hashed.bin",
             expected_sha256=digest,

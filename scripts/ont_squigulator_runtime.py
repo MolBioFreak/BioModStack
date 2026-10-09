@@ -155,7 +155,8 @@ def _single_fasta(path: Path) -> tuple[str, str]:
 
 
 def _parse_paf(
-    path: Path, generated_id: str, input_id: str, length: int, kmer_length: int
+    path: Path, generated_id: str, input_id: str, length: int, kmer_length: int,
+    *, rna: bool = False,
 ) -> list[str]:
     lines = path.read_text(encoding="ascii").splitlines()
     if len(lines) != 1:
@@ -166,10 +167,13 @@ def _parse_paf(
     signal_length, query_start, query_end = map(int, fields[1:4])
     target_length, target_start, target_end = map(int, fields[6:9])
     expected_target_length = length - kmer_length + 1
+    # Native Squigulator RNA truth runs from the last k-mer to the first.
+    expected_interval = (expected_target_length, 0) if rna else (0, expected_target_length)
     if (
         signal_length <= 0 or query_start != 0 or query_end != signal_length
         or expected_target_length <= 0
-        or (target_length, target_start, target_end) != (expected_target_length, 0, expected_target_length)
+        or target_length != expected_target_length
+        or (target_start, target_end) != expected_interval
         or tuple(map(int, fields[9:11])) != (expected_target_length, expected_target_length)
     ):
         raise ValueError("Squigulator PAF coordinate span is invalid")
@@ -185,10 +189,13 @@ def _parse_paf(
 def _normalize_paf(fields: list[str], *, contig: str, contig_length: int, start: int, end: int, orientation: str) -> str:
     normalized = list(fields)
     normalized[4] = "+" if orientation == "forward" else "-"
-    target_span = int(fields[8]) - int(fields[7])
+    target_span = abs(int(fields[8]) - int(fields[7]))
     if target_span <= 0 or start - 1 + target_span > end:
         raise ValueError("Squigulator normalized PAF span is invalid")
-    normalized[5:9] = [contig, str(contig_length), str(start - 1), str(start - 1 + target_span)]
+    target_start, target_end = start - 1, start - 1 + target_span
+    if int(fields[7]) > int(fields[8]):
+        target_start, target_end = target_end, target_start
+    normalized[5:9] = [contig, str(contig_length), str(target_start), str(target_end)]
     normalized.extend([f"or:Z:{orientation}", f"vw:i:{start - 1}"])
     return "\t".join(normalized) + "\n"
 
@@ -453,7 +460,7 @@ def produce_comparison(*, reference_fasta: Path, output: Path, reference_sha256:
         raise ValueError("Squigulator perfect-read sequence diverges from simulation input")
     paf_fields = _parse_paf(
         output / "simulated_source.paf", generated_id, input_id, len(sequence),
-        PROFILE_KMER_LENGTH[profile_id],
+        PROFILE_KMER_LENGTH[profile_id], rna=profile_id.startswith("rna"),
     )
     (output / "simulated_normalized.paf").write_text(
         _normalize_paf(paf_fields, contig=contig, contig_length=contig_length,

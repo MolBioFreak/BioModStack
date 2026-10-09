@@ -74,7 +74,8 @@ def test_mapping_profile_render_args_bind_exact_kmer_length() -> None:
         worker_module._mapping_profile_render_args(SimpleNamespace(kmer_length=0))
 
 
-def test_raw_and_workbench_read_leases_share_one_break_generation(
+@pytest.mark.asyncio
+async def test_raw_and_workbench_read_leases_share_one_break_generation(
     tmp_path: Path,
 ) -> None:
     previous_handler = signal.getsignal(signal.SIGIO)
@@ -82,7 +83,7 @@ def test_raw_and_workbench_read_leases_share_one_break_generation(
     source.write_bytes(b"retained")
     parents = RetainedParentSet()
     try:
-        parents.pin(
+        await parents.pin_async(
             source,
             alias="parent.bin",
             expected_sha256=hashlib.sha256(b"retained").hexdigest(),
@@ -169,7 +170,8 @@ def _partitioned_representation(tmp_path: Path) -> tuple[SimpleNamespace, Path, 
     return representation, first, first_index, second, second_index, routing
 
 
-def test_worker_resolves_only_selected_governed_routing_partitions(
+@pytest.mark.asyncio
+async def test_worker_resolves_only_selected_governed_routing_partitions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -192,10 +194,14 @@ def test_worker_resolves_only_selected_governed_routing_partitions(
 
     assert selected == [(second, second_index)]
     assert identities["routing_sha256"] == _sha(routing)
-    assert set(hashed_paths) == {routing, second, second_index}
+    # Selected bodies are hashed once by pin_async at the FD transfer boundary.
+    assert hashed_paths == [routing]
     assert first not in hashed_paths
     assert first_index not in hashed_paths
-    assert identities["blow5"] == [
+    with RetainedParentSet((tmp_path,)) as parents:
+        retained_identities = await OntSignalWorker._pin_raw_partitions_async(parents, representation, selected)
+        assert len(parents.parents) == 2
+    assert retained_identities == [
         {
             "sha256": _sha(second),
             "index_sha256": _sha(second_index),
@@ -827,7 +833,7 @@ def test_container_command_sets_worker_label_and_finite_fsize(
     output.mkdir()
     broker = tmp_path / "broker"
     broker.mkdir(mode=0o700)
-    digest = worker_module.APPROVED_OCI_DIGEST.removeprefix("sha256:")
+    digest = json.loads(worker_module.RUNTIME_POLICY_PATH.read_text())['runtime_id'].removeprefix("sha256:")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{digest}")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", digest)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "podman")
@@ -863,7 +869,7 @@ def test_container_command_fails_closed_when_approved_image_is_absent(
     output.mkdir()
     broker = tmp_path / "broker"
     broker.mkdir(mode=0o700)
-    digest = worker_module.APPROVED_OCI_DIGEST.removeprefix("sha256:")
+    digest = json.loads(worker_module.RUNTIME_POLICY_PATH.read_text())['runtime_id'].removeprefix("sha256:")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{digest}")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", digest)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "docker")
@@ -879,7 +885,14 @@ def test_container_command_fails_closed_when_approved_image_is_absent(
         OntSignalWorker(None, None)._container_command(output, broker, kind="mapping")
 
 
-def test_squigualiser_build_script_rejects_image_id_outside_runtime_policy(tmp_path: Path) -> None:
+@pytest.mark.parametrize("image_id,valid", [
+    ("sha256:" + "0" * 64, True),
+    ("sha256:" + "g" * 64, False),
+    ("mutable:tag", False),
+])
+def test_squigualiser_build_reports_measured_candidate_without_selecting_it(
+    tmp_path: Path, image_id: str, valid: bool,
+) -> None:
     runtime = tmp_path / "docker"
     runtime.write_text(
         "#!/usr/bin/env python3\n"
@@ -897,43 +910,21 @@ def test_squigualiser_build_script_rejects_image_id_outside_runtime_policy(tmp_p
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "BMS_CONTAINER_RUNTIME": "docker",
-        "FAKE_IMAGE_ID": "sha256:" + "0" * 64,
+        "FAKE_IMAGE_ID": image_id,
     }
     result = subprocess.run(
         ["bash", str(script)], env=environment, capture_output=True, text=True
     )
-    assert result.returncode != 0
-    assert "does not match the approved runtime policy" in result.stderr
+    if valid:
+        assert result.returncode == 0, result.stderr
+        assert f"BMS_ONT_SQUIGUALISER_IMAGE={image_id}" in result.stdout
+    else:
+        assert result.returncode != 0
+        assert "Invalid built image ID" in result.stderr
 
 
-def test_squigualiser_build_script_accepts_image_id_from_runtime_policy(tmp_path: Path) -> None:
-    runtime = tmp_path / "docker"
-    runtime.write_text(
-        "#!/usr/bin/env python3\n"
-        "import os, sys\n"
-        "if sys.argv[1] == 'build': raise SystemExit(0)\n"
-        "if sys.argv[1:3] == ['image', 'inspect']:\n"
-        "    print(os.environ['FAKE_IMAGE_ID'])\n"
-        "    raise SystemExit(0)\n"
-        "raise SystemExit(64)\n",
-        encoding="utf-8",
-    )
-    runtime.chmod(0o755)
-    script = Path(__file__).parents[3] / "scripts" / "build_ont_squigualiser_runtime.sh"
-    environment = {
-        **os.environ,
-        "PATH": f"{tmp_path}:{os.environ['PATH']}",
-        "BMS_CONTAINER_RUNTIME": "docker",
-        "FAKE_IMAGE_ID": worker_module.APPROVED_OCI_DIGEST,
-    }
-    result = subprocess.run(
-        ["bash", str(script)], env=environment, capture_output=True, text=True
-    )
-    assert result.returncode == 0, result.stderr
-    assert f"BMS_ONT_SQUIGUALISER_IMAGE={worker_module.APPROVED_OCI_DIGEST}" in result.stdout
-
-
-def test_retained_parent_keeps_exact_inode_bytes_and_command_never_reopens_source(
+@pytest.mark.asyncio
+async def test_retained_parent_keeps_exact_inode_bytes_and_command_never_reopens_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     assert RetainedParentSet is not None, "retained-parent lifecycle is missing"
@@ -942,7 +933,7 @@ def test_retained_parent_keeps_exact_inode_bytes_and_command_never_reopens_sourc
     source.write_bytes(original)
     expected_sha256 = hashlib.sha256(original).hexdigest()
     parents = RetainedParentSet()
-    retained = parents.pin(
+    retained = await parents.pin_async(
         source,
         alias="original_moves.bam",
         expected_sha256=expected_sha256,
@@ -961,7 +952,7 @@ def test_retained_parent_keeps_exact_inode_bytes_and_command_never_reopens_sourc
     broker = tmp_path / "broker-retained"
     output.mkdir()
     broker.mkdir(mode=0o700)
-    digest = worker_module.APPROVED_OCI_DIGEST.removeprefix("sha256:")
+    digest = json.loads(worker_module.RUNTIME_POLICY_PATH.read_text())['runtime_id'].removeprefix("sha256:")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{digest}")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", digest)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "docker")
@@ -985,7 +976,8 @@ def test_retained_parent_keeps_exact_inode_bytes_and_command_never_reopens_sourc
 
 
 @pytest.mark.parametrize("terminal", [None, RuntimeError("failed"), asyncio.CancelledError()])
-def test_retained_parent_descriptors_close_on_every_terminal_exit(
+@pytest.mark.asyncio
+async def test_retained_parent_descriptors_close_on_every_terminal_exit(
     tmp_path: Path, terminal: BaseException | None
 ) -> None:
     assert RetainedParentSet is not None, "retained-parent lifecycle is missing"
@@ -994,7 +986,7 @@ def test_retained_parent_descriptors_close_on_every_terminal_exit(
     descriptor = -1
     with pytest.raises(type(terminal)) if terminal is not None else _does_not_raise():
         with RetainedParentSet() as parents:
-            retained = parents.pin(
+            retained = await parents.pin_async(
                 source,
                 alias="parent.bin",
                 expected_sha256=hashlib.sha256(b"parent").hexdigest(),
@@ -1171,10 +1163,42 @@ def test_runtime_broker_retains_parent_fds_across_trusted_child_exec(tmp_path: P
         left.close(); right.close(); os.close(descriptor)
 
 
+@pytest.mark.parametrize("stage,policy_attribute,image_env", [
+    (None, "RUNTIME_POLICY_PATH", "BMS_ONT_SQUIGUALISER_IMAGE"),
+    ("squigulator_producer", "SQUIGULATOR_POLICY_PATH", "BMS_ONT_SQUIGULATOR_IMAGE"),
+    ("squigualiser_comparison_renderer", "COMPARISON_RENDER_POLICY_PATH", "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE"),
+])
+def test_selected_policy_is_single_runtime_authority_and_digest_is_provenance(
+    tmp_path, monkeypatch, stage, policy_attribute, image_env,
+):
+    policy = json.loads(getattr(worker_module, policy_attribute).read_text())
+    # A release can select its actual rebuilt ID without editing Python constants.
+    selected = "sha256:" + "b" * 64
+    policy["runtime_id"] = policy["oci_digest"] = selected
+    raw = json.dumps(policy, indent=4).encode() + b"\n"
+    path = tmp_path / "policy.json"
+    path.write_bytes(raw)
+    monkeypatch.setattr(worker_module, policy_attribute, path)
+    monkeypatch.setenv(image_env, selected)
+    monkeypatch.setenv(image_env + "_DIGEST", "b" * 64)
+    identity = (OntSignalWorker._runtime_identity() if stage is None
+                else OntSignalWorker._comparison_runtime_identity(stage))
+    assert identity["image"] == selected
+    assert identity["policy_manifest_sha256" if stage is None else "policy_sha256"] == hashlib.sha256(raw).hexdigest()
+    if stage is not None:
+        assert identity["wrapper_sha256"] == policy["wrapper_sha256"]
+    monkeypatch.setenv(image_env, "sha256:" + "c" * 64)
+    with pytest.raises(RuntimeError, match="identity"):
+        if stage is None:
+            OntSignalWorker._runtime_identity()
+        else:
+            OntSignalWorker._comparison_runtime_identity(stage)
+
+
 def test_runtime_identity_is_bound_to_the_staged_approved_oci_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    approved = worker_module.APPROVED_OCI_DIGEST.removeprefix("sha256:")
+    approved = json.loads(worker_module.RUNTIME_POLICY_PATH.read_text())['runtime_id'].removeprefix("sha256:")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{approved}")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", approved)
 

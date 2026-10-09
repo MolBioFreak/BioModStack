@@ -1,11 +1,11 @@
 {
+  "network": "none",
+  "oci_digest": "sha256:750a72343bd3a0015ff6d55d6ec38671eff200838acdd2fb065f7e03fdcca40c",
+  "runtime_id": "sha256:750a72343bd3a0015ff6d55d6ec38671eff200838acdd2fb065f7e03fdcca40c",
   "schema": "bms.ont-squigualiser-runtime-policy.v1",
-  "runtime_id": "sha256:4061ecf65ad8edbe909592e9e922ee089ee67260fbd8384da3321d0313d5e404",
-  "oci_digest": "sha256:4061ecf65ad8edbe909592e9e922ee089ee67260fbd8384da3321d0313d5e404",
   "upstream": {
+    "commit": "5a2404f1f43bc3227a85475c59b2b77970078b2e",
     "name": "Squigualiser",
-    "version": "0.7.0",
-    "commit": "5a2404f1f43bc3227a85475c59b2b77970078b2e"
-  },
-  "network": "none"
+    "version": "0.7.0"
+  }
 }

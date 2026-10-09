@@ -1,6 +1,8 @@
 """Offline startup tests: no container, service, remote worker or network launch."""
 from __future__ import annotations
 
+import json
+
 import asyncio
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
@@ -169,8 +171,8 @@ async def test_api_lifespan_yields_with_absent_backend(store, monkeypatch, caplo
     monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "1")
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "docker")
     monkeypatch.delenv("BMS_ONT_SLOW5TOOLS_IMAGE", raising=False)
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", workers.APPROVED_OCI_DIGEST)
-    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", workers.APPROVED_OCI_DIGEST.removeprefix("sha256:"))
+    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", json.loads(workers.RUNTIME_POLICY_PATH.read_text())["runtime_id"])
+    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", json.loads(workers.RUNTIME_POLICY_PATH.read_text())["runtime_id"].removeprefix("sha256:"))
     monkeypatch.setattr(workers.asyncio, "create_subprocess_exec", AsyncMock(side_effect=FileNotFoundError(2, "missing", "docker")))
     for name in ("init_db", "init_experiment_db", "init_molbio_db", "init_molbio_ngs_db"):
         monkeypatch.setattr(main, name, AsyncMock())

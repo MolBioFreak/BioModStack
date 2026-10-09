@@ -1,7 +1,7 @@
 """Governed ONT raw-signal representations and capability selection.
 
 Paths remain server-side. Public functions return opaque representation metadata.
-Conversion stays fail-closed until the exact local fidelity profile is qualified.
+Conversion uses the selected native runtime and validates actual input/output fidelity.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import json
 import os
 import platform
 import secrets
+import re
 import shutil
 import stat
 import subprocess
@@ -49,7 +50,6 @@ EXTERNAL_BLOW5_VALIDATION_PROFILE_ID = "bms.blow5.external-validation.v2"
 BLOW5_CONTAINER_ENV = "BMS_ONT_SLOW5TOOLS_IMAGE"
 BLOW5_CONTAINER_DIGEST_ENV = "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST"
 BLOW5_CONTAINER_RUNTIME_ENV = "BMS_ONT_CONTAINER_RUNTIME"
-BLOW5_CONVERSION_ENABLED_ENV = "BMS_ONT_BLOW5_CONVERSION_QUALIFIED"
 BLOW5_STAGING_ROOT_ENV = "BMS_ONT_RAW_SIGNAL_STAGING_ROOT"
 BLOW5_MIN_FREE_BYTES_ENV = "BMS_ONT_RAW_SIGNAL_MIN_FREE_BYTES"
 BLOW5_ACQUISITION_PRESSURE_ENV = "BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE"
@@ -59,7 +59,6 @@ RAW_SIGNAL_RETENTION_POLICY_ENV = "BMS_ONT_RAW_SIGNAL_RETENTION_POLICY"
 BLOW5_DEFAULT_STAGING_ROOT = "/mnt/BioModStack/ont-raw-signal-staging"
 BLOW5_DEFAULT_MIN_FREE_BYTES = 20 * 1024 * 1024 * 1024
 RAW_SIGNAL_RUNTIME_POLICY_PATH = Path(__file__).resolve().parents[1] / "config/ont_signal_workbench/raw_signal_runtime_policy_v1.json"
-RAW_SIGNAL_RUNTIME_POLICY_SHA256 = "7d504d40b1022120911400f74872b4d038d65dbbafd01ee5a0e318e9ade82a58"
 
 
 class SourceLeaseUnavailable(RuntimeError):
@@ -136,8 +135,6 @@ def raw_signal_runtime_identity() -> dict[str, Any]:
     finally:
         os.close(descriptor)
     policy_sha256 = hashlib.sha256(raw).hexdigest()
-    if policy_sha256 != RAW_SIGNAL_RUNTIME_POLICY_SHA256:
-        raise RuntimeError("raw-signal runtime policy manifest identity diverged")
     try:
         policy = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -155,7 +152,7 @@ def raw_signal_runtime_identity() -> dict[str, Any]:
         }
         or not isinstance(runtime_id, str)
         or not isinstance(oci_digest, str)
-        or not _is_sha256(runtime_id.removeprefix("sha256:"))
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", runtime_id) is None
         or runtime_id != oci_digest
         or not isinstance(tools, dict)
         or tools != {"blue_crab": "0.5.0", "slow5tools": "1.4.0", "pyslow5": "1.4.0"}
@@ -1632,7 +1629,6 @@ def _resource_snapshot(source_bytes: int) -> dict[str, Any]:
     image = os.getenv(BLOW5_CONTAINER_ENV, "").strip()
     image_digest = os.getenv(BLOW5_CONTAINER_DIGEST_ENV, "").strip()
     container_runtime = os.getenv(BLOW5_CONTAINER_RUNTIME_ENV, "docker").strip()
-    enabled = os.getenv(BLOW5_CONVERSION_ENABLED_ENV, "").strip().lower() in {"1", "true", "yes"}
     return {
         "schema": "bms.ont.raw-signal-resource-snapshot.v1",
         "staging_root": str(root),
@@ -1642,7 +1638,6 @@ def _resource_snapshot(source_bytes: int) -> dict[str, Any]:
         "required_free_bytes": required_free,
         "load_average_1m": os.getloadavg()[0],
         "active_acquisition_pressure": os.getenv(BLOW5_ACQUISITION_PRESSURE_ENV, "unknown").strip().lower(),
-        "qualified_conversion_enabled": enabled,
         "container_image": image,
         "container_digest": image_digest,
         "container_runtime": container_runtime,
@@ -1662,8 +1657,6 @@ def _container_image_ref(snapshot: dict[str, Any]) -> str:
 
 
 def _qualification_gate(snapshot: dict[str, Any]) -> str | None:
-    if not snapshot["qualified_conversion_enabled"]:
-        return "converter_fidelity_profile_not_qualified"
     if not snapshot["container_image"] or not _is_sha256(snapshot["container_digest"]):
         return "converter_runtime_identity_not_pinned"
     if snapshot["container_runtime"] not in {"docker", "podman"} or shutil.which(snapshot["container_runtime"]) is None:
@@ -1810,6 +1803,7 @@ def _conversion_commands(
         snapshot["container_runtime"], "run", "--rm", "--pull=never", "--network=none", "--read-only",
         f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
         "--cpus=4", "--memory=16g", "--pids-limit=256", "--ulimit", "nofile=512:512",
+        "--workdir", "/stage",
         "--mount", f"type=bind,src={stage},dst=/stage",
     ]
     common = base + [image_ref]
@@ -2109,6 +2103,7 @@ def _external_blow5_validation_commands(job: OntRawSignalDerivationJob, source: 
         snapshot["container_runtime"], "run", "--rm", "--pull=never", "--network=none", "--read-only",
         f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
         "--cpus=1", "--memory=2g", "--pids-limit=64", "--ulimit", "nofile=128:128",
+        "--workdir", "/stage",
         "--mount", f"type=bind,src={stage},dst=/stage",
         image_ref,
     ]

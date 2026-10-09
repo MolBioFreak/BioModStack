@@ -5,8 +5,8 @@
     "streamvbyte": "Apache-2.0"
   },
   "network": "none",
-  "oci_digest": "sha256:10690870e22ae777ada80688060eb30977e63034b56bedb38c160a827604351b",
-  "runtime_id": "sha256:10690870e22ae777ada80688060eb30977e63034b56bedb38c160a827604351b",
+  "oci_digest": "sha256:0f7fc490368461fe783b77fcec6c76a4f2ccf84c28b57329463bacc0e7b0ee02",
+  "runtime_id": "sha256:0f7fc490368461fe783b77fcec6c76a4f2ccf84c28b57329463bacc0e7b0ee02",
   "schema": "bms.ont-squigulator-runtime-policy.v1",
   "source_asset": {
     "name": "squigulator-v0.5.0-release.tar.gz",
@@ -18,5 +18,5 @@
     "version": "0.5.0"
   },
   "wrapper": "scripts/ont_squigulator_runtime.py",
-  "wrapper_sha256": "e5ff983ab508c14424b93aa2787127eedc546bde5f6fbd349b5ff939956338b1"
+  "wrapper_sha256": "ff83c9d41ac7eda3aa436721045eeae4a4778461b35e032c67ef3e7fcd9bf9da"
 }

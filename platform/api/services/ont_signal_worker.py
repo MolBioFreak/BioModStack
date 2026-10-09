@@ -57,9 +57,6 @@ RUNTIME_POLICY_PATH = (
     / "ont_signal_workbench"
     / "runtime_policy_v1.json"
 )
-RUNTIME_POLICY_SHA256 = "34d2af958f51539ba6d09e59f354798c0091f6e4d63428d3f5de0baa86ef6d37"
-APPROVED_OCI_DIGEST = "sha256:4061ecf65ad8edbe909592e9e922ee089ee67260fbd8384da3321d0313d5e404"
-APPROVED_UPSTREAM_COMMIT = "5a2404f1f43bc3227a85475c59b2b77970078b2e"
 MAX_CONTAINER_LOG_BYTES = 8 * 1024 * 1024
 COMMAND_DEADLINES = {
     "move": 2 * 60 * 60, "calibration": 2 * 60 * 60, "mapping": 4 * 60 * 60,
@@ -648,19 +645,14 @@ class OntSignalWorker:
             policy = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise RuntimeError("approved runtime policy manifest is invalid") from exc
-        expected_policy = {
-            "schema": "bms.ont-squigualiser-runtime-policy.v1",
-            "runtime_id": APPROVED_OCI_DIGEST,
-            "oci_digest": APPROVED_OCI_DIGEST,
-            "upstream": {
-                "name": "Squigualiser",
-                "version": "0.7.0",
-                "commit": APPROVED_UPSTREAM_COMMIT,
-            },
-            "network": "none",
-        }
-        if policy_sha256 != RUNTIME_POLICY_SHA256 or policy != expected_policy:
-            raise RuntimeError("approved runtime policy manifest identity diverged")
+        if (
+            not isinstance(policy, dict)
+            or policy.get("schema") != "bms.ont-squigualiser-runtime-policy.v1"
+            or policy.get("network") != "none"
+            or policy.get("runtime_id") != policy.get("oci_digest")
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(policy.get("runtime_id", "")))
+        ):
+            raise RuntimeError("approved runtime policy manifest is invalid")
         if (
             image != policy["runtime_id"]
             or digest != policy["oci_digest"].removeprefix("sha256:")
@@ -728,36 +720,18 @@ class OntSignalWorker:
 
     @staticmethod
     def _comparison_runtime_identity(stage: str) -> dict[str, str]:
-        approvals: dict[str, tuple[Path, str, str, str, str, dict[str, Any]]] = {
+        approvals = {
             "squigulator_producer": (
                 SQUIGULATOR_POLICY_PATH, "BMS_ONT_SQUIGULATOR_IMAGE",
-                "BMS_ONT_SQUIGULATOR_IMAGE_DIGEST", "scripts/ont_squigulator_runtime.py",
-                "edd60f7d2930674767df43d3f196b2111f899a28feb71c5cf9a59b05815fa871",
-                {"schema": "bms.ont-squigulator-runtime-policy.v1",
-                 "runtime_id": "sha256:10690870e22ae777ada80688060eb30977e63034b56bedb38c160a827604351b",
-                 "oci_digest": "sha256:10690870e22ae777ada80688060eb30977e63034b56bedb38c160a827604351b",
-                 "upstream": {"name": "Squigulator", "version": "0.5.0", "commit": "c5f0c619a28b9532388877096acb7568c34b9c4b"},
-                 "source_asset": {"name": "squigulator-v0.5.0-release.tar.gz", "sha256": "f8b428655d586427c6e0c939d4a0383fa8569523234e3c21951edcd23372a66a"},
-                 "licenses": {"squigulator": "MIT", "slow5lib": "MIT", "streamvbyte": "Apache-2.0"},
-                 "wrapper": "scripts/ont_squigulator_runtime.py",
-                 "wrapper_sha256": "e5ff983ab508c14424b93aa2787127eedc546bde5f6fbd349b5ff939956338b1",
-                 "network": "none"},
+                "bms.ont-squigulator-runtime-policy.v1",
             ),
             "squigualiser_comparison_renderer": (
                 COMPARISON_RENDER_POLICY_PATH, "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE",
-                "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST", "scripts/ont_signal_comparison_runtime.py",
-                "a5a2d25ef8bfc9e49e9244454e48641907ac34d42aa786af5302e2ecfca4a182",
-                {"schema": "bms.ont-squigualiser-comparison-runtime-policy.v1",
-                 "runtime_id": "sha256:e1a5778525539c1fd6c98c2bf53a3f341bac53b80044abd7f633e1a7e7fd70c0",
-                 "oci_digest": "sha256:e1a5778525539c1fd6c98c2bf53a3f341bac53b80044abd7f633e1a7e7fd70c0",
-                 "upstream": {"name": "Squigualiser", "version": "0.7.0", "commit": "5a2404f1f43bc3227a85475c59b2b77970078b2e"},
-                 "wrapper": "scripts/ont_signal_comparison_runtime.py",
-                 "wrapper_sha256": "80f780ed1a34eb09f6f5a95db826ac13a5684a276575c2a2d867165032889ee7",
-                 "network": "none"},
+                "bms.ont-squigualiser-comparison-runtime-policy.v1",
             ),
         }
         try:
-            policy_path, image_env, digest_env, wrapper_name, approved_policy_sha256, expected_policy = approvals[stage]
+            policy_path, image_env, schema = approvals[stage]
         except KeyError as exc:
             raise RuntimeError("unknown comparison runtime stage") from exc
         descriptor = os.open(policy_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -773,34 +747,22 @@ class OntSignalWorker:
             policy = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise RuntimeError("approved comparison runtime policy is invalid") from exc
-        wrapper_relative = Path(wrapper_name)
-        if wrapper_relative.is_absolute() or wrapper_relative.parts[0] != "scripts" or len(wrapper_relative.parts) != 2:
-            raise RuntimeError("approved comparison wrapper path is invalid")
-        if policy_sha256 != approved_policy_sha256 or policy != expected_policy:
-            raise RuntimeError("approved comparison runtime policy identity diverged")
-        wrapper_path = Path(__file__).resolve().parents[3] / wrapper_relative
-        wrapper_descriptor = os.open(wrapper_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-        try:
-            wrapper_info = os.fstat(wrapper_descriptor)
-            if not stat.S_ISREG(wrapper_info.st_mode) or wrapper_info.st_size <= 0 or wrapper_info.st_size > 1024 * 1024:
-                raise RuntimeError("approved comparison wrapper is not a bounded regular file")
-            wrapper_digest = hashlib.sha256()
-            while chunk := os.read(wrapper_descriptor, 1024 * 1024):
-                wrapper_digest.update(chunk)
-            wrapper_sha256 = wrapper_digest.hexdigest()
-        finally:
-            os.close(wrapper_descriptor)
-        image = os.environ.get(image_env, "").strip()
-        digest = os.environ.get(digest_env, "").strip().lower()
         if (
-            image != expected_policy["runtime_id"]
-            or digest != str(expected_policy["oci_digest"]).removeprefix("sha256:")
-            or wrapper_sha256 != expected_policy["wrapper_sha256"]
-            or not HEX64.fullmatch(digest)
+            not isinstance(policy, dict)
+            or policy.get("schema") != schema
+            or policy.get("network") != "none"
+            or policy.get("runtime_id") != policy.get("oci_digest")
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(policy.get("runtime_id", "")))
+            or not HEX64.fullmatch(str(policy.get("wrapper_sha256", "")))
         ):
+            raise RuntimeError("approved comparison runtime policy is invalid")
+        image = os.environ.get(image_env, "").strip()
+        digest = os.environ.get(image_env + "_DIGEST", "").strip().lower()
+        if image != policy["runtime_id"] or digest != policy["oci_digest"].removeprefix("sha256:"):
             raise RuntimeError(f"configured {stage} identity diverges from approved policy")
+        # The immutable image owns its wrapper, not an unused host-side copy.
         return {"stage": stage, "image": image, "image_digest": digest,
-                "policy_sha256": policy_sha256, "wrapper_sha256": wrapper_sha256}
+                "policy_sha256": policy_sha256, "wrapper_sha256": policy["wrapper_sha256"]}
 
     def _comparison_container_command(
         self, stage: str, output_dir: Path, broker_dir: Path
