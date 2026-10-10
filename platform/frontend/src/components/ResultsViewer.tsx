@@ -1,4 +1,4 @@
-import type { NativeScalarQuery } from '../lib/scientificAnalytics';
+import type { NativeResults, NativeScalarQuery } from '../lib/scientificAnalytics';
 import { MSA_POLICY } from '../lib/msaPolicy';
 import { canonicalScalars, scalarCell, scalarEvidence, NativeScalarControls, usePredictionScalars } from './predictionScalarEvidence';
 import { lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -1031,6 +1031,7 @@ type RfReviewSet = 'filtered' | 'raw';
 type ReviewSourceSelectorValue = '' | 'live:filtered' | 'live:raw' | `saved:${string}`;
 type SavedReviewFilterState = {
     native?: NativeScalarQuery | null;
+    native_snapshot?: Pick<NativeResults, 'count_exact' | 'unread_ids' | 'unresolved_ids' | 'read_identity' | 'population_count' | 'evaluated_count' | 'matching_count' | 'scope'> & {partial: boolean; retry_filters: DesignFilters};
     rf_review_set?: RfReviewSet | null;
     output_source_filter?: OutputSourceFilter;
     sort_field?: string;
@@ -1926,6 +1927,7 @@ function ResultsViewerContent() {
     const [rfReviewSet, setRfReviewSet] = useState<RfReviewSet | null>(null);
     const [rfMetricScope, setRfMetricScope] = useState<RfScreeningScope>('cdr_loops');
     const [nativeQuery, setNativeQuery] = useState<NativeScalarQuery | null>({});
+    const [nativeRetryFilters, setNativeRetryFilters] = useState<DesignFilters | null>(null);
     const [nativeExportScope, setNativeExportScope] = useState<'matching' | 'selected' | 'population'>('matching');
     const [plddtMin, setPlddtMin] = useState<number>(0);
     const [iptmMin, setIptmMin] = useState<number>(0);
@@ -2462,7 +2464,7 @@ function ResultsViewerContent() {
     const activeRfArtifactGroup = isPostRFantibodyReview && rfReviewSet ? rfReviewSet : undefined;
     const activeSavedSubsetDesignIds = hasExplicitReviewSelection && appliedSavedReviewFilterSet?.design_ids?.length
         ? appliedSavedReviewFilterSet.design_ids
-        : undefined;
+        : appliedSavedReviewFilterSet?.filter_state.native_snapshot ? [] : undefined;
     const activeReviewSourceSelection = useMemo<ReviewSourceSelectorValue>(() => {
         if (!isPostRFantibodyReview) return '';
         if (appliedSavedReviewFilterSet?.id) {
@@ -2516,8 +2518,10 @@ function ResultsViewerContent() {
         rfd_rog_max: rfdRogMaxValue,
         artifact_group: activeRfArtifactGroup,
         include_summary: true,
-    }), [nativeResults, nativeQuery, scopedModelId, selectedJobId, isReviewStageJob, filterText, pageSize, currentPage, apiSortField, sortDir, selectedBackboneId, plddtMin, iptmMin, ipsaeMin, contactsMin, targetContactsMin, epitopeMaxDistValue, targetMaxDistValue, binderSizeMinValue, binderSizeMaxValue, cdrH1MinValue, cdrH1MaxValue, cdrH2MinValue, cdrH2MaxValue, cdrH3MinValue, cdrH3MaxValue, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue, activeRfArtifactGroup, activeSavedSubsetDesignIds, activeJob?.design_count, activeJobHasDesignBearingChildren, backboneFilterApplies, forceBulkLoadForSorting]);
-    useEffect(() => { setSelectedDesignId(''); setCurrentPage(1); setNativeQuery({}); }, [selectedJobId, resultSurface]);
+        ...(nativeResults && nativeRetryFilters ? {job_id: nativeRetryFilters.job_id, model_id: nativeRetryFilters.model_id,
+            include_children: nativeRetryFilters.include_children, design_ids: nativeRetryFilters.design_ids} : {}),
+    }), [nativeRetryFilters, nativeResults, nativeQuery, scopedModelId, selectedJobId, isReviewStageJob, filterText, pageSize, currentPage, apiSortField, sortDir, selectedBackboneId, plddtMin, iptmMin, ipsaeMin, contactsMin, targetContactsMin, epitopeMaxDistValue, targetMaxDistValue, binderSizeMinValue, binderSizeMaxValue, cdrH1MinValue, cdrH1MaxValue, cdrH2MinValue, cdrH2MaxValue, cdrH3MinValue, cdrH3MaxValue, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue, activeRfArtifactGroup, activeSavedSubsetDesignIds, activeJob?.design_count, activeJobHasDesignBearingChildren, backboneFilterApplies, forceBulkLoadForSorting]);
+    useEffect(() => { setSelectedDesignId(''); setCurrentPage(1); setNativeQuery({}); setNativeRetryFilters(null); }, [selectedJobId, resultSurface]);
     const bulkSelectionFilters = useMemo<DesignFilters>(() => ({
         ...designQueryFilters,
         limit: MAX_BULK_SELECTION_DESIGNS,
@@ -3139,7 +3143,6 @@ function ResultsViewerContent() {
         }));
     }, [antibodyData?.overlay_selections]);
 
-    const analyticsChartDesigns = designs;
     const preferredAnalysisLens = useMemo<AnalysisLens | 'auto'>(() => {
         if (isAnalysisLensOutputSource(outputSourceFilter) && designs.some((design) => getAuthoritativeDesignLens(design) === outputSourceFilter)) {
             return outputSourceFilter;
@@ -3193,7 +3196,15 @@ function ResultsViewerContent() {
     const predictionModelId = String(selectedDesign?.provenance?.producer_model_id ?? activeJob?.model_id ?? '');
     const tableHasNativeConfidence = ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) || tableDesigns.some(canonicalScalars);
     const legacyTableScalars = usePredictionScalars(tableDesigns, activeTab === 'table' && !nativeResults);
+    // Inspection uses the selected detail document; table cells stay page-bound.
+    const inspectionDesigns = useMemo(() => {
+        if (!selectedDesign) return tableDesigns;
+        return tableDesigns.some(design => design.id === selectedDesign.id)
+            ? tableDesigns.map(design => design.id === selectedDesign.id ? selectedDesign : design)
+            : [selectedDesign, ...tableDesigns];
+    }, [selectedDesign, tableDesigns]);
     const nativeEnvelope = displayedDesignsData?.data.scientific;
+    const nativeMatchingIds = useMemo(() => new Set(nativeEnvelope?.ids ?? []), [nativeEnvelope?.ids]);
     useEffect(() => {
         if (!nativeEnvelope || showingPreviousPage) return;
         const prior = priorNativeRead.current;
@@ -4606,13 +4617,15 @@ function ResultsViewerContent() {
     }, [appliedSavedReviewFilterSet, currentSavedFilterState]);
 
     const applySavedReviewFilterSet = (filterSet: SavedReviewFilterSet) => {
+        setNativeRetryFilters(null);
         const nextState = filterSet.filter_state || {};
         setNativeQuery(nextState.native ?? null);
         const nextSortField = typeof nextState.sort_field === 'string' && nextState.sort_field.trim()
             ? nextState.sort_field
             : 'name';
         const nextSortDir = nextState.sort_dir === 'desc' ? 'desc' : 'asc';
-        const nextRfReviewSet = nextState.rf_review_set === 'raw' ? 'raw' : 'filtered';
+        const nextRfReviewSet = nextState.rf_review_set === 'raw' ? 'raw'
+            : nextState.native != null && nextState.rf_review_set == null ? null : 'filtered';
         const nextOutputSourceFilter = ((typeof nextState.output_source_filter === 'string' && isScopedOutputSourceFilter(nextState.output_source_filter))
             || nextState.output_source_filter === 'all')
             ? nextState.output_source_filter
@@ -4936,12 +4949,17 @@ function ResultsViewerContent() {
             }
             if (nativeResults) {
                 const response = await fetchDesigns({...bulkSelectionFilters, native_output: 'ids'});
-                const ids = response.data.scientific?.ids;
-                if (!ids?.length) throw new Error('No matching identities received.');
+                const scientific = response.data.scientific!;
+                const ids = scientific.ids;
+                if (!ids) throw new Error('No matching identities received.');
+                const {count_exact, unread_ids, unresolved_ids, read_identity, population_count, evaluated_count, matching_count, scope} = scientific;
+                const native_snapshot = {count_exact, unread_ids, unresolved_ids, read_identity, population_count, evaluated_count, matching_count, scope,
+                    partial: !count_exact || unread_ids.length > 0 || unresolved_ids.length > 0,
+                    retry_filters: {...bulkSelectionFilters, limit: undefined, offset: undefined, native_output: undefined}};
                 return saveReviewFilterSet(selectedJobId, {
                     name: savedFilterSetName.trim() || undefined, visible_count: ids.length,
-                    source_total_count: ids.length, design_ids: ids,
-                    filter_state: currentSavedFilterState as Record<string, unknown>,
+                    source_total_count: scientific.population_count, design_ids: ids,
+                    filter_state: {...currentSavedFilterState, native_snapshot} as Record<string, unknown>,
                 });
             }
             const response = await fetchDesigns(bulkSelectionFilters);
@@ -4966,8 +4984,11 @@ function ResultsViewerContent() {
             const nextFilterSets = coerceSavedReviewFilterSets(response.data.filter_sets);
             setSavedReviewFilterSetsOverride(nextFilterSets);
             setSavedFilterSetName('');
-            setAppliedSavedFilterSetId(response.data.filter_set.id);
-            setIterationMessage({ kind: 'success', text: response.data.message });
+            const snapshot = (response.data.filter_set.filter_state as SavedReviewFilterState).native_snapshot;
+            if (!snapshot?.partial) {setNativeRetryFilters(null); setAppliedSavedFilterSetId(response.data.filter_set.id);}
+            setIterationMessage({ kind: 'success', text: snapshot?.partial
+                ? `Saved partial snapshot: only ${response.data.filter_set.design_ids?.length ?? 0} received identities. Original scope remains active; Refresh scalar read retries it. Reopen the saved dataset explicitly to view its subset.`
+                : response.data.message });
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             queryClient.invalidateQueries({ queryKey: ['jobs', 'include_children'] });
         },
@@ -6693,7 +6714,7 @@ function ResultsViewerContent() {
                                     ) : (
                                         <>
                                     {/* OVERVIEW TAB */}
-                                    {activeTab === 'overview' && ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) && <div className="p-4"><StructurePredictionResults summaryOnly modelId={predictionModelId} designs={selectedDesign && !tableDesigns.some(d => d.id === selectedDesign.id) ? [selectedDesign, ...tableDesigns] : tableDesigns} selectedDesignId={selectedDesignId} onSelectDesign={selectDesign} /></div>}
+                                    {activeTab === 'overview' && ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) && <div className="p-4"><StructurePredictionResults summaryOnly modelId={predictionModelId} designs={inspectionDesigns} selectedDesignId={selectedDesignId} onSelectDesign={selectDesign} /></div>}
                                     {activeTab === 'overview' && !['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) && overviewStats && (
                                         <div className="p-6 space-y-6">
                                             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
@@ -7167,14 +7188,14 @@ function ResultsViewerContent() {
                                                 modelId={predictionModelId}
                                                 fullPaeRequested={typeof activeJob?.params?.write_full_pae === 'boolean' ? activeJob.params.write_full_pae : undefined}
                                                 enabled={['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId)}
-                                                designs={selectedDesign && !tableDesigns.some(d => d.id === selectedDesign.id) ? [selectedDesign, ...tableDesigns] : tableDesigns} selectedDesignId={selectedDesignId} onSelectDesign={selectDesign}
+                                                designs={inspectionDesigns} selectedDesignId={selectedDesignId} onSelectDesign={selectDesign}
                                                 structure={(selection, onSelection, companion) => <StructureViewerPane
                                                 confidenceCharts={companion}
                                                 confidenceSelection={selection} onConfidenceSelection={onSelection}
                                                 confidenceCompanion={['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId)}
                                                 selectedDesignId={selectedDesignId}
                                                 setSelectedDesignId={selectDesign}
-                                                designs={selectedDesign && !tableDesigns.some(design => design.id === selectedDesign.id) ? [selectedDesign, ...tableDesigns] : tableDesigns}
+                                                designs={inspectionDesigns}
                                                 selectedDesign={selectedDesign}
                                                 colorMode={colorMode}
                                                 setColorMode={setColorMode}
@@ -7970,16 +7991,27 @@ function ResultsViewerContent() {
                                             {/* Quality Filters */}
                                             <div className="mb-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
                                                 {nativeResults && <>
+                                                    {iterationMessage && <p role="status">{iterationMessage.text}</p>}
                                                     {designsError && <p role="status">Scalar read failed; any displayed rows are the previous successfully loaded page, not the requested page. Selected IDs and independent Structure/Charts remain available. Refresh to retry.</p>}
                                                     {showingPreviousPage && <p role="status">Loading requested page; showing the previous page meanwhile.</p>}
                                                     {nativeReadChanged && <p role="status">Population or scalar evidence changed since the preceding read. These pages are not a snapshot; refresh or export in one read.</p>}
+                                                    {nativeRetryFilters && <p role="status">Retrying the original live scope, not the saved subset.</p>}
+                                                    {appliedSavedReviewFilterSet?.filter_state.native_snapshot?.partial && <p role="status">
+                                                        Partial snapshot: only received identities are shown; {appliedSavedReviewFilterSet.filter_state.native_snapshot.unread_ids.length} unread and {appliedSavedReviewFilterSet.filter_state.native_snapshot.unresolved_ids.length} unresolved identities at save. Read identity: {appliedSavedReviewFilterSet.filter_state.native_snapshot.read_identity}.
+                                                        <button onClick={() => {
+                                                            const snapshot = appliedSavedReviewFilterSet.filter_state.native_snapshot!;
+                                                            setNativeRetryFilters(snapshot.retry_filters); setNativeQuery(snapshot.retry_filters.native ?? {});
+                                                            setAppliedSavedFilterSetId(null); setCurrentPage(1);
+                                                            queryClient.invalidateQueries({queryKey: ['designs']});
+                                                        }}>Retry original live scope</button>
+                                                    </p>}
                                                     <NativeScalarControls query={nativeQuery!} result={nativeEnvelope} jobLabel={id => jobsById.get(id)?.name} onChange={query => {setNativeQuery(query); setCurrentPage(1);}} />
                                                     <div className="mt-2 flex flex-wrap gap-2 text-xs">
                                                         <button onClick={selectVisibleDesigns}>Select visible</button>
                                                         <button onClick={selectAllFilteredDesigns}>Select all matching</button>
                                                         <input aria-label="Native Top N" className="w-16 bg-slate-900" value={topSelectionCount} onChange={e => setTopSelectionCount(e.target.value)} />
                                                         <button onClick={selectTopRankedDesigns}>Top N in chosen cohort</button>
-                                                        <span>{selectedDesignIds.length} selected · {selectedDesignIds.filter(id => !nativeEnvelope?.ids?.includes(id)).length} outside current matches</span>
+                                                        <span>{selectedDesignIds.length} selected · {selectedDesignIds.filter(id => !nativeMatchingIds.has(id)).length} outside current matches</span>
                                                         <select aria-label="Scalar export scope" className="bg-slate-900" value={nativeExportScope} onChange={e => setNativeExportScope(e.target.value as typeof nativeExportScope)}>
                                                             <option value="matching">Matching scalar rows</option><option value="selected">Explicit selection (including off-page)</option><option value="population">All in job/model population</option>
                                                         </select>
@@ -7990,10 +8022,10 @@ function ResultsViewerContent() {
                                                         <button onClick={() => saveFilterSetMutation.mutate()}>Save matching dataset</button>
                                                         <select aria-label="Saved native dataset" className="bg-slate-900" value={appliedSavedFilterSetId ?? ''} onChange={e => {
                                                             const saved = savedReviewFilterSets.find(item => item.id === e.target.value);
-                                                            if (saved) applySavedReviewFilterSet(saved); else {setAppliedSavedFilterSetId(null); setCurrentPage(1);}
+                                                            if (saved) applySavedReviewFilterSet(saved); else {setAppliedSavedFilterSetId(null); setNativeRetryFilters(null); setCurrentPage(1);}
                                                         }}>
                                                             <option value="">Live population</option>
-                                                            {savedReviewFilterSets.map(saved => <option key={saved.id} value={saved.id}>{saved.name}{saved.filter_state.native == null ? ' (legacy filters)' : ''}</option>)}
+                                                            {savedReviewFilterSets.map(saved => <option key={saved.id} value={saved.id}>{saved.name}{saved.filter_state.native_snapshot?.partial ? ' (partial snapshot)' : ''}{saved.filter_state.native == null ? ' (legacy filters)' : ''}</option>)}
                                                         </select>
                                                     </div>
                                                 </>}
@@ -8870,7 +8902,7 @@ function ResultsViewerContent() {
                                     {/* CHARTS TAB - Full Analytics Dashboard */}
                                     {activeTab === 'charts' && (
                                         <AnalyticsDashboard
-                                            designs={selectedDesign && !analyticsChartDesigns.some(d => d.id === selectedDesign.id) ? [selectedDesign, ...analyticsChartDesigns] : analyticsChartDesigns}
+                                            designs={inspectionDesigns}
                                             fullPaeRequested={typeof activeJob?.params?.write_full_pae === 'boolean' ? activeJob.params.write_full_pae : undefined}
                                             modelId={predictionModelId}
                                             selectedDesignId={selectedDesignId}
@@ -8878,7 +8910,7 @@ function ResultsViewerContent() {
                                             structure={(selection, onSelection) => selectedDesignSupportsStructureViewer && !exactArtifactId ? <StructureViewerPane confidenceCompanion
                                                 confidenceSelection={selection} onConfidenceSelection={onSelection}
                                                 selectedDesignId={selectedDesignId} setSelectedDesignId={selectDesign}
-                                                designs={analyticsChartDesigns} selectedDesign={selectedDesign}
+                                                designs={inspectionDesigns} selectedDesign={selectedDesign}
                                                 colorMode={colorMode} setColorMode={setColorMode} structureFormat={structureFormat}
                                                 viewerAnalyses={structureViewerAnalyses} activeJob={activeJob} getMetricColor={getMetricColor}
                                             /> : <p>Structure document unavailable for this selection.</p>}

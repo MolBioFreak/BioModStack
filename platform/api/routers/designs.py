@@ -2473,16 +2473,19 @@ async def _native_design_list(query, native, output, limit, offset, model_counts
             return JSONResponse(payload, headers={'Content-Disposition': f'attachment; filename="{filename}.json"'})
         stream = io.StringIO(newline='')
         writer = csv.writer(stream)
-        writer.writerow(['read_identity', 'count_exact', 'query_scope', 'design_id', 'name', 'job_id', 'cohort_key', 'metric', 'raw_value', 'unit', 'scope',
+        writer.writerow(['record_type', 'read_identity', 'count_exact', 'query_scope', 'design_id', 'name', 'job_id', 'cohort_key', 'metric', 'raw_value', 'unit', 'scope',
                          'state', 'reason', 'artifact_sha256', 'candidate_id', 'document_id'])
+        writer.writerow(['metadata', identity, not unread_ids,
+                         json.dumps({'scope': scope, 'native': native.model_dump()}, sort_keys=True),
+                         *([''] * 13)])
         for point in payload['points']:
             if not point['metric_states']:
-                writer.writerow([identity, not unread_ids, json.dumps({'scope': scope, 'native': native.model_dump()}, sort_keys=True),
+                writer.writerow(['value', identity, not unread_ids, '',
                     point['id'], point['name'], point['source_job_id'], point['cohort_key'], '', '', '', '',
                     'unavailable', (point['publication_state'] or {}).get('reason_code', 'no_native_metrics'), '', '', ''])
             for metric, state in point['metric_states'].items():
                 descriptor, source = point['metric_descriptors'][metric], point['metric_sources'][metric] or {}
-                writer.writerow([identity, not unread_ids, json.dumps({'scope': scope, 'native': native.model_dump()}, sort_keys=True), point['id'], point['name'], point['source_job_id'], point['cohort_key'], metric,
+                writer.writerow(['value', identity, not unread_ids, '', point['id'], point['name'], point['source_job_id'], point['cohort_key'], metric,
                     state['value'], descriptor['unit'], descriptor['scope'], state['state'], state['reason_code'],
                     source.get('artifact_sha256'), source.get('candidate_id'), source.get('document_id')])
         return Response(stream.getvalue(), media_type='text/csv',

@@ -252,7 +252,7 @@ def _canonical_fingerprint(run: dict[str, Any], resource: str, archive_sha256: s
     return hashlib.sha256(payload).hexdigest()
 
 
-def retained_scalar_records(design, job, *, scalar_read=None):
+def retained_scalar_records(design, job, *, scalar_read=None, manifest_indexes=None):
     """Read exact imported sample values without claiming local Boltz production."""
     from paths import get_data_root, resolve_runtime_data_path
     from services.boltz_scientific_persistence import _snapshot
@@ -271,11 +271,24 @@ def retained_scalar_records(design, job, *, scalar_read=None):
     if (manifest['provider']['id'] != PROVIDER_ID
             or manifest['source']['source_fingerprint'] != provenance.get('source_fingerprint')):
         raise ValueError('foreign import manifest')
-    matches = [s for s in manifest['samples'] if s['sample_id'] == provenance.get('sample_id')]
+    # Lists retain ambiguity per identity, including duplicate structure declarations.
+    key = str(root)
+    if manifest_indexes is None:
+        manifest_indexes = {}
+    if key not in manifest_indexes:
+        samples, structures = {}, {}
+        for row in manifest['samples']:
+            samples.setdefault(row['sample_id'], []).append(row)
+        for row in manifest['artifacts']:
+            if row['kind'] == 'structure':
+                structures.setdefault(row['sample_id'], []).append(row)
+        manifest_indexes[key] = samples, structures
+    samples, structures = manifest_indexes[key]
+    matches = samples.get(provenance.get('sample_id'), [])
     if len(matches) != 1:
         raise ValueError('ambiguous imported sample')
     sample = matches[0]
-    declared = [a for a in manifest['artifacts'] if a['kind'] == 'structure' and a['sample_id'] == sample['sample_id']]
+    declared = structures.get(sample['sample_id'], [])
     if len(declared) != 1 or declared[0]['path'] != sample['structure_path']:
         raise ValueError('imported sample document binding mismatch')
     structure = dict(path=str(root / sample['structure_path']), sha256=declared[0]['sha256'])

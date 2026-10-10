@@ -154,12 +154,12 @@ def native_scalar_owner(job):
         or ((job.provenance or {}).get('external_import') or {}).get('provider') == 'boltz_api')
 
 
-def retained_scalar_projection(design, job, *, scalar_read=None):
+def retained_scalar_projection(design, job, *, scalar_read=None, manifest_indexes=None):
     from services.boltz_scientific_consumer import retained_cp_snapshot, scalar_records
     external = ((job.provenance or {}).get('external_import') or {}).get('provider') == 'boltz_api'
     if external:
         from services.external_imports.boltz_api import retained_scalar_records
-        records = retained_scalar_records(design, job, scalar_read=scalar_read)
+        records = retained_scalar_records(design, job, scalar_read=scalar_read, manifest_indexes=manifest_indexes)
         return projection(design, records=records, source_kind='external_provider_artifact')
     if scalar_read is not None:
         from services.boltz_scientific_consumer import retained_cp_paths
@@ -241,7 +241,7 @@ async def bulk_scalar_projections(designs, owners, session):
     from paths import get_data_root, resolve_runtime_data_path
 
     def collect():
-        cache, result = {}, {}
+        cache, result, manifest_indexes = {}, {}, {}
         def scalar_read(root, key):
             identity = ('retained', str(root), key)
             if identity not in cache:
@@ -293,7 +293,7 @@ async def bulk_scalar_projections(designs, owners, session):
                 continue
             try:
                 if revision_for_job(job) != 1:
-                    result[design.id] = retained_scalar_projection(design, job, scalar_read=scalar_read)
+                    result[design.id] = retained_scalar_projection(design, job, scalar_read=scalar_read, manifest_indexes=manifest_indexes)
                     continue
                 if job.model_id in ('boltz', 'boltz2'):
                     from services.boltz_scientific_consumer import scalar_records_from_publication
