@@ -929,6 +929,28 @@ a:hover {
   border-color: var(--border-primary) !important;
 }
 
+/* Complete the shared Mol* chrome palette; never recolor molecular encodings. */
+[data-bms-molstar-adapter] .msp-plugin :is(.msp-section-header, .msp-log li, .msp-log-entry, .msp-log-timestamp) {
+  background-color: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+}
+[data-bms-molstar-adapter] .msp-plugin .msp-section-header .msp-icon {
+  color: inherit;
+}
+/* Native log timestamps reserve 110px, leaving only fragments in the narrow
+   reactive region. Let complete messages wrap below their timestamps instead. */
+[data-bms-molstar-adapter] .msp-plugin .msp-log li {
+  display: flex;
+  flex-wrap: wrap;
+}
+[data-bms-molstar-adapter] .msp-plugin .msp-log-entry {
+  flex: 1 1 14rem;
+  min-width: 0;
+  margin-left: 0 !important;
+  padding-left: 8px !important;
+  overflow-wrap: anywhere;
+}
+
 /* ============================================
    PLOTLY CHART THEMING
    Override Plotly's inline SVG styles where possible

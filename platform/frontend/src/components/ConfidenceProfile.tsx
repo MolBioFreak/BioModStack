@@ -83,13 +83,17 @@ export function ConfidenceProfile({ chainMetrics, onInspect, height = 270 }: Con
     const categoryTicks = profile.categories.filter((_, index, all) =>
         index % Math.max(1, Math.ceil(all.length / tickCount)) === 0,
     );
+    const legendColumns = Math.max(1, Math.floor(((width ?? 600) - 64) / 125));
+    const legendRows = Math.min(6, Math.ceil(profile.data.length / legendColumns));
+    const legendHeight = Math.max(28, legendRows * 24);
+    const plotHeight = height + Math.max(0, legendHeight - 44);
     const layout: Partial<Layout> = {
         autosize: true,
         width,
-        height,
+        height: plotHeight,
         paper_bgcolor: 'transparent',
         plot_bgcolor: colors.bgSecondary,
-        font: { color: colors.textPrimary, size: 11 },
+        font: { color: colors.textPrimary, size: 12 },
         xaxis: {
             type: profile.categorical ? 'category' : 'linear',
             title: { text: profile.positional ? 'Profile position' : 'Residue number', standoff: 8 },
@@ -121,18 +125,20 @@ export function ConfidenceProfile({ chainMetrics, onInspect, height = 270 }: Con
             ticklen: 5,
             tickcolor: colors.borderPrimary,
         },
-        margin: { l: 48, r: 16, t: profile.data.length > 2 ? 72 : 48, b: 48 },
-        // Keep legend above the plot, away from the residue axis. A bounded,
-        // scrollable legend prevents large complexes from consuming the plot.
+        margin: { l: 48, r: 16, t: legendHeight + 40, b: 48 },
+        // Reserve separate toolbar and wrapped-legend space without shrinking
+        // the scientific plot. Bound only unusually large complexes.
         showlegend: true,
         legend: {
             orientation: 'h',
+            entrywidth: 80,
+            entrywidthmode: 'pixels',
             x: 0,
             xanchor: 'left',
             y: 1.04,
             yanchor: 'bottom',
-            maxheight: 44,
-            font: { size: 11, color: colors.textPrimary },
+            maxheight: legendHeight,
+            font: { size: 12, color: colors.textPrimary },
             bgcolor: colors.bgSecondary,
             itemclick: 'toggle',
             itemdoubleclick: 'toggleothers',
@@ -158,7 +164,7 @@ export function ConfidenceProfile({ chainMetrics, onInspect, height = 270 }: Con
             }}
             config={DEFAULT_PLOT_CONFIG}
             useResizeHandler
-            style={{ width: '100%', height }}
+            style={{ width: '100%', height: plotHeight }}
         />
     </div>;
 }
