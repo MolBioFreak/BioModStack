@@ -4,7 +4,7 @@ import { canonicalScalars, scalarCell, scalarEvidence, NativeScalarControls, use
 import { lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { MaturationEvidence } from './MaturationEvidence';
 import { parseScientificPae } from '../lib/scientificViewerIdentity';
-import { useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
+import { hashKey, useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 
 import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, exportNativeResults, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview, fetchChainPairIptm } from '../lib/api';
@@ -1031,7 +1031,7 @@ type RfReviewSet = 'filtered' | 'raw';
 type ReviewSourceSelectorValue = '' | 'live:filtered' | 'live:raw' | `saved:${string}`;
 type SavedReviewFilterState = {
     native?: NativeScalarQuery | null;
-    native_snapshot?: Pick<NativeResults, 'count_exact' | 'unread_ids' | 'unresolved_ids' | 'read_identity' | 'population_count' | 'evaluated_count' | 'matching_count' | 'scope'> & {partial: boolean; retry_filters: DesignFilters};
+    native_snapshot?: Pick<NativeResults, 'count_exact' | 'unread_ids' | 'unresolved_ids' | 'read_identity' | 'population_count' | 'evaluated_count' | 'matching_count' | 'scope'> & {partial: boolean; transport_error?: string; retry_filters: DesignFilters};
     rf_review_set?: RfReviewSet | null;
     output_source_filter?: OutputSourceFilter;
     sort_field?: string;
@@ -2528,20 +2528,22 @@ function ResultsViewerContent() {
         offset: 0,
     }), [designQueryFilters]);
 
-    const nativeReadScope = JSON.stringify({...designQueryFilters, limit: undefined, offset: undefined});
+    const nativeReadScope = hashKey([{...designQueryFilters, limit: undefined, offset: undefined}]);
     const priorNativeRead = useRef({scope: '', identity: ''});
     const [nativeReadChanged, setNativeReadChanged] = useState(false);
     const {
         data: designsData,
         isPlaceholderData: showingPreviousPage,
         isLoading: designsLoading,
-        isError: designsError,
+        isError: designsQueryFailed,
+        isPaused: designsPaused,
+        failureReason: designsFailureReason,
         error: designsQueryError,
         refetch: refetchDesigns,
     } = useQuery({
         queryKey: ['designs', designQueryFilters],
         queryFn: () => fetchDesigns(designQueryFilters),
-        placeholderData: (previous, previousQuery) => nativeResults && JSON.stringify({...previousQuery?.queryKey[1] as DesignFilters, limit: undefined, offset: undefined}) === nativeReadScope ? previous : undefined,
+        placeholderData: (previous, previousQuery) => nativeResults && hashKey([{...previousQuery?.queryKey[1] as DesignFilters, limit: undefined, offset: undefined}]) === nativeReadScope ? previous : undefined,
         enabled: !!activeJob
             && !isShapeResultJob(activeJob)
             && activeJob.model_id !== 'molecular_dynamics'
@@ -2549,10 +2551,12 @@ function ResultsViewerContent() {
             && !isRFD3LocalRedesignResultJob(activeJob)
             && !reviewSelectionRequired,
     });
+    // A failed retry can be paused while hidden/offline. It is not still loading.
+    const designsError = designsQueryFailed || (nativeResults && designsPaused && designsFailureReason !== null);
     // Reuse React Query's last successful page for this exact scope on a page
     // transport failure. It is visibly stale, never a replacement successful read.
     const retainedNativePage = nativeResults && designsError ? queryClient.getQueryCache().findAll({queryKey: ['designs']})
-        .filter(query => query.state.data && JSON.stringify({...query.queryKey[1] as DesignFilters, limit: undefined, offset: undefined}) === nativeReadScope)
+        .filter(query => query.state.data && hashKey([{...query.queryKey[1] as DesignFilters, limit: undefined, offset: undefined}]) === nativeReadScope)
         .sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt)[0]?.state.data as typeof designsData : undefined;
     const displayedDesignsData = designsData ?? retainedNativePage;
     const rawDesigns = useMemo(
@@ -4948,13 +4952,17 @@ function ResultsViewerContent() {
                 throw new Error('Select a live RF review set or saved dataset before saving a dataset.');
             }
             if (nativeResults) {
-                const response = await fetchDesigns({...bulkSelectionFilters, native_output: 'ids'});
-                const scientific = response.data.scientific!;
-                const ids = scientific.ids;
+                // Save the received page on a transport failure, not a fresh successful
+                // IDs-only read that would conceal the failed page's coverage.
+                const scientific = designsError ? nativeEnvelope
+                    : (await fetchDesigns({...bulkSelectionFilters, native_output: 'ids'})).data.scientific;
+                if (!scientific) throw new Error('No scalar read received to save.');
+                const ids = designsError ? designs.map(design => design.id) : scientific.ids;
                 if (!ids) throw new Error('No matching identities received.');
                 const {count_exact, unread_ids, unresolved_ids, read_identity, population_count, evaluated_count, matching_count, scope} = scientific;
                 const native_snapshot = {count_exact, unread_ids, unresolved_ids, read_identity, population_count, evaluated_count, matching_count, scope,
-                    partial: !count_exact || unread_ids.length > 0 || unresolved_ids.length > 0,
+                    partial: designsError || !count_exact || unread_ids.length > 0 || unresolved_ids.length > 0,
+                    ...(designsError ? {transport_error: getErrorMessage(designsQueryError ?? designsFailureReason)} : {}),
                     retry_filters: {...bulkSelectionFilters, limit: undefined, offset: undefined, native_output: undefined}};
                 return saveReviewFilterSet(selectedJobId, {
                     name: savedFilterSetName.trim() || undefined, visible_count: ids.length,
@@ -5375,7 +5383,10 @@ function ResultsViewerContent() {
         />}
     </>;
 
+    // Keep the query/selection owner mounted while a lazy workspace loads.
+    // Suspending above this owner reconnects its scope-reset effects on reveal.
     return (
+        <Suspense fallback={<p role="status">Loading Results workspace…</p>}>
         <div className="min-h-screen bg-slate-950 text-slate-200">
             {/* Background */}
             <div className="fixed inset-0 pointer-events-none">
@@ -7993,11 +8004,12 @@ function ResultsViewerContent() {
                                                 {nativeResults && <>
                                                     {iterationMessage && <p role="status">{iterationMessage.text}</p>}
                                                     {designsError && <p role="status">Scalar read failed; any displayed rows are the previous successfully loaded page, not the requested page. Selected IDs and independent Structure/Charts remain available. Refresh to retry.</p>}
-                                                    {showingPreviousPage && <p role="status">Loading requested page; showing the previous page meanwhile.</p>}
+                                                    {showingPreviousPage && !designsError && <p role="status">Loading requested page; showing the previous page meanwhile.</p>}
                                                     {nativeReadChanged && <p role="status">Population or scalar evidence changed since the preceding read. These pages are not a snapshot; refresh or export in one read.</p>}
                                                     {nativeRetryFilters && <p role="status">Retrying the original live scope, not the saved subset.</p>}
                                                     {appliedSavedReviewFilterSet?.filter_state.native_snapshot?.partial && <p role="status">
                                                         Partial snapshot: only received identities are shown; {appliedSavedReviewFilterSet.filter_state.native_snapshot.unread_ids.length} unread and {appliedSavedReviewFilterSet.filter_state.native_snapshot.unresolved_ids.length} unresolved identities at save. Read identity: {appliedSavedReviewFilterSet.filter_state.native_snapshot.read_identity}.
+                                                        {appliedSavedReviewFilterSet.filter_state.native_snapshot.transport_error && <> Page transport failed: {appliedSavedReviewFilterSet.filter_state.native_snapshot.transport_error}. The saved subset contains the last received page, not a complete matching read; counts and read identity above belong to that preceding read.</>}
                                                         <button onClick={() => {
                                                             const snapshot = appliedSavedReviewFilterSet.filter_state.native_snapshot!;
                                                             setNativeRetryFilters(snapshot.retry_filters); setNativeQuery(snapshot.retry_filters.native ?? {});
@@ -8930,6 +8942,7 @@ function ResultsViewerContent() {
                 )}
             </div >
         </div >
+        </Suspense>
     );
 }
 
