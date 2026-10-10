@@ -502,7 +502,7 @@ export default function StructureViewerHost({
                             missingness: entry.missingness,
                             // Display only: the registry, palette and export keep native fractions.
                             displayValue: residueLayer.descriptor.id === 'native-plddt' && ['fraction', 'fractional'].includes(residueLayer.descriptor.units ?? '') && typeof entry.value === 'number'
-                                ? `${(entry.value * 100).toFixed(1)}%` : undefined,
+                                ? `${(entry.value * 100).toFixed(1)} / 100` : undefined,
                         }))}
                         selectedKeys={selectedResidueKeys}
                         onSelection={commitSelection}

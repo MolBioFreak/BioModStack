@@ -4,7 +4,7 @@ import Plot from 'react-plotly.js';
 import type { Data } from 'plotly.js';
 import { useThemeColors } from './useThemeColors';
 import './StructurePredictionResults.css';
-import { fetchChainMetrics, fetchDesignResidueMetrics, fetchPAEData, type ChainMetric, type Design } from '../lib/api';
+import { fetchNativeConfidenceArtifacts, fetchChainMetrics, fetchDesignResidueMetrics, fetchPAEData, type ChainMetric, type Design } from '../lib/api';
 import { parseScientificNativeMetric, parseScientificPae, type NativePaeToken } from '../lib/scientificViewerIdentity';
 import { scalarCell, usePredictionScalars, type ScalarEvidence } from './predictionScalarEvidence';
 import type { MetricSelection } from '../structureViewer/metrics/metricContracts';
@@ -152,6 +152,20 @@ function PredictionEvidence({ design, structure, fullPaeRequested, scalars }: { 
     </>;
 }
 
+function NativeArtifactDownloads({ design }: { design: Design }) {
+    const [open, setOpen] = useState(false);
+    const query = useQuery({ queryKey: ['native-confidence-artifacts', design.id],
+        queryFn: () => fetchNativeConfidenceArtifacts(design.id).then(r => r.data), enabled: open, retry: false });
+    return <details onToggle={event => setOpen(event.currentTarget.open)}><summary>Original confidence files</summary>
+        <p className="prediction-caption">Original retained artifacts, not chart exports or newly calculated confidence.</p>
+        {open && (query.isPending ? <p>Loading files…</p> : query.isError ? <p>File inventory could not be read. Structure remains available.</p>
+            : query.data?.status !== 'ok' ? <p>Original confidence file inventory is unavailable for this result.</p>
+            : <ul className="space-y-2">{query.data.artifacts.map(a => <li key={a.role}>{a.download_url
+                ? <a className="underline" href={a.download_url}>{a.role} · {a.filename}</a>
+                : <span>{a.role} · {a.retained ? 'Retained; no download link available' : 'Not retained'}</span>}</li>)}</ul>)}
+    </details>;
+}
+
 function PaeComparison({ design, onSelect, fullPaeRequested }: { design: Design; onSelect: () => void; fullPaeRequested?: boolean }) {
     const query = useQuery({ queryKey: ['prediction-pae', design.id], queryFn: () => fetchPAEData(design.id).then(r => r.data), retry: false, staleTime: 60_000 });
     const native = parseScientificPae(query.data, design.scientific_structure_document, design.id);
@@ -176,9 +190,12 @@ export function StructurePredictionResults({ designs, selectedDesignId, onSelect
     if (!design) return <p>No saved predictions loaded.</p>;
     const select = onSelectDesign ?? setLocalId;
     const labels: Record<string, string> = { protenix: 'Protenix', boltz2: 'Boltz-2', boltz_cp_experimental: 'Boltz-2 via Fold-CP', esmfold2: 'Biohub ESMFold2', esmfold2_experimental: 'Biohub ESMFold2' };
-    const modelLabel = labels[modelId ?? String(design.provenance?.producer_model_id ?? design.provenance?.model_id ?? '')] ?? 'Structure prediction';
+    const external = asRecord(design.provenance?.external_import);
+    const modelLabel = external?.provider === 'boltz_api' ? 'Boltz API' : labels[modelId ?? String(design.provenance?.producer_model_id ?? design.provenance?.model_id ?? '')] ?? 'Structure prediction';
     return <section aria-label="Structure prediction confidence" className="prediction-results space-y-4 text-[var(--text-primary)]">
         <h2 className="text-lg font-semibold">{modelLabel} confidence</h2>
+        {external?.provider === 'boltz_api' && <p className="prediction-caption">Imported provider result · {String(external.sample_id ?? 'saved sample')}. Provider confidence is retained under its own definition.</p>}
+        {design.native_sample && <p className="prediction-caption">Native sample {String(design.native_sample.producer_sample ?? design.name)}{design.native_sample.producer_rank == null ? '' : ` · producer rank ${design.native_sample.producer_rank}`}{design.native_sample.producer_partition ? ` · ${design.native_sample.producer_partition}` : ''}</p>}
         {modelId === 'protenix' && <p className="prediction-caption">Producer sample rank is not generation order. The producer disorder field is a placeholder, not a measured disorder result.</p>}
         <p className="prediction-caption">pLDDT uses the native 0–100 confidence scale, not a probability of correctness. iPTM is an interface-placement score, not a binding grade; monomer values do not establish binding.</p>
         <label className="prediction-selector"><span>Selected prediction</span><select aria-label="Selected prediction" value={design.id} onChange={e => select(e.target.value)}>{designs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label>
@@ -187,6 +204,7 @@ export function StructurePredictionResults({ designs, selectedDesignId, onSelect
             <p className="text-xs">Same 0–30 Å scale for every prediction; each matrix keeps its original order.</p>
             {compare && <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">{designs.map(d => <PaeComparison key={d.id} fullPaeRequested={fullPaeRequested} design={d} onSelect={() => select(d.id)} />)}</div>}
         </details>}
-        <details open><summary>Saved predictions ({designs.length})</summary><p className="text-xs">Saved sample identities, not a new ranking. Missing scores are not zero. pLDDT is not evidence of correct inter-chain placement.</p><div className="overflow-auto"><table className="w-full text-left text-sm"><thead><tr><th>Prediction</th><th>pLDDT (0–100)</th><th>pTM</th><th>iPTM</th></tr></thead><tbody>{designs.map(d => <tr key={d.id} aria-selected={design.id === d.id}><td><button onClick={() => select(d.id)}>{d.name}</button></td>{scalarCell(scalarsFor(d), ['complex_plddt', 'plddt', 'plddt_mean', 'plddt_overall'])}{scalarCell(scalarsFor(d), ['ptm'])}{scalarCell(scalarsFor(d), ['iptm'])}</tr>)}</tbody></table></div></details>
+        <NativeArtifactDownloads key={`artifacts-${design.id}`} design={design} />
+        <details><summary>Saved predictions ({designs.length})</summary><p className="text-xs">Saved sample identities, not a new ranking. Missing scores are not zero. pLDDT is not evidence of correct inter-chain placement.</p><div className="overflow-auto"><table className="w-full text-left text-sm"><thead><tr><th>Prediction</th><th>pLDDT (0–100)</th><th>pTM</th><th>iPTM</th></tr></thead><tbody>{designs.map(d => <tr key={d.id} aria-selected={design.id === d.id}><td><button onClick={() => select(d.id)}>{d.name}</button></td>{scalarCell(scalarsFor(d), ['complex_plddt', 'plddt', 'plddt_mean', 'plddt_overall'])}{scalarCell(scalarsFor(d), ['ptm'])}{scalarCell(scalarsFor(d), ['iptm'])}</tr>)}</tbody></table></div></details>
     </section>;
 }

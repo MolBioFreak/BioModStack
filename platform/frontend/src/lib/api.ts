@@ -314,6 +314,11 @@ export interface ProteinLocalRedesignResultArtifact {
 }
 
 export interface ProteinLocalRedesignResultItem {
+    producer_sample_id?: string;
+    sample_index_semantics?: 'producer_suffix_not_generation_index' | 'producer_sample_id';
+    confidence_status?: 'available' | 'unavailable';
+    confidence_reason?: string | null;
+    metric_interpretations?: Record<string, string>;
     item_id: string;
     design_id: string | null;
     candidate_id: string;
@@ -1015,6 +1020,12 @@ export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const fetchRFD3LocalRedesign = (id: string) => api.get<RFD3LocalRedesignReadModel>(`/api/jobs/${id}/rfd3-local-redesign`);
 export const fetchRFD3Generation = (id: string) => api.get<RFD3GenerationReadModel>(`/api/jobs/${encodeURIComponent(id)}/rfd3-generation`);
 export const fetchProteinLocalRedesignResults = (id: string) => api.get<ProteinLocalRedesignResultSurface>(`/api/jobs/${encodeURIComponent(id)}/workflow-results`);
+export interface NativeConfidenceArtifacts {
+    design_id: string; status: 'ok' | 'unavailable'; reason: string | null;
+    artifacts: Array<{ role: string; filename: string; retained: boolean; scope: string; download_url: string | null; download_reason?: string | null }>;
+}
+export const fetchNativeConfidenceArtifacts = (id: string) => api.get<NativeConfidenceArtifacts>(`/api/designs/${id}/confidence-artifacts`);
+
 export const fetchDesignById = (id: string, jobId?: string) => api.get<Design>(`/api/designs/${id}`, { params: { job_id: jobId } });
 export interface ProteinBaseBundleImportRequest {
     bundle_path: string;
@@ -2303,6 +2314,7 @@ export interface DesignFrustraMPNNProjection {
 }
 
 export interface Design {
+    native_sample?: { producer_method?: string; producer_sample?: string; producer_rank?: number; producer_output_key?: string; producer_partition?: string; [key: string]: UntypedApiValue } | null;
     core_protein_scientific_contract?: 1 | null;
     scientific_structure_document?: import('../structureViewer/contracts/structureIdentity').StructureDocumentRef | null;
     id: string;

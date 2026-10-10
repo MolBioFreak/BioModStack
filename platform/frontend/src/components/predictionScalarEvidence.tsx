@@ -2,10 +2,10 @@ import { useQueries } from '@tanstack/react-query';
 import { fetchJobDesignMetrics, type Design } from '../lib/api';
 import type { ScientificPoint } from '../lib/scientificAnalytics';
 const asRecord = (value: unknown): Record<string, unknown> | null => value != null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
-const nativeSummaryKeys: Record<string, string> = { plddt_mean: 'Mean pLDDT (fraction)', plddt: 'Mean pLDDT (0–100)', complex_plddt: 'Complex pLDDT (fraction)', complex_iplddt: 'Interface pLDDT (fraction)', ptm: 'pTM', iptm: 'iPTM', ranking_score: 'Producer ranking score', confidence_score: 'Producer confidence score', gpde: 'gPDE (Å)', complex_pde: 'Complex PDE (Å)', complex_ipde: 'Interface PDE (Å)', ligand_iptm: 'Ligand iPTM', protein_iptm: 'Protein iPTM'  };
+const nativeSummaryKeys: Record<string, string> = { plddt_mean: 'Mean pLDDT (fraction)', plddt: 'Mean pLDDT (0–100)', complex_plddt: 'Complex pLDDT (fraction)', complex_iplddt: 'Interface pLDDT (fraction)', ptm: 'pTM', iptm: 'iPTM', structure_confidence: 'Provider structure confidence', ranking_score: 'Producer ranking score', confidence_score: 'Producer confidence score', gpde: 'gPDE (Å)', complex_pde: 'Complex PDE (Å)', complex_ipde: 'Interface PDE (Å)', ligand_iptm: 'Ligand iPTM', protein_iptm: 'Protein iPTM'  };
 type ScalarDisplay = { key: string; label: string; display: string; title: string };
 export type ScalarEvidence = { entries: ScalarDisplay[]; reason?: string };
-export const canonicalScalars = (design: Design) => design.core_protein_scientific_contract === 1 || design.confidence_metrics?.core_protein_scientific_contract === 1 || !!design.scientific_structure_document || !!design.confidence_metrics?.core_protein_scientific;
+export const canonicalScalars = (design: Design) => design.core_protein_scientific_contract === 1 || design.confidence_metrics?.core_protein_scientific_contract === 1 || !!design.scientific_structure_document || !!design.confidence_metrics?.core_protein_scientific || asRecord(design.provenance?.external_import)?.provider === 'boltz_api';
 const finiteScalar = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 /** Consume the existing source-verified analytics transport, not nullable DB projections. */
 function scalarEvidence(design: Design, point?: ScientificPoint, reason?: string): ScalarEvidence {

@@ -1,5 +1,5 @@
 export type MetricState = {state:'ok'; value:number; reason_code:null} | {state:'unavailable'|'invalid'; value:null; reason_code:string};
-export interface MetricDescriptor {metric_id:string; source:'canonical_artifact'; scope:string; unit:string; direction:'higher'|'lower'|'none'; producer_version:string; derivation_version:string}
+export interface MetricDescriptor {metric_id:string; source:'canonical_artifact'|'retained_native_artifact'|'external_provider_artifact'; scope:string; unit:string; direction:'higher'|'lower'|'none'; producer_version:string; derivation_version:string}
 export interface MetricSource {artifact_sha256:string; candidate_id:string; document_id:string}
 export interface ScientificPoint {
     publication_state?:MetricState|null;
@@ -12,7 +12,7 @@ export interface ScientificCohort {
     metrics:Record<string,{observed_count:number; unavailable_count:number; invalid_count:number; descriptor:MetricDescriptor; statistics:Record<'min'|'max'|'avg'|'median'|'std_dev',number>|null; reason_code:string|null}>;
     pairs:Record<string,{x_metric:string;y_metric:string;pair_count:number;excluded_count:number;excluded_ids:string[];points:{id:string;x:number;y:number}[];correlation:MetricState}>;
 }
-const allowed=new Set(['design_ptm','affinity_probability','filter_rmsd','complex_plddt','plddt','gpde','ranking_score','plddt_mean','iptm','plddt_overall','plddt_binder','pae_overall','pae_interaction','rmsd_overall','rmsd_binder','ptm','conf_score','rog','mpnn_score','fampnn_psce','ligand_iptm','affinity_score','binder_probability','frustration_pct_high','maturation_interface_score','maturation_rmsd','maturation_delta_interface','maturation_selected_interface_score','maturation_selected_rmsd','maturation_nonselected_rmsd','ppiflow_objective_score','ppiflow_primary_loop_rmsd']);
+const allowed=new Set(['confidence_score','protein_iptm','complex_iplddt','complex_pde','complex_ipde','structure_confidence','design_ptm','affinity_probability','filter_rmsd','complex_plddt','plddt','gpde','ranking_score','plddt_mean','iptm','plddt_overall','plddt_binder','pae_overall','pae_interaction','rmsd_overall','rmsd_binder','ptm','conf_score','rog','mpnn_score','fampnn_psce','ligand_iptm','affinity_score','binder_probability','frustration_pct_high','maturation_interface_score','maturation_rmsd','maturation_delta_interface','maturation_selected_interface_score','maturation_selected_rmsd','maturation_nonselected_rmsd','ppiflow_objective_score','ppiflow_primary_loop_rmsd']);
 function requireThat(condition:unknown):asserts condition {if(!condition) throw new Error('Invalid scientific analytics contract');}
 function object(value:unknown):Record<string,unknown> {requireThat(value!==null&&typeof value==='object'&&!Array.isArray(value));return value as Record<string,unknown>;}
 function keys(value:Record<string,unknown>,expected:string[]) {requireThat(Object.keys(value).sort().join('|')===[...expected].sort().join('|'));}
@@ -29,7 +29,7 @@ export function parseMetricState(value:unknown):MetricState {
 }
 function descriptor(value:unknown,key:string):MetricDescriptor {
     const row=object(value);keys(row,['metric_id','source','scope','unit','direction','producer_version','derivation_version']);
-    requireThat(allowed.has(key)&&row.metric_id===key&&row.source==='canonical_artifact');
+    requireThat(allowed.has(key)&&row.metric_id===key&&['canonical_artifact','retained_native_artifact','external_provider_artifact'].includes(String(row.source)));
     text(row.scope);text(row.unit);text(row.producer_version);text(row.derivation_version);
     requireThat(row.direction==='higher'||row.direction==='lower'||row.direction==='none');
     return value as MetricDescriptor;

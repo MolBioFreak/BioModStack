@@ -56,9 +56,9 @@
 .prediction-companion { min-width: 0; flex: 0 0 auto; }
 .prediction-companion .prediction-charts { margin-top: 0.5rem; }
 .prediction-viewer-fullscreen { height: 100dvh; width: 100%; overflow: auto; padding: 0.75rem; }
-.prediction-fullscreen-flow { display: flex; flex-direction: column; gap: 0.75rem; min-height: 100%; }
-.prediction-fullscreen-molecule { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 60vh; }
-.prediction-fullscreen-canvas { flex: 1; min-height: 55vh; }
+.prediction-fullscreen-flow { display: flex; flex-direction: column; gap: 0.75rem; height: 100%; min-height: 640px; }
+.prediction-fullscreen-molecule { display: flex; flex: 1 1 0; flex-direction: column; min-width: 0; min-height: 400px; }
+.prediction-fullscreen-canvas { flex: 1 1 0; height: 0; min-height: 300px; }
 .prediction-companion-fullscreen { flex: 0 0 auto; max-height: 38vh; overflow: auto; }
 .prediction-companion-fullscreen .prediction-charts { grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); }
 @media (max-width: 699px) {

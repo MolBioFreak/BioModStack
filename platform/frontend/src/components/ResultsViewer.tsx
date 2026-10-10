@@ -5224,7 +5224,7 @@ function ResultsViewerContent() {
         return <div role="alert">Requested Design {requestedDesignId} is unavailable in this Job lineage. No other candidate has been selected.</div>;
     }
 
-    if (activeJob?.model_id === 'conformational_mapping' || activeJob?.model_id === 'confornets_experimental') {
+    if (activeJob?.model_id === 'conformational_mapping' || (activeJob?.model_id === 'confornets_experimental' && activeJob.conformational_mapping_request_id)) {
         if (!activeJob.conformational_mapping_request_id) {
             return <div role="alert" className="mx-auto mt-12 max-w-3xl rounded-xl border border-red-500/30 bg-red-500/10 p-6 text-red-200">
                 Conformational Mapping request identity is unavailable for this job.
@@ -5287,9 +5287,9 @@ function ResultsViewerContent() {
             <div className={`relative z-10 px-3 sm:px-4 lg:px-5 xl:px-6 2xl:px-8 ${viewerShellClassName}`}>
                 {/* Header */}
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
-                    <div>
+                    <div className="min-w-0 max-w-full">
                         <h1 className="text-3xl font-bold text-white">Results Viewer</h1>
-                        <p className="text-slate-400 text-sm mt-1">
+                        <p className="text-slate-400 text-sm mt-1 [overflow-wrap:anywhere]">
                             {activeJob ? `${activeJob.name} • ${activeJob.model_id}` : 'Import a dataset or open an existing workflow'}
                         </p>
                         <div className="mt-3">{resultModelSelector}</div>
@@ -5543,10 +5543,12 @@ function ResultsViewerContent() {
                             </div>
                         )}
 
-                        {selectedCandidateControls}
+                        {['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) && !exactArtifactId
+                            ? <SelectedCandidateOperations key={`prediction-operations-${activeJob.id}`} count={selectedDesignIds.length + selectedNativeSources.length}>{selectedCandidateControls}</SelectedCandidateOperations>
+                            : selectedCandidateControls}
 
                         {/* Tabs */}
-                        <div className="flex gap-1 mb-6 border-b border-slate-800 pb-px">
+                        <div className="flex gap-1 mb-6 border-b border-slate-800 pb-px overflow-x-auto">
                             {visibleReviewTabs.map(tab => (
                                 <button
                                     key={tab.id}

@@ -594,10 +594,10 @@ export default function StructureViewerPane({
     const nativeResidueLayer = useMemo<MetricLayer | null>(()=>nativeResidue.status !== 'ok' ? null : ({
         descriptor:{id:'native-plddt',label:nativeResidue.metric === 'atom_plddt' ? 'Native atom pLDDT' : 'Native residue pLDDT',dimension:nativeResidue.metric === 'atom_plddt' ? 'atom-scalar' : 'residue-scalar',units:'fraction',direction:'higher_is_better',valueRange:[0,1],projectionPolicy:'direct',normalization:'none',
             categories: {
-                veryHigh: {label: '≥90%', color: '#3b82f6'},
-                confident: {label: '70–<90%', color: '#22d3ee'},
-                low: {label: '50–<70%', color: '#facc15'},
-                veryLow: {label: '<50%', color: '#f97316'},
+                veryHigh: {label: '≥90', color: '#3b82f6'},
+                confident: {label: '70–<90', color: '#22d3ee'},
+                low: {label: '50–<70', color: '#facc15'},
+                veryLow: {label: '<50', color: '#f97316'},
             },
             provenance:{source:'Verified native confidence vector',artifactSha256:nativeResidue.artifactSha256}},
         // Reuse the established confidence bands for display only; retain native fractions.
@@ -3054,7 +3054,7 @@ export default function StructureViewerPane({
                             ? 'prediction-fullscreen-canvas relative'
                             : 'relative rounded-lg border border-slate-700'
                         }
-                        style={isFullscreen ? undefined : { height: confidenceCompanion ? 'clamp(560px, 72vh, 800px)' : viewerLayout.viewerHeight }}
+                        style={isFullscreen ? undefined : { height: confidenceCompanion ? (viewportWidth < 700 ? (metricWorkbenchOpen ? '1320px' : '820px') : 'clamp(560px, 72vh, 800px)') : viewerLayout.viewerHeight }}
                     >
                         {awaitingGovernedWorkbenchIdentity ? (
                             <div className="flex h-full items-center justify-center text-sm text-slate-400">Preparing governed structure resources…</div>
