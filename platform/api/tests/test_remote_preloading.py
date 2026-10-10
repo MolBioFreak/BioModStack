@@ -629,7 +629,9 @@ async def test_shared_claim_not_progress_preserves_maintenance_exclusion(store, 
     from services.remote_execution.executor import _release_remote_target_lease
     from services.remote_execution.targets import list_targets
     from sqlalchemy import update
-    controller = p.PreloadController(store)
+    async def prewarm(**kwargs):
+        return {'source_revision': 'a'*40, 'source_tree': 'b'*40, 'artifacts': []}
+    controller = p.PreloadController(store, prewarm=prewarm)
     async with store() as session:
         a, b = shared_remote_job('shared-a', status=status), shared_remote_job('shared-b', status=status)
         session.add_all([a, b])
@@ -642,7 +644,7 @@ async def test_shared_claim_not_progress_preserves_maintenance_exclusion(store, 
         assert changed.rowcount == 0
         await session.rollback()
         with pytest.raises(ExecutionTargetError, match='idle'):
-            await controller.start(session, 'vast:1', PreloadRequest(job_id='recipe'))
+            await controller.refresh_inventory(session, 'vast:1')
         with pytest.raises(ExecutionTargetError):
             await deactivate_target(session, 'vast:1')
         a = await session.get(Job, 'shared-a')
@@ -650,5 +652,12 @@ async def test_shared_claim_not_progress_preserves_maintenance_exclusion(store, 
         await session.commit()
         assert await has_target_claims(session, 'vast:1')
         with pytest.raises(ExecutionTargetError, match='idle'):
-            await controller.start(session, 'vast:1', PreloadRequest(job_id='recipe'))
+            await controller.refresh_inventory(session, 'vast:1')
+        await controller.start(session, 'vast:1', PreloadRequest(job_id='recipe'))
+    await settle(controller)
+    async with store() as session:
+        target = await session.get(ExecutionTarget, 'vast:1')
+        assert target.provider_metadata['preload']['phase'] == 'source_download_ready'
+        assert await has_target_claims(session, 'vast:1')
+        assert (await session.get(Job, 'shared-b')).status == status
     await controller.close()
