@@ -39,6 +39,63 @@ def calibration_examples():
     return entries
 
 
+def calibration_bound_fixture(entry):
+    """Separately selected software companion, never a starter's defaults."""
+    fixture = deepcopy(entry)
+    fixture['status'] = 'bound_software_fixture_not_wet_lab_recipe'
+    fixture['qualification'] = 'Synthetic authored inputs for compile-only qualification; not measured observations or device execution.'
+    key = entry['id']
+    paths = {s['step_id']: f'/method/steps/{index}' for index, s in enumerate(entry['method']['steps'])}
+    def reference(step, output, path):
+        return {'method_result': {'step_path': paths[step]}, 'output': output, 'path': path}
+    if key == 'pipette_height_calibration':
+        bindings = {
+            'prepare_inputs': {'message': 'Software-only height fixture; operator positions and measures independently'},
+            'measure_inputs': {'message': 'Enter externally observed Z', 'measurement_form': {'fields': [
+                {'field_id': 'z', 'label': 'Observed Z', 'unit': 'steps', 'module': 'pipette', 'repetitions': 1}]}},
+            'calculate_inputs': {'operation': 'height_calculate', 'scope_id': 'software-height', 'plate': 'TC',
+                'measured_z': reference('measure', 'measurements', ['z', 0])},
+            'apply_inputs': {'operation': 'height_apply', 'calculation': reference('calculate', 'result', [])},
+            'decision_inputs': {'operation': 'height_decision', 'scope_id': 'software-height', 'decision': 'restore'}}
+    elif key == 'pipette_volume_calibration':
+        recipe = {'mode': 'single', 'channels': [0], 'timeout_ms': 1000,
+            'target_liquid_ul': '20', 'commanded_aspiration_ul': '22.5', 'aspiration_speed_ul_s': '50',
+            'aspiration_delay_ms': 0, 'leading_air': None, 'trailing_air': None,
+            'before_leading_air': [], 'before_liquid': [], 'after_liquid': [], 'before_dispense': [], 'after_dispense': [],
+            'dispense_segments': [{'volume_ul': '22.5', 'speed_ul_s': '50'}],
+            'final_empty_speed_ul_s': None, 'final_empty_before': [], 'multi': None}
+        bindings = {'prepare_inputs': {'message': 'Software-only fixture; author actual positioning and consumables before use'},
+            'dispense_inputs': {'recipe': recipe},
+            'measure_inputs': {'message': 'Enter external delivered volume', 'measurement_form': {'fields': [
+                {'field_id': 'volume', 'label': 'External volume', 'unit': 'uL', 'module': 'pipette', 'target': '20', 'commanded': '22.5', 'repetitions': 1}]}},
+            'analyze_inputs': {'operation': 'analyze', 'analysis': {'kind': 'pipette', 'model': 'descriptive', 'context': {'fixture': 'software-only'},
+                'samples': [{'point_id': 'fixture', 'target_ul': '20', 'commanded_ul': '22.5',
+                    'observation': {'kind': 'volume', 'measured_ul': reference('measure', 'measurements', ['volume', 0])}}]}}}
+    else:
+        module = key.split('_')[0]
+        bindings = {'setpoint_inputs': {'bank': 'nest' if module == 'tc' else module, 'target_temp_c': '25'},
+            'settle_inputs': {'seconds': '1'},
+            'measure_inputs': {'message': 'Enter independent temperature probe observation', 'measurement_form': {'fields': [
+                {'field_id': 'temperature', 'label': 'External probe', 'unit': 'degC', 'module': module, 'target': '25', 'commanded': '25', 'repetitions': 1}]}},
+            'analyze_inputs': {'operation': 'analyze', 'analysis': {'kind': 'thermal', 'samples': [{
+                'point_id': 'fixture', 'module': module, 'target_c': '25', 'commanded_c': '25',
+                'measured_c': reference('measure', 'measurements', ['temperature', 0]), 'context': {'fixture': 'software-only'}}]}}}
+    fixture['bindings'] = bindings
+    return fixture
+
+
+def inline_schema(schema, root=None):
+    """Embed a closed exported schema without changing its local $ref scope."""
+    root = schema if root is None else root
+    if isinstance(schema, list):
+        return [inline_schema(item, root) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    if '$ref' in schema:
+        return inline_schema(root['$defs'][schema['$ref'].rsplit('/', 1)[-1]], root)
+    return {key: inline_schema(value, root) for key, value in schema.items() if key != '$defs'}
+
+
 def action_schema():
     schema = deepcopy(CALIBRATION['action_params'])
     schema['$defs']['ResultReference'] = {'anyOf': [deepcopy(CALIBRATION['result_reference']), deepcopy(AUTHOR_REFERENCE)]}

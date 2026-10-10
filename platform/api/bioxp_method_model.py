@@ -192,16 +192,19 @@ def method_catalog():
             entry['effects'] = 'Source cover inspection can relocate covers; not photo-only'
         if entry['action'] == 'thermal_door':
             entry['effects'] = 'Source DO opens thermal door then initializes pipettes; DC closes door'
-    from bioxp_method_calibration import CALIBRATION, action_schema
+    from bioxp_method_calibration import CALIBRATION, action_schema, inline_schema
     for entry in actions:
         if entry['action'] == 'calibration':
             entry['inputs'] = action_schema()
         elif entry['action'] == 'checkpoint':
-            entry['inputs']['properties']['measurement_form'] = deepcopy(CALIBRATION['measurement_form'])
+            entry['inputs']['properties']['measurement_form'] = inline_schema(CALIBRATION['measurement_form'])
     from bioxp_method_custody import custody_suggestions
     from bioxp_method_planning import liquid_field_matrix
     return {'schema': SCHEMA, 'actions': actions, 'native_definitions': schema['$defs'],
         'native_source_definitions': native['native_request']['$defs'],
+        'device_commands': deepcopy(EXPORT['method_contract']['device_commands']),
+        'calibration': deepcopy(CALIBRATION),
+        'cavro_capabilities': deepcopy(EXPORT['capabilities']),
         'authoring': {'custody': custody_suggestions(), 'liquid_fields': liquid_field_matrix()},
         'geometry': native['alignment'], 'locations': native['native_locations'],
         'limits': {'depth': 64, 'occurrences': 10000, 'native_actions': 100000},
@@ -217,5 +220,8 @@ def method_examples():
         entry['bound_fixture'] = fixtures[entry['id']]
         if entry['id'] in {'purification', 'dna_purification', 'rna_purification', 'cfps_and_purification'}:
             entry['authoring_variants'] = [magnetic_variant(entry)]
-    from bioxp_method_calibration import calibration_examples
-    return entries + calibration_examples()
+    from bioxp_method_calibration import calibration_examples, calibration_bound_fixture
+    for entry in calibration_examples():
+        entry['bound_fixture'] = calibration_bound_fixture(entry)
+        entries.append(entry)
+    return entries

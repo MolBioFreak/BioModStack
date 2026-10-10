@@ -98,7 +98,8 @@ def liquid_selection_schema():
     number = {'anyOf': [{'type': 'number'}, {'type': 'string'}, {'type': 'null'}]}
     settings = {key: deepcopy(number) for key in (*RECIPE_FIELDS, AIR_GAP_SPEED_FIELD) if key != 'dispense_segments'}
     from bioxp_method_native import EXPORT
-    settings['selected_correction'] = {**deepcopy(EXPORT['recipe']['properties']['selected_correction']), '$defs': deepcopy(EXPORT['recipe']['$defs'])}
+    from bioxp_method_calibration import inline_schema
+    settings['selected_correction'] = inline_schema(EXPORT['recipe']['properties']['selected_correction'], EXPORT['recipe'])
     settings.update({key: {'anyOf': [deepcopy(value), {'type': 'null'}]} for key, value in SETTINGS['properties'].items()})
     settings.update({key: deepcopy(number) for key in ('slope_n1', 'slope_n2')})
     settings['dispense_segments'] = {'type': 'array', 'items': {'type': 'object', 'properties': {

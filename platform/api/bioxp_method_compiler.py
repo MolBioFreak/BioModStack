@@ -609,7 +609,7 @@ def compile_method(request):
                                     'commanded_displacement_ul': air['volume_ul']})
                         phases.append({'recipe_phase': 'aspirate', 'channel': channel,
                             'source': deepcopy(effect.get('source')), 'volume_ul': recipe['target_liquid_ul'],
-                            'commanded_displacement_ul': recipe['commanded_aspiration_ul'], 'air_ul': 0})
+                            'commanded_displacement_ul': recipe.get('commanded_aspiration_ul'), 'air_ul': 0})
                         for index, segment in enumerate(recipe['dispense_segments']):
                             phases.append({'recipe_phase': 'dispense_segments', 'segment_index': index, 'channel': channel,
                                 'destination': deepcopy(effect.get('destination')), 'volume_ul': None,

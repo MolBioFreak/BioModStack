@@ -110,7 +110,8 @@ def native_recipe_accounting(recipe):
         sample = n(recipe['target_liquid_ul'])
         conditioning = excess = reaspiration = zero
         waste, retained = zero, None
-        displacement = n(recipe['commanded_aspiration_ul']) + air
+        # Selected corrections are evaluated once by native, never by BMS.
+        displacement = None if recipe.get('commanded_aspiration_ul') is None else n(recipe['commanded_aspiration_ul']) + air
         if multi is not None:
             sample = n(multi['sample_count']) * n(multi['sample_volume_ul'])
             conditioning = n(multi['conditioning_volume_ul']) * n(multi['conditioning_back_to_source_count'])
@@ -118,14 +119,17 @@ def native_recipe_accounting(recipe):
             reaspiration = (n(multi['reaspiration']['volume_ul']) * n(multi['sample_count'])
                            if multi['reaspiration'] is not None else zero)
             air += reaspiration
-            displacement += conditioning + reaspiration
+            if displacement is not None:
+                displacement += conditioning + reaspiration
             aliquots = multi['aliquots'] + ([multi['excess']] if multi['excess'] is not None else [])
-            displacement += sum((n(s['volume_ul']) for a in aliquots for s in a['segments']), zero)
+            if displacement is not None:
+                displacement += sum((n(s['volume_ul']) for a in aliquots for s in a['segments']), zero)
             # An authored excess stroke does not say it goes to waste. No endpoint is invented.
             waste = None if multi['excess'] is not None else zero
             retained = excess if multi['excess'] is None else None
         else:
-            displacement += sum((n(s['volume_ul']) for s in recipe['dispense_segments']), zero)
+            if displacement is not None:
+                displacement += sum((n(s['volume_ul']) for s in recipe['dispense_segments']), zero)
         if recipe['final_empty_speed_ul_s'] is not None:
             waste = retained = None  # Keep the known displacement subtotal; empty adds an unknown stroke.
         return {'liquid': sample, 'conditioning_return': conditioning, 'excess': excess,

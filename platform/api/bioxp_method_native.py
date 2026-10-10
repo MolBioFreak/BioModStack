@@ -80,12 +80,16 @@ def coerce(value, schema, root=None):
     root = root or schema
     if '$ref' in schema:
         return coerce(value, root['$defs'][schema['$ref'].split('/')[-1]], root)
+    # Prefer the already-valid scalar representation before trying numeric
+    # coercion. Native Number unions intentionally retain exact decimal text.
+    if not isinstance(value, (dict, list)) and NativeValidator({**schema, '$defs': root.get('$defs', {})}).is_valid(value):
+        return value
     for option in schema.get('anyOf', schema.get('oneOf', [])):
         try:
             result = coerce(value, option, root)
             NativeValidator({**option, '$defs': root.get('$defs', {})}).validate(result)
             return result
-        except (ValueError, TypeError, ValidationError):
+        except (ValueError, TypeError, ArithmeticError, ValidationError):
             pass
     if isinstance(value, dict):
         properties = dict(schema.get('properties', {}))
@@ -160,6 +164,8 @@ def native_action(operation, inputs):
                         validate_instructions(child)
         validate_instructions(value)
         if field == 'recipe':
+            if value.get('selected_correction') is not None and value.get('commanded_aspiration_ul') is not None:
+                raise ValueError('selected_correction conflicts with explicitly commanded_aspiration_ul; native evaluates a selected correction once')
             multi = value['multi']
             if (value['mode'] == 'multi') != (multi is not None):
                 raise ValueError('multi parameters required exactly for multi mode')

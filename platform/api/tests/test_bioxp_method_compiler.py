@@ -167,7 +167,7 @@ def test_discovery_examples_are_unbound_and_raw_roundtrip():
     schema = method_schema()
     Draft202012Validator.check_schema(schema)
     examples = method_examples()
-    assert {e['id'] for e in examples} == {'cfps', 'purification', 'gibson', 'golden_gate', 'pcr', 'dna_purification', 'rna_purification', 'cfps_and_purification'}
+    assert {e['id'] for e in examples} == {'cfps', 'purification', 'gibson', 'golden_gate', 'pcr', 'dna_purification', 'rna_purification', 'cfps_and_purification', 'pipette_volume_calibration', 'pipette_height_calibration', 'rc_calibration', 'oc_calibration', 'tc_calibration'}
     for entry in examples:
         Draft202012Validator(schema).validate(entry['method'])
         validate_method(entry['method'])
