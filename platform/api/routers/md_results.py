@@ -109,6 +109,11 @@ async def get_md_analysis(job_id: str, session: AsyncSession = Depends(get_sessi
             current = latest.get(replica)
             if current is None or (child.created_at, str(child.id)) > (current.created_at, str(current.id)):
                 latest[replica] = child
+        report["execution"] = [
+            {"replica": replica, "job_id": child.id, "status": child.status,
+             "error": child.error_message}
+            for replica, child in sorted(latest.items())
+        ]
         active = any(str(child.status or child.queue_status).lower() in {"queued", "running", "pending"} for child in children)
         raw_states = report.get("replica_states")
         states: list[Any] = raw_states if isinstance(raw_states, list) else []

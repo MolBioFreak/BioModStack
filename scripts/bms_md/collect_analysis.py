@@ -57,9 +57,66 @@ def _replica_manifest_hashes(parent_root: Path, aggregate: dict[str, Any]) -> di
     return hashes
 
 
+def run_native_wham(manifests, request, output_dir, *, gmx="gmx"):
+    """Run GROMACS' 1D estimator on explicit window/coordinate selections."""
+    import subprocess
+    import tempfile
+    from .analysis import _role_record, _verify_artifact
+    from .analyzers import read_xvg
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    result = {"status": "failed", "dimension": 1, "method": "gmx_wham",
+              "scope": "selected_coordinate_across_windows", "request": request,
+              "coordinate_unit": request["unit"], "energy_unit": "kJ/mol", "inputs": []}
+    try:
+        with tempfile.TemporaryDirectory(prefix="wham-", dir=output_dir) as temporary:
+            work = Path(temporary)
+            tprs, pullx, masks = [], [], []
+            for window in request["windows"]:
+                manifest_path = manifests[window["replica"]]
+                manifest = json.loads(manifest_path.read_text())
+                tpr_record = _role_record(manifest, "production_tpr")
+                pull_record = _role_record(manifest, "pull_coordinates")
+                tpr, tpr_sha = _verify_artifact(manifest_path.parent, tpr_record, snapshot_root=work)
+                coordinates, pull_sha = _verify_artifact(manifest_path.parent, pull_record, snapshot_root=work)
+                count, selected = window["coordinate_count"], window["coordinate"]
+                if not 1 <= selected <= count:
+                    raise ValueError("WHAM coordinate is outside the declared native coordinate count")
+                tprs.append(str(tpr))
+                pullx.append(str(coordinates))
+                masks.append(" ".join("1" if i == selected else "0" for i in range(1, count + 1)))
+                result["inputs"].append({**window, "manifest_sha256": _sha256(manifest_path),
+                                         "tpr_sha256": tpr_sha, "pull_sha256": pull_sha,
+                                         "engine": manifest.get("engine")})
+            for name, rows in (("tpr.dat", tprs), ("pullx.dat", pullx), ("selection.dat", masks)):
+                (work / name).write_text("\n".join(rows) + "\n")
+            command = [gmx, "wham", "-it", str(work / "tpr.dat"), "-ix", str(work / "pullx.dat"),
+                       "-is", str(work / "selection.dat"), "-o", str(work / "pmf.xvg"),
+                       "-hist", str(work / "histogram.xvg"), "-xvg", "none", "-unit", "kJ", "-temp", str(request["temperature_k"]),
+                       "-bins", str(request.get("bins", 200)), "-b", str(request.get("begin_ps", 0))]
+            if request.get("end_ps") is not None:
+                command += ["-e", str(request["end_ps"])]
+            process = subprocess.run(command, cwd=work, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            (output_dir / "wham.log").write_text(process.stdout)
+            result["returncode"] = process.returncode
+            for name in ("pmf.xvg", "histogram.xvg"):
+                if (work / name).is_file():
+                    publish_file_immutable(work / name, output_dir / name)
+            if process.returncode:
+                raise RuntimeError(f"gmx wham exited {process.returncode}: {process.stdout[-4000:]}")
+            pmf = read_xvg(work / "pmf.xvg")
+            histograms = read_xvg(work / "histogram.xvg")
+            result.update(status="completed", points=[{"coordinate": row[0], "pmf_kj_mol": row[1]} for row in pmf],
+                          histograms={"columns": request["windows"], "rows": histograms})
+    except Exception as exc:
+        result["status"] = "failed"
+        result["error"] = {"code": "MD_WHAM_FAILED", "message": str(exc)}
+    return result
+
+
 def collect_analysis(
     child_status_path: Path, aggregate_manifest: Path, output_dir: Path,
-    *, spawn_receipt: Path | None = None,
+    *, spawn_receipt: Path | None = None, gmx: str = "gmx",
 ) -> dict[str, Any]:
     status = json.loads(child_status_path.read_text(encoding="utf-8"))
     receipt = (
@@ -84,6 +141,9 @@ def collect_analysis(
         raise ValueError("completed MD aggregate manifest is required")
     parent_job_id = aggregate["job_id"]
     replica_hashes = _replica_manifest_hashes(parent_root, aggregate)
+    manifests = {index: parent_root / "replicas" / f"replica_{index}" / "manifest.json" for index in replica_hashes}
+    config = json.loads(manifests[min(manifests)].read_text()).get("config", {})
+    optional = "analysis" in config or config.get("schema") == "bms.md.job.v3"
     if receipt is not None:
         submitted_hashes = {child["replica_index"]: child.get("manifest_sha256") for child in receipt["children"]}
         if (
@@ -115,7 +175,7 @@ def collect_analysis(
         replica_index = sidecar.get("replica")
         if (
             sidecar.get("schema") != "bms.md.analysis-artifacts.v1"
-            or sidecar.get("status") != "completed"
+            or sidecar.get("status") not in {"completed", "not_applicable", "failed"}
             or sidecar.get("job_id") != parent_job_id
             or isinstance(replica_index, bool)
             or not isinstance(replica_index, int)
@@ -175,6 +235,7 @@ def collect_analysis(
         completed_records.append(
             {
                 "replica_index": replica_index,
+                "status": sidecar["status"],
                 "input_manifest_sha256": replica_hashes[replica_index],
                 "artifact_sidecar": sidecar_path.name,
                 "artifact_sidecar_sha256": sidecar_sha256,
@@ -185,7 +246,7 @@ def collect_analysis(
             [sidecar_path] + [sidecar_path.parent / record["path"] for record in artifact_records]))
 
     completed_records.sort(key=lambda item: item["replica_index"])
-    failed = int(status.get("failed") or 0)
+    failed = max(int(status.get("failed") or 0), sum(item["status"] == "failed" for item in completed_records))
     cancelled = int(status.get("cancelled") or 0)
     required = len(replica_hashes)
     is_complete = not failed and not cancelled and seen_replicas == set(replica_hashes)
@@ -198,13 +259,19 @@ def collect_analysis(
             json.dumps(sorted(replica_hashes.items()), separators=(",", ":")).encode("utf-8")
         ).hexdigest(),
         "required_analysis_children": required,
-        "completed_analysis_children": len(completed_records),
+        "completed_analysis_children": sum(item["status"] != "failed" for item in completed_records),
         "failed_analysis_children": failed,
         "cancelled_analysis_children": cancelled,
         "child_ids": list(status.get("child_ids") or []),
         "analyses": completed_records,
     }
-    if is_complete:
+    wham = (config.get("analysis") or {}).get("wham")
+    if wham:
+        result = run_native_wham(manifests, wham, analysis_root / "wham", gmx=gmx)
+        result_path = analysis_root / "wham" / "result.json"
+        publish_json_immutable(result, result_path)
+        collection["wham"] = {"path": "wham/result.json", "bytes": result_path.stat().st_size, "sha256": _sha256(result_path)}
+    if is_complete or optional:
         publish_json_immutable(collection, analysis_root / "manifest.json")
     else:
         partial_identity = hashlib.sha256(
@@ -231,9 +298,10 @@ def main() -> None:
     parser.add_argument("--aggregate-manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--spawn-receipt", type=Path)
+    parser.add_argument("--gmx", default="gmx")
     args = parser.parse_args()
 
-    collect_analysis(args.child_status, args.aggregate_manifest, args.output_dir, spawn_receipt=args.spawn_receipt)
+    collect_analysis(args.child_status, args.aggregate_manifest, args.output_dir, spawn_receipt=args.spawn_receipt, gmx=args.gmx)
     print(args.output_dir / "analysis" / "manifest.json")
 
 

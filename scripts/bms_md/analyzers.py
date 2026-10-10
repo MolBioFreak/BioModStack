@@ -159,4 +159,61 @@ def prepare_specialized_analyzers(universe: Any, manifest: Mapping[str, Any]) ->
         "reason": "DRT4 chemistry and covalent/metal parameterization are not approved" if not context.drt4_parameterization_approved else "explicit DRT4 observable definition is required",
         "chemistry_profile_id": context.chemistry_profile_id,
     })
+    for contact in (config.get("analysis") or {}).get("contacts", []):
+        name = contact["name"]
+        try:
+            group_a = _selection(universe, contact["selection_a"])
+            group_b = _selection(universe, contact["selection_b"])
+            if not group_a.n_atoms or not group_b.n_atoms:
+                states.append({"analyzer_id": name, "status": "not_applicable", "reason": "empty contact selection"})
+                continue
+            prepared.append(PairDistanceAnalyzer(
+                analyzer_id=name, group_a=group_a, group_b=group_b,
+                cutoff_angstrom=contact["cutoff_angstrom"],
+                definition="explicit selected-atom pair distances and contacts",
+                selection_a=contact["selection_a"], selection_b=contact["selection_b"],
+            ))
+        except Exception as exc:
+            states.append({"analyzer_id": name, "status": "failed", "reason": str(exc)})
     return prepared, states
+
+
+def read_xvg(path):
+    """Read native numerical columns without guessing coordinate semantics."""
+    import math
+
+    rows = []
+    with path.open() as handle:
+        for line in handle:
+            line = line.strip()
+            if not line or line.startswith(("#", "@")):
+                continue
+            row = [float(value) for value in line.split()]
+            if not row or not all(math.isfinite(value) for value in row):
+                raise ValueError("non-finite native XVG value")
+            if rows and len(row) != len(rows[0]):
+                raise ValueError("inconsistent native XVG columns")
+            rows.append(row)
+    return rows
+
+
+def pull_coordinate_reports(path, coordinates, *, replica, max_points=2000):
+    import numpy as np
+
+    rows = read_xvg(path)
+    reports = []
+    for coordinate in coordinates:
+        column = coordinate["column"]
+        if type(column) is not int or column < 1:
+            raise ValueError("pull column must be a zero-based value column, not time")
+        values = np.asarray([row[column] for row in rows], dtype=float)
+        counts, edges = np.histogram(values, bins=50) if len(values) else ([], [])
+        indices = np.linspace(0, len(rows) - 1, min(len(rows), max_points), dtype=int)
+        reports.append({
+            **coordinate, "replica": replica, "status": "completed", "dimension": 1,
+            "time_unit": "ps", "sample_count": len(rows),
+            "points": [{"time_ps": rows[i][0], "value": rows[i][column]} for i in indices],
+            "histogram": {"edges": list(map(float, edges)), "counts": list(map(int, counts)),
+                          "sample_count": len(rows), "normalization": "count"},
+        })
+    return reports

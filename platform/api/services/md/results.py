@@ -340,7 +340,9 @@ def _load_inventory(job: MDJobRecord, *, include_analysis: bool = True, _digests
             for record in artifacts.values()
             if isinstance(record, Mapping) and record.get("semantic_role") == "representative_structure"
         ]
-        if representative_records and (
+        unpaired_native_final = (optional_analysis(manifest.get("config")) and not trajectory_hashes
+                                 and all(not record.get("source_trajectory_sha256") for record in representative_records))
+        if representative_records and not unpaired_native_final and (
             len(trajectory_hashes) != 1
             or any(record.get("source_trajectory_sha256") not in trajectory_hashes for record in representative_records)
         ):
@@ -551,6 +553,38 @@ def _invocation_digest(path: Path, digests: dict) -> str:
     return digests[key]
 
 
+def _wham_report(root: Path, aggregate: Mapping[str, Any], job: MDJobRecord):
+    collection_path = root / "analysis" / "manifest.json"
+    if not collection_path.is_file():
+        return None
+    collection = _load_json(collection_path, "MD_ANALYSIS_COLLECTION_INVALID")
+    record = collection.get("wham")
+    if not record:
+        return None
+    if (collection.get("job_id") != job.id
+            or collection.get("aggregate_manifest_sha256") != _digest(root / "manifest.json")):
+        raise MDResultError("MD_ANALYSIS_REPORT_STALE", "WHAM collection does not bind these dynamics", 409)
+    analysis_root = root / "analysis"
+    path = _contained(analysis_root, str(record.get("path") or ""))
+    with os.fdopen(_open_artifact_beneath(analysis_root, path), "rb") as handle:
+        encoded = handle.read()
+    if len(encoded) != record.get("bytes") or hashlib.sha256(encoded).hexdigest() != record.get("sha256"):
+        raise MDResultError("MD_ANALYSIS_REPORT_STALE", "WHAM result changed", 409)
+    try:
+        result = json.loads(encoded)
+    except (ValueError, UnicodeError) as exc:
+        raise MDResultError("MD_ANALYSIS_REPORT_INVALID", "WHAM result is invalid", 409) from exc
+    if not isinstance(result, dict):
+        raise MDResultError("MD_ANALYSIS_REPORT_INVALID", "WHAM result is not an object", 409)
+    _assert_finite_json(result, "MD_ANALYSIS_REPORT_INVALID")
+    indices = {row["replica_index"] for row in aggregate["replicas"]}
+    for source in result.get("inputs", []):
+        index = source.get("replica")
+        if index not in indices or source.get("manifest_sha256") != _digest(root / "replicas" / f"replica_{index}" / "manifest.json"):
+            raise MDResultError("MD_ANALYSIS_REPORT_STALE", "WHAM window manifest changed", 409)
+    return result
+
+
 def analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict[str, Any]:
     digests = _digests if _digests is not None else {}
     root, aggregate, inventory = (_inventory if _inventory is not None
@@ -635,9 +669,16 @@ def analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict
                 topology.atom_order_identity,
             ) or atom_order.atom_order_identity != topology.atom_order_identity:
                 raise MDResultError("MD_ANALYSIS_REPORT_STALE", "MD analysis report inputs do not match current artifacts", 409)
+        pull_source = report.get("pull_source")
+        if pull_source is not None:
+            source = next((item for item in inventory if item.replica_index == index and item.semantic_role == "pull_coordinates"), None)
+            if source is None or source.sha256 != pull_source.get("sha256"):
+                raise MDResultError("MD_ANALYSIS_REPORT_STALE", "Pull trace does not bind the native output", 409)
         reports.append(report)
-        states.append({"replica": index, "status": report.get("status", "failed")})
-    completed_reports = [report for report in reports if report.get("status") == "completed" and isinstance(report.get("summary"), Mapping)]
+        states.append({"replica": index, "status": report.get("status", "failed"),
+                       "failure": report.get("failure"), "reason": report.get("reason"),
+                       "pull_error": report.get("pull_error")})
+    completed_reports = [report for report in reports if report.get("status") == "completed" and report.get("method") == "md_backbone_rmsd_v1" and isinstance(report.get("summary"), Mapping)]
     replica_means = [float(report["summary"]["mean"]) for report in completed_reports]
     replica_finals = [float(report["summary"]["final"]) for report in completed_reports]
     ensemble = {
@@ -649,12 +690,29 @@ def analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict
         "mean_of_replica_final_rmsd_angstrom": statistics.fmean(replica_finals) if replica_finals else None,
         "sample_stdev_of_replica_final_rmsd_angstrom": statistics.stdev(replica_finals) if len(replica_finals) >= 2 else None,
     }
-    overall = "absent" if not reports else ("completed" if all(item["status"] == "completed" for item in states) else "partial")
+    overall = "absent" if not reports else ("completed" if all(item["status"] in {"completed", "not_applicable"} for item in states) else "partial")
+    if reports and all(item["status"] == "failed" for item in states):
+        overall = "failed"
+    collection_state = None
+    collection_path = root / "analysis" / "manifest.json"
+    if optional_analysis((job.params or {}).get("md_job_spec")) and collection_path.is_file():
+        collection = _load_json(collection_path, "MD_ANALYSIS_COLLECTION_INVALID")
+        if collection.get("job_id") != job.id or collection.get("aggregate_manifest_sha256") != digest(root / "manifest.json"):
+            raise MDResultError("MD_ANALYSIS_REPORT_STALE", "Analysis collection does not bind these dynamics", 409)
+        collection_state = {key: collection.get(key) for key in ("status", "completed_analysis_children", "failed_analysis_children", "cancelled_analysis_children")}
+        if collection.get("failed_analysis_children") or collection.get("cancelled_analysis_children"):
+            overall = "partial" if reports and overall != "failed" else "failed"
+    wham = _wham_report(root, aggregate, job)
+    if ((wham and wham.get("status") == "failed")
+            or any(report.get("pull_error") or any(item.get("status") == "failed" for item in report.get("specialized_analyzers", [])) for report in reports)):
+        overall = "partial" if reports and overall != "failed" else "failed"
     return {
         "schema": "bms.md.analysis-report-set.v1", "job_id": job.id,
         "source": "validated_job_owned_analysis_reports", "status": overall,
         "bounded": True, "replica_states": states, "reports": reports,
+        "collection": collection_state,
         "ensemble": ensemble,
+        "wham": wham,
         "evidence": {
             "status": "insufficient_evidence",
             "reason": "RMSD/RMSF/Rg traces and replica summaries do not by themselves establish equilibrium or population-level certainty",
@@ -663,10 +721,15 @@ def analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict
     }
 
 
+def optional_analysis(job_spec) -> bool:
+    return isinstance(job_spec, Mapping) and ("analysis" in job_spec or job_spec.get("schema") == "bms.md.job.v3")
+
+
 def completion_barrier(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict[str, Any]:
     digests = _digests if _digests is not None else {}
+    optional = optional_analysis((job.params or {}).get("md_job_spec"))
     root, aggregate, inventory = (_inventory if _inventory is not None
-        else _load_inventory(job, _digests=digests))
+        else _load_inventory(job, include_analysis=not optional, _digests=digests))
     id_map = {item.artifact_id: item for item in inventory}
     def digest(path):
         return _invocation_digest(path, digests)
@@ -711,6 +774,8 @@ def completion_barrier(job: MDJobRecord, *, _inventory=None, _digests=None) -> d
         "atom_order_manifest",
         "representative_structure",
     }
+    if optional:
+        required_roles = {"representative_structure"}
     roles_by_replica: dict[int, set[str]] = {index: set() for index in replica_indices}
     for artifact in inventory:
         if artifact.semantic_role:
@@ -722,6 +787,8 @@ def completion_barrier(job: MDJobRecord, *, _inventory=None, _digests=None) -> d
             _schema_validator("md_run_v1.schema.json").validate(manifest)
         except ValidationError as exc:
             raise MDResultError("MD_COMPLETION_BLOCKED", f"MD replica {index} fails its run schema", 409) from exc
+        if manifest.get("status") != "completed":
+            raise MDResultError("MD_COMPLETION_BLOCKED", f"MD replica {index} dynamics did not complete", 409)
         seed = manifest.get("replica_seed")
         if not _replica_protocol_matches(
             job_spec,
@@ -744,47 +811,63 @@ def completion_barrier(job: MDJobRecord, *, _inventory=None, _digests=None) -> d
         replica_hashes[index] = digest(manifest_path)
 
     collection_path = root / "analysis" / "manifest.json"
-    collection = _load_json(collection_path, "MD_ANALYSIS_COLLECTION_INVALID")
-    analyses = collection.get("analyses")
-    analysis_child_ids = collection.get("child_ids")
-    analysis_indices = (
-        [int(item["replica_index"]) for item in analyses]
-        if isinstance(analyses, list)
-        and all(isinstance(item, Mapping) and type(item.get("replica_index")) is int for item in analyses)
-        else []
-    )
     replica_manifest_set_sha256 = hashlib.sha256(
         json.dumps(sorted(replica_hashes.items()), separators=(",", ":")).encode("utf-8")
     ).hexdigest()
-    if (
-        collection.get("schema") != "bms.md.analysis-collection.v1"
-        or collection.get("status") != "completed"
-        or collection.get("job_id") != job.id
-        or collection.get("aggregate_manifest_sha256") != digest(root / "manifest.json")
-        or collection.get("replica_manifest_set_sha256") != replica_manifest_set_sha256
-        or collection.get("required_analysis_children") != len(replica_indices)
-        or collection.get("completed_analysis_children") != len(replica_indices)
-        or collection.get("failed_analysis_children") != 0
-        or collection.get("cancelled_analysis_children") != 0
-        or not isinstance(analyses, list)
-        or sorted(analysis_indices) != replica_indices
-        or not isinstance(analysis_child_ids, list)
-        or len(analysis_child_ids) != len(replica_indices)
-        or len(set(analysis_child_ids)) != len(analysis_child_ids)
-    ):
-        raise MDResultError("MD_COMPLETION_BLOCKED", "MD analysis collection is incomplete or inconsistent", 409)
-
-    report_set = analysis_report(job, _inventory=(root, aggregate, inventory), _digests=digests)
-    reports = report_set.get("reports") or []
-    if report_set.get("status") != "completed" or len(reports) != len(replica_indices):
-        raise MDResultError("MD_COMPLETION_BLOCKED", "Required MD analysis reports are not complete", 409)
-    for expected_index, report in zip(replica_indices, reports, strict=True):
+    analysis_error = None
+    if optional:
+        analysis_child_ids = []
         try:
-            _schema_validator("md_analysis_v1.schema.json").validate(report)
-        except ValidationError as exc:
-            raise MDResultError("MD_COMPLETION_BLOCKED", f"MD analysis report {expected_index} fails its schema", 409) from exc
-        if not isinstance(report, Mapping) or report.get("replica") != expected_index:
-            raise MDResultError("MD_COMPLETION_BLOCKED", "MD analysis report replica lineage is invalid", 409)
+            report_set = analysis_report(job, _digests=digests)
+            analysis_state = report_set["status"]
+        except MDResultError as exc:
+            analysis_state = "failed"
+            analysis_error = {"code": exc.code, "message": str(exc)}
+    else:
+        collection_path = root / "analysis" / "manifest.json"
+        collection = _load_json(collection_path, "MD_ANALYSIS_COLLECTION_INVALID")
+        analyses = collection.get("analyses")
+        analysis_child_ids = collection.get("child_ids")
+        analysis_indices = (
+            [int(item["replica_index"]) for item in analyses]
+            if isinstance(analyses, list)
+            and all(isinstance(item, Mapping) and type(item.get("replica_index")) is int for item in analyses)
+            else []
+        )
+        replica_manifest_set_sha256 = hashlib.sha256(
+            json.dumps(sorted(replica_hashes.items()), separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        if (
+            collection.get("schema") != "bms.md.analysis-collection.v1"
+            or collection.get("status") != "completed"
+            or collection.get("job_id") != job.id
+            or collection.get("aggregate_manifest_sha256") != digest(root / "manifest.json")
+            or collection.get("replica_manifest_set_sha256") != replica_manifest_set_sha256
+            or collection.get("required_analysis_children") != len(replica_indices)
+            or collection.get("completed_analysis_children") != len(replica_indices)
+            or collection.get("failed_analysis_children") != 0
+            or collection.get("cancelled_analysis_children") != 0
+            or not isinstance(analyses, list)
+            or sorted(analysis_indices) != replica_indices
+            or not isinstance(analysis_child_ids, list)
+            or len(analysis_child_ids) != len(replica_indices)
+            or len(set(analysis_child_ids)) != len(analysis_child_ids)
+        ):
+            raise MDResultError("MD_COMPLETION_BLOCKED", "MD analysis collection is incomplete or inconsistent", 409)
+
+        report_set = analysis_report(job, _inventory=(root, aggregate, inventory), _digests=digests)
+        reports = report_set.get("reports") or []
+        if report_set.get("status") != "completed" or len(reports) != len(replica_indices):
+            raise MDResultError("MD_COMPLETION_BLOCKED", "Required MD analysis reports are not complete", 409)
+        for expected_index, report in zip(replica_indices, reports, strict=True):
+            try:
+                _schema_validator("md_analysis_v1.schema.json").validate(report)
+            except ValidationError as exc:
+                raise MDResultError("MD_COMPLETION_BLOCKED", f"MD analysis report {expected_index} fails its schema", 409) from exc
+            if not isinstance(report, Mapping) or report.get("replica") != expected_index:
+                raise MDResultError("MD_COMPLETION_BLOCKED", "MD analysis report replica lineage is invalid", 409)
+
+        analysis_state = "completed"
 
     for artifact in id_map.values():
         _artifact, handle = _open_verified_descriptor(root, artifact)
@@ -792,13 +875,13 @@ def completion_barrier(job: MDJobRecord, *, _inventory=None, _digests=None) -> d
 
     barrier = _load_json(root / "md_completion_barrier.json", "MD_COMPLETION_BARRIER_INVALID")
     aggregate_sha256 = digest(root / "manifest.json")
-    analysis_sha256 = digest(collection_path)
+    analysis_sha256 = digest(collection_path) if collection_path.is_file() else None
     if (
         barrier.get("schema") != "bms.md.completion-barrier.v1"
         or barrier.get("status") != "completed"
         or barrier.get("job_id") != job.id
         or barrier.get("aggregate_manifest_sha256") != aggregate_sha256
-        or barrier.get("analysis_manifest_sha256") != analysis_sha256
+        or (not optional and barrier.get("analysis_manifest_sha256") != analysis_sha256)
     ):
         raise MDResultError("MD_COMPLETION_BLOCKED", "MD completion marker does not bind the accepted generation", 409)
 
@@ -822,7 +905,8 @@ def completion_barrier(job: MDJobRecord, *, _inventory=None, _digests=None) -> d
         "state": "completed",
         "result_state": "completed",
         "dynamics_state": "completed",
-        "analysis_state": "completed",
+        "analysis_state": analysis_state,
+        "analysis_error": analysis_error,
         "aggregate_manifest_sha256": aggregate_sha256,
         "replica_manifest_set_sha256": replica_manifest_set_sha256,
         "analysis_manifest_sha256": analysis_sha256,
@@ -923,6 +1007,9 @@ def summary(job: MDJobRecord) -> dict[str, Any]:
     return {
         "schema": "bms.md.summary.v1", "job_id": job.id, "status": aggregate.get("status"),
         "result_state": lifecycle.get("result_state") if isinstance(lifecycle, Mapping) else None,
+        "dynamics_state": lifecycle.get("dynamics_state") if isinstance(lifecycle, Mapping) else aggregate.get("status"),
+        "analysis_state": lifecycle.get("analysis_state") if isinstance(lifecycle, Mapping) else None,
+        "analysis_error": lifecycle.get("analysis_error") if isinstance(lifecycle, Mapping) else None,
         "source": "validated_job_owned_manifests", "bounded": True,
         "aggregate_manifest_sha256": _digest(root / "manifest.json"),
         "replica_count": len(aggregate["replicas"]), "artifact_count": len(inventory),
