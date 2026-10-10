@@ -8,7 +8,7 @@ import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/
 import {
   fetchModels, fetchTemplates, fetchProvisionCatalog, previewExecutionTargetProvision, provisionExecutionTarget,
   cancelExecutionTargetProvision, retryExecutionTargetProvision,
-  activeExecutionTargetJobIds, provisionSelectionLabel, type WorkflowProvisionRequest, type CatalogProvisionSelection, type WorkflowPackSelection,
+  provisionSelectionLabel, type WorkflowProvisionRequest, type CatalogProvisionSelection, type WorkflowPackSelection,
   type CachedArtifactReceipt, type ExecutionTarget, type ProvisionSelection,
 } from '../../lib/api';
 
@@ -79,7 +79,7 @@ export function IndependentProvisionPanel(props: Props) {
   const binding = JSON.stringify([target.id, target.provider_instance_id, target.host, target.port,
     target.username, target.remote_root, target.host_key_sha256, target.active, target.state,
     target.activated_at, capabilityIdentity(target), target.preload?.operation_id,
-    target.preload?.source_revision, target.preload?.source_tree, target.preload?.recovery_required, activeExecutionTargetJobIds(target), target.active_job_ids === undefined ? target.progress?.operation_id : undefined]);
+    target.preload?.source_revision, target.preload?.source_tree, target.preload?.recovery_required]);
   return <ProvisionChooser key={binding} {...props} />;
 }
 function ProvisionChooser({ target, onChanged, inventoryVisible = true }: Props) {
@@ -161,7 +161,7 @@ export function WorkflowProvisionPanel({ target, onChanged, workflowRequest }: P
   const selection: ProvisionSelection = { kind: 'workflow', workflow_request: workflowRequest };
   const binding = JSON.stringify([selection, target.id, target.provider_instance_id, target.host, target.port, target.username, target.remote_root,
     target.host_key_sha256, target.active, target.state, target.activated_at, capabilityIdentity(target),
-    target.preload?.operation_id, target.preload?.source_revision, target.preload?.source_tree, target.preload?.phase, target.preload?.recovery_required, activeExecutionTargetJobIds(target), target.active_job_ids === undefined ? target.progress?.operation_id : undefined]);
+    target.preload?.operation_id, target.preload?.source_revision, target.preload?.source_tree, target.preload?.phase, target.preload?.recovery_required]);
   return <section aria-label="Unsaved workflow provisioning" className="mt-3 space-y-3">
     <h4>Provision this workflow's dependencies without launching</h4>
     <p className="text-xs">Uses the current typed workflow request. No saved Job, biological input staging, MSA service request or inference is created by provisioning. Scientific launch restrictions remain separate.</p>
@@ -180,7 +180,7 @@ export function ProvisionActions(props: ProvisionActionsProps) {
     target.host, target.port, target.username, target.remote_root, target.host_key_sha256,
     target.active, target.state, target.activated_at, capabilityIdentity(target), target.preload?.operation_id,
     target.preload?.source_revision, target.preload?.source_tree, target.preload?.phase,
-    target.preload?.recovery_required, activeExecutionTargetJobIds(target), target.active_job_ids === undefined ? target.progress?.operation_id : undefined]);
+    target.preload?.recovery_required]);
   return <BoundProvisionActions key={binding} {...props} />;
 }
 
@@ -210,7 +210,7 @@ function BoundProvisionActions({ target, onChanged, selection, retryOperationId,
     onSettled: () => onChanged(),
   });
   const busy = active > 0 || target.preload?.recovery_required || ACTIVE_PHASES.includes(target.preload?.phase ?? '');
-  const allowed = target.active && target.state === 'ready' && activeExecutionTargetJobIds(target).length === 0 && !busy;
+  const allowed = target.active && target.state === 'ready' && !busy;
   // The keyed boundary binds the entire request, including every scientific setting.
   // Server-normalized workflow selections may contain additional schema defaults.
   function matchesSelection(observed?: ProvisionSelection) {
@@ -262,7 +262,7 @@ function BoundProvisionActions({ target, onChanged, selection, retryOperationId,
       <button type="button" className={buttonClass} disabled={!allowed || !data || !!data.blockers?.length || preview.isPending} onClick={() => void start()}>{provision.isPending ? 'Starting provision…' : retryOperationId ? 'Retry provision with fresh preview' : 'Start provision'}</button>
       </>}
     </div>
-    {!allowed && <p className="text-xs text-[var(--text-muted)]">Provisioning requires an attached, ready, idle worker with no active preload.</p>}
+    {!allowed && <p className="text-xs text-[var(--text-muted)]">Provisioning requires an attached, ready worker with no active preload.</p>}
     {(preview.error || provision.error) && <p role="alert" className="text-sm text-[var(--error)]">{errorText(preview.error || provision.error)}</p>}
     {provision.isSuccess && <p role="status">Provision request accepted. Completion is reported by worker progress; installed evidence is shown separately from the last-preparation receipt.</p>}
     {data && <div aria-label="Provision preview" className="space-y-2 text-sm">
@@ -326,7 +326,7 @@ function PreparationStatus({ target, onChanged }: Props) {
     {['failed', 'cancelled', 'recovery_blocked'].includes(operation.phase) && <ProvisionActions
       key={JSON.stringify([operation.operation_id, operation.selection, operation.phase, target.id, target.host, target.port,
         target.username, target.remote_root, target.host_key_sha256, target.activated_at, target.active, target.state,
-        capabilityIdentity(target), operation.source_revision, operation.source_tree, operation.recovery_required, target.provider_instance_id, activeExecutionTargetJobIds(target), target.active_job_ids === undefined ? target.progress?.operation_id : undefined])}
+        capabilityIdentity(target), operation.source_revision, operation.source_tree, operation.recovery_required, target.provider_instance_id])}
       target={target} onChanged={onChanged} selection={operation.selection} retryOperationId={operation.operation_id} />}
   </section>;
 }

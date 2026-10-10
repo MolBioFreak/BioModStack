@@ -34,7 +34,7 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
   const jobProgress = target.job_progress ?? (target.active_job_ids === undefined && target.progress ? [target.progress] : []);
   const busy = mutation.isPending || activePreloads > 0 || preload?.recovery_required || ['checking', 'transferring', 'verifying', 'cancelling', 'recovery_blocked'].includes(preload?.phase ?? '');
   const validRecipe = jobs.some(job => job.id === jobId);
-  const canPreload = target.active && target.state === 'ready' && activeJobIds.length === 0 && !busy;
+  const canPreload = target.active && target.state === 'ready' && !busy;
   function submit() {
     if (!validRecipe || !canPreload || queryClient.isMutating({ mutationKey }) > 0) return;
     mutation.mutate(jobId);

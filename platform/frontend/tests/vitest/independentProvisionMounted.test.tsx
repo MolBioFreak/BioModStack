@@ -61,21 +61,23 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); api.defaults.adapter = adapter; vi.restoreAllMocks(); });
 
-it('disables independent preparation for claims without progress, ignoring stale progress after release', async () => {
+it('preserves the whole-workflow choice across claim arrival and release without posting', async () => {
   target = { ...target, active_job_ids: ['one', 'two'], progress: null, job_progress: [] };
   await render(); await select('Preparation workflow', 'structure_prediction');
-  expect(button('Prepare entire workflow').disabled).toBe(true);
-  await click('Prepare entire workflow'); expect(posts).toEqual([]);
-  target = { ...target, active_job_ids: ['two'] };
-  await render(); await select('Preparation workflow', 'structure_prediction');
-  expect(button('Prepare entire workflow').disabled).toBe(true);
-  target = { ...target, active_job_ids: [], progress: { operation_id: 'old', job_id: 'one', phase: 'running', artifact: null, message: 'Stale', updated_at: 'now' } };
-  await render(); await select('Preparation workflow', 'structure_prediction');
-  expect(button('Prepare entire workflow').disabled).toBe(false);
+  for (const ids of [['two'], [], ['three']]) {
+    target = { ...target, active_job_ids: ids };
+    await render();
+    expect(container.querySelector<HTMLSelectElement>('[aria-label="Preparation workflow"]')?.value).toBe('structure_prediction');
+    expect(button('Prepare entire workflow').disabled).toBe(false);
+  }
   expect(posts).toEqual([]);
+  await click('Prepare entire workflow');
+  expect(posts.map(post => post.url)).toEqual([
+    '/api/execution-targets/vast%3A123/provision/preview', '/api/execution-targets/vast%3A123/provision',
+  ]);
 });
 
-it('discards a late one-click preparation preview when a Job claim arrives before progress', async () => {
+it('completes the explicitly requested one-click preparation when a Job claim arrives before progress', async () => {
   target = { ...target, active_job_ids: [] };
   await render(); await select('Preparation workflow', 'structure_prediction');
   let finish!: (value: ReturnType<typeof response>) => void;
@@ -84,10 +86,66 @@ it('discards a late one-click preparation preview when a Job claim arrives befor
   target = { ...target, active_job_ids: ['claimed'], progress: null };
   await render();
   await act(async () => { finish(response(preview({ kind: 'workflow_pack', workflow_id: 'structure_prediction' }))); await settle(); });
-  expect(api.post).toHaveBeenCalledTimes(1);
-  expect(posts).toEqual([]);
-  await select('Preparation workflow', 'structure_prediction');
+  expect(api.post).toHaveBeenCalledTimes(2);
+  expect(posts).toEqual([{ url: '/api/execution-targets/vast%3A123/provision', body: { kind: 'workflow_pack', workflow_id: 'structure_prediction', preview_sha256: 'b'.repeat(64) } }]);
+  expect(container.querySelector<HTMLSelectElement>('[aria-label="Preparation workflow"]')?.value).toBe('structure_prediction');
   expect(button('Prepare entire workflow').disabled).toBe(true);
+});
+
+it.each(['model', 'image', 'workflow', 'retry'] as const)('preserves %s previews through running/staging Jobs and starts only on click', async scope => {
+  const request = { name: 'Draft', model_id: 'protenix', mode: 'predict', params: { seeds: [7], sequence: 'ACDE' } };
+  const selection: ProvisionSelection = scope === 'workflow' ? { kind: 'workflow', workflow_request: request }
+    : { kind: scope === 'image' ? 'image' : 'model', model_id: 'protenix' };
+  if (scope === 'retry') target.preload = { ...compactEmpty, operation_id: 'stopped', selection,
+    source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40), request_sha256: 'c'.repeat(64),
+    phase: 'cancelled', artifact: null, message: 'Stopped', started_at: 'now', updated_at: 'now' };
+  const mount = scope === 'workflow' ? async () => {
+    await act(async () => { root.render(<QueryClientProvider client={client}><WorkflowProvisionPanel target={target} workflowRequest={request} onChanged={changed} /></QueryClientProvider>); await settle(); });
+  } : render;
+  // Legacy worker responses have no active_job_ids. Their progress operation also must not bind preparation.
+  target = { ...target, progress: { operation_id: 'run-one', job_id: 'one', phase: 'running', artifact: null, message: 'CUDA running', updated_at: 'now' } };
+  await mount();
+  if (scope === 'model' || scope === 'image') { await select('Provision scope', scope); await select('Provision model', 'protenix'); }
+  await click('Preview artifact downloads');
+  const start = scope === 'retry' ? 'Retry provision with fresh preview' : 'Start provision';
+  expect(button(start).disabled).toBe(false);
+  for (const phase of ['staging', 'running'] as const) {
+    target = { ...target, progress: { ...target.progress!, operation_id: `run-${phase}`, phase, message: phase } };
+    await mount();
+    expect(button(start).disabled).toBe(false);
+    expect(container.querySelector('[aria-label="Provision preview"]')).not.toBeNull();
+  }
+  target = { ...target, active_job_ids: ['two', 'three'], job_progress: [target.progress!] };
+  await mount();
+  target = { ...target, active_job_ids: [] };
+  await mount();
+  expect(posts).toHaveLength(1);
+  expect(button(start).disabled).toBe(false);
+  await click(start, true);
+  expect(posts).toEqual([
+    { url: '/api/execution-targets/vast%3A123/provision/preview', body: selection },
+    { url: `/api/execution-targets/vast%3A123/provision${scope === 'retry' ? '/stopped/retry' : ''}`, body: { ...selection, preview_sha256: 'b'.repeat(64) } },
+  ]);
+});
+
+it.each(['running', 'staging'] as const)('preloads a saved recipe while %s and retains shared mutation exclusion', async phase => {
+  target = { ...target, active_job_ids: ['science'], job_progress: [{ operation_id: 'run', job_id: 'science', phase, artifact: null, message: `Science ${phase}`, updated_at: 'now' }] };
+  const mount = async () => { await act(async () => { root.render(<QueryClientProvider client={client}><RemotePreloadPanel target={target} jobs={[{ id: 'saved', model_id: 'protenix' }]} onChanged={changed} /></QueryClientProvider>); await settle(); }); };
+  await mount(); await disclose('Prepare worker');
+  await select('Saved Job recipe', 'saved'); await select('Provision model', 'protenix');
+  await click('Preview artifact downloads');
+  expect(container.querySelector('[aria-label="Worker activity"]')?.textContent).toContain(`Science ${phase}`);
+  let finish!: (value: ReturnType<typeof response>) => void;
+  const post = vi.spyOn(api, 'post').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await click('Preload selected worker', true);
+  expect(post).toHaveBeenCalledTimes(1);
+  expect(post).toHaveBeenCalledWith('/api/execution-targets/vast%3A123/preload', { job_id: 'saved' });
+  expect(button('Preview artifact downloads').disabled).toBe(true);
+  expect(button('Start provision').disabled).toBe(true);
+  expect(button('Preloading…').disabled).toBe(true);
+  await act(async () => { finish(response(target)); await settle(); });
+  expect(changed).toHaveBeenCalledTimes(1);
+  expect(button('Start provision').disabled).toBe(false);
 });
 
 it('prepares the entire workflow from one explicit click using its fresh digest, without a Job', async () => {
@@ -133,14 +191,20 @@ it('keeps whole-workflow missing-asset details visible without starting an incom
   expect(posts).toEqual([]);
 });
 
-it.each(['selection', 'worker'])('does not auto-start a late pack preview after changing the %s', async change => {
+it.each(['selection', 'worker', 'attachment', 'readiness', 'runtime'])('does not auto-start a late pack preview after changing the %s', async change => {
   await render(); await select('Preparation workflow', 'structure_prediction');
   let finish!: (value: ReturnType<typeof response>) => void;
   const pending = new Promise<ReturnType<typeof response>>(resolve => { finish = resolve; });
   const post = vi.spyOn(api, 'post').mockReturnValueOnce(pending);
   await click('Prepare entire workflow');
   if (change === 'selection') await select('Preparation workflow', 'antibody_denovo');
-  else { target = { ...target, id: 'vast:456', provider_instance_id: '456' }; await render(); }
+  else {
+    if (change === 'worker') target = { ...target, id: 'vast:456', provider_instance_id: '456' };
+    if (change === 'attachment') target = { ...target, active: false };
+    if (change === 'readiness') target = { ...target, state: 'unavailable' };
+    if (change === 'runtime') target = { ...target, capabilities: { critical_runtime_binding: { release_sha256: 'replacement' } } };
+    await render();
+  }
   await act(async () => { finish(response(preview({ kind: 'workflow_pack', workflow_id: 'structure_prediction' }))); await settle(); });
   expect(post).toHaveBeenCalledTimes(1);
   expect(posts).toEqual([]);
@@ -410,9 +474,8 @@ it('does not restore an old target preview when its request resolves after endpo
   expect(button('Start provision')).toBeUndefined();
 });
 
-it.each(['busy', 'running', 'inactive'])('blocks provisioning when worker is %s', async state => {
+it.each(['busy', 'inactive'])('blocks provisioning when worker is %s', async state => {
   if (state === 'inactive') target = { ...target, active: false };
-  if (state === 'running') target = { ...target, progress: { operation_id: 'run', job_id: 'job', phase: 'running', artifact: null, message: 'Running', updated_at: 'now' } };
   if (state === 'busy') target = { ...target, preload: { ...compactEmpty, operation_id: 'op', job_id: 'job', source_revision: 'a'.repeat(40), source_tree: 'a'.repeat(40), request_sha256: 'a'.repeat(64), phase: 'transferring', artifact: null, message: 'Transferring', started_at: 'now', updated_at: 'now' } };
   await render(); await select('Provision model', 'protenix');
   expect(button('Preview artifact downloads').disabled).toBe(true);

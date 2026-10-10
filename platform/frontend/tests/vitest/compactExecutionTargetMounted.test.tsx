@@ -201,10 +201,10 @@ it('shows concurrent claim activity, including missing progress, without stale c
 });
 
 it.each([
-  { ids: undefined, disabled: true },
+  { ids: undefined, disabled: false },
   { ids: [], disabled: false },
-  { ids: ['one', 'two'], disabled: true },
-])('saved preload respects claim IDs $ids rather than stale progress', async ({ ids, disabled }) => {
+  { ids: ['one', 'two'], disabled: false },
+])('saved preload remains available with claim IDs $ids or legacy progress', async ({ ids, disabled }) => {
   target = { ...target, preload: null, active_job_ids: ids, progress: jobProgress('old') };
   await mount(); await disclose('Prepare worker');
   await act(async () => { const select = container.querySelector<HTMLSelectElement>('[aria-label="Saved Job recipe"]')!;
@@ -212,7 +212,8 @@ it.each([
   const preload = [...container.querySelectorAll('button')].find(item => item.textContent === 'Preload selected worker')!;
   expect(preload.disabled).toBe(disabled);
   if (ids?.length === 0) expect(container.querySelector('[aria-label="Worker activity"]')).toBeNull();
-  if (disabled) { await click('Preload selected worker'); expect(posts).toEqual([]); }
+  await click('Preload selected worker');
+  expect(posts).toEqual([{ url: '/api/execution-targets/vast%3A123/preload', body: { job_id: 'recipe' } }]);
 });
 
 it('uses legacy progress only for responses without claim IDs', async () => {
@@ -225,29 +226,29 @@ it('uses legacy progress only for responses without claim IDs', async () => {
   expect(container.querySelector('[aria-label="Worker activity"]')?.textContent).toContain('Awaiting worker progress');
 });
 
-it('invalidates configured-workflow previews on claim arrival without progress', async () => {
+it('preserves configured-workflow previews on claim arrival and release without progress', async () => {
   target = { ...target, preload: null, active_job_ids: [] };
   await mount('workflow'); await click('Preview artifact downloads');
   const start = () => [...container.querySelectorAll('button')].find(item => item.textContent === 'Start provision')!;
   expect(start().disabled).toBe(false);
   target = { ...target, active_job_ids: ['one', 'two'] }; await mount('workflow');
-  expect(start().disabled).toBe(true);
-  expect(container.querySelector('[aria-label="Provision preview"]')).toBeNull();
+  expect(start().disabled).toBe(false);
+  expect(container.querySelector('[aria-label="Provision preview"]')).not.toBeNull();
   target = { ...target, active_job_ids: [] }; await mount('workflow');
-  expect(start().disabled).toBe(true); // a fresh preview is required after maintenance interruption
+  expect(start().disabled).toBe(false);
   expect([...container.querySelectorAll('button')].find(item => item.textContent === 'Preview artifact downloads')!.disabled).toBe(false);
   expect(posts).toHaveLength(1);
 });
 
-it('blocks saved preload before any claim progress exists and recovers only after the last claim ends', async () => {
+it('keeps saved preload selection enabled throughout claim lifecycle without automatic posts', async () => {
   target = { ...target, preload: null, active_job_ids: ['one', 'two'], progress: null, job_progress: [] };
   await mount(); await disclose('Prepare worker');
   await act(async () => { const select = container.querySelector<HTMLSelectElement>('[aria-label="Saved Job recipe"]')!;
     select.value = 'recipe'; select.dispatchEvent(new Event('change', { bubbles: true })); await settle(); });
   const preload = () => [...container.querySelectorAll('button')].find(item => item.textContent === 'Preload selected worker')!;
-  expect(preload().disabled).toBe(true);
+  expect(preload().disabled).toBe(false);
   target = { ...target, active_job_ids: ['two'] }; await mount();
-  expect(preload().disabled).toBe(true);
+  expect(preload().disabled).toBe(false);
   target = { ...target, active_job_ids: [] }; await mount();
   expect(preload().disabled).toBe(false);
   expect(posts).toEqual([]);
