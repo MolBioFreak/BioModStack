@@ -426,7 +426,13 @@ export function JobSubmission() {
 
     const handleTemplateCardSelect = (templateId: string) => {
         const retainedDeNovo = templateId === DE_NOVO_TEMPLATE ? deNovoDraftRef.current : undefined;
-        setClonedValues(retainedDeNovo ?? getDedicatedTemplateInitialValues(templateId));
+        const projectTemplate = projectSetup.setup
+            ? new URLSearchParams(projectSetup.setup.setup_destination.split('?')[1] ?? '').get('template')
+            : null;
+        const retainedProject = projectSetup.active && projectTemplate === templateId
+            ? projectDraftValues.editor_state ?? projectDraftValues
+            : undefined;
+        setClonedValues(retainedProject ?? retainedDeNovo ?? getDedicatedTemplateInitialValues(templateId));
         if (isDedicatedLauncherTemplate(templateId)) {
             setDedicatedTemplateVersion((prev) => prev + 1);
         }
@@ -1822,6 +1828,7 @@ export function JobSubmission() {
                                     key={`molecular_dynamics:${dedicatedTemplateVersion}`}
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={molecularDynamicsInitialValues}
+                                    onDraftChange={projectSetup.active ? setProjectDraftValues : undefined}
                                     launchContextId={launchContextId}
                                     onOpenStructurePrediction={openMdStructurePrediction}
                                 />

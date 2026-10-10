@@ -38,6 +38,7 @@ from services.protein_project_capabilities import (
     SHAPE_SETUP_CAPABILITY_ID,
     protein_capability_record,
     protein_parameter_schema,
+    protein_setup_parameter_schema,
 )
 
 RelationshipKind = Literal["primary", "follow_up"]
@@ -83,7 +84,9 @@ async def _detailed_document(
     contract = json.loads(row.capability_contract_json)
     capability = contract["capability"]
     draft = json.loads(row.draft_json)
-    if contract["parameter_schema"].get("x-bms-native-editor-draft"):
+    if contract["parameter_schema"].get("x-bms-native-editor-draft") or (
+        "editor_state" in draft and protein_setup_parameter_schema(row.capability_id).get("x-bms-native-editor-draft")
+    ):
         draft = {**draft.get("editor_state", {}), **{
             key: draft[key] for key in ("native_job_request", "shape_submitted_request") if key in draft
         }}
@@ -441,7 +444,12 @@ async def save_workflow_setup_draft(
     contract = json.loads(row.capability_contract_json)
     if sha256_text(row.capability_contract_json) != row.capability_contract_sha256:
         raise ValidationFailure("workflow setup capability contract digest mismatch")
-    materialized, validation_state = _materialize_draft(contract["parameter_schema"], draft)
+    # Editor storage is separate from the immutable scientific capability
+    # contract. Legacy flat drafts still use their original strict schema.
+    draft_schema = contract['parameter_schema']
+    if 'editor_state' in draft:
+        draft_schema = protein_setup_parameter_schema(row.capability_id)
+    materialized, validation_state = _materialize_draft(draft_schema, draft)
     row.draft_json = canonical_json(materialized)
     row.draft_sha256 = sha256_text(row.draft_json)
     row.generation += 1
@@ -506,7 +514,9 @@ async def prepare_workflow_setup_launch(
 
     domain = await session.get(ExperimentAggregateHead, row.domain_experiment_id)
     stored_draft = json.loads(row.draft_json)
-    native = json.loads(row.capability_contract_json)["parameter_schema"].get("x-bms-native-editor-draft")
+    native = json.loads(row.capability_contract_json)["parameter_schema"].get("x-bms-native-editor-draft") or (
+        "editor_state" in stored_draft and protein_setup_parameter_schema(row.capability_id).get("x-bms-native-editor-draft")
+    )
     native_request = stored_draft.get("native_job_request") if native else None
     if row.capability_id == SHAPE_SETUP_CAPABILITY_ID:
         from paths import get_data_root

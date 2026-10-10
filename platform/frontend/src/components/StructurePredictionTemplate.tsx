@@ -645,12 +645,25 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             binderIds.push(autoBinderId);
         }
 
+        // Keep native component annotations (including omitted versus empty MSA)
+        // only while the editable molecular identity still matches the draft.
+        // Do not copy an alignment onto a replaced sequence or expanded count.
+        const retained = Array.isArray(initialValues?.complex_components) ? initialValues.complex_components : [];
+        const nativeComponents = components.map(component => {
+            const original = retained.find((candidate: Record<string, UntypedApiValue>) =>
+                candidate.id === component.id && candidate.type === component.type
+                && candidate.name === component.name
+                && candidate.sequence === component.sequence
+                && candidate.ccd === component.ccd && candidate.smiles === component.smiles
+                && (candidate.count === undefined || candidate.count === 1));
+            return original ? { ...original, ...component } : component;
+        });
         return {
-            components,
+            components: nativeComponents,
             resolvedPrimaryId,
             binderIds,
         };
-    }, [autoBatchBinderMode, implicitBatchBinderId, ligands, primaryChainId, sequence, sequenceBatchPrefix, sequenceName]);
+    }, [autoBatchBinderMode, implicitBatchBinderId, initialValues, ligands, primaryChainId, sequence, sequenceBatchPrefix, sequenceName]);
 
     const proteinBatchTargets = [
         { id: primaryChainId || 'A', name: `${sequenceName || 'Primary'} (${primaryChainId || 'A'})`, role: 'Primary' },
@@ -882,11 +895,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
     }, [continuationSource, continuationChain, initialValues, executionTargetId, jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Settings, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpCpTopology, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
-    // Project drafts reuse the saved-template scientific projection, not a second serializer.
-    const projectDraftJson = JSON.stringify(currentTemplateParams);
-    useEffect(() => {
-        onDraftChange?.(JSON.parse(projectDraftJson) as Record<string, UntypedApiValue>);
-    }, [onDraftChange, projectDraftJson]);
     const targetPreview = targetSource
         ? resolveTargetPreviewSource({
             previewUrl: targetPreviewUrl,
@@ -1166,6 +1174,15 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         try { return buildSubmission(targetSourcePath || targetSource?.path || null).jobRequest; }
         catch { return null; }
     })();
+    // Persist editor state separately; the existing submission owner supplies
+    // the scientific request (or leaves an unfinished draft without one).
+    const projectDraftJson = JSON.stringify({
+        editor_state: currentTemplateParams,
+        ...(workflowRequest ? { native_job_request: workflowRequest } : {}),
+    });
+    useEffect(() => {
+        onDraftChange?.(JSON.parse(projectDraftJson) as Record<string, UntypedApiValue>);
+    }, [onDraftChange, projectDraftJson]);
     const msaCacheKey = JSON.stringify(msaNeeded && workflowRequest ? {
         model_id: workflowRequest.model_id, params: workflowRequest.params,
     } : null);

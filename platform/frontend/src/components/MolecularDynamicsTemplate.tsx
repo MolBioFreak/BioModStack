@@ -44,6 +44,7 @@ interface MolecularDynamicsTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, unknown>;
     launchContextId?: string | null;
+    onDraftChange?: (draft: Record<string, unknown>) => void;
     onOpenStructurePrediction?: (initialValues: Record<string, unknown>) => void;
 }
 
@@ -134,9 +135,8 @@ const initialForm = (initialValues?: Record<string, unknown>): MolecularDynamics
             const value = record[key];
             if (typeof value === typeof result[key]) (result as unknown as Record<string, unknown>)[key] = value;
         });
-        result.structurePath = '';
-        result.coordinatesPath = '';
-        result.topologyPath = '';
+        // Handoff drafts already remove paths at their owner; Project drafts
+        // retain the exact operator-selected inputs for cold reopen.
     }
     return result;
 };
@@ -201,6 +201,7 @@ export function MolecularDynamicsTemplate({
     onBack,
     initialValues,
     launchContextId: routeLaunchContextId = null,
+    onDraftChange,
 }: MolecularDynamicsTemplateProps) {
     const navigate = useNavigate();
     const launchContextId = routeLaunchContextId ?? (typeof initialValues?.md_destination_launch_context_id === 'string' ? initialValues.md_destination_launch_context_id : null);
@@ -232,10 +233,10 @@ export function MolecularDynamicsTemplate({
         () => isResultsViewerDesignHandoff ? null : resolveMolecularDynamicsCloneSource(initialValues || {}),
         [initialValues, isResultsViewerDesignHandoff],
     );
-    const [selectedProfileId, setSelectedProfileId] = useState(String(native?.input.chemistry_profile_id || initialIntent?.chemistry_profile_id || initialChemistry?.profile_id || initialPreparation?.chemistry_profile_id || ''));
-    const [selectedProfileDigest, setSelectedProfileDigest] = useState(String(native?.input.chemistry_profile_sha256 || initialIntent?.chemistry_profile_sha256 || initialChemistry?.profile_sha256 || initialPreparation?.chemistry_profile_sha256 || ''));
+    const [selectedProfileId, setSelectedProfileId] = useState(String(initialValues?.md_selected_profile_id ?? native?.input.chemistry_profile_id ?? initialIntent?.chemistry_profile_id ?? initialChemistry?.profile_id ?? initialPreparation?.chemistry_profile_id ?? ''));
+    const [selectedProfileDigest, setSelectedProfileDigest] = useState(String(initialValues?.md_selected_profile_digest ?? native?.input.chemistry_profile_sha256 ?? initialIntent?.chemistry_profile_sha256 ?? initialChemistry?.profile_sha256 ?? initialPreparation?.chemistry_profile_sha256 ?? ''));
     const returnedPredictionJobId = cloneSource?.kind === 'design' ? '' : routedPredictionJobId;
-    const [sourceMode, setSourceMode] = useState<SourceMode>(cloneSource?.kind === 'design' ? 'design' : returnedPredictionJobId ? 'prediction' : 'rcsb');
+    const [sourceMode, setSourceMode] = useState<SourceMode>((initialValues?.md_source_mode as SourceMode | undefined) ?? (cloneSource?.kind === 'design' ? 'design' : returnedPredictionJobId ? 'prediction' : 'rcsb'));
     const [inspection, setInspection] = useState<MolecularDynamicsStartingStructureInspection | null>(null);
     const [admissionAuthority, setAdmissionAuthority] = useState<{
         sourceSha256: string;
@@ -250,9 +251,9 @@ export function MolecularDynamicsTemplate({
     const [promotedSha256, setPromotedSha256] = useState<string | null>(null);
     const [sourceBusy, setSourceBusy] = useState(false);
     const [sourceError, setSourceError] = useState('');
-    const [rcsbId, setRcsbId] = useState('');
+    const [rcsbId, setRcsbId] = useState(String(initialValues?.md_rcsb_id ?? ''));
     const [uploadFile, setUploadFile] = useState<File | null>(null);
-    const [predictionJobId, setPredictionJobId] = useState(returnedPredictionJobId);
+    const [predictionJobId, setPredictionJobId] = useState(String(initialValues?.md_prediction_job_id ?? returnedPredictionJobId));
     const loadedReturnedPredictionRef = useRef<string | null>(null);
     const [predictionPage, setPredictionPage] = useState<Gen2PredictionPage | null>(null);
     const [selectedPredictionCandidate, setSelectedPredictionCandidate] = useState<Gen2PredictionCandidate | null>(null);
@@ -260,8 +261,8 @@ export function MolecularDynamicsTemplate({
     const [sequenceName, setSequenceName] = useState('MD candidate');
     const [sequenceSource, setSequenceSource] = useState<'new' | 'saved'>('new');
     const [savedSequenceId, setSavedSequenceId] = useState('');
-    const [designId, setDesignId] = useState(cloneSource?.kind === 'design' ? cloneSource.id : '');
-    const [priorMdJobId, setPriorMdJobId] = useState(cloneSource?.kind === 'prior_md_input' ? cloneSource.id : '');
+    const [designId, setDesignId] = useState(String(initialValues?.md_design_id ?? (cloneSource?.kind === 'design' ? cloneSource.id : '')));
+    const [priorMdJobId, setPriorMdJobId] = useState(String(initialValues?.md_prior_job_id ?? (cloneSource?.kind === 'prior_md_input' ? cloneSource.id : '')));
     const [serverSearch, setServerSearch] = useState('');
     const [serverCursor, setServerCursor] = useState<string | null>(null);
     const [sequenceOffset, setSequenceOffset] = useState(0);
@@ -696,6 +697,41 @@ export function MolecularDynamicsTemplate({
         name: form.jobName.trim(), model_id: 'molecular_dynamics', mode: 'simulate',
         params: { md_job_spec: buildMolecularDynamicsJobSpec(form) },
     });
+
+    const projectDraftJson = JSON.stringify({
+        editor_state: {
+            ...initialValues,
+            name: form.jobName,
+            job_name: form.jobName,
+            md_form: { ...form, ...(nativeEnabled && native ? { native_intent: { ...native, name: form.jobName, ...placement } } : {}) },
+            // Raw numeric editor text must survive Save even while incomplete.
+            intent: nativeEnabled && native ? { ...native, name: form.jobName, ...placement }
+                : initialIntent?.schema_version === 'bms.md.launch-intent.v1' ? {
+                    ...initialIntent,
+                    name: form.jobName,
+                    requested_settings: molecularDynamicsRequestedSettings(form),
+                    ...(inspection ? { source_ref: inspection.source_ref, expected_source_sha256: inspection.identity.sha256 } : {}),
+                    chemistry_profile_id: selectedProfileId,
+                    chemistry_profile_sha256: selectedProfileDigest,
+                    ...placement,
+                } : undefined,
+            native_job_request: undefined,
+            md_selected_profile_id: selectedProfileId,
+            md_selected_profile_digest: selectedProfileDigest,
+            md_source_mode: sourceMode,
+            md_rcsb_id: rcsbId,
+            md_prediction_job_id: predictionJobId,
+            md_design_id: designId,
+            md_prior_job_id: priorMdJobId,
+        },
+        ...(!nativeEnabled && form.inputMode === 'prepared' ? (() => {
+            try { return { native_job_request: buildPreparedWorkflowRequest() }; }
+            catch { return {}; }
+        })() : {}),
+    });
+    useEffect(() => {
+        onDraftChange?.(JSON.parse(projectDraftJson) as Record<string, unknown>);
+    }, [onDraftChange, projectDraftJson]);
 
     // Typed launches use GROMACS; prepared systems use the selected engine.
     // Chemistry runtime_version identifies preparation, not a simulator version.
