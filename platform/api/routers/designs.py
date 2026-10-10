@@ -19,7 +19,7 @@ from types import SimpleNamespace
 import math
 import re
 
-from services.scientific_analytics import MetricState, MetricDescriptor, MetricSource, ScientificCohort, owning_jobs, projection, persisted_projection, revision_for_job, partition
+from services.scientific_analytics import MetricState, MetricDescriptor, MetricSource, ScientificCohort, owning_jobs, projection, persisted_projection, revision_for_job, partition, native_scalar_owner
 from database import get_session, Design, Job
 from services.analysis_registry import scientific_contract_revision, unavailable_scientific_identity
 from services.scientific_viewer_contract import ScientificViewerMetric, ScientificResidueMetric, ScientificAtomMetric, ScientificChainMetric, ViewerDocument
@@ -183,6 +183,7 @@ class DesignFrustraMPNNProjection(BaseModel):
 class DesignResponse(BaseModel):
     core_protein_scientific_contract: Optional[int] = None
     scientific_structure_document: Optional[ViewerDocument] = None
+    native_sample: Optional[Dict[str, Any]] = None
     id: str
     job_id: str
     name: str
@@ -883,6 +884,9 @@ def _inject_metric(metrics: Dict[str, float], key: str, value: Any) -> None:
 
 def _review_metric_allowed(design: Design, key: str) -> bool:
     normalized = key.strip().lower()
+    # Native interchain confidence has no binder/target-role prerequisite.
+    if normalized in {"iptm", "protein_iptm", "ligand_iptm", "pair_chains_iptm"}:
+        return True
     if normalized in {
         "ipsae",
         "ipsae_binder_to_target",
@@ -1936,7 +1940,8 @@ def _design_to_response(
         data["frustrampnn"] = None
     fampnn_metrics = _compute_fampnn_response_metrics(
         design,
-        include_structure_fallback=include_fampnn_structure_fallback,
+        include_structure_fallback=(include_fampnn_structure_fallback and
+            not (job and job.model_id in ("boltz", "boltz2", "boltz_cp_experimental"))),
     )
     data.update(fampnn_metrics)
     confidence_metrics = data.get("confidence_metrics") if isinstance(data.get("confidence_metrics"), dict) else {}
@@ -2064,6 +2069,40 @@ def _design_to_response(
         data["binder_length"] = None
 
     capabilities = set(contract.viewer_capabilities)
+    if job is not None and job.model_id in ('boltz', 'boltz2', 'boltz_cp_experimental'):
+        # Prediction B factors are not FAMPNN side-chain errors. Historical
+        # nested fallbacks stay out of current scientific readback; genuine
+        # producer sidecars are retained without interpreting prediction atoms.
+        from services.result_ingester import _find_fampnn_sidecar_path, _load_json_payload
+        sidecar = _find_fampnn_sidecar_path(Path(design.pdb_path), Path(job.output_dir)) if design.pdb_path and job.output_dir else None
+        native_fampnn = _load_json_payload(sidecar) if sidecar else None
+        confidence = dict(data.get('confidence_metrics') or {})
+        provenance = dict(data.get('provenance') or {})
+        if not isinstance(native_fampnn, dict) or not any(k.startswith('fampnn_') for k in native_fampnn):
+            if confidence.pop('fampnn', None) is not None or provenance.get('fampnn') is not None:
+                provenance['unsupported_historical_fampnn_reason'] = 'prediction_bfactor_is_not_psce'
+            provenance.pop('fampnn', None)
+            for key in ('fampnn_psce', 'fampnn_max_residue_psce', 'fampnn_min_residue_psce'):
+                data[key] = None
+            if provenance.get('source') == 'fampnn':
+                provenance['source'] = job.model_id
+        else:
+            confidence['fampnn'] = native_fampnn
+            provenance['fampnn'] = native_fampnn
+            for target, key in (('fampnn_psce', 'fampnn_avg_psce'),
+                    ('fampnn_max_residue_psce', 'fampnn_max_residue_psce'),
+                    ('fampnn_min_residue_psce', 'fampnn_min_residue_psce')):
+                data[target] = _numeric_record_value(native_fampnn, key)
+        data['confidence_metrics'], data['provenance'] = confidence, provenance
+    if job is not None and job.model_id == 'boltz_cp_experimental':
+        from services.boltz_scientific_consumer import retained_cp_snapshot
+        try:
+            retained = retained_cp_snapshot(design, job, roles=('structure',))
+            data['scientific_structure_document'] = dict(documentId='primary', candidateId=design.id,
+                contentSha256=retained['artifacts']['structure']['sha256'], sourceKind='mmcif')
+            data['native_sample'] = retained['producer']
+        except (ValueError, TypeError, KeyError, OSError):
+            pass
 
     def clear_review_fields(*, prefixes: tuple[str, ...] = (), names: tuple[str, ...] = ()) -> None:
         for field_name in tuple(data):
@@ -2075,7 +2114,7 @@ def _design_to_response(
             prefixes=("binder_", "epitope_", "target_", "ipsae"),
             names=(
                 "plddt_binder", "plddt_target", "pae_interaction", "rmsd_binder", "rmsd_target",
-                "iptm", "protein_iptm", "ligand_iptm", "pair_chains_iptm", "affinity_score",
+                "affinity_score",
                 "binder_probability", "detected_target_chain",
             ),
         )
@@ -2258,7 +2297,7 @@ async def _collect_plotly_metrics(
     points: List[PlotlyMetricPoint] = []
     metric_keys: set[str] = set()
     for design in designs:
-        scientific = await persisted_projection(design, session) if revision_for_job(owners.get(design.job_id)) == 1 else None
+        scientific = await persisted_projection(design, session) if native_scalar_owner(owners.get(design.job_id)) else None
         metrics = scientific["metrics"] if scientific else _build_plotly_metrics(design)
         metric_keys.update(metrics.keys())
         points.append(
@@ -2641,8 +2680,9 @@ async def list_designs(
     owners = await owning_jobs(session, designs)
     responses = [_design_to_response(d, job=owners.get(d.job_id)) for d in designs]
     for design, response in zip(designs, responses):
-        response.core_protein_scientific_contract = await scientific_contract_revision(design, session)
-        if response.core_protein_scientific_contract == 1:
+        response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
+            or (1 if response.native_sample and response.scientific_structure_document else None))
+        if response.core_protein_scientific_contract == 1 and not response.native_sample:
             from services.core_protein_scientific_contract import scientific_document
             response.scientific_structure_document = await scientific_document(design, session)
     _enrich_design_responses_from_sources(responses)
@@ -2870,8 +2910,9 @@ async def get_design(
     owners = await owning_jobs(session, [design])
     response = _design_to_response(design, include_fampnn_structure_fallback=True,
                                    job=owners.get(design.job_id))
-    response.core_protein_scientific_contract = await scientific_contract_revision(design, session)
-    if response.core_protein_scientific_contract == 1:
+    response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
+            or (1 if response.native_sample and response.scientific_structure_document else None))
+    if response.core_protein_scientific_contract == 1 and not response.native_sample:
         from services.core_protein_scientific_contract import scientific_document
         response.scientific_structure_document = await scientific_document(design, session)
     return response
@@ -2964,6 +3005,11 @@ async def get_residue_metrics(
         from services.core_protein_scientific_contract import compute_persisted_native_metric
         return await compute_persisted_native_metric(design, "residue_plddt", session)
 
+    owner = await session.get(Job, design.job_id)
+    if owner and owner.model_id == 'boltz_cp_experimental':
+        from services.boltz_scientific_consumer import retained_cp_metric
+        return retained_cp_metric(design, owner, 'residue_plddt')
+
     if not design.residue_plddt:
         raise HTTPException(status_code=404, detail="No per-residue data available for this design")
     
@@ -2991,6 +3037,11 @@ async def get_chain_metrics(design_id: str, session: AsyncSession = Depends(get_
     if await scientific_contract_revision(design, session) == 1:
         from services.core_protein_scientific_contract import compute_persisted_native_metric
         return await compute_persisted_native_metric(design, "chain_metrics", session)
+
+    owner = await session.get(Job, design.job_id)
+    if owner and owner.model_id == 'boltz_cp_experimental':
+        from services.boltz_scientific_consumer import retained_cp_metric
+        return retained_cp_metric(design, owner, 'chain_metrics')
 
     payload = await _get_cached_design_analysis_payload(
         session,
@@ -3109,8 +3160,9 @@ async def get_designs_for_job(
     owners = await owning_jobs(session, designs)
     responses = [_design_to_response(d, job=owners.get(d.job_id)) for d in designs]
     for design, response in zip(designs, responses):
-        response.core_protein_scientific_contract = await scientific_contract_revision(design, session)
-        if response.core_protein_scientific_contract == 1:
+        response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
+            or (1 if response.native_sample and response.scientific_structure_document else None))
+        if response.core_protein_scientific_contract == 1 and not response.native_sample:
             from services.core_protein_scientific_contract import scientific_document
             response.scientific_structure_document = await scientific_document(design, session)
     _enrich_design_responses_from_sources(responses)
@@ -3267,6 +3319,51 @@ class PAEData(BaseModel):
     size: int  # Matrix dimension
 
 
+@router.get("/{design_id}/confidence-artifacts")
+async def get_confidence_artifacts(design_id: str, session: AsyncSession = Depends(get_session)):
+    """Original retained evidence inventory; downloads use the existing file owner."""
+    from urllib.parse import quote
+    from services.boltz_scientific_consumer import retained_cp_paths, verified_boltz_design
+    from services.boltz_scientific_persistence import _snapshot
+    design = await session.get(Design, design_id)
+    if design is None:
+        raise HTTPException(status_code=404, detail='Design not found')
+    job = await session.get(Job, design.job_id)
+    entries, producer = [], None
+    try:
+        if job and revision_for_job(job) == 1 and job.model_id in ('boltz', 'boltz2'):
+            selected = await verified_boltz_design(design, session)
+            producer = selected['block']['producer']
+            root = selected['publication_root']
+            keys = {role: Path(a['path']).relative_to(root).as_posix() for role,a in selected['artifacts'].items()}
+            # Optional native PDE is a same-sample sibling, never substituted
+            # for PAE and never inferred from a launch/save flag.
+            structure_key = Path(keys['structure'])
+            keys['pde'] = (structure_key.parent / f'pde_{structure_key.stem}.npz').as_posix()
+        else:
+            found = retained_cp_paths(design, job)
+            if found is None:
+                return dict(design_id=design_id, status='unavailable', reason='native_inventory_unavailable', artifacts=[])
+            root, keys, producer = found
+        for role, key in keys.items():
+            try:
+                artifact, content = _snapshot(root, key)
+                relative = _safe_allowed_relative(artifact['path'])
+                entries.append(dict(role=role, filename=Path(key).name, retained=True,
+                    artifact_sha256=artifact['sha256'], size_bytes=len(content),
+                    scope='original_native_artifact',
+                    download_url='/api/files/download/' + quote(relative, safe='/') if relative else None,
+                    download_reason=None if relative else 'outside_existing_download_owner'))
+            except (ValueError, OSError):
+                entries.append(dict(role=role, filename=Path(key).name, retained=False,
+                    scope='original_native_artifact', download_url=None, download_reason='not_retained'))
+        return dict(design_id=design_id, status='ok', reason=None, producer=producer,
+            artifacts=entries, mapping_endpoint=f'/api/designs/{design_id}/pae',
+            saved_write_full_pae=(job.params or {}).get('write_full_pae'))
+    except (ValueError, TypeError, KeyError, OSError):
+        return dict(design_id=design_id, status='unavailable', reason='native_inventory_unverified', artifacts=[])
+
+
 @router.get("/{design_id}/pae", response_model=Union[PAEData, ScientificViewerMetric])
 async def get_pae_data(
     design_id: str,
@@ -3290,6 +3387,11 @@ async def get_pae_data(
         from services.analysis_registry import normalize_pae_matrix_params
         payload, _, _ = await compute_persisted_pae(design, normalize_pae_matrix_params({'max_size':max_size}), session)
         return ScientificViewerMetric.model_validate(payload)
+
+    owner = await session.get(Job, design.job_id)
+    if owner and owner.model_id == 'boltz_cp_experimental':
+        from services.boltz_scientific_consumer import retained_cp_metric
+        return retained_cp_metric(design, owner, 'pae', {'max_size': max_size})
 
     payload = await _get_cached_design_analysis_payload(
         session,
@@ -3510,6 +3612,16 @@ async def get_chain_pair_iptm(
     
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
+    owner = await session.get(Job, design.job_id)
+    if owner and owner.model_id in ('boltz', 'boltz2', 'boltz_cp_experimental') and (
+            revision_for_job(owner) == 1 or owner.model_id == 'boltz_cp_experimental'):
+        native = await get_chain_metrics(design_id, session)
+        if isinstance(native, ScientificChainMetric):
+            native_keys = [str(c.native_asym_id) for c in native.chain_index_map]
+            return ChainPairIptmData(design_id=design.id, design_name=design.name,
+                chain_ids=[c.chain_id for c in native.chain_index_map], size=len(native_keys),
+                iptm_matrix=[[native.pair_chains_iptm[r][c] for c in native_keys] for r in native_keys])
+        raise HTTPException(status_code=409, detail='native chain identity mapping unavailable')
     contract = resolve_result_contract(review_profile_id=design.review_profile_id)
     if "complex_interface_metrics" not in contract.viewer_capabilities:
         raise HTTPException(

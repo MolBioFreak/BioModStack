@@ -719,6 +719,7 @@ def _build_fampnn_payload(fam_payload: Optional[Dict[str, Any]], fam_metrics: Di
 def _extract_fampnn_metrics(
     fam_payload: Optional[Dict[str, Any]],
     structure_path: Optional[Path] = None,
+    *, allow_structure_psce: bool = False,
 ) -> Dict[str, Any]:
     metrics = _default_fampnn_metrics()
 
@@ -809,7 +810,9 @@ def _extract_fampnn_metrics(
     need_scores = any(v is None for v in (avg_psce, max_residue_psce, min_residue_psce))
     historical_scores = policy is None and any(v is not None for v in (avg_psce, max_residue_psce, min_residue_psce, chain_avg_psce))
     structure_metrics = _default_fampnn_metrics()
-    if need_scores and not historical_scores:
+    if need_scores and not historical_scores and allow_structure_psce:
+        # Only an explicit FAMPNN structure producer may interpret its B field
+        # as PSCE. Prediction/validation structures carry different quantities.
         structure_metrics = _compute_fampnn_metrics_from_structure(structure_path, policy)
         if structure_metrics.get("psce_policy"):
             metrics["psce_policy"] = structure_metrics["psce_policy"]
@@ -5571,7 +5574,8 @@ async def _ingest_job_results(
                     structure_cdr_lengths = _parse_hlt_cdr_lengths(structure_path)
                     fam_json_path = _find_fampnn_sidecar_path(structure_path, output_path) if structure_path else None
                     fam_payload = _load_json_payload(fam_json_path) if fam_json_path else None
-                    fam_metrics = _extract_fampnn_metrics(fam_payload, structure_path)
+                    fam_metrics = _extract_fampnn_metrics(fam_payload, structure_path,
+                        allow_structure_psce=job_context.get("stage_family") == "fampnn")
                     fampnn_record = _build_fampnn_payload(fam_payload, fam_metrics)
                     canonical_row = canonical_metadata.get(canonical_design_id)
                     strict_projection: dict[str, Any] = {}
@@ -8064,7 +8068,8 @@ async def ingest_loose_files(
                     structure_path=structure_path,
                     source_identity=fam_payload,
                 )
-                fam_metrics = _extract_fampnn_metrics(fam_payload, structure_path)
+                fam_metrics = _extract_fampnn_metrics(fam_payload, structure_path,
+                    allow_structure_psce=job_context.get("stage_family") == "fampnn" and not is_fold_cp)
                 fampnn_record = _build_fampnn_payload(fam_payload, fam_metrics)
                     
                 # For raw RFantibody outputs, the meaningful confidence lives in the

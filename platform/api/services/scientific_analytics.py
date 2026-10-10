@@ -32,7 +32,7 @@ class MetricState(ClosedModel):
 
 class MetricDescriptor(ClosedModel):
     metric_id: str
-    source: Literal['canonical_artifact']
+    source: Literal['canonical_artifact', 'retained_native_artifact', 'external_provider_artifact']
     scope: str
     unit: str
     direction: Literal['higher', 'lower', 'none']
@@ -88,7 +88,8 @@ class ScientificCohort(ClosedModel):
 
 # Owner-fixed native definitions also describe unreadable evidence without
 # trusting a tampered compact block for its descriptor or supported metric list.
-_BOLTZ = {'ptm': ('dimensionless', 'overall'), 'complex_plddt': ('fraction', 'complex')}
+from services.boltz_scientific_consumer import SCALAR_DESCRIPTORS
+_BOLTZ = {key: (unit, scope) for key, (unit, scope, _) in SCALAR_DESCRIPTORS.items()}
 
 
 def metric_state(value):
@@ -99,7 +100,7 @@ def metric_state(value):
     return MetricState(state='ok', value=value, reason_code=None)
 
 
-def projection(design, *, records=(), invalid_reason=None, model_id=None):
+def projection(design, *, records=(), invalid_reason=None, model_id=None, source_kind='canonical_artifact'):
     """Project owner-verified records; never read legacy columns as canonical."""
     states, descriptors, sources = {}, {}, {}
     for record in records:
@@ -108,13 +109,16 @@ def projection(design, *, records=(), invalid_reason=None, model_id=None):
         if key in states:
             raise ValueError('duplicate canonical metric')
         states[key] = MetricState(**{k:record[k] for k in ('state','value','reason_code')})
-        descriptors[key] = MetricDescriptor(metric_id=key, source='canonical_artifact',
+        descriptors[key] = MetricDescriptor(metric_id=key, source=source_kind,
             scope=record['scope'], unit=record['unit'],
             direction={'higher_is_better':'higher','lower_is_better':'lower','neutral':'none'}[record['direction']],
             producer_version=record['producer_version'], derivation_version=record['derivation_version'])
         sources[key] = MetricSource.model_validate(record['source']).model_dump()
     if invalid_reason:
-        expected = _BOLTZ if model_id in ('boltz', 'boltz2') else {}
+        expected = _BOLTZ if model_id in ('boltz', 'boltz2', 'boltz_cp_experimental') else {}
+        if model_id == 'boltz_api':
+            expected = {k:v for k,v in _BOLTZ.items() if k != 'confidence_score'}
+            expected['structure_confidence'] = ('dimensionless', 'provider_native_structure_confidence')
         if model_id in ('esmfold2', 'esmfold2_experimental'):
             from services.esmfold2_scientific_consumer import DESCRIPTORS
             expected = {d['metric_key']: (d['unit'], d['scope']) for d in DESCRIPTORS}
@@ -131,8 +135,8 @@ def projection(design, *, records=(), invalid_reason=None, model_id=None):
             expected = {d['metric_key']: (d['unit'], d['scope']) for d in SCALAR_DESCRIPTORS}
         for key, (unit, scope) in expected.items():
             states[key] = MetricState(state='invalid', value=None, reason_code=invalid_reason)
-            descriptors[key] = MetricDescriptor(metric_id=key, source='canonical_artifact', scope=scope,
-                unit=unit, direction='lower' if key in ('filter_rmsd', 'gpde') else 'higher',
+            descriptors[key] = MetricDescriptor(metric_id=key, source=source_kind, scope=scope,
+                unit=unit, direction='lower' if key in ('filter_rmsd', 'gpde', 'complex_pde', 'complex_ipde') else 'higher',
                 producer_version='unverified', derivation_version='unverified')
             sources[key] = None
     signature = json.dumps({k:d.model_dump() for k,d in sorted(descriptors.items())}, sort_keys=True, separators=(',',':'))
@@ -144,13 +148,39 @@ def projection(design, *, records=(), invalid_reason=None, model_id=None):
         metrics={k:s.value for k,s in states.items() if s.state == 'ok'})
 
 
+def native_scalar_owner(job):
+    return job is not None and (revision_for_job(job) == 1
+        or job.model_id == 'boltz_cp_experimental'
+        or ((job.provenance or {}).get('external_import') or {}).get('provider') == 'boltz_api')
+
+
+def retained_scalar_projection(design, job):
+    from services.boltz_scientific_consumer import retained_cp_snapshot, scalar_records
+    external = ((job.provenance or {}).get('external_import') or {}).get('provider') == 'boltz_api'
+    if external:
+        from services.external_imports.boltz_api import retained_scalar_records
+        records = retained_scalar_records(design, job)
+        return projection(design, records=records, source_kind='external_provider_artifact')
+    selected = retained_cp_snapshot(design, job, roles=('structure', 'metrics'))
+    source = dict(artifact_sha256=selected['artifacts']['metrics']['sha256'],
+        candidate_id=design.id, document_id=selected['producer']['producer_output_key'])
+    records = scalar_records(json.loads(selected['snapshots']['metrics']), source,
+        'boltz-cp:retained-output')
+    return projection(design, records=records, source_kind='retained_native_artifact')
+
+
 async def persisted_projection(design, session):
     """Keep owning-Job lookup and publication verification in the same read."""
     with session.no_autoflush:
         job = await session.get(Job, design.job_id)
-        if job is None or revision_for_job(job) != 1:
-            raise ValueError('canonical projection requires marked owning Job')
+        if job is None or not native_scalar_owner(job):
+            raise ValueError('native projection requires owning Job')
         try:
+            if revision_for_job(job) != 1:
+                # Plotly's compact query defers structure/provenance columns.
+                # Resolve them asynchronously, never trigger implicit ORM I/O.
+                await session.refresh(design, attribute_names=['pdb_path', 'provenance'])
+                return retained_scalar_projection(design, job)
             if job.model_id in ('boltz', 'boltz2'):
                 from services.boltz_scientific_consumer import verified_boltz_design
                 selected = await verified_boltz_design(design, session)
@@ -170,6 +200,11 @@ async def persisted_projection(design, session):
             # bytes before contributing canonical scalar records here.
             return projection(design, invalid_reason='missing_canonical_publication', model_id=job.model_id)
         except (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError):
+            if revision_for_job(job) != 1:
+                external = ((job.provenance or {}).get('external_import') or {}).get('provider') == 'boltz_api'
+                return projection(design, invalid_reason='invalid_retained_native_evidence',
+                    model_id='boltz_api' if external else job.model_id,
+                    source_kind='external_provider_artifact' if external else 'retained_native_artifact')
             return projection(design, invalid_reason='invalid_canonical_publication', model_id=job.model_id)
 
 
@@ -210,7 +245,7 @@ def summarize(rows):
 async def partition(designs, owners, session, projections=None):
     legacy, grouped = [], {}
     for design in designs:
-        if revision_for_job(owners.get(design.job_id)) != 1:
+        if not native_scalar_owner(owners.get(design.job_id)):
             legacy.append(design)
         else:
             value = projections[design.id] if projections is not None else await persisted_projection(design, session)
