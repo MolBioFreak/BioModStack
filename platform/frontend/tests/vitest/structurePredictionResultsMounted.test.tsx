@@ -107,8 +107,8 @@ it.each([false, true])('standalone analytics preserves the real profile in canon
     await act(async () => tree!.root.findByProps({ 'aria-label': 'Row chain' }).props.onChange({ target: { value: 'E' } }));
     expect(heatmap().data[0].z).toEqual(b.pae.pae_matrix.slice(3));
     expect(calls.filter(c => c.method !== 'get').every(c => c.url.endsWith('/plotly-metrics'))).toBe(true);
-    expect(text(tree!.root)).toContain('Exploratory scalar analytics and Plotly Lab');
-    if (canonical) expect(tree!.root.findAllByProps({ 'aria-label': 'Plotly Lab' }).length).toBeGreaterThan(0);
+    expect(text(tree!.root)).toContain('Metric comparisons and custom charts');
+    if (canonical) expect(tree!.root.findAllByProps({ 'aria-label': 'Custom charts' }).length).toBeGreaterThan(0);
 });
 it('native atom profiles explicitly select protein CA; ligand atoms and DNA CA are not averaged', () => {
     const result = confidenceProfile(a.confidence, designs[0]);

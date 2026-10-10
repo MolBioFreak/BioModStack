@@ -36,10 +36,10 @@ async function mount(points: any[], designs = points, extra = {}, loadedDesignCo
     return { host, requests };
 }
 
-test('canonical observations use real Plotly Lab, histogram and heatmap with zero and missing values intact', async () => {
+test('canonical observations use real Custom charts, histogram and heatmap with zero and missing values intact', async () => {
     const points = [row('missing', null), row('zero', 0), row('five', 5)];
     const { host } = await mount(points);
-    expect(host.querySelector('[aria-label="Plotly Lab"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Custom charts"]')).not.toBeNull();
     expect(scatter(host).data[0].x).toEqual([0, 0, 0]);
     expect(scatter(host).data[0].y).toEqual([2, 2, 2]);
     expect(plots(host).some(plot => plot.data[0].type === 'histogram')).toBe(true);
@@ -49,13 +49,13 @@ test('canonical observations use real Plotly Lab, histogram and heatmap with zer
     expect(scatter(host).data[0].y).toEqual([0, 5]);
     expect(scatter(host).data[0].customdata).toEqual(['zero', 'five']);
     expect(host.textContent).toContain('2 plotted · 1 omitted');
-    await change(host, 'Plotly Lab palette', 'Cividis');
+    await change(host, 'Custom chart palette', 'Cividis');
     expect(scatter(host).data[0].marker.colorscale).toBe('Cividis');
     await change(host, 'Scatter drag mode', 'lasso');
     expect(scatter(host).layout.dragmode).toBe('lasso');
-    await change(host, 'Plotly Lab view', '3D');
+    await change(host, 'Custom chart view', '3D');
     expect(plots(host).find(plot => plot.data[0].type === 'scatter3d').data[0].z).toEqual([2, 2]);
-    await change(host, 'Plotly Lab view', '2D');
+    await change(host, 'Custom chart view', '2D');
     expect((host.querySelector('[aria-label="2D Y metric"]') as HTMLSelectElement).value).toBe('rmsd_overall');
     await change(host, 'Sort measurements', 'rmsd_overall');
     const detail = host.querySelector('[aria-label="Sort measurements"]')!.closest('details')!;
@@ -152,14 +152,14 @@ test('sampled canonical charts disclose their loaded-result scope', async () => 
     expect(scatter(host).data[0].customdata).toEqual(['sample']);
 });
 
-test('ordinary results retain the existing rich dashboard and configurable Plotly Lab', async () => {
+test('ordinary results retain the existing rich dashboard and configurable Custom charts', async () => {
     const designs = [{ id: 'legacy', name: 'Ordinary prediction', plddt_overall: 80, pae_overall: 2, ptm: 0.8,
         viewer_capabilities: ['global_confidence', 'complex_interface_metrics'], analysis_contract_id: 'structure_prediction_v1' }];
     const { host } = await mount([{ id: 'legacy', name: 'Ordinary prediction', metrics: { plddt_overall: 80, pae_overall: 2, ptm: 0.8 } }], designs);
     expect(plots(host).length).toBeGreaterThan(0);
-    const button = [...host.querySelectorAll('button')].find(button => button.textContent?.includes('Plotly Lab'));
+    const button = [...host.querySelectorAll('button')].find(button => button.textContent?.includes('custom charts'));
     expect(button).toBeDefined();
     await act(async () => button!.click());
-    expect(host.querySelector('[aria-label="Plotly Lab"]')).not.toBeNull();
-    expect(host.querySelector('[aria-label="Plotly Lab view"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Custom charts"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Custom chart view"]')).not.toBeNull();
 });

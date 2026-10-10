@@ -27,7 +27,7 @@ test.each(['zero','csv_zero','missing','invalid','source_swapped','unknown_produ
     expect(host.textContent).toContain('design_ptm / native_design_chain_tokens / fraction');
     expect(host.textContent).toContain(`filter_rmsd / ${name==='csv_zero'?'native_refolded_complex_backbone':'native_filter_complex_alignment'} / angstrom`);
     if(name==='zero'||name==='csv_zero'){
-        expect(host.querySelector('[aria-label="Plotly Lab"]')).not.toBeNull();
+        expect(host.querySelector('[aria-label="Custom charts"]')).not.toBeNull();
         await change(host, '2D X metric', 'design_ptm');
         await change(host, '2D Y metric', name === 'csv_zero' ? 'filter_rmsd' : 'affinity_probability');
         const count = wire.points.length;
@@ -37,7 +37,7 @@ test.each(['zero','csv_zero','missing','invalid','source_swapped','unknown_produ
         expect(scatter(host).layout.yaxis.title.text).toContain(name === 'csv_zero' ? '(angstrom)' : '(fraction)');
     }else{
         if (Object.keys(wire.points[0].metrics).length) {
-            expect(host.querySelector('[aria-label="Plotly Lab"]')).not.toBeNull();
+            expect(host.querySelector('[aria-label="Custom charts"]')).not.toBeNull();
             expect(plots(host).some(plot => plot.data[0].type === 'histogram')).toBe(true);
             expect([...host.querySelectorAll('select[aria-label="2D X metric"] option')].map(option => (option as HTMLOptionElement).value)).not.toContain('design_ptm');
         } else {

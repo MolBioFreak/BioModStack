@@ -453,7 +453,7 @@ function ScalarAnalyticsDisclosure(props: AnalyticsDashboardProps) {
     const [opened, setOpened] = useState(false);
     return <details className="m-4 rounded-xl border border-[var(--border-color)] p-4"
         onToggle={event => { if (event.currentTarget.open) setOpened(true); }}>
-        <summary>Exploratory scalar analytics and Plotly Lab</summary>
+        <summary>Metric comparisons and custom charts</summary>
         {opened && <GovernedAnalyticsDashboard {...props} />}
     </details>;
 }
@@ -1388,7 +1388,7 @@ function LegacyAnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisLe
                         </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
-                        <button type="button" className="rounded-lg border px-3 py-2 text-sm" aria-expanded={showPlotlyLab} onClick={() => setShowPlotlyLab(value => !value)}>{showPlotlyLab ? 'Close Plotly Lab' : 'Open Plotly Lab'}</button>
+                        <button type="button" className="rounded-lg border px-3 py-2 text-sm" aria-expanded={showPlotlyLab} onClick={() => setShowPlotlyLab(value => !value)}>{showPlotlyLab ? 'Close custom charts' : 'Open custom charts'}</button>
                         <button
                             type="button"
                             onClick={() => setShowAdvancedCharts((current) => !current)}

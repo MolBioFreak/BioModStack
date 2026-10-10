@@ -250,7 +250,7 @@ export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSele
                     <p className="pt-2 text-xs text-[var(--text-secondary)]">Shown only when this record reports a complete coil/helix/strand partition. Not a campaign or binding composition.</p>
                 </article>}
             </div>
-            <p className="text-xs text-[var(--text-secondary)]">Click a point to inspect it. Box or lasso selection adds records to your selection; the camera downloads an SVG. Use Plotly Lab to change measurements and colors.</p>
+            <p className="text-xs text-[var(--text-secondary)]">Click a point to inspect it. Box or lasso selection adds records to your selection; the camera downloads an SVG. Use custom charts to change measurements and colors.</p>
         </>}
         {mode === 'analytics' && <>
             {numeric.length > 0 && <article className={card}>

@@ -78,7 +78,7 @@ it('prefers exact recorded iPTM over coldspot and iptm_loss, retaining operator 
         row.analytics.phase_metrics.refine = { 'human_EGFR.iptm': { last: 0.72 }, 'human_EGFR.iptm_loss': { last: 8 } };
     }
     await mount(rows);
-    await click('Plotly Lab');
+    await click('Custom charts');
     const screen = 'screen · human_EGFR.iptm · last recorded';
     const refine = 'refine · human_EGFR.iptm · last recorded';
     expect(control('X metric').props.value).toBe(screen);
@@ -91,7 +91,7 @@ it('prefers exact recorded iPTM over coldspot and iptm_loss, retaining operator 
     await change('Distribution metric', screen);
     await change('Search candidates', 'nothing matches');
     await change('Search candidates', '');
-    await click('Trajectory 1'); await flush(); await click('Plotly Lab');
+    await click('Trajectory 1'); await flush(); await click('Custom charts');
     expect(control('X metric').props.value).toBe('seq_length');
     expect(control('Y metric').props.value).toBe(refine);
     expect(control('Distribution metric').props.value).toBe(screen);
@@ -111,7 +111,7 @@ it('fills three pages; table, plots, outcomes, cross-page selection and native J
     expect(reads).toHaveLength(3);
 });
 it('preserves axes/search/selection when a plotted trajectory opens its exact paginated phase trace and returns', async () => {
-    await mount(fixture(205), { traceTotal: 1005 }); await click('Plotly Lab');
+    await mount(fixture(205), { traceTotal: 1005 }); await click('Custom charts');
     await change('Search candidates', 'exact/design-204'); await click('Select all matching (1)');
     await change('Y metric', 'screen · human_EGFR.iptm · peak recorded');
     const scatter = tree.root.findAllByType(Plot).find(node => node.props.data[0]?.type === 'scatter')!;
@@ -119,7 +119,7 @@ it('preserves axes/search/selection when a plotted trajectory opens its exact pa
     expect(reads.filter(url => url.pathname.endsWith('/trajectory')).map(url => [url.searchParams.get('design'), url.searchParams.get('offset')])).toEqual([['exact/design-204', '0'], ['exact/design-204', '1000']]);
     expect(text(control('Native trajectory detail'))).toContain('1005 of 1005 recorded updates');
     expect(text(control('Native trajectory detail'))).toContain('not the final acceptance scores');
-    await click('Plotly Lab');
+    await click('Custom charts');
     expect(control('Search candidates').props.value).toBe('exact/design-204');
     expect(control('Y metric').props.value).toBe('screen · human_EGFR.iptm · peak recorded');
     expect(control('Select Trajectory 205').props.checked).toBe(true);

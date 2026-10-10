@@ -15,7 +15,7 @@ const wire = path ? JSON.parse(readFileSync(path,'utf8')) : null;
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(async () => {if (root) await act(async()=>root!.unmount()); document.body.innerHTML='';});
 
-test('published SQLite API bytes reach the existing Plotly Lab and distributions', async () => {
+test('published SQLite API bytes reach the existing Custom charts and distributions', async () => {
     expect(wire, 'BMS_ANALYTICS_WIRE must be produced by the API fixture').not.toBeNull();
     validateScientificEnvelope(wire);
     const points = parseMetricPoints(wire.points) as ScientificPoint[];
@@ -29,7 +29,7 @@ test('published SQLite API bytes reach the existing Plotly Lab and distributions
     expect(requests).toContain('/api/designs/by-job/job/plotly-metrics');
     expect(host.textContent).toContain('complex_plddt / complex / fraction');
     expect(host.textContent).toContain('ptm / overall / dimensionless');
-    expect(host.querySelector('[aria-label="Plotly Lab"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Custom charts"]')).not.toBeNull();
     await change(host, '2D X metric', 'complex_plddt');
     await change(host, '2D Y metric', 'ptm');
     expect(scatter(host).data[0].x).toEqual(points.map(point => point.metrics.complex_plddt));
