@@ -1,7 +1,48 @@
 {
-  "source_commit": "475af73de71dddd18e160552e91b038257537958",
+  "source_commit": "e4decce4308235148b8bb2cb21046309fcbcfed6",
   "request": {
     "$defs": {
+      "AreaPoint": {
+        "additionalProperties": false,
+        "properties": {
+          "height_mm": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Height Mm"
+          },
+          "area_mm2": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Area Mm2"
+          }
+        },
+        "required": [
+          "height_mm",
+          "area_mm2"
+        ],
+        "title": "AreaPoint",
+        "type": "object"
+      },
       "AuthoredReference": {
         "additionalProperties": false,
         "properties": {
@@ -82,6 +123,37 @@
           "positive_steps_direction"
         ],
         "title": "AxisCalibration",
+        "type": "object"
+      },
+      "ChannelWell": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "maximum": 3,
+            "minimum": 0,
+            "title": "Channel",
+            "type": "integer"
+          },
+          "row": {
+            "title": "Row",
+            "type": "integer"
+          },
+          "column": {
+            "title": "Column",
+            "type": "integer"
+          },
+          "well_id": {
+            "title": "Well Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "row",
+          "column",
+          "well_id"
+        ],
+        "title": "ChannelWell",
         "type": "object"
       },
       "DetectedReference": {
@@ -746,6 +818,17 @@
             "title": "Positioning",
             "type": "object"
           },
+          "rack_transform": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RackTransform"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "pickup": {
             "$ref": "#/$defs/SurfaceMove"
           },
@@ -805,6 +888,100 @@
           "calibration"
         ],
         "title": "ProfilePickup",
+        "type": "object"
+      },
+      "RackReference": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "rack",
+            "title": "Kind",
+            "type": "string"
+          },
+          "transform": {
+            "$ref": "#/$defs/RackTransform"
+          },
+          "fallback_position_steps": {
+            "title": "Fallback Position Steps",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "transform",
+          "fallback_position_steps"
+        ],
+        "title": "RackReference",
+        "type": "object"
+      },
+      "RackTransform": {
+        "additionalProperties": false,
+        "properties": {
+          "calibration_id": {
+            "title": "Calibration Id",
+            "type": "string"
+          },
+          "provenance": {
+            "title": "Provenance",
+            "type": "string"
+          },
+          "origin_mm": {
+            "$ref": "#/$defs/Vector3"
+          },
+          "row_pitch_mm": {
+            "$ref": "#/$defs/Vector3"
+          },
+          "column_pitch_mm": {
+            "$ref": "#/$defs/Vector3"
+          },
+          "tool_offset_mm": {
+            "$ref": "#/$defs/Vector3"
+          },
+          "reference_tip_offset_mm": {
+            "$ref": "#/$defs/Vector3"
+          },
+          "reference_channel": {
+            "maximum": 3,
+            "minimum": 0,
+            "title": "Reference Channel",
+            "type": "integer"
+          },
+          "channel_wells": {
+            "items": {
+              "$ref": "#/$defs/ChannelWell"
+            },
+            "title": "Channel Wells",
+            "type": "array"
+          },
+          "x_steps_per_mm": {
+            "$ref": "#/$defs/Vector3"
+          },
+          "y_steps_per_mm": {
+            "$ref": "#/$defs/Vector3"
+          },
+          "z_steps_per_mm": {
+            "$ref": "#/$defs/Vector3"
+          },
+          "native_origin_steps": {
+            "$ref": "#/$defs/Vector3"
+          }
+        },
+        "required": [
+          "calibration_id",
+          "provenance",
+          "origin_mm",
+          "row_pitch_mm",
+          "column_pitch_mm",
+          "tool_offset_mm",
+          "reference_tip_offset_mm",
+          "reference_channel",
+          "channel_wells",
+          "x_steps_per_mm",
+          "y_steps_per_mm",
+          "z_steps_per_mm",
+          "native_origin_steps"
+        ],
+        "title": "RackTransform",
         "type": "object"
       },
       "SourceAir": {
@@ -990,7 +1167,9 @@
             "discriminator": {
               "mapping": {
                 "authored": "#/$defs/AuthoredReference",
-                "detected": "#/$defs/DetectedReference"
+                "detected": "#/$defs/DetectedReference",
+                "rack": "#/$defs/RackReference",
+                "vessel": "#/$defs/VesselReference"
               },
               "propertyName": "kind"
             },
@@ -1000,6 +1179,12 @@
               },
               {
                 "$ref": "#/$defs/DetectedReference"
+              },
+              {
+                "$ref": "#/$defs/VesselReference"
+              },
+              {
+                "$ref": "#/$defs/RackReference"
               }
             ],
             "title": "Reference"
@@ -1070,7 +1255,14 @@
           "length_mm": {
             "anyOf": [
               {
+                "type": "integer"
+              },
+              {
                 "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
               },
               {
                 "type": "null"
@@ -1082,7 +1274,14 @@
           "orifice_mm": {
             "anyOf": [
               {
+                "type": "integer"
+              },
+              {
                 "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
               },
               {
                 "type": "null"
@@ -1094,7 +1293,14 @@
           "usable_capacity_ul": {
             "anyOf": [
               {
+                "type": "integer"
+              },
+              {
                 "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
               },
               {
                 "type": "null"
@@ -1102,6 +1308,37 @@
             ],
             "default": null,
             "title": "Usable Capacity Ul"
+          },
+          "seal_geometry": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Seal Geometry"
+          },
+          "seal_diameter_mm": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Seal Diameter Mm"
           },
           "rack_id": {
             "anyOf": [
@@ -1136,6 +1373,296 @@
           "filtered"
         ],
         "title": "TipProfile",
+        "type": "object"
+      },
+      "Vector3": {
+        "additionalProperties": false,
+        "properties": {
+          "x": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "X"
+          },
+          "y": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Y"
+          },
+          "z": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Z"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "z"
+        ],
+        "title": "Vector3",
+        "type": "object"
+      },
+      "VesselGeometry": {
+        "additionalProperties": false,
+        "properties": {
+          "vessel_id": {
+            "title": "Vessel Id",
+            "type": "string"
+          },
+          "provenance": {
+            "title": "Provenance",
+            "type": "string"
+          },
+          "shape": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Shape"
+          },
+          "bottom": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bottom"
+          },
+          "cross_section_model": {
+            "anyOf": [
+              {
+                "enum": [
+                  "constant",
+                  "linear_area"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cross Section Model"
+          },
+          "area_mm2": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Area Mm2"
+          },
+          "area_points": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/AreaPoint"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Area Points"
+          },
+          "fill_ul": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Fill Ul"
+          },
+          "fill_provenance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Fill Provenance"
+          },
+          "dead_volume_ul": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Dead Volume Ul"
+          },
+          "inaccessible_volume_ul": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Inaccessible Volume Ul"
+          },
+          "surface_timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Surface Timestamp"
+          }
+        },
+        "required": [
+          "vessel_id",
+          "provenance"
+        ],
+        "title": "VesselGeometry",
+        "type": "object"
+      },
+      "VesselReference": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "vessel",
+            "title": "Kind",
+            "type": "string"
+          },
+          "vessel": {
+            "$ref": "#/$defs/VesselGeometry"
+          },
+          "selected_level": {
+            "enum": [
+              "surface",
+              "bottom",
+              "accessible_floor"
+            ],
+            "title": "Selected Level",
+            "type": "string"
+          },
+          "bottom_head_steps": {
+            "title": "Bottom Head Steps",
+            "type": "integer"
+          },
+          "calibration": {
+            "$ref": "#/$defs/AxisCalibration"
+          },
+          "tip_correction_mm": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Tip Correction Mm"
+          },
+          "fallback_position_steps": {
+            "title": "Fallback Position Steps",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "vessel",
+          "selected_level",
+          "bottom_head_steps",
+          "calibration",
+          "tip_correction_mm",
+          "fallback_position_steps"
+        ],
+        "title": "VesselReference",
         "type": "object"
       }
     },

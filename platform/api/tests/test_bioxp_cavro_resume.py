@@ -18,7 +18,7 @@ async def test_typed_profile_pickup_nested_numeric_text(store):
     assert result['document'], result['issues']
     params = result['document']['stages'][0]['actions'][0]['params']
     assert params['profile']['nominal_volume_ul'] == 10
-    assert params['profile']['usable_capacity_ul'] == 10.5
+    assert params['profile']['usable_capacity_ul'] == '10.5'  # native exact Number now admits decimal text
     assert params['calibration']['pickup']['reference']['position_steps'] == 40000
     assert params['calibration']['retract']['displacement']['offset_steps'] == -100
     assert request == PROFILE_REQUEST
