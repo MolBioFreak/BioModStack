@@ -164,6 +164,8 @@ def native_action(operation, inputs):
                         validate_instructions(child)
         validate_instructions(value)
         if field == 'recipe':
+            if value.get('selected_correction') is None and value.get('commanded_aspiration_ul') is None:
+                raise ValueError('explicit commanded_aspiration_ul or selected_correction required by native Recipe')
             if value.get('selected_correction') is not None and value.get('commanded_aspiration_ul') is not None:
                 raise ValueError('selected_correction conflicts with explicitly commanded_aspiration_ul; native evaluates a selected correction once')
             multi = value['multi']

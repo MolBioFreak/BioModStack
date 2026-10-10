@@ -170,6 +170,7 @@ def test_selected_class_correction_preserves_pin_and_no_bms_arithmetic():
     assert request == before
     export('selected-correction', {'request': request, 'result': result})
     inputs['recipe']['selected_correction'] = None
+    assert compile_method(request)['document'] is None  # native still requires an explicit displacement source
     inputs['recipe']['commanded_aspiration_ul'] = '21.125'
     disabled = compile_method(request)
     assert disabled['document'], disabled['issues']
