@@ -8,6 +8,7 @@ export interface CohortInitialMetrics { x?: string; y?: string; distribution?: s
 
 interface Props {
     initialMetrics?: CohortInitialMetrics;
+    retentionKey?: string;
     rows: CohortRow[];
     selectedIds: string[];
     activeId?: string;
@@ -69,26 +70,38 @@ export function CohortPlot({ label, data, layout, onClick, onSelected, height = 
     </div>;
 }
 
-export function CohortAnalytics({ rows, selectedIds, activeId, onInspect, onSelect, mode, initialMetrics, getMetricLabel = metricLabel, getMetricDescription, renderMetricPicker, inspectionHint = 'click a point to inspect its exact native document' }: Props): JSX.Element {
+export function CohortAnalytics({ retentionKey, rows, selectedIds, activeId, onInspect, onSelect, mode, initialMetrics, getMetricLabel = metricLabel, getMetricDescription, renderMetricPicker, inspectionHint = 'click a point to inspect its exact native document' }: Props): JSX.Element {
     const caption = getMetricLabel;
     const description = (key: string) => getMetricDescription?.(key) || `${caption(key)}: recorded value; missing values are omitted.`;
-    const [palette, setPalette] = useState('Viridis');
-    const [reverse, setReverse] = useState(false);
+    // Settings are browser-session UI state, not scientific data or workspace selection.
+    const [saved] = useState<Record<string, unknown>>(() => {
+        try {
+            const value = retentionKey ? JSON.parse(sessionStorage.getItem(`${retentionKey}:settings`) ?? '{}') : {};
+            return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+        } catch { return {}; }
+    });
+    const [palette, setPalette] = useState(typeof saved.palette === 'string' ? saved.palette : 'Viridis');
+    const [reverse, setReverse] = useState(typeof saved.reverse === 'boolean' ? saved.reverse : false);
     const numeric = useMemo(() => numericMetricKeys(rows), [rows]);
     const allKeys = useMemo(() => metricKeys(rows), [rows]);
-    const [xChoice, setXChoice] = useState(initialMetrics?.x ?? 'seq_length');
-    const [yChoice, setYChoice] = useState(initialMetrics?.y ?? 'dsasa');
-    const [distributionChoice, setDistributionChoice] = useState(initialMetrics?.distribution ?? 'dsasa');
-    const [colorChoice, setColorChoice] = useState('');
-    const [dragMode, setDragMode] = useState<'zoom' | 'select' | 'lasso'>('zoom');
-    const [heatChoice, setHeatChoice] = useState<string[] | null>(null);
-    const [heatAdd, setHeatAdd] = useState('');
-    const [labDimension, setLabDimension] = useState<'2D' | '3D'>('2D');
-    const [metricSearch, setMetricSearch] = useState('');
-    const [metricPage, setMetricPage] = useState(0);
-    const [zChoice, setZChoice] = useState('radius_of_gyration');
-    const [color3dChoice, setColor3dChoice] = useState('');
-    const [barChoice, setBarChoice] = useState('dsasa');
+    const [xChoice, setXChoice] = useState(typeof saved.xChoice === 'string' ? saved.xChoice : initialMetrics?.x ?? 'seq_length');
+    const [yChoice, setYChoice] = useState(typeof saved.yChoice === 'string' ? saved.yChoice : initialMetrics?.y ?? 'dsasa');
+    const [distributionChoice, setDistributionChoice] = useState(typeof saved.distributionChoice === 'string' ? saved.distributionChoice : initialMetrics?.distribution ?? 'dsasa');
+    const [colorChoice, setColorChoice] = useState(typeof saved.colorChoice === 'string' ? saved.colorChoice : '');
+    const [dragMode, setDragMode] = useState<'zoom' | 'select' | 'lasso'>(saved.dragMode === 'select' || saved.dragMode === 'lasso' ? saved.dragMode : 'zoom');
+    const [heatChoice, setHeatChoice] = useState<string[] | null>(Array.isArray(saved.heatChoice) && saved.heatChoice.every(key => typeof key === 'string') ? saved.heatChoice : null);
+    const [heatAdd, setHeatAdd] = useState(typeof saved.heatAdd === 'string' ? saved.heatAdd : '');
+    const [labDimension, setLabDimension] = useState<'2D' | '3D'>(saved.labDimension === '3D' ? '3D' : '2D');
+    const [metricSearch, setMetricSearch] = useState(typeof saved.metricSearch === 'string' ? saved.metricSearch : '');
+    const [metricPage, setMetricPage] = useState(typeof saved.metricPage === 'number' && Number.isSafeInteger(saved.metricPage) && saved.metricPage >= 0 ? saved.metricPage : 0);
+    const [zChoice, setZChoice] = useState(typeof saved.zChoice === 'string' ? saved.zChoice : 'radius_of_gyration');
+    const [color3dChoice, setColor3dChoice] = useState(typeof saved.color3dChoice === 'string' ? saved.color3dChoice : '');
+    const [barChoice, setBarChoice] = useState(typeof saved.barChoice === 'string' ? saved.barChoice : 'dsasa');
+    useEffect(() => {
+        if (!retentionKey) return;
+        try { sessionStorage.setItem(`${retentionKey}:settings`, JSON.stringify({ palette, reverse, xChoice, yChoice, distributionChoice, colorChoice, dragMode, heatChoice, heatAdd, labDimension, metricSearch, metricPage, zChoice, color3dChoice, barChoice })); }
+        catch { /* Unavailable session storage must not stop chart interaction. */ }
+    }, [retentionKey, palette, reverse, xChoice, yChoice, distributionChoice, colorChoice, dragMode, heatChoice, heatAdd, labDimension, metricSearch, metricPage, zChoice, color3dChoice, barChoice]);
     const theme = usePlotTheme();
     const xKey = numeric.includes(xChoice) ? xChoice : numeric.includes('seq_length') ? 'seq_length' : numeric[0] ?? '';
     const yKey = numeric.includes(yChoice) ? yChoice : numeric.includes('dsasa') ? 'dsasa' : numeric[1] ?? numeric[0] ?? '';

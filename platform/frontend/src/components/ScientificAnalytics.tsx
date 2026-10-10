@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CohortAnalytics } from './CohortAnalytics';
 import { metricLabel } from '../lib/cohortAnalytics';
 import type { ScientificCohort, ScientificPoint } from '../lib/scientificAnalytics';
@@ -8,7 +8,7 @@ const control = 'rounded border border-[var(--border-color)] bg-[var(--bg-primar
 
 /** Adapt canonical observations to the existing dashboard and Plotly Lab. Never
  * merge producer cohorts or reinterpret native values through Design aliases. */
-export function ScientificAnalytics({ points, cohorts }: { points: ScientificPoint[]; cohorts: ScientificCohort[] }) {
+export function ScientificAnalytics({ points, cohorts, jobId }: { points: ScientificPoint[]; cohorts: ScientificCohort[]; jobId?: string }) {
     const groups = useMemo(() => {
         const grouped = new Map<string, ScientificPoint[]>();
         for (const point of points) {
@@ -19,17 +19,29 @@ export function ScientificAnalytics({ points, cohorts }: { points: ScientificPoi
         return [...grouped];
     }, [points]);
     return <section aria-label="Scientific result analytics" className="min-w-0 space-y-4 text-[var(--text-primary)]">
-        {groups.map(([key, rows], index) => <ScientificCohortCharts key={key} points={rows}
+        {groups.map(([key, rows], index) => <ScientificCohortCharts key={JSON.stringify([jobId, key])} retentionKey={`bms:chart-state:v1:${JSON.stringify([jobId ?? rows[0]?.source_job_id, key])}`} points={rows}
             cohort={cohorts.find(cohort => cohort.cohort_key === key)}
             title={groups.length > 1 ? `Recorded measurements · cohort ${index + 1}` : 'Recorded measurements'} />)}
     </section>;
 }
 
-function ScientificCohortCharts({ points, cohort, title }: { points: ScientificPoint[]; cohort?: ScientificCohort; title: string }) {
-    const [selectedIds, setSelectedIds] = useState<string[]>([]);
-    const [activeId, setActiveId] = useState<string>();
-    const [sortMetric, setSortMetric] = useState('');
-    const [showDetails, setShowDetails] = useState(false);
+function ScientificCohortCharts({ points, cohort, title, retentionKey }: { points: ScientificPoint[]; cohort?: ScientificCohort; title: string; retentionKey: string }) {
+    const [saved] = useState<Record<string, unknown>>(() => {
+        try {
+            const value = JSON.parse(sessionStorage.getItem(`${retentionKey}:inspection`) ?? '{}');
+            return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+        } catch { return {}; }
+    });
+    const [localSelectedIds, setSelectedIds] = useState<string[]>(Array.isArray(saved.selectedIds) ? saved.selectedIds.filter((id): id is string => typeof id === 'string') : []);
+    const [activeId, setActiveId] = useState<string | undefined>(typeof saved.activeId === 'string' ? saved.activeId : undefined);
+    const [sortMetric, setSortMetric] = useState(typeof saved.sortMetric === 'string' ? saved.sortMetric : '');
+    const [showDetails, setShowDetails] = useState(saved.showDetails === true);
+    const currentIds = useMemo(() => new Set(points.map(point => point.id)), [points]);
+    const selectedIds = localSelectedIds.filter(id => currentIds.has(id));
+    useEffect(() => {
+        try { sessionStorage.setItem(`${retentionKey}:inspection`, JSON.stringify({ selectedIds: localSelectedIds, activeId, sortMetric, showDetails })); }
+        catch { /* Chart state is optional; never block native results. */ }
+    }, [retentionKey, localSelectedIds, activeId, sortMetric, showDetails]);
     const descriptors = Object.assign({}, ...points.map(point => point.metric_descriptors)) as ScientificPoint['metric_descriptors'];
     const label = (key: string) => {
         const descriptor = descriptors[key];
@@ -53,7 +65,7 @@ function ScientificCohortCharts({ points, cohort, title }: { points: ScientificP
             <span className="text-sm text-[var(--text-secondary)]">{points.length} records · native units</span>
         </header>
         {incomplete > 0 && <p role="status" className={`${panel} text-sm`}>{incomplete} of {points.length} records have unavailable measurements. Charts use observed values only; missing values are not zero.</p>}
-        <CohortAnalytics rows={rows} selectedIds={selectedIds} activeId={activeId}
+        <CohortAnalytics retentionKey={retentionKey} rows={rows} selectedIds={selectedIds} activeId={activeId}
             onInspect={id => { setActiveId(id); setShowDetails(true); }} onSelect={ids => setSelectedIds(previous => [...new Set([...previous, ...ids])])}
             mode="analytics" getMetricLabel={label} inspectionHint="click a point to inspect its recorded measurements"
             initialMetrics={pair ? { x: pair.x_metric, y: pair.y_metric, distribution: pair.x_metric } : undefined} />
