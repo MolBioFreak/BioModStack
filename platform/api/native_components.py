@@ -857,7 +857,7 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         retry = workflow == 'orchestrator' and bool(p.get('md_retry_spawn_receipt'))
         prep = a.chain(['MD_PREPARE_CONFIG']) if workflow == 'orchestrator' and not retry else ()
         if prep:
-            a.asset('runtime_data', None, 'nextflow.config:params.md_preparation_runtime_lock', 'md_preparation_runtime_lock')
+            a.asset('runtime_data', 'md-preparation/env-v1-explicit.txt', 'nextflow.config:params.md_preparation_runtime_lock', 'md_preparation_runtime_lock')
         spawn = a.chain(['MD_SPAWN_REPLICAS'], prep) if prep else ()
         for selected_engine in engines:
             process = 'MD_GROMACS_REPLICA' if selected_engine == 'gromacs' else 'MD_OPENMM_REPLICA'

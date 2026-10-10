@@ -56,6 +56,11 @@ def get_data_root() -> Path:
     return Path(str(_runtime_paths()["data_root"]))
 
 
+def get_md_preparation_runtime_lock() -> Path:
+    """Installation-owned preparation identity; never a scientific setting."""
+    return get_data_root() / "md-preparation/env-v1-explicit.txt"
+
+
 def resolve_runtime_data_path(path: str | Path) -> Path:
     candidate = Path(path).expanduser().resolve()
     if candidate.exists():

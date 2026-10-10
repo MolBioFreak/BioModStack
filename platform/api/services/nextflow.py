@@ -4383,11 +4383,15 @@ async def compile_native_workflow_provision_request(workflow_request, http_reque
         normalized = await normalize_md_provision_request(workflow_request.request.intent, session)
     else:
         raise ValueError('Expected a closed native workflow provisioning request')
+    native_parameters: dict[str, Any] = {'input_bindings': normalized.input_bindings}
+    if normalized.model_id == 'molecular_dynamics':
+        from paths import get_md_preparation_runtime_lock
+        native_parameters['md_preparation_runtime_lock'] = str(get_md_preparation_runtime_lock())
     plan = build_selected_execution_plan(
         model_id=normalized.model_id, mode=normalized.mode, entrypoint=normalized.entrypoint,
         requested=normalized.requested_params, effective=normalized.effective_params,
         metadata_settings=normalized.effective_params,
-        native_parameters={'input_bindings': normalized.input_bindings}, source_identity=source,
+        native_parameters=native_parameters, source_identity=source,
     )
     if await asyncio.to_thread(current_source_identity) != (source.revision, source.tree):
         raise ValueError('Workflow provision source identity changed')
@@ -5687,6 +5691,12 @@ def compile_nextflow_invocation(
         effective_profile == 'ont_fastq_qc'
         and str(params.get('ont_input_mode') or params.get('input_mode') or '').strip() == 'fastq'
     )
+
+    if model_id == 'molecular_dynamics' and mode == 'simulate':
+        from paths import get_md_preparation_runtime_lock
+        # Carry the same managed binding as provisioning into argv so the
+        # existing bundle path map relocates the lock, not the host fallback.
+        params['md_preparation_runtime_lock'] = str(get_md_preparation_runtime_lock())
 
     if model_id == 'molecular_dynamics' and params.get('md_job_config'):
         params = dict(params)
