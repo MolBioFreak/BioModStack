@@ -1,4 +1,5 @@
 import { BioXpMeasurementReview } from './BioXpMeasurementReview';
+import { definiteMethodRefusal } from '../lib/bioxpMethods';
 import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { bioXpErrorText, useBioXpWorkflowJobObservation, useControlBioXpWorkflow, useReviewBioXpWorkflow,
@@ -98,10 +99,20 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
                 && detail.control.command_id === attempted?.command_id
                 && detail.control.ownership_generation === attempted?.expected_ownership_generation
                 && detail.control.idempotency_key === attempted?.idempotency_key;
-            // Only canonical rejection settles this attempt. Timeout/HTTP500 keeps
-            // both the key AND frozen response; no automatic retry or liquid replay.
-            if (rejected) delete reviewAttempts.current[reviewIdentity];
-            if (identity.current.jobId === jobId && identity.current.generation === generation) setLocalError(`${bioXpErrorText(error)} ${rejected ? 'Response rejected. A deliberate resubmission will use a fresh host-response key for this same occurrence.' : 'Response outcome uncertain. A deliberate retry retains the original response and key; it does not replay the job.'}`);
+            // ProtocolReviewRequest.native_measurements rejects this exact body
+            // before the review route runs. Status alone (including 422) is not proof.
+            const validation = (error as { response?: { status?: number; data?: { detail?: unknown } } })?.response;
+            const issues = validation?.data?.detail;
+            const invalidMeasurements = validation?.status === 422 && attempted?.measurements != null
+                && Array.isArray(issues) && issues.length > 0 && issues.every(issue => issue?.type === 'value_error'
+                    && Array.isArray(issue.loc) && issue.loc.length === 2
+                    && issue.loc[0] === 'body' && issue.loc[1] === 'measurements'
+                    && JSON.stringify(issue.input) === JSON.stringify(attempted.measurements));
+            const notSubmitted = invalidMeasurements || definiteMethodRefusal(error);
+            // Only explicit nondelivery/validation or matched canonical rejection
+            // settles this attempt. Uncertainty retains both frozen response and key.
+            if (rejected || notSubmitted) delete reviewAttempts.current[reviewIdentity];
+            if (identity.current.jobId === jobId && identity.current.generation === generation) setLocalError(`${bioXpErrorText(error)} ${notSubmitted ? 'Response not submitted. A deliberate resubmission will use the edited response and a fresh host-response key for this same occurrence.' : rejected ? 'Response rejected. A deliberate resubmission will use a fresh host-response key for this same occurrence.' : 'Response outcome uncertain. A deliberate retry retains the original response and key; it does not replay the job.'}`);
         }
         finally { busyRef.current = false; onBusyChange(false); }
     }

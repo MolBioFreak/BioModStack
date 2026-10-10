@@ -76,6 +76,20 @@ async def main():
     generator = store.__wrapped__(scratch, monkeypatch)
     client, transport, _, _ = await anext(generator)
     native_leaf(transport)
+    if os.environ.get('BIOXP_CAVRO_REVIEW_LEASE_REFUSAL') == '1':
+        from services.bioxp.errors import ConnectionStateError
+        connection = client._transport.app.state.bioxp_runtime.connection
+        lease = connection.active_request_lease
+        refused = False
+        @contextlib.asynccontextmanager
+        async def refuse_once(**kwargs):
+            nonlocal refused
+            if not refused:
+                refused = True
+                raise ConnectionStateError('Injected pre-dispatch lease refusal')
+            async with lease(**kwargs) as active:
+                yield active
+        monkeypatch.setattr(connection, 'active_request_lease', refuse_once)
     try:
         for line in sys.stdin:
             request = json.loads(line)
