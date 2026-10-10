@@ -73,6 +73,31 @@ async def verified_esmfold2_design(design, session):
         return dict(selected, publication_root=root, publication_receipt=receipt)
 
 
+def scalar_records_from_publication(design, job, read):
+    """Verify scalar bytes and committed document binding, not coordinate bytes."""
+    from services.core_protein_result_contract import _persisted_candidate_artifacts
+    receipt = job.provenance['core_protein_candidate_publication']
+    artifacts = _persisted_candidate_artifacts(receipt, design)
+    manifest = read(receipt['manifest'])
+    if manifest.get('schema_version') != 2 or manifest.get('workflow') != 'esmfold2':
+        raise ValueError('foreign scalar manifest')
+    entries = read(receipt['manifest'], index=('samples', 'sample_id'))
+    entry = entries[design.name]
+    root = Path(receipt['manifest']['path']).parent
+    if (design.source_stage is not None
+            or artifacts['structure']['path'] != str(root / entry['cif'])
+            or artifacts['metrics']['path'] != str(root / entry['metrics'])):
+        raise ValueError('foreign scalar document binding')
+    payload = read(artifacts['metrics'])
+    if payload.get('sample_id') != design.name or payload.get('cif') != entry['cif']:
+        raise ValueError('foreign scalar companion')
+    block = scalar_block(payload, candidate_id=design.name, document_id=entry['metrics'],
+                         artifact_sha256=artifacts['metrics']['sha256'])
+    if canonical_bytes(block) != canonical_bytes(design.confidence_metrics.get('core_protein_scientific')):
+        raise ValueError('changed scalar publication')
+    return block['metrics']
+
+
 CONFIDENCE_DIALECT = {**SCALAR_DIALECT, 'name': 'biohub_esmfold2_native_confidence_v1'}
 _ERRORS = (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError, BadZipFile, EOFError)
 

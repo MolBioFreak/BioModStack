@@ -1,8 +1,8 @@
 import axios from 'axios';
 import type { CmSubmitRequest } from '../components/conformationalMapping/conformationalMappingApi';
 import type { MolecularDynamicsLaunchIntent, MolecularDynamicsNativeIntent, MolecularDynamicsAnalysisOptions, MolecularDynamicsNativeStage } from '../components/molecularDynamicsUiState';
-import { parseMetricPoints, validateScientificEnvelope } from './scientificAnalytics';
-import type { ScientificPoint, ScientificCohort } from './scientificAnalytics';
+import { parseMetricPoints, parseNativeResults, validateScientificEnvelope } from './scientificAnalytics';
+import type { ScientificPoint, ScientificCohort, NativeResults, NativeScalarQuery } from './scientificAnalytics';
 type ScientificPointFields = Partial<Omit<ScientificPoint, 'id' | 'name' | 'metrics' | 'contract_revision'>> & { contract_revision?: 1 | null };
 import type { TelemetryChartHistoryResponse } from './telemetryChart';
 import type { ViewerSnapshotV2 } from '../structureViewer/contracts/m6Reproducibility';
@@ -2626,6 +2626,7 @@ export interface DesignAggregateSummary {
 }
 
 export interface DesignListResponse {
+    scientific?: NativeResults | null;
     model_counts?: Record<string, number>;
     designs: Design[];
     total: number;
@@ -2633,6 +2634,8 @@ export interface DesignListResponse {
 }
 
 export interface DesignFilters {
+    native?: NativeScalarQuery;
+    native_output?: 'page' | 'ids';
     job_id?: string;
     model_id?: string;
     include_children?: boolean;
@@ -2782,10 +2785,15 @@ export interface BackboneSummary {
     }>;
 }
 
-export const fetchDesigns = (filters: DesignFilters = {}) =>
-    filters.design_ids?.length
+export const fetchDesigns = async (filters: DesignFilters = {}) => {
+    const response = await (filters.native || filters.design_ids?.length
         ? api.post<DesignListResponse>('/api/designs/query', filters)
-        : api.get<DesignListResponse>('/api/designs', { params: filters });
+        : api.get<DesignListResponse>('/api/designs', { params: filters }));
+    if (response.data.scientific) response.data.scientific = parseNativeResults(response.data.scientific);
+    return response;
+};
+export const exportNativeResults = (filters: DesignFilters, format: 'csv' | 'json') =>
+    api.post<Blob>('/api/designs/query', {...filters, native: filters.native ?? {}, native_output: format}, {responseType: 'blob'});
 
 export const fetchBackboneSummary = (jobId: string, artifactGroup?: string) =>
     api.get<BackboneSummary>(`/api/designs/by-job/${jobId}/backbone-summary`, {

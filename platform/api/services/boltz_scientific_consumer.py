@@ -97,6 +97,37 @@ async def verified_boltz_design(design, session) -> dict[str, Any]:
         return dict(selected, design_id=row.id, publication_root=root, publication_receipt=receipt)
 
 
+def scalar_records_from_publication(design, job, read):
+    """Scalar companion verification with persisted (not rehashed) coordinates."""
+    from services.core_protein_result_contract import _persisted_candidate_artifacts
+    artifacts = _persisted_candidate_artifacts(job.provenance['core_protein_candidate_publication'], design)
+    block = design.confidence_metrics['core_protein_scientific']
+    manifest = read(artifacts['manifest'])
+    if manifest.get('schema_version') != 1 or manifest.get('schema_name') not in ('structure_producer_candidates', 'sequence_structure_producer_candidates'):
+        raise ValueError('foreign scalar manifest')
+    entry = read(artifacts['manifest'], index=('candidates', 'producer_output_key'))[design.name]
+    native = entry['boltz_native_identity']
+    source = dict(candidate_id=entry.get('producer_artifact_id', design.name),
+                  document_id=design.name, artifact_sha256=artifacts['metrics']['sha256'])
+    base = Path(artifacts['manifest']['path']).parent / 'predictions'
+    structure_key = design.name.removeprefix(entry.get('producer_artifact_key', '') + '/')
+    if (entry['producer_method'] != 'boltz' or entry['source_format'] != 'pdb'
+            or design.source_stage is not None or block['design_id'] != design.id
+            or block['candidate_id'] != source['candidate_id'] or block['document_id'] != design.name
+            or block['artifacts'] != artifacts
+            or artifacts['structure']['sha256'] != entry['producer_artifact_sha256']
+            or artifacts['structure']['path'] != str(base / structure_key)
+            or artifacts['metrics']['path'] != str(base / native['confidence']['artifact_key'])
+            or artifacts['metrics']['sha256'] != native['confidence']['artifact_sha256']):
+        raise ValueError('foreign scalar document binding')
+    records = scalar_records(read(artifacts['metrics']), source, native['provider_revision'])
+    # The original compact block published only these two scalars.
+    for prior in block['metrics']:
+        if canonical_json_bytes(prior) not in [canonical_json_bytes(record) for record in records]:
+            raise ValueError('changed scalar publication')
+    return records
+
+
 def retained_cp_paths(design, job):
     """Exact historical split-output transport; never scan basenames/other samples."""
     import re

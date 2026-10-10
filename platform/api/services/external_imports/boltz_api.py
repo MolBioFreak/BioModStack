@@ -252,7 +252,7 @@ def _canonical_fingerprint(run: dict[str, Any], resource: str, archive_sha256: s
     return hashlib.sha256(payload).hexdigest()
 
 
-def retained_scalar_records(design, job):
+def retained_scalar_records(design, job, *, scalar_read=None):
     """Read exact imported sample values without claiming local Boltz production."""
     from paths import get_data_root, resolve_runtime_data_path
     from services.boltz_scientific_persistence import _snapshot
@@ -262,8 +262,11 @@ def retained_scalar_records(design, job):
         raise ValueError('foreign import owner')
     root = Path(job.output_dir)
     root = resolve_runtime_data_path(root) if root.is_absolute() else get_data_root() / root
-    _, manifest_bytes = _snapshot(root, 'normalized/import-manifest.json')
-    manifest = json.loads(manifest_bytes)
+    if scalar_read is None:
+        _, manifest_bytes = _snapshot(root, 'normalized/import-manifest.json')
+        manifest = json.loads(manifest_bytes)
+    else:
+        _, manifest = scalar_read(root, 'normalized/import-manifest.json')
     provenance = (design.provenance or {}).get('external_import') or {}
     if (manifest['provider']['id'] != PROVIDER_ID
             or manifest['source']['source_fingerprint'] != provenance.get('source_fingerprint')):
@@ -272,13 +275,20 @@ def retained_scalar_records(design, job):
     if len(matches) != 1:
         raise ValueError('ambiguous imported sample')
     sample = matches[0]
-    structure, _ = _snapshot(root, sample['structure_path'])
     declared = [a for a in manifest['artifacts'] if a['kind'] == 'structure' and a['sample_id'] == sample['sample_id']]
+    if len(declared) != 1 or declared[0]['path'] != sample['structure_path']:
+        raise ValueError('imported sample document binding mismatch')
+    structure = dict(path=str(root / sample['structure_path']), sha256=declared[0]['sha256'])
+    if scalar_read is None:
+        structure, _ = _snapshot(root, sample['structure_path'])
     if (len(declared) != 1 or declared[0]['sha256'] != structure['sha256']
             or str(resolve_runtime_data_path(Path(design.pdb_path))) != structure['path']):
         raise ValueError('imported sample structure binding mismatch')
-    artifact, content = _snapshot(root, 'artifacts/metrics.json')
-    metrics = json.loads(content)
+    if scalar_read is None:
+        artifact, content = _snapshot(root, 'artifacts/metrics.json')
+        metrics = json.loads(content)
+    else:
+        artifact, metrics = scalar_read(root, 'artifacts/metrics.json')
     index = int(sample['sample_id'].removeprefix('sample_'))
     raw = metrics['all_sample_results'][index]['metrics']
     if raw != sample['provider_metrics']:

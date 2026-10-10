@@ -426,14 +426,29 @@ class DesignAggregateSummary(BaseModel):
     screen_failed: int
 
 
+class NativeScalarQuery(BaseModel):
+    """One descriptor cohort and metric; bounds use the descriptor's raw unit."""
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+    cohort_key: str | None = None
+    metric_id: str | None = None
+    unit: str | None = None
+    minimum: float | None = Field(default=None, strict=True)
+    maximum: float | None = Field(default=None, strict=True)
+    include_missing: bool = False
+    order: Literal['asc', 'desc'] | None = None
+
+
 class DesignList(BaseModel):
     designs: List[DesignResponse]
     total: int
     summary: Optional[DesignAggregateSummary] = None
     model_counts: Dict[str, int] = Field(default_factory=dict)
+    scientific: Optional[Dict[str, Any]] = None
 
 
 class DesignQueryRequest(BaseModel):
+    native: NativeScalarQuery | None = None
+    native_output: Literal["page", "ids", "json", "csv"] = "page"
     job_id: Optional[str] = None
     model_id: Optional[str] = None
     include_children: Optional[bool] = True
@@ -1864,6 +1879,7 @@ def _design_to_response(
     *,
     include_fampnn_structure_fallback: bool = False,
     job: Optional[Job] = None,
+    scalar_only: bool = False,
 ) -> DesignResponse:
     state = sa_inspect(design)
     unloaded = set(state.unloaded)
@@ -2089,7 +2105,7 @@ def _design_to_response(
         if provenance.get('source') == 'fampnn':
             provenance['source'] = job.model_id
         data['confidence_metrics'], data['provenance'] = confidence, provenance
-    if job is not None and job.model_id == 'boltz_cp_experimental':
+    if not scalar_only and job is not None and job.model_id == 'boltz_cp_experimental':
         from services.boltz_scientific_consumer import retained_cp_snapshot
         try:
             retained = retained_cp_snapshot(design, job, roles=('structure',))
@@ -2379,8 +2395,124 @@ async def list_reusable_structures(
     return {"structures": structures, "limit": limit}
 
 
+async def _native_design_list(query, native, output, limit, offset, model_counts, session, scope):
+    """Evaluate one resolved population before pagination; reuse its scalar points."""
+    import csv
+    import json
+    import hashlib
+    import io
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.responses import JSONResponse, Response
+    from services.scientific_analytics import bulk_scalar_projections, summarize
+
+    compact = query.with_only_columns(Design.id, Design.job_id, Design.name, Design.confidence_metrics,
+        Design.provenance, Design.pdb_path, Design.json_path, Design.source_stage, Design.producer_model_id)
+    from types import SimpleNamespace
+    designs = [SimpleNamespace(**row) for row in (await session.execute(compact)).mappings()]
+    owners = await owning_jobs(session, designs)
+    projections = await bulk_scalar_projections(designs, owners, session)
+    for design in designs:
+        if design.id not in projections:
+            projections[design.id] = projection(design, invalid_reason='missing_native_scalar_authority',
+                model_id=getattr(owners.get(design.job_id), 'model_id', None))
+    grouped = {}
+    for design in designs:
+        point = projections.get(design.id)
+        if point is not None:
+            grouped.setdefault(point['cohort_key'], []).append((design.id, point))
+    # Available descriptors describe the population, summaries the matching set.
+    cohorts = {key: {'count': len(rows), 'metric_descriptors': rows[0][1]['metric_descriptors']}
+               for key, rows in grouped.items()}
+    numeric = native.minimum is not None or native.maximum is not None or native.order is not None
+    if numeric and not (native.cohort_key and native.metric_id and native.unit):
+        raise HTTPException(422, 'Native bounds/order require one cohort, metric and raw unit')
+    if native.minimum is not None and native.maximum is not None and native.minimum > native.maximum:
+        raise HTTPException(422, 'Minimum exceeds maximum')
+    if native.cohort_key in cohorts and native.metric_id:
+        descriptor = cohorts[native.cohort_key]['metric_descriptors'].get(native.metric_id)
+        if descriptor is None or descriptor.unit != native.unit:
+            raise HTTPException(422, 'Native metric/unit does not match the selected cohort')
+    matching = []
+    for design in designs:
+        point = projections.get(design.id)
+        if native.cohort_key and (point is None or point['cohort_key'] != native.cohort_key):
+            continue
+        if native.minimum is not None or native.maximum is not None:
+            state = point['metric_states'].get(native.metric_id) if point else None
+            if state is None or state.state != 'ok':
+                if not native.include_missing:
+                    continue
+            elif ((native.minimum is not None and state.value < native.minimum)
+                  or (native.maximum is not None and state.value > native.maximum)):
+                continue
+        matching.append(design)
+    if native.order:
+        def key(design):
+            state = projections[design.id]['metric_states'].get(native.metric_id)
+            value = state.value if state is not None and state.state == 'ok' else None
+            return (value is None, 0 if value is None else value * (-1 if native.order == 'desc' else 1), design.id)
+        matching.sort(key=key)
+    unread_ids = [id for id, p in projections.items() if p['publication_state'] is not None and p['publication_state'].reason_code == 'scalar_read_failed']
+    matched_ids = {d.id for d in matching} - set(unread_ids)
+    summaries = {key: summarize([(id, p) for id, p in rows if id in matched_ids], include_pairs=False)['metrics']
+                 for key, rows in grouped.items() if any(id in matched_ids for id, _ in rows)}
+    identity = hashlib.sha256(json.dumps(jsonable_encoder([
+        (d.id, projections.get(d.id)) for d in designs]), sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    unresolved_ids = sorted(set(scope.get('design_ids') or []) - {d.id for d in designs})
+    scientific = dict(query=native.model_dump(), scope=scope, unresolved_ids=unresolved_ids, population_count=len(designs), evaluated_count=len(projections) - len(unread_ids),
+        unread_ids=unread_ids, count_exact=not unread_ids,
+        matching_count=len(matching), read_identity=identity, cohorts=cohorts, summaries=summaries,
+        verification='scalar_bytes_and_persisted_document_binding; coordinates_not_rehashed',
+        ids=[d.id for d in matching])
+    page = matching[offset:offset + limit] if output == 'page' else matching
+    scientific['points'] = [dict(id=d.id, name=d.name, **projections[d.id]) for d in page if d.id in projections]
+    if output in ('json', 'csv'):
+        payload = jsonable_encoder(scientific)
+        filename = 'native-results-partial' if unread_ids or unresolved_ids else 'native-results'
+        if output == 'json':
+            return JSONResponse(payload, headers={'Content-Disposition': f'attachment; filename="{filename}.json"'})
+        stream = io.StringIO(newline='')
+        writer = csv.writer(stream)
+        writer.writerow(['read_identity', 'count_exact', 'query_scope', 'design_id', 'name', 'job_id', 'cohort_key', 'metric', 'raw_value', 'unit', 'scope',
+                         'state', 'reason', 'artifact_sha256', 'candidate_id', 'document_id'])
+        for point in payload['points']:
+            if not point['metric_states']:
+                writer.writerow([identity, not unread_ids, json.dumps({'scope': scope, 'native': native.model_dump()}, sort_keys=True),
+                    point['id'], point['name'], point['source_job_id'], point['cohort_key'], '', '', '', '',
+                    'unavailable', (point['publication_state'] or {}).get('reason_code', 'no_native_metrics'), '', '', ''])
+            for metric, state in point['metric_states'].items():
+                descriptor, source = point['metric_descriptors'][metric], point['metric_sources'][metric] or {}
+                writer.writerow([identity, not unread_ids, json.dumps({'scope': scope, 'native': native.model_dump()}, sort_keys=True), point['id'], point['name'], point['source_job_id'], point['cohort_key'], metric,
+                    state['value'], descriptor['unit'], descriptor['scope'], state['state'], state['reason_code'],
+                    source.get('artifact_sha256'), source.get('candidate_id'), source.get('document_id')])
+        return Response(stream.getvalue(), media_type='text/csv',
+                        headers={'Content-Disposition': f'attachment; filename="{filename}.csv"'})
+    if output == 'ids':
+        scientific['points'] = []
+        responses = []
+    else:
+        hydrated = {d.id: d for d in (await session.execute(select(Design).where(Design.id.in_([d.id for d in page]))
+            .options(load_only(*DESIGN_LIST_LOAD_ONLY_COLUMNS, Design.json_path)))).scalars()}
+        page = [hydrated[d.id] for d in page if d.id in hydrated]
+        responses = await run_in_threadpool(lambda: [
+            _design_to_response(d, job=owners.get(d.job_id), scalar_only=True) for d in page])
+        for design, response in zip(page, responses):
+            if native_scalar_owner(owners.get(design.job_id)):
+                response.core_protein_scientific_contract = 1
+                # Coordinates remain verified by the selected spatial endpoint.
+                artifacts = (design.confidence_metrics or {}).get('core_protein_candidate_artifacts') or {}
+                structure = artifacts.get('structure')
+                if structure and projections[design.id]['publication_state'] is None:
+                    response.scientific_structure_document = ViewerDocument(documentId='primary', candidateId=design.id,
+                        contentSha256=structure['sha256'], sourceKind='mmcif' if structure['path'].endswith(('.cif', '.mmcif')) else 'pdb')
+        _enrich_design_responses_from_sources(responses)
+    return DesignList(designs=responses, total=len(matching), model_counts=model_counts, scientific=scientific)
+
+
 @router.get("", response_model=DesignList)
 async def list_designs(
+    native: Optional[str] = None,
+    native_output: Literal["page", "ids", "json", "csv"] = "page",
     job_id: Optional[str] = None,
     model_id: Optional[str] = None,
     include_children: bool = Query(True, description="Include designs from child jobs (for parent jobs)"),
@@ -2433,6 +2565,12 @@ async def list_designs(
     - favorites_only: Show only favorited designs
     - sort_by: Sort by specific field
     """
+    native_query = None
+    if native is not None:
+        try:
+            native_query = NativeScalarQuery.model_validate_json(native)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     selected_job: Optional[Job] = None
     review_stage: Optional[str] = None
     if job_id:
@@ -2540,7 +2678,7 @@ async def list_designs(
                 conditions.append(Design.source_stage.is_(None))
     elif not include_children:
         conditions.append(Design.source_stage.is_(None))
-    elif not job_id:
+    elif not job_id and not (native_query is not None and design_ids is not None):
         conditions.append(Design.source_stage.is_(None))
     # Lineage-wide model summary deliberately precedes display filters/pagination.
     model_identity = Design.producer_model_id
@@ -2554,7 +2692,7 @@ async def list_designs(
     if model_id:
         conditions.append(model_identity == model_id.strip().lower())
     clean_design_ids = [design_id.strip() for design_id in (design_ids or []) if design_id and design_id.strip()]
-    if clean_design_ids:
+    if clean_design_ids or (native_query is not None and design_ids is not None):
         conditions.append(Design.id.in_(clean_design_ids))
     if q and q.strip():
         conditions.append(Design.name.ilike(f"%{q.strip()}%"))
@@ -2614,6 +2752,14 @@ async def list_designs(
     if conditions:
         query = query.where(and_(*conditions))
     
+    if native_query is not None:
+        if not 1 <= limit <= 500 or offset < 0:
+            raise HTTPException(422, 'Native pages require limit 1–500 and a nonnegative offset')
+        values = locals()
+        scope = {key: values[key] for key in DesignQueryRequest.model_fields if key in values
+                 and key not in {'native', 'native_output', 'limit', 'offset', 'include_summary'}}
+        return await _native_design_list(query, native_query, native_output, limit, offset, model_counts, session, scope)
+
     # Get total count
     count_query = select(func.count(Design.id))
     if conditions:
@@ -2698,6 +2844,8 @@ async def query_designs(
 ):
     """List designs via POST for large explicit design-id subsets."""
     return await list_designs(
+        native=request.native.model_dump_json() if request.native is not None else None,
+        native_output=request.native_output,
         job_id=request.job_id,
         model_id=request.model_id,
         include_children=True if request.include_children is None else request.include_children,

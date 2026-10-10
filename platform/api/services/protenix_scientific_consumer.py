@@ -391,10 +391,58 @@ SCALAR_DESCRIPTORS = tuple(dict(metric_key=key, unit=unit, scope=scope,
 async def verified_scalar_metrics(design, session):
     """Read only bound summary scalars; spatial full_data is not required."""
     selected = await verified_native_design(design, session, scalar_only=True)
-    summary = _json(selected['snapshots']['metrics'])
+    return scalar_records(_json(selected['snapshots']['metrics']),
+        dict(selected['block'], artifact_sha256=selected['artifacts']['metrics']['sha256']))
+
+
+def scalar_records_from_publication(design, job, read):
+    """Read bound summary bytes without opening coordinates or full_data."""
+    from services.core_protein_result_contract import _persisted_candidate_artifacts
+    artifacts = _persisted_candidate_artifacts(job.provenance['core_protein_candidate_publication'], design)
+    native = design.provenance['native_producer']
+    from paths import get_data_root, resolve_runtime_data_path
+    root = Path(job.output_dir)
+    root = resolve_runtime_data_path(root) if root.is_absolute() else get_data_root() / root
+    key = native['producer_output_key']
+    if (design.source_stage is not None or native['producer_method'] != 'protenix' or native['source_format'] != 'mmcif'
+            or artifacts['structure']['sha256'] != native['producer_artifact_sha256']):
+        raise ValueError('foreign scalar document binding')
+    matches = []
+    for entry in job.provenance['protenix_primary_publication']:
+        candidates = read(entry['producer_manifest'], index=('candidates', 'producer_output_key'))
+        publication = read(entry['publication'])
+        bindings = read(entry['publication'], index=('bindings', 'producer_output_key'))
+        if (publication['schema_name'] != 'structure_producer_publication' or publication['schema_version'] != 1
+                or publication['producer_manifest']['sha256'] != entry['producer_manifest']['sha256']
+                or publication['producer_manifest']['relative_path'] != _key(root, entry['producer_manifest']['path'])):
+            raise ValueError('foreign scalar publication')
+        if key in candidates:
+            binding = bindings[key]
+            if (candidates[key] != native or binding['source_format'] != 'mmcif' or binding['sha256'] != artifacts['structure']['sha256']
+                    or _key(root, artifacts['structure']['path']) != binding['published_relative_path']):
+                raise ValueError('foreign scalar document binding')
+            matches.append(binding)
+    if len(matches) != 1:
+        raise ValueError('missing selected scalar publication')
+    from scripts.write_structure_producer_manifest import protenix_confidence_names
+    binding = matches[0]
+    relative = str(Path(binding['published_relative_path']).parent / protenix_confidence_names(Path(key).name)['metrics'])
+    descriptor = (binding.get('confidence') or {}).get('metrics')
+    if descriptor is None:
+        # Existing historical return-custody owner, reused once per owning Job.
+        returned = read(None, returned=(job, root))
+        descriptor = dict(sha256=returned[relative].sha256, published_relative_path=relative)
+    if (descriptor['sha256'] != artifacts['metrics']['sha256']
+            or descriptor['published_relative_path'] != relative
+            or _key(root, artifacts['metrics']['path']) != relative):
+        raise ValueError('foreign scalar companion')
+    return scalar_records(read(artifacts['metrics']), dict(candidate_id=key, document_id=key,
+        artifact_sha256=artifacts['metrics']['sha256']))
+
+
+def scalar_records(summary, source):
     if not isinstance(summary, dict):
         raise ValueError('invalid native summary')
-    source = dict(selected['block'], artifact_sha256=selected['artifacts']['metrics']['sha256'])
     records = []
     for descriptor in SCALAR_DESCRIPTORS:
         key = descriptor['metric_key']

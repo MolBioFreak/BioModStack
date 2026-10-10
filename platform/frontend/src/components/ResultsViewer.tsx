@@ -1,12 +1,13 @@
+import type { NativeScalarQuery } from '../lib/scientificAnalytics';
 import { MSA_POLICY } from '../lib/msaPolicy';
-import { canonicalScalars, scalarCell, usePredictionScalars } from './predictionScalarEvidence';
+import { canonicalScalars, scalarCell, scalarEvidence, NativeScalarControls, usePredictionScalars } from './predictionScalarEvidence';
 import { lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { MaturationEvidence } from './MaturationEvidence';
 import { parseScientificPae } from '../lib/scientificViewerIdentity';
 import { useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 
-import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview, fetchChainPairIptm } from '../lib/api';
+import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, exportNativeResults, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview, fetchChainPairIptm } from '../lib/api';
 import { isNgsJob, ngsResultHref } from '../lib/ngsResultRouting';
 import type {
     AntibodyData,
@@ -1029,6 +1030,7 @@ type ReviewRepresentative = {
 type RfReviewSet = 'filtered' | 'raw';
 type ReviewSourceSelectorValue = '' | 'live:filtered' | 'live:raw' | `saved:${string}`;
 type SavedReviewFilterState = {
+    native?: NativeScalarQuery | null;
     rf_review_set?: RfReviewSet | null;
     output_source_filter?: OutputSourceFilter;
     sort_field?: string;
@@ -1493,6 +1495,7 @@ const coerceSavedReviewFilterSets = (value: unknown): SavedReviewFilterSet[] => 
 };
 
 const normalizeSavedReviewFilterState = (state: SavedReviewFilterState): SavedReviewFilterState => ({
+    native: state.native ?? null,
     rf_review_set: state.rf_review_set === 'raw' ? 'raw' : state.rf_review_set === 'filtered' ? 'filtered' : undefined,
     output_source_filter: state.output_source_filter === 'rfantibody'
         || state.output_source_filter === 'boltzgen'
@@ -1922,6 +1925,8 @@ function ResultsViewerContent() {
     const [selectedBackboneId, setSelectedBackboneId] = useState<number | null>(null);
     const [rfReviewSet, setRfReviewSet] = useState<RfReviewSet | null>(null);
     const [rfMetricScope, setRfMetricScope] = useState<RfScreeningScope>('cdr_loops');
+    const [nativeQuery, setNativeQuery] = useState<NativeScalarQuery | null>({});
+    const [nativeExportScope, setNativeExportScope] = useState<'matching' | 'selected' | 'population'>('matching');
     const [plddtMin, setPlddtMin] = useState<number>(0);
     const [iptmMin, setIptmMin] = useState<number>(0);
     const [ipsaeMin, setIpsaeMin] = useState<number>(0);
@@ -2471,12 +2476,15 @@ function ResultsViewerContent() {
     const backboneFilterApplies = outputSourceFilter === 'all' || outputSourceFilter === 'rfantibody' || outputSourceFilter === 'boltzgen';
     const scopedModelId = resultSurface !== 'workflow' && resultSurface !== 'frustrampnn' && resultSurface !== primaryResultModelId
         ? resultSurface : undefined;
-    const useClientSourcePagination = outputSourceFilter !== 'all' || resultSetFilter !== 'all';
+    const nativeResultsAvailable = ['boltz', 'boltz2', 'protenix', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(scopedModelId ?? primaryResultModelId);
+    const nativeResults = nativeResultsAvailable && nativeQuery !== null;
+    const useClientSourcePagination = !nativeResults && (outputSourceFilter !== 'all' || resultSetFilter !== 'all');
     const requiresClientOnlySort = useClientRenderedValueSort
         || (!SERVER_SORT_FIELDS.has(sortField as DesignSortField) && isTableColumnSortable(sortField));
-    const forceBulkLoadForSorting = useClientSourcePagination || requiresClientOnlySort;
+    const forceBulkLoadForSorting = !nativeResults && (useClientSourcePagination || requiresClientOnlySort);
     const isReviewStageJob = isStageReviewJob(activeJob);
     const designQueryFilters = useMemo<DesignFilters>(() => ({
+        native: nativeResults ? nativeQuery : undefined,
         job_id: selectedJobId,
         model_id: scopedModelId,
         include_children: !isReviewStageJob,
@@ -2484,11 +2492,11 @@ function ResultsViewerContent() {
         q: filterText.trim() || undefined,
         limit: forceBulkLoadForSorting ? MAX_BULK_SELECTION_DESIGNS : pageSize,
         offset: forceBulkLoadForSorting ? 0 : (currentPage - 1) * pageSize,
-        sort_by: apiSortField,
+        sort_by: nativeResults ? 'name' : apiSortField,
         sort_desc: sortDir === 'desc',
         backbone_id: backboneFilterApplies ? (selectedBackboneId ?? undefined) : undefined,
-        plddt_min: plddtMin > 0 ? plddtMin : undefined,
-        iptm_min: iptmMin > 0 ? iptmMin : undefined,
+        plddt_min: !nativeResults && plddtMin > 0 ? plddtMin : undefined,
+        iptm_min: !nativeResults && iptmMin > 0 ? iptmMin : undefined,
         ipsae_min: ipsaeMin > 0 ? ipsaeMin : undefined,
         epitope_contacts_min: contactsMin > 0 ? contactsMin : undefined,
         target_contacts_min: targetContactsMin > 0 ? targetContactsMin : undefined,
@@ -2508,16 +2516,20 @@ function ResultsViewerContent() {
         rfd_rog_max: rfdRogMaxValue,
         artifact_group: activeRfArtifactGroup,
         include_summary: true,
-    }), [scopedModelId, selectedJobId, isReviewStageJob, filterText, pageSize, currentPage, apiSortField, sortDir, selectedBackboneId, plddtMin, iptmMin, ipsaeMin, contactsMin, targetContactsMin, epitopeMaxDistValue, targetMaxDistValue, binderSizeMinValue, binderSizeMaxValue, cdrH1MinValue, cdrH1MaxValue, cdrH2MinValue, cdrH2MaxValue, cdrH3MinValue, cdrH3MaxValue, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue, activeRfArtifactGroup, activeSavedSubsetDesignIds, activeJob?.design_count, activeJobHasDesignBearingChildren, backboneFilterApplies, forceBulkLoadForSorting]);
-    useEffect(() => { setSelectedDesignId(''); setCurrentPage(1); }, [selectedJobId, resultSurface]);
+    }), [nativeResults, nativeQuery, scopedModelId, selectedJobId, isReviewStageJob, filterText, pageSize, currentPage, apiSortField, sortDir, selectedBackboneId, plddtMin, iptmMin, ipsaeMin, contactsMin, targetContactsMin, epitopeMaxDistValue, targetMaxDistValue, binderSizeMinValue, binderSizeMaxValue, cdrH1MinValue, cdrH1MaxValue, cdrH2MinValue, cdrH2MaxValue, cdrH3MinValue, cdrH3MaxValue, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue, activeRfArtifactGroup, activeSavedSubsetDesignIds, activeJob?.design_count, activeJobHasDesignBearingChildren, backboneFilterApplies, forceBulkLoadForSorting]);
+    useEffect(() => { setSelectedDesignId(''); setCurrentPage(1); setNativeQuery({}); }, [selectedJobId, resultSurface]);
     const bulkSelectionFilters = useMemo<DesignFilters>(() => ({
         ...designQueryFilters,
         limit: MAX_BULK_SELECTION_DESIGNS,
         offset: 0,
     }), [designQueryFilters]);
 
+    const nativeReadScope = JSON.stringify({...designQueryFilters, limit: undefined, offset: undefined});
+    const priorNativeRead = useRef({scope: '', identity: ''});
+    const [nativeReadChanged, setNativeReadChanged] = useState(false);
     const {
         data: designsData,
+        isPlaceholderData: showingPreviousPage,
         isLoading: designsLoading,
         isError: designsError,
         error: designsQueryError,
@@ -2525,6 +2537,7 @@ function ResultsViewerContent() {
     } = useQuery({
         queryKey: ['designs', designQueryFilters],
         queryFn: () => fetchDesigns(designQueryFilters),
+        placeholderData: (previous, previousQuery) => nativeResults && JSON.stringify({...previousQuery?.queryKey[1] as DesignFilters, limit: undefined, offset: undefined}) === nativeReadScope ? previous : undefined,
         enabled: !!activeJob
             && !isShapeResultJob(activeJob)
             && activeJob.model_id !== 'molecular_dynamics'
@@ -2532,15 +2545,21 @@ function ResultsViewerContent() {
             && !isRFD3LocalRedesignResultJob(activeJob)
             && !reviewSelectionRequired,
     });
+    // Reuse React Query's last successful page for this exact scope on a page
+    // transport failure. It is visibly stale, never a replacement successful read.
+    const retainedNativePage = nativeResults && designsError ? queryClient.getQueryCache().findAll({queryKey: ['designs']})
+        .filter(query => query.state.data && JSON.stringify({...query.queryKey[1] as DesignFilters, limit: undefined, offset: undefined}) === nativeReadScope)
+        .sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt)[0]?.state.data as typeof designsData : undefined;
+    const displayedDesignsData = designsData ?? retainedNativePage;
     const rawDesigns = useMemo(
-        () => (designsData?.data.designs ?? []).map(sanitizeDesignForReview),
-        [designsData?.data.designs],
+        () => (displayedDesignsData?.data.designs ?? []).map(sanitizeDesignForReview),
+        [displayedDesignsData?.data.designs],
     );
-    const serverTotalDesigns = designsData?.data.total ?? rawDesigns.length;
+    const serverTotalDesigns = displayedDesignsData?.data.total ?? rawDesigns.length;
     const clientDerivedResultsPolicy = getClientDerivedResultsPolicy({
         total: serverTotalDesigns,
         loaded: rawDesigns.length,
-        requiresClientDerivation: useClientSourcePagination || requiresClientOnlySort,
+        requiresClientDerivation: !nativeResults && (useClientSourcePagination || requiresClientOnlySort),
     });
     const clientDerivedResultsBlocked = !clientDerivedResultsPolicy.allowed;
     const canClientSortLoadedDesigns = clientDerivedResultsPolicy.allowed
@@ -2548,9 +2567,9 @@ function ResultsViewerContent() {
     // Design IDs, unlike display names, distinguish models, candidates and attempts.
     const designs = useMemo(() => Array.from(new Map(rawDesigns.map((design) => [design.id, design])).values()), [rawDesigns]);
     const orderedDesigns = useMemo(() => {
-        if (!canClientSortLoadedDesigns) return designs;
+        if (nativeResults || !canClientSortLoadedDesigns) return designs;
         return [...designs].sort((left, right) => compareDesignsByField(left, right, sortField, sortDir));
-    }, [canClientSortLoadedDesigns, designs, sortDir, sortField]);
+    }, [nativeResults, canClientSortLoadedDesigns, designs, sortDir, sortField]);
     const resultModelHierarchy = useMemo(() => activeJob ? buildWorkflowModelResults({
         job: activeJob,
         modelCounts: designsData?.data.model_counts ?? {},
@@ -3142,6 +3161,7 @@ function ResultsViewerContent() {
         return counts;
     }, [orderedDesigns]);
     const sourceScopedDesigns = useMemo(() => {
+        if (nativeResults) return orderedDesigns;
         if (clientDerivedResultsBlocked) return [];
         const sourceFiltered = outputSourceFilter === 'all'
             ? orderedDesigns
@@ -3150,7 +3170,7 @@ function ResultsViewerContent() {
             ? sourceFiltered
             : sourceFiltered.filter((design) => inferDesignResultSet(design as UntypedApiValue) === resultSetFilter);
         return resultSetFiltered;
-    }, [clientDerivedResultsBlocked, orderedDesigns, outputSourceFilter, resultSetFilter]);
+    }, [nativeResults, clientDerivedResultsBlocked, orderedDesigns, outputSourceFilter, resultSetFilter]);
     const boltzgenScopedDesigns = useMemo(
         () => sourceScopedDesigns.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === 'boltzgen'),
         [sourceScopedDesigns],
@@ -3172,7 +3192,20 @@ function ResultsViewerContent() {
     // A validator's producer owns its result semantics, not the enclosing workflow.
     const predictionModelId = String(selectedDesign?.provenance?.producer_model_id ?? activeJob?.model_id ?? '');
     const tableHasNativeConfidence = ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) || tableDesigns.some(canonicalScalars);
-    const nativeTableScalars = usePredictionScalars(tableDesigns, activeTab === 'table');
+    const legacyTableScalars = usePredictionScalars(tableDesigns, activeTab === 'table' && !nativeResults);
+    const nativeEnvelope = displayedDesignsData?.data.scientific;
+    useEffect(() => {
+        if (!nativeEnvelope || showingPreviousPage) return;
+        const prior = priorNativeRead.current;
+        setNativeReadChanged(prior.scope === nativeReadScope && prior.identity !== nativeEnvelope.read_identity);
+        priorNativeRead.current = {scope: nativeReadScope, identity: nativeEnvelope.read_identity};
+    }, [nativeEnvelope?.read_identity, nativeReadScope, showingPreviousPage]);
+    const nativePoints = new Map(nativeEnvelope?.points.map(point => [point.id, point]));
+    const displayedSortField = nativeResults ? nativeQuery?.order ? (['complex_plddt', 'plddt'].includes(nativeQuery.metric_id ?? '') ? 'plddt_overall' : nativeQuery.metric_id) : 'name' : sortField;
+    const displayedSortDir = nativeResults ? nativeQuery?.order ?? sortDir : sortDir;
+    const nativeTableScalars = (design: Design) => nativeResults
+        ? nativePoints.has(design.id) ? scalarEvidence(design, nativePoints.get(design.id)) : {entries: [], reason: 'No native scalar evidence in this read; legacy columns are not substituted.'}
+        : legacyTableScalars(design);
     const visibleDesignIds = useMemo(() => tableDesigns.map((design) => design.id), [tableDesigns]);
     const visibleSelectionRef = useRef<HTMLInputElement | null>(null);
     const tableScrollViewportRef = useRef<HTMLDivElement | null>(null);
@@ -3191,7 +3224,7 @@ function ResultsViewerContent() {
     );
     const allVisibleSelected = visibleDesignIds.length > 0 && visibleSelectedCount === visibleDesignIds.length;
     const someVisibleSelected = visibleSelectedCount > 0 && !allVisibleSelected;
-    const parsedTopSelectionCount = Math.max(1, Math.min(MAX_BULK_SELECTION_DESIGNS, Number(topSelectionCount) || 0));
+    const parsedTopSelectionCount = Math.max(1, Math.min(nativeResults ? Number.MAX_SAFE_INTEGER : MAX_BULK_SELECTION_DESIGNS, Number(topSelectionCount) || 0));
     const activeReviewSetLabel = getRfReviewSetLabel(rfReviewSet);
     const loadedSavedReviewFilterSet = appliedSavedReviewFilterSet?.design_ids?.length
         ? appliedSavedReviewFilterSet
@@ -4226,7 +4259,7 @@ function ResultsViewerContent() {
     // Quick stats for overview
     const statsDesigns = useClientSourcePagination ? sourceScopedDesigns : designs;
     const stats = useMemo(() => {
-        const designs = statsDesigns;
+        const designs = nativeResults ? [] : statsDesigns;
         if (designs.length === 0) return null;
         const plddts = designs.map(d => d.plddt_overall).filter((v): v is number => v != null);
         const paes = designs.map(d => d.pae_overall).filter((v): v is number => v != null);
@@ -4346,7 +4379,7 @@ function ResultsViewerContent() {
         const serverSummary = designsData?.data.summary;
         if (!serverSummary || useClientSourcePagination) return sampleStats;
         return applyAuthoritativeDesignSummary(sampleStats, serverSummary, designs.length);
-    }, [statsDesigns, designsData?.data.summary, totalDesigns, useClientSourcePagination]);
+    }, [nativeResults, statsDesigns, designsData?.data.summary, totalDesigns, useClientSourcePagination]);
     const rfReviewFallbackStats = useMemo(() => {
         if (!isPostRFantibodyReview || reviewSelectionRequired || reviewBackboneRows.length === 0) return null;
 
@@ -4424,6 +4457,17 @@ function ResultsViewerContent() {
     const usingReviewRepresentativeFallback = !stats && !!rfReviewFallbackStats;
 
     const handleSort = (field: string) => {
+        if (nativeResults) {
+            const descriptors = nativeEnvelope?.cohorts[nativeQuery?.cohort_key ?? '']?.metric_descriptors ?? {};
+            const metric = field === 'plddt_overall' ? ('complex_plddt' in descriptors ? 'complex_plddt' : 'plddt') : field;
+            if (metric in descriptors) {
+                setNativeQuery({cohort_key: nativeQuery?.cohort_key, metric_id: metric, unit: descriptors[metric].unit,
+                    ...(nativeQuery?.metric_id === metric ? nativeQuery : {}), order: nativeQuery?.order === 'desc' ? 'asc' : 'desc'});
+            } else if (field === 'name') {setNativeQuery({...nativeQuery, order: null}); setSortDir(sortDir === 'asc' ? 'desc' : 'asc');}
+            else setIterationMessage({kind: 'error', text: 'Choose the owning native cohort and metric in Native controls to order these values.'});
+            setCurrentPage(1);
+            return;
+        }
         const nextSortDir = sortField === field
             ? (sortDir === 'asc' ? 'desc' : 'asc')
             : getDefaultSortDirection(field);
@@ -4501,6 +4545,7 @@ function ResultsViewerContent() {
     };
 
     const currentSavedFilterState = useMemo<SavedReviewFilterState>(() => ({
+        native: nativeResults ? nativeQuery : null,
         rf_review_set: rfReviewSet,
         output_source_filter: outputSourceFilter,
         sort_field: sortField,
@@ -4527,7 +4572,7 @@ function ResultsViewerContent() {
         epitope_max_dist: epitopeMaxDist,
         target_max_dist: targetMaxDist,
     }), [
-        rfReviewSet,
+        nativeResults, nativeQuery, rfReviewSet,
         outputSourceFilter,
         sortField,
         sortDir,
@@ -4562,6 +4607,7 @@ function ResultsViewerContent() {
 
     const applySavedReviewFilterSet = (filterSet: SavedReviewFilterSet) => {
         const nextState = filterSet.filter_state || {};
+        setNativeQuery(nextState.native ?? null);
         const nextSortField = typeof nextState.sort_field === 'string' && nextState.sort_field.trim()
             ? nextState.sort_field
             : 'name';
@@ -4628,7 +4674,7 @@ function ResultsViewerContent() {
             targetMaxDist: typeof nextState.target_max_dist === 'string' ? nextState.target_max_dist : '',
         });
         setAppliedSavedFilterSetId(filterSet.id);
-        setSelectedDesignIds([]);
+        if (!nativeResultsAvailable) setSelectedDesignIds([]);
         setCurrentPage(1);
         setIterationMessage({ kind: 'success', text: `Loaded saved dataset '${filterSet.name}'.` });
     };
@@ -4801,7 +4847,13 @@ function ResultsViewerContent() {
             if (reviewSelectionRequired) {
                 throw new Error('Select a live RF review set or saved dataset before building a working set.');
             }
-            const response = await fetchDesigns(bulkSelectionFilters);
+            const response = await fetchDesigns(nativeResults ? {...bulkSelectionFilters, native_output: 'ids'} : bulkSelectionFilters);
+            if (nativeResults) {
+                const ids = response.data.scientific?.ids;
+                if (!ids) throw new Error('Matching identities were not received; selection unchanged.');
+                if (mode === 'top_ranked' && !nativeQuery?.order) throw new Error('Choose one native cohort and metric order for Top N.');
+                return {ids: mode === 'top_ranked' ? ids.slice(0, Math.max(1, topN || 1)) : ids, partial: !response.data.scientific?.count_exact};
+            }
             if (response.data.total > MAX_BULK_SELECTION_DESIGNS) {
                 throw new Error(`Filtered result set exceeds ${MAX_BULK_SELECTION_DESIGNS.toLocaleString()} outputs. Narrow the filters first.`);
             }
@@ -4809,17 +4861,17 @@ function ResultsViewerContent() {
                 ? response.data.designs
                 : response.data.designs.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === outputSourceFilter);
             if (mode === 'top_ranked') {
-                return scopedDesigns.slice(0, Math.max(1, topN || 1)).map((design) => design.id);
+                return {ids: scopedDesigns.slice(0, Math.max(1, topN || 1)).map((design) => design.id), partial: false};
             }
-            return scopedDesigns.map((design) => design.id);
+            return {ids: scopedDesigns.map((design) => design.id), partial: false};
         },
-        onSuccess: (designIds, variables) => {
+        onSuccess: ({ids: designIds, partial}, variables) => {
             setSelectedDesignIds((current) => Array.from(new Set([...current, ...designIds])));
             if (designIds.length === 0) {
                 setIterationMessage({ kind: 'error', text: 'No outputs matched the current filtered set.' });
                 return;
             }
-            const message = variables.mode === 'all_filtered'
+            const message = partial ? `Added ${designIds.length.toLocaleString()} known matching identities from a partial scalar read; not a complete match set or global Top N.` : variables.mode === 'all_filtered'
                 ? `Added ${designIds.length.toLocaleString()} filtered outputs to the antibody refinement set.`
                 : `Added the top ${designIds.length.toLocaleString()} filtered outputs to the antibody refinement set.`;
             setIterationMessage({ kind: 'success', text: message });
@@ -4881,6 +4933,16 @@ function ResultsViewerContent() {
             }
             if (reviewSelectionRequired) {
                 throw new Error('Select a live RF review set or saved dataset before saving a dataset.');
+            }
+            if (nativeResults) {
+                const response = await fetchDesigns({...bulkSelectionFilters, native_output: 'ids'});
+                const ids = response.data.scientific?.ids;
+                if (!ids?.length) throw new Error('No matching identities received.');
+                return saveReviewFilterSet(selectedJobId, {
+                    name: savedFilterSetName.trim() || undefined, visible_count: ids.length,
+                    source_total_count: ids.length, design_ids: ids,
+                    filter_state: currentSavedFilterState as Record<string, unknown>,
+                });
             }
             const response = await fetchDesigns(bulkSelectionFilters);
             if (response.data.total > MAX_BULK_SELECTION_DESIGNS) {
@@ -4953,6 +5015,21 @@ function ResultsViewerContent() {
         }
         setSelectedDesignIds((current) => current.filter((designId) => !visibleDesignIds.includes(designId)));
     };
+
+    const nativeExportMutation = useMutation({
+        mutationFn: async (format: 'csv' | 'json') => {
+            const population: DesignFilters = {job_id: selectedJobId, model_id: scopedModelId,
+                include_children: !isReviewStageJob, native: {}};
+            const filters = nativeExportScope === 'matching' ? designQueryFilters
+                : nativeExportScope === 'selected' ? {native: {}, design_ids: selectedDesignIds, include_children: true} : population;
+            const response = await exportNativeResults(filters, format);
+            const url = URL.createObjectURL(response.data);
+            const link = document.createElement('a'); link.href = url;
+            const partial = String(response.headers['content-disposition']).includes('partial');
+            link.download = `native-results-${nativeExportScope}${partial ? '-partial' : ''}.${format}`; link.click(); URL.revokeObjectURL(url);
+        },
+        onError: error => setIterationMessage({kind: 'error', text: getErrorMessage(error)}),
+    });
 
     const exportFasta = (mode: 'binder' | 'cdr') => {
         if (!selectedJobId) return;
@@ -5523,7 +5600,7 @@ function ResultsViewerContent() {
                         <RFD3LocalRedesignResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : activeJob.model_id === 'molecular_dynamics' ? (
                         <MDResultsPane key={activeJob.id} jobId={activeJob.id} />
-                    ) : designsError ? (
+                    ) : designsError && !nativeResults ? (
                         <DataViewerQueryError
                             title="Results could not be loaded"
                             error={designsQueryError}
@@ -7892,8 +7969,36 @@ function ResultsViewerContent() {
 
                                             {/* Quality Filters */}
                                             <div className="mb-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
-                                                {tableHasNativeConfidence && <p className="mb-3 text-xs text-[var(--text-secondary)]">Confidence cells show native scores where available. These server filters and sorts still use legacy stored scores, which may be empty; they do not operate on the displayed native confidence.</p>}
-                                                <div className="flex items-center gap-4 flex-wrap">
+                                                {nativeResults && <>
+                                                    {designsError && <p role="status">Scalar read failed; any displayed rows are the previous successfully loaded page, not the requested page. Selected IDs and independent Structure/Charts remain available. Refresh to retry.</p>}
+                                                    {showingPreviousPage && <p role="status">Loading requested page; showing the previous page meanwhile.</p>}
+                                                    {nativeReadChanged && <p role="status">Population or scalar evidence changed since the preceding read. These pages are not a snapshot; refresh or export in one read.</p>}
+                                                    <NativeScalarControls query={nativeQuery!} result={nativeEnvelope} onChange={query => {setNativeQuery(query); setCurrentPage(1);}} />
+                                                    <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                                                        <button onClick={selectVisibleDesigns}>Select visible</button>
+                                                        <button onClick={selectAllFilteredDesigns}>Select all matching</button>
+                                                        <input aria-label="Native Top N" className="w-16 bg-slate-900" value={topSelectionCount} onChange={e => setTopSelectionCount(e.target.value)} />
+                                                        <button onClick={selectTopRankedDesigns}>Top N in chosen cohort</button>
+                                                        <span>{selectedDesignIds.length} selected · {selectedDesignIds.filter(id => !nativeEnvelope?.ids?.includes(id)).length} outside current matches</span>
+                                                        <select aria-label="Scalar export scope" className="bg-slate-900" value={nativeExportScope} onChange={e => setNativeExportScope(e.target.value as typeof nativeExportScope)}>
+                                                            <option value="matching">Matching scalar rows</option><option value="selected">Explicit selection (including off-page)</option><option value="population">All in job/model population</option>
+                                                        </select>
+                                                        <button onClick={() => nativeExportMutation.mutate('csv')}>Scalar CSV</button>
+                                                        <button onClick={() => nativeExportMutation.mutate('json')}>Scalar JSON</button>
+                                                        <button onClick={() => refetchDesigns()}>Refresh scalar read</button>
+                                                        <input aria-label="Native dataset name" className="bg-slate-900" placeholder="Dataset name" value={savedFilterSetName} onChange={e => setSavedFilterSetName(e.target.value)} />
+                                                        <button onClick={() => saveFilterSetMutation.mutate()}>Save matching dataset</button>
+                                                        <select aria-label="Saved native dataset" className="bg-slate-900" value={appliedSavedFilterSetId ?? ''} onChange={e => {
+                                                            const saved = savedReviewFilterSets.find(item => item.id === e.target.value);
+                                                            if (saved) applySavedReviewFilterSet(saved); else {setAppliedSavedFilterSetId(null); setCurrentPage(1);}
+                                                        }}>
+                                                            <option value="">Live population</option>
+                                                            {savedReviewFilterSets.map(saved => <option key={saved.id} value={saved.id}>{saved.name}{saved.filter_state.native == null ? ' (legacy filters)' : ''}</option>)}
+                                                        </select>
+                                                    </div>
+                                                </>}
+                                                {!nativeResults && tableHasNativeConfidence && <p className="mb-3 text-xs text-[var(--text-secondary)]">Legacy saved filters use stored scores, not native confidence. {nativeResultsAvailable && <button onClick={() => {setNativeQuery({}); setCurrentPage(1);}}>Use native controls (clear legacy interpretation)</button>}</p>}
+                                                <div className={nativeResults ? 'hidden' : 'flex items-center gap-4 flex-wrap'}>
                                                     <label className="flex items-center gap-2">
                                                         <span className="text-xs text-slate-500">Sort by</span>
                                                         <select
@@ -8198,7 +8303,7 @@ function ResultsViewerContent() {
                                                     Check rows to build a launch set. The header checkbox now selects all visible rows, and row clicks still open the structure view.
                                                 </span>
                                             </div>
-                                            <div className="mb-4 flex flex-wrap items-center gap-2">
+                                            <div className={nativeResults ? 'hidden' : 'mb-4 flex flex-wrap items-center gap-2'}>
                                                 {OUTPUT_SOURCE_BUTTON_LABELS.filter(([value]) => (
                                                     (value !== 'rfantibody' || tableReviewCapabilities.antibody)
                                                     && (value !== 'ppiflow' || showPpiflowColumns)
@@ -8397,8 +8502,8 @@ function ResultsViewerContent() {
                                                                         className={`px-3 py-2 text-left font-medium text-slate-400 ${sortable ? 'cursor-pointer hover:text-white' : ''}`}
                                                                     >
                                                                         {col.label}
-                                                                        {sortable && sortField === col.key && (
-                                                                            <span className="ml-1">{sortDir === 'asc' ? '▲' : '▼'}</span>
+                                                                        {sortable && displayedSortField === col.key && (
+                                                                            <span className="ml-1">{displayedSortDir === 'asc' ? '▲' : '▼'}</span>
                                                                         )}
                                                                     </th>
                                                                 );
@@ -8551,7 +8656,7 @@ function ResultsViewerContent() {
                                                                         {formatMetric(d.ipsae, 2)}
                                                                     </td>
                                                                 )}
-                                                                {canonicalScalars(d) ? scalarCell(nativeTableScalars(d), ['complex_plddt', 'plddt', 'plddt_mean', 'plddt_overall']) : <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_overall', d.plddt_overall)}`}>
+                                                                {(nativeResults || canonicalScalars(d)) ? scalarCell(nativeTableScalars(d), ['complex_plddt', 'plddt', 'plddt_mean', 'plddt_overall']) : <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_overall', d.plddt_overall)}`}>
                                                                     {formatMetric(d.plddt_overall, 1)}
                                                                 </td>}
                                                                 {isPostRFantibodyReview && (
@@ -8572,7 +8677,7 @@ function ResultsViewerContent() {
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('pae_overall', d.pae_overall)}`}>
                                                                     {formatMetric(d.pae_overall, 1)}
                                                                 </td>
-                                                                {canonicalScalars(d) ? scalarCell(nativeTableScalars(d), ['ptm']) : <td className={`px-3 py-2 font-mono ${getMetricColor('ptm', d.ptm)}`}>
+                                                                {(nativeResults || canonicalScalars(d)) ? scalarCell(nativeTableScalars(d), ['ptm']) : <td className={`px-3 py-2 font-mono ${getMetricColor('ptm', d.ptm)}`}>
                                                                     {formatMetric(d.ptm, 2)}
                                                                 </td>}
                                                                 {tableReviewCapabilities.interface && (
@@ -8580,7 +8685,7 @@ function ResultsViewerContent() {
                                                                         <td className={`px-3 py-2 font-mono ${getMetricColor('pae_interaction', d.pae_interaction)}`}>
                                                                             {formatMetric(d.pae_interaction, 1)}
                                                                         </td>
-                                                                        {canonicalScalars(d) ? scalarCell(nativeTableScalars(d), ['iptm']) : <td className={`px-3 py-2 font-mono ${d.iptm != null && d.iptm > 0.7 ? 'text-emerald-400' : d.iptm != null && d.iptm > 0.5 ? 'text-blue-400' : 'text-slate-500'}`}>
+                                                                        {(nativeResults || canonicalScalars(d)) ? scalarCell(nativeTableScalars(d), ['iptm']) : <td className={`px-3 py-2 font-mono ${d.iptm != null && d.iptm > 0.7 ? 'text-emerald-400' : d.iptm != null && d.iptm > 0.5 ? 'text-blue-400' : 'text-slate-500'}`}>
                                                                             {formatMetric(d.iptm, 2)}
                                                                         </td>}
                                                                         <td className={`px-3 py-2 font-mono ${d.ligand_iptm != null && d.ligand_iptm > 0.8 ? 'text-emerald-400' : 'text-slate-500'}`}>

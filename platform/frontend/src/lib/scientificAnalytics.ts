@@ -1,3 +1,45 @@
+export interface NativeScalarQuery {
+    cohort_key?: string; metric_id?: string; unit?: string;
+    minimum?: number | null; maximum?: number | null; include_missing?: boolean; order?: 'asc' | 'desc' | null;
+}
+export interface NativeResults {
+    query: NativeScalarQuery; population_count: number; evaluated_count: number; matching_count: number;
+    unread_ids: string[]; unresolved_ids: string[]; count_exact: boolean;
+    scope: Record<string, unknown>;
+    read_identity: string; verification: string; points: ScientificPoint[]; ids: string[] | null;
+    cohorts: Record<string, {count: number; metric_descriptors: Record<string, MetricDescriptor>}>;
+    summaries: Record<string, ScientificCohort['metrics']>;
+}
+export function parseNativeResults(value: unknown): NativeResults {
+    const row = object(value);
+    ['population_count', 'evaluated_count', 'matching_count'].forEach(key => count(row[key]));
+    text(row.read_identity); text(row.verification); object(row.query);
+    identities(row.unread_ids); identities(row.unresolved_ids); object(row.scope); requireThat(typeof row.count_exact === 'boolean');
+    requireThat(Array.isArray(row.points));
+    const points = row.points.map(parseScientificPoint);
+    requireThat(new Set(points.map(p => p.id)).size === points.length);
+    if (row.ids !== null) {
+        const ids = new Set(identities(row.ids));
+        requireThat(ids.size === row.matching_count && points.every(point => ids.has(point.id)));
+    }
+    requireThat((row.evaluated_count as number) + (row.unread_ids as string[]).length === row.population_count);
+    const cohorts = object(row.cohorts);
+    for (const [key, raw] of Object.entries(cohorts)) {
+        requireThat(key.startsWith('v1:')); const cohort = object(raw); count(cohort.count);
+        for (const [metric, d] of Object.entries(object(cohort.metric_descriptors))) descriptor(d, metric);
+    }
+    for (const [key, raw] of Object.entries(object(row.summaries))) {
+        requireThat(key in cohorts);
+        for (const [metric, value] of Object.entries(object(raw))) {
+            const summary = object(value);
+            ['observed_count', 'unavailable_count', 'invalid_count'].forEach(k => count(summary[k]));
+            descriptor(summary.descriptor, metric);
+            if (summary.statistics !== null) Object.values(object(summary.statistics)).forEach(finite);
+        }
+    }
+    return value as NativeResults;
+}
+
 export type MetricState = {state:'ok'; value:number; reason_code:null} | {state:'unavailable'|'invalid'; value:null; reason_code:string};
 export interface MetricDescriptor {metric_id:string; source:'canonical_artifact'|'retained_native_artifact'|'external_provider_artifact'; scope:string; unit:string; direction:'higher'|'lower'|'none'; producer_version:string; derivation_version:string}
 export interface MetricSource {artifact_sha256:string; candidate_id:string; document_id:string}
