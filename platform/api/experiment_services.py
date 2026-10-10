@@ -467,8 +467,8 @@ async def persist_workflow_plan_authority(
     existing = await session.get(ExperimentWorkflowPlanAuthority, workflow_id)
     native_contract = None
     if normalized_job_request is not None:
-        from services.protein_project_capabilities import normalized_job_plan_contract, _PARAMETER_SCHEMAS
-        setup_capability = capability_id if _PARAMETER_SCHEMAS.get(capability_id, {}).get("x-bms-native-editor-draft") else None
+        from services.protein_project_capabilities import normalized_job_plan_contract, protein_setup_parameter_schema, _PARAMETER_SCHEMAS
+        setup_capability = capability_id if capability_id in _PARAMETER_SCHEMAS and protein_setup_parameter_schema(capability_id).get("x-bms-native-editor-draft") else None
         native_contract = normalized_job_plan_contract(
             normalized_job_request, native_entrypoint=native_entrypoint,
             setup_capability_id=setup_capability,
