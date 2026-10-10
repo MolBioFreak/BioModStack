@@ -108,7 +108,7 @@ test('four-channel pipette surface separates physical admission from no-motion p
     assert.doesNotMatch(source, /BioXpPipetteControlPanel/);
     for (const label of [
         'Pipette status', 'Channel', 'Hardware tip readback', 'Hardware pressure',
-        'Load tip physically', 'Move to waste physically', 'Detect fluid physically', 'Lift pipette head (Z)', 'Lower pipette head (Z)',
+        'Assign source tip type / location (host only)', 'Move to waste physically', 'Detect fluid physically', 'Lift pipette head (Z)', 'Lower pipette head (Z)',
         'Build no-motion plan', 'No-motion application planner', 'Active hardware readback', 'Read live hardware',
     ]) assert.ok(pipettePanel.toLowerCase().includes(label.toLowerCase()), `missing literal label: ${label}`);
     for (const token of [

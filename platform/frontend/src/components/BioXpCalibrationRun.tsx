@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useCalibrationObservation, useInvalidateSettings } from '../lib/bioxpSettingsObservations';
 import { bioXpErrorText } from '../lib/bioxpClient';
 import { calibrationFields, decideCalibrationRun, readCalibrationRun, type CalibrationRun } from '../lib/bioxpCalibration';
 import { PipetteOutcome, PipetteValue } from './BioXpPipetteResults';
@@ -6,9 +7,12 @@ import { PipetteOutcome, PipetteValue } from './BioXpPipetteResults';
 export function BioXpCalibrationRun({ runId, generation, connected }: {
     runId?: string; generation: number; connected: boolean;
 }) {
+    const invalidate = useInvalidateSettings(generation);
     const [draftId, setDraftId] = useState('');
     const [selectedId, setSelectedId] = useState(runId ?? '');
     const [run, setRun] = useState<CalibrationRun | null>(null);
+    const [settingsOpened, setSettingsOpened] = useState(false);
+    const currentSettings = useCalibrationObservation(generation, connected && Boolean(selectedId) && settingsOpened);
     const [error, setError] = useState('');
     const [message, setMessage] = useState('');
     const [pending, setPending] = useState(false);
@@ -45,6 +49,7 @@ export function BioXpCalibrationRun({ runId, generation, connected }: {
             let value: CalibrationRun;
             try {
                 value = matching(await decideCalibrationRun(generation, id, decision), id);
+                void invalidate('calibration');
             } finally {
                 // Only the POST owns local exclusion. Passive readback must not
                 // become a second admission lock for a later explicit decision.
@@ -75,6 +80,9 @@ export function BioXpCalibrationRun({ runId, generation, connected }: {
         </form>}
         {selectedId && <>
             <p className="break-all">Run {selectedId} · connection {generation}</p>
+            <button type="button" disabled={!connected} onClick={() => { setSettingsOpened(true); if (settingsOpened) void currentSettings.refetch(); }}>Read current settings revisions</button>
+            <p>Current settings · saved revision: {currentSettings.data ? currentSettings.data.saved_revision_id ?? 'baseline' : 'not read'} · active revision: {currentSettings.data ? currentSettings.data.active_revision_id ?? 'baseline' : 'not read'}. These are separate from the fixed run snapshots.</p>
+            {currentSettings.error && <p role="alert">Current settings read unavailable: {bioXpErrorText(currentSettings.error)}</p>}
             <p>Calibration saves and paired-tray Z Set apply in-process through the existing robot owner. A partial run may already have saved and applied stations; body completion is not operator acceptance or physical verification.</p>
             <p>Reject / restore replaces the FULL pre-run calibration, including liquid-calibration settings and any later calibration edits. It applies the restored calibration in-process; no restart or home is requested.</p>
             <button type="button" disabled={!connected || pending} onClick={() => void refresh()}>Refresh comparison</button>
@@ -82,6 +90,8 @@ export function BioXpCalibrationRun({ runId, generation, connected }: {
             <button type="button" disabled={!connected || pending} onClick={() => void decide('restore')}>Reject / restore full pre-run calibration</button>
             {run && <>
                 <p>Recorded decision: {run.decision ?? 'Not decided'}</p>
+                {run.comparison_source === 'no_previous_values' && <p>No previous calibration backup. Accept / restore returns unchanged and records no decision.</p>}
+                <p>Before and after are fixed snapshots of this run, not the current settings revision.</p>
                 <PipetteOutcome result={run} />
                 <Comparison run={run} />
             </>}

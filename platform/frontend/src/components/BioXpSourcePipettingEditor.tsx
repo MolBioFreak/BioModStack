@@ -33,9 +33,9 @@ const fieldLabels: Record<string, string> = {
     'Source mix aspirate_delay_ms': 'Aspiration delay (ms)', 'Source mix dispense_delay_ms': 'Dispense delay (ms)',
     'Source mix cycles': 'Mix cycles', 'Source purge speed': 'Purge speed',
 };
-export function BioXpSourcePipettingEditor({ drafts, onChange, enabled, run, selectedOperation }: { drafts: Record<BioXpSourceStep['operation'], NativeDraft<BioXpSourceStep>>; onChange: (step: NativeDraft<BioXpSourceStep>) => void; enabled: boolean; run?: (operation: BioXpSourceStep['operation']) => void; selectedOperation?: BioXpSourceStep['operation'] }) {
+export function BioXpSourcePipettingEditor({ drafts, onChange, enabled, run, selectedOperation, visibleOperations }: { visibleOperations?: readonly string[]; drafts: Record<BioXpSourceStep['operation'], NativeDraft<BioXpSourceStep>>; onChange: (step: NativeDraft<BioXpSourceStep>) => void; enabled: boolean; run?: (operation: BioXpSourceStep['operation']) => void; selectedOperation?: BioXpSourceStep['operation'] }) {
     return <div className="space-y-3 [&_select]:mt-1 [&_select]:block [&_select]:w-full [&_select]:rounded [&_select]:bg-slate-950 [&_select]:p-2">
-        {Object.values(drafts).filter(raw => !selectedOperation || raw.operation === selectedOperation).map(raw => {
+        {Object.values(drafts).filter(raw => (!selectedOperation || raw.operation === selectedOperation) && (!visibleOperations || visibleOperations.includes(raw.operation))).map(raw => {
             const step = sourceEditorDraft(raw.operation, raw as unknown as DraftObject);
             const update = (fields: object) => onChange(mergeDraftEdits(raw as unknown as DraftObject, step as unknown as DraftObject, { ...step, ...fields } as unknown as DraftObject) as unknown as NativeDraft<BioXpSourceStep>);
             const num = (name: string, value: number | string | null | undefined, set: (value: number | string | null) => void, nullable = false) => <label key={name} className="block">{fieldLabels[name] ?? name.replaceAll('_', ' ')}<input className="mt-1 block w-full rounded bg-slate-950 p-2" aria-label={name} type="number" step="any" placeholder={nullable ? 'Default' : undefined} value={value ?? ''} onChange={e => set(e.target.value)} /></label>;

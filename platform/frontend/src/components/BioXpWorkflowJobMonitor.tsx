@@ -1,3 +1,4 @@
+import { BioXpMeasurementReview } from './BioXpMeasurementReview';
 import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { bioXpErrorText, useBioXpWorkflowJobObservation, useControlBioXpWorkflow, useReviewBioXpWorkflow,
@@ -14,6 +15,7 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
     const [abortConfirmed, setAbortConfirmed] = useState(false);
     const [reviewer, setReviewer] = useState('');
     const [note, setNote] = useState('');
+    const [measurementDrafts, setMeasurementDrafts] = useState<Record<string, Record<string, string[]>>>({});
     const [localError, setLocalError] = useState<string | null>(null);
     const identity = useRef({ jobId, generation });
     identity.current = { jobId, generation };
@@ -41,6 +43,9 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
     const command = job?.command;
     const runtime = job?.execution?.runtime_state;
     const workflow = runtime?.workflow;
+    const pendingReview = job?.operator?.pending_review;
+    const reviewIdentity = JSON.stringify([generation, jobId, pendingReview?.stage_id, pendingReview?.action_id, pendingReview?.source_occurrence_id]);
+    const measurements = measurementDrafts[reviewIdentity] ?? {};
     const canonical = !!command && !!workflow && command.command_id === jobId && workflow.command_id === jobId && job?.execution?.dry_run === false;
     const busy = submitting || control.isPending || review.isPending;
     const mutable = connected && controlsEnabled && !busy && canonical && !command.terminal
@@ -77,7 +82,10 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
             await review.mutateAsync({ jobId, request: { command_id: command.command_id,
                 expected_ownership_generation: command.ownership_generation,
                 expected_connection_generation: generation, idempotency_key: crypto.randomUUID(),
-                stage_id: stageId, action_id: actionId, reviewer: reviewer.trim(), note: note || null } });
+                stage_id: stageId, action_id: actionId, reviewer: reviewer.trim(), note: note || null,
+                ...(pendingReview?.measurement_form ? { source_occurrence_id: pendingReview.source_occurrence_id,
+                    measurements: Object.fromEntries(pendingReview.measurement_form.fields.map(field => [field.field_id,
+                        Array.from({ length: field.repetitions ?? 1 }, (_, index) => measurements[field.field_id]?.[index] ?? '')])) } : {}) } });
             void query.refetch();
         } catch (error) {
             if (identity.current.jobId === jobId && identity.current.generation === generation) setLocalError(bioXpErrorText(error));
@@ -109,6 +117,8 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
             <label className="block text-sm"><input type="checkbox" checked={abortConfirmed} onChange={event => setAbortConfirmed(event.target.checked)} /> Confirm cooperative job Abort</label>
             <button className={buttonClass} disabled={!mutable || !abortConfirmed} onClick={() => void send({ action: 'abort' })}>Abort workflow</button>
             {gate === 'review' && <div className="space-y-2">
+                <p>{pendingReview?.reason}</p>
+                {pendingReview?.measurement_form && <BioXpMeasurementReview form={pendingReview.measurement_form} values={measurements} onChange={values => setMeasurementDrafts(previous => ({ ...previous, [reviewIdentity]: values }))} />}
                 <label className="block">Reviewer <input value={reviewer} maxLength={120} onChange={event => setReviewer(event.target.value)} /></label>
                 <label className="block">Review note <input value={note} maxLength={4000} onChange={event => setNote(event.target.value)} /></label>
                 <button className={buttonClass} disabled={!mutable || !reviewer.trim() || !job?.operator?.pending_review?.stage_id} onClick={() => void acknowledgeReview()}>Acknowledge protocol review</button>

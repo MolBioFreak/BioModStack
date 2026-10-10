@@ -129,6 +129,7 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
                     <label>{display(`${label}.${name}`)}{active.required?.includes(name) ? ' *' : ''}<select aria-label={`${label}.${name} presence`} className={classes} value={value[name] === undefined ? 'omitted' : 'value'} onChange={event => update(name, event.target.value === 'omitted' ? undefined : initialValue(child))}>
                         <option value="omitted">{rawDraft ? 'Unspecified (preserved)' : `Omit (service default${Object.hasOwn(child, 'default') ? `: ${JSON.stringify(child.default)}` : ''})`}</option><option value="value">Explicit value</option>
                     </select></label>
+                    {rawDraft && value[name] === undefined && Object.hasOwn(child, 'source_default') && <button type="button" aria-label={`Use source value for ${label}.${name}`} onClick={() => update(name, structuredClone(child.source_default))}>Use source value: {JSON.stringify(child.source_default)}</button>}
                     {value[name] !== undefined && <BioXpSchemaInput label={`${label}.${name}`} schema={child} rootSchema={rootSchema} rawDraft={rawDraft} value={value[name]} onChange={next => update(name, next)} fallback={fallback} />}
                 </div>;
             })}

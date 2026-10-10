@@ -1,3 +1,6 @@
+import { BioXpPipetteNativeTools } from './BioXpPipetteNativeTools';
+import { methodsPost, newMethod, type MethodCompile, type MethodValue } from '../lib/bioxpMethods';
+import { useInvalidateSettings } from '../lib/bioxpSettingsObservations';
 import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { useEffect, useRef, useState } from 'react';
 import { BioXpPipetteResults } from './BioXpPipetteResults';
@@ -39,6 +42,7 @@ const wells = [...'ABCDEFGH'].flatMap(row => Array.from({ length: 12 }, (_, col)
 export function BioXpWellPipettingPanel({ generation, connected, destinations = [], positionTableRevision, workflowAuthoring = false, controlsEnabled = false, visible = true }: { visible?: boolean;
     controlsEnabled?: boolean; workflowAuthoring?: boolean; generation: number; connected: boolean; destinations?: BioXpDeckDestinationV1[]; positionTableRevision?: string | null;
 }) {
+    const invalidateSettings = useInvalidateSettings(generation);
     const [sourceDrafts, setSourceDrafts] = useState<Record<BioXpSourceStep['operation'], NativeDraft<BioXpSourceStep>>>(sourceDefaults);
     const updateSource = (step: NativeDraft<BioXpSourceStep>) => setSourceDrafts(current => ({ ...current, [step.operation]: step }));
     const [tray, setTray] = useState('1');
@@ -101,7 +105,10 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     const observeJob = documentVisible && (visible || (observationId !== null && settledJob !== observationId));
     const query = useBioXpWorkflowJob(observationId, attempt?.generation ?? generation, connected && sameConnection && observeJob);
     useEffect(() => {
-        if (query.data?.command?.terminal && query.data.job_id === observationId) setSettledJob(observationId);
+        if (query.data?.command?.terminal && query.data.job_id === observationId) {
+            setSettledJob(observationId);
+            if (query.data.execution?.runtime_state.action_results?.some(result => pipetteResults(result).some(value => value.saved_revision_id !== undefined))) void invalidateSettings();
+        }
     }, [query.data, observationId]);
     const mismatch = !!query.data && !!attempt && (query.data.job_id !== attempt.id || query.data.command?.idempotency_key !== attempt.key);
     const job = mismatch ? null : query.data ?? accepted;
@@ -274,11 +281,16 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
         setWorkflowId(id); setWorkflowName(result.data.name); setOpenList(null);
         setSavedNotice('Opened draft from database.');
     });
-    async function run(op?: Operation, explicitStep?: BioXpManualStep) {
+    async function run(op?: Operation, explicitStep?: BioXpManualStep, nativeTool?: { action: string; inputs: MethodValue }) {
         if (!enabled || busy.current) return;
         busy.current = true; setPending(true); setError(null);
         try {
-            const document = manualPipettingDocument({ protocol_id: 'bms-manual-pipetting', steps: explicitStep ? [explicitStep] : op ? [draft(op)] : steps.map(row => nativeIntent(row.intent)) });
+            let document: MethodValue;
+            if (nativeTool) {
+                const compiled = await methodsPost<MethodCompile>('compile', { method: { ...newMethod(), name: 'Pipettes immediate action', steps: [{ step_id: 'immediate', type: 'action', action: nativeTool.action, inputs: nativeTool.inputs }] } });
+                if (!compiled.document) throw new Error(compiled.issues.map(issue => issue.message).join('; ') || 'Native compiler returned no document.');
+                document = compiled.document;
+            } else document = manualPipettingDocument({ protocol_id: 'bms-manual-pipetting', steps: explicitStep ? [explicitStep] : op ? [draft(op)] : steps.map(row => nativeIntent(row.intent)) });
             const key = crypto.randomUUID();
             const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
             const id = `protocol-live-${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')}`;
@@ -334,7 +346,16 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
     const positionOperation = ['move', 'lower', 'lift'].includes(operation);
     const liquidOperation = ['aspirate', 'dispense', 'mix'].includes(operation);
     const sourceOperation = Object.hasOwn(sourceDefaults, operation);
-    const show = (...ops: Operation[]) => !workflowAuthoring || ops.includes(operation);
+    const [category, setCategory] = useState('Liquid strokes');
+    const categories: Record<string, Operation[]> = {
+        'Liquid strokes': ['aspirate', 'dispense', 'mix'],
+        Tips: ['load_tip', 'source_load_tips'],
+        Diagnostics: ['diagnostic_pipette'],
+        'Position / Z': ['move', 'lower', 'lift'],
+        Calibration: ['measure_fluid_height', 'source_fluid_offset', 'diagnostic_detect_fluid', 'source_calwith_fluid'],
+        'Other native tools': ['source_mix', 'source_aspirate_air', 'source_dispense_air', 'source_purge'],
+    };
+    const show = (...ops: Operation[]) => workflowAuthoring ? ops.includes(operation) : ops.some(op => categories[category].includes(op));
     const workflowLabel = (intent: DraftObject) => {
         if (intent.operation === 'transfer') return 'Transfer';
         if (intent.operation === 'diagnostic_pipette' && isDraftObject(intent.diagnostic))
@@ -385,29 +406,12 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
                 </div>
             </li>)}</ol>
         </aside>
-    ) : (
-        <details open={workflowAuthoring || undefined} className="space-y-2 rounded border border-slate-700 p-3"><summary className="cursor-pointer font-semibold">{workflowAuthoring ? "Workflow steps" : "Ordered well-to-well program"}</summary>
-            <p className="text-sm">Author each step explicitly. For a transfer: Move → Lower → Aspirate → Lift, then select the destination and add Move → Lower → Dispense → Lift. Adding, copying and reordering do not move hardware.</p>
-            <label>Step to append<select aria-label="Step to append" value={operation} onChange={e => setOperation(e.target.value as Operation)} className="ml-2 bg-slate-950 p-2">{allOperations.map(op => <option key={op} value={op}>{label(op)}</option>)}</select></label>
-            <button type="button" onClick={append} className="ml-2 rounded border px-3 py-2">Append step</button>
-            {editingId && <span className="ml-2">Editing step {steps.findIndex(row => row.step_id === editingId) + 1}
-                <button type="button" onClick={updateStep}>Update step</button> <button type="button" onClick={cancelEdit}>Cancel editing</button>
-            </span>}
-            <ol className="space-y-2">{steps.map((step, index) => <li key={step.step_id} className="flex flex-wrap items-center gap-2" data-manual-step={index} data-step-id={step.step_id}>
-                <span>{index + 1}. Draft · {description(step.intent)}</span>
-                <button type="button" aria-label={`Edit step ${index + 1}`} onClick={() => edit(index, true)}>Edit step</button>
-                <button type="button" aria-label={`Copy step ${index + 1} to editor`} onClick={() => edit(index)}>Copy to editor</button>
-                <button type="button" aria-label={`Clone step ${index + 1}`} onClick={() => setSteps(current => [...current, { ...step, step_id: crypto.randomUUID(), intent: structuredClone(step.intent) }])}>Clone step</button>
-                <button type="button" aria-label={`Move step ${index + 1} up`} disabled={index === 0} onClick={() => reorder(index, -1)}>↑</button>
-                <button type="button" aria-label={`Move step ${index + 1} down`} disabled={index === steps.length - 1} onClick={() => reorder(index, 1)}>↓</button>
-                <button type="button" aria-label={`Remove step ${index + 1}`} onClick={() => { setSteps(current => current.filter(row => row.step_id !== step.step_id)); if (editingId === step.step_id) cancelEdit(); }}>Remove</button>
-            </li>)}</ol>
-            {!workflowAuthoring && <button type="button" disabled={!enabled} onClick={() => void run()} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">Run ordered steps</button>}
-        </details>
-    );
+    ) : null;
     return <section onChangeCapture={() => setSavedNotice('')} aria-label={workflowAuthoring ? "Workflow editor" : "Well pipetting"} className={workflowAuthoring ? 'bioxp-workflow-editor' : 'mt-4 min-w-0 space-y-3 rounded border border-slate-700 p-4 [&_select]:max-w-full [&_select]:rounded [&_select]:bg-slate-950 [&_select]:p-2 [&_input[type=number]]:min-w-0 [&_input[type=number]]:rounded [&_input[type=number]]:bg-slate-950 [&_input[type=number]]:p-2'}>
         {!workflowAuthoring && <>
-            <section aria-label="Tip ejection" className="space-y-2 rounded border border-slate-700 p-3">
+            <h3 className="font-semibold">Basic tests & immediate controls</h3>
+            <div className="flex flex-wrap gap-2" aria-label="Test categories">{Object.keys(categories).map(name => <button type="button" aria-pressed={category === name} key={name} onClick={() => setCategory(name)}>{name}</button>)}</div>
+            <section hidden={category !== 'Tips'} aria-label="Tip ejection" className="space-y-2 rounded border border-slate-700 p-3">
                 <h3 className="font-semibold">Tip ejection</h3>
                 <p className="text-sm">Releases tips at the current head position. Move over waste first; these buttons do not move the head.</p>
                 <fieldset><legend className="text-sm">Pipettes to eject</legend><div className="flex flex-wrap gap-4">
@@ -423,7 +427,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
                         className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">Eject selected tips</button>
                 </div>
             </section>
-            <h3 className="font-semibold">Well pipetting</h3>
+            <p className="text-sm">One deliberate action at a time. Build ordered procedures in Workflows.</p>
         </>}
         {workflowAuthoring && <div className="bioxp-workflow-toolbar" aria-label="Saved workflow">
             <label className="bioxp-workflow-name">Workflow name<input aria-label="Workflow name" placeholder="Untitled workflow" value={workflowName} onChange={e => { setWorkflowName(e.target.value); setSavedNotice(''); }} /></label>
@@ -490,7 +494,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             </div>
         </div></>}
         <section className={workflowAuthoring ? 'bioxp-workflow-card bioxp-step-inspector' : 'space-y-3'} aria-label="Step settings">
-        <h3 className="font-semibold">{workflowAuthoring ? editingId ? `Step ${steps.findIndex(row => row.step_id === editingId) + 1}` : 'New step' : 'Native step editor'}</h3>
+        <h3 className="font-semibold">{workflowAuthoring ? editingId ? `Step ${steps.findIndex(row => row.step_id === editingId) + 1}` : 'New step' : category}</h3>
         {workflowAuthoring && <label className="bioxp-step-type">Action<select aria-label="Step to append" value={operation} onChange={e => { setOperation(e.target.value as Operation); if (e.target.value === 'transfer') setSchema('bms.bioxp-workflow-draft.v2'); }}>
             <option value="transfer">Transfer</option>
             <optgroup label="Position & liquid">{allOperations.filter(op => ['move','lower','lift','aspirate','dispense','mix'].includes(op)).map(op => <option key={op} value={op}>{label(op)}</option>)}</optgroup>
@@ -498,8 +502,8 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             <optgroup label="Diagnostics & calibration">{allOperations.filter(op => ['measure_fluid_height','source_fluid_offset','diagnostic_detect_fluid','source_calwith_fluid','diagnostic_pipette'].includes(op)).map(op => <option key={op} value={op}>{label(op)}</option>)}</optgroup>
         </select></label>}
         {workflowAuthoring && operation === 'transfer' && <BioXpWorkflowTransferEditor value={transfer} onChange={setTransfer} selection={deck} onSelect={setDeck} />}
-        {(!workflowAuthoring || positionOperation) && <p className="text-sm">Move positions the head at a station and reference well. Lower and Lift act vertically in place.</p>}
-        {!workflowAuthoring && <p className="text-sm text-amber-200">Choose which pipettes aspirate, dispense or mix. This does not load tips or change tip alignment. Use Load selected tips for physical loading. With four tips, the selected well positions the head; the tips keep their fixed spacing.</p>}
+        {(workflowAuthoring ? positionOperation : category === 'Position / Z') && <p className="text-sm">Move positions the head at a station and reference well. Lower and Lift act vertically in place.</p>}
+        {!workflowAuthoring && category === 'Liquid strokes' && <p className="text-sm text-amber-200">Choose which pipettes aspirate, dispense or mix. This does not load tips or change tip alignment. Use Load selected tips for physical loading. With four tips, the selected well positions the head; the tips keep their fixed spacing.</p>}
         {workflowAuthoring && liquidOperation && <p className="text-sm">Choose which pipettes perform liquid strokes. Their spacing is fixed; this does not position the head or load tips.</p>}
         {!workflowAuthoring && <details className="text-xs text-slate-300"><summary>Position details</summary><p>Calibration revision: {positionTableRevision ?? 'unavailable'}. Not every well is usable at every station.</p></details>}
         <div hidden={!show('move', 'lower', 'lift')} className="grid gap-3 sm:grid-cols-3">
@@ -536,7 +540,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
                 <label key={name} hidden={workflowAuthoring && (name === 'Mix cycles' ? operation !== 'mix' : name === 'Aspirate speed' ? operation === 'dispense' : name === 'Dispense speed' ? operation === 'aspirate' : false)}>{name}<input aria-label={name} className="block w-full bg-slate-950 p-2" type="number" step={name === 'Mix cycles' ? '1' : 'any'} value={value} onChange={e => setter(e.target.value)} /></label>)}
         </div>
         <p hidden={!show('mix')} className="text-xs">Mix repeats the selected aspiration and dispense strokes (1–50 cycles). Speeds use controller units.</p>
-        {!workflowAuthoring && <div className="flex flex-wrap gap-2">{operations.filter(op => ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix'].includes(op)).map(op => <button type="button" key={op} disabled={!enabled} onClick={() => void run(op)} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">{label(op)} now</button>)}</div>}
+        {!workflowAuthoring && <div className="flex flex-wrap gap-2">{operations.filter(op => ['move', 'lower', 'lift', 'aspirate', 'dispense', 'mix'].includes(op) && show(op)).map(op => <button type="button" key={op} disabled={!enabled} onClick={() => void run(op)} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">{label(op)} now</button>)}</div>}
         <details hidden={!show('load_tip')} open={workflowAuthoring && operation === 'load_tip' || undefined} className="rounded border border-slate-700 p-3">
             <summary className="cursor-pointer font-semibold">Tips: tray pickup</summary>
             <p className="my-2 text-sm">Picks up a tip from the selected tray and well. This moves the head.</p>
@@ -546,7 +550,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             <label><input aria-label="Overpress" type="checkbox" checked={overpress} onChange={e => setOverpress(e.target.checked)} />Overpress</label>
             <label><input aria-label="Lift Z after pickup" type="checkbox" checked={liftZ} onChange={e => setLiftZ(e.target.checked)} />Lift Z after pickup</label>
             </div>
-        {!workflowAuthoring && <div className="flex flex-wrap gap-2">{(['load_tip'] as Operation[]).map(op => <button type="button" key={op} disabled={!enabled} onClick={() => void run(op)} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">{label(op)} now</button>)}</div>}
+        {!workflowAuthoring && <div className="flex flex-wrap gap-2">{(['load_tip'] as Operation[]).map(op => <button type="button" key={op} disabled={!enabled} onClick={() => void run(op)} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">{op === 'load_tip' ? 'Pick up from tray' : `${label(op)} now`}</button>)}</div>}
         </details>
         <details hidden={!show('measure_fluid_height','source_fluid_offset','diagnostic_detect_fluid','source_calwith_fluid')} open={workflowAuthoring || undefined} className="rounded border border-slate-700 p-3">
             <summary className="cursor-pointer font-semibold">Fluid diagnostics & calibration</summary>
@@ -560,13 +564,13 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             <p className="my-2 text-sm">Calibrate with fluid saves and applies calibration, including partial results. Reject restores the FULL pre-run calibration, replacing later edits. These controls do not restart or home the robot.</p>
         {!workflowAuthoring && <div className="flex flex-wrap gap-2">{(['measure_fluid_height', 'source_fluid_offset', 'diagnostic_detect_fluid', 'source_calwith_fluid'] as Operation[]).map(op => <button type="button" key={op} disabled={!enabled} onClick={() => void run(op)} className="rounded bg-cyan-800 px-3 py-2 disabled:opacity-35">{label(op)} now</button>)}</div>}
         </details>
-        {(!workflowAuthoring || sourceOperation) && <BioXpSourcePipettingEditor drafts={sourceDrafts} onChange={updateSource} enabled={enabled} run={workflowAuthoring ? undefined : op => void run(op)} selectedOperation={workflowAuthoring ? operation as BioXpSourceStep['operation'] : undefined} />}
+        {(!workflowAuthoring || sourceOperation) && <BioXpSourcePipettingEditor drafts={sourceDrafts} onChange={updateSource} enabled={enabled} run={workflowAuthoring ? undefined : op => void run(op)} selectedOperation={workflowAuthoring ? operation as BioXpSourceStep['operation'] : undefined} visibleOperations={workflowAuthoring ? undefined : categories[category]} />}
         {workflowAuthoring && <div className="bioxp-inspector-actions">
             {selectedRow ? <><button type="button" className="bioxp-primary" onClick={updateStep}>Update step</button><button type="button" onClick={cancelEdit}>Cancel editing</button></> : <button type="button" className="bioxp-primary" onClick={append}>Add step</button>}
         </div>}
+        {!workflowAuthoring && <BioXpPipetteNativeTools visible={visible && category === 'Other native tools'} enabled={enabled} run={(action, inputs) => void run(undefined, undefined, { action, inputs })} />}
         </section>
         </div>
-        {!workflowAuthoring && orderedSteps}
         {pending && <p role="status">Submitting pipetting program…</p>}
         {attempt && <p className="break-all text-xs">Job {attempt.id} · request {attempt.key}</p>}
         {!sameConnection && <p role="alert">Connection changed. Earlier job belongs to connection {attempt?.generation}.</p>}
@@ -579,7 +583,7 @@ export function BioXpWellPipettingPanel({ generation, connected, destinations = 
             pipetteResults(result).flatMap(value => value.run_id ? [value.run_id] : [])))].map(runId =>
             <BioXpCalibrationRun key={`${attempt?.generation}:${runId}`} runId={runId}
                 generation={attempt?.generation ?? generation} connected={connected && sameConnection} />)}
-        {!workflowAuthoring && <details className="rounded border border-slate-700 p-3"><summary className="cursor-pointer font-semibold">Review a calibration run</summary><BioXpCalibrationRun key={`recover:${generation}`} generation={generation} connected={connected} /></details>}
+        {!workflowAuthoring && <BioXpCalibrationRun key={`recover:${generation}`} generation={generation} connected={connected} />}
         {error && <p role="alert">{error}</p>}
     </section>;
 }

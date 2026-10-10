@@ -1,4 +1,6 @@
 import React, { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+let client: QueryClient;
 import { createRoot, type Root } from 'react-dom/client';
 import { spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, expect, it } from 'vitest';
@@ -8,9 +10,10 @@ import { api } from '../../src/lib/api';
 let host: HTMLDivElement, root: Root, calls: any[], savedFlags: boolean, savedSet: boolean;
 const original = api.defaults.adapter;
 async function tick() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); }); }
-async function mount() { await act(async () => root.render(<BioXpPipetteSettings generation={77} connected />)); await tick(); }
+async function mount() { await act(async () => root.render(<QueryClientProvider client={client}><BioXpPipetteSettings generation={77} connected /></QueryClientProvider>)); await tick(); }
 async function click(text: string) { await act(async () => [...host.querySelectorAll('button')].find(el => el.textContent === text)!.click()); await tick(); }
 beforeEach(() => {
+    client = new QueryClient({ defaultOptions: { queries: {retry:false, gcTime:Infinity} } });
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     calls = []; savedFlags = false; savedSet = false;
     api.defaults.adapter = async config => {
@@ -29,7 +32,7 @@ beforeEach(() => {
         return { data: relay.data, status: relay.status, statusText: 'offline robot', config, headers: {} };
     };
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); api.defaults.adapter = original; });
+afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); api.defaults.adapter = original; });
 it('mounted manual Set sends typed tray to fixed robot endpoint and displays measured, paired saved and active readback', async () => {
     await mount();
     const select = host.querySelector('[aria-label="Tip tray for manual Set"]') as HTMLSelectElement;

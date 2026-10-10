@@ -1712,11 +1712,11 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 <BioXpWellPipettingPanel visible={documentVisible && controlTab === 'pipettes'} generation={generation} connected={linkConnected}
                     destinations={selectionAction?.destination_options ?? []}
                     positionTableRevision={selectionAction?.position_table_revision} />
-                <details onToggle={event => setSettingsOpen(event.currentTarget.open)} className="mt-4 rounded border border-slate-700 p-3">
-                    <summary className="cursor-pointer font-semibold">Settings & calibration</summary>
+                <section className="mt-4 rounded border border-slate-700 p-3">
+                    <button type="button" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(open => !open)}>Settings & calibration</button>
                     <BioXpPipetteSettings visible={settingsOpen && documentVisible && controlTab === 'pipettes'} key={`pipette-settings:${generation}:${active}`} generation={generation} connected={linkConnected} />
                     <BioXpCalibrationSettings visible={settingsOpen && documentVisible && controlTab === 'pipettes'} key={`calibration:${generation}:${active}`} generation={generation} connected={linkConnected} />
-                </details>
+                </section>
                 </>}
             </div>
             <section aria-label="Latest command" className="bx-ui bx-last"><strong>Last command</strong>
