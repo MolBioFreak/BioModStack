@@ -58,7 +58,10 @@ async def create_md_run(session: AsyncSession, *, job: Job, normalized_request: 
         # retained non-null columns without inventing v2 assurance or a digest.
         chemistry = {"profile_id": "legacy_unavailable", "profile_sha256": "unavailable"}
         assurance = "legacy_unavailable"
-    elif schema == "bms.md.job.v2":
+    elif schema == "bms.md.job.v3" and "chemistry" not in normalized_request:
+        chemistry = {"profile_id": "external", "profile_sha256": "unavailable"}
+        assurance = "external_unreviewed"
+    elif schema in {"bms.md.job.v2", "bms.md.job.v3"}:
         chemistry = normalized_request["chemistry"]
         assurance = chemistry.get("assurance")
         if not isinstance(assurance, str) or not assurance:

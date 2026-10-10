@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 import base64
 import codecs
 import hashlib
@@ -22,7 +24,7 @@ import httpx
 import rfc8785
 from Bio.PDB import MMCIFIO, MMCIFParser, PDBParser
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, StrictInt, StrictFloat, model_validator
 from sqlalchemy import select
 
 from database import Design, Job, MdRun
@@ -219,14 +221,77 @@ class MdLaunchIntent(_ClosedModel):
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
 
 
+class MdNativeStage(_ClosedModel):
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    mdp: dict[str, StrictStr | StrictInt | StrictFloat] | None = None
+    mdp_file: str | None = None
+    checkpoint_interval_minutes: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def one_document(self) -> "MdNativeStage":
+        if (self.mdp is None) == (self.mdp_file is None):
+            raise ValueError("supply exactly one mdp document or mdp_file")
+        return self
+
+
+class MdNativeExecution(_ClosedModel):
+    ntmpi: Literal[1] = 1
+    ntomp: int = Field(default=8, ge=1, le=128)
+    gpu_offload: Literal["full", "full_forces", "auto", "none"] = "auto"
+    pin: Literal["on", "off", "auto"] = "on"
+
+
+class MdGuidedNativeInput(_ClosedModel):
+    kind: Literal["guided"]
+    index: str | None = None
+    restraint_reference: str | None = None
+    source_ref: StartingStructureSourceRef
+    expected_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    chemistry_profile_id: str
+    chemistry_profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    catalog_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    box_type: Literal["cubic", "triclinic", "dodecahedron", "octahedron"] = "dodecahedron"
+    padding_nm: float = Field(default=1.0, gt=0)
+    salt_molar: float = Field(default=0.15, ge=0)
+    neutralize: bool = True
+
+
+class MdPreparedNativeInput(_ClosedModel):
+    kind: Literal["prepared"]
+    coordinates: str = Field(min_length=1)
+    topology: str = Field(min_length=1)
+    index: str | None = None
+    restraint_reference: str | None = None
+    checkpoint: str | None = None
+
+
+class MdCompiledNativeInput(_ClosedModel):
+    kind: Literal["compiled"]
+    tpr: str = Field(min_length=1)
+    checkpoint: str | None = None
+
+
+class MdNativeLaunchIntent(_ClosedModel):
+    schema_version: Literal["bms.md.launch-intent.v2"]
+    name: str = Field(min_length=1, max_length=255)
+    input: MdGuidedNativeInput | MdPreparedNativeInput | MdCompiledNativeInput = Field(discriminator="kind")
+    replicas: int = Field(default=1, ge=1)
+    random_seed: int = Field(default=20260717, ge=1, le=2147483647)
+    stages: list[MdNativeStage]
+    execution: MdNativeExecution = Field(default_factory=MdNativeExecution)
+    analysis: dict[str, Any] | None = None
+    execution_target_id: str | None = Field(default=None, min_length=1, max_length=160)
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
+
+
 class MdLaunchPreviewRequest(_ClosedModel):
     schema_version: Literal["bms.md.launch-preview-request.v1"]
-    intent: MdLaunchIntent
+    intent: MdLaunchIntent | MdNativeLaunchIntent = Field(discriminator="schema_version")
 
 
 class MdLaunchRequest(_ClosedModel):
     schema_version: Literal["bms.md.launch-request.v1"]
-    intent: MdLaunchIntent
+    intent: MdLaunchIntent | MdNativeLaunchIntent = Field(discriminator="schema_version")
     preview_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
@@ -326,6 +391,51 @@ class MdLaunchPreview(_ClosedModel):
     warnings: list[MdLaunchNotice]
     blockers: list[MdLaunchNotice]
     preview_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class MdNativeLaunchPreview(_ClosedModel):
+    schema_version: Literal["bms.md.launch-preview.v2"] = "bms.md.launch-preview.v2"
+    effective_request: dict[str, Any]
+    input_identity: dict[str, Any]
+    source: MdLaunchSourceIdentity | None = None
+    warnings: list[MdLaunchNotice] = Field(default_factory=list)
+    blockers: list[MdLaunchNotice] = Field(default_factory=list)
+    preview_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    execution_plan: dict[str, Any] | None = None
+    execution_target_id: str | None = None
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
+
+
+def compile_native_job_intent(
+    intent: MdNativeLaunchIntent, *, profile: Mapping[str, Any] | None = None,
+    source_token: str = "bms-md-starting-structure:selected",
+) -> dict[str, Any]:
+    """Project typed controls directly into the native job document."""
+    config: dict[str, Any] = {
+        "schema": "bms.md.job.v3", "job_id": "assigned-by-server", "engine": "gromacs",
+        "replicas": intent.replicas, "random_seed": intent.random_seed,
+        "stages": [stage.model_dump(mode="json", exclude_none=True) for stage in intent.stages],
+        "execution": {**intent.execution.model_dump(mode="json"), "gpu_id": "0"},
+    }
+    source = intent.input
+    if isinstance(source, MdGuidedNativeInput):
+        if profile is None:
+            raise _error("MD_CHEMISTRY_PROFILE_UNAVAILABLE", "The guided preparation profile is unavailable.", 409)
+        config["input"] = {"structure": source_token}
+        for field in ("index", "restraint_reference"):
+            if getattr(source, field) is not None:
+                config["input"][field] = getattr(source, field)
+        config["chemistry"] = {
+            "profile_id": source.chemistry_profile_id, "profile_sha256": source.chemistry_profile_sha256,
+            "catalog_digest": source.catalog_digest,
+            "requested_scope": profile["scientific_validation"]["scope"]["launch_scope"],
+        }
+        config["preparation"] = {field: getattr(source, field) for field in ("box_type", "padding_nm", "salt_molar", "neutralize")}
+    else:
+        config["input"] = source.model_dump(mode="json", exclude={"kind"}, exclude_none=True)
+    if intent.analysis is not None:
+        config["analysis"] = copy.deepcopy(intent.analysis)
+    return config
 
 
 @dataclass(frozen=True)

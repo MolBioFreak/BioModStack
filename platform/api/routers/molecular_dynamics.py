@@ -26,11 +26,17 @@ from services.md.cancel_actuator import cancel_running_md_run
 from services.md.chemistry_catalog import ChemistryCatalogError, get_chemistry_catalog
 from services.md.feature_gate import molecular_dynamics_feature_enabled, require_molecular_dynamics_feature
 from services.workflow_request_types import NativeWorkflowDependencyRequest
-from services.md.launch_contract import MDLaunchError, approved_pack_inventory
+from services.md.launch_contract import (
+    MDLaunchError, approved_pack_inventory, normalize_md_job_spec, native_input_identity,
+    V2_SERVER_RESOLVED_CHEMISTRY_FIELDS,
+)
+from services.md.chemistry_catalog import ChemistryProfileSelectionError
 from services.md.pause_actuator import pause_running_md_run
 from services.md.read_model import md_queue_snapshot, md_run_snapshot
 from services.md.starting_structures import (
     MdLaunchIntent,
+    MdNativeLaunchIntent, MdNativeLaunchPreview, MdGuidedNativeInput,
+    MdLaunchSourceIdentity, compile_native_job_intent,
     MdLaunchPreview,
     MdLaunchPreviewRequest,
     MdLaunchRequest,
@@ -229,7 +235,7 @@ def molecular_dynamics_capabilities() -> dict:
         "schema": "bms.md.capabilities.v1",
         "feature_enabled": molecular_dynamics_feature_enabled(),
         "experimental": True,
-        "contract_schemas": ["bms.md.job.v2", "bms.md.job.v1"],
+        "contract_schemas": ["bms.md.job.v3", "bms.md.job.v2", "bms.md.job.v1"],
         "catalog_schema": "bms.md.chemistry-profile.v1",
         "catalog_digest": view.catalog_digest,
         "automatic_preparation": {
@@ -580,7 +586,7 @@ def _typed_launch_chemistry(intent: MdLaunchIntent) -> tuple[Any, Any]:
 
 
 async def normalize_md_provision_request(
-    intent: MdLaunchIntent, session: AsyncSession,
+    intent: MdLaunchIntent | MdNativeLaunchIntent, session: AsyncSession,
 ) -> NativeWorkflowDependencyRequest:
     """Dependency-only projection of the actual typed starting-structure intent.
 
@@ -588,6 +594,24 @@ async def normalize_md_provision_request(
     /launch-preview and /launch still resolve and verify the exact source bytes.
     """
     require_molecular_dynamics_feature("molecular_dynamics")
+    if isinstance(intent, MdNativeLaunchIntent):
+        profile = None
+        if isinstance(intent.input, MdGuidedNativeInput):
+            view = _catalog_view_or_503()
+            profile = view.get_profile(intent.input.chemistry_profile_id)
+        config = compile_native_job_intent(intent, profile=profile)
+        bindings = ({
+            "role": "starting_structure", "source_ref": intent.input.source_ref.model_dump(mode="json"),
+            "expected_sha256": intent.input.expected_source_sha256, "required": True, "state": "declared",
+        },) if isinstance(intent.input, MdGuidedNativeInput) else tuple(
+            {"role": field, "path": path, "required": True, "state": "declared"}
+            for field, path in config["input"].items()
+        )
+        return NativeWorkflowDependencyRequest(
+            model_id="molecular_dynamics", mode="simulate", requested_params=intent.model_dump(mode="json"),
+            effective_params={"md_config": config},
+            entrypoint="workflows/experimental/molecular_dynamics/orchestrator.nf", input_bindings=bindings,
+        )
     try:
         await _validate_preview_launch_context(intent)
         view, profile = _typed_launch_chemistry(intent)
@@ -620,6 +644,8 @@ async def normalize_md_provision_request(
                 "state": "declared",
             },),
         )
+    except (MDLaunchError, ChemistryProfileSelectionError) as exc:
+        raise HTTPException(status_code=getattr(exc, "status_code", 422), detail={"code": exc.code, "message": str(exc)}) from exc
     except StartingStructureError as exc:
         _starting_structure_http_error(exc)
     except LaunchContextError as exc:
@@ -627,6 +653,125 @@ async def normalize_md_provision_request(
             status_code=exc.status_code,
             detail={"code": exc.code, "message": str(exc)},
         ) from exc
+
+
+async def _compile_native_preview(intent: MdNativeLaunchIntent, session: AsyncSession):
+    from component_runtime import canonical_bytes, digest, SourceIdentity
+    from routers.jobs import _resolve_md_input_path_for_runtime
+
+    require_molecular_dynamics_feature("molecular_dynamics")
+    resolved = None
+    source = None
+    profile = None
+    catalog = None
+    view = None
+    source_token = "bms-md-starting-structure:selected"
+    try:
+        if isinstance(intent.input, MdGuidedNativeInput):
+            catalog = get_chemistry_catalog()
+            view = catalog.view()
+            profile = view.get_profile(intent.input.chemistry_profile_id)
+            resolved = await resolve_source(intent.input.source_ref, session)
+            structure = read_resolved_structure(resolved)
+            if structure.sha256 != intent.input.expected_source_sha256:
+                raise StartingStructureError("MD_STARTING_STRUCTURE_CHANGED", "The selected source bytes changed.", status_code=409)
+            source = MdLaunchSourceIdentity(
+                source_ref=resolved.source_ref, label=resolved.label, format=structure.format,
+                size_bytes=structure.size_bytes, sha256=structure.sha256, pdb_id=resolved.pdb_id,
+                producer_job_id=resolved.producer_job_id, design_id=resolved.design_id,
+            )
+
+        def resolver(value: str) -> str:
+            if resolved is not None and value == source_token:
+                return resolved_runtime_path(resolved)
+            return _resolve_md_input_path_for_runtime(value)
+
+        spec = compile_native_job_intent(intent, profile=profile, source_token=source_token)
+        normalized = normalize_md_job_spec(
+            params={"md_job_spec": spec}, job_id="assigned-by-server", resolve_runtime_path=resolver,
+            chemistry_catalog=catalog, chemistry_view=view,
+        )
+        identity = native_input_identity(normalized)
+        if source is not None:
+            normalized["input"]["structure"] = source_token
+        for field in V2_SERVER_RESOLVED_CHEMISTRY_FIELDS:
+            normalized.get("chemistry", {}).pop(field, None)
+        preimage = {
+            "effective_request": normalized, "input_identity": identity,
+            "source": source.model_dump(mode="json") if source else None,
+            "execution_target_id": intent.execution_target_id,
+            "execution_policy": intent.execution_policy.model_dump(mode="json"),
+        }
+        preview = MdNativeLaunchPreview(
+            **preimage, preview_digest=hashlib.sha256(canonical_bytes(preimage)).hexdigest(),
+        )
+        if intent.execution_target_id:
+            from services.nextflow import build_selected_execution_plan
+            from services.remote_execution.bundle import current_source_identity, RemoteBundleError
+            try:
+                source_identity = SourceIdentity(*current_source_identity())
+            except RemoteBundleError as exc:
+                raise StartingStructureError("MD_REMOTE_SOURCE_UNAVAILABLE", "Committed BMS source identity is unavailable.", status_code=503) from exc
+            plan = build_selected_execution_plan(
+                model_id="molecular_dynamics", mode="simulate",
+                entrypoint="workflows/experimental/molecular_dynamics/orchestrator.nf",
+                requested=intent.model_dump(mode="json"), effective={"md_config": normalized},
+                metadata_settings={"md_config": normalized},
+                native_parameters={"input_bindings": normalized["input"]},
+                source_identity=source_identity,
+            )
+            preview.execution_plan = plan.to_dict()
+            preview.preview_digest = digest({"native_preview_digest": preview.preview_digest, "execution_plan": preview.execution_plan})
+            if not plan.complete:
+                raise StartingStructureError("MD_REMOTE_PLAN_UNSUPPORTED", "Selected shared MD execution plan is incomplete: " + "; ".join(row.reason for row in plan.blockers), status_code=422)
+        return preview, resolved, resolver
+    except Exception as exc:
+        if resolved is not None:
+            resolved.close()
+        if isinstance(exc, ValueError) and not isinstance(exc, (MDLaunchError, StartingStructureError, ChemistryProfileSelectionError)):
+            raise MDLaunchError("MD_JOB_CONTRACT_INVALID", "The native MD document is invalid.", status_code=422) from exc
+        raise
+
+
+async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession):
+    from routers.jobs import create_job, ApprovedExecutionPlan
+    from component_runtime import canonical_bytes
+
+    assert isinstance(request.intent, MdNativeLaunchIntent)
+    preview, resolved, resolver = await _compile_native_preview(request.intent, session)
+    try:
+        if preview.preview_digest != request.preview_digest:
+            raise StartingStructureError("MD_LAUNCH_PREVIEW_STALE", "The native launch preview is stale.", status_code=409)
+        provenance: dict[str, Any] = {}
+        if resolved is not None:
+            provenance.update(copy.deepcopy(resolved.source_provenance or {}))
+            assert preview.source is not None
+            provenance.update(source_ref=resolved.source_ref.model_dump(mode="json"), source_sha256=preview.source.sha256)
+        provenance["native_input_identity"] = preview.input_identity
+        params = {"md_job_spec": preview.effective_request, "md_source_provenance": provenance}
+        if resolved is not None and resolved.design_id is not None:
+            params.update(
+                source_design_id=resolved.design_id, lineage_root_job_id=provenance.get("lineage_root_job_id"),
+                selection_source_job_id=resolved.producer_job_id, selection_source_type="design",
+                source_stage_job_id=resolved.producer_job_id, source_stage_family=provenance.get("source_stage_family"),
+                source_stage_mode=provenance.get("source_stage_mode"), source_selection_count=1,
+            )
+        job_data = JobCreate(
+            name=request.intent.name, model_id="molecular_dynamics", mode="simulate", parent_job_id=None,
+            params=params, execution_target_id=request.intent.execution_target_id,
+            execution_policy=request.intent.execution_policy,
+        )
+        kwargs = {"_md_output_creation": {}, "_md_input_resolver": resolver}
+        if request.intent.execution_target_id:
+            kwargs["_approved_execution_plan"] = ApprovedExecutionPlan(
+                canonical_bytes(job_data.model_dump(mode="json")),
+                canonical_bytes({"approval_digest": preview.preview_digest, "plan": preview.execution_plan,
+                                 "admissible": True, "deferred_preparation": [], "blockers": []}),
+            )
+        return await create_job(job_data, BackgroundTasks(), session, **kwargs)
+    finally:
+        if resolved is not None:
+            resolved.close()
 
 
 async def _compile_typed_preview(
@@ -674,16 +819,21 @@ async def _compile_typed_preview(
 
 @router.post(
     "/launch-preview",
-    response_model=MdLaunchPreview,
+    response_model=MdLaunchPreview | MdNativeLaunchPreview,
 )
 async def preview_typed_md_launch(
     request: MdLaunchPreviewRequest,
     session: AsyncSession = Depends(get_session),
-) -> MdLaunchPreview:
+) -> MdLaunchPreview | MdNativeLaunchPreview:
     resolved = None
     try:
+        if isinstance(request.intent, MdNativeLaunchIntent):
+            preview, resolved, _resolver = await _compile_native_preview(request.intent, session)
+            return preview
         preview, resolved, _profile = await _compile_typed_preview(request.intent, session)
         return preview
+    except (MDLaunchError, ChemistryProfileSelectionError) as exc:
+        raise HTTPException(status_code=getattr(exc, "status_code", 422), detail={"code": exc.code, "message": str(exc)}) from exc
     except StartingStructureError as exc:
         _starting_structure_http_error(exc)
     except LaunchContextError as exc:
@@ -707,6 +857,8 @@ async def launch_typed_md_job(
 ) -> JobResponse:
     resolved = None
     try:
+        if isinstance(request.intent, MdNativeLaunchIntent):
+            return await _launch_native_md_job(request, session)
         preview, resolved, profile = await _compile_typed_preview(request.intent, session)
         if preview.preview_digest != request.preview_digest:
             raise StartingStructureError(
@@ -806,6 +958,8 @@ async def launch_typed_md_job(
                 _typed_md_project_launch=typed_project_launch,
                 **call_kwargs,
             )
+    except (MDLaunchError, ChemistryProfileSelectionError) as exc:
+        raise HTTPException(status_code=getattr(exc, "status_code", 422), detail={"code": exc.code, "message": str(exc)}) from exc
     except StartingStructureError as exc:
         _starting_structure_http_error(exc)
     except LaunchContextError as exc:

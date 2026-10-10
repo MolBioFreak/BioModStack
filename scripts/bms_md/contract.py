@@ -12,9 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
+from .native_config import INPUT_FILE_FIELDS, NATIVE_JOB_SCHEMA, normalize_native_config
+
 MD_JOB_SCHEMA = "bms.md.job.v1"
 MD_JOB_SCHEMA_V2 = "bms.md.job.v2"
-SUPPORTED_MD_JOB_SCHEMAS = {MD_JOB_SCHEMA, MD_JOB_SCHEMA_V2}
+SUPPORTED_MD_JOB_SCHEMAS = {MD_JOB_SCHEMA, MD_JOB_SCHEMA_V2, NATIVE_JOB_SCHEMA}
 MD_RUN_SCHEMA = "bms.md.run.v1"
 RETRYABLE_INFRASTRUCTURE_FAILURES = frozenset({
     "spawn_rejected", "worker_lost", "scheduler_transient", "runtime_transient",
@@ -111,6 +113,8 @@ def normalize_job_config(raw: Mapping[str, Any]) -> dict[str, Any]:
 
     if not isinstance(raw, Mapping):
         raise ValueError("MD job config must be an object")
+    if raw.get("schema") == NATIVE_JOB_SCHEMA:
+        return normalize_native_config(raw)
     requested_schema = str(raw.get("schema") or "").strip()
     defaults = copy.deepcopy(_DEFAULT_CONFIG)
     if requested_schema == MD_JOB_SCHEMA_V2:
@@ -257,7 +261,7 @@ def verify_input_snapshots(job_config: Mapping[str, Any]) -> None:
     input_config = job_config.get("input")
     if not isinstance(input_config, Mapping):
         raise _snapshot_mismatch("input snapshot contract is missing")
-    for field in ("structure", "coordinates", "topology"):
+    for field in INPUT_FILE_FIELDS:
         value = input_config.get(field)
         if not value:
             continue
@@ -339,7 +343,7 @@ def prepare_verified_worker_inputs(config_path: Path, worker_root: Path) -> dict
     worker_root.mkdir(parents=True, exist_ok=True)
     private_root = Path(tempfile.mkdtemp(prefix="verified-inputs-", dir=worker_root))
     try:
-        for field in ("structure", "coordinates"):
+        for field in (field for field in INPUT_FILE_FIELDS if field != "topology"):
             source_value = input_config.get(field)
             if not source_value:
                 continue

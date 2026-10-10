@@ -1,0 +1,675 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://biomodstack.local/schemas/md_job_v3.schema.json",
+  "title": "BioModStack native GROMACS job",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "job_id",
+    "engine",
+    "replicas",
+    "random_seed",
+    "input",
+    "stages",
+    "execution"
+  ],
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "engine_runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sif_sha256",
+        "image_name"
+      ],
+      "properties": {
+        "sif_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "image_name": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "random_seed": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gpu_id",
+        "ntmpi",
+        "ntomp",
+        "gpu_offload",
+        "pin"
+      ],
+      "properties": {
+        "gpu_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scheduler_gpu_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ntmpi": {
+          "const": 1
+        },
+        "ntomp": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 128
+        },
+        "gpu_offload": {
+          "enum": [
+            "full",
+            "full_forces",
+            "auto",
+            "none"
+          ]
+        },
+        "pin": {
+          "enum": [
+            "on",
+            "off",
+            "auto"
+          ]
+        }
+      }
+    },
+    "chemistry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id",
+        "profile_sha256",
+        "catalog_digest",
+        "requested_scope"
+      ],
+      "properties": {
+        "profile_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "catalog_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "requested_scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approved_pack_ids": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+          }
+        },
+        "resolved_approved_packs": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "version",
+              "pack_sha256",
+              "snapshot"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pack_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "snapshot": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "assurance": {
+          "type": "string",
+          "minLength": 1
+        },
+        "family": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resolved_preparation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "force_field",
+            "water_model"
+          ],
+          "properties": {
+            "force_field": {
+              "type": "string",
+              "minLength": 1
+            },
+            "water_model": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "runtime_identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "runtime_id",
+            "runtime_version",
+            "sif_sha256"
+          ],
+          "properties": {
+            "runtime_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "runtime_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sif_sha256": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        }
+      }
+    },
+    "preparation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "box_type",
+        "padding_nm",
+        "salt_molar",
+        "neutralize"
+      ],
+      "properties": {
+        "box_type": {
+          "enum": [
+            "cubic",
+            "triclinic",
+            "dodecahedron",
+            "octahedron"
+          ]
+        },
+        "padding_nm": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "salt_molar": {
+          "type": "number",
+          "minimum": 0
+        },
+        "neutralize": {
+          "type": "boolean"
+        }
+      }
+    },
+    "schema": {
+      "const": "bms.md.job.v3"
+    },
+    "engine": {
+      "const": "gromacs"
+    },
+    "replicas": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "structure": {
+          "type": "string",
+          "minLength": 1
+        },
+        "structure_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "structure_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 104857600
+        },
+        "coordinates": {
+          "type": "string",
+          "minLength": 1
+        },
+        "coordinates_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "coordinates_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 104857600
+        },
+        "topology": {
+          "type": "string",
+          "minLength": 1
+        },
+        "topology_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "topology_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 104857600
+        },
+        "tpr": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tpr_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "tpr_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 104857600
+        },
+        "checkpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "checkpoint_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "checkpoint_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 104857600
+        },
+        "index": {
+          "type": "string",
+          "minLength": 1
+        },
+        "index_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "index_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 104857600
+        },
+        "restraint_reference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "restraint_reference_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "restraint_reference_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 104857600
+        },
+        "topology_closure": {
+          "$ref": "#/$defs/topologyClosure"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "structure"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "coordinates"
+                ]
+              },
+              {
+                "required": [
+                  "topology"
+                ]
+              },
+              {
+                "required": [
+                  "tpr"
+                ]
+              },
+              {
+                "required": [
+                  "checkpoint"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "coordinates",
+            "topology"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "structure"
+                ]
+              },
+              {
+                "required": [
+                  "tpr"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "tpr"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "structure"
+                ]
+              },
+              {
+                "required": [
+                  "coordinates"
+                ]
+              },
+              {
+                "required": [
+                  "topology"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "mdp": {
+            "$ref": "#/$defs/mdp"
+          },
+          "mdp_file": {
+            "type": "string",
+            "minLength": 1
+          },
+          "checkpoint_interval_minutes": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "mdp"
+            ],
+            "not": {
+              "required": [
+                "mdp_file"
+              ]
+            }
+          },
+          {
+            "required": [
+              "mdp_file"
+            ],
+            "not": {
+              "required": [
+                "mdp"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "analysis": {
+      "type": "object",
+      "description": "Optional analysis-owner configuration; not an execution admission condition."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "input": {
+            "required": [
+              "structure"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "chemistry",
+          "preparation"
+        ]
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "chemistry"
+              ]
+            },
+            {
+              "required": [
+                "preparation"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "input": {
+            "required": [
+              "tpr"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "stages": {
+            "maxItems": 0
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "stages": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "mdp": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]+$"
+      },
+      "additionalProperties": {
+        "type": [
+          "string",
+          "number"
+        ]
+      }
+    },
+    "topologyClosure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "files",
+        "runtime_includes"
+      ],
+      "properties": {
+        "root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "files": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "sha256",
+              "bytes",
+              "parent",
+              "include"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_.+/-]+$"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 104857600
+              },
+              "parent": {
+                "type": "string",
+                "minLength": 1
+              },
+              "include": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "runtime_includes": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "parent",
+              "include"
+            ],
+            "properties": {
+              "parent": {
+                "type": "string",
+                "minLength": 1
+              },
+              "include": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "runtime_identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "runtime_id",
+            "runtime_version",
+            "sif_sha256",
+            "asset_ids"
+          ],
+          "properties": {
+            "runtime_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "runtime_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sif_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "asset_ids": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 128,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.+-]{1,96}\\.ff$"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
