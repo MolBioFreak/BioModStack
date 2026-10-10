@@ -39,6 +39,8 @@ import { bioXpDeckReadinessText, bioXpReceiptFailureText, bioXpReceiptStatusText
 import { BioXpCameraPanel } from './BioXpCameraPanel';
 import { BioXpHistoryReceiptCard, BioXpHistoryPager, useBioXpHistoryPagination } from './BioXpHistoryReceiptCard';
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
+import { BioXpCalibrationAnalysis } from './BioXpCalibrationAnalysis';
+import { BioXpPressureCapture } from './BioXpPressureCapture';
 import { BioXpPipetteControlPanel } from './BioXpPipetteControlPanel';
 import { BioXpCalibrationSettings } from './BioXpCalibrationSettings';
 import { BioXpPipetteSettings } from './BioXpPipetteSettings';
@@ -1712,6 +1714,8 @@ export function BioXpCockpit({ initialTab = 'robot' }: { initialTab?: ControlTab
                 <BioXpWellPipettingPanel visible={documentVisible && controlTab === 'pipettes'} generation={generation} connected={linkConnected}
                     destinations={selectionAction?.destination_options ?? []}
                     positionTableRevision={selectionAction?.position_table_revision} />
+                <BioXpCalibrationAnalysis visible={documentVisible && controlTab === 'pipettes'} connected={linkConnected} generation={generation} />
+                <BioXpPressureCapture visible={documentVisible && controlTab === 'pipettes'} connected={linkConnected} generation={generation} />
                 <section className="mt-4 rounded border border-slate-700 p-3">
                     <button type="button" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(open => !open)}>Settings & calibration</button>
                     <BioXpPipetteSettings visible={settingsOpen && documentVisible && controlTab === 'pipettes'} key={`pipette-settings:${generation}:${active}`} generation={generation} connected={linkConnected} />

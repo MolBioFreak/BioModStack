@@ -4,7 +4,7 @@ import { bioXpErrorText, type BioXpOperatorJsonSchema } from '../lib/bioxpClient
 import { methodsGet, type MethodCatalog, type MethodValue } from '../lib/bioxpMethods';
 import { MethodFields, object } from './BioXpMethodFields';
 
-const families = ['cavro_application', 'pipette_settings', 'fluid_search', 'pressure_stream', 'tip_pickup', 'tip_eject', 'calibration'];
+const families = ['cavro_application', 'pipette_settings', 'fluid_search', 'pressure_stream', 'tip_pickup', 'tip_eject', 'profile_pickup', 'calibration'];
 /** Native discovery is the schema authority. Never imply unadvertised firmware support. */
 export function BioXpPipetteNativeTools({ visible, enabled, run }: {
     visible: boolean; enabled: boolean; run: (action: string, inputs: MethodValue) => void;
