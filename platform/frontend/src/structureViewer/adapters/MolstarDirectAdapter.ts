@@ -16,6 +16,8 @@ import {
 } from 'molstar/lib/mol-plugin-state/helpers/structure-overpaint';
 import { clearStructureTransparency, setStructureTransparency } from 'molstar/lib/mol-plugin-state/helpers/structure-transparency';
 import { StateTransforms } from 'molstar/lib/mol-plugin-state/transforms';
+import { StaticStructureComponentTypes, type StructureComponentParams } from 'molstar/lib/mol-plugin-state/helpers/structure-component';
+import type { StateTransformer } from 'molstar/lib/mol-state';
 import { StateSelection } from 'molstar/lib/mol-state';
 import { Overpaint } from 'molstar/lib/mol-theme/overpaint';
 import { Transparency } from 'molstar/lib/mol-theme/transparency';
@@ -778,7 +780,14 @@ export class MolstarDirectAdapter {
                 if (!kind) throw new Error(`Mol* representation kind ${params?.type?.name ?? '<missing>'} is not supported by the saved-review contract`);
                 return [{
                     representation,
+                    component,
                     state: {
+                        nativeComponent: {
+                            key: component.key ?? String(componentIndex),
+                            params: JSON.parse(JSON.stringify(component.cell.transform.params)),
+                            visible: !component.cell.state.isHidden,
+                        },
+                        nativeTags: [...(representation.cell.transform.tags ?? [])],
                         representationId: `${documentId}:${component.key ?? componentIndex}:${representationIndex}`,
                         documentId,
                         kind,
@@ -811,21 +820,68 @@ export class MolstarDirectAdapter {
     private async applyRepresentations(states: readonly StructureRepresentationState[]): Promise<void> {
         const plugin = this.requirePlugin();
         const entries = new Map(this.representationEntries().map((entry) => [entry.state.representationId, entry]));
-        if (states.length !== entries.size) throw new Error('Saved representation set does not match the loaded Mol* hierarchy');
         const update = plugin.state.data.build();
+        const restoredComponents = new Map<string, string>();
+        const componentVisibility = new Map<string, boolean>();
+        const replacedDocuments = new Set<string>();
+        const savedKeys = new Set<string>();
         for (const state of states) {
-            const entry = entries.get(state.representationId) ?? entries.get(state.representationId.replace(`:${state.kind}:`, ':'));
-            if (!entry || entry.state.documentId !== state.documentId) {
-                throw new Error(`Saved representation ${state.representationId} does not match the loaded Mol* hierarchy`);
+            const structure = plugin.managers.structure.hierarchy.current.structures.find(s =>
+                s.cell.obj && this.documentStructures.get(s.cell.obj.data.root) === state.documentId);
+            if (!structure) throw new Error(`Saved representation document ${state.documentId} is not loaded`);
+            const id = state.representationId.replace(`:${state.kind}:`, ':');
+            if (!id.startsWith(`${state.documentId}:`)) throw new Error(`Saved representation ${state.representationId} has a different document`);
+            const entry = entries.get(state.representationId) ?? entries.get(id);
+            // Older snapshots contain the stock builder key, not a component definition.
+            // Resolve only the actual Mol* static vocabulary, never guessed chain queries.
+            const key = state.nativeComponent?.key ?? id.slice(state.documentId.length + 1, id.lastIndexOf(':'));
+            const staticType = key.replace(/^structure-component-static-/, '');
+            const definition = state.nativeComponent?.params ??
+                (key === `structure-component-static-${staticType}` && StaticStructureComponentTypes.some(t => t === staticType)
+                    ? { type: { name: 'static', params: staticType }, nullIfEmpty: true, label: '' } : undefined);
+            const componentId = `${state.documentId}:${key}`;
+            savedKeys.add(componentId);
+            let componentRef = restoredComponents.get(componentId);
+            const component = structure.components.find(c => c.key === key);
+            if (!componentRef) {
+                if (component) {
+                    componentRef = component.cell.transform.ref;
+                    if (definition) update.to(componentRef).update(JSON.parse(JSON.stringify(definition)) as StructureComponentParams);
+                } else {
+                    if (!definition) throw new Error(`Saved representation ${state.representationId} has no reconstructible component definition`);
+                    componentRef = update.to(structure.cell).apply(StateTransforms.Model.StructureComponent,
+                        JSON.parse(JSON.stringify(definition)) as StructureComponentParams, { tags: [key] }).ref;
+                    replacedDocuments.add(state.documentId);
+                }
+                restoredComponents.set(componentId, componentRef);
+                componentVisibility.set(componentRef, state.nativeComponent?.visible !== false);
             }
-            plugin.managers.structure.hierarchy.toggleVisibility([entry.representation], state.visible ? 'show' : 'hide');
-            update.to(entry.representation.cell).update((params: { type?: { params?: { alpha?: number } } }) => {
-                if (state.nativeParams) Object.assign(params, JSON.parse(JSON.stringify(state.nativeParams)));
-                if (!params.type?.params) throw new Error(`Mol* representation ${state.representationId} has no opacity parameters`);
-                params.type.params.alpha = state.opacity;
-            });
+            if (entry && entry.state.documentId !== state.documentId) throw new Error(`Saved representation ${state.representationId} has a different document`);
+            const params = JSON.parse(JSON.stringify(state.nativeParams ?? entry?.state.nativeParams));
+            if (!params?.type?.params) throw new Error(`Mol* representation ${state.representationId} has no opacity parameters`);
+            params.type.params.alpha = state.opacity;
+            if (entry) update.to(entry.representation.cell).update(params);
+            else update.to(componentRef).apply(StateTransforms.Representation.StructureRepresentation3D,
+                params as StateTransformer.Params<typeof StateTransforms.Representation.StructureRepresentation3D>,
+                { tags: state.nativeTags ? [...state.nativeTags] : undefined, state: { isHidden: !state.visible } });
         }
         await update.commit({ revertOnError: true });
+        // A stock preset replaced the saved hierarchy. Hide its unsaved stock layer,
+        // rather than deleting components (or any independent native measurements).
+        // Native user components use their own keys and remain untouched.
+        for (const [ref, visible] of componentVisibility) {
+            plugin.state.data.updateCellState(ref, { isHidden: !visible });
+        }
+        for (const entry of this.representationEntries()) {
+            const saved = states.find(s => s.representationId.replace(`:${s.kind}:`, ':') === entry.state.representationId);
+            if (saved) {
+                plugin.managers.structure.hierarchy.toggleVisibility([entry.representation], saved.visible ? 'show' : 'hide');
+            } else if (replacedDocuments.has(entry.state.documentId)
+                && entry.component.key?.startsWith('structure-component-static-')
+                && !savedKeys.has(`${entry.state.documentId}:${entry.component.key}`)) {
+                plugin.managers.structure.hierarchy.toggleVisibility([entry.representation], 'hide');
+            }
+        }
     }
 
     applyPresentation(presentation: MolstarDirectPresentation): Promise<void> {

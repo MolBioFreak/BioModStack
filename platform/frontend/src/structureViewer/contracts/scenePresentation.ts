@@ -14,6 +14,13 @@ export interface StructureRepresentationState {
     readonly selectionSetId?: string;
     /** Native Mol* representation params (type, color and size themes), not scientific data. */
     readonly nativeParams?: Readonly<Record<string, unknown>>;
+    /** Native component transform definition; hierarchy keys alone are transient. */
+    readonly nativeComponent?: {
+        readonly key: string;
+        readonly params: Readonly<Record<string, unknown>>;
+        readonly visible: boolean;
+    };
+    readonly nativeTags?: readonly string[];
 }
 
 export interface StructureLayerState {
