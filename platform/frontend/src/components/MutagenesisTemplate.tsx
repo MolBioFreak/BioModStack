@@ -3,7 +3,7 @@ import { hydrateEsmfold2Settings } from './esmfold2Settings';
 import { HostedMsaControls } from './HostedMsaControls';
 import { hydrateHostedMsaSettings } from '../lib/msaPolicy';
 import { FileBrowser } from './FileBrowser';
-import type { MutagenesisPredictorConfig, MutagenesisEsmSettings, MutagenesisBoltzSettings } from '../lib/mutagenesisWorkflowRequest';
+import type { MutagenesisPredictorConfig, MutagenesisEsmSettings, MutagenesisBoltzSettings, MutagenesisVariant, MutagenesisComponent } from '../lib/mutagenesisWorkflowRequest';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { SequenceManagerModal } from './SequenceManagerModal';
@@ -72,7 +72,7 @@ export function MutagenesisTemplate({ onBack, onSubmit, initialValues, onDraftCh
             .sort((a, b) => a - b);
     }, [selectedPositions, baseSequence.length]);
     // Note: excludedPositions state kept for future Affinity Maturation enhancements
-    const [generatedVariants, setGeneratedVariants] = useState<VariantSequence[]>(initialValues?.mutagenesis_variants ?? []);
+    const [generatedVariants, setGeneratedVariants] = useState<MutagenesisVariant[]>(initialValues?.mutagenesis_variants ?? []);
 
     // Predictor Config
     const [predictor, setPredictor] = useState<'boltz' | 'esmfold2'>(initialValues?.pred_method === 'esmfold2' || initialValues?.model_id === 'esmfold2' ? 'esmfold2' : 'boltz');
@@ -94,11 +94,15 @@ export function MutagenesisTemplate({ onBack, onSubmit, initialValues, onDraftCh
             chain_id: saved?.chain_id ?? 'A', msa_format: saved?.msa_format ?? 'auto' };
     });
     const [esmMsa, setEsmMsa] = useState(() => hydrateHostedMsaSettings(initialValues?.mutagenesis_predictor_drafts?.esmfold2 ?? initialValues));
-    const [variantMsaPaths, setVariantMsaPaths] = useState<Record<string, string>>(initialValues?.mutagenesis_variant_msa_paths ?? {});
+    const [variantMsaPaths, setVariantMsaPaths] = useState<Record<string, string>>(() => ({ ...Object.fromEntries((initialValues?.mutagenesis_variants ?? []).flatMap((v: MutagenesisVariant) => {
+        const primary = v.complex_components?.[0];
+        return primary?.type === 'protein' && primary.sequence === v.sequence && primary.msa_path
+            ? [[`${v.name}:${v.sequence}`, primary.msa_path]] : [];
+    })), ...initialValues?.mutagenesis_variant_msa_paths }));
     const [msaBrowserVariant, setMsaBrowserVariant] = useState<string | null>(null);
 
     // Complex Mode: Ligands & Ions
-    const [ligands, setLigands] = useState<LigandEntry[]>(initialValues?.ligands ?? []);
+    const [ligands, setLigands] = useState<(LigandEntry & MutagenesisComponent)[]>(initialValues?.ligands ?? []);
 
     // Physics refinement (OpenMM) - for ΔΔG validation
     const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(() => ({ ...PHYSICS_DEFAULTS,
@@ -322,6 +326,8 @@ export function MutagenesisTemplate({ onBack, onSubmit, initialValues, onDraftCh
 
             // Include ALL fields from ligand entries - sequence is required for DNA/RNA!
             ligands: ligands.map(l => ({
+                msa_path: l.msa_path,
+                msa_format: l.msa_format,
                 type: l.type,
                 id: l.id,
                 ccd: l.ccd,
@@ -377,7 +383,7 @@ export function MutagenesisTemplate({ onBack, onSubmit, initialValues, onDraftCh
                     </div>
                 </div>
 
-                {onOpenTemplateManager && <button type="button" onClick={() => onOpenTemplateManager({
+                {onOpenTemplateManager && <button type="button" className="px-3 py-2 rounded-lg border border-slate-600 bg-slate-800 text-sm text-slate-200 hover:bg-slate-700" onClick={() => onOpenTemplateManager({
                     currentParams: draft, currentModelId: predictor === 'boltz' ? 'boltz2' : 'esmfold2',
                     currentMode: 'predict', baseTemplateId: 'mutagenesis',
                 })}>Save / load template</button>}
@@ -992,10 +998,10 @@ export function MutagenesisTemplate({ onBack, onSubmit, initialValues, onDraftCh
                     </details>}
                     <Esmfold2SettingsControls value={esmSettings} onChange={value => setEsmSettings(current => ({ ...current, ...value }))} />
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <label>Protein chain ID<input aria-label="ESMFold2 protein chain ID" value={esmSettings.chain_id ?? 'A'} onChange={e => setEsmSettings(s => ({ ...s, chain_id: e.target.value }))} /></label>
-                        <label>Model repository or local checkpoint (optional)<input aria-label="ESMFold2 model checkpoint" value={esmSettings.model_id_or_path ?? ''} onChange={e => setEsmSettings(s => ({ ...s, model_id_or_path: e.target.value }))} /></label>
+                        <label className="block text-sm text-slate-300 space-y-2">Protein chain ID<input className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-accent outline-none" aria-label="ESMFold2 protein chain ID" value={esmSettings.chain_id ?? 'A'} onChange={e => setEsmSettings(s => ({ ...s, chain_id: e.target.value }))} /></label>
+                        <label className="block text-sm text-slate-300 space-y-2">Model repository or local checkpoint (optional)<input className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-accent outline-none" aria-label="ESMFold2 model checkpoint" value={esmSettings.model_id_or_path ?? ''} onChange={e => setEsmSettings(s => ({ ...s, model_id_or_path: e.target.value }))} /></label>
                         <label><input type="checkbox" checked={esmSettings.local_files_only ?? true} onChange={e => setEsmSettings(s => ({ ...s, local_files_only: e.target.checked }))} />Use local model files only</label>
-                        <label>Supplied MSA format<select aria-label="ESMFold2 MSA format" value={esmSettings.msa_format ?? 'auto'} onChange={e => setEsmSettings(s => ({ ...s, msa_format: e.target.value as MutagenesisEsmSettings['msa_format'] }))}>
+                        <label className="block text-sm text-slate-300 space-y-2">Supplied MSA format<select className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-accent outline-none" aria-label="ESMFold2 MSA format" value={esmSettings.msa_format ?? 'auto'} onChange={e => setEsmSettings(s => ({ ...s, msa_format: e.target.value as MutagenesisEsmSettings['msa_format'] }))}>
                             <option value="auto">Auto</option><option value="a3m">A3M</option><option value="stockholm">Stockholm</option>
                         </select></label>
                     </div>
@@ -1004,10 +1010,14 @@ export function MutagenesisTemplate({ onBack, onSubmit, initialValues, onDraftCh
                     </details>
                     <p className="text-xs text-slate-400">No reference MSA is shared between mutants. Supplied alignments belong to the exact variant below; otherwise enabling MSA prepares missing alignments with the selected hosted provider. DNA/RNA, ligands and peptide components use the existing component editor. PDB import above supplies the base sequence, not template coordinates.</p>
                     <details><summary>Variant-specific supplied MSAs</summary>
-                        {generatedVariants.map(variant => <div key={variant.name}>
-                            <span>{variant.name}</span>
-                            <input aria-label={`MSA for ${variant.name}`} value={variantMsaPaths[`${variant.name}:${variant.sequence}`] ?? ''} onChange={e => setVariantMsaPaths(s => ({ ...s, [`${variant.name}:${variant.sequence}`]: e.target.value }))} />
-                            <button type="button" onClick={() => setMsaBrowserVariant(`${variant.name}:${variant.sequence}`)}>Choose alignment</button>
+                        {generatedVariants.map(variant => <div className="space-y-2 my-3" key={`${variant.name}:${variant.sequence}`}>
+                            <span className="text-sm text-slate-300">{variant.name}</span>
+                            {variant.complex_components?.slice(1).map((component, offset) => <div key={`${component.id}:${offset}`} className="text-sm text-slate-400">
+                                <span>{component.id} · {component.type}{component.sequence ? ` · ${component.sequence}` : ''}{component.ccd ? ` · ${component.ccd}` : ''}</span>
+                                {component.type === 'protein' && <label className="block">Supplied MSA for {component.id}<input className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm" aria-label={`MSA for ${variant.name} component ${component.id}`} value={component.msa_path ?? ''} onChange={event => setGeneratedVariants(rows => rows.map(row => row === variant ? { ...row, complex_components: row.complex_components?.map((entry, index) => index === offset + 1 ? { ...entry, msa_path: event.target.value || undefined } : entry) } : row))} /></label>}
+                            </div>)}
+                            <input className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-accent outline-none" aria-label={`MSA for ${variant.name}`} value={variantMsaPaths[`${variant.name}:${variant.sequence}`] ?? ''} onChange={e => setVariantMsaPaths(s => ({ ...s, [`${variant.name}:${variant.sequence}`]: e.target.value }))} />
+                            <button type="button" className="px-3 py-2 rounded-lg border border-slate-600 bg-slate-800 text-sm text-slate-200 hover:bg-slate-700" onClick={() => setMsaBrowserVariant(`${variant.name}:${variant.sequence}`)}>Choose alignment</button>
                         </div>)}
                     </details>
                     {msaBrowserVariant !== null && <FileBrowser title={`MSA for ${msaBrowserVariant}`} accept=".a3m,.sto,.stockholm" onCancel={() => setMsaBrowserVariant(null)} onSelect={path => { setVariantMsaPaths(s => ({ ...s, [msaBrowserVariant]: path })); setMsaBrowserVariant(null); }} />}

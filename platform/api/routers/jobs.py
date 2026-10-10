@@ -7092,12 +7092,14 @@ async def _create_job(
 
     from services.msa_policy import requires_msa_search
     if msa_provider in {"colabfold_api", "neurosnap_api"} and requires_msa_search(job_data.model_id, job_data.params):
-        if not _supports_colabfold_api_single_job(job_data.model_id, job_data.mode):
+        if not (_supports_colabfold_api_single_job(job_data.model_id, job_data.mode)
+                or (job_data.model_id in {"esmfold2", "esmfold2_experimental"}
+                    and job_data.mode in {"predict", "complex"})):
             raise HTTPException(
                 status_code=422,
                 detail=(
                     "API MSA preparation is supported for "
-                    "structure launches (boltz2/rf3/protenix predict|complex, "
+                    "structure launches (boltz2/rf3/protenix/esmfold2/esmfold2_experimental predict|complex, "
                     "boltz_cp_experimental design)."
                 ),
             )

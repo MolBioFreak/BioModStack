@@ -19,10 +19,12 @@ export interface MutagenesisEsmSettings extends Esmfold2Settings {
     chain_id?: string;
     msa_format?: 'auto' | 'a3m' | 'stockholm';
 }
+export type MutagenesisComponent = Pick<LigandEntry, 'type' | 'id' | 'ccd' | 'smiles' | 'sequence'> & { msa_path?: string; msa_format?: string };
+export type MutagenesisVariant = VariantSequence & { complex_components?: MutagenesisComponent[] };
 interface MutagenesisCommonSettings {
     num_parallel_jobs: number;
     msa_reference_sequence?: string;
-    ligands?: Pick<LigandEntry, 'type' | 'id' | 'ccd' | 'smiles' | 'sequence'>[];
+    ligands?: MutagenesisComponent[];
     openmm_enabled?: boolean;
     openmm_compute_tier?: string;
     openmm_restraint_mode?: string;
@@ -41,23 +43,25 @@ export type MutagenesisPredictorConfig = MutagenesisCommonSettings & (
     | { predictor: 'esmfold2'; esmfold2: MutagenesisEsmSettings; msa: HostedMsaSettings; variant_msa_paths?: Record<string, string> }
 );
 
-export function buildMutagenesisWorkflowRequest(jobNamePrefix: string, variants: VariantSequence[], predictorConfig: MutagenesisPredictorConfig) {
+export function buildMutagenesisWorkflowRequest(jobNamePrefix: string, variants: MutagenesisVariant[], predictorConfig: MutagenesisPredictorConfig) {
     // Build params with mutagenesis_variants array
     const batchParams = {
         // Always regenerate MSAs for mutants (no shared reference MSA)
         msa_force_refresh: true,
         // Array of variants (each with name + sequence)
-        mutagenesis_variants: variants.map(v => ({
-            name: v.name,
-            sequence: v.sequence,
-            ...(predictorConfig.predictor === 'esmfold2' && (predictorConfig.variant_msa_paths?.[`${v.name}:${v.sequence}`] || predictorConfig.ligands?.length) ? {
-                complex_components: [
-                    { type: 'protein', id: predictorConfig.esmfold2.chain_id ?? 'A', sequence: v.sequence,
-                        ...(predictorConfig.variant_msa_paths?.[`${v.name}:${v.sequence}`] ? { msa_path: predictorConfig.variant_msa_paths[`${v.name}:${v.sequence}`] } : {}) },
+        mutagenesis_variants: variants.map(v => {
+            const msaKey = `${v.name}:${v.sequence}`;
+            const msaPaths = predictorConfig.predictor === 'esmfold2' ? predictorConfig.variant_msa_paths : undefined;
+            const supplied = msaPaths && Object.prototype.hasOwnProperty.call(msaPaths, msaKey);
+            const components = v.complex_components ?? (predictorConfig.predictor === 'esmfold2'
+                && (msaPaths?.[msaKey] || predictorConfig.ligands?.length) ? [
+                    { type: 'protein' as const, id: predictorConfig.esmfold2.chain_id ?? 'A', sequence: v.sequence },
                     ...(predictorConfig.ligands ?? []),
-                ],
-            } : {}),
-        })),
+                ] : undefined);
+            return { ...v, ...(components ? { complex_components: components.map((component, index) =>
+                index === 0 && component.type === 'protein' && component.sequence === v.sequence && supplied
+                    ? { ...component, msa_path: msaPaths[msaKey] || undefined } : component) } : {}) };
+        }),
         // Predictor params (same for all variants)
         ...(predictorConfig.predictor === 'boltz' ? {
             boltz_recycling_steps: predictorConfig.recycling_steps,

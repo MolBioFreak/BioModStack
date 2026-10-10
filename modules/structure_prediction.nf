@@ -837,6 +837,7 @@ PYEOF
         ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
         --recycling_steps ${recycling} \\
         --sampling_steps ${sampling} \\
+        ${params.boltz_method ? "--method '" + params.boltz_method.toString().replace("'", "'\"'\"'") + "'" : ''} \\
         ${params.boltz_use_potentials ? '--use_potentials' : ''} \\
         ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \\
         ${params.boltz_predict_affinity ? '--sampling_steps_affinity ' + (params.boltz_sampling_steps_affinity ?: 200) + ' --diffusion_samples_affinity ' + (params.boltz_diffusion_samples_affinity ?: 5) : ''} \\
@@ -1043,6 +1044,7 @@ PYEOF
         ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
         --recycling_steps ${recycling} \\
         --sampling_steps ${sampling} \\
+        ${params.boltz_method ? "--method '" + params.boltz_method.toString().replace("'", "'\"'\"'") + "'" : ''} \\
         ${params.boltz_use_potentials ? '--use_potentials' : ''} \\
         ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \\
         ${params.boltz_predict_affinity ? '--sampling_steps_affinity ' + (params.boltz_sampling_steps_affinity ?: 200) + ' --diffusion_samples_affinity ' + (params.boltz_diffusion_samples_affinity ?: 5) : ''} \\
@@ -1679,6 +1681,7 @@ process BoltzFromComplex {
         ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
         --recycling_steps ${recycling} \\
         --sampling_steps ${sampling} \\
+        ${params.boltz_method ? "--method '" + params.boltz_method.toString().replace("'", "'\"'\"'") + "'" : ''} \\
         ${params.boltz_use_potentials ? '--use_potentials' : ''} \\
         ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \\
         ${params.boltz_predict_affinity ? '--sampling_steps_affinity ' + (params.boltz_sampling_steps_affinity ?: 200) + ' --diffusion_samples_affinity ' + (params.boltz_diffusion_samples_affinity ?: 5) : ''} \\
