@@ -27,6 +27,8 @@ SCALAR_DESCRIPTORS = {
 def scalar_records(confidence, source, producer_version):
     import math
     from services.core_protein_scientific_contract import validate_metric
+    if not isinstance(confidence, dict):
+        raise ValueError("native confidence must be an object")
     records = []
     for key, (unit, scope, direction) in SCALAR_DESCRIPTORS.items():
         value = confidence.get(key)

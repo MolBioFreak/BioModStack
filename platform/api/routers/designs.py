@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, case, inspect as sa_inspect
 from sqlalchemy.exc import NoInspectionAvailable
 from sqlalchemy.orm import load_only
+from starlette.concurrency import run_in_threadpool
 from typing import Optional, List, Dict, Any, Union, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
@@ -540,6 +541,7 @@ ANALYTICS_LOAD_ONLY_COLUMNS = (
     Design.id,
     Design.name,
     Design.created_at,
+    Design.pdb_path,
     Design.review_profile_id,
     Design.plddt_overall,
     Design.plddt_binder,
@@ -2070,29 +2072,22 @@ def _design_to_response(
 
     capabilities = set(contract.viewer_capabilities)
     if job is not None and job.model_id in ('boltz', 'boltz2', 'boltz_cp_experimental'):
-        # Prediction B factors are not FAMPNN side-chain errors. Historical
-        # nested fallbacks stay out of current scientific readback; genuine
-        # producer sidecars are retained without interpreting prediction atoms.
-        from services.result_ingester import _find_fampnn_sidecar_path, _load_json_payload
-        sidecar = _find_fampnn_sidecar_path(Path(design.pdb_path), Path(job.output_dir)) if design.pdb_path and job.output_dir else None
-        native_fampnn = _load_json_payload(sidecar) if sidecar else None
+        # A prediction is not a FAMPNN coordinate product. Preserve persisted
+        # upstream sequence/mutation evidence; a missing sidecar says nothing
+        # about its validity. Filename matches cannot establish producer identity.
         confidence = dict(data.get('confidence_metrics') or {})
         provenance = dict(data.get('provenance') or {})
-        if not isinstance(native_fampnn, dict) or not any(k.startswith('fampnn_') for k in native_fampnn):
-            if confidence.pop('fampnn', None) is not None or provenance.get('fampnn') is not None:
-                provenance['unsupported_historical_fampnn_reason'] = 'prediction_bfactor_is_not_psce'
-            provenance.pop('fampnn', None)
-            for key in ('fampnn_psce', 'fampnn_max_residue_psce', 'fampnn_min_residue_psce'):
-                data[key] = None
-            if provenance.get('source') == 'fampnn':
-                provenance['source'] = job.model_id
-        else:
-            confidence['fampnn'] = native_fampnn
-            provenance['fampnn'] = native_fampnn
-            for target, key in (('fampnn_psce', 'fampnn_avg_psce'),
-                    ('fampnn_max_residue_psce', 'fampnn_max_residue_psce'),
-                    ('fampnn_min_residue_psce', 'fampnn_min_residue_psce')):
-                data[target] = _numeric_record_value(native_fampnn, key)
+        for container in (confidence, provenance):
+            payload = container.get('fampnn')
+            if isinstance(payload, dict) and payload.get('producer_model_id') != 'fampnn':
+                # Historical ingestion synthesized PSCE from prediction B factors.
+                # Remove only that unsupported score, not other upstream evidence.
+                container['fampnn'] = {k: v for k, v in payload.items()
+                    if 'psce' not in k.lower()}
+        for key in ('fampnn_psce', 'fampnn_max_residue_psce', 'fampnn_min_residue_psce'):
+            data[key] = None
+        if provenance.get('source') == 'fampnn':
+            provenance['source'] = job.model_id
         data['confidence_metrics'], data['provenance'] = confidence, provenance
     if job is not None and job.model_id == 'boltz_cp_experimental':
         from services.boltz_scientific_consumer import retained_cp_snapshot
@@ -2678,7 +2673,8 @@ async def list_designs(
     query = query.limit(limit).offset(offset)
     designs = list((await session.execute(query)).scalars())
     owners = await owning_jobs(session, designs)
-    responses = [_design_to_response(d, job=owners.get(d.job_id)) for d in designs]
+    responses = await run_in_threadpool(
+        lambda: [_design_to_response(d, job=owners.get(d.job_id)) for d in designs])
     for design, response in zip(designs, responses):
         response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
             or (1 if response.native_sample and response.scientific_structure_document else None))
@@ -2908,7 +2904,7 @@ async def get_design(
         if design.job_id not in lineage_job_ids:
             raise HTTPException(status_code=404, detail="Design not found in requested Job lineage")
     owners = await owning_jobs(session, [design])
-    response = _design_to_response(design, include_fampnn_structure_fallback=True,
+    response = await run_in_threadpool(_design_to_response, design, include_fampnn_structure_fallback=True,
                                    job=owners.get(design.job_id))
     response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
             or (1 if response.native_sample and response.scientific_structure_document else None))
@@ -3158,7 +3154,8 @@ async def get_designs_for_job(
     # Count total
     total = (await session.execute(count_query)).scalar()
     owners = await owning_jobs(session, designs)
-    responses = [_design_to_response(d, job=owners.get(d.job_id)) for d in designs]
+    responses = await run_in_threadpool(
+        lambda: [_design_to_response(d, job=owners.get(d.job_id)) for d in designs])
     for design, response in zip(designs, responses):
         response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
             or (1 if response.native_sample and response.scientific_structure_document else None))

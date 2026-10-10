@@ -161,7 +161,7 @@ def retained_scalar_projection(design, job):
         from services.external_imports.boltz_api import retained_scalar_records
         records = retained_scalar_records(design, job)
         return projection(design, records=records, source_kind='external_provider_artifact')
-    selected = retained_cp_snapshot(design, job, roles=('structure', 'metrics'))
+    selected = retained_cp_snapshot(design, job, roles=('metrics',))
     source = dict(artifact_sha256=selected['artifacts']['metrics']['sha256'],
         candidate_id=design.id, document_id=selected['producer']['producer_output_key'])
     records = scalar_records(json.loads(selected['snapshots']['metrics']), source,
@@ -179,8 +179,12 @@ async def persisted_projection(design, session):
             if revision_for_job(job) != 1:
                 # Plotly's compact query defers structure/provenance columns.
                 # Resolve them asynchronously, never trigger implicit ORM I/O.
-                await session.refresh(design, attribute_names=['pdb_path', 'provenance'])
-                return retained_scalar_projection(design, job)
+                from sqlalchemy import inspect
+                from starlette.concurrency import run_in_threadpool
+                unloaded = inspect(design).unloaded.intersection({'pdb_path', 'provenance'})
+                if unloaded:
+                    await session.refresh(design, attribute_names=sorted(unloaded))
+                return await run_in_threadpool(retained_scalar_projection, design, job)
             if job.model_id in ('boltz', 'boltz2'):
                 from services.boltz_scientific_consumer import verified_boltz_design
                 selected = await verified_boltz_design(design, session)
