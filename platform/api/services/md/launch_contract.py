@@ -579,6 +579,7 @@ def _materialize_topology_closure(
     published_snapshots: list[Path],
     runtime_identity_resolver: Callable[[], Mapping[str, Any] | None],
     inspect_only: bool = False,
+    native_preprocessing: bool = False,
 ) -> dict[str, Any]:
     try:
         allowed_root = source_topology.parent.resolve(strict=True)
@@ -619,6 +620,14 @@ def _materialize_topology_closure(
                 resolved = source.resolve(strict=True)
                 resolved.relative_to(allowed_root)
             except FileNotFoundError:
+                if native_preprocessing:
+                    # Inventory transportable files; grompp owns conditional/search resolution.
+                    try:
+                        source.resolve(strict=False).relative_to(allowed_root)
+                    except ValueError as exc:
+                        raise _topology_error("MD_TOPOLOGY_INCLUDE_FORBIDDEN",
+                                              "A topology include escapes its allowed source directory.") from exc
+                    continue
                 force_field_root = include_path.parts[0] if include_path.parts else ""
                 if not force_field_root.endswith(".ff"):
                     raise _topology_error(
@@ -653,6 +662,8 @@ def _materialize_topology_closure(
                 ) from exc
 
             if logical_text in active:
+                if native_preprocessing:
+                    continue  # A guarded include cycle is resolved by native preprocessing.
                 raise _topology_error(
                     "MD_TOPOLOGY_INCLUDE_CYCLE",
                     "The topology include graph contains a cycle.",
@@ -714,7 +725,7 @@ def native_input_identity(config: Mapping[str, Any]) -> dict[str, Any]:
             source_topology=topology, topology_snapshot=topology,
             contract_dir=topology.parent, published_snapshots=[],
             runtime_identity_resolver=_bound_gromacs_topology_runtime_identity,
-            inspect_only=True,
+            inspect_only=True, native_preprocessing=config.get("schema") == NATIVE_JOB_SCHEMA,
         )
         closure.pop("root")
         identity["topology_closure"] = closure
@@ -1112,6 +1123,7 @@ def materialize_md_job_spec(
                 topology_snapshot=topology_snapshot,
                 contract_dir=contract_dir,
                 published_snapshots=published_snapshots,
+                native_preprocessing=normalized.get("schema") == NATIVE_JOB_SCHEMA,
                 runtime_identity_resolver=(
                     _bound_gromacs_topology_runtime_identity
                     if normalized.get("schema") == NATIVE_JOB_SCHEMA
