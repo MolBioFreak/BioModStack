@@ -1359,6 +1359,12 @@ def _should_normalize_antibody_job_params(
     if normalized_model_id in {"bindcraft2", "ligandmpnn"}:
         return False
     if (
+        normalized_model_id in {"boltz2", "protenix", "esmfold2", "esmfold2_experimental", "rf3", "template_structure_prediction"}
+        and normalized_mode in {"predict", "complex", "structure_prediction"}
+        and not _is_antibody_launch(model_id, params)
+    ):
+        return False
+    if (
         normalized_model_id == "protein_local_redesign"
         and normalized_mode == "local_redesign"
     ) or (
@@ -11044,10 +11050,18 @@ async def resume_job(
     # reuse cached task hashes that depend on params.out_dir/publishDir paths.
     output_dir = str(get_results_dir() / new_job_id) if fresh_execution else job.output_dir
 
-    merged_params = {
-        **_normalize_antibody_job_params(_normalize_structure_geometry_params(job.params or {})),
-        **param_overrides,
-    }
+    source_params = _normalize_structure_geometry_params(job.params or {})
+    if _should_normalize_antibody_job_params(job.model_id, job.mode, source_params):
+        source_params = _normalize_antibody_job_params(source_params)
+    merged_params = {**source_params, **param_overrides}
+    # Use the existing prospective complex interpretation, as fresh admission does.
+    # The source Job (linked by resume_job_id) retains the original selector token.
+    if (
+        str(job.mode or "").strip().lower() == "complex"
+        and not _should_normalize_antibody_job_params(job.model_id, job.mode, merged_params)
+        and str(merged_params.get("pred_method") or "").strip().lower() in {"both", "all", "boltz_protenix"}
+    ):
+        merged_params = _normalize_structure_prediction_pred_method(job.model_id, job.mode, merged_params)
     if job.model_id == "nanopore":
         merged_params = ont_ngs_contract.replay_expected_plasmid_size(
             merged_params, job.provenance, mode=job.mode,
@@ -11098,7 +11112,8 @@ async def resume_job(
     merged_params = _normalize_antibody_runtime_paths(job.model_id, merged_params)
     merged_params = _normalize_structure_runtime_paths(job.model_id, merged_params)
     merged_params = _normalize_structure_geometry_params(merged_params)
-    merged_params = _normalize_antibody_job_params(merged_params)
+    if _should_normalize_antibody_job_params(job.model_id, job.mode, merged_params):
+        merged_params = _normalize_antibody_job_params(merged_params)
     if job.model_id == "boltz_cp_experimental":
         # An explicit workflow override must replace the parent's public value.
         for public_key, workflow_key in (("cp_topology", "bcp_cp_topology"), ("size_cp", "bcp_size_cp")):
