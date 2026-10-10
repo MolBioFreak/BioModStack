@@ -21,6 +21,7 @@ import {
     type MDTrajectoryFrameMap,
 } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
+import MDNativeAnalysis, { mdLaneLabel, type MDLane, type NativeAnalysis } from './MDNativeAnalysis';
 import type { MDSceneState } from '../structureViewer/contracts/mdTrajectory';
 
 const layout: Partial<Layout> = {
@@ -160,7 +161,14 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
             return response.json() as Promise<MDTrajectoryFrameMap>;
         },
     });
-    const reports = analysis.isError ? [] : analysis.data?.data.reports ?? [];
+    const nativeAnalysis = analysis.isError ? undefined : analysis.data?.data as NativeAnalysis | undefined;
+    const lanes = useMemo(() => (summary.data?.data.replicas ?? []) as Array<MDLane>, [summary.data]);
+    const reports = useMemo(() => (nativeAnalysis?.reports ?? []).map(report => ({ ...lanes.find(lane => lane.replica === report.replica), ...report })), [nativeAnalysis, lanes]);
+    const explicitSelection = reports.some(report => report.method === 'md_selection_rmsd_v1');
+    const structuralLabel = explicitSelection ? 'Selection' : 'Backbone';
+    const laneLabel = (replica: number | null | undefined) => mdLaneLabel(lanes.find(lane => lane.replica === replica) ?? { replica: replica ?? undefined });
+    const viewerReplicas = [...new Set([...finalStructures.map(item => item.replica), ...(playbackCapability?.supported ? playbackCapability.replicas.map(item => item.replica) : [])])];
+    const hasWindows = lanes.some(lane => lane.window_id != null) || reports.some(report => report.window_id != null || report.pull_coordinates?.some(pull => pull.window != null)) || Boolean(nativeAnalysis?.wham?.request.windows.length);
     const playbackFrames = trajectoryRequested && !frameMap.isError ? frameMap.data?.frames ?? [] : [];
     useEffect(() => {
         if (playbackState !== 'playing' || playbackFrames.length === 0) return undefined;
@@ -218,7 +226,7 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
     const traces = useMemo<Data[]>(() => reports
         .filter((report) => report.status === 'completed' && report.replica != null && report.points?.length)
         .map((report) => ({
-            type: 'scatter', mode: 'lines+markers', name: `Replica ${report.replica}`,
+            type: 'scatter', mode: 'lines+markers', name: `${mdLaneLabel(report)}${report.selection ? ` · ${report.selection}` : ''}`,
             x: report.points!.map((point) => point.time_ps),
             y: report.points!.map((point) => point.rmsd_angstrom),
             customdata: report.points!.map((point) => [point.replica, point.source_frame]),
@@ -226,7 +234,7 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
         })), [reports]);
     const replicaTrace = useMemo<Data[]>(() => [{
         type: 'bar',
-        x: reports.filter((report) => report.status === 'completed').map((report) => `Replica ${report.replica}`),
+        x: reports.filter((report) => report.status === 'completed').map((report) => mdLaneLabel(report)),
         y: reports.filter((report) => report.status === 'completed').map((report) => report.summary?.final ?? null),
         customdata: reports.filter((report) => report.status === 'completed').map((report) => [report.replica ?? -1, report.inputs.trajectory_sha256 ?? '']),
         hovertemplate: 'Replica %{customdata[0]}<br>Final RMSD %{y:.3f} Å<br>Trajectory SHA-256 %{customdata[1]}<extra></extra>',
@@ -235,7 +243,7 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
     const rgTraces = useMemo<Data[]>(() => reports
         .filter((report) => report.status === 'completed' && report.replica != null && report.points?.length)
         .map((report) => ({
-            type: 'scatter', mode: 'lines', name: `Replica ${report.replica}`,
+            type: 'scatter', mode: 'lines', name: `${mdLaneLabel(report)}${report.selection ? ` · ${report.selection}` : ''}`,
             x: report.points!.map((point) => point.time_ps),
             y: report.points!.map((point) => point.radius_of_gyration_angstrom),
             customdata: report.points!.map((point) => [point.replica, point.source_frame]),
@@ -244,11 +252,11 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
     const rmsfTraces = useMemo<Data[]>(() => reports
         .filter((report) => report.status === 'completed' && report.replica != null && report.residue_metrics?.length)
         .map((report) => ({
-            type: 'scatter', mode: 'lines', name: `Replica ${report.replica}`,
+            type: 'scatter', mode: 'lines', name: `${mdLaneLabel(report)}${report.selection ? ` · ${report.selection}` : ''}`,
             x: report.residue_metrics!.map((residue) => `${residue.segid}:${residue.resid}`),
-            y: report.residue_metrics!.map((residue) => residue.backbone_rmsf_angstrom),
-            customdata: report.residue_metrics!.map((residue) => [residue.resname, residue.backbone_atom_count]),
-            hovertemplate: '%{x} %{customdata[0]}<br>Backbone RMSF %{y:.3f} Å<br>%{customdata[1]} backbone atoms<extra></extra>',
+            y: report.residue_metrics!.map((residue) => report.method === 'md_selection_rmsd_v1' ? residue.rmsf_angstrom ?? null : residue.backbone_rmsf_angstrom ?? null),
+            customdata: report.residue_metrics!.map((residue) => [residue.resname, report.method === 'md_selection_rmsd_v1' ? residue.atom_count ?? null : residue.backbone_atom_count ?? null]),
+            hovertemplate: '%{x} %{customdata[0]}<br>RMSF %{y:.3f} Å<br>%{customdata[1]} selected atoms<extra></extra>',
         })), [reports]);
     const lifecyclePanel = lifecycle.isError ? <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-100">
         Dynamics lifecycle is unavailable. Lifecycle commands are disabled. Available independent results are shown below.
@@ -273,8 +281,8 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
     const loading = !lifecycle.data && lifecycle.isLoading;
     if (loading) return <section className="space-y-4" data-bms-result-pane="molecular-dynamics">{lifecyclePanel}<div className="rounded-xl border border-slate-800 bg-slate-900/70 p-8 text-slate-300">Loading MD results…</div></section>;
     if (preReplicaTerminal) return <section className="space-y-4" data-bms-result-pane="molecular-dynamics">{lifecyclePanel}</section>;
-    const summaryData = summary.isError ? undefined : summary.data?.data;
-    const analysisData = analysis.isError ? undefined : analysis.data?.data;
+    const summaryData = summary.isError ? undefined : summary.data?.data as (NonNullable<typeof summary.data>['data'] & { dynamics_state?: string; analysis_state?: string | null; analysis_error?: { code?: string; message: string } | null }) | undefined;
+    const analysisData = nativeAnalysis;
     return (
         <section className="space-y-4" data-bms-result-pane="molecular-dynamics">
             {lifecyclePanel}
@@ -283,36 +291,37 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
                 {(artifacts.isError ? [] : artifacts.data?.data.artifacts ?? []).map(item => <a key={item.id} href={item.content_url} className="block text-cyan-300">{item.name} · {item.id}</a>)}
                 {reports.map((report, index) => <details key={index}><summary>Replica {report.replica ?? 'unknown'} · {report.status} · block statistics</summary>
                     {report.block_statistics?.length ? <table className="text-xs"><thead><tr><th>Block</th><th>Frames</th><th>Mean RMSD (Å)</th><th>Mean Rg (Å)</th></tr></thead><tbody>{report.block_statistics.map(block => <tr key={block.block}><td>{block.block}</td><td>{block.count}</td><td>{block.mean_rmsd_angstrom}</td><td>{block.mean_radius_of_gyration_angstrom}</td></tr>)}</tbody></table> : <p className="text-xs">No native block statistics published.</p>}
-                    {(report as typeof report & { specialized_analyzers?: Array<{ analyzer_id: string; status: string; reason?: string; cutoff_angstrom?: number }> }).specialized_analyzers?.map(analyzer => <details key={analyzer.analyzer_id}><summary>{analyzer.analyzer_id} · {analyzer.status}</summary><p className="text-xs">{analyzer.reason}{analyzer.cutoff_angstrom != null && ` · Cutoff ${analyzer.cutoff_angstrom} Å`}</p><pre className="overflow-auto text-xs">{JSON.stringify(analyzer, null, 2)}</pre></details>)}
-                    <pre className="overflow-auto text-xs">{JSON.stringify(report, null, 2)}</pre></details>)}
+                    </details>)}
             </details>
             {artifacts.data?.data.analysis_error && <div role="alert" className="rounded border border-amber-500/30 p-3 text-amber-200">Analysis artifacts unavailable: {artifacts.data.data.analysis_error.message}</div>}
             <div className="grid gap-3 md:grid-cols-4">
                 {[
                     ['Replicas', summaryData?.replica_count ?? 'unavailable'], ['Dynamics artifacts', summaryData?.artifact_count ?? 'unavailable'],
-                    ['Dynamics', summaryData?.status ?? 'unavailable'], ['Analysis', analysis.isError ? 'unavailable' : analysisData?.status ?? 'loading'],
+                    ['Dynamics', summaryData?.dynamics_state ?? summaryData?.status ?? 'unavailable'], ['Analysis', summaryData?.analysis_state ?? (analysis.isError ? 'unavailable' : analysisData?.status ?? 'loading')],
                 ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-800 bg-slate-900/70 p-4"><div className="text-xs uppercase text-slate-500">{label}</div><div className="mt-1 text-xl font-semibold text-white">{value}</div></div>)}
             </div>
             {analysisData && analysisData.status !== 'completed' && <div className="flex items-center justify-between rounded-xl border border-amber-500/20 bg-amber-500/5 p-4"><div><div className="font-medium text-amber-100">Analysis requires attention</div><div className="mt-1 text-xs text-amber-200/70">{analysisData.retry.active ? 'A CPU-only analysis attempt is active.' : 'Retry schedules CPU analysis attempts only. Completed dynamics artifacts remain immutable.'}</div></div>{analysisData.retry.eligible && <button type="button" disabled={retry.isPending} onClick={() => retry.mutate()} className="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-100 disabled:cursor-not-allowed disabled:opacity-50">{retry.isPending ? 'Scheduling…' : 'Retry analysis'}</button>}</div>}
+            {summaryData?.analysis_error && <p role="alert" className="text-amber-200">Optional analysis: {summaryData.analysis_error.message}</p>}
+            <MDNativeAnalysis analysis={analysisData && { ...analysisData, reports }} />
             {retry.isError && <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">Analysis retry was rejected. Refresh the job state before retrying.</div>}
-            {analysisData && <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-100">
+            {analysisData && !hasWindows && <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-100">
                 <div className="font-semibold">{analysisData.evidence.status.replace('_', ' ')}</div>
                 <div className="mt-1 text-xs text-amber-200/80">{analysisData.evidence.reason} Frames are not treated as independent biological replicates.</div>
                 <div className="mt-2 text-xs text-slate-300">Completed independent replicas: {analysisData.ensemble.completed_replicas} · mean replica RMSD: {analysisData.ensemble.mean_of_replica_mean_rmsd_angstrom?.toFixed(3) ?? 'n/a'} Å · sample SD across replica means: {analysisData.ensemble.sample_stdev_of_replica_mean_rmsd_angstrom?.toFixed(3) ?? 'n/a'} Å</div>
             </div>}
             <div className="grid gap-4 xl:grid-cols-2">
                 <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-                    <div className="mb-3 flex items-center justify-between"><h2 className="font-semibold text-white">Backbone RMSD</h2><span className="text-xs text-slate-400">Server-produced bounded points</span></div>
+                    <div className="mb-3 flex items-center justify-between"><h2 className="font-semibold text-white">{structuralLabel} RMSD</h2><span className="text-xs text-slate-400">Server-produced bounded points</span></div>
                     {!analysisData ? <div className="py-20 text-center text-amber-300">{analysis.isError ? 'Analysis unavailable: report validation or read failed. Independent dynamics remain available.' : 'Loading analysis…'}</div> : analysisData.status === 'absent' ? <div className="py-20 text-center text-slate-400">Analysis has not been produced for this dynamics run.</div>
-                        : traces.length === 0 ? <div className="py-20 text-center text-amber-300">Analysis is partial or failed. Inspect replica states below.</div>
-                            : <Plot data={traces} layout={layout} config={{ responsive: true, displaylogo: false }} useResizeHandler className="w-full"
+                        : traces.length === 0 ? <div className="py-20 text-center text-amber-300">No structural RMSD samples published. See optional analysis states and reasons below.</div>
+                            : <Plot data={traces} layout={{ ...layout, yaxis: { title: { text: `${structuralLabel} RMSD (Å)` }, gridcolor: '#334155' } }} config={{ responsive: true, displaylogo: false }} useResizeHandler className="w-full"
                                 onClick={(event: PlotMouseEvent) => { const raw = event.points[0]?.customdata; if (Array.isArray(raw)) { const point = reports.flatMap((report) => report.points ?? []).find((candidate) => candidate.replica === Number(raw[0]) && candidate.source_frame === Number(raw[1])); if (point) { setTrajectoryJobId(jobId); setPlaybackState('paused'); setSelection({ kind: 'point', point: { replica: point.replica, source_frame: point.source_frame } }); setSelectedReplica(point.replica); } } }} />}
                     {selectedPoint && <div className="mt-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-100">Replica {selectedPoint.replica} · source frame {selectedPoint.source_frame} · {selectedPoint.time_ps.toFixed(2)} ps · {selectedPoint.rmsd_angstrom.toFixed(3)} Å</div>}
                     <div className="mt-3 flex flex-wrap gap-2">{analysisData?.replica_states.map((state) => <span key={state.replica} className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300">Replica {state.replica}: {state.status}</span>)}</div>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-                    <div className="mb-3 flex items-center justify-between"><h2 className="font-semibold text-white">Replica final structure</h2>{finalStructures.length > 1 && <select value={finalStructure?.replica ?? ''} onChange={(event) => { setPlaybackState('paused'); setSelection(null); setSelectedReplica(Number(event.target.value)); }} className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm">{finalStructures.map((item) => <option key={item.id} value={item.replica}>Replica {item.replica}</option>)}</select>}</div>
-                    {(finalStructure || molecularDynamics) ? <MolstarViewer structureUrl={finalStructure?.content_url ?? ''} format={finalStructure ? (finalStructure.format === 'cif' || finalStructure.format === 'mmcif' ? 'cif' : 'pdb') : 'pdb'} height={390} label={finalStructure ? `MD replica ${finalStructure.replica} final structure` : 'MD GRO+XTC trajectory'} showMetricWorkbench={false} molecularDynamics={molecularDynamics} artifactJobId={jobId} /> : <div className="py-20 text-center text-slate-400">No checksum-bound PDB/mmCIF final structure or GRO+XTC trajectory is available.</div>}
+                    <div className="mb-3 flex items-center justify-between"><h2 className="font-semibold text-white">{molecularDynamics ? 'Selected trajectory frame' : 'Replica final structure'}</h2>{viewerReplicas.length > 1 && <select aria-label="Trajectory or structure lane" value={activeReplica ?? ''} onChange={(event) => { setPlaybackState('paused'); setSelection(null); setSelectedReplica(Number(event.target.value)); }} className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm">{viewerReplicas.map(replica => <option key={replica} value={replica}>{laneLabel(replica)}</option>)}</select>}</div>
+                    {(finalStructure || molecularDynamics) ? <MolstarViewer structureUrl={finalStructure?.content_url ?? ''} format={finalStructure ? (finalStructure.format === 'cif' || finalStructure.format === 'mmcif' ? 'cif' : 'pdb') : 'pdb'} height={390} label={molecularDynamics && selectedFrame ? `${laneLabel(activeReplica)} · source frame ${selectedFrame.source_frame} · ${selectedFrame.time_ps} ps · step ${selectedFrame.step}` : finalStructure ? `MD replica ${finalStructure.replica} final structure` : 'MD GRO+XTC trajectory'} showMetricWorkbench={false} molecularDynamics={molecularDynamics} artifactJobId={jobId} /> : <div className="py-20 text-center text-slate-400">No checksum-bound PDB/mmCIF final structure or GRO+XTC trajectory is available.</div>}
                     {summaryData?.trajectory_playback.supported && !trajectoryRequested && <button type="button" data-bms-md-activate-trajectory onClick={() => setTrajectoryJobId(jobId)} className="mt-3 rounded border border-cyan-400/50 px-3 py-2 text-cyan-100">Load trajectory playback</button>}
                     {summaryData?.trajectory_playback.supported && playbackFrames.length > 0 && selectedFrame && <div className="mt-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-3 text-xs text-cyan-100">
                         <div className="mb-2 flex flex-wrap gap-2" aria-label="Governed trajectory playback controls">
@@ -338,28 +347,28 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
                     </div>}
                     {selection?.kind === 'point' && !selectedFrame && <div className="mt-2 text-xs text-amber-200">Selected source frame is not in the governed playback frame map; no trajectory frame is selected.</div>}
                     {frameMap.isError && <div className="mt-2 text-xs text-amber-200">Trajectory frame map is unavailable: {frameMap.error.message} <button type="button" disabled={frameMap.isFetching} onClick={() => void frameMap.refetch()} className="underline">Retry playback read</button></div>}
-                    {finalStructure && <div className="mt-3 space-y-1 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs text-slate-300"><div>Replica {finalStructure.replica} · source frame {finalStructure.source_frame ?? 'n/a'} · {finalStructure.time_ps != null ? `${finalStructure.time_ps.toFixed(2)} ps` : 'time unavailable'}</div><div className="break-all text-slate-500">Structure SHA-256 {finalStructure.sha256}</div><div className="break-all text-slate-500">Source trajectory SHA-256 {finalStructure.source_trajectory_sha256 ?? 'unavailable'}</div><div className="text-slate-500">Selection: {finalStructure.selection_method ?? 'completed production final coordinates'}</div></div>}
+                    {finalStructure && !molecularDynamics?.playback.selectedFrame && <div className="mt-3 space-y-1 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs text-slate-300"><div>Replica {finalStructure.replica} · source frame {finalStructure.source_frame ?? 'n/a'} · {finalStructure.time_ps != null ? `${finalStructure.time_ps.toFixed(2)} ps` : 'time unavailable'}</div><div className="break-all text-slate-500">Structure SHA-256 {finalStructure.sha256}</div><div className="break-all text-slate-500">Source trajectory SHA-256 {finalStructure.source_trajectory_sha256 ?? 'unavailable'}</div><div className="text-slate-500">Selection: {finalStructure.selection_method ?? 'completed production final coordinates'}</div></div>}
                     {!summaryData?.trajectory_playback.supported && <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">Trajectory playback unavailable: {summaryData?.trajectory_playback.supported === false ? summaryData.trajectory_playback.reason : 'Summary unavailable'}. Plot selections retain exact replica/time/source-frame provenance but do not move Mol*.</div>}
                 </div>
             </div>
             <div className="grid gap-4 xl:grid-cols-2">
                 <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
                     <h2 className="mb-3 font-semibold text-white">Radius of gyration</h2>
-                    {rgTraces.length ? <Plot data={rgTraces} layout={{ ...layout, yaxis: { title: { text: 'Backbone Rg (Å)' }, gridcolor: '#334155' } }} config={{ responsive: true, displaylogo: false }} useResizeHandler className="w-full" /> : <div className="py-16 text-center text-slate-400">No completed radius-of-gyration series.</div>}
+                    {rgTraces.length ? <Plot data={rgTraces} layout={{ ...layout, yaxis: { title: { text: `${structuralLabel} Rg (Å)` }, gridcolor: '#334155' } }} config={{ responsive: true, displaylogo: false }} useResizeHandler className="w-full" /> : <div className="py-16 text-center text-slate-400">No completed radius-of-gyration series.</div>}
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-                    <h2 className="mb-3 font-semibold text-white">Residue backbone RMSF</h2>
-                    {rmsfTraces.length ? <Plot data={rmsfTraces} layout={{ ...layout, xaxis: { title: { text: 'Residue' }, gridcolor: '#334155' }, yaxis: { title: { text: 'Backbone RMSF (Å)' }, gridcolor: '#334155' } }} config={{ responsive: true, displaylogo: false }} useResizeHandler className="w-full" /> : <div className="py-16 text-center text-slate-400">No completed residue RMSF table.</div>}
+                    <h2 className="mb-3 font-semibold text-white">Residue {structuralLabel.toLowerCase()} RMSF</h2>
+                    {rmsfTraces.length ? <Plot data={rmsfTraces} layout={{ ...layout, xaxis: { title: { text: 'Residue' }, gridcolor: '#334155' }, yaxis: { title: { text: `${structuralLabel} RMSF (Å)` }, gridcolor: '#334155' } }} config={{ responsive: true, displaylogo: false }} useResizeHandler className="w-full" /> : <div className="py-16 text-center text-slate-400">No completed residue RMSF table.</div>}
                 </div>
             </div>
             <div className="grid gap-4 xl:grid-cols-2">
                 <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-                    <h2 className="mb-3 font-semibold text-white">Replica comparison</h2>
-                    {reports.some((report) => report.status === 'completed') ? <Plot data={replicaTrace} layout={{ ...layout, xaxis: { title: { text: 'Replica' }, gridcolor: '#334155' }, yaxis: { title: { text: 'Final backbone RMSD (Å)' }, gridcolor: '#334155' } }} config={{ responsive: true, displaylogo: false }} useResizeHandler className="w-full" /> : <div className="py-16 text-center text-slate-400">No completed replica analysis is available.</div>}
+                    <h2 className="mb-3 font-semibold text-white">{hasWindows ? 'Window / replicate comparison' : 'Replica comparison'}</h2>{hasWindows && <p className="text-xs text-slate-400">Execution lanes retain window and replicate identity; biased windows are not independent replica estimates.</p>}
+                    {reports.some((report) => report.status === 'completed') ? <Plot data={replicaTrace} layout={{ ...layout, xaxis: { title: { text: 'Replica' }, gridcolor: '#334155' }, yaxis: { title: { text: `Final ${structuralLabel.toLowerCase()} RMSD (Å)` }, gridcolor: '#334155' } }} config={{ responsive: true, displaylogo: false }} useResizeHandler className="w-full" /> : <div className="py-16 text-center text-slate-400">No completed replica analysis is available.</div>}
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
                     <h2 className="mb-3 font-semibold text-white">Replica QC provenance</h2>
-                    <div className="space-y-2">{summaryData?.replicas.map((replica) => <div key={replica.replica} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-sm"><div className="flex justify-between"><span className="font-medium text-white">Replica {replica.replica}</span><span className="text-slate-300">{replica.status}</span></div><div className="mt-1 text-xs text-slate-400">{replica.engine.name ?? 'unknown engine'} {replica.engine.version ?? ''} · {replica.engine.platform ?? 'unknown platform'}</div><div className="mt-1 text-xs text-slate-500">{Object.entries(replica.performance).length ? Object.entries(replica.performance).map(([key, value]) => `${key}: ${value}`).join(' · ') : 'No bounded engine performance metrics reported'}</div></div>)}</div>
+                    <div className="space-y-2">{summaryData?.replicas.map((replica) => <div key={replica.replica} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-sm"><div className="flex justify-between"><span className="font-medium text-white">{laneLabel(replica.replica)}</span><span className="text-slate-300">{replica.status}</span></div><div className="mt-1 text-xs text-slate-400">{replica.engine.name ?? 'unknown engine'} {replica.engine.version ?? ''} · {replica.engine.platform ?? 'unknown platform'}</div><div className="mt-1 text-xs text-slate-500">{Object.entries(replica.performance).length ? Object.entries(replica.performance).map(([key, value]) => `${key}: ${value}`).join(' · ') : 'No bounded engine performance metrics reported'}</div></div>)}</div>
                 </div>
             </div>
         </section>
