@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { BioXpPipetteResults, PipetteValue } from './BioXpPipetteResults';
 import type { MethodCompile, MethodValue } from '../lib/bioxpMethods';
 import { BioXpWorkflowDeck } from './BioXpWorkflowDeck';
 import { previewActionDestination } from '../lib/bioxpWorkflowPlan';
@@ -8,6 +9,17 @@ import { deckResources } from '../lib/bioxpWorkflowDeck';
 export function nativeMethodActions(document: unknown): MethodValue[] {
     return (Array.isArray(object(document).stages) ? object(document).stages as unknown[] : []).flatMap(stage => Array.isArray(object(stage).actions) ? object(stage).actions as MethodValue[] : []);
 }
+// Presentation-only selection from the existing emitted action, never a second
+// Recipe/Application state owner or a numerical geometry/accounting projection.
+function nativeGeometryContext(value: unknown, path = 'params'): { path: string; value: unknown }[] {
+    if (!value || typeof value !== 'object') return [];
+    return Object.entries(value).flatMap(([key, child]) => {
+        const childPath = `${path}.${key}`;
+        if (['accounting_context', 'accounting_intent', 'aspiration_intent', 'conditioning_intent', 'rack_transform', 'footprint', 'target_liquid_ul', 'conditioning_target_liquid_ul'].includes(key)
+            || key === 'reference' && ['vessel', 'rack'].includes(String(object(child).kind))) return [{ path: childPath, value: child }];
+        return nativeGeometryContext(child, childPath);
+    });
+}
 export function BioXpMethodPreview({ result, initialState, custodyDestinations = [] }: { result: MethodCompile; initialState?: unknown; custodyDestinations?: MethodValue[] }) {
     const [selected, setSelected] = useState('');
     const provenance = result.provenance ?? [];
@@ -16,6 +28,8 @@ export function BioXpMethodPreview({ result, initialState, custodyDestinations =
     const actions = nativeMethodActions(result.document).filter(a => ids.has(a.action_id));
     const [child, setChild] = useState(0);
     const action = actions[Math.min(child, Math.max(0, actions.length - 1))];
+    const context = nativeGeometryContext(action?.params);
+    const [contextOpen, setContextOpen] = useState(false);
     const destination = previewActionDestination({ kind: String(action?.kind ?? ''), params: object(action?.params), station: null, well: null }, custodyDestinations);
     const after = methodStateAfter(result.simulation, initialState, row?.occurrence_id);
     const vessels = methodVessels(after);
@@ -31,6 +45,7 @@ export function BioXpMethodPreview({ result, initialState, custodyDestinations =
             return <g key={vessel.key} data-planned-vessel={vessel.key}><circle cx={point.x} cy={point.y} r="8" fill={vessel.volume_ul == null ? '#94a3b8' : '#14b8a6'} fillOpacity="0.65" /><title>{vessel.labwareId} {vessel.well}: {display(vessel.volume_ul)} µL; materials {display(vessel.materials)}. Planned, not measured.</title></g>;
         })}</g>} />
         <dl>{Object.entries(object(action?.params)).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{JSON.stringify(value)}</dd></div>)}</dl>
+        {context.length > 0 && <details aria-label="Authored native geometry and accounting context" open={contextOpen} onToggle={e => setContextOpen(e.currentTarget.open)}><summary>Authored native context — not a calculated result</summary>{contextOpen && <><p>Selected action only. Native geometry, compartment inventories and per-channel endpoints are retained for native execution. No preflight surface, footprint, occupancy or measured delivery is inferred here. Legacy recipe totals describe labels and explicit strokes, not the native completed inventory.</p>{context.map(entry => <section key={entry.path}><h5>{entry.path}</h5><PipetteValue value={entry.value} /></section>)}</>}</details>}
         <section aria-label="Planned state after occurrence"><h4>Simulated after the complete occurrence</h4><p>Not observed pose or a physical measurement. Selecting a native child changes the destination highlight, not this occurrence-level simulation.</p>
             {!after ? <p>Unknown / not reported.</p> : <><table><thead><tr><th>Labware</th><th>Station</th><th>Well</th><th>Liquid µL</th><th>Mixture / materials</th></tr></thead><tbody>{vessels.map(v => <tr key={v.key}><td>{v.labwareId}</td><td>{display(v.station)}</td><td>{v.well}</td><td>{display(v.volume_ul)}</td><td>{display(v.materials)}</td></tr>)}</tbody></table>
             <dl>{['channels', 'custody', 'thermal_tasks', 'head_reference'].map(key => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{display(after[key])}</dd></div>)}</dl></>}
@@ -52,5 +67,5 @@ export function BioXpMethodApplicationFields({ value }: { value: unknown }) {
 }
 export function BioXpMethodProgress({ report }: { report: MethodValue }) {
     const rows = Array.isArray(report.occurrences) && report.occurrences.length ? report.occurrences : Array.isArray(report.occurrence_outcomes) && report.occurrence_outcomes.length ? report.occurrence_outcomes : Array.isArray(report.action_results) ? report.action_results : [];
-    return <section aria-label="Occurrence outcomes"><h4>Exact occurrence progress and partial effects</h4><table><thead><tr><th>Authored occurrence</th><th>Call / loop path</th><th>Reported status</th><th>Generated native actions / partial effects</th></tr></thead><tbody>{rows.map((value, i) => { const row = object(value); const source = object(object(row.metadata).bms_method); return <tr key={String(row.occurrence_id ?? i)}><td>{String(row.occurrence_id ?? row.source_occurrence_id ?? object(row.metadata).occurrence_id ?? row.step_id ?? 'unknown')}</td><td>{JSON.stringify({ path: row.path ?? source.path, call_path: row.call_path ?? source.call_path, loop_path: row.loop_path ?? source.loop_path })}</td><td>{String(row.status ?? 'unknown')}</td><td>{JSON.stringify(row.children ?? row.native_actions ?? row.effects ?? row.child_outcomes ?? row.native_action_ids ?? null)}</td></tr>; })}</tbody></table>{rows.length === 0 && <p>No occurrence outcomes reported. An absent ACK or HTTP error does not establish that nothing started.</p>}</section>;
+    return <section aria-label="Occurrence outcomes"><h4>Exact occurrence progress and partial effects</h4><table><thead><tr><th>Authored occurrence</th><th>Call / loop path</th><th>Reported status</th><th>Generated native actions / partial effects</th></tr></thead><tbody>{rows.map((value, i) => { const row = object(value); const source = object(object(row.metadata).bms_method); return <tr key={String(row.occurrence_id ?? i)}><td>{String(row.occurrence_id ?? row.source_occurrence_id ?? object(row.metadata).occurrence_id ?? row.step_id ?? 'unknown')}</td><td>{JSON.stringify({ path: row.path ?? source.path, call_path: row.call_path ?? source.call_path, loop_path: row.loop_path ?? source.loop_path })}</td><td>{String(row.status ?? 'unknown')}</td><td>{JSON.stringify(row.children ?? row.native_actions ?? row.effects ?? row.child_outcomes ?? row.native_action_ids ?? null)}</td></tr>; })}</tbody></table>{(Array.isArray(report.action_results) ? report.action_results : []).map((action, index) => <BioXpPipetteResults key={index} value={action} />)}{rows.length === 0 && <p>No occurrence outcomes reported. An absent ACK or HTTP error does not establish that nothing started.</p>}</section>;
 }

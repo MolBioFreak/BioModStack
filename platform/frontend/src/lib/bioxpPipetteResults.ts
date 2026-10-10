@@ -1,4 +1,5 @@
 export type PipetteResult = {
+    accounting_summary?: unknown;
     events?: Record<string, unknown>[]; plld?: unknown; shared_head?: unknown; liquid_settings?: unknown; requested?: unknown; correction?: unknown; analysis?: unknown;
     action?: string; requested_pipette?: number; tip_location?: number; alignment_published?: boolean; already_matching_tip_type?: boolean;
     selected_channels?: number[]; lost_tip_channels?: number[]; cached_tip_channels?: number[]; ejected_channels?: number[];

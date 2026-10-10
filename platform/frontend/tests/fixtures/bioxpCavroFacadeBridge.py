@@ -33,8 +33,16 @@ def native_leaf(transport):
     captures = [json.loads((retained / name).read_text())['capture'] for name in [
         'pressure-public-receiving.json', 'review-pressure-readback-None.json', 'failed-capture-ValueError.json'] ]
     state = {'review_attempt': 0, 'job': rejected['still_held']}
+    geometry = []
+    if directory := os.environ.get('BIOXP_GEOMETRY_PRODUCER'):
+        geometry = [json.loads(path.read_text())['result'] for path in Path(directory).glob('finish-*.json')
+                    if 'result' in json.loads(path.read_text()) and 'job_id' in json.loads(path.read_text())['result']]
     def receive(request):
         path = request.url.path
+        for job in geometry:
+            if path == '/protocol/jobs/' + job['job_id']:
+                assert request.method == 'GET'
+                return httpx.Response(200, json=job)
         if path == '/protocol/calibration/analyze':
             assert json.loads(request.content) == analysis['requested'], 'Only exact native producer input may use this retained result'
             return httpx.Response(200, json=analysis)

@@ -33,9 +33,37 @@ function DeviceOperationResult({ event }: { event: Record<string, unknown> }) {
     </section>;
 }
 
+/** Native calculated evidence only: never recompute geometry or inventories here. */
+function GeometryAccountingResult({ result }: { result: PipetteResult }) {
+    const summary = resultRecord(result.accounting_summary);
+    const geometry = (result.events ?? []).filter(event => ['rack_geometry', 'surface_reference'].includes(String(event.operation)));
+    const labels = resultRecord(result.liquid_settings)?.accounting_labels;
+    if (!summary && !geometry.length && labels === undefined) return null;
+    const cell = (v: unknown) => v == null ? 'Unknown / not measured' : String(v);
+    return <section aria-label="Native geometry and accounting" className="min-w-0 break-words">
+        <h4>Native geometry and completed-prefix accounting</h4>
+        <p>Calculated from authored geometry and correlated completed commands, not measured surface, liquid delivery, collision clearance or physical fit. Unknowns and discrepancies are observations, not additional run conditions.</p>
+        {summary && <>
+            <p>Incomplete application: {proof(summary.incomplete_application)} · Completed prefix only: {proof(summary.completed_prefix_only)} · Uncompleted strokes not estimated: {proof(summary.uncompleted_strokes_not_estimated)}</p>
+            <p>Actual liquid delivery (µL): {cell(summary.actual_delivery_ul)}</p>
+            {Object.entries(resultRecord(summary.channels) ?? {}).map(([channel, raw]) => {
+                const occupancy = resultRecord(resultRecord(raw)?.occupancy) ?? {};
+                return <section key={channel} aria-label={`Channel ${channel} compartment accounting`}><h5>Physical channel {channel}</h5>
+                    <div className="max-w-full overflow-x-auto"><table><thead><tr><th>Inventory (µL)</th><th>Occupancy</th><th>Peak occupancy</th><th>Known-prefix peak</th><th>Cumulative travel</th><th>Current state known</th></tr></thead><tbody>{['pneumatic', 'authored_liquid_intent'].map(key => { const value = resultRecord(occupancy[key]) ?? {}; return <tr key={key}><th>{key === 'pneumatic' ? 'Commanded pneumatic displacement' : 'Authored liquid intent'}</th>{['occupancy_ul', 'peak_occupancy_ul', 'known_prefix_peak_occupancy_ul', 'cumulative_travel_ul', 'current_state_known'].map(field => <td key={field}>{cell(value[field])}</td>)}</tr>; })}</tbody></table></div>
+                    <PipetteValue value={{ initial_state: occupancy.initial_state, pneumatic_compartments_orifice_first: resultRecord(occupancy.pneumatic)?.orifice_first_compartments, liquid_intent_compartments_orifice_first: resultRecord(occupancy.authored_liquid_intent)?.orifice_first_compartments, transitions: occupancy.transitions, roles: occupancy.roles }} />
+                </section>;
+            })}
+            <h5>Aggregate endpoint vessel intent — not measured fill</h5><PipetteValue value={summary.vessels} />
+        </>}
+        {labels !== undefined && <><h5>Authored labels versus explicit strokes</h5><PipetteValue value={labels} /></>}
+        {geometry.map((event, index) => <section key={index} aria-label={`Native geometry ${index + 1}`}><h5>{String(event.operation).replaceAll('_', ' ')} · {String(event.status ?? 'Unknown')}</h5><p>Source identity: {String(event.source_identity ?? 'Not reported')}</p><PipetteValue value={event.result ?? event.partial} /></section>)}
+    </section>;
+}
+
 export function PipetteOutcome({ result }: { result: PipetteResult }) {
     const body = result.body_completed ?? result.completed;
     return <dl className="min-w-0 break-words text-sm space-y-1">
+        <dt className="sr-only">Native geometry and accounting evidence</dt><dd><GeometryAccountingResult result={result} /></dd>
         {result.action && <><dt>OEM diagnostic action</dt><dd>{result.action.replaceAll('_', ' ')}</dd></>}
         {([['requested_pipette', 'Requested pipette'], ['tip_location', 'Reported tip alignment'], ['alignment_published', 'New alignment reported'], ['already_matching_tip_type', 'Matching tips already loaded'], ['selected_channels', 'Selected channels'], ['lost_tip_channels', 'Lost-tip channels'], ['cached_tip_channels', 'Cached tipped channels'], ['ejected_channels', 'Ejected channels'], ['controller_outcome_ok', 'Controller outcome'], ['source_return_completed', 'Procedure returned'], ['physical_effect_verified', 'Physical effect verified']] as const).map(([key, label]) => result[key] !== undefined && <Fragment key={key}><dt>{label}</dt><dd><PipetteValue value={result[key]} /></dd></Fragment>)}
         {result.already_matching_tip_type === true && <><dt>Alignment note</dt><dd>Existing alignment retained; no new alignment was reported.</dd></>}
