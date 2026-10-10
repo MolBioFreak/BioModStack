@@ -91,6 +91,9 @@ def test_ordered_native_roles_and_no_invented_trajectory(tmp_path, native_double
     import jsonschema
     schema = json.loads((Path(__file__).resolve().parents[3] / "schemas/md_run_v1.schema.json").read_text())
     jsonschema.validate(manifest, schema)
+    # Native tinit may be negative; the result schema must not invent a time gate.
+    manifest["artifacts"]["representative_structure"]["time_ps"] = -2.5
+    jsonschema.validate(manifest, schema)
 
 
 def test_compiled_tpr_checkpoint_never_grompp(tmp_path, native_double):

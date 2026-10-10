@@ -72,7 +72,7 @@
         "atom_order_identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "selection_method": {"const": "completed_production_final_coordinates"},
         "source_frame": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
-        "time_ps": {"type": "number", "minimum": 0},
+        "time_ps": {"type": "number"},
         "source_trajectory_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     }
