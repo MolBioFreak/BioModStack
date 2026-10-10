@@ -197,6 +197,16 @@ it('a late refresh cannot overwrite the replacement endpoint view', async () => 
   expect(container.textContent).not.toContain('weights/model.pt');
   expect(container.textContent).toContain('No saved managed observation');
 });
+it('keeps refresh disabled until all claims end, even without worker progress', async () => {
+  target = { ...target, active_job_ids: ['one', 'two'], progress: null, job_progress: [] };
+  await render(); expect(button().disabled).toBe(true); await click();
+  target = { ...target, active_job_ids: ['two'] };
+  await render(); expect(button().disabled).toBe(true); await click();
+  target = { ...target, active_job_ids: [], progress: { operation_id: 'old', job_id: 'one', phase: 'running', artifact: null, message: 'Stale', updated_at: 'now' } };
+  await render(); expect(button().disabled).toBe(false);
+  expect(requests.every(r => r.method === 'get')).toBe(true);
+});
+
 it.each(['inactive', 'busy', 'running'])('disables refresh for %s workers without mutation', async state => {
   if (state === 'inactive') target.active = false;
   if (state === 'busy') target.state = 'discovered';

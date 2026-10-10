@@ -591,6 +591,9 @@ export interface ExecutionTarget {
     artifact_inventory?: ObservedArtifactInventory | null;
     preload?: RemotePreloadProgress | null;
     progress?: RemoteArtifactProgress | null;
+    /** Outstanding scheduler claims, including Jobs with no progress yet. */
+    active_job_ids?: string[];
+    job_progress?: RemoteArtifactProgress[];
     id: string;
     provider: 'vast';
     provider_instance_id: string;
@@ -608,6 +611,11 @@ export interface ExecutionTarget {
     last_error: string | null;
     last_seen_at: string | null;
     activated_at: string | null;
+}
+
+/** Older responses lack claim IDs; explicit empty IDs override stale progress. */
+export function activeExecutionTargetJobIds(target: ExecutionTarget): string[] {
+    return target.active_job_ids ?? (target.progress ? [target.progress.job_id] : []);
 }
 
 export interface DiscoveredExecutionTarget {

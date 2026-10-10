@@ -3,7 +3,7 @@ import { IndependentProvisionPanel } from './IndependentProvisionPanel';
 import { PagedArtifactDetails } from './PagedArtifactDetails';
 import { isAxiosError } from 'axios';
 import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query';
-import { preloadExecutionTarget, provisionSelectionLabel, type ExecutionTarget } from '../../lib/api';
+import { preloadExecutionTarget, activeExecutionTargetJobIds, provisionSelectionLabel, type ExecutionTarget } from '../../lib/api';
 
 interface Props {
   target: ExecutionTarget;
@@ -30,10 +30,11 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
   const error = isAxiosError(mutation.error) && typeof mutation.error.response?.data?.detail === 'string'
     ? mutation.error.response.data.detail : mutation.error?.message;
   const preload = target.preload;
-  const progress = target.progress;
+  const activeJobIds = activeExecutionTargetJobIds(target);
+  const jobProgress = target.job_progress ?? (target.active_job_ids === undefined && target.progress ? [target.progress] : []);
   const busy = mutation.isPending || activePreloads > 0 || preload?.recovery_required || ['checking', 'transferring', 'verifying', 'cancelling', 'recovery_blocked'].includes(preload?.phase ?? '');
   const validRecipe = jobs.some(job => job.id === jobId);
-  const canPreload = target.active && target.state === 'ready' && !progress && !busy;
+  const canPreload = target.active && target.state === 'ready' && activeJobIds.length === 0 && !busy;
   function submit() {
     if (!validRecipe || !canPreload || queryClient.isMutating({ mutationKey }) > 0) return;
     mutation.mutate(jobId);
@@ -70,11 +71,17 @@ export function RemotePreloadPanel({ target, jobs, onChanged }: Props) {
       {preload.artifact && <p className="break-all font-mono">{preload.artifact}</p>}
       <p className="text-xs text-[var(--text-muted)]">{preload.selection ? `${preload.selection.kind} ${provisionSelectionLabel(preload.selection)}` : `Recipe ${preload.job_id}`} · Source {preload.source_revision.slice(0, 12)} · Updated {preload.updated_at}</p>
     </div>}
-    {progress && <div role="status" aria-label="Worker activity" className="text-sm">
-      <p>{progress.message}</p>
-      {progress.artifact && <p className="break-all font-mono">{progress.artifact}</p>}
-      {progress.activity && <p>{progress.activity.stage}: {progress.activity.state}</p>}
-      <p className="text-xs text-[var(--text-muted)]">Job {progress.job_id} · Updated {progress.updated_at}</p>
+    {activeJobIds.length > 0 && <div role="status" aria-label="Worker activity" className="space-y-2 text-sm">
+      {activeJobIds.length > 1 && <p>{activeJobIds.length} active Jobs · shared VRAM scheduling</p>}
+      {activeJobIds.map(jobId => {
+        const progress = jobProgress.find(item => item.job_id === jobId);
+        return <div key={jobId}>
+          <p>{progress?.message ?? 'Awaiting worker progress'}</p>
+          {progress?.artifact && <p className="break-all font-mono">{progress.artifact}</p>}
+          {progress?.activity && <p>{progress.activity.stage}: {progress.activity.state}</p>}
+          <p className="text-xs text-[var(--text-muted)]">Job {jobId}{progress && ` · Updated ${progress.updated_at}`}</p>
+        </div>;
+      })}
     </div>}
   </section>;
 }

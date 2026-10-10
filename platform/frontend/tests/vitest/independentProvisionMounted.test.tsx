@@ -61,6 +61,35 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); api.defaults.adapter = adapter; vi.restoreAllMocks(); });
 
+it('disables independent preparation for claims without progress, ignoring stale progress after release', async () => {
+  target = { ...target, active_job_ids: ['one', 'two'], progress: null, job_progress: [] };
+  await render(); await select('Preparation workflow', 'structure_prediction');
+  expect(button('Prepare entire workflow').disabled).toBe(true);
+  await click('Prepare entire workflow'); expect(posts).toEqual([]);
+  target = { ...target, active_job_ids: ['two'] };
+  await render(); await select('Preparation workflow', 'structure_prediction');
+  expect(button('Prepare entire workflow').disabled).toBe(true);
+  target = { ...target, active_job_ids: [], progress: { operation_id: 'old', job_id: 'one', phase: 'running', artifact: null, message: 'Stale', updated_at: 'now' } };
+  await render(); await select('Preparation workflow', 'structure_prediction');
+  expect(button('Prepare entire workflow').disabled).toBe(false);
+  expect(posts).toEqual([]);
+});
+
+it('discards a late one-click preparation preview when a Job claim arrives before progress', async () => {
+  target = { ...target, active_job_ids: [] };
+  await render(); await select('Preparation workflow', 'structure_prediction');
+  let finish!: (value: ReturnType<typeof response>) => void;
+  vi.spyOn(api, 'post').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await click('Prepare entire workflow');
+  target = { ...target, active_job_ids: ['claimed'], progress: null };
+  await render();
+  await act(async () => { finish(response(preview({ kind: 'workflow_pack', workflow_id: 'structure_prediction' }))); await settle(); });
+  expect(api.post).toHaveBeenCalledTimes(1);
+  expect(posts).toEqual([]);
+  await select('Preparation workflow', 'structure_prediction');
+  expect(button('Prepare entire workflow').disabled).toBe(true);
+});
+
 it('prepares the entire workflow from one explicit click using its fresh digest, without a Job', async () => {
   await render();
   const invalidate = vi.spyOn(client, 'invalidateQueries');

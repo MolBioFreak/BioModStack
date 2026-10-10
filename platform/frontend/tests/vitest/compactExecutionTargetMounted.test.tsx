@@ -6,6 +6,8 @@ import { RemotePreloadPanel } from '../../src/components/dashboard/RemotePreload
 import { IndependentProvisionPanel, WorkflowProvisionPanel } from '../../src/components/dashboard/IndependentProvisionPanel';
 import { api, type ExecutionTarget, type ArtifactPage, type PreloadArtifactReceipt } from '../../src/lib/api';
 
+import { ExecutionTargetPicker } from '../../src/components/ExecutionTargetPicker';
+
 const summary = { total_count: 205, verified_count: 137, total_bytes: 9000, verified_bytes: 6000 };
 const ready: ExecutionTarget = { id: 'vast:123', provider: 'vast', provider_instance_id: '123', name: 'Worker', state: 'ready', active: true, host: 'host', port: 22, username: 'root', remote_root: '/opt/bms', host_key_sha256: 'c'.repeat(64), capabilities: {}, pricing: {}, last_error: null, last_seen_at: null, activated_at: null,
   preload: { operation_id: 'op/1', job_id: 'recipe', source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40), request_sha256: 'c'.repeat(64), phase: 'transferring', artifact: null, message: 'Downloading', started_at: '2026-01-01', updated_at: '2026-01-01', sequence: 4, artifact_summary: summary, cached_artifact_count: 137 } };
@@ -180,6 +182,89 @@ it('binds compact runtime identity faithfully without serializing full legacy ma
   target = { ...target, capabilities: { ...target.capabilities, critical_runtime_binding: { release_sha256: 'release', paths: { runner: '/replacement' }, environment: { BMS_CONTAINER_BACKEND: 'udocker' } } } };
   await mount('workflow'); expect(start().disabled).toBe(true);
   expect(posts).toHaveLength(1);
+});
+
+const jobProgress = (jobId: string) => ({ operation_id: `run-${jobId}`, job_id: jobId, phase: 'running' as const, artifact: null, message: `Running ${jobId}`, updated_at: 'now' });
+
+it('shows concurrent claim activity, including missing progress, without stale completed Jobs', async () => {
+  target = { ...target, preload: null, active_job_ids: ['one', 'two', 'three'],
+    progress: jobProgress('old'), job_progress: [jobProgress('two'), jobProgress('one'), jobProgress('old')] };
+  await mount();
+  const activity = container.querySelector('[aria-label="Worker activity"]')!;
+  expect(activity.textContent).toContain('3 active Jobs');
+  for (const id of ['one', 'two', 'three']) expect(activity.textContent).toContain(`Job ${id}`);
+  expect(activity.textContent).toContain('Running one');
+  expect(activity.textContent).toContain('Running two');
+  expect(activity.textContent).toContain('Awaiting worker progress');
+  expect(activity.textContent).not.toContain('old');
+  expect(posts).toEqual([]);
+});
+
+it.each([
+  { ids: undefined, disabled: true },
+  { ids: [], disabled: false },
+  { ids: ['one', 'two'], disabled: true },
+])('saved preload respects claim IDs $ids rather than stale progress', async ({ ids, disabled }) => {
+  target = { ...target, preload: null, active_job_ids: ids, progress: jobProgress('old') };
+  await mount(); await disclose('Prepare worker');
+  await act(async () => { const select = container.querySelector<HTMLSelectElement>('[aria-label="Saved Job recipe"]')!;
+    select.value = 'recipe'; select.dispatchEvent(new Event('change', { bubbles: true })); await settle(); });
+  const preload = [...container.querySelectorAll('button')].find(item => item.textContent === 'Preload selected worker')!;
+  expect(preload.disabled).toBe(disabled);
+  if (ids?.length === 0) expect(container.querySelector('[aria-label="Worker activity"]')).toBeNull();
+  if (disabled) { await click('Preload selected worker'); expect(posts).toEqual([]); }
+});
+
+it('uses legacy progress only for responses without claim IDs', async () => {
+  target = { ...target, preload: null, progress: jobProgress('one') };
+  await mount();
+  expect(container.querySelector('[aria-label="Worker activity"]')?.textContent).toContain('Running one');
+  target = { ...target, active_job_ids: ['one'] };
+  await mount();
+  expect(container.querySelector('[aria-label="Worker activity"]')?.textContent).not.toContain('Running one');
+  expect(container.querySelector('[aria-label="Worker activity"]')?.textContent).toContain('Awaiting worker progress');
+});
+
+it('invalidates configured-workflow previews on claim arrival without progress', async () => {
+  target = { ...target, preload: null, active_job_ids: [] };
+  await mount('workflow'); await click('Preview artifact downloads');
+  const start = () => [...container.querySelectorAll('button')].find(item => item.textContent === 'Start provision')!;
+  expect(start().disabled).toBe(false);
+  target = { ...target, active_job_ids: ['one', 'two'] }; await mount('workflow');
+  expect(start().disabled).toBe(true);
+  expect(container.querySelector('[aria-label="Provision preview"]')).toBeNull();
+  target = { ...target, active_job_ids: [] }; await mount('workflow');
+  expect(start().disabled).toBe(true); // a fresh preview is required after maintenance interruption
+  expect([...container.querySelectorAll('button')].find(item => item.textContent === 'Preview artifact downloads')!.disabled).toBe(false);
+  expect(posts).toHaveLength(1);
+});
+
+it('blocks saved preload before any claim progress exists and recovers only after the last claim ends', async () => {
+  target = { ...target, preload: null, active_job_ids: ['one', 'two'], progress: null, job_progress: [] };
+  await mount(); await disclose('Prepare worker');
+  await act(async () => { const select = container.querySelector<HTMLSelectElement>('[aria-label="Saved Job recipe"]')!;
+    select.value = 'recipe'; select.dispatchEvent(new Event('change', { bubbles: true })); await settle(); });
+  const preload = () => [...container.querySelectorAll('button')].find(item => item.textContent === 'Preload selected worker')!;
+  expect(preload().disabled).toBe(true);
+  target = { ...target, active_job_ids: ['two'] }; await mount();
+  expect(preload().disabled).toBe(true);
+  target = { ...target, active_job_ids: [] }; await mount();
+  expect(preload().disabled).toBe(false);
+  expect(posts).toEqual([]);
+});
+
+it('keeps a concurrently occupied worker selectable for new scientific Jobs', async () => {
+  target = { ...target, preload: null, active_job_ids: ['one', 'two'], job_progress: [],
+    capabilities: { scheduling: { policy: 'vram_packing', new_work_ready: true } } };
+  client.setQueryData(['execution-targets'], response([target]));
+  let selected: string | null = null;
+  await act(async () => { root.render(<QueryClientProvider client={client}><ExecutionTargetPicker value={null}
+    onChange={value => { selected = value; }} /></QueryClientProvider>); await settle(); });
+  const worker = [...container.querySelectorAll('button')].find(item => item.textContent === 'Vast · Worker')!;
+  expect(worker.disabled).toBe(false);
+  await act(async () => worker.click());
+  expect(selected).toBe(target.id);
+  expect(posts).toEqual([]);
 });
 
 it('preserves the saved-Job retry payload and disabled predicates', async () => {
