@@ -183,6 +183,9 @@ def _clone_behavior(document: dict) -> dict:
     for stage in result["stages"]:
         for action in stage["actions"]:
             action.pop("action_id", None)
+            # Legacy documents predate the explicit native stop policy. Missing
+            # is the producer's stop default, not a different execution effect.
+            action.setdefault("on_error", _NATIVE["document_template"]["stages"][0]["actions"][0]["on_error"])
             metadata = action.get("metadata")
             if isinstance(metadata, dict):
                 metadata.pop("manual_step", None)
@@ -308,7 +311,12 @@ def _convert(value: Any, schema: dict, field: str = "intent") -> Any:
         if ref is None:
             raise ValueError(f"{field}: unknown native operation")
         schema = _SCHEMA["$defs"][ref.rsplit("/", 1)[-1]]
-    if schema.get("type") == "object":
+    if "$ref" in schema:
+        # Nested producer models have optional fields and their own exact-number
+        # unions. Use the shared native normalizer, not the flat intent boundary.
+        from bioxp_method_native import coerce
+        result = coerce(value, schema, _SCHEMA)
+    elif schema.get("type") == "object":
         if not isinstance(value, dict):
             raise ValueError(f"{field}: expected object")
         props = schema["properties"]

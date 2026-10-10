@@ -307,6 +307,10 @@ from bioxp_method_native import SETTINGS
 @pytest.mark.parametrize('source', ['requested', 'authored', 'manufacturer', 'water'])
 def test_each_published_mapping_received(field, source):
     raw = recipe(multi=field != 'dispense_segments')
+    if field == 'selected_correction':
+        from test_bioxp_cavro_finish import correction_request
+        raw.pop('commanded_aspiration_ul')
+        raw['selected_correction'] = correction_request()['dependencies']['liquid_classes'][0]['settings']['selected_correction']
     raw['leading_air'] = {'volume_ul': 1, 'speed_ul_s': 25}
     raw['trailing_air'] = {'volume_ul': 2, 'speed_ul_s': 25}
     if raw['multi'] is not None:
@@ -340,6 +344,12 @@ def test_each_published_mapping_received(field, source):
         select['water' if source == 'water' else 'liquid_class'] = cls
     q = request(node('liquid_recipe', {'recipe': raw, 'liquid': select}))
     r = compiled('field:' + field + ':' + source, q)
+    if field == 'selected_correction' and source == 'water':
+        # Corrections require explicit selection; never inherit a Water fit.
+        assert r['document'] is None
+        assert any('explicit commanded_aspiration_ul or selected_correction' in issue['message'] for issue in r['issues'])
+        assert r['resolved']['liquids'][0]['fields'][field]['resolved']['source'] != 'water'
+        return
     assert r['document'] is not None, r['issues']
     f = r['resolved']['liquids'][0]['fields'][field]
     assert f['emitted']['status'] == 'emitted'

@@ -160,7 +160,7 @@ async def test_all_bound_discovery_companions_real_save_compile_submit(store):
     assert (await client.get(BASE + "/schema")).status_code == 200
     assert (await client.get(BASE + "/catalog")).status_code == 200
     examples = (await client.get(BASE + "/examples")).json()
-    assert len(examples) == 8
+    assert len(examples) == 13
     for entry in examples:
         fixture = entry["bound_fixture"]
         request = {k: fixture[k] for k in ("method", "bindings", "dependencies", "initial_state") if k in fixture}
