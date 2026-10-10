@@ -51,7 +51,7 @@ async def workers(tmp_path, monkeypatch):
     from services.remote_execution import targets
     async def telemetry(target):
         return dict(available=True, observed_at="fixture", gpus=[dict(index=i, uuid=f"GPU-{i}",
-            memory_total_mb=100000, memory_used_mb=0, utilization=99) for i in range(4)])
+            memory_total_mb=100000, memory_used_mb=0, utilization=0) for i in range(4)])
     monkeypatch.setattr(targets, "remote_target_telemetry", telemetry)
     path = tmp_path / 'workers.db'
     engine = create_async_engine(f"sqlite+aiosqlite:///{path}")
@@ -524,7 +524,7 @@ async def gpu_competitors(workers, monkeypatch, *, count=3, capacity=24000, gpu_
     from services.remote_execution import targets
     async def telemetry(target):
         return dict(available=True, observed_at="inert", gpus=[dict(index=i, uuid=f"GPU-{i}",
-            memory_total_mb=capacity, memory_used_mb=used, utilization=99) for i in range(gpu_count)])
+            memory_total_mb=capacity, memory_used_mb=used, utilization=0) for i in range(gpu_count)])
     monkeypatch.setattr(targets, "remote_target_telemetry", telemetry)
     monkeypatch.setattr(scheduler, "read_scheduler_config", lambda: {
         "global": {"enabled": True, "target_vram_fill": .75, "vram_safety_margin_mb": 0,
@@ -771,3 +771,97 @@ def test_packer_local_allowlist_and_target_capabilities_are_distinct():
         gpu_capabilities={0: {"supports_protenix": False}, 1: {"supports_protenix": True}})
     assert len(packed) == 1 and packed[0][1] == 1
     assert job.pinned_gpus == [0, 1]  # Local pin list remains an allowlist, not a set reservation.
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('policy', ['busy', 'cooldown', 'cap-index', 'cap-uuid', 'model-cap', 'auto'])
+async def test_target_qualified_policy_uses_same_target_claims(workers, monkeypatch, policy):
+    from services.remote_execution import executor, targets
+    await gpu_competitors(workers, monkeypatch, capacity=24000 if policy == 'auto' else 48000)
+    config = {'global': {'target_vram_fill': .75, 'vram_safety_margin_mb': 0,
+                         'busy_threshold': .5, 'cooldown_ms': 0},
+              'overrides': {'0': {'disabled': True, 'max_concurrent_jobs': 1}}}
+    monkeypatch.setattr(scheduler, 'read_scheduler_config', lambda: config)
+    async with workers() as s:
+        first = await s.get(Job, 'job-1')
+        second = await s.get(Job, 'job-2')
+        assert await scheduler._claim_remote_job(s, first, gpu_id=0, vram_estimate_mb=8000)
+        if policy == 'busy':
+            async def telemetry(target):
+                return dict(available=True, gpus=[dict(index=0, uuid='GPU-0', memory_total_mb=48000,
+                    memory_used_mb=0, utilization=90 if target.id == 'vast:1' else 0)])
+            monkeypatch.setattr(targets, 'remote_target_telemetry', telemetry)
+        elif policy == 'cooldown':
+            config['global']['cooldown_ms'] = 60000
+            assert await executor._publish_remote_transition(s, first,
+                {'status': 'completed', 'queue_status': 'completed'}, release_lease=True)
+        elif policy in {'model-cap', 'auto'}:
+            config['concurrency_limits'] = {'cpu-only': 'auto' if policy == 'auto' else 1}
+        else:
+            suffix = 'GPU-0' if policy == 'cap-uuid' else '0'
+            config['overrides'][f'vast:1:gpu:{suffix}'] = {'max_concurrent_jobs': 1}
+        assert await scheduler._claim_remote_job(s, second, gpu_id=0, vram_estimate_mb=8000) is None
+        # An identically indexed/UUID fixture GPU on a different target is independent.
+        other = await s.get(Job, 'job-3')
+        other.execution_target_id = 'vast:2'
+        await s.commit()
+        assert await scheduler._claim_remote_job(s, other, gpu_id=0, vram_estimate_mb=8000)
+        assert (await s.get(Job, 'job-1')).provenance['remote_execution_assignment']['lease_id']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mismatch', [None, 'attempt_id', 'execution_target_id', 'boot_id', 'generation',
+                                     'continuation_lease_id', 'gpu_uuid', 'staging', 'absent'])
+async def test_attributed_vram_credit_is_exact_attempt_only(workers, monkeypatch, mismatch):
+    from services.remote_execution import targets
+    await gpu_competitors(workers, monkeypatch, capacity=48000)
+    async with workers() as s:
+        first = await s.get(Job, 'job-1')
+        first.vram_estimate_mb = 16000
+        await s.commit()
+        assert await scheduler._claim_remote_job(s, first, gpu_id=0, vram_estimate_mb=16000)
+        first.remote_attempt_id = 'attempt-one'
+        first.queue_status = 'preparing' if mismatch == 'staging' else 'running'
+        first.provenance = {**first.provenance, 'remote_execution_receipt': {
+            'boot_id': 'boot', 'generation': 2, 'continuation_lease_id': 'continuation'}}
+        await s.commit()
+        process = dict(job_id='job-1', attempt_id='attempt-one', execution_target_id='vast:1',
+            boot_id='boot', generation=2, continuation_lease_id='continuation', gpu_uuid='GPU-0', memory_used_mb=16000)
+        if mismatch not in (None, 'staging', 'absent'):
+            process[mismatch] = 'foreign'
+        async def telemetry(target):
+            return dict(available=True, gpus=[dict(index=0, uuid='GPU-0', memory_total_mb=48000,
+                memory_used_mb=20000, utilization=0)], gpu_processes=[] if mismatch == 'absent' else [process])
+        monkeypatch.setattr(targets, 'remote_target_telemetry', telemetry)
+        second = await s.get(Job, 'job-2')
+        result = await scheduler._claim_remote_job(s, second, gpu_id=0, vram_estimate_mb=8000)
+        assert (result is not None) == (mismatch is None)
+        await s.refresh(first)
+        assert first.provenance['remote_execution_assignment'].get('released_at') is None
+
+
+@pytest.mark.asyncio
+async def test_attributed_vram_preserves_staging_and_unrelated_usage(workers, monkeypatch):
+    from services.remote_execution import targets
+    await gpu_competitors(workers, monkeypatch, count=4, capacity=48000)
+    async with workers() as s:
+        first = await s.get(Job, 'job-1'); first.vram_estimate_mb = 16000
+        await s.commit()
+        assert await scheduler._claim_remote_job(s, first, gpu_id=0, vram_estimate_mb=16000)
+        second = await s.get(Job, 'job-2')
+        assert await scheduler._claim_remote_job(s, second, gpu_id=0, vram_estimate_mb=8000)
+        first.queue_status = 'running'; first.remote_attempt_id = 'attempt-one'
+        first.provenance = {**first.provenance, 'remote_execution_receipt': {'boot_id': 'boot'}}
+        await s.commit()
+        used = [28000]
+        async def telemetry(target):
+            return dict(available=True, gpus=[dict(index=0, uuid='GPU-0', memory_total_mb=48000,
+                memory_used_mb=used[0], utilization=0)], gpu_processes=[dict(job_id='job-1',
+                attempt_id='attempt-one', execution_target_id='vast:1', boot_id='boot', generation=0,
+                gpu_uuid='GPU-0', memory_used_mb=16000)])
+        monkeypatch.setattr(targets, 'remote_target_telemetry', telemetry)
+        third = await s.get(Job, 'job-3')
+        assert await scheduler._claim_remote_job(s, third, gpu_id=0, vram_estimate_mb=8000) is None
+        used[0] = 20000
+        assert await scheduler._claim_remote_job(s, third, gpu_id=0, vram_estimate_mb=8000)
+        fourth = await s.get(Job, 'job-4')
+        assert await scheduler._claim_remote_job(s, fourth, gpu_id=0, vram_estimate_mb=8000) is None

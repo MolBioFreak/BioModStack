@@ -23,6 +23,70 @@ def number(value):
         return None
 
 
+def process_identity(pid):
+    try:
+        fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+        return (int(fields[1]), int(fields[19])) if fields[0] not in {'Z', 'X'} else None
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def gpu_processes(root):
+    """Observe live descendants of an exact worker workflow; unknowns stay uncredited."""
+    try:
+        before = {int(path.name): process_identity(int(path.name))
+                  for path in Path('/proc').iterdir() if path.name.isdigit()}
+        boot = read('/proc/sys/kernel/random/boot_id')
+        owners = []
+        for attempt in (Path(root) / 'attempts').glob('*'):
+            try:
+                status = json.loads((attempt / 'status.json').read_bytes())
+                envelope = json.loads((attempt / 'execution-envelope.json').read_bytes())
+                pid = status.get('workflow_pid')
+                identity = before.get(pid)
+                if (boot and type(pid) is int and pid > 0
+                        and status.get('boot_id') == boot and status.get('attempt_id') == attempt.name
+                        and envelope.get('attempt_id') == attempt.name
+                        and status.get('job_id') == envelope.get('job_id') and identity
+                        and identity[1] == status.get('workflow_start_ticks')):
+                    owners.append((attempt, status, envelope))
+            except (OSError, ValueError, TypeError):
+                continue
+        if not owners:
+            return []
+        proc = subprocess.run(['nvidia-smi', '--query-compute-apps=gpu_uuid,pid,used_gpu_memory',
+            '--format=csv,noheader,nounits'], capture_output=True, text=True, timeout=3, check=True)
+        rows, seen = [], set()
+        for line in proc.stdout.splitlines():
+            cells = [cell.strip() for cell in line.split(',')]
+            if len(cells) != 3 or not cells[1].isdigit() or number(cells[2]) is None:
+                continue
+            gpu, pid, used = cells[0], int(cells[1]), number(cells[2])
+            if (gpu, pid) in seen:
+                continue
+            seen.add((gpu, pid))
+            ancestors, current = set(), pid
+            while current not in ancestors and before.get(current):
+                if process_identity(current) != before[current]:
+                    break
+                ancestors.add(current)
+                current = before[current][0]
+            matches = [(attempt, status, envelope) for attempt, status, envelope in owners
+                       if status['workflow_pid'] in ancestors]
+            if len(matches) != 1:
+                continue
+            attempt, status, envelope = matches[0]
+            if json.loads((attempt / 'status.json').read_bytes()) != status:
+                continue
+            rows.append(dict(gpu_uuid=gpu, pid=pid, memory_used_mb=used,
+                job_id=status['job_id'], attempt_id=status['attempt_id'], boot_id=boot,
+                execution_target_id=envelope['execution_target_id'], generation=status.get('generation', 0),
+                continuation_lease_id=status.get('continuation_lease_id')))
+        return rows
+    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+        return []
+
+
 def snapshot(root):
     result = {'worker_time': time.monotonic(), 'gpus': [], 'cpu': {}, 'ram': {}, 'disk': {}, 'network': {}}
     query = 'index,uuid,name,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw'
@@ -37,6 +101,7 @@ def snapshot(root):
                     utilization=number(cells[5]), temperature=number(cells[6]), power_draw_w=number(cells[7])))
     except (OSError, subprocess.SubprocessError):
         pass
+    result['gpu_processes'] = gpu_processes(root)
     # Measure the worker envelope, NOT the transient SSH session cgroup:
     # jobs run under different sessions. A VM uses host counters; a private
     # container cgroup namespace exposes its workload envelope at the mount root.

@@ -1453,6 +1453,25 @@ def _reservation_shortfall_mb(job: Any, live_vram_mb: Optional[int]) -> int:
     return max(0, reservation - (live_vram_mb or 0))
 
 
+def _remote_attributed_vram_mb(job, target, telemetry, index):
+    """Credit only same-sample process bytes bound to this target/attempt generation."""
+    receipt = (job.provenance or {}).get('remote_execution_receipt') or {}
+    if job.queue_status == 'preparing' or not job.remote_attempt_id or not receipt.get('boot_id'):
+        return None
+    gpu = next((row for row in telemetry.get('gpus', []) if row.get('index') == index), {})
+    rows = [row for row in telemetry.get('gpu_processes', []) if row.get('gpu_uuid') == gpu.get('uuid')]
+    # Inconsistent device/process samples receive no credit, never aggregate subtraction.
+    if any(type(row.get('memory_used_mb')) not in (int, float) or not 0 <= row['memory_used_mb'] < float('inf') for row in rows):
+        return None
+    if sum(row['memory_used_mb'] for row in rows) > (gpu.get('memory_used_mb') or 0):
+        return None
+    matching = [row for row in rows if row.get('job_id') == str(job.id)
+        and row.get('attempt_id') == job.remote_attempt_id and row.get('execution_target_id') == str(target.id)
+        and row.get('boot_id') == receipt['boot_id'] and row.get('generation') == receipt.get('generation', 0)
+        and row.get('continuation_lease_id') == receipt.get('continuation_lease_id')]
+    return int(sum(row['memory_used_mb'] for row in matching)) if matching else None
+
+
 async def _reserve_remote_capacity(
     session: Any, job: Any, target: Any, *, vram_estimate_mb: int,
     gpu_ids: List[int], admission_snapshot: Dict[str, Any] | None = None,
@@ -1464,7 +1483,7 @@ async def _reserve_remote_capacity(
     this same admission owner before their existing complete Job transition.
     """
     import uuid
-    from sqlalchemy import select, update
+    from sqlalchemy import select, update, or_
     from database import ExecutionTarget, Job
     from services.remote_execution.claims import POLICY, IDENTITY_FIELDS, outstanding_claim_clause
     from services.remote_execution.targets import INVENTORY_MAX_AGE_SECONDS, remote_target_telemetry
@@ -1504,6 +1523,7 @@ async def _reserve_remote_capacity(
             outstanding_claim_clause(),
         ).execution_options(populate_existing=True))).scalars().all()
         shortfall: Dict[int, int] = {}
+        counts: Dict[int, int] = {}
         for owner in claims:
             assignment = (owner.provenance or {}).get("remote_execution_assignment") or {}
             indices = assignment.get("gpu_indices")
@@ -1513,11 +1533,11 @@ async def _reserve_remote_capacity(
                     [owner.assigned_gpu] if owner.assigned_gpu is not None else [])
             if owner.vram_estimate_mb == 0:
                 continue
-            # Aggregate telemetry has no per-attempt attribution. It cannot be
-            # subtracted once from every startup claim: retain the full reserve.
-            reserve = _reservation_shortfall_mb(owner, None)
-            reserve = max(reserve, int((assignment.get("admission_snapshot") or {}).get("required_per_gpu_mb") or 0))
             for index in set(indices):
+                counts[index] = counts.get(index, 0) + 1
+                live = _remote_attributed_vram_mb(owner, target, telemetry, index)
+                floor = int((assignment.get("admission_snapshot") or {}).get("required_per_gpu_mb") or 0)
+                reserve = max(_reservation_shortfall_mb(owner, live), max(0, floor - (live or 0)))
                 shortfall[index] = shortfall.get(index, 0) + reserve
         requirements = job_gpu_capacity_requirements(job.model_id, _normalize_job_params(job.params))
         info = JobInfo(id=str(job.id), name=job.name or str(job.id),
@@ -1527,29 +1547,63 @@ async def _reserve_remote_capacity(
             minimum_gpu_memory_mb=requirements["minimum_gpu_memory_mb"],
             gpu_memory_mb=requirements.get("gpu_memory_mb", 0))
         info.scheduler_reservation_mb = _pending_job_reservation_mb(info, {})
-        # Controller flags, per-device overrides, workflow pins, batch locks,
-        # cooldown and utilization busy gates belong to the local namespace.
-        global_policy = read_scheduler_config().get("global", {})
+        # Only target-qualified device overrides apply here; numeric keys,
+        # workflow pins and batch locks still belong to the controller GPUs.
+        policy = read_scheduler_config()
+        global_policy = policy.get("global", {})
         config = {"global": {key: global_policy[key] for key in (
-            "target_vram_fill", "vram_safety_margin_mb", "capacity_weight", "emptiness_weight")
-            if key in global_policy}}
+            "target_vram_fill", "vram_safety_margin_mb", "capacity_weight", "emptiness_weight",
+            "busy_threshold", "cooldown_ms") if key in global_policy}}
         config["global"].setdefault("target_vram_fill", 0.75)
-        config["global"]["busy_threshold"] = 0
         gpu_count = int((target.capabilities or {}).get("gpu_count") or 0)
         rows = [row for row in telemetry.get("gpus", []) if isinstance(row, dict)
                 and isinstance(row.get("index"), int) and 0 <= row["index"] < gpu_count and row.get("uuid")]
+        config["overrides"] = {str(row["index"]): dict(
+            policy.get("overrides", {}).get(f'{target.id}:gpu:{row["index"]}', {}),
+            **policy.get("overrides", {}).get(f'{target.id}:gpu:{row["uuid"]}', {})) for row in rows}
+        # Released claims still contribute their last launch during cooldown.
+        cooldown_ms = max(0, int(global_policy.get("cooldown_ms", 0) or 0))
+        cutoff = now - timedelta(milliseconds=cooldown_ms)
+        recent = (await session.execute(select(Job).where(
+            Job.execution_target_id == str(target.id), Job.id != str(job.id),
+            or_(Job.started_at >= cutoff,
+                Job.provenance["remote_execution_assignment"]["claimed_at"].as_string() >= cutoff.isoformat()),
+        ).execution_options(populate_existing=True))).scalars().all() if cooldown_ms else []
+        last_launch = {}
+        for owner in {str(owner.id): owner for owner in [*recent, *claims]}.values():
+            assignment = (owner.provenance or {}).get("remote_execution_assignment") or {}
+            stamp = assignment.get("claimed_at")
+            try:
+                stamp = datetime.fromisoformat(stamp.replace('Z', '+00:00')).replace(tzinfo=None) if stamp else owner.started_at
+            except (ValueError, TypeError):
+                stamp = owner.started_at
+            devices = (assignment.get("admission_snapshot") or {}).get("devices", [])
+            for row in rows:
+                matches = any(device.get("gpu_uuid") == row["uuid"] for device in devices) if devices else (
+                    row["index"] in (assignment.get("gpu_indices") or [owner.assigned_gpu]))
+                if matches and stamp is not None:
+                    last_launch[row["index"]] = max(last_launch.get(row["index"], stamp), stamp)
         states = [GPUState(index=row["index"], name=str(row.get("name") or "remote"),
             memory_used_mb=int(row.get("memory_used_mb") or 0) + shortfall.get(row["index"], 0),
             memory_total_mb=int(row.get("memory_total_mb") or 0), memory_free_mb=0,
             utilization=int(row.get("utilization") or 0), temperature=0) for row in rows]
+        limit = policy.get("concurrency_limits", {}).get(info.model_type)
+        if isinstance(limit, str) and limit.lower() == "auto":
+            limit = _compute_auto_limit(info.model_type, [info], states, config,
+                running_jobs_per_gpu=counts, gpu_capabilities={})
+        if limit is not None and not isinstance(limit, str):
+            if sum(_effective_job_model_type(owner) == info.model_type for owner in claims) >= limit:
+                return None
         fill = config["global"]["target_vram_fill"]
         if selected:
             # Remote requested sets (not local allowlists) reserve every member.
             if any(not pack_jobs_to_gpus([replace(info, pinned_gpu=index)], states, fill,
-                                        config, gpu_capabilities={}) for index in selected):
+                                        config, running_jobs_per_gpu=counts, gpu_last_launch_at=last_launch,
+                                        gpu_capabilities={}) for index in selected):
                 return None
         else:
-            packed = pack_jobs_to_gpus([info], states, fill, config, gpu_capabilities={})
+            packed = pack_jobs_to_gpus([info], states, fill, config,
+                running_jobs_per_gpu=counts, gpu_last_launch_at=last_launch, gpu_capabilities={})
             if not packed:
                 return None
             selected = [packed[0][1]]
@@ -1890,8 +1944,10 @@ def _compute_auto_limit(
     gpu_stats: List[Any],
     config: Dict[str, Any],
     running_jobs_per_gpu: Optional[Dict[int, int]] = None,
+    *, gpu_capabilities: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> int:
     """Compute a VRAM-based concurrency cap for a model."""
+    capabilities = GPU_CAPABILITIES if gpu_capabilities is None else gpu_capabilities
     reservations = [
         (j.scheduler_reservation_mb if j.scheduler_reservation_mb is not None else j.vram_estimate_mb)
         for j in job_infos if j.model_type == model_id
@@ -1919,7 +1975,7 @@ def _compute_auto_limit(
         if is_gpu_disabled(gpu.index, config) and not _gpu_force_available(gpu.index, config):
             continue
         if model_id in HEAVY_MODELS:
-            gpu_caps = GPU_CAPABILITIES.get(gpu.index, {'supports_heavy': True})
+            gpu_caps = capabilities.get(gpu.index, {'supports_heavy': True})
             if not gpu_caps.get('supports_heavy', True):
                 continue
 
