@@ -82,9 +82,26 @@ def run_native_stages(config: Mapping[str, Any], *, config_path: Path, output_di
     publication_errors = {}
 
     def observe_dump(flag: str, path: Path, log_path: Path) -> str:
+        # TPR/CPT dumps contain entire coordinate/state arrays. Consume them
+        # incrementally and retain only the native scalar metadata used below.
+        from collections import deque
+
+        scalars = []
+        tail = deque(maxlen=20)
+        scalar = re.compile(r"^\s*(?:integrator|nsteps|init-step|dt|tinit|ld-seed|pull-ncoords|step|t)\s*=")
         try:
-            return _run_command([gmx_binary, "dump", flag, str(path)], cwd=path.parent, log_path=log_path)
-        except RuntimeError as exc:
+            with subprocess.Popen([gmx_binary, "dump", flag, str(path)], cwd=path.parent,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as process:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    tail.append(line)
+                    if scalar.match(line):
+                        scalars.append(line)
+                returncode = process.wait()
+            if returncode:
+                raise RuntimeError(f"GROMACS metadata dump failed with exit code {returncode}: " + "".join(tail))
+            return "".join(scalars)
+        except (RuntimeError, OSError) as exc:
             publication_errors[str(log_path.relative_to(output_dir))] = str(exc)
             return ""
     for stage in stages:

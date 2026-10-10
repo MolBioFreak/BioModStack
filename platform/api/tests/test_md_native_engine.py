@@ -30,8 +30,23 @@ def config(tmp_path):
 
 
 @pytest.fixture
-def native_double(monkeypatch):
+def native_double(monkeypatch, tmp_path):
     calls = []
+    # Metadata now streams through Popen rather than the captured-log helper.
+    # Keep this explicitly inert command fixture at the existing boundary.
+    import os
+    import sys
+    executable = tmp_path / "fixture-gmx"
+    executable.write_text(
+        f"#!{sys.executable}\nimport sys\n"
+        "if sys.argv[1:3] == ['dump', '-s']:\n"
+        " print('dt = 0.001\\ntinit = 7\\nnsteps = 7\\nld-seed = 73')\n"
+        "elif sys.argv[1:3] == ['dump', '-cp']:\n"
+        " print('step = 7\\nt = 7.007')\n"
+        "else: sys.exit(2)\n"
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
 
     def run(command, *, cwd, log_path, stdin_text=None):
         calls.append(command)
@@ -51,10 +66,6 @@ def native_double(monkeypatch):
                 (prefix.parent / "pullx.xvg").write_text("7.007 0.6\n")
         elif command[1] == "editconf":
             Path(command[command.index("-o") + 1]).write_text("inert PDB\n")
-        elif command[1:3] == ["dump", "-s"]:
-            text = "    dt = 0.001\n    tinit = 7\n    nsteps = 7\n    ld-seed = 73\n"
-        elif command[1:3] == ["dump", "-cp"]:
-            text = "step = 7\nt = 7.007\n"
         else:
             pytest.fail(f"unexpected native command: {command}")
         log_path.write_text(text)
@@ -80,6 +91,7 @@ def test_ordered_native_roles_and_no_invented_trajectory(tmp_path, native_double
         assert "-maxwarn" not in command
     assert (tmp_path / "sample/sample.mdp").read_text() == render_mdp("sample", cfg, 0)
     assert manifest["final_stage"] == "sample"
+    assert not list(tmp_path.glob("*/*.dump.txt"))
     assert manifest["window_id"] == "w0" and manifest["replicate_index"] == 0
     assert manifest["native_endpoints"]["sample"]["step"] == 7
     assert manifest["native_endpoints"]["sample"]["time_ps"] == 7.007

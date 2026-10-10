@@ -199,7 +199,7 @@ def _expected_snapshot_metadata(input_config: Mapping[str, Any], field: str) -> 
 
 
 def _verify_open_snapshot(source: Path, expected_digest: str, expected_bytes: int) -> None:
-    from lib.portable_inputs import resolve_input_path
+    from scripts.lib.portable_inputs import resolve_input_path
     source = resolve_input_path(source)
     digest = hashlib.sha256()
     consumed = 0
@@ -296,7 +296,7 @@ def _copy_verified_snapshot(
     expected_digest: str,
     expected_bytes: int,
 ) -> None:
-    from lib.portable_inputs import resolve_input_path
+    from scripts.lib.portable_inputs import resolve_input_path
     source = resolve_input_path(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=".verified.", suffix=".tmp", dir=destination.parent)
