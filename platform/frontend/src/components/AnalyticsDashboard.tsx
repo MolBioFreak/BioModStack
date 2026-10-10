@@ -443,7 +443,7 @@ export function AnalyticsDashboard(props: AnalyticsDashboardProps & { nativeCoho
     // reinterpret them through the legacy binder Design score adapter.
     if (props.nativeCohort) return <CohortAnalytics {...props.nativeCohort} />;
     if (isStandaloneStructurePrediction(props.modelId)) return <>
-        <StructurePredictionResults {...props} />
+        <StructurePredictionResults {...props} structure={undefined} />
         <ScalarAnalyticsDisclosure {...props} />
     </>;
     return <GovernedAnalyticsDashboard {...props} />;

@@ -48,9 +48,19 @@
 .prediction-results details > summary { cursor: pointer; padding-block: 0.5rem; }
 .prediction-results table th, .prediction-results table td { padding: 0.5rem 0.75rem; }
 @container prediction-results (min-width: 700px) {
-    .prediction-charts { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .prediction-charts { grid-template-columns: minmax(240px, 360px) minmax(0, 1fr); }
 }
-@container prediction-results (min-width: 1100px) {
-    .prediction-workspace-with-structure { grid-template-columns: minmax(0, 1fr) 400px; }
-    .prediction-workspace-with-structure .prediction-charts { grid-template-columns: minmax(0, 1fr); }
+.prediction-viewer-pane { min-width: 0; }
+.prediction-viewer-toolbar { position: relative; flex: 0 0 auto; padding-block: 0.5rem; }
+.prediction-viewer-toolbar select { min-width: 0; max-width: 100%; }
+.prediction-companion { min-width: 0; flex: 0 0 auto; }
+.prediction-companion .prediction-charts { margin-top: 0.5rem; }
+.prediction-viewer-fullscreen { height: 100dvh; width: 100%; overflow: auto; padding: 0.75rem; }
+.prediction-fullscreen-flow { display: flex; flex-direction: column; gap: 0.75rem; min-height: 100%; }
+.prediction-fullscreen-molecule { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 60vh; }
+.prediction-fullscreen-canvas { flex: 1; min-height: 55vh; }
+.prediction-companion-fullscreen { flex: 0 0 auto; max-height: 38vh; overflow: auto; }
+.prediction-companion-fullscreen .prediction-charts { grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); }
+@media (max-width: 699px) {
+    .prediction-companion-fullscreen .prediction-charts { grid-template-columns: minmax(0, 1fr); }
 }

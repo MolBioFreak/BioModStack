@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react';
+import './StructurePredictionResults.css';
 import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
@@ -95,6 +96,7 @@ interface ViewerAnalysisBundle {
 
 interface Props {
     confidenceCompanion?: boolean;
+    confidenceCharts?: React.ReactNode;
     confidenceSelection?: readonly AtomRef[];
     onConfidenceSelection?: (selection: MetricSelection) => void;
     selectedDesignId: string | null;
@@ -329,6 +331,7 @@ export function ShapeDocumentInspector({ design, document }: { design: Design; d
 
 export default function StructureViewerPane({
     confidenceCompanion = false,
+    confidenceCharts,
     confidenceSelection,
     onConfidenceSelection,
     selectedDesignId,
@@ -353,6 +356,7 @@ export default function StructureViewerPane({
     const [viewportHeight, setViewportHeight] = useState(() => (
         typeof window === 'undefined' ? 720 : window.innerHeight
     ));
+    const [companionOpen, setCompanionOpen] = useState(false);
     const [analyticsPanelOpen, setAnalyticsPanelOpen] = useState(!confidenceCompanion);
     // The molecular structure is the primary scientific result. Keep auxiliary
     // metric/export controls collapsed until the operator asks for them.
@@ -1595,7 +1599,7 @@ export default function StructureViewerPane({
     // Listen to fullscreen changes
     useEffect(() => {
         const handleFullscreenChange = () => {
-            const fullscreen = !!document.fullscreenElement;
+            const fullscreen = document.fullscreenElement === containerRef.current;
             setIsFullscreen(fullscreen);
             setMetricWorkbenchOpen(!fullscreen);
         };
@@ -2975,7 +2979,7 @@ export default function StructureViewerPane({
     };
 
     const metricStatus = (nativeMetrics || scientificPae || requiresBoundMetrics) && (nativeResidue.status !== 'ok' || nativeChains.status !== 'ok' || scientificPae?.status === 'unavailable') && (
-                            <div role="status" className={confidenceCompanion && !isFullscreen ? "mt-2 rounded-lg border border-[var(--border-primary)] p-2 text-xs text-[var(--text-secondary)]" : "absolute bottom-2 left-2 right-2 bg-slate-950/90 p-2 text-xs text-amber-200"}>
+                            <div role="status" className={confidenceCompanion || isFullscreen ? "mt-2 rounded-lg border border-[var(--border-primary)] p-2 text-xs text-[var(--text-secondary)]" : "absolute bottom-2 left-2 right-2 bg-slate-950/90 p-2 text-xs text-amber-200"}>
                                 {scientificPae?.status === 'unavailable' ? `${scientificPae.reason}. ` : ''}Structure viewing remains available.
                                 {residueQuery.isPending ? ' Loading confidence…' : residueQuery.isError ? ' Confidence request failed.' : nativeResidue.status === 'unavailable' ? ` Confidence unavailable: ${nativeResidue.reason}` : ''}
                                 {!nativeMetrics ? '' : chainQuery.isPending ? ' Loading chain metrics…' : chainQuery.isError ? ' Chain metric request failed.' : nativeChains.status === 'unavailable' ? ` Chain metrics unavailable: ${nativeChains.reason}` : ''}
@@ -2986,17 +2990,17 @@ export default function StructureViewerPane({
         <div
             ref={containerRef}
             data-structure-viewer-analytics-open={analyticsPanelOpen ? 'true' : 'false'}
-            className={`${isFullscreen ? 'fixed inset-0 z-50 bg-slate-950' : confidenceCompanion ? 'min-w-0' : 'p-4'}`}
+            className={`prediction-viewer-pane ${isFullscreen ? 'prediction-viewer-fullscreen bg-slate-950' : confidenceCompanion ? 'min-w-0' : 'p-4'}`}
         >
             {/* Main layout container - always present */}
             <div
                 data-structure-viewer-layout={viewerLayout.isStacked ? 'stacked' : 'split'}
-                className={isFullscreen ? 'h-full w-full relative' : viewerLayout.isStacked ? 'flex flex-col gap-4' : 'flex gap-4'}
+                className={isFullscreen ? 'prediction-fullscreen-flow' : confidenceCompanion || viewerLayout.isStacked ? 'flex flex-col gap-4' : 'flex gap-4'}
             >
                 {/* Left Column / Fullscreen: Viewer Area */}
-                <div ref={viewerAreaRef} className={isFullscreen ? 'absolute inset-0' : viewerLayout.isStacked ? 'min-w-0' : 'flex-[2] min-w-0'}>
+                <div ref={viewerAreaRef} className={isFullscreen ? 'prediction-fullscreen-molecule' : viewerLayout.isStacked ? 'min-w-0' : 'flex-[2] min-w-0'}>
                     {/* Toolbar - positioned differently based on mode */}
-                    <div className={isFullscreen ? 'absolute top-3 left-3 z-40' : ''}>
+                    <div className="prediction-viewer-toolbar">
                         {renderViewerToolbar(isFullscreen || viewerLayout.isStacked)}
                         {fampnnPsceProfile && <div className="text-[10px] text-slate-400">
                             {fampnnPsceProfile.policy
@@ -3047,8 +3051,8 @@ export default function StructureViewerPane({
                     {/* Main Viewer - ALWAYS at this exact tree position */}
                     <div
                         className={isFullscreen
-                            ? 'absolute inset-0'
-                            : 'relative rounded-lg overflow-hidden border border-slate-700'
+                            ? 'prediction-fullscreen-canvas relative'
+                            : 'relative rounded-lg border border-slate-700'
                         }
                         style={isFullscreen ? undefined : { height: confidenceCompanion ? 'clamp(560px, 72vh, 800px)' : viewerLayout.viewerHeight }}
                     >
@@ -3091,7 +3095,7 @@ export default function StructureViewerPane({
                             />
                         )}
 
-                        {(!confidenceCompanion || isFullscreen) && metricStatus}
+                        {!confidenceCompanion && !isFullscreen && metricStatus}
                         {showReferenceDock && (
                             <div
                                 className="absolute z-30 rounded-xl border border-slate-700/70 bg-slate-950/92 shadow-2xl backdrop-blur-sm overflow-hidden"
@@ -3170,9 +3174,15 @@ export default function StructureViewerPane({
                             </div>
                         )}
                     </div>
-                    {confidenceCompanion && !isFullscreen && metricStatus}
+                    {(confidenceCompanion || isFullscreen) && metricStatus}
                 </div>
 
+                {confidenceCharts && <section className={`prediction-companion ${isFullscreen ? 'prediction-companion-fullscreen' : ''}`} aria-label="Optional confidence charts">
+                    <button type="button" aria-expanded={companionOpen} onClick={() => setCompanionOpen(open => !open)} className="rounded border border-[var(--border-primary)] px-3 py-2 text-sm">
+                        {companionOpen ? 'Hide companion charts' : 'Show companion charts · PAE & pLDDT'}
+                    </button>
+                    {companionOpen && confidenceCharts}
+                </section>}
                 {/* Right Column: Analytics Sidebar - hidden in fullscreen */}
                 {LEGACY_ANALYTICS_ENABLED && !isFullscreen && analyticsPanelOpen && renderAnalyticsSidebar()}
             </div>

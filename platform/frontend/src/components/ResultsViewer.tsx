@@ -1,4 +1,5 @@
 import { MSA_POLICY } from '../lib/msaPolicy';
+import { canonicalScalars, scalarCell, usePredictionScalars } from './predictionScalarEvidence';
 import { lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { MaturationEvidence } from './MaturationEvidence';
 import { parseScientificPae } from '../lib/scientificViewerIdentity';
@@ -3168,6 +3169,9 @@ function ResultsViewerContent() {
         const start = Math.max(0, (currentPage - 1) * pageSize);
         return sourceScopedDesigns.slice(start, start + pageSize);
     }, [currentPage, pageSize, sourceScopedDesigns, useClientSourcePagination]);
+    // A validator's producer owns its result semantics, not the enclosing workflow.
+    const predictionModelId = String(selectedDesign?.provenance?.producer_model_id ?? activeJob?.model_id ?? '');
+    const nativeTableScalars = usePredictionScalars(tableDesigns, activeTab === 'table');
     const visibleDesignIds = useMemo(() => tableDesigns.map((design) => design.id), [tableDesigns]);
     const visibleSelectionRef = useRef<HTMLInputElement | null>(null);
     const tableScrollViewportRef = useRef<HTMLDivElement | null>(null);
@@ -6609,7 +6613,8 @@ function ResultsViewerContent() {
                                     ) : (
                                         <>
                                     {/* OVERVIEW TAB */}
-                                    {activeTab === 'overview' && overviewStats && (
+                                    {activeTab === 'overview' && ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) && <div className="p-4"><StructurePredictionResults summaryOnly modelId={predictionModelId} designs={selectedDesign && !tableDesigns.some(d => d.id === selectedDesign.id) ? [selectedDesign, ...tableDesigns] : tableDesigns} selectedDesignId={selectedDesignId} onSelectDesign={selectDesign} /></div>}
+                                    {activeTab === 'overview' && !['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) && overviewStats && (
                                         <div className="p-6 space-y-6">
                                             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
                                                 {selectedDesignSupportsAntibodyAnalysis && isPostRFantibodyReview ? (
@@ -7063,7 +7068,7 @@ function ResultsViewerContent() {
                                             </div>
                                         </div>
                                     )}
-                                    {activeTab === 'overview' && !overviewStats && (
+                                    {activeTab === 'overview' && !['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) && !overviewStats && (
                                         <div className="flex min-h-[360px] items-center justify-center px-6 py-12">
                                             <div className="max-w-xl rounded-xl border border-slate-700/60 bg-slate-900/60 p-6 text-center">
                                                 <div className="text-sm font-semibold text-slate-100">No overview data loaded</div>
@@ -7079,13 +7084,14 @@ function ResultsViewerContent() {
                                     {activeTab === 'structure' && !exactArtifactId && selectedDesignSupportsStructureViewer && (
                                         <div className="p-4 space-y-3">
                                             <StructurePredictionResults
-                                                modelId={activeJob?.model_id}
+                                                modelId={predictionModelId}
                                                 fullPaeRequested={typeof activeJob?.params?.write_full_pae === 'boolean' ? activeJob.params.write_full_pae : undefined}
-                                                enabled={['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(activeJob?.model_id ?? '')}
+                                                enabled={['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId)}
                                                 designs={selectedDesign && !tableDesigns.some(d => d.id === selectedDesign.id) ? [selectedDesign, ...tableDesigns] : tableDesigns} selectedDesignId={selectedDesignId} onSelectDesign={selectDesign}
-                                                structure={(selection, onSelection) => <StructureViewerPane
+                                                structure={(selection, onSelection, companion) => <StructureViewerPane
+                                                confidenceCharts={companion}
                                                 confidenceSelection={selection} onConfidenceSelection={onSelection}
-                                                confidenceCompanion={['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(activeJob?.model_id ?? '')}
+                                                confidenceCompanion={['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId)}
                                                 selectedDesignId={selectedDesignId}
                                                 setSelectedDesignId={selectDesign}
                                                 designs={selectedDesign && !tableDesigns.some(design => design.id === selectedDesign.id) ? [selectedDesign, ...tableDesigns] : tableDesigns}
@@ -8541,9 +8547,9 @@ function ResultsViewerContent() {
                                                                         {formatMetric(d.ipsae, 2)}
                                                                     </td>
                                                                 )}
-                                                                <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_overall', d.plddt_overall)}`}>
+                                                                {canonicalScalars(d) ? scalarCell(nativeTableScalars(d), ['complex_plddt', 'plddt', 'plddt_mean', 'plddt_overall']) : <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_overall', d.plddt_overall)}`}>
                                                                     {formatMetric(d.plddt_overall, 1)}
-                                                                </td>
+                                                                </td>}
                                                                 {isPostRFantibodyReview && (
                                                                     <td className={`px-3 py-2 font-mono ${getMetricColor('plddt_overall', d.rfa_plddt_selected ?? null)}`}>
                                                                         {formatMetric(d.rfa_plddt_selected, 1)}
@@ -8562,17 +8568,17 @@ function ResultsViewerContent() {
                                                                 <td className={`px-3 py-2 font-mono ${getMetricColor('pae_overall', d.pae_overall)}`}>
                                                                     {formatMetric(d.pae_overall, 1)}
                                                                 </td>
-                                                                <td className={`px-3 py-2 font-mono ${getMetricColor('ptm', d.ptm)}`}>
+                                                                {canonicalScalars(d) ? scalarCell(nativeTableScalars(d), ['ptm']) : <td className={`px-3 py-2 font-mono ${getMetricColor('ptm', d.ptm)}`}>
                                                                     {formatMetric(d.ptm, 2)}
-                                                                </td>
+                                                                </td>}
                                                                 {tableReviewCapabilities.interface && (
                                                                     <>
                                                                         <td className={`px-3 py-2 font-mono ${getMetricColor('pae_interaction', d.pae_interaction)}`}>
                                                                             {formatMetric(d.pae_interaction, 1)}
                                                                         </td>
-                                                                        <td className={`px-3 py-2 font-mono ${d.iptm != null && d.iptm > 0.7 ? 'text-emerald-400' : d.iptm != null && d.iptm > 0.5 ? 'text-blue-400' : 'text-slate-500'}`}>
+                                                                        {canonicalScalars(d) ? scalarCell(nativeTableScalars(d), ['iptm']) : <td className={`px-3 py-2 font-mono ${d.iptm != null && d.iptm > 0.7 ? 'text-emerald-400' : d.iptm != null && d.iptm > 0.5 ? 'text-blue-400' : 'text-slate-500'}`}>
                                                                             {formatMetric(d.iptm, 2)}
-                                                                        </td>
+                                                                        </td>}
                                                                         <td className={`px-3 py-2 font-mono ${d.ligand_iptm != null && d.ligand_iptm > 0.8 ? 'text-emerald-400' : 'text-slate-500'}`}>
                                                                             {formatMetric(d.ligand_iptm, 2)}
                                                                         </td>
@@ -8740,7 +8746,7 @@ function ResultsViewerContent() {
 
                                     {/* COMPARE TAB */}
                                     {activeTab === 'compare' && (
-                                        <BatchComparePane initialJobId={selectedJobId} />
+                                        <BatchComparePane initialJobId={selectedJobId} nativeMetrics={['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId)} />
                                     )}
 
                                     {/* Compare Designs Pane */}
@@ -8756,7 +8762,7 @@ function ResultsViewerContent() {
                                         <AnalyticsDashboard
                                             designs={selectedDesign && !analyticsChartDesigns.some(d => d.id === selectedDesign.id) ? [selectedDesign, ...analyticsChartDesigns] : analyticsChartDesigns}
                                             fullPaeRequested={typeof activeJob?.params?.write_full_pae === 'boolean' ? activeJob.params.write_full_pae : undefined}
-                                            modelId={activeJob?.model_id}
+                                            modelId={predictionModelId}
                                             selectedDesignId={selectedDesignId}
                                             onSelectDesign={selectDesign}
                                             structure={(selection, onSelection) => selectedDesignSupportsStructureViewer && !exactArtifactId ? <StructureViewerPane confidenceCompanion

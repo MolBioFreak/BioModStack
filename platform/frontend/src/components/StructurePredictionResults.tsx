@@ -1,17 +1,17 @@
 import { useState, type ReactNode } from 'react';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data } from 'plotly.js';
 import { useThemeColors } from './useThemeColors';
 import './StructurePredictionResults.css';
-import { fetchChainMetrics, fetchDesignResidueMetrics, fetchJobDesignMetrics, fetchPAEData, type ChainMetric, type Design } from '../lib/api';
+import { fetchChainMetrics, fetchDesignResidueMetrics, fetchPAEData, type ChainMetric, type Design } from '../lib/api';
 import { parseScientificNativeMetric, parseScientificPae, type NativePaeToken } from '../lib/scientificViewerIdentity';
-import type { ScientificPoint } from '../lib/scientificAnalytics';
+import { scalarCell, usePredictionScalars, type ScalarEvidence } from './predictionScalarEvidence';
 import type { MetricSelection } from '../structureViewer/metrics/metricContracts';
 import type { AtomRef } from '../structureViewer/contracts/structureIdentity';
 import { ConfidenceProfile, type ConfidenceChainMetric } from './ConfidenceProfile';
 
-export type ConfidenceStructure = ReactNode | ((selection: readonly AtomRef[], onSelection: (selection: MetricSelection) => void) => ReactNode);
+export type ConfidenceStructure = ReactNode | ((selection: readonly AtomRef[], onSelection: (selection: MetricSelection) => void, companion: ReactNode) => ReactNode);
 
 export const isStandaloneStructurePrediction = (modelId?: string | null) =>
     ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(modelId ?? '');
@@ -19,44 +19,6 @@ const asRecord = (value: unknown): Record<string, unknown> | null => value != nu
 const chainId = (ref: AtomRef) => ref.authAsymId ?? ref.labelAsymId ?? '';
 const axisLabel = (ref: AtomRef) => `${chainId(ref)}:${ref.authSeqId ?? ref.labelSeqId}${ref.insertionCode ?? ''} ${ref.componentId ?? ''}${ref.labelAtomId ? ` / ${ref.labelAtomId}` : ''}`;
 const tokenLabel = (token: NativePaeToken) => String(token.index);
-const nativeSummaryKeys: Record<string, string> = { plddt_mean: 'Mean pLDDT (fraction)', plddt: 'Mean pLDDT (0–100)', complex_plddt: 'Complex pLDDT (fraction)', complex_iplddt: 'Interface pLDDT (fraction)', ptm: 'pTM', iptm: 'iPTM', ranking_score: 'Producer ranking score', confidence_score: 'Producer confidence score', gpde: 'gPDE (Å)', complex_pde: 'Complex PDE (Å)', complex_ipde: 'Interface PDE (Å)' };
-type ScalarDisplay = { key: string; label: string; display: string; title: string };
-type ScalarEvidence = { entries: ScalarDisplay[]; reason?: string };
-const canonicalScalars = (design: Design) => design.core_protein_scientific_contract === 1 || design.confidence_metrics?.core_protein_scientific_contract === 1 || !!design.scientific_structure_document || !!design.confidence_metrics?.core_protein_scientific;
-const finiteScalar = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
-/** Consume the existing source-verified analytics transport, not nullable DB projections. */
-function scalarEvidence(design: Design, point?: ScientificPoint, reason?: string): ScalarEvidence {
-    if (!canonicalScalars(design)) {
-        const values = { ...asRecord(design.confidence_metrics) };
-        values.plddt_overall ??= design.plddt_overall;
-        values.ptm ??= design.ptm;
-        values.iptm ??= design.iptm;
-        return { entries: Object.entries(values).flatMap(([key, value]) => {
-            if (!finiteScalar(value) || !(key in nativeSummaryKeys || key === 'plddt_overall')) return [];
-            const fractionPlddt = ['plddt_mean', 'complex_plddt', 'complex_iplddt'].includes(key);
-            const plddt = key.includes('plddt');
-            return [{ key, label: (nativeSummaryKeys[key] ?? 'Overall pLDDT (0–100)').replace('(fraction)', '(0–100; native fraction)'),
-                display: (fractionPlddt ? value * 100 : value).toFixed(plddt ? 2 : 4), title: String(value) }];
-        }) };
-    }
-    if (!point) return { entries: [], reason: reason ?? 'Native scalar evidence not retained.' };
-    if (point.id !== design.id || point.source_job_id !== design.job_id || (design.scientific_structure_document && design.scientific_structure_document.candidateId !== design.id)) return { entries: [], reason: 'Native scalar identity mismatch.' };
-    if (point.publication_state) return { entries: [], reason: point.publication_state.reason_code ?? 'Native publication unavailable.' };
-    return { entries: Object.entries(point.metric_states).flatMap(([key, state]) => {
-        if (!(key in nativeSummaryKeys)) return [];
-        const descriptor = point.metric_descriptors[key];
-        const plddt = key.includes('plddt');
-        const label = plddt ? `${key === 'complex_iplddt' ? 'Interface' : key === 'complex_plddt' ? 'Complex' : 'Mean'} pLDDT` : nativeSummaryKeys[key];
-        const title = state.state === 'ok' ? `${state.value} ${descriptor.unit}; ${descriptor.scope}` : state.reason_code;
-        if (state.state !== 'ok') return [{ key, label, display: '—', title }];
-        if (plddt && !['fraction', 'percent'].includes(descriptor.unit)) return [{ key, label, display: '—', title: `Unsupported native pLDDT unit: ${descriptor.unit}` }];
-        return [{ key, label, display: (plddt && descriptor.unit === 'fraction' ? state.value * 100 : state.value).toFixed(plddt ? 2 : 4), title }];
-    }) };
-}
-const scalarCell = (evidence: ScalarEvidence, keys: string[]) => {
-    const entry = keys.map(key => evidence.entries.find(e => e.key === key)).find(Boolean);
-    return <td title={entry ? `${entry.label}: ${entry.title}` : evidence.reason ?? 'Not reported'}>{entry?.display ?? '—'}</td>;
-};
 const sparseTicks = (labels: string[]) => {
     const positions = [...new Set(Array.from({ length: Math.min(5, labels.length) }, (_, i) =>
         Math.round(i * (labels.length - 1) / Math.max(1, Math.min(5, labels.length) - 1))))];
@@ -77,7 +39,7 @@ function PaePlot({ matrix, rowLabels, columnLabels, rowTicks = rowLabels, column
             customdata: rowLabels.map(row => columnLabels.map(column => `Row ${row}<br>Column ${column}`)),
             zmin: 0, zmax: 30, zsmooth: false, colorscale: 'YlGnBu',
             colorbar: { title: { text: 'Å', side: 'top' }, thickness: 10, len: 0.85, tickvals: [0, 10, 20, 30], outlinewidth: 0, xpad: 5 },
-            hovertemplate: '%{customdata}<br>PAE %{z:.2f} Å<extra></extra>' } as Data]}
+            hovertemplate: '%{customdata}<br>PAE %{z} Å<extra></extra>' } as Data]}
         layout={{ autosize: true, paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
             font: { color: colors.textSecondary, size: 11 }, margin: { l: compact ? 46 : 58, r: 40, t: 26, b: compact ? 42 : 54 },
             xaxis: { type: 'linear', title: { text: axisTitle, standoff: 10 }, ...sparseTicks(columnTicks),
@@ -116,7 +78,7 @@ export function confidenceProfile(raw: unknown, design: Design): { chains: Recor
             chain.length++;
         });
         for (const chain of Object.values(chains)) chain.avg_plddt = chain.plddt.reduce((a, b) => a + b, 0) / chain.length;
-        return { chains, description: native.metric === 'atom_plddt' ? 'Confidence by residue, using its Cα atom. Higher is better.' : 'Confidence by residue. Higher is better.' };
+        return { chains, description: native.metric === 'atom_plddt' ? 'Protein Cα-only confidence profile (0–100); no atom averaging. Native atom and non-protein evidence is available in Structure → Metrics & tools.' : 'Confidence by residue. Higher is better.' };
     }
     return { chains: {}, description: 'Legacy per-chain confidence' };
 }
@@ -158,14 +120,10 @@ function PredictionEvidence({ design, structure, fullPaeRequested, scalars }: { 
     const ri = matrix?.map((_, i) => i).filter(i => tokenPae || !rowChain || chainId(rows[i]) === rowChain) ?? [];
     const ci = matrix?.[0]?.map((_, i) => i).filter(i => tokenPae || !columnChain || chainId(columns[i]) === columnChain) ?? [];
     const axisTitle = tokenPae || !rows.length ? 'Prediction position' : rows.some(ref => ref.labelAtomId || ref.authAtomId) ? 'Residue / atom' : 'Residue';
-    return <>
-        <dl aria-label="Native confidence summary" className="prediction-summary">{scalars.entries.map(entry => <div key={entry.key}><dt>{entry.label}</dt><dd title={entry.title}>{entry.display}</dd></div>)}{scalars.reason && <div role="status">{scalars.reason}</div>}</dl>
-        <div className={`prediction-workspace${structure ? ' prediction-workspace-with-structure' : ''}`}>
-            {structure && <section aria-label="Selected prediction structure" className="prediction-structure">{typeof structure === 'function' ? structure(inspection, acceptSelection) : structure}</section>}
-            <div className="prediction-charts">
+    const charts = <div className="prediction-charts">
                 <section aria-label="Predicted Aligned Error" className="prediction-card">
                     <h3>Predicted aligned error</h3>
-                    <p className="prediction-caption">Expected position error in Å. Lower is better.</p>
+                    <p className="prediction-caption">Directed expected position error in Å. Lower is better; row and column identities retain native orientation. Colors saturate above 30 Å; hover retains the exact value.</p>
                     {rows.length > 0 && <div className="prediction-chain-controls">{(['Row', 'Column'] as const).map((name, i) => <label key={name}><span>{name} chain</span><select aria-label={`${name} chain`} value={i ? columnChain : rowChain} onChange={e => (i ? setColumnChain : setRowChain)(e.target.value)}><option value="">All</option>{[...new Set((i ? columns : rows).map(chainId))].map(id => <option key={id}>{id}</option>)}</select></label>)}</div>}
                     {matrix ? <PaePlot matrix={ri.map(r => ci.map(c => matrix[r][c]))}
                         rowLabels={ri.map(i => tokenPae ? tokenLabel(tokenPae.rowTokens[i]) : rows[i] ? axisLabel(rows[i]) : String(i))}
@@ -175,17 +133,21 @@ function PredictionEvidence({ design, structure, fullPaeRequested, scalars }: { 
                         axisTitle={axisTitle} onInspect={tokenPae ? undefined : (r, c) => {
                             const row = rows[ri[r]], column = columns[ci[c]];
                             if (row && column) setInspection([row, column]);
-                        }} /> : <p role="status" className="py-8">{pae.isPending ? 'Loading PAE…' : fullPaeRequested === false ? 'Full PAE was not requested for this prediction.' : pae.isError ? 'PAE request failed. Structure and other scores remain available.' : nativePae.status === 'unavailable' ? missingPae(nativePae.reason) : 'Full PAE not retained.'}</p>}
+                        }} /> : <p role="status" className="py-8">{pae.isPending ? 'Loading PAE…' : pae.isError ? 'PAE request failed. Structure and other scores remain available.' : fullPaeRequested === false && nativePae.status === 'unavailable' && ['full_pae_not_requested', 'pae_not_requested'].includes(nativePae.reason) ? 'Full PAE was not requested for this prediction.' : nativePae.status === 'unavailable' ? missingPae(nativePae.reason) : 'Full PAE not retained.'}</p>}
                     {tokenPae && <p className="prediction-caption">Zero-based prediction positions; residue mapping unavailable.</p>}
                 </section>
                 <section aria-label="Confidence profile" className="prediction-card">
                     <h3>pLDDT by residue</h3><p className="prediction-caption">{chains.unmapped ? 'Residue confidence; chain mapping unavailable.' : profile.description}</p>
                     {Object.keys(chains).length ? <ConfidenceProfile chainMetrics={chains} onInspect={ref => setInspection([ref])} /> : <p role="status">{residue.isPending || chain.isPending ? 'Loading confidence…' : profile.reason ?? 'Per-chain confidence was not retained.'}</p>}
                 </section>
-            </div>
+            </div>;
+    return <>
+        <dl aria-label="Native confidence summary" className="prediction-summary">{scalars.entries.map(entry => <div key={entry.key}><dt>{entry.label}</dt><dd title={entry.title}>{entry.display}</dd></div>)}{scalars.reason && <div role="status">{scalars.reason}</div>}</dl>
+        <div className="prediction-workspace">
+            {structure ? <section aria-label="Selected prediction structure" className="prediction-structure">{typeof structure === 'function' ? structure(inspection, acceptSelection, charts) : structure}</section> : charts}
         </div>
         {inspection.length > 0 && <div aria-label="Confidence selection" className="text-sm">{inspection.map(axisLabel).join(' × ')} <button onClick={() => setInspection([])}>Clear inspection</button></div>}
-        {nativeChain.status === 'ok' && <details><summary>Native chain-pair iPTM</summary><p>Directional entries are retained as published; no symmetrization.</p><table><thead><tr><th>Row chain</th><th>Column chain</th><th>iPTM</th><th>Inspect</th></tr></thead><tbody>{nativeChain.chains.flatMap(a => nativeChain.chains.map(b => <tr key={`${a.providerIndex}:${b.providerIndex}`}><td>{a.chainId}</td><td>{b.chainId}</td><td>{nativeChain.pairChainsIptm[a.providerIndex][b.providerIndex]}</td><td><button onClick={() => { setRowChain(a.chainId); setColumnChain(b.chainId); setInspection([...a.residues, ...b.residues]); }}>PAE block</button></td></tr>))}</tbody></table></details>}
+        {nativeChain.status === 'ok' && <details><summary>Native chain-pair iPTM</summary><p>Directional entries are retained as published; no symmetrization. Diagonal entries describe one chain, not an inter-chain binding grade.</p><table><thead><tr><th>Row chain</th><th>Column chain</th><th>iPTM</th><th>Inspect</th></tr></thead><tbody>{nativeChain.chains.flatMap(a => nativeChain.chains.map(b => <tr key={`${a.providerIndex}:${b.providerIndex}`}><td>{a.chainId}</td><td>{b.chainId}</td><td>{nativeChain.pairChainsIptm[a.providerIndex][b.providerIndex]}</td><td><button onClick={() => { setRowChain(a.chainId); setColumnChain(b.chainId); setInspection([...a.residues, ...b.residues]); }}>PAE block</button></td></tr>))}</tbody></table></details>}
         <details><summary>Raw confidence details</summary><pre className="max-h-80 overflow-auto text-xs">{JSON.stringify({ residue: residue.data, chains: chain.data, ...(tokenPae ? { paeAxes: { row: tokenPae.rowAxis, column: tokenPae.columnAxis, nativeShape: tokenPae.nativeShape, sampledRows: tokenPae.sampledRowIndices, sampledColumns: tokenPae.sampledColumnIndices } } : {}) }, null, 2)}</pre></details>
     </>;
 }
@@ -200,39 +162,31 @@ function PaeComparison({ design, onSelect, fullPaeRequested }: { design: Design;
             columnLabels={native.axisKind === 'model_token' ? native.columnTokens.map(tokenLabel) : native.columns.map(axisLabel)}
             rowTicks={native.axisKind === 'model_token' ? native.rowTokens.map(tokenLabel) : native.rows.map(residueTick)}
             columnTicks={native.axisKind === 'model_token' ? native.columnTokens.map(tokenLabel) : native.columns.map(residueTick)}
-            axisTitle={native.axisKind === 'model_token' ? 'Prediction position' : 'Residue / atom'} compact /> : <p className="prediction-caption">{query.isPending ? 'Loading…' : fullPaeRequested === false ? 'Full PAE was not requested.' : query.isError ? 'PAE request failed.' : missingPae(native.reason)}</p>}
+            axisTitle={native.axisKind === 'model_token' ? 'Prediction position' : 'Residue / atom'} compact /> : <p className="prediction-caption">{query.isPending ? 'Loading…' : query.isError ? 'PAE request failed.' : fullPaeRequested === false && ['full_pae_not_requested', 'pae_not_requested'].includes(native.reason) ? 'Full PAE was not requested.' : missingPae(native.reason)}</p>}
         {native.status === 'ok' && native.axisKind === 'model_token' && <p className="prediction-caption">Residue mapping unavailable.</p>}
     </article>;
 }
 
-export function StructurePredictionResults({ designs, selectedDesignId, onSelectDesign, structure, enabled = true, fullPaeRequested, modelId }: { modelId?: string | null; fullPaeRequested?: boolean; enabled?: boolean; designs: Design[]; selectedDesignId?: string | null; onSelectDesign?: (id: string) => void; structure?: ConfidenceStructure }) {
+export function StructurePredictionResults({ designs, selectedDesignId, onSelectDesign, structure, enabled = true, fullPaeRequested, modelId, summaryOnly = false }: { summaryOnly?: boolean; modelId?: string | null; fullPaeRequested?: boolean; enabled?: boolean; designs: Design[]; selectedDesignId?: string | null; onSelectDesign?: (id: string) => void; structure?: ConfidenceStructure }) {
     const [localId, setLocalId] = useState('');
     const [compare, setCompare] = useState(false);
-    const jobs = [...new Set(designs.filter(canonicalScalars).map(d => d.job_id))];
-    const scalarQueries = useQueries({ queries: jobs.map(jobId => ({
-        queryKey: ['prediction-native-scalars', jobId],
-        queryFn: () => fetchJobDesignMetrics(jobId, false).then(r => r.data),
-        enabled, retry: false, staleTime: 60_000,
-    })) });
-    const scalarsFor = (d: Design) => {
-        const query = scalarQueries[jobs.indexOf(d.job_id)];
-        const point = query?.data?.find(p => p.id === d.id && p.contract_revision === 1) as ScientificPoint | undefined;
-        return scalarEvidence(d, point, query?.isPending ? 'Loading native scalar evidence…' : query?.isError ? 'Native scalar request failed. Structure and other confidence remain available.' : undefined);
-    };
+    const scalarsFor = usePredictionScalars(designs, enabled);
     const design = selectedDesignId ? designs.find(d => d.id === selectedDesignId) : designs.find(d => d.id === localId) ?? designs[0];
-    if (!enabled) return <>{typeof structure === 'function' ? structure([], () => {}) : structure}</>;
+    if (!enabled) return <>{typeof structure === 'function' ? structure([], () => {}, null) : structure}</>;
     if (!design) return <p>No saved predictions loaded.</p>;
     const select = onSelectDesign ?? setLocalId;
     const labels: Record<string, string> = { protenix: 'Protenix', boltz2: 'Boltz-2', boltz_cp_experimental: 'Boltz-2 via Fold-CP', esmfold2: 'Biohub ESMFold2', esmfold2_experimental: 'Biohub ESMFold2' };
     const modelLabel = labels[modelId ?? String(design.provenance?.producer_model_id ?? design.provenance?.model_id ?? '')] ?? 'Structure prediction';
     return <section aria-label="Structure prediction confidence" className="prediction-results space-y-4 text-[var(--text-primary)]">
         <h2 className="text-lg font-semibold">{modelLabel} confidence</h2>
+        {modelId === 'protenix' && <p className="prediction-caption">Producer sample rank is not generation order. The producer disorder field is a placeholder, not a measured disorder result.</p>}
+        <p className="prediction-caption">pLDDT uses the native 0–100 confidence scale, not a probability of correctness. iPTM is an interface-placement score, not a binding grade; monomer values do not establish binding.</p>
         <label className="prediction-selector"><span>Selected prediction</span><select aria-label="Selected prediction" value={design.id} onChange={e => select(e.target.value)}>{designs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label>
-        <PredictionEvidence key={design.id} design={design} structure={structure} fullPaeRequested={fullPaeRequested} scalars={scalarsFor(design)} />
-        <details onToggle={event => setCompare(event.currentTarget.open)}><summary>Compare native PAE — fixed 0–30 Å scale</summary>
+        {summaryOnly ? <dl aria-label="Native confidence summary" className="prediction-summary">{scalarsFor(design).entries.map(entry => <div key={entry.key}><dt>{entry.label}</dt><dd title={entry.title}>{entry.display}</dd></div>)}{scalarsFor(design).reason && <p role="status">{scalarsFor(design).reason}</p>}</dl> : <PredictionEvidence key={design.id} design={design} structure={structure} fullPaeRequested={fullPaeRequested} scalars={scalarsFor(design)} />}
+        {!summaryOnly && <details onToggle={event => setCompare(event.currentTarget.open)}><summary>Compare native PAE — fixed 0–30 Å scale</summary>
             <p className="text-xs">Same 0–30 Å scale for every prediction; each matrix keeps its original order.</p>
             {compare && <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">{designs.map(d => <PaeComparison key={d.id} fullPaeRequested={fullPaeRequested} design={d} onSelect={() => select(d.id)} />)}</div>}
-        </details>
+        </details>}
         <details open><summary>Saved predictions ({designs.length})</summary><p className="text-xs">Saved sample identities, not a new ranking. Missing scores are not zero. pLDDT is not evidence of correct inter-chain placement.</p><div className="overflow-auto"><table className="w-full text-left text-sm"><thead><tr><th>Prediction</th><th>pLDDT (0–100)</th><th>pTM</th><th>iPTM</th></tr></thead><tbody>{designs.map(d => <tr key={d.id} aria-selected={design.id === d.id}><td><button onClick={() => select(d.id)}>{d.name}</button></td>{scalarCell(scalarsFor(d), ['complex_plddt', 'plddt', 'plddt_mean', 'plddt_overall'])}{scalarCell(scalarsFor(d), ['ptm'])}{scalarCell(scalarsFor(d), ['iptm'])}</tr>)}</tbody></table></div></details>
     </section>;
 }

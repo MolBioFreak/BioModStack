@@ -68,7 +68,7 @@ export function ConfidenceProfile({ chainMetrics, onInspect, height = 270 }: Con
                 name: metric.label ?? `Chain ${chainId}`,
                 meta: [metric.label ?? `Chain ${chainId}`, metric.type, metric.avg_plddt?.toFixed(1) ?? 'n/a'],
                 line: { width: 1.8, color: CHAIN_COLORS[index % CHAIN_COLORS.length], shape: 'linear' as const },
-                hovertemplate: '<b>%{meta[0]}</b><br>Position %{text}<br>pLDDT: %{y:.1f}<br>%{meta[1]} · mean %{meta[2]}<extra></extra>',
+                hovertemplate: '<b>%{meta[0]}</b><br>Position %{text}<br>pLDDT: %{y}<br>%{meta[1]} · mean %{meta[2]}<extra></extra>',
             };
         });
         const numericPositions = categorical ? [] : data.flatMap(trace => trace.x.map(Number)).filter(Number.isFinite);
