@@ -29,7 +29,7 @@ from scripts.bms_md.chemistry.prepare import build_preparation_bundle
 
 config = json.loads(Path('normalized_config.json').read_text())
 bundle = Path('preparation_bundle')
-if config.get('schema') == 'bms.md.job.v2':
+if config.get('schema') == 'bms.md.job.v2' or (config.get('schema') == 'bms.md.job.v3' and config['input'].get('structure')):
     chemistry = config['chemistry']
     runtime_image = Path(os.environ.get(
         'BMS_MD_PREPARATION_SIF', '/opt/bms-md-preparation-runtime.sif'

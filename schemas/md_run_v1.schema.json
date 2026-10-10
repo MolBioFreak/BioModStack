@@ -4,15 +4,21 @@
   "title": "BioModStack MD Run Manifest v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "job_schema", "status", "created_at", "job_id", "replica_index", "replica_seed", "engine", "config", "stages", "artifacts"],
+  "required": ["schema", "job_schema", "status", "created_at", "job_id", "replica_index", "engine", "config", "stages", "artifacts"],
   "properties": {
     "schema": {"const": "bms.md.run.v1"},
-    "job_schema": {"enum": ["bms.md.job.v1", "bms.md.job.v2"]},
+    "job_schema": {"enum": ["bms.md.job.v1", "bms.md.job.v2", "bms.md.job.v3"]},
     "status": {"enum": ["completed", "failed", "cancelled"]},
     "created_at": {"type": "string", "format": "date-time"},
     "job_id": {"type": "string", "minLength": 1},
     "replica_index": {"type": "integer", "minimum": 0},
     "replica_seed": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+    "window_id": {"type": "string"},
+    "replicate_index": {"type": "integer", "minimum": 0},
+    "orchestration_seed": {"type": "integer"},
+    "final_stage": {"type": "string"},
+    "native_endpoints": {"type": "object"},
+    "publication_errors": {"type": "object", "additionalProperties": {"type": "string"}},
     "engine": {
       "type": "object",
       "additionalProperties": true,
@@ -52,6 +58,7 @@
       "additionalProperties": {"$ref": "#/$defs/artifact"}
     }
   },
+  "allOf": [{"if": {"properties": {"job_schema": {"enum": ["bms.md.job.v1", "bms.md.job.v2"]}}}, "then": {"required": ["replica_seed"]}}],
   "$defs": {
     "artifact": {
       "type": "object",

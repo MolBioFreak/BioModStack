@@ -28,6 +28,9 @@ def render_mdp(stage_name: str, job_config: Mapping[str, Any], replica_index: in
     config = normalize_job_config(job_config)
     if replica_index < 0 or replica_index >= config["replicas"]:
         raise ValueError("replica_index is outside configured replica range")
+    if config.get("schema") == "bms.md.job.v3":
+        from .native_config import render_mdp as render_native_mdp
+        return render_native_mdp(next(stage["mdp"] for stage in config["stages"] if stage["name"] == stage_name))
     if stage_name not in config["stages"]:
         raise ValueError(f"unsupported MD stage: {stage_name}")
     stage = config["stages"][stage_name]
