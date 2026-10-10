@@ -114,7 +114,7 @@ async def get_md_analysis(job_id: str, session: AsyncSession = Depends(get_sessi
              "error": child.error_message}
             for replica, child in sorted(latest.items())
         ]
-        active = any(str(child.status or child.queue_status).lower() in {"queued", "running", "pending"} for child in children)
+        active = any(str(child.status or child.queue_status).lower() in {"queued", "running", "pending"} for child in latest.values())
         raw_states = report.get("replica_states")
         states: list[Any] = raw_states if isinstance(raw_states, list) else []
         failed_or_missing = any(
@@ -123,13 +123,30 @@ async def get_md_analysis(job_id: str, session: AsyncSession = Depends(get_sessi
         )
         md = (job.provenance or {}).get("md") if isinstance(job.provenance, dict) else None
         accepted_set = md.get("replica_manifest_set_sha256") if isinstance(md, dict) else None
-        lifecycle_retrying = isinstance(md, dict) and md.get("analysis_state") == "retrying" and job.status != "failed"
+        shared = bool(job.execution_target_id or (job.provenance or {}).get("component_context_path"))
+        lifecycle_retrying = (isinstance(md, dict) and md.get("analysis_state") == "retrying"
+                              and job.status != "failed" and not (shared and job.status == "completed"))
+        analysis_incomplete = report.get("status") != "completed"
+        if shared:
+            # Current retained components, not replaced projections or an older
+            # report, own shared retry eligibility. POST still owns admission.
+            try:
+                roster = await _joined_thread(_retained_analysis_roster, dict(job.provenance or {}),
+                    str(job.id), job.execution_target_id or "local",
+                    Path(job.child_output_dir or job.output_dir or "").expanduser().resolve())
+            except (OSError, ValueError, TypeError, KeyError):
+                roster = {}
+            if roster:
+                active = any(row["status"] in {"queued", "running", "uncertain"} for row in roster.values())
+                failed_or_missing = any(row["status"] == "failed" for row in roster.values())
+                analysis_incomplete = failed_or_missing
         generation_matches = await _joined_thread(_generation_matches_accepted, result_record(job))
         eligible = bool(
-            report.get("status") != "completed"
+            analysis_incomplete
             and failed_or_missing
             and not active
             and not lifecycle_retrying
+            and job.status != "cancelled" and not job.awaiting_input
             and isinstance(accepted_set, str)
             and generation_matches
         )
@@ -215,8 +232,10 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
     retained_intent = (parent.provenance or {}).get("component_retry") or {}
     recovering = (retained_intent.get("actor") == "md-analysis-retry:" + job_id
                   and retained_intent.get("state") in {"pending", "requested", "uncertain"})
+    shared = bool(parent.execution_target_id or (parent.provenance or {}).get("component_context_path"))
     if (isinstance(current_md, dict) and current_md.get("analysis_state") == "retrying"
-            and parent.status != "failed" and not recovering):
+            and parent.status != "failed" and not recovering
+            and not (shared and parent.status == "completed")):
         raise HTTPException(
             status_code=409,
             detail={"code": "MD_ANALYSIS_RETRY_ACTIVE", "message": "An MD analysis retry is already active"},
@@ -243,8 +262,8 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
         current = latest.get(replica)
         if current is None or (child.created_at, str(child.id)) > (current.created_at, str(current.id)):
             latest[replica] = child
-    active = [child for child in children if str(child.status or child.queue_status).lower() in {"queued", "running", "pending"}]
-    if active and not recovering:
+    active = [child for child in latest.values() if str(child.status or child.queue_status).lower() in {"queued", "running", "pending"}]
+    if active and not recovering and not shared:
         raise HTTPException(
             status_code=409,
             detail={"code": "MD_ANALYSIS_RETRY_ACTIVE", "message": "An MD analysis retry is already active"},
@@ -272,7 +291,7 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
 
     accepted_sets = {
         value
-        for child in children
+        for child in latest.values()
         if isinstance(child.params, dict)
         for value in [child.params.get("md_replica_manifest_set_sha256")]
         if isinstance(value, str)
@@ -323,6 +342,9 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
             if any(row["status"] in {"queued", "running", "uncertain"} for row in roster.values()):
                 raise HTTPException(status_code=409, detail={"code": "MD_ANALYSIS_RETRY_ACTIVE",
                     "message": "Retained analysis components are still active"})
+        elif active and not recovering:
+            raise HTTPException(status_code=409, detail={"code": "MD_ANALYSIS_RETRY_ACTIVE",
+                "message": "An MD analysis retry is already active"})
         if recovering and not retry_indices:
             retry_indices = replica_indices
         if not retry_indices:

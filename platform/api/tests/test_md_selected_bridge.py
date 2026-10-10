@@ -175,4 +175,3 @@ def test_native_md_v3_cpu_reservation_follows_execution(roots, tmp_path, monkeyp
     assert 'flock -x 198' in block
     assert f'cpus = {threads}' in block
     assert resources['gpu_ids'] == [0]
-

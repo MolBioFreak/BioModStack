@@ -19,7 +19,23 @@ import routers.md_results as routes
 from test_md_results_trim import store, _tree, _seed, _bytes
 
 
-def retained(tmp_path, monkeypatch, target, *, replicas=1, root_state='failed'):
+async def public(session, method="POST"):
+    from fastapi import FastAPI, HTTPException
+    from httpx import ASGITransport, AsyncClient
+    from database import get_session
+    app = FastAPI()
+    app.include_router(routes.router)
+    async def db():
+        yield session
+    app.dependency_overrides[get_session] = db
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://fixture") as client:
+        response = await client.request(method, "/md-job-1/md/analysis" + ("/retry" if method == "POST" else ""))
+    if response.status_code != 200:
+        raise HTTPException(response.status_code, response.json()["detail"])
+    return response.json()
+
+
+def retained(tmp_path, monkeypatch, target, *, replicas=1, root_state='failed', active=False):
     root, spec = _tree(tmp_path, monkeypatch)
     if root_state == 'completed':
         spec['analysis'] = {}
@@ -27,12 +43,6 @@ def retained(tmp_path, monkeypatch, target, *, replicas=1, root_state='failed'):
         manifest = json.loads(manifest_path.read_bytes())
         manifest['config'] = spec
         manifest_path.write_bytes(canonical_bytes(manifest))
-        # Rebind the inert analysis sidecar to this fixture's explicit optional config.
-        from component_runtime import file_identity
-        sidecar_path = root/'analysis/md_analysis_replica_0.artifacts.json'
-        sidecar = json.loads(sidecar_path.read_bytes())
-        sidecar['input_manifest_sha256'] = file_identity(manifest_path)[0]
-        sidecar_path.write_bytes(canonical_bytes(sidecar))
     if replicas == 2:
         import shutil
         spec['replicas'] = 2
@@ -49,6 +59,27 @@ def retained(tmp_path, monkeypatch, target, *, replicas=1, root_state='failed'):
         aggregate['lineage']['completed_children'] = 2
         aggregate['lineage']['child_ids'].append('replica-child-1')
         (root/'manifest.json').write_bytes(canonical_bytes(aggregate))
+    # Rebind the inert retained report after changing fixture configuration.
+    from services.md.results import _analysis_identity
+    from component_runtime import file_identity
+    report_path = root/'analysis/md_analysis_replica_0.json'
+    report = json.loads(report_path.read_bytes())
+    report['inputs']['manifest_sha256'] = file_identity(root/'replicas/replica_0/manifest.json')[0]
+    report['analysis_identity_sha256'] = _analysis_identity(report)
+    report_path.write_bytes(canonical_bytes(report))
+    sidecar_path = root/'analysis/md_analysis_replica_0.artifacts.json'
+    sidecar = json.loads(sidecar_path.read_bytes())
+    sidecar['input_manifest_sha256'] = report['inputs']['manifest_sha256']
+    sidecar['analysis_identity_sha256'] = report['analysis_identity_sha256']
+    for artifact in sidecar['artifacts'].values():
+        if artifact['semantic_role'] == 'md_analysis_report':
+            artifact['sha256'], artifact['bytes'] = file_identity(report_path)
+    sidecar_path.write_bytes(canonical_bytes(sidecar))
+    collection_path = root/'analysis/manifest.json'
+    if collection_path.exists():
+        collection = json.loads(collection_path.read_bytes())
+        collection['aggregate_manifest_sha256'] = file_identity(root/'manifest.json')[0]
+        collection_path.write_bytes(canonical_bytes(collection))
     monkeypatch.setenv('BMS_RESULTS_DIR', str(root))
     import model_registry
     monkeypatch.setattr(model_registry, 'molecular_dynamics_feature_enabled', lambda: True)
@@ -82,8 +113,9 @@ def retained(tmp_path, monkeypatch, target, *, replicas=1, root_state='failed'):
     runtime.claim_root(owner_id='fixture', boot_id=boot)
     for row in receipt['children']:
         runtime.claim(row['id'], owner_id='fixture', boot_id=boot)
-        runtime.fail(row['id'], owner_id='fixture', boot_id=boot, quiescent=True, reason='inert analysis failure',
-            failure_receipt=dict(code='execution_failed', source='worker'))
+        if not active:
+            runtime.fail(row['id'], owner_id='fixture', boot_id=boot, quiescent=True, reason='inert analysis failure',
+                failure_receipt=dict(code='execution_failed', source='worker'))
     runtime.set_root_state(root_state, owner_id='fixture', boot_id=boot, quiescent=True, generation=0)
     return root, spec, runtime, context, path, child, boot
 
@@ -124,7 +156,7 @@ async def seed(maker, root, spec, context, path, target, root_state='failed'):
 @pytest.mark.parametrize('root_state', ['failed', 'completed'])
 @pytest.mark.parametrize('target,lose_response,cancel_retry', [('local', False, False),
     ('vast:fixture', False, False), ('vast:fixture', True, False), ('vast:fixture', False, True),
-    ('vast:fixture', False, 'retry-again')])
+    ('vast:fixture', False, 'retry-again'), ('local', False, 'retry-again')])
 async def test_public_route_real_receiving_dispatch_and_analysis_only_compiler(store, tmp_path, monkeypatch, target, lose_response, cancel_retry, root_state):
     _, maker = store
     root, spec, runtime, context, path, child, boot = retained(tmp_path, monkeypatch, target, root_state=root_state)
@@ -197,19 +229,21 @@ async def test_public_route_real_receiving_dispatch_and_analysis_only_compiler(s
             return SimpleNamespace(stdout=json.dumps(payload))
         monkeypatch.setattr(executor, 'run_remote', transport)
     async with maker() as session:
+        assert (await public(session, 'GET'))['retry']['eligible']
         if lose_response:
             from fastapi import HTTPException
             with pytest.raises(HTTPException) as uncertain:
-                await routes.retry_md_analysis('md-job-1', session)
+                await public(session)
             assert uncertain.value.detail['code'] == 'MD_ANALYSIS_RETRY_ACTUATION_UNCERTAIN'
             parent = await session.get(Job, 'md-job-1', populate_existing=True)
             assert parent.provenance['component_retry']['state'] == 'uncertain'
             issued_operation = parent.provenance['component_retry']['operation_id']
-        reply = await routes.retry_md_analysis('md-job-1', session)
+        reply = await public(session)
         parent = await session.get(Job, 'md-job-1')
         if lose_response:
             assert parent.provenance['component_retry']['operation_id'] == issued_operation
         pending = parent.provenance['component_retry']
+        assert not (await public(session, 'GET'))['retry']['eligible']
         assert pending['component_id'] == child
         assert parent.params == original_params
         if target == 'local':
@@ -254,18 +288,34 @@ async def test_public_route_real_receiving_dispatch_and_analysis_only_compiler(s
             runtime.set_root_state(root_state, owner_id='fixture', boot_id=boot, quiescent=True,
                 generation=edge['generation'], continuation_edge=edge)
             publication = runtime.publish_projection()
+            # Inert failed-analysis return retains the unchanged dynamics files.
+            import shutil
+            shutil.copytree(root/'replicas', publication.parent/'replicas', dirs_exist_ok=True)
+            shutil.copyfile(root/'manifest.json', publication.parent/'manifest.json')
             parent.child_output_dir = str(publication.parent)
             await session.commit()
-            assert await executor._publish_remote_transition(session, parent,
-                {'status': root_state, 'queue_status': root_state}, release_lease=True)
-            state = worker.load_json(worker.status_path(attempt))
-            state.update(state='succeeded' if root_state == 'completed' else 'failed', quiescent=True)
-            worker.atomic_json(worker.status_path(attempt), state)
-            second = await executor.retry_component_execution(session, parent, component_id=edge['child_job_id'],
-                operation_id='explicit-second', actor='operator', failure_code='execution_failed')
+            if target == 'local':
+                parent.status = parent.queue_status = root_state
+                await session.commit()
+            else:
+                assert await executor._publish_remote_transition(session, parent,
+                    {'status': root_state, 'queue_status': root_state}, release_lease=True)
+            if target != 'local':
+                state = worker.load_json(worker.status_path(attempt))
+                state.update(state='succeeded' if root_state == 'completed' else 'failed', quiescent=True)
+                worker.atomic_json(worker.status_path(attempt), state)
+            assert (await public(session, 'GET'))['retry']['eligible']
+            second_reply = await public(session)
+            if target == 'local':
+                parent.status = parent.queue_status = 'running'; parent.assigned_gpu = 0
+                nextflow._compile_local_component_retry(parent,
+                    (path, context, runtime, None, parent.provenance['component_retry']))
+            second = runtime.retry_status(parent.provenance['component_retry']['operation_id'])
+            assert second_reply['created_child_ids'] == [second['child_job_id']]
             assert second['generation'] == 2 and second['component_id'] == edge['child_job_id']
-            assert calls.count('inert-supervisor') == 2
-            assert (await session.get(Job, 'peer', populate_existing=True)).provenance == peer_claim
+            if target != 'local':
+                assert calls.count('inert-supervisor') == 2
+                assert (await session.get(Job, 'peer', populate_existing=True)).provenance == peer_claim
             assert _bytes(root/'replicas') == before
             return
         if cancel_retry is True:
@@ -329,7 +379,7 @@ async def test_multiple_failed_lanes_remain_explicit_exact_operations(store, tmp
     await seed(maker, root, spec, context, path, 'local', root_state)
     before = _bytes(root/'replicas')
     async with maker() as session:
-        first = await routes.retry_md_analysis('md-job-1', session)
+        first = await public(session)
         assert first['scheduled_replica_indices'] == [0]
         assert first['remaining_replica_indices'] == [1]
         parent = await session.get(Job, 'md-job-1')
@@ -353,17 +403,13 @@ async def test_multiple_failed_lanes_remain_explicit_exact_operations(store, tmp
         # A shared root failure can precede the optional MD lifecycle projection.
         # The failed retained owner, not stale 'retrying' presentation, owns retry.
         assert parent.provenance['md']['analysis_state'] == 'retrying'
+        # A replaced native child's stale mapped row no longer owns this lane.
+        session.add(Job(id=child, name='stale historical projection', model_id='molecular_dynamics',
+            mode='analyze', parent_job_id=parent.id, child_stage='md_analysis',
+            status='running', queue_status='running', params=runtime.request(child).payload['params']))
         await session.commit()
-        if root_state == 'completed':
-            # Exercise the shared receiving owner directly before the independent
-            # MD lifecycle has refreshed its analysis_state presentation.
-            remaining = next(row['id'] for row in runtime.children(parent.id, 'md_analysis') if row['status'] == 'failed')
-            received = await executor.retry_component_execution(session, parent, component_id=remaining,
-                operation_id='second-optional', actor='operator', failure_code='execution_failed')
-            second = dict(scheduled_replica_indices=[1], remaining_replica_indices=[],
-                          created_child_ids=[received['child_job_id']])
-        else:
-            second = await routes.retry_md_analysis('md-job-1', session)
+        assert (await public(session, 'GET'))['retry']['eligible']
+        second = await public(session)
         assert second['scheduled_replica_indices'] == [1]
         assert second['remaining_replica_indices'] == []
         assert second['created_child_ids'] != first['created_child_ids']
@@ -400,7 +446,7 @@ async def test_public_retry_publication_race_keeps_second_session_control(store,
         return await publish(session, parent, values, **kwargs)
     monkeypatch.setattr(executor, '_publish_remote_transition', racing)
     async with maker() as session:
-        reply = await routes.retry_md_analysis('md-job-1', session)
+        reply = await public(session)
         assert reply['created_child_ids'] == []
         assert reply['status'] == ('cancelled' if control == 'cancelled' else 'ownership_changed')
     async with maker() as observer:
@@ -411,18 +457,26 @@ async def test_public_retry_publication_race_keeps_second_session_control(store,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('control', ['cancelled', 'review'])
-async def test_public_retry_keeps_cancel_and_review_authority(store, tmp_path, monkeypatch, control):
+@pytest.mark.parametrize('target', ['local', 'vast:fixture'])
+@pytest.mark.parametrize('control', ['cancelled', 'review', 'active'])
+async def test_public_retry_keeps_cancel_and_review_authority(store, tmp_path, monkeypatch, control, target):
     _, maker = store
-    root, spec, runtime, context, path, child, boot = retained(tmp_path, monkeypatch, 'local')
-    await seed(maker, root, spec, context, path, 'local')
+    root, spec, runtime, context, path, child, boot = retained(tmp_path, monkeypatch, target,
+        root_state='completed', active=control == 'active')
+    await seed(maker, root, spec, context, path, target, 'completed')
+    runtime.publish_projection()
     async with maker() as session:
         parent = await session.get(Job, 'md-job-1')
+        provenance = dict(parent.provenance)
+        provenance['md'] = dict(provenance['md'], analysis_state='retrying')
+        if target != 'local': provenance.pop('component_context_path')
+        parent.provenance = provenance
         if control == 'cancelled': parent.status = parent.queue_status = 'cancelled'
-        else: parent.awaiting_input = True
+        elif control == 'review': parent.awaiting_input = True
         await session.commit()
+        assert not (await public(session, 'GET'))['retry']['eligible']
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as refused:
-            await routes.retry_md_analysis('md-job-1', session)
+            await public(session)
         assert refused.value.status_code == 409
         assert len(runtime.children()) == 1 and not parent.provenance.get('component_retry')
