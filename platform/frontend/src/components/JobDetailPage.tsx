@@ -129,6 +129,12 @@ export function JobDetailPage() {
         return <Navigate replace to={ngsResultHref(job.id, location.search)} />;
     }
 
+    // Historical ConforNets Designs belong to the existing legacy Results owner,
+    // not a canonical CM request that was never created.
+    if (job.model_id === 'confornets_experimental' && !job.conformational_mapping_request_id) {
+        return <Navigate replace to={`/designs/${job.id}${location.search}`} />;
+    }
+
     if (isConformationalMappingJob) {
         if (!job.conformational_mapping_request_id) {
             return <div role="alert" className="max-w-3xl mx-auto px-4 py-12 text-red-200">

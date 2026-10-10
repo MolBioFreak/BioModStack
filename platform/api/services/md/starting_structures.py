@@ -395,6 +395,20 @@ def _error(code: str, message: str, status_code: int = 422) -> StartingStructure
     return StartingStructureError(code, message, status_code=status_code)
 
 
+def _is_pdb_atom_record(line: str) -> bool:
+    # mmCIF atom-site rows also start with ATOM/HETATM (including Fold-CP
+    # ligands). Those whitespace-delimited rows are not a second PDB document.
+    # Recognize PDB's fixed-width identity columns, then leave coordinate
+    # validation (including malformed/truncated records) to the existing reader.
+    if not line.startswith(("ATOM  ", "HETATM")) or len(line) < 27 or line[11] != " " or line[20] != " ":
+        return False
+    try:
+        int(line[22:26])
+    except ValueError:
+        return False
+    return True
+
+
 def _detect_structure_format(data: bytes) -> PUBLIC_STRUCTURE_FORMAT:
     if not data:
         raise _error("MD_STARTING_STRUCTURE_EMPTY", "The starting structure is empty.")
@@ -416,7 +430,7 @@ def _detect_structure_format(data: bytes) -> PUBLIC_STRUCTURE_FORMAT:
             "The starting structure is not valid supported text content.",
         ) from exc
     lines = text.splitlines()
-    pdb_content = any(line.startswith(("ATOM  ", "HETATM")) for line in lines)
+    pdb_content = any(_is_pdb_atom_record(line) for line in lines)
     non_comment = next((line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")), "")
     cif_content = non_comment.lower().startswith("data_") and any(
         line.lstrip().lower().startswith("_atom_site.") for line in lines
@@ -474,7 +488,7 @@ def _read_structure_metadata_descriptor(
     def observe_line(line: str) -> None:
         nonlocal first_non_comment, pdb_content, cif_atom_content
         logical = line.rstrip("\r\n")
-        if logical.startswith(("ATOM  ", "HETATM")):
+        if _is_pdb_atom_record(logical):
             pdb_content = True
         stripped = logical.strip()
         if not first_non_comment and stripped and not logical.lstrip().startswith("#"):
@@ -692,7 +706,7 @@ def open_verified_structure_snapshot(
     def observe_line(line: str) -> None:
         nonlocal pdb_content, cif_atom_content, first_non_comment
         logical = line.rstrip("\r\n")
-        if logical.startswith(("ATOM  ", "HETATM")):
+        if _is_pdb_atom_record(logical):
             pdb_content = True
         stripped = logical.strip()
         if not first_non_comment and stripped and not logical.lstrip().startswith("#"):
@@ -1472,6 +1486,9 @@ async def resolve_source(
 _ACCEPTED_PREDICTION_PRODUCERS = frozenset(
     {
         ("esmfold2", "predict"),
+        ("esmfold2_experimental", "predict"),
+        # Fold-CP's retained prediction transport uses mode="design".
+        ("boltz_cp_experimental", "design"),
         ("boltz2", "predict"),
         ("boltz2", "complex"),
         ("rf3", "predict"),
