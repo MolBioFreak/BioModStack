@@ -15,7 +15,7 @@ const task = process.env.BIOXP_CAVRO_TASK;
 let host: HTMLDivElement, root: Root, client: QueryClient, child: ChildProcessWithoutNullStreams;
 let pending: ((value: any) => void)[], calls: any[], errors: string;
 const original = api.defaults.adapter;
-const load = (file: string) => JSON.parse(readFileSync(`${task}/${file}`, 'utf8'));
+const loadGeometry = (name: string) => JSON.parse(readFileSync(`${process.env.BIOXP_GEOMETRY_PRODUCER}/${name}.json`, 'utf8'));
 async function settle() { for(let pass=0;pass<3;pass++) await act(async () => { await new Promise(r=>setTimeout(r,30)); for (let i=0;i<500 && pending.length;i++) await new Promise(r=>setTimeout(r,20)); }); expect(pending.length,errors).toBe(0); }
 async function mount(element: React.ReactNode) { await act(async()=>root.render(<QueryClientProvider client={client}>{element}</QueryClientProvider>)); await settle(); }
 async function click(text: string) { const el=[...host.querySelectorAll('button')].find(e=>e.textContent===text || e.getAttribute('aria-label')===text); expect(el,text).toBeTruthy(); await act(async()=>el!.click()); await settle(); }
@@ -60,7 +60,7 @@ describe.skipIf(!task || !process.env.BIOXP_METHOD_API_DIR || !process.env.BMS_T
  afterEach(async()=>{await act(async()=>root.unmount());client.clear();host.remove();await settle();child.stdin.end();await new Promise(resolve=>child.once('exit',resolve));api.defaults.adapter=original;vi.unstubAllGlobals();});
 
  for(const [name,action,field] of [['geometry-accounting-recipe','liquid_recipe','recipe'],['rack-True','cavro_application','application']])it(`${name}: typed edits → scratch Save / exact GET / cold Open / HTTP compile`,async()=>{
-  const data=load(`geometry-accounting-finish/exports/${name}.json`);
+  const data=loadGeometry(name);
   const value=name==='rack-True'?data.request:data;
   // Seed only the real native software example via scratch HTTP, then edit
   // ordinary discovered controls in the existing Methods draft owner.
@@ -119,7 +119,7 @@ describe.skipIf(!task || !process.env.BIOXP_METHOD_API_DIR || !process.env.BMS_T
   if(process.env.BIOXP_CAVRO_UI_EVIDENCE)appendFileSync(process.env.BIOXP_CAVRO_UI_EVIDENCE+'.compiled',JSON.stringify({name,request:compile.request.body,result:compile.response.data,authored})+'\n');
  });
  for(const name of ['finish-True-True','finish-True-False','finish-False-True','finish-False-None','finish-partial-http-device','finish-partial-http-missing','finish-partial-http-interrupt'])it(`${name}: genuine native HTTP report → mounted existing report owner`,async()=>{
-  const source=load(`geometry-accounting-finish/exports/${name}.json`).result;
+  const source=loadGeometry(name).result;
   const report=(await api.get(`/api/bioxp/methods/runs/${source.job_id}/report`)).data;
   expect(report.action_results).toEqual(source.execution.runtime_state.action_results);
   await mount(<BioXpMethodProgress report={report}/>);
