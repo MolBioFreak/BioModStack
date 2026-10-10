@@ -187,8 +187,6 @@ def _retained_analysis_roster(provenance: dict, root_job_id: str, target_id: str
                                  required=request.required, params=request.payload["params"]))
     roster = {}
     for row in rows:
-        if not row["required"]:
-            continue
         index = row["params"]["md_replica_index"]
         if type(index) is not int or index < 0 or index in roster:
             raise ValueError("Retained analysis roster replica identity conflicts")

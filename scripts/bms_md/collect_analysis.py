@@ -57,7 +57,7 @@ def _replica_manifest_hashes(parent_root: Path, aggregate: dict[str, Any]) -> di
     return hashes
 
 
-def run_native_wham(manifests, request, output_dir, *, gmx="gmx"):
+def run_native_wham(manifests, request, output_dir, *, gmx="gmx", gromacs_container=None):
     """Run GROMACS' 1D estimator on explicit window/coordinate selections."""
     import subprocess
     import tempfile
@@ -90,7 +90,12 @@ def run_native_wham(manifests, request, output_dir, *, gmx="gmx"):
                                          "engine": manifest.get("engine")})
             for name, rows in (("tpr.dat", tprs), ("pullx.dat", pullx), ("selection.dat", masks)):
                 (work / name).write_text("\n".join(rows) + "\n")
-            command = [gmx, "wham", "-it", str(work / "tpr.dat"), "-ix", str(work / "pullx.dat"),
+            command = [gmx]
+            if gromacs_container:
+                from lib.container_runtime import container_executable
+                command = [container_executable() or "apptainer", "exec", "--bind",
+                           f"{work.resolve()}:{work.resolve()}", str(gromacs_container), gmx]
+            command += ["wham", "-it", str(work / "tpr.dat"), "-ix", str(work / "pullx.dat"),
                        "-is", str(work / "selection.dat"), "-o", str(work / "pmf.xvg"),
                        "-hist", str(work / "histogram.xvg"), "-xvg", "none", "-unit", "kJ", "-temp", str(request["temperature_k"]),
                        "-bins", str(request.get("bins", 200)), "-b", str(request.get("begin_ps", 0))]
@@ -116,7 +121,7 @@ def run_native_wham(manifests, request, output_dir, *, gmx="gmx"):
 
 def collect_analysis(
     child_status_path: Path, aggregate_manifest: Path, output_dir: Path,
-    *, spawn_receipt: Path | None = None, gmx: str = "gmx",
+    *, spawn_receipt: Path | None = None, gmx: str = "gmx", gromacs_container: str | None = None,
 ) -> dict[str, Any]:
     status = json.loads(child_status_path.read_text(encoding="utf-8"))
     receipt = (
@@ -259,6 +264,7 @@ def collect_analysis(
             json.dumps(sorted(replica_hashes.items()), separators=(",", ":")).encode("utf-8")
         ).hexdigest(),
         "required_analysis_children": required,
+        "optional": optional,
         "completed_analysis_children": sum(item["status"] != "failed" for item in completed_records),
         "failed_analysis_children": failed,
         "cancelled_analysis_children": cancelled,
@@ -267,7 +273,7 @@ def collect_analysis(
     }
     wham = (config.get("analysis") or {}).get("wham")
     if wham:
-        result = run_native_wham(manifests, wham, analysis_root / "wham", gmx=gmx)
+        result = run_native_wham(manifests, wham, analysis_root / "wham", gmx=gmx, gromacs_container=gromacs_container)
         result_path = analysis_root / "wham" / "result.json"
         publish_json_immutable(result, result_path)
         collection["wham"] = {"path": "wham/result.json", "bytes": result_path.stat().st_size, "sha256": _sha256(result_path)}
@@ -299,9 +305,10 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--spawn-receipt", type=Path)
     parser.add_argument("--gmx", default="gmx")
+    parser.add_argument("--gromacs-container")
     args = parser.parse_args()
 
-    collect_analysis(args.child_status, args.aggregate_manifest, args.output_dir, spawn_receipt=args.spawn_receipt, gmx=args.gmx)
+    collect_analysis(args.child_status, args.aggregate_manifest, args.output_dir, spawn_receipt=args.spawn_receipt, gmx=args.gmx, gromacs_container=args.gromacs_container)
     print(args.output_dir / "analysis" / "manifest.json")
 
 

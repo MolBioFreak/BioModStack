@@ -53,10 +53,14 @@ def _replica_protocol_matches(
     observed: Any,
     *,
     qualified_gpu_offload: str | None = None,
+    replica_index: int = 0,
 ) -> bool:
+    if requested.get("schema") == "bms.md.job.v3":
+        from scripts.bms_md.native_config import lane_config
+        requested = lane_config(requested, replica_index)
     if observed == requested:
         return True
-    if requested.get("schema") == "bms.md.job.v1" and isinstance(observed, Mapping):
+    if requested.get("schema") in {"bms.md.job.v1", "bms.md.job.v3"} and isinstance(observed, Mapping):
         # v1 has the same immutable snapshot identities as the verified-copy
         # reader. Only placement fields may differ; protocol/settings may not.
         wanted = requested.get("input")
@@ -64,7 +68,9 @@ def _replica_protocol_matches(
         if not isinstance(wanted, Mapping) or not isinstance(actual, Mapping):
             return False
         normalized = dict(actual)
-        for field in ("structure", "coordinates", "topology"):
+        from scripts.bms_md.native_config import INPUT_FILE_FIELDS
+        fields = INPUT_FILE_FIELDS if requested.get("schema") == "bms.md.job.v3" else ("structure", "coordinates", "topology")
+        for field in fields:
             if wanted.get(field) == actual.get(field):
                 continue
             digest, size = wanted.get(field + "_sha256"), wanted.get(field + "_bytes")
@@ -82,7 +88,7 @@ def _replica_protocol_matches(
             if not isinstance(wanted_closure, Mapping) or not isinstance(actual_closure, Mapping):
                 return False
             members = wanted_closure.get("files")
-            if (not isinstance(members, list) or not members
+            if (not isinstance(members, list) or (not members and requested.get("schema") != "bms.md.job.v3")
                     or not isinstance(wanted_closure.get("root"), str)
                     or not isinstance(actual_closure.get("root"), str)):
                 return False
@@ -340,8 +346,10 @@ def _load_inventory(job: MDJobRecord, *, include_analysis: bool = True, _digests
             for record in artifacts.values()
             if isinstance(record, Mapping) and record.get("semantic_role") == "representative_structure"
         ]
-        unpaired_native_final = (optional_analysis(manifest.get("config")) and not trajectory_hashes
-                                 and all(not record.get("source_trajectory_sha256") for record in representative_records))
+        unpaired_native_final = (optional_analysis(manifest.get("config"))
+            and all(not record.get("source_trajectory_sha256") for record in representative_records)
+            and (not trajectory_hashes or (manifest.get("job_schema") == "bms.md.job.v3"
+                 and all(record.get("source_frame") is None for record in representative_records))))
         if representative_records and not unpaired_native_final and (
             len(trajectory_hashes) != 1
             or any(record.get("source_trajectory_sha256") not in trajectory_hashes for record in representative_records)
@@ -758,7 +766,8 @@ def completion_barrier(job: MDJobRecord, *, _inventory=None, _digests=None) -> d
     job_spec = (job.params or {}).get("md_job_spec") if isinstance(job.params, Mapping) else None
     if not isinstance(job_spec, Mapping):
         raise MDResultError("MD_COMPLETION_BLOCKED", "MD requested scientific protocol is missing", 409)
-    expected_count = job_spec.get("replicas")
+    from scripts.bms_md.native_config import lane_count
+    expected_count = lane_count(job_spec)
     base_seed = job_spec.get("random_seed")
     if type(expected_count) is not int or expected_count != len(replica_indices):
         raise MDResultError("MD_COMPLETION_BLOCKED", "MD replica count does not match the requested job contract", 409)
@@ -794,6 +803,7 @@ def completion_barrier(job: MDJobRecord, *, _inventory=None, _digests=None) -> d
             job_spec,
             manifest.get("config"),
             qualified_gpu_offload=qualified_gpu_offload,
+            replica_index=index,
         ):
             raise MDResultError("MD_COMPLETION_BLOCKED", "MD replica configuration does not match the requested scientific protocol", 409)
         engine = manifest.get("engine")
@@ -803,7 +813,10 @@ def completion_barrier(job: MDJobRecord, *, _inventory=None, _digests=None) -> d
             or engine.get("runtime") != job_spec.get("engine_runtime")
         ):
             raise MDResultError("MD_COMPLETION_BLOCKED", "MD replica engine identity does not match the requested scientific protocol", 409)
-        if type(seed) is not int or manifest.get("replica_index") != index or seed != base_seed + index or seed in replica_seeds:
+        native = job_spec.get("schema") == "bms.md.job.v3"
+        if (manifest.get("replica_index") != index
+                or (native and manifest.get("orchestration_seed") != base_seed)
+                or (not native and (type(seed) is not int or seed != base_seed + index or seed in replica_seeds))):
             raise MDResultError("MD_COMPLETION_BLOCKED", "MD replica index or seed lineage is invalid", 409)
         if not required_roles.issubset(roles_by_replica[index]):
             raise MDResultError("MD_COMPLETION_BLOCKED", f"MD replica {index} is missing required artifact roles", 409)
@@ -995,11 +1008,13 @@ def summary(job: MDJobRecord) -> dict[str, Any]:
         index = int(replica["replica_index"])
         manifest = _load_json(root / "replicas" / f"replica_{index}" / "manifest.json", "MD_REPLICA_MANIFEST_INVALID")
         engine = manifest.get("engine") if isinstance(manifest.get("engine"), Mapping) else {}
-        production = manifest.get("stages", {}).get("production", {}) if isinstance(manifest.get("stages"), Mapping) else {}
+        production = manifest.get("stages", {}).get(manifest.get("final_stage", "production"), {}) if isinstance(manifest.get("stages"), Mapping) else {}
         performance = production.get("performance", {}) if isinstance(production, Mapping) else {}
         replica_summaries.append({
             "replica": index,
             "status": manifest.get("status"),
+            **{key: manifest.get(key, manifest.get("config", {}).get(key)) for key in ("window_id", "replicate_index") if key in manifest or key in manifest.get("config", {})},
+            **({"native_endpoints": manifest["native_endpoints"], "final_stage": manifest.get("final_stage")} if "native_endpoints" in manifest else {}),
             "engine": {key: engine.get(key) for key in ("name", "version", "platform") if isinstance(engine.get(key), (str, int, float, bool))},
             "performance": {str(key): value for key, value in list(performance.items())[:16] if isinstance(value, (int, float)) and not isinstance(value, bool)} if isinstance(performance, Mapping) else {},
         })

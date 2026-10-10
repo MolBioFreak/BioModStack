@@ -365,11 +365,6 @@
             "anyOf": [
               {
                 "required": [
-                  "coordinates"
-                ]
-              },
-              {
-                "required": [
                   "topology"
                 ]
               },
@@ -484,6 +479,48 @@
     "analysis": {
       "type": "object",
       "description": "Optional analysis-owner configuration; not an execution admission condition."
+    },
+    "windows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "coordinates": {
+            "type": "string",
+            "minLength": 1
+          },
+          "coordinates_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "coordinates_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "mdp": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/mdp"
+            }
+          }
+        }
+      }
+    },
+    "window_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "replicate_index": {
+      "type": "integer",
+      "minimum": 0
     }
   },
   "allOf": [

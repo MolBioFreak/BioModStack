@@ -271,6 +271,12 @@ class MdCompiledNativeInput(_ClosedModel):
     checkpoint: str | None = None
 
 
+class MdNativeWindow(_ClosedModel):
+    id: str = Field(min_length=1)
+    coordinates: str | None = None
+    mdp: dict[str, dict[str, StrictStr | StrictInt | StrictFloat]] | None = None
+
+
 class MdNativeLaunchIntent(_ClosedModel):
     schema_version: Literal["bms.md.launch-intent.v2"]
     name: str = Field(min_length=1, max_length=255)
@@ -278,6 +284,7 @@ class MdNativeLaunchIntent(_ClosedModel):
     replicas: int = Field(default=1, ge=1)
     random_seed: int = Field(default=20260717, ge=1, le=2147483647)
     stages: list[MdNativeStage]
+    windows: list[MdNativeWindow] | None = None
     execution: MdNativeExecution = Field(default_factory=MdNativeExecution)
     analysis: dict[str, Any] | None = None
     execution_target_id: str | None = Field(default=None, min_length=1, max_length=160)
@@ -417,6 +424,8 @@ def compile_native_job_intent(
         "stages": [stage.model_dump(mode="json", exclude_none=True) for stage in intent.stages],
         "execution": {**intent.execution.model_dump(mode="json"), "gpu_id": "0"},
     }
+    if intent.windows is not None:
+        config["windows"] = [window.model_dump(mode="json", exclude_none=True) for window in intent.windows]
     source = intent.input
     if isinstance(source, MdGuidedNativeInput):
         if profile is None:

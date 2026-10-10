@@ -206,6 +206,11 @@ def collect_children(
     source_manifests = [_find_run_manifest(child_dir) for child_dir in child_dirs]
     # Validate native identity before publishing any lane into the parent.
     aggregate = aggregate_manifests(source_manifests)
+    runs = [json.loads(path.read_text()) for path in source_manifests]
+    configs = {run["replica_index"]: run.get("config", {}) for run in runs}
+    for replica in aggregate["replicas"]:
+        config = configs[replica["replica_index"]]
+        replica.update({key: config[key] for key in ("window_id", "replicate_index") if key in config})
     from scripts.child_job_utils import component_runtime_enabled, seal_validated_child_files
     use_runtime = component_runtime_enabled()
     validated_files = {}
@@ -238,7 +243,8 @@ def collect_children(
             lane = expected.get(run["replica_index"])
             if (
                 lane is None or run.get("job_id") != receipt["parent_job_id"]
-                or run.get("replica_seed") != lane.get("replica_seed")
+                or (run.get("job_schema") != "bms.md.job.v3" and run.get("replica_seed") != lane.get("replica_seed"))
+                or (run.get("job_schema") == "bms.md.job.v3" and run.get("orchestration_seed") != run.get("config", {}).get("random_seed"))
                 or not isinstance(run.get("engine"), dict)
                 or run["engine"].get("name") != receipt["engine"]
             ):

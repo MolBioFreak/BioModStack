@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -126,7 +127,10 @@ def _checkpoint_receipt(
     raw_path = payload.get("checkpoint_path")
     if not isinstance(raw_path, str) or not raw_path or Path(raw_path).is_absolute():
         raise MdStateError("MD_PAUSE_CHECKPOINT_INVALID", "MD_PAUSE_ACTUATION_FAILED: checkpoint path must be relative")
-    if raw_path != "production/production.cpt":
+    stage = payload.get("native_stage") if payload.get("job_schema") == "bms.md.job.v3" else "production"
+    if not isinstance(stage, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", stage) is None:
+        raise MdStateError("MD_PAUSE_CHECKPOINT_INVALID", "MD checkpoint stage is invalid")
+    if raw_path != f"{stage}/{stage}.cpt":
         raise MdStateError("MD_PAUSE_CHECKPOINT_INVALID", "MD pause requires the canonical production checkpoint")
     checkpoint = (receipt_path.parent / raw_path).resolve(strict=True)
     try:

@@ -267,6 +267,10 @@ def verify_input_snapshots(job_config: Mapping[str, Any]) -> None:
             continue
         expected_digest, expected_bytes = _expected_snapshot_metadata(input_config, field)
         _verify_open_snapshot(Path(str(value)), expected_digest, expected_bytes)
+    for window in job_config.get("windows") or []:
+        if window.get("coordinates"):
+            digest, size = _expected_snapshot_metadata(window, "coordinates")
+            _verify_open_snapshot(Path(window["coordinates"]), digest, size)
     if input_config.get("topology"):
         closure_root, closure_files = _topology_closure(job_config)
         for record in closure_files:
@@ -343,6 +347,13 @@ def prepare_verified_worker_inputs(config_path: Path, worker_root: Path) -> dict
     worker_root.mkdir(parents=True, exist_ok=True)
     private_root = Path(tempfile.mkdtemp(prefix="verified-inputs-", dir=worker_root))
     try:
+        for index, window in enumerate(config.get("windows") or []):
+            if window.get("coordinates"):
+                digest, size = _expected_snapshot_metadata(window, "coordinates")
+                source = Path(window["coordinates"])
+                destination = private_root / "windows" / str(index) / source.name
+                _copy_verified_snapshot(source, destination, expected_digest=digest, expected_bytes=size)
+                window["coordinates"] = str(destination.resolve())
         for field in (field for field in INPUT_FILE_FIELDS if field != "topology"):
             source_value = input_config.get(field)
             if not source_value:

@@ -827,6 +827,11 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
         return True
 
     if workflow in {'orchestrator', 'replica', 'analyze'} and 'molecular_dynamics' in entrypoint:
+        a.asset('support_tool', 'scripts/bms_md/native_config.py', entrypoint)
+        cfg = p.get('md_config')
+        if workflow == 'orchestrator' and isinstance(cfg, dict) and (cfg.get('analysis') or {}).get('wham'):
+            a.asset('image', 'gromacs-md-2025.3.sif', 'scripts/bms_md/collect_analysis.py:run_native_wham', 'md_gromacs_container')
+            a.asset('support_tool', 'scripts/lib/container_runtime.py', entrypoint)
         if workflow == 'analyze':
             a.stage('MD_ANALYZE_REPLICA')
             return True
@@ -860,7 +865,7 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
                 'child_model': 'molecular_dynamics', 'child_mode': 'replica', 'child_stage': 'md_replica',
                 'candidate_identity': 'parent job + replica_index + normalized config digest',
                 'grouping': 'one native engine replica per child, ordered replica_index',
-                'count': cfg.get('replicas') if isinstance(cfg, dict) else None,
+                'count': cfg.get('replicas', 1) * (len(cfg.get('windows') or []) or 1) if isinstance(cfg, dict) else None,
                 'seed_authority': 'scripts/bms_md/contract.py; native per-replica random_seed',
                 'join': 'MD_ASSERT_REPLICA_OUTCOME requires immutable completed replicas',
             }

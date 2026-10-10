@@ -11,7 +11,7 @@ from sqlalchemy import select, update
 
 from database import Job, JobArtifact, MdAttemptSegment, MdReplicaRun, MdRun
 from services.md.results import (
-    MDJobRecord, MDResultError, _load_inventory, _open_verified_descriptor, _analysis_inventory,
+    MDJobRecord, MDResultError, _load_inventory, _open_verified_descriptor, _analysis_inventory, _load_json,
     apply_completion_barrier, completion_barrier, result_record, optional_analysis,
 )
 
@@ -112,7 +112,20 @@ async def _ingest_durable_artifacts(job: MDJobRecord, session: Any, *, _inventor
     existing = {(row.owner_job_id, row.attempt, row.logical_path): row for row in existing_rows}
     frame_endpoints = (_frame_endpoints if _frame_endpoints is not None
         else await _joined_thread(_read_frame_endpoints, root, inventory))
-    for replica_index, endpoint in frame_endpoints.items():
+    native = job.params["md_job_spec"].get("schema") == "bms.md.job.v3"
+    if native:
+        # Native checkpoint observations, not authored durations or saved frames,
+        # describe actual endpoints (including compiled TPR and nonzero tinit).
+        for index, replica in replicas_by_index.items():
+            manifest = await _joined_thread(_load_json, root / "replicas" / f"replica_{index}" / "manifest.json", "MD_REPLICA_MANIFEST_INVALID")
+            endpoint = manifest.get("native_endpoints", {}).get(manifest.get("final_stage"), {})
+            segment = latest_segment.get(replica.id)
+            if segment is not None:
+                if type(endpoint.get("step")) is int:
+                    segment.end_step = endpoint["step"]
+                if isinstance(endpoint.get("time_ps"), (int, float)):
+                    segment.end_time_ps = endpoint["time_ps"]
+    for replica_index, endpoint in (() if native else frame_endpoints.items()):
         replica = replicas_by_index.get(replica_index)
         segment = latest_segment.get(replica.id) if replica is not None else None
         if segment is None:

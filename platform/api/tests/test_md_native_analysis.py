@@ -64,16 +64,23 @@ async def test_optional_failed_analysis_finalizes_in_scratch_store_and_reopens_r
 
 
 @pytest.mark.asyncio
-async def test_completion_does_not_rewrite_failed_dynamics_segment(store, tmp_path, monkeypatch):
+async def test_completion_does_not_rewrite_genuine_native_dynamics_failure(store, tmp_path, monkeypatch):
     _engine, maker = store
     root, spec = _tree(tmp_path, monkeypatch)
+    # Native outcome, not an advisory segment-state observation, owns failure.
+    spec['analysis'] = {}
+    manifest_path = root / 'replicas/replica_0/manifest.json'
+    manifest = json.loads(manifest_path.read_text())
+    manifest['config'] = spec
+    manifest['status'] = 'failed'
+    manifest_path.write_text(json.dumps(manifest))
     _replica_id, segment_id = await _seed(maker, root, spec)
     async with maker() as session:
         segment = await session.get(MdAttemptSegment, segment_id)
         segment.state = 'failed'
         await session.commit()
         parent = await session.get(Job, 'md-job-1')
-        with pytest.raises(MDResultError, match='failed segment'):
+        with pytest.raises(MDResultError, match='dynamics did not complete'):
             await validate_and_finalize_md_job(parent, session)
         await session.rollback()
     async with maker() as reader:

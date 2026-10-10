@@ -706,6 +706,8 @@ def native_input_identity(config: Mapping[str, Any]) -> dict[str, Any]:
     for field in INPUT_FILE_FIELDS:
         if inputs.get(field):
             identity[field] = sha256_file_bounded(Path(inputs[field]))
+    if config.get("windows"):
+        identity["windows"] = [{"id": window["id"], **({"coordinates": sha256_file_bounded(Path(window["coordinates"]))} if window.get("coordinates") else {})} for window in config["windows"]]
     if inputs.get("topology"):
         topology = Path(inputs["topology"])
         closure = _materialize_topology_closure(
@@ -958,6 +960,11 @@ def normalize_md_job_spec(
         candidate["input"] = normalized_input
 
     if candidate.get("schema") == NATIVE_JOB_SCHEMA:
+        for window in candidate.get("windows") or []:
+            if any(key in window for key in ("coordinates_sha256", "coordinates_bytes")):
+                raise MDLaunchError("MD_INPUT_DIGEST_FORBIDDEN", "Window digests are generated during materialization.", status_code=422)
+            if window.get("coordinates"):
+                window["coordinates"] = resolve_runtime_path(window["coordinates"])
         for stage in candidate["stages"]:
             if "mdp_file" in stage:
                 source = Path(resolve_runtime_path(stage.pop("mdp_file")))
@@ -1112,11 +1119,21 @@ def materialize_md_job_spec(
                 ),
             )
         normalized["input"] = input_config
+        for index, window in enumerate(normalized.get("windows") or []):
+            if not window.get("coordinates"):
+                continue
+            snapshot, digest, size = _snapshot_input_file(
+                source=Path(window["coordinates"]), field=f"window_{index}_coordinates",
+                contract_dir=contract_dir, expected_sha256=None)
+            published_snapshots.append(snapshot)
+            window.update(coordinates=str(snapshot), coordinates_sha256=digest, coordinates_bytes=size)
         expected_native = (params.get("md_source_provenance") or {}).get("native_input_identity")
         if expected_native is not None and normalized.get("schema") == NATIVE_JOB_SCHEMA:
             actual = {field: input_config[f"{field}_sha256"] for field in INPUT_FILE_FIELDS if input_config.get(field)}
             if input_config.get("topology_closure"):
                 actual["topology_closure"] = {key: value for key, value in input_config["topology_closure"].items() if key != "root"}
+            if normalized.get("windows"):
+                actual["windows"] = [{"id": window["id"], **({"coordinates": window["coordinates_sha256"]} if window.get("coordinates") else {})} for window in normalized["windows"]]
             if actual != expected_native:
                 raise MDLaunchError("MD_LAUNCH_PREVIEW_STALE", "Native input bytes changed after preview.", status_code=409)
         _validate_raw_md_job_spec(normalized)

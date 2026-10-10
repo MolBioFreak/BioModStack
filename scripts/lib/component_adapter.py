@@ -200,7 +200,11 @@ def native_resource_config(plan: dict, resources: dict, lock_path: str, source_r
         if len(setup) > 1:
             raise ValueError('ambiguous compiled native setup authority')
         expression = setup[0] if setup else "''"
-        lines += [f'  withName: {groovy(name)} {{', '    beforeScript = {',
+        cpu = component['resources_json'].get('cpus', {})
+        lines += [f'  withName: {groovy(name)} {{']
+        if name == 'MD_GROMACS_REPLICA' and cpu.get('parameter') == 'md_config.execution.ntmpi * md_config.execution.ntomp':
+            lines += [f'    cpus = {int(cpu["value"])}']
+        lines += ['    beforeScript = {',
                   f'      def nativeSetup = {expression}',
                   f'      return {groovy(acquire)} + (nativeSetup instanceof Closure ? nativeSetup.call() : nativeSetup)',
                   '    }', '  }']

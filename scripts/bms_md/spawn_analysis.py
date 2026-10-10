@@ -111,12 +111,14 @@ def spawn_analysis(
             "batch_name": parent_name,
             "child_stage": "md_analysis",
         }
+        config = json.loads(manifest.read_text()).get("config", {})
+        required = not ("analysis" in config or config.get("schema") == "bms.md.job.v3")
         if component_runtime_enabled():
             from scripts.lib.component_adapter import runtime_from_environment
             generation = runtime_from_environment().context.get('generation', 0)
             child_id = submit_child_job(
                 payload, parent_job_id=parent_job_id, stage="md_analysis",
-                child_key=f"{generation}:{manifest_set_sha256}:{replica_index}", required=True,
+                child_key=f"{generation}:{manifest_set_sha256}:{replica_index}", required=required,
             )
             child = {"id": child_id, "name": payload["name"], "status": "queued"}
         else:
@@ -169,8 +171,7 @@ def prepare_analysis_retry(runtime, *, component_id: str, operation_id: str,
     replacement = ComponentRequest.capture(parent_job_id=original.parent_job_id,
         stage=original.stage, child_key='retry:' + digest([component_id, operation_id]),
         payload=original.payload, required=original.required)
-    ids = tuple(child['id'] for child in runtime.children(runtime.root_job_id, 'md_analysis')
-                if child['required'])
+    ids = runtime.group_children(f'{runtime.root_job_id}:md_analysis')
     expected = replacement.component_id if runtime.retry_status(operation_id) else component_id
     if expected not in ids:
         raise ValueError("retry component is not in the current required analysis set")
