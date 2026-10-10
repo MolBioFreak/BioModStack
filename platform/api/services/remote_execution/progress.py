@@ -19,15 +19,16 @@ def preload_active(target):
 
 
 async def publish_job_progress(session, job, *, phase, artifact, message, activity=None):
-    """Publish only the currently leased attempt; no Job mutation or secrets."""
+    """Publish this owned attempt without replacing a sibling's activity."""
     from .contracts import RemoteArtifactProgress
     progress = RemoteArtifactProgress(
         operation_id=str(job.remote_attempt_id), job_id=str(job.id),
         phase=phase, artifact=artifact, message=message, activity=activity, updated_at=datetime.utcnow(),
     ).model_dump(mode="json")
     identity = Job.id == str(job.id)
-    from sqlalchemy import select
-    owns = select(Job.id).where(identity,
+    from sqlalchemy import case, select
+    from .claims import job_claim_authority
+    owns = select(Job.id).where(identity, job_claim_authority(job),
         Job.remote_attempt_id == str(job.remote_attempt_id),
         Job.execution_target_id == str(job.execution_target_id),
         Job.status.in_(("queued", "running")),
@@ -35,13 +36,20 @@ async def publish_job_progress(session, job, *, phase, artifact, message, activi
             "succeeded", "failed", "cancelled", "lost", "results_available", "result_pull_failed", "returning",
         )),
     ).exists()
+    metadata = ExecutionTarget.provider_metadata
+    legacy = ExecutionTarget.leased_job_id == str(job.id)
+    prior = metadata["job_progress"][str(job.id)]
+    operation = func.coalesce(case((legacy, metadata["progress"]["operation_id"].as_string())),
+        prior["operation_id"].as_string(), "")
+    prior_phase = func.coalesce(case((legacy, metadata["progress"]["phase"].as_string())),
+        prior["phase"].as_string(), "")
+    payload = func.json(json.dumps(progress))
+    updated = func.json_set(metadata, "$.job_progress." + json.dumps(str(job.id)), payload)
     result = await session.execute(update(ExecutionTarget).where(
-        ExecutionTarget.id == str(job.execution_target_id),
-        ExecutionTarget.leased_job_id == str(job.id), owns,
+        ExecutionTarget.id == str(job.execution_target_id), owns,
         # A delayed callback must not regress this attempt's terminal projection.
-        ~((func.coalesce(ExecutionTarget.provider_metadata["progress"]["operation_id"].as_string(), "") == str(job.remote_attempt_id))
-          & func.coalesce(ExecutionTarget.provider_metadata["progress"]["phase"].as_string(), "").in_(("completed", "failed"))),
-    ).values(provider_metadata=func.json_set(ExecutionTarget.provider_metadata,
-        "$.progress", func.json(json.dumps(progress)))).execution_options(synchronize_session=False))
+        ~((operation == str(job.remote_attempt_id)) & prior_phase.in_(("completed", "failed"))),
+    ).values(provider_metadata=case((legacy, func.json_set(updated, "$.progress", payload)),
+        else_=updated)).execution_options(synchronize_session=False))
     await session.commit()
     return result.rowcount == 1

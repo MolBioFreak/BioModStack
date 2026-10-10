@@ -571,6 +571,63 @@ async def test_hosted_preparation_stops_and_joins_thread(monkeypatch, tmp_path, 
     assert session.commit.await_count == 0
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('released', [False, True])
+async def test_controller_msa_uses_own_claim_not_sibling_target_lease(monkeypatch, tmp_path, released):
+    import asyncio
+    from datetime import datetime
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from database import Base, ExecutionTarget, Job
+    from services import nextflow, model_msa_handoff
+    engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "msa.db"}')
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    calls = []
+    def prepare(model, params, destination):
+        calls.append((model, params, destination))
+        if len(calls) == 1:
+            from biomodstack_msa_api import PendingMSA
+            raise PendingMSA('fixture pending', operation={'provider': 'neurosnap_api',
+                'request_digest': 'a' * 64, 'retry_after_seconds': 0,
+                'tickets': {'unpaired': {'phase': 'polling', 'remote_id': 'fixture-id'}}})
+        return {**params, 'msa_path': str(destination / 'fixture.a3m')}
+    monkeypatch.setattr(model_msa_handoff, 'prepare_launch_msa', prepare)
+    try:
+        async with factory() as session:
+            assignment = {'policy': 'vram_packing', 'lease_id': 'msa-claim',
+                'root_job_id': 'msa', 'execution_target_id': 'vast:msa',
+                'claimed_at': datetime.utcnow().isoformat()}
+            if released:
+                assignment['released_at'] = datetime.utcnow().isoformat()
+            target = ExecutionTarget(id='vast:msa', provider='vast', provider_instance_id='msa',
+                active=True, state='ready', leased_job_id='unrelated-legacy-job')
+            job = Job(id='msa', name='msa', model_id='boltz2', mode='predict',
+                params={'seed': 0}, status='queued', queue_status='preparing', remote_state='preparing',
+                remote_attempt_id='msa-attempt', execution_target_id=target.id,
+                provenance={'remote_execution_assignment': assignment})
+            session.add_all([target, job])
+            await session.commit()
+            authority = (job.execution_target_id, job.remote_attempt_id, job.nextflow_run_id, assignment)
+            operation = nextflow._prepare_launch_msa_on_controller(
+                session, job, 'boltz2', dict(job.params), tmp_path, authority=authority)
+            if released:
+                with pytest.raises(asyncio.CancelledError):
+                    await operation
+                assert calls == []
+            else:
+                prepared = await operation
+                assert len(calls) == 2 and calls[0] == calls[1]
+                assert prepared['msa_path'].endswith('fixture.a3m')
+                await session.refresh(job)
+                assert job.provenance['msa_preparation']['state'] == 'ready'
+                assert job.provenance['remote_execution_assignment'] == assignment
+            await session.refresh(target)
+            assert target.leased_job_id == 'unrelated-legacy-job'
+    finally:
+        await engine.dispose()
+
+
 @pytest.mark.parametrize('replace_during_parse', [False, True])
 def test_cp_config_parse_and_digest_use_same_bytes(tmp_path, monkeypatch, replace_during_parse):
     from biomodstack_boltz_msa import resolve_boltz_config

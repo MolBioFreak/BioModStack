@@ -304,6 +304,8 @@ class ArtifactInventoryStatus(StrictModel):
 class ExecutionTargetStatusFields(StrictModel):
     setup: ExecutionTargetSetup | None = None
     progress: RemoteArtifactProgress | None = None
+    active_job_ids: list[str] = Field(default_factory=list)
+    job_progress: list[RemoteArtifactProgress] = Field(default_factory=list)
     id: str
     provider: Literal["vast"]
     provider_instance_id: str

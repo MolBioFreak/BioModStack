@@ -123,7 +123,13 @@ Operations persist per-artifact status and actual progress. Completed verified c
 
 Multiple workers may be attached and ready simultaneously. Operators can choose a worker or an eligible pool; deterministic fit-based placement considers required capabilities and GPU/CPU/RAM/scratch reservations. Cache-aware cost optimization is deferred.
 
-Every workflow attempt is bound to one target, source/runtime/plan and lease generation. Independent workers can run independent workflows concurrently. Initial conservative serialization within a worker is acceptable only when surfaced honestly and sufficient for declared resource requirements; no claim of fine-grained concurrency without evidence.
+Every workflow attempt is bound to one target, source/runtime/plan and its own claim generation. Independent root Jobs may share a remote GPU when the existing scheduler's VRAM reservation and packing policy fits them. A target-wide one-root lease is not the admission policy. Target/device namespaces remain separate from controller GPUs, and multi-GPU requests retain their whole assigned device set.
+
+Preparing and still-owning terminal/cancelling attempts retain their reservations until their existing release path relinquishes the individual claim. Claims are persisted on Jobs and capacity is revalidated under the target transaction, so competing controller claims cannot spend the same remaining VRAM. Releasing or cancelling one Job does not release its siblings. Retained legacy target leases and authenticated running-attempt identities remain valid without rewriting or relaunching them.
+
+Device telemetry includes total VRAM use, not per-attempt process attribution. Where attribution is absent, the shared reservation policy retains the outstanding reservation rather than assuming aggregate usage belongs to a particular Job; this can conservatively double-count part of actual use. Existing per-root CPU/RAM checks are unchanged and do not imply cumulative CPU/RAM reservations across roots. These are accounting limits, not new refusal policies. More concurrent Jobs do not guarantee proportionally greater throughput.
+
+Routine target responses expose `active_job_ids` and per-Job `job_progress`; the original `progress` field remains a compatibility projection of one active Job. Any outstanding claim preserves existing maintenance/reattachment exclusion, independently of whether progress has been published. Scheduling eligibility is separate from maintenance idleness.
 
 Provider endpoint/host identity, boot identity and lease ownership are checked independently. Detach/stop recovery must not strand a leased attempt behind ordinary admission restrictions. Preserve uncertain-start fences: ambiguous transport failure must not issue duplicate science.
 

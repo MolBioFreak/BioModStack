@@ -38,6 +38,7 @@ from .transport import (
 )
 from .vast import VastInventoryError, list_owned_instances
 from .progress import preload_active, preload_idle_clause
+from .claims import has_target_claims, shared_claim_clause, target_idle_clause
 
 RUNNING_PROVIDER_STATES = frozenset({"running", "ready"})
 INVENTORY_MAX_AGE_SECONDS = 120
@@ -158,6 +159,14 @@ def _target_response(target: Any, *, details: Literal[True]) -> ExecutionTargetD
 
 def _target_response(target: Any, *, details: bool = False) -> ExecutionTargetResponse | ExecutionTargetDetails:
     metadata = target.provider_metadata or {}
+    active_job_ids: list[str] = list(getattr(target, "active_job_ids", ()) or ())
+    if target.leased_job_id and target.leased_job_id not in active_job_ids:
+        active_job_ids.insert(0, str(target.leased_job_id))
+    progress_by_job = dict(metadata.get("job_progress") or {})
+    legacy_progress = metadata.get("progress")
+    if isinstance(legacy_progress, dict) and legacy_progress.get("job_id") in active_job_ids:
+        progress_by_job.setdefault(legacy_progress["job_id"], legacy_progress)
+    job_progress = [progress_by_job[key] for key in active_job_ids if key in progress_by_job]
     preload = metadata.get("preload")
     if not details and isinstance(preload, dict):
         preload = {key: value for key, value in preload.items() if key not in {"artifacts", "artifact_progress"}}
@@ -167,7 +176,9 @@ def _target_response(target: Any, *, details: bool = False) -> ExecutionTargetRe
         artifact_inventory=observed_artifact_inventory(target, compact=not details),
         setup=(target.provider_metadata or {}).get("setup"),
         preload=preload,
-        progress=(target.provider_metadata or {}).get("progress") if target.leased_job_id else None,
+        active_job_ids=active_job_ids,
+        job_progress=job_progress,
+        progress=job_progress[0] if job_progress else None,
         id=str(target.id),
         provider="vast",
         provider_instance_id=str(target.provider_instance_id),
@@ -183,8 +194,8 @@ def _target_response(target: Any, *, details: bool = False) -> ExecutionTargetRe
         remote_root=str(target.remote_root),
         host_key_sha256=target.host_key_sha256,
         capabilities={**(dict(target.capabilities or {}) if details else compact_capabilities(target.capabilities)), "scheduling": {
-            "policy": "exclusive_target", "max_concurrent_root_attempts": 1,
-            "new_work_ready": target_eligible(target) and not target.leased_job_id,
+            "policy": "vram_packing", "active_job_ids": active_job_ids,
+            "new_work_ready": target_eligible(target),
             "inventory_fresh": inventory_fresh(target),
             "leased_job_id": target.leased_job_id,
         }},
@@ -263,6 +274,12 @@ def _json_object(column, keys, prefix=""):
     return func.json_object(*args)
 
 
+def _shared_job_ids_query():
+    return select(func.json_group_array(Job.id)).where(
+        Job.execution_target_id == ExecutionTarget.id, shared_claim_clause(),
+    ).correlate(ExecutionTarget).scalar_subquery()
+
+
 def status_query(*, include_observations=True):
     """SQLite projects scalar metadata before any Python JSON/ORM decoding.
 
@@ -295,9 +312,10 @@ def status_query(*, include_observations=True):
     capabilities = _json_object(ExecutionTarget.capabilities, STATUS_CAPABILITY_KEYS)
     readiness = _json_object(ExecutionTarget.capabilities, STATUS_READINESS_KEYS, "readiness.")
     runtime = _json_object(ExecutionTarget.capabilities, STATUS_RUNTIME_KEYS, "critical_runtime.")
+    columns.append(_shared_job_ids_query().label("active_job_ids"))
     columns.extend((capabilities.label("status_capabilities"), readiness.label("status_readiness"),
                     runtime.label("status_runtime"),
-                    _json_object(metadata, ("inventory", "setup", "attachment", "progress")
+                    _json_object(metadata, ("inventory", "setup", "attachment", "progress", "job_progress")
                                  if include_observations else ("inventory", "setup", "attachment")).label("status_metadata")))
     if include_observations:
         columns.extend((preload.label("status_preload"), inventory.label("status_inventory"), summary.label("status_summary"),
@@ -311,6 +329,7 @@ def status_query(*, include_observations=True):
 
 def _status_row(row):
     value = dict(row)
+    value["active_job_ids"] = json.loads(value.get("active_job_ids") or "[]")
     metadata = json.loads(value.pop("status_metadata"))
     # json_object emits null for absent keys; preserve legacy attachment absence.
     metadata = {key: item for key, item in metadata.items() if item is not None}
@@ -345,7 +364,7 @@ async def _status_rows(session, *, identifier=None, order=False):
     if identifier is not None:
         query = query.where(ExecutionTarget.id == identifier)
     if order:
-        query = query.where(or_(ExecutionTarget.active.is_(True), ExecutionTarget.leased_job_id.is_not(None),
+        query = query.where(or_(ExecutionTarget.active.is_(True), ~target_idle_clause(),
                                 ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True)))
         query = query.order_by(ExecutionTarget.active.desc(), ExecutionTarget.updated_at.desc())
     return [_status_row(row) for row in (await session.execute(query)).mappings()]
@@ -429,15 +448,19 @@ async def list_targets(session: AsyncSession) -> list[ExecutionTargetResponse]:
         raise ExecutionTargetError("Vast inventory is unknown or expired; placement is unavailable")
     # A stale/unreachable member cannot hide the rest of the fleet or retained
     # ownership. Per-target admission remains fail-closed in get_ready_target.
-    return [_target_response(row) for row in rows if row.active or row.leased_job_id
+    return [_target_response(row) for row in rows if row.active or row.leased_job_id or row.active_job_ids
             or (row.provider_metadata or {}).get("inventory", {}).get("present") is True]
 
 
 async def get_target(session: AsyncSession, execution_target_id: str) -> ExecutionTarget:
     """Identity lookup for observation/control; not new-work admission authority."""
-    target = await session.get(ExecutionTarget, execution_target_id, populate_existing=True)
-    if target is None:
+    row = (await session.execute(select(ExecutionTarget, _shared_job_ids_query()).where(
+        ExecutionTarget.id == execution_target_id,
+    ).execution_options(populate_existing=True))).one_or_none()
+    if row is None:
         raise ExecutionTargetError("Execution target does not exist")
+    target, active_job_ids = row
+    setattr(target, "active_job_ids", json.loads(active_job_ids or "[]"))
     return target
 
 
@@ -571,7 +594,7 @@ async def _refresh_vast_targets(session: AsyncSession) -> ExecutionTargetInvento
         endpoint_changed = (target.host, target.port) != (instance.host, instance.port)
         if target not in session.new:
             # Evaluate the lease in the endpoint write itself, not a stale ORM read.
-            unleased = ExecutionTarget.leased_job_id.is_(None)
+            unleased = target_idle_clause()
             await session.execute(update(ExecutionTarget).where(ExecutionTarget.id == identifier).values(
                 host=case((unleased, instance.host), else_=ExecutionTarget.host),
                 port=case((unleased, instance.port), else_=ExecutionTarget.port),
@@ -649,7 +672,7 @@ async def fail_setup(session, identifier, started_at, message: str, *, revoke_at
     probing = ExecutionTarget.state == "probing"
     now = datetime.utcnow()
     await session.execute(update(ExecutionTarget).where(
-        ExecutionTarget.id == identifier, ExecutionTarget.leased_job_id.is_(None),
+        ExecutionTarget.id == identifier, target_idle_clause(),
         ExecutionTarget.provider_metadata["setup"]["started_at"].as_string() == started_at,
         or_(probing, ExecutionTarget.provider_metadata["setup"]["phase"].as_string().in_(SETUP_ACTIVE_PHASES)),
     ).values(
@@ -727,7 +750,7 @@ class AttachmentController:
             rows = (await session.scalars(select(ExecutionTarget).where(
                 or_(ExecutionTarget.state == "probing",
                     ExecutionTarget.provider_metadata["setup"]["phase"].as_string().in_(SETUP_ACTIVE_PHASES)),
-                ExecutionTarget.leased_job_id.is_(None)))).all()
+                target_idle_clause()))).all()
             for row in rows:
                 message = "Remote setup interrupted by service restart; retry Attach"
                 await fail_setup(session, row.id, (row.provider_metadata or {}).get("setup", {}).get("started_at"), message)
@@ -764,7 +787,7 @@ async def begin_activation(
         raise ExecutionTargetError("Selected Vast instance is absent or inventory is unavailable")
     existing = await session.get(ExecutionTarget, target_id("vast", request.provider_instance_id))
 
-    if existing is not None and existing.leased_job_id:
+    if existing is not None and await has_target_claims(session, existing.id):
         raise ExecutionTargetError("Execution target has an active attempt lease; cannot reattach")
     if instance.provider_state not in RUNNING_PROVIDER_STATES:
         raise ExecutionTargetError(
@@ -777,7 +800,7 @@ async def begin_activation(
 
     admitted = await session.execute(update(ExecutionTarget).where(
         ExecutionTarget.id == identifier,
-        ExecutionTarget.leased_job_id.is_(None),
+        target_idle_clause(),
         ExecutionTarget.state != "probing",
         preload_idle_clause(),
 
@@ -825,7 +848,7 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
                 or target.provider_metadata["inventory"].get("running") is not True
 
                 or (target.host_key_sha256 is not None and target.host_key_sha256 != fingerprint)
-                or target.state != "probing" or target.leased_job_id
+                or target.state != "probing" or await has_target_claims(session, identifier)
                 or (target.provider_metadata or {}).get("setup", {}).get("started_at") != started_at
                 or (target.host, target.port, target.username, target.remote_root) !=
                    (connection.host, connection.port, connection.username, connection.remote_root)):
@@ -862,7 +885,7 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
                         target.provider_metadata['inventory']['checked_at'],
                     ExecutionTarget.host == connection.host, ExecutionTarget.port == connection.port,
                     ExecutionTarget.username == connection.username, ExecutionTarget.remote_root == connection.remote_root,
-                    ExecutionTarget.host_key_sha256.is_(None), ExecutionTarget.leased_job_id.is_(None),
+                    ExecutionTarget.host_key_sha256.is_(None), target_idle_clause(),
                 ).values(host=candidate.host, port=candidate.port).execution_options(synchronize_session=False))
                 if changed.rowcount != 1:
                     await session.rollback()
@@ -894,7 +917,7 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         committed = await session.execute(update(ExecutionTarget).where(
             ExecutionTarget.id == identifier, ExecutionTarget.state == "probing",
             ExecutionTarget.provider_metadata["setup"]["started_at"].as_string() == started_at,
-            ExecutionTarget.leased_job_id.is_(None), ExecutionTarget.host == connection.host,
+            target_idle_clause(), ExecutionTarget.host == connection.host,
             ExecutionTarget.port == connection.port, ExecutionTarget.username == connection.username,
             ExecutionTarget.remote_root == connection.remote_root,
             or_(ExecutionTarget.host_key_sha256.is_(None), ExecutionTarget.host_key_sha256 == fingerprint),
@@ -997,7 +1020,7 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
             attachment_clause(now),
             ExecutionTarget.host_key_sha256 == fingerprint,
             ExecutionTarget.provider_metadata["setup"]["started_at"].as_string() == started_at,
-            ExecutionTarget.leased_job_id.is_(None),
+            target_idle_clause(),
             ExecutionTarget.host == connection.host,
             ExecutionTarget.port == connection.port,
             ExecutionTarget.username == connection.username,
@@ -1046,7 +1069,7 @@ async def deactivate_target(
             "Execution target has nonterminal Jobs and cannot be detached"
         )
     changed = await session.execute(update(ExecutionTarget).where(
-        ExecutionTarget.id == execution_target_id, ExecutionTarget.leased_job_id.is_(None),
+        ExecutionTarget.id == execution_target_id, target_idle_clause(),
         ExecutionTarget.state != "probing", preload_idle_clause(),
     ).values(active=False, state="inactive", updated_at=datetime.utcnow()).execution_options(synchronize_session=False))
     if changed.rowcount != 1:
@@ -1077,7 +1100,7 @@ async def admit_target_resources(
     """Bind compiled requirements to fresh target capacity, without changing science.
 
     The launch/compiler owner supplies the aggregate plan and bundle budget;
-    Nextflow must enforce the returned CPU/RAM ceiling within this root lease.
+    Nextflow must enforce the returned CPU/RAM ceiling within this root attempt.
     Descendants subdivide this reservation, never reserve another target.
     """
     requirements = {"cpus": required_cpus, "memory_bytes": required_memory_bytes,
@@ -1110,7 +1133,7 @@ async def admit_target_resources(
     )):
         raise ExecutionTargetError(f"Assigned GPU physical capacity is below {minimum_gpu_memory_mb} MB")
     return {"schema": "bms.target-resource-admission.v1", "execution_target_id": str(target.id),
-            "policy": "exclusive_target", "observed_at": sample.get("observed_at"),
+            "policy": "vram_packing", "observed_at": sample.get("observed_at"),
             "required": requirements, "available": observed,
             "minimum_gpu_memory_mb": minimum_gpu_memory_mb,
             "devices": [{"gpu_index": i, "gpu_uuid": devices[i]["uuid"]} for i in gpu_ids]}
@@ -1192,7 +1215,7 @@ def selected_plan_target_resources(target, plan, *, gpu_ids, scratch_bytes) -> d
     if len(gpu_ids) < required_gpus:
         raise ExecutionTargetError("Selected plan GPU requirement exceeds assigned target devices")
     return {"schema": "bms.selected-plan-target-resources.v1",
-            "execution_target_id": str(target.id), "policy": "exclusive_target",
+            "execution_target_id": str(target.id), "policy": "vram_packing",
             "required": {"cpus": cpus, "memory_bytes": memory, "scratch_bytes": scratch_bytes},
             "gpu_ids": list(gpu_ids), "components": declarations,
             "compute": compute_budget, "coordinator_overlap": coordinator_budget,

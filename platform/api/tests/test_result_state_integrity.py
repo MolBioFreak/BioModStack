@@ -483,7 +483,8 @@ def test_lineage_fields_accept_artifact_override_without_duplicate_kwarg_path() 
 
 
 @pytest.mark.asyncio
-async def test_completion_is_committed_only_after_ingestion_and_validation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("placement", ["local", "legacy_remote", "shared_remote"])
+async def test_completion_is_committed_only_after_ingestion_and_validation(tmp_path: Path, placement: str) -> None:
     factory, engine = await _session_factory(tmp_path)
     output_dir = tmp_path / "results"
     output_dir.mkdir()
@@ -491,6 +492,22 @@ async def test_completion_is_committed_only_after_ingestion_and_validation(tmp_p
 
     async with factory() as session:
         job = _job("ordered", output_dir=str(output_dir))
+        if placement != "local":
+            from database import ExecutionTarget
+            job.execution_target_id = "vast:shared"
+            job.remote_attempt_id = "ordered-attempt"
+            job.remote_state = "succeeded"
+            target = ExecutionTarget(id="vast:shared", provider="vast", provider_instance_id="shared",
+                active=True, state="ready", host="fixture", port=22, username="root")
+            if placement == "legacy_remote":
+                target.leased_job_id = job.id
+            else:
+                job.provenance = {"remote_execution_assignment": {"policy": "vram_packing",
+                    "lease_id": "ordered-claim", "root_job_id": job.id,
+                    "execution_target_id": target.id, "claimed_at": datetime.utcnow().isoformat()}}
+                # The legacy pointer belonging to another job must not deny this claim.
+                target.leased_job_id = "sibling-legacy"
+            session.add(target)
         session.add(job)
         await session.commit()
         observed_statuses: list[tuple[str, str]] = []

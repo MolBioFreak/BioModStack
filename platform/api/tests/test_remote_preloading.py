@@ -566,3 +566,89 @@ async def test_cancel_retains_artifact_evidence_and_blocks_until_quiescent(store
     assert observed and all(value == operation for value in observed)
     assert not controller.tasks
     await controller.close()
+
+
+def shared_remote_job(identifier, *, status='running'):
+    return Job(id=identifier, name=identifier, model_id='boltz2', mode='predict', params={},
+        status=status, queue_status=status, execution_target_id='vast:1',
+        remote_attempt_id=f'{identifier}-attempt', remote_state='running', assigned_gpu=0,
+        provenance={'remote_execution_assignment': {'schema': 'bms.remote-execution-assignment.v1',
+            'policy': 'vram_packing', 'lease_id': f'{identifier}-lease', 'root_job_id': identifier,
+            'execution_target_id': 'vast:1', 'gpu_indices': [0],
+            'claimed_at': datetime.utcnow().isoformat()}})
+
+
+@pytest.mark.asyncio
+async def test_shared_job_progress_is_independent_and_exact_claim_fenced(store):
+    from services.remote_execution.progress import publish_job_progress
+    from services.remote_execution.targets import target_status, get_target, _target_response
+    from services.remote_execution.executor import _release_remote_target_lease
+    async with store() as session:
+        session.add_all([shared_remote_job('shared-a'), shared_remote_job('shared-b')])
+        await session.commit()
+    async with store() as stale:
+        a = await stale.get(Job, 'shared-a')
+        b = await stale.get(Job, 'shared-b')
+        assert await publish_job_progress(stale, a, phase='running', artifact=None, message='A running')
+        assert await publish_job_progress(stale, b, phase='transferring', artifact=None, message='B staging')
+        status = await target_status(stale, 'vast:1')
+        assert set(status.active_job_ids) == {'shared-a', 'shared-b'}
+        assert {row.job_id: row.message for row in status.job_progress} == {
+            'shared-a': 'A running', 'shared-b': 'B staging'}
+        assert status.capabilities['scheduling']['policy'] == 'vram_packing'
+        assert status.capabilities['scheduling']['new_work_ready'] is True
+        assert 'max_concurrent_root_attempts' not in status.capabilities['scheduling']
+        details = _target_response(await get_target(stale, 'vast:1'), details=True)
+        assert set(details.active_job_ids) == set(status.active_job_ids)
+        await stale.rollback()
+    # A delayed callback cannot publish under a replaced lease of the same attempt.
+    async with store() as stale:
+        a = await stale.get(Job, 'shared-a')
+        async with store() as writer:
+            current = await writer.get(Job, 'shared-a')
+            current.provenance = {**current.provenance, 'remote_execution_assignment': {
+                **current.provenance['remote_execution_assignment'], 'lease_id': 'replacement'}}
+            await writer.commit()
+        assert not await publish_job_progress(stale, a, phase='running', artifact=None, message='Stale A')
+    async with store() as session:
+        a = await session.get(Job, 'shared-a')
+        await _release_remote_target_lease(session, a)
+        await session.commit()
+        status = await target_status(session, 'vast:1')
+        assert status.active_job_ids == ['shared-b']
+        assert [(row.job_id, row.message) for row in status.job_progress] == [('shared-b', 'B staging')]
+        metadata = (await get_target(session, 'vast:1')).provider_metadata
+        assert 'shared-a' not in metadata.get('job_progress', {})
+        assert metadata['job_progress']['shared-b']['message'] == 'B staging'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status', ['running', 'preparing', 'cancelled'])
+async def test_shared_claim_not_progress_preserves_maintenance_exclusion(store, status):
+    from services.remote_execution.claims import has_target_claims, target_idle_clause
+    from services.remote_execution.executor import _release_remote_target_lease
+    from services.remote_execution.targets import list_targets
+    from sqlalchemy import update
+    controller = p.PreloadController(store)
+    async with store() as session:
+        a, b = shared_remote_job('shared-a', status=status), shared_remote_job('shared-b', status=status)
+        session.add_all([a, b])
+        await session.commit()
+        assert await has_target_claims(session, 'vast:1')
+        assert (await list_targets(session))[0].progress is None
+        assert set((await list_targets(session))[0].active_job_ids) == {'shared-a', 'shared-b'}
+        changed = await session.execute(update(ExecutionTarget).where(
+            ExecutionTarget.id == 'vast:1', target_idle_clause()).values(host='replacement'))
+        assert changed.rowcount == 0
+        await session.rollback()
+        with pytest.raises(ExecutionTargetError, match='idle'):
+            await controller.start(session, 'vast:1', PreloadRequest(job_id='recipe'))
+        with pytest.raises(ExecutionTargetError):
+            await deactivate_target(session, 'vast:1')
+        a = await session.get(Job, 'shared-a')
+        await _release_remote_target_lease(session, a)
+        await session.commit()
+        assert await has_target_claims(session, 'vast:1')
+        with pytest.raises(ExecutionTargetError, match='idle'):
+            await controller.start(session, 'vast:1', PreloadRequest(job_id='recipe'))
+    await controller.close()

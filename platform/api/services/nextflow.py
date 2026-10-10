@@ -2230,7 +2230,8 @@ async def _prepare_launch_msa_on_controller(session, job, model_id, params, dest
                 raise asyncio.CancelledError()
             from database import ExecutionTarget
             target = await session.get(ExecutionTarget, job.execution_target_id, populate_existing=True)
-            if target is None or target.leased_job_id != str(job.id):
+            from services.remote_execution.claims import job_has_claim
+            if target is None or not job_has_claim(target, job):
                 raise asyncio.CancelledError()
 
     async def publish(state, operation=None):
