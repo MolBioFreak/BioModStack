@@ -80,7 +80,7 @@ function transport({ missing = false, legacy = false, canonical = false, residue
 }
 async function mount(element: React.ReactNode) {
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
-    await act(async () => { tree = create(<QueryClientProvider client={client}>{element}</QueryClientProvider>); });
+    await act(async () => { tree = create(<QueryClientProvider client={client}><ThemeProvider>{element}</ThemeProvider></QueryClientProvider>); });
     await flush();
 }
 afterEach(async () => { await act(async () => tree?.unmount()); tree = undefined; client?.clear(); api.defaults.adapter = adapter; vi.unstubAllGlobals(); sessionStorage.clear(); });
@@ -92,16 +92,17 @@ it.each([false, true])('standalone analytics preserves the real profile in canon
         return <AnalyticsDashboard modelId="protenix" jobId="job" designs={designs} selectedDesignId={id} onSelectDesign={select} structure={<div data-document={id} />} />;
     }
     await mount(<Selected />);
-    const scalar = tree!.root.findAllByType('details').find(d => text(d.findAllByType('summary')[0]).startsWith('Exploratory scalar'))!;
+    const scalar = tree!.root.findAllByType('details').find(d => text(d.findAllByType('summary')[0]).startsWith('Metric comparisons and custom charts'))!;
     await act(async () => scalar.props.onToggle({ currentTarget: { open: true } })); await flush();
     expect(profilePlot().data[0].y).toEqual([90]);
     expect(profilePlot().layout.shapes.map((s: any) => [s.y0,s.y1])).toEqual([[90,100],[70,90],[50,70],[0,50]]);
-    expect(profilePlot().layout.hovermode).toBe('x unified');
+    expect(profilePlot().layout.hovermode).toBe('closest');
     expect(profilePlot().config.toImageButtonOptions.format).toBe('svg');
     expect(heatmap().data[0].z).toEqual(a.pae.pae_matrix);
-    expect(heatmap().data[0].x[3]).toContain('E:1 GTP / C1');
+    expect(heatmap().data[0].customdata[0][3]).toContain('E:1 GTP / C1');
     await act(async () => tree!.root.findByProps({ 'aria-label': 'Selected prediction' }).props.onChange({ target: { value: 'other' } })); await flush();
-    expect(tree!.root.findByProps({ 'data-document': 'other' })).toBeTruthy();
+    expect(tree!.root.findByProps({ 'aria-label': 'Selected prediction' }).props.value).toBe('other');
+    expect(tree!.root.findAllByProps({ 'data-document': 'other' })).toHaveLength(0);
     expect(profilePlot().data[0].y).toEqual([42]);
     expect(heatmap().data[0].z[0][1]).toBe(27);
     await act(async () => tree!.root.findByProps({ 'aria-label': 'Row chain' }).props.onChange({ target: { value: 'E' } }));
@@ -116,19 +117,26 @@ it('native atom profiles explicitly select protein CA; ligand atoms and DNA CA a
     expect(result.chains.A.plddt).toEqual([90]);
     expect(result.description).toContain('no atom averaging');
 });
-it('not-requested PAE leaves native structure and profile usable, and comparison retains a fixed scale', async () => {
+it('not-requested PAE leaves the native profile usable without duplicating the structure in Charts', async () => {
     transport({ missing: true });
     await mount(<AnalyticsDashboard modelId="boltz_cp_experimental" designs={designs} structure={<div data-structure />} />);
     expect(text(tree!.root)).toContain('Full PAE was not requested');
-    expect(tree!.root.findByProps({ 'data-structure': true })).toBeTruthy();
+    expect(tree!.root.findAllByProps({ 'data-structure': true })).toHaveLength(0);
     expect(profilePlot().data[0].y).toEqual([90]);
     expect(heatmap()).toBeUndefined();
     expect(calls.every(c => c.method === 'get')).toBe(true);
 });
-it('an explicit saved output flag explains an absent legacy full PAE without treating unknown flags as false', async () => {
-    transport({ paeRequestFails: true });
+it('explicit not-requested evidence stays distinct from a failed PAE request', async () => {
+    transport({ missing: true });
     await mount(<AnalyticsDashboard modelId="boltz_cp_experimental" fullPaeRequested={false} designs={designs} structure={<div data-structure />} />);
     expect(text(tree!.root)).toContain('Full PAE was not requested for this prediction.');
+    expect(profilePlot().data[0].y).toEqual([90]);
+    expect(calls.every(c => c.method === 'get')).toBe(true);
+    await act(async () => tree!.unmount()); client.clear();
+    transport({ paeRequestFails: true });
+    await mount(<AnalyticsDashboard modelId="boltz_cp_experimental" fullPaeRequested={false} designs={designs} />);
+    expect(text(tree!.root)).toContain('PAE request failed. Structure and other scores remain available.');
+    expect(text(tree!.root)).not.toContain('Full PAE was not requested for this prediction.');
     expect(profilePlot().data[0].y).toEqual([90]);
     expect(calls.every(c => c.method === 'get')).toBe(true);
 });
@@ -138,7 +146,8 @@ it('legacy spatial payloads retain residue numbers and asymmetric matrix without
     await mount(<AnalyticsDashboard modelId="boltz2" designs={[legacy]} structure={<div />} />);
     expect(profilePlot().data[0].x).toEqual([10,12]);
     expect(heatmap().data[0].z).toEqual([[0,4],[8,0]]);
-    expect(heatmap().layout.xaxis.title.text).toContain('mapping unavailable');
+    expect(heatmap().layout.xaxis.title.text).toBe('Prediction position');
+    expect(tree!.root.findAllByProps({ 'aria-label': 'Row chain' })).toHaveLength(0);
 });
 it('legacy residue-only confidence is visible without inventing a chain identity', async () => {
     transport({ legacy: true, legacyResidueOnly: true });
@@ -163,56 +172,62 @@ it.each(['esmfold2', 'esmfold2_experimental'])('%s uses native residue confidenc
     expect(profilePlot().data.map((trace: any) => trace.y)).toEqual([[.5],[80],[40]]);
     expect(profilePlot().data[0].x).toEqual(['42A']);
     expect(heatmap().data[0].z).toEqual(esmfold2Fixture().pae.pae_matrix);
-    expect(heatmap().data[0].x).toEqual(['Token 0','Token 1','Token 2','Token 3','Token 4']);
+    expect(heatmap().data[0].x).toEqual([0,1,2,3,4]);
+    expect(heatmap().layout.xaxis.ticktext).toEqual(['0','1','2','3','4']);
     expect(tree!.root.findAllByProps({'aria-label':'Row chain'})).toHaveLength(0);
     expect(text(tree!.root)).toContain('native_token_to_structure_mapping_unavailable');
     expect(text(tree!.root)).toContain('native_output_order');
-    expect(text(tree!.root)).toContain('Native collapsed-CIF-residue pLDDT');
-    expect(text(tree!.root)).toContain('Not a token-mean summary');
+    expect(text(tree!.root)).toContain('Confidence by residue. Higher is better.');
+    expect(profilePlot().data.map((trace: any) => trace.y)).not.toEqual([[90]]);
     expect(text(tree!.root)).not.toContain('Native Cα atom pLDDT');
 });
 it('native token clicks never emit scene selections; collapsed CIF profile selections still do', async () => {
     transport({residueConfidence: true});
-    await mount(<MemoryRouter initialEntries={['/designs/job?design_id=candidate&tab=charts']}><ThemeProvider><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></ThemeProvider></MemoryRouter>);
+    await mount(<MemoryRouter initialEntries={['/designs/job?design_id=candidate&tab=structure']}><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></MemoryRouter>);
     await flush();
+    await act(async () => tree!.root.findAllByType('button').find(n => text(n) === 'Show companion charts · PAE & pLDDT')!.props.onClick());
     const engine = () => tree!.root.findAll(n => n.type === 'div' && !!n.props['data-native-url'])[0];
     const focused = () => engine().props['data-native-queries'].filter((query: any) => query.color?.g === 185);
     expect(focused()).toEqual([]);
-    await act(async () => heatmap().onClick({points:[{x:'Token 4',y:'Token 0'}]}));
+    await act(async () => heatmap().onClick({points:[{x:4,y:0}]}));
     expect(focused()).toEqual([]);
     expect(tree!.root.findAllByProps({'aria-label':'Confidence selection'})).toHaveLength(0);
     await act(async () => profilePlot().onClick({points:[{customdata:profilePlot().data[0].customdata[0]}]}));
     expect(focused().length).toBeGreaterThan(0);
     expect(text(tree!.root.findByProps({'aria-label':'Confidence selection'}))).toContain('A:42A ALA');
     const before = focused();
-    await act(async () => heatmap().onClick({points:[{x:'Token 1',y:'Token 2'}]}));
+    await act(async () => heatmap().onClick({points:[{x:1,y:2}]}));
     expect(focused()).toEqual(before);
     const disclosure = tree!.root.findAllByType('details').find(d => text(d.findAllByType('summary')[0]).startsWith('Compare native PAE'))!;
     await act(async () => disclosure.props.onToggle({currentTarget:{open:true}})); await flush();
     const maps = plots().filter(p => p.data[0]?.type === 'heatmap' && p.data[0].zmax === 30);
     expect(maps).toHaveLength(3);
     expect(maps[2].data[0].z).toEqual(esmfold2Fixture('other',1).pae.pae_matrix);
-    expect(maps[2].data[0].x[4]).toBe('Token 4');
+    expect(maps[2].data[0].x[4]).toBe(4);
+    expect(maps[2].data[0].customdata[0][4]).toBe('Row 0<br>Column 4');
     await act(async () => tree!.root.findByProps({'aria-label':'Selected prediction'}).props.onChange({target:{value:'other'}})); await flush();
     expect(engine().props['data-native-url']).toBe('/api/designs/other/pdb');
     expect(focused()).toEqual([]);
+    await act(async () => tree!.root.findAllByType('button').find(n => text(n) === 'Show companion charts · PAE & pLDDT')!.props.onClick());
     expect(heatmap().data[0].z).toEqual(esmfold2Fixture('other',1).pae.pae_matrix);
     expect(calls.filter(c=>c.method!=='get').every(c=>/plotly-metrics|designs\/query/.test(c.url))).toBe(true);
 });
-it.each(['native_pae_not_reported','not_retained_by_producer','missing_or_invalid_esmfold2_native_evidence'])('ESMFold2 %s retains the collapsed confidence chart and structure', async missingReason => {
+it.each(['native_pae_not_reported','not_retained_by_producer','missing_or_invalid_esmfold2_native_evidence'])('ESMFold2 %s retains residue confidence without duplicating the structure in Charts', async missingReason => {
     transport({residueConfidence:true,missing:true,missingReason});
     await mount(<AnalyticsDashboard modelId="esmfold2" designs={[designs[0]]} structure={<div data-structure />} />);
     expect(heatmap()).toBeUndefined();
     expect(text(tree!.root)).toContain(missingReason);
     expect(profilePlot().data.map((trace: any)=>trace.y)).toEqual([[.5],[80],[40]]);
-    expect(tree!.root.findByProps({'data-structure':true})).toBeTruthy();
+    expect(tree!.root.findAllByProps({'data-structure':true})).toHaveLength(0);
     expect(calls.every(c=>c.method==='get')).toBe(true);
 });
 it('sampled token plots retain source indices instead of relabeling as residues or dense positions', async () => {
     transport({residueConfidence:true,sampledTokens:true});
     await mount(<AnalyticsDashboard modelId="esmfold2" designs={[designs[0]]} structure={<div />} />);
-    expect(heatmap().data[0].x).toEqual(['Token 0','Token 4']);
-    expect(heatmap().data[0].y).toEqual(['Token 0','Token 4']);
+    expect(heatmap().data[0].x).toEqual([0,1]);
+    expect(heatmap().layout.xaxis.ticktext).toEqual(['0','4']);
+    expect(heatmap().data[0].y).toEqual([0,1]);
+    expect(heatmap().data[0].customdata).toEqual([['Row 0<br>Column 0','Row 0<br>Column 4'],['Row 4<br>Column 0','Row 4<br>Column 4']]);
     expect(heatmap().data[0].z).toEqual([[0,2],[10,12]]);
     expect(heatmap().layout.xaxis.constrain).toBe('domain');
     expect(heatmap().layout.yaxis.constrain).toBe('domain');
@@ -222,14 +237,21 @@ it('scope excludes conformational mapping, ConforNets and historical launchers',
     for (const id of ['conformational_mapping','confornets_experimental','rf3','alphafold2']) expect(isStandaloneStructurePrediction(id)).toBe(false);
     for (const id of ['esmfold2','esmfold2_experimental','boltz_cp_experimental']) expect(isStandaloneStructurePrediction(id)).toBe(true);
 });
-it.each(['Charts', 'Structure'])('real Results %s routing mounts shared structure and selection changes both', async view => {
+it.each(['Charts', 'Structure'])('real Results %s routing separates charts from structure and preserves selection', async view => {
     transport();
-    await mount(<MemoryRouter initialEntries={['/designs/job?design_id=candidate&tab=charts']}><ThemeProvider><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></ThemeProvider></MemoryRouter>);
+    await mount(<MemoryRouter initialEntries={['/designs/job?design_id=candidate&tab=structure']}><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></MemoryRouter>);
     await flush();
     const charts = tree!.root.findAllByType('button').find(n => text(n).endsWith(view));
     expect(charts).toBeTruthy();
     await act(async () => charts!.props.onClick()); await flush();
     expect(tree!.root.findAllByProps({ 'aria-label': 'Structure prediction confidence' })).toHaveLength(1);
+    if (view === 'Charts') {
+        expect(tree!.root.findAll(n => n.type === 'div' && !!n.props['data-native-url'])).toHaveLength(0);
+        expect(profilePlot().data[0].y).toEqual([90]);
+        await act(async () => tree!.root.findAllByType('button').find(n => text(n).endsWith('Structure'))!.props.onClick()); await flush();
+    }
+    expect(profilePlot()).toBeUndefined();
+    await act(async () => tree!.root.findAllByType('button').find(n => text(n) === 'Show companion charts · PAE & pLDDT')!.props.onClick());
     expect(profilePlot().data[0].y).toEqual([90]);
     const engine = () => tree!.root.findAll(n => n.type === 'div' && !!n.props['data-native-url'])[0];
     expect(engine().props['data-native-url']).toBe('/api/designs/candidate/pdb');
@@ -241,6 +263,7 @@ it.each(['Charts', 'Structure'])('real Results %s routing mounts shared structur
     await act(async () => profilePlot().onClick({ points: [{ customdata: profilePlot().data[0].customdata[0] }] }));
     expect(engine().props['data-native-queries'].filter((query: any) => query.color?.g === 185).map((query: any) => query.labelAtomIds)).toEqual([['CA']]);
     await act(async () => tree!.root.findByProps({ 'aria-label': 'Selected prediction' }).props.onChange({ target: { value: 'other' } })); await flush();
+    await act(async () => tree!.root.findAllByType('button').find(n => text(n) === 'Show companion charts · PAE & pLDDT')!.props.onClick());
     expect(profilePlot().data[0].y).toEqual([42]);
     expect(tree!.root.findAll(n => n.type === 'div' && n.props['data-native-url'] === '/api/designs/other/pdb').length).toBeGreaterThan(0);
     expect(calls.filter(c => c.method !== 'get').every(c => /plotly-metrics|designs\/query/.test(c.url))).toBe(true);
@@ -315,15 +338,16 @@ it('native Boltz null-column wire renders canonical summary and saved row withou
     expect(calls.every(c => c.method === 'get')).toBe(true);
 });
 it.each([
-    ['esmfold2', 'fraction', 'model_token_mean', 0.7823242545127869, 'Native token-mean'],
-    ['esmfold2_experimental', 'fraction', 'model_token_mean', 0.7823242545127869, 'Native token-mean'],
-    ['protenix', 'percent', 'model_atom_mean', 78.23242545127869, 'Native atom-mean'],
-])('%s scalar scope and units remain distinct from the profile', async (model, unit, scope, value, label) => {
+    ['esmfold2', 'fraction', 'model_token_mean', 0.7823242545127869],
+    ['esmfold2_experimental', 'fraction', 'model_token_mean', 0.7823242545127869],
+    ['protenix', 'percent', 'model_atom_mean', 78.23242545127869],
+])('%s scalar scope and units remain distinct from the profile', async (model, unit, scope, value) => {
     if (model === 'protenix' && process.env.BMS_PROTENIX_SCALAR_DESIGNS && process.env.BMS_PROTENIX_SCALAR_POINTS) {
         const saved = JSON.parse(readFileSync(process.env.BMS_PROTENIX_SCALAR_DESIGNS, 'utf8')).designs;
         scalarTransport(JSON.parse(readFileSync(process.env.BMS_PROTENIX_SCALAR_POINTS, 'utf8')));
         await mount(<StructurePredictionResults modelId="protenix" designs={saved} />);
-        expect(text(summary())).toContain('Native atom-mean pLDDT (0–100)');
+        expect(text(summary())).toContain('Mean pLDDT (0–100)');
+        expect(savedCells()[0][1].props.title).toContain('model_atom_mean');
         expect(savedCells()[0].slice(1).map(text)).toEqual(['62.03', '0.6251', '0.0000']);
         expect(savedCells()[0][1].props.title).toContain('62.0338020324707 percent');
         return;
@@ -335,7 +359,8 @@ it.each([
     point.metric_sources = { plddt: point.metric_sources.complex_plddt, ptm: point.metric_sources.ptm };
     scalarTransport(points);
     await mount(<StructurePredictionResults modelId={String(model)} designs={[design]} />);
-    expect(text(summary())).toContain(`${label} pLDDT (0–100)`);
+    expect(text(summary())).toContain('Mean pLDDT (0–100)');
+    expect(savedCells()[0][1].props.title).toContain(scope);
     expect(savedCells()[0].slice(1).map(text)).toEqual(['78.23', '0.0000', '—']);
     expect(savedCells()[0][1].props.title).toContain(`${value} ${unit}`);
     expect(profilePlot().data[0].y).toEqual([90]);
@@ -353,7 +378,7 @@ it.each(['unavailable', 'invalid', 'wrong-design', 'wrong-job', 'wrong-document'
     else if (mode === 'malformed') point.metrics.ptm = 'not numeric';
     else if (mode === 'publication') point.publication_state = { state: 'invalid', value: null, reason_code: 'invalid_canonical_publication' };
     scalarTransport(points, mode === 'request-failed');
-    await mount(<StructurePredictionResults designs={[design]} structure={<div data-structure />} />);
+    await mount(<StructurePredictionResults designs={[design]} structure={(_selection, _onSelection, charts) => <><div data-structure />{charts}</>} />);
     expect(savedCells()[0].slice(1).map(text)).toEqual(['—', '—', '—']);
     expect(text(summary())).not.toContain('0.9900');
     expect(tree!.root.findByProps({ 'data-structure': true })).toBeTruthy();

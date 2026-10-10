@@ -8,6 +8,7 @@ import '../../src/components/ExecutionPlanApproval';
 import { StructureWorkbench } from '../../src/structureViewer/StructureWorkbench';
 import Plot from 'react-plotly.js';
 import { api } from '../../src/lib/api';
+import { ThemeProvider } from '../../src/components/ThemeProvider';
 import type { NativeGenerationRecord } from '../../src/lib/nativeBinderResults';
 import { document as evidenceDocument, fixture as paeFixture } from '../fixtures/scientificViewerFixture';
 vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: (props: any) => <div data-shared-workbench data-structure-url={props.structureUrl} /> }));
@@ -29,7 +30,7 @@ const button = (name: string) => tree.root.findAllByType('button').find(node => 
 async function mount(props: Partial<React.ComponentProps<typeof NativeBinderGenerationResults>> = {}, rows: NativeGenerationRecord[] = records) {
     api.defaults.adapter = async config => ({ config, status: 200, statusText: 'OK', headers: {}, data: { records: rows.slice(config.params.offset, config.params.offset + config.params.limit), total: rows.length, offset: config.params.offset, limit: config.params.limit, receipt: { settings: { enabled: false } }, publication: { source: 'native' }, artifacts: [] } });
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
-    await act(async () => { tree = create(<QueryClientProvider client={client}><NativeBinderGenerationResults jobId="job" {...props} /></QueryClientProvider>); });
+    await act(async () => { tree = create(<QueryClientProvider client={client}><ThemeProvider><NativeBinderGenerationResults jobId="job" {...props} /></ThemeProvider></QueryClientProvider>); });
     await flush();
 }
 afterEach(async () => { await act(async () => tree?.unmount()); client?.clear(); api.defaults.adapter = original; vi.unstubAllGlobals(); });
@@ -135,7 +136,7 @@ it('keeps sequence, prediction sample, native PAE and persisted directional evid
         return { config, status: 200, statusText: 'OK', headers: {}, data };
     };
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
-    await act(async () => { tree = create(<QueryClientProvider client={client}><NativeBinderGenerationResults jobId="job" onSelectedDesignIdsChange={selected} selectedDesignIds={['other-page']} /></QueryClientProvider>); });
+    await act(async () => { tree = create(<QueryClientProvider client={client}><ThemeProvider><NativeBinderGenerationResults jobId="job" onSelectedDesignIdsChange={selected} selectedDesignIds={['other-page']} /></ThemeProvider></QueryClientProvider>); });
     await flush();
     await act(async () => button('Structure').props.onClick()); await flush();
     const viewer = tree.root.findByType(StructureWorkbench);
@@ -178,7 +179,7 @@ it('reads round errors without submitting, retries explicitly and reuses the ret
         return { config, status: 200, statusText: 'OK', headers: {}, data };
     };
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
-    await act(async () => { tree = create(<QueryClientProvider client={client}><BinderPredictionEvidence jobId="job" /></QueryClientProvider>); });
+    await act(async () => { tree = create(<QueryClientProvider client={client}><ThemeProvider><BinderPredictionEvidence jobId="job" /></ThemeProvider></QueryClientProvider>); });
     await flush();
     expect(text(tree.root)).toContain('source mapping unavailable');
     expect(requests.every(config => config.method === 'get')).toBe(true);
