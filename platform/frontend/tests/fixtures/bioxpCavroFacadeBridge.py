@@ -35,8 +35,12 @@ def native_leaf(transport):
     state = {'review_attempt': 0, 'job': rejected['still_held']}
     geometry = []
     if directory := os.environ.get('BIOXP_GEOMETRY_PRODUCER'):
-        geometry = [json.loads(path.read_text())['result'] for path in Path(directory).glob('finish-*.json')
-                    if 'result' in json.loads(path.read_text()) and 'job_id' in json.loads(path.read_text())['result']]
+        for pattern in ('finish-*.json', 'review-*.json'):
+            for path in Path(directory).glob(pattern):
+                capture = json.loads(path.read_text())
+                job = capture.get('job', capture.get('result'))
+                if isinstance(job, dict) and 'job_id' in job:
+                    geometry.append(job)
     def receive(request):
         path = request.url.path
         for job in geometry:

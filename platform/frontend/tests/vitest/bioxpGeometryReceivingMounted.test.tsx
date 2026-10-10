@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AxiosError } from 'axios';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { readFileSync, appendFileSync } from 'node:fs';
+import { readFileSync, appendFileSync, existsSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { BioXpMethodPreview, BioXpMethodProgress } from '../../src/components/BioXpMethodPreview';
@@ -134,4 +134,41 @@ describe.skipIf(!task || !process.env.BIOXP_METHOD_API_DIR || !process.env.BMS_T
   }
   expect(calls.every(c=>c.request.method==='get')).toBe(true);
  });
+ for (const name of ['review-lifetime-command', 'review-lifetime-program', 'review-lifetime-query',
+  'review-lifetime-seed-manual', 'review-lifetime-absent', 'review-lifetime-empty_unknown',
+  'review-projection-True', 'review-projection-False',
+  'review-geometry-observation-unavailable', 'review-geometry-primary-failure'])
+  it.skipIf(!existsSync(`${process.env.BIOXP_GEOMETRY_PRODUCER}/${name}.json`))(`${name}: repaired producer → exact report → selected action`, async () => {
+   const source = loadGeometry(name).job;
+   const before = JSON.stringify(source);
+   const report = (await api.get(`/api/bioxp/methods/runs/${source.job_id}/report`)).data;
+   expect(report.action_results).toEqual(source.execution.runtime_state.action_results);
+   for (const action of report.action_results) {
+    await mount(<BioXpMethodProgress report={{ ...report, action_results: [action] }} />);
+    const pipette = action.pipette_result;
+    const summary = pipette?.accounting_summary;
+    const geometry = (pipette?.events ?? []).filter((event: any) => ['rack_geometry', 'surface_reference'].includes(event.operation));
+    const panel = host.querySelector('[aria-label="Native geometry and accounting"]');
+    if (!summary && !geometry.length && pipette?.liquid_settings?.accounting_labels === undefined) {
+     expect(panel).toBeNull();
+     continue;
+    }
+    expect(panel).toBeTruthy(); expect(panel!.closest('details')).toBeNull();
+    if (summary) {
+     expect(panel!.textContent).toContain(`Incomplete application: ${summary.incomplete_application ? 'Yes' : 'No'}`);
+     expect(summary.actual_delivery_ul).toBeNull();
+     expect(panel!.querySelectorAll('[aria-label^="Channel "]')).toHaveLength(Object.keys(summary.channels).length);
+     for (const [channel, raw] of Object.entries(summary.channels)) {
+      const rows = [...panel!.querySelector(`[aria-label="Channel ${channel} compartment accounting"]`)!.querySelectorAll('tbody tr')];
+      expect(rows.map(row => [...row.querySelectorAll('td')].map(cell => cell.textContent))).toEqual(
+       ['pneumatic', 'authored_liquid_intent'].map(key => ['occupancy_ul', 'peak_occupancy_ul', 'known_prefix_peak_occupancy_ul', 'cumulative_travel_ul', 'current_state_known'].map(field => String((raw as any).occupancy[key][field] ?? 'Unknown / not measured'))));
+     }
+    }
+    expect(panel!.querySelectorAll('[aria-label^="Native geometry "]')).toHaveLength(geometry.length);
+    for (const event of geometry) expect(panel!.textContent).toContain(`${event.operation.replaceAll('_', ' ')} · ${event.status ?? 'Unknown'}`);
+   }
+   expect(JSON.stringify(source)).toBe(before);
+   expect(calls.length).toBeGreaterThan(0);
+   expect(calls.every(call => call.request.method === 'get')).toBe(true);
+  });
 });

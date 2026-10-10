@@ -91,3 +91,38 @@ async def test_genuine_native_job_and_report_http(store, name):
         export('geometry-received-' + name, {'job': read.json(), 'report': report.json()})
     finally:
         await native.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name', [
+    'review-lifetime-command', 'review-lifetime-program', 'review-lifetime-query',
+    'review-lifetime-seed-manual', 'review-lifetime-absent', 'review-lifetime-empty_unknown',
+    'review-projection-True', 'review-projection-False',
+    'review-geometry-observation-unavailable', 'review-geometry-primary-failure',
+])
+async def test_refreshed_native_lifetime_and_observation_receiving(store, name):
+    directory = os.environ.get('BIOXP_GEOMETRY_PRODUCER')
+    if not directory or not (Path(directory) / (name + '.json')).is_file():
+        pytest.skip('Requires separately guarded native lifetime-repair export')
+    client, _, _, _ = store
+    capture = producer(name)
+    original = deepcopy(capture['job'])
+    native, calls, job = connect(client, json.dumps(original).encode())
+    try:
+        route = BASE + '/runs/' + job['job_id']
+        read = await client.get(route)
+        assert read.status_code == 200 and read.json() == original
+        report = await client.get(route + '/report')
+        assert report.status_code == 200, report.text
+        actions = report.json()['action_results']
+        assert actions == original['execution']['runtime_state']['action_results']
+        for action in actions:
+            summary = action.get('pipette_result', {}).get('accounting_summary')
+            if summary is not None:
+                assert summary['actual_delivery_ul'] is None
+                assert summary['completed_prefix_only'] is True
+        assert capture['job'] == original
+        assert calls and all(call.method == 'GET' for call in calls)
+        export('geometry-received-' + name, {'job': read.json(), 'report': report.json()})
+    finally:
+        await native.close()
