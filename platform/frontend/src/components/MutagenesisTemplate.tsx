@@ -1,3 +1,9 @@
+import { Esmfold2SettingsControls } from './Esmfold2SettingsControls';
+import { hydrateEsmfold2Settings } from './esmfold2Settings';
+import { HostedMsaControls } from './HostedMsaControls';
+import { hydrateHostedMsaSettings } from '../lib/msaPolicy';
+import { FileBrowser } from './FileBrowser';
+import type { MutagenesisPredictorConfig, MutagenesisEsmSettings, MutagenesisBoltzSettings } from '../lib/mutagenesisWorkflowRequest';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { SequenceManagerModal } from './SequenceManagerModal';
@@ -15,16 +21,19 @@ import { createLatestAsyncResourceController } from '../lib/latestAsyncResource'
 
 interface MutagenesisTemplateProps {
     onBack: () => void;
-    onSubmit: (jobName: string, variants: VariantSequence[], predictorConfig: UntypedApiValue) => void;
+    initialValues?: Record<string, UntypedApiValue>;
+    onDraftChange?: (draft: Record<string, UntypedApiValue>) => void;
+    onOpenTemplateManager?: (context: { currentParams: Record<string, UntypedApiValue>; currentModelId: string; currentMode: string; baseTemplateId: string }) => void;
+    onSubmit: (jobName: string, variants: VariantSequence[], predictorConfig: MutagenesisPredictorConfig) => void;
 }
 
 import { buildMutagenesisWorkflowRequest } from '../lib/mutagenesisWorkflowRequest';
 export { buildMutagenesisWorkflowRequest } from '../lib/mutagenesisWorkflowRequest';
 
-export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplateProps) {
+export function MutagenesisTemplate({ onBack, onSubmit, initialValues, onDraftChange, onOpenTemplateManager }: MutagenesisTemplateProps) {
     // Top-level state
-    const [jobNamePrefix, setJobNamePrefix] = useState('mutagenesis_lib');
-    const [baseSequence, setBaseSequence] = useState('');
+    const [jobNamePrefix, setJobNamePrefix] = useState<string>(initialValues?.name ?? 'mutagenesis_lib');
+    const [baseSequence, setBaseSequence] = useState<string>(initialValues?.msa_reference_sequence ?? initialValues?.sequence ?? '');
     const [mode, setMode] = useState<'library' | 'manual'>('library');
 
     // Library Generator State
@@ -63,25 +72,38 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
             .sort((a, b) => a - b);
     }, [selectedPositions, baseSequence.length]);
     // Note: excludedPositions state kept for future Affinity Maturation enhancements
-    const [generatedVariants, setGeneratedVariants] = useState<VariantSequence[]>([]);
+    const [generatedVariants, setGeneratedVariants] = useState<VariantSequence[]>(initialValues?.mutagenesis_variants ?? []);
 
     // Predictor Config
-    const [predictor, setPredictor] = useState<'boltz' | 'esmfold2'>('boltz');
-    const [predictorParams, setPredictorParams] = useState({
-        recycling_steps: 3,
-        diffusion_samples: 1,
-        sampling_steps: 50,
-        num_parallel_jobs: 1,
-        use_msa: true,
-        use_potentials: false,
-        step_scale: 1.638
+    const [predictor, setPredictor] = useState<'boltz' | 'esmfold2'>(initialValues?.pred_method === 'esmfold2' || initialValues?.model_id === 'esmfold2' ? 'esmfold2' : 'boltz');
+    const [predictorParams, setPredictorParams] = useState<MutagenesisBoltzSettings & { num_parallel_jobs: number }>({
+        recycling_steps: initialValues?.boltz_recycling_steps ?? 3,
+        diffusion_samples: initialValues?.boltz_num_samples ?? 1,
+        sampling_steps: initialValues?.boltz_sampling_steps ?? 50,
+        num_parallel_jobs: initialValues?.num_parallel_jobs ?? 1,
+        use_msa: initialValues?.boltz_use_msa ?? true,
+        use_potentials: initialValues?.boltz_use_potentials ?? false,
+        step_scale: initialValues?.boltz_step_scale ?? 1.638,
+        ...initialValues?.mutagenesis_predictor_drafts?.boltz,
     });
+    const [esmSettings, setEsmSettings] = useState<MutagenesisEsmSettings>(() => {
+        const saved = initialValues?.mutagenesis_predictor_drafts?.esmfold2 ?? initialValues;
+        // Shared legacy use_msa/Boltz keys never controlled native ESM; do not migrate them.
+        return { ...hydrateEsmfold2Settings({ ...saved, use_msa: saved?.esmf_use_msa ?? false }),
+            model_id_or_path: saved?.model_id_or_path, local_files_only: saved?.local_files_only ?? true,
+            chain_id: saved?.chain_id ?? 'A', msa_format: saved?.msa_format ?? 'auto' };
+    });
+    const [esmMsa, setEsmMsa] = useState(() => hydrateHostedMsaSettings(initialValues?.mutagenesis_predictor_drafts?.esmfold2 ?? initialValues));
+    const [variantMsaPaths, setVariantMsaPaths] = useState<Record<string, string>>(initialValues?.mutagenesis_variant_msa_paths ?? {});
+    const [msaBrowserVariant, setMsaBrowserVariant] = useState<string | null>(null);
 
     // Complex Mode: Ligands & Ions
-    const [ligands, setLigands] = useState<LigandEntry[]>([]);
+    const [ligands, setLigands] = useState<LigandEntry[]>(initialValues?.ligands ?? []);
 
     // Physics refinement (OpenMM) - for ΔΔG validation
-    const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(PHYSICS_DEFAULTS);
+    const [physicsSettings, setPhysicsSettings] = useState<PhysicsRefinementSettings>(() => ({ ...PHYSICS_DEFAULTS,
+        ...Object.fromEntries(Object.entries({ enabled: 'enabled', computeTier: 'compute_tier', restraintMode: 'restraint_mode', mmgbsaMode: 'mmgbsa_mode', forceField: 'force_field', topNPercentage: 'top_n_percentage', maxIterations: 'max_iterations', tolerance: 'tolerance', restraintStrength: 'restraint_strength', implicitSolvent: 'implicit_solvent', platform: 'platform' }).filter(([, key]) => initialValues?.[`openmm_${key}`] !== undefined).map(([field, key]) => [field, initialValues?.[`openmm_${key}`]])),
+    }));
 
     // PDB Import State
     const [showPdbImport, setShowPdbImport] = useState(false);
@@ -283,14 +305,18 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
 
     // A generated library belongs to the exact source and rule selection.
     // Do not regenerate random science implicitly after an operator edit.
+    const initialVariantsRetained = useRef(true);
     useEffect(() => {
+        if (initialVariantsRetained.current) { initialVariantsRetained.current = false; return; }
         if (mode === 'manual') handleGeneratePreview();
         else setGeneratedVariants([]);
     }, [handleGeneratePreview, mode]);
 
-    const buildPredictorConfig = () => ({
-            predictor,
-            ...predictorParams,
+    const buildPredictorConfig = (): MutagenesisPredictorConfig => ({
+            ...(predictor === 'boltz' ? { predictor: 'boltz' as const, ...predictorParams }
+                : { predictor: 'esmfold2' as const, esmfold2: esmSettings, msa: esmMsa, variant_msa_paths: variantMsaPaths }),
+            num_parallel_jobs: predictorParams.num_parallel_jobs,
+            run_frustrampnn: initialValues?.run_frustrampnn,
             // Reference sequence for logging (mutants regenerate MSAs)
             msa_reference_sequence: baseSequence,
 
@@ -315,6 +341,18 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
             openmm_implicit_solvent: physicsSettings.implicitSolvent,
             openmm_platform: physicsSettings.platform
     });
+    const draft = {
+        ...initialValues, ...buildMutagenesisWorkflowRequest(jobNamePrefix, generatedVariants, buildPredictorConfig()).params,
+        name: jobNamePrefix, pred_method: predictor,
+        msa_reference_sequence: baseSequence, mutagenesis_variants: generatedVariants,
+        ligands, mutagenesis_variant_msa_paths: variantMsaPaths,
+        mutagenesis_predictor_drafts: { boltz: predictorParams,
+            esmfold2: { ...esmSettings, esmf_use_msa: esmSettings.use_msa, ...esmMsa } },
+    };
+    const draftRef = useRef(onDraftChange);
+    draftRef.current = onDraftChange;
+    const serializedDraft = JSON.stringify(draft);
+    useEffect(() => { draftRef.current?.(JSON.parse(serializedDraft)); }, [serializedDraft]);
     const handleSubmit = () => {
         if (generatedVariants.length === 0) return;
         onSubmit(jobNamePrefix, generatedVariants, buildPredictorConfig());
@@ -339,6 +377,10 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                     </div>
                 </div>
 
+                {onOpenTemplateManager && <button type="button" onClick={() => onOpenTemplateManager({
+                    currentParams: draft, currentModelId: predictor === 'boltz' ? 'boltz2' : 'esmfold2',
+                    currentMode: 'predict', baseTemplateId: 'mutagenesis',
+                })}>Save / load template</button>}
             </header>
 
             <div className="space-y-8">
@@ -852,6 +894,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white"
                             />
                         </div>
+                        {predictor === 'boltz' && <>
                         <div>
                             <label className="text-slate-400 block mb-1" title="Higher values improve quality but take longer">Recycling Steps</label>
                             <input
@@ -889,6 +932,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 <span>1000</span>
                             </div>
                         </div>
+                        </>}
                         <div>
                             <label className="text-slate-400 block mb-1" title="Number of parallel jobs to split the work into (helps with VRAM)">Parallel Jobs</label>
                             <input
@@ -899,6 +943,7 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 min={1} max={50}
                             />
                         </div>
+                        {predictor === 'boltz' && <>
                         <div className="flex items-center gap-2 pt-6">
                             <input
                                 type="checkbox"
@@ -935,8 +980,38 @@ export function MutagenesisTemplate({ onBack, onSubmit }: MutagenesisTemplatePro
                                 <span>3.0 (conserved)</span>
                             </div>
                         </div>
+                        </>}
                     </div>
                 </section>
+
+                {predictor === 'esmfold2' && <section className="space-y-4" aria-label="ESMFold2 native settings">
+                    {initialValues && Object.keys(initialValues).some(key => key.startsWith('boltz_')) && <details>
+                        <summary>Retained prior Boltz request fields (not ESM settings)</summary>
+                        <p>These fields are not translated into ESM controls. Historical effective ESM values are unknown unless recorded native settings were supplied; the displayed omission defaults describe the current request.</p>
+                        <pre>{JSON.stringify(Object.fromEntries(Object.entries(initialValues).filter(([key]) => key.startsWith('boltz_'))), null, 2)}</pre>
+                    </details>}
+                    <Esmfold2SettingsControls value={esmSettings} onChange={value => setEsmSettings(current => ({ ...current, ...value }))} />
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <label>Protein chain ID<input aria-label="ESMFold2 protein chain ID" value={esmSettings.chain_id ?? 'A'} onChange={e => setEsmSettings(s => ({ ...s, chain_id: e.target.value }))} /></label>
+                        <label>Model repository or local checkpoint (optional)<input aria-label="ESMFold2 model checkpoint" value={esmSettings.model_id_or_path ?? ''} onChange={e => setEsmSettings(s => ({ ...s, model_id_or_path: e.target.value }))} /></label>
+                        <label><input type="checkbox" checked={esmSettings.local_files_only ?? true} onChange={e => setEsmSettings(s => ({ ...s, local_files_only: e.target.checked }))} />Use local model files only</label>
+                        <label>Supplied MSA format<select aria-label="ESMFold2 MSA format" value={esmSettings.msa_format ?? 'auto'} onChange={e => setEsmSettings(s => ({ ...s, msa_format: e.target.value as MutagenesisEsmSettings['msa_format'] }))}>
+                            <option value="auto">Auto</option><option value="a3m">A3M</option><option value="stockholm">Stockholm</option>
+                        </select></label>
+                    </div>
+                    <details><summary>MSA Quality Options · retained when MSA preparation is off</summary>
+                        <HostedMsaControls value={esmMsa} onChange={setEsmMsa} />
+                    </details>
+                    <p className="text-xs text-slate-400">No reference MSA is shared between mutants. Supplied alignments belong to the exact variant below; otherwise enabling MSA prepares missing alignments with the selected hosted provider. DNA/RNA, ligands and peptide components use the existing component editor. PDB import above supplies the base sequence, not template coordinates.</p>
+                    <details><summary>Variant-specific supplied MSAs</summary>
+                        {generatedVariants.map(variant => <div key={variant.name}>
+                            <span>{variant.name}</span>
+                            <input aria-label={`MSA for ${variant.name}`} value={variantMsaPaths[`${variant.name}:${variant.sequence}`] ?? ''} onChange={e => setVariantMsaPaths(s => ({ ...s, [`${variant.name}:${variant.sequence}`]: e.target.value }))} />
+                            <button type="button" onClick={() => setMsaBrowserVariant(`${variant.name}:${variant.sequence}`)}>Choose alignment</button>
+                        </div>)}
+                    </details>
+                    {msaBrowserVariant !== null && <FileBrowser title={`MSA for ${msaBrowserVariant}`} accept=".a3m,.sto,.stockholm" onCancel={() => setMsaBrowserVariant(null)} onSelect={path => { setVariantMsaPaths(s => ({ ...s, [msaBrowserVariant]: path })); setMsaBrowserVariant(null); }} />}
+                </section>}
 
                 {/* Physics Refinement (OpenMM) for ΔΔG Validation */}
                 <section className="pt-4 border-t border-slate-800">

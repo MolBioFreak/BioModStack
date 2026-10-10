@@ -6,7 +6,8 @@ name: RosettaFold3
 version: "3.0.0"
 category: structure_prediction
 description: >
-  RosettaFold3 structure prediction using the Foundry container.
+  RosettaFold3 Foundry model retained for embedded PDB-input workflows and historical results.
+  The standalone and complex sequence-prediction Job API does not accept RF3.
 container: foundry.sif
 
 ui_icon: atom
@@ -22,7 +23,7 @@ outputs:
 modes:
   - id: predict
     name: Structure Prediction
-    description: Predict structure from amino acid sequence
+    description: Retained model context; not a standalone or complex sequence-prediction launch. Embedded PDB-input workflows have separate receiving owners.
     params:
       - colabfold_use_env
       - colabfold_use_filter

@@ -6,9 +6,9 @@ import { ColabfoldMsaControls } from './ColabfoldMsaControls';
 import { NeurosnapMsaControls } from './NeurosnapMsaControls';
 import { MSA_POLICY } from '../lib/msaPolicy';
 import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
-import { api, completeCurrentLaunchContext, submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchUserSequence, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus } from '../lib/api';
+import { api, fetchModelById, completeCurrentLaunchContext, submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchUserSequence, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { parseMolecularDynamicsHandoffUserSequence } from './gen2StartingStructureState';
 import { SequenceManager } from './SequenceManager';
@@ -154,6 +154,9 @@ const clampBoltzSamplingSteps = (value: unknown, useMsa: boolean): number => {
 export function StructurePredictionTemplate({ onBack, initialValues, onDraftChange, onOpenTemplateManager, sourceSequenceId = null, mdDraftId = null, returnTemplate = null }: StructurePredictionTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const boltzModelQuery = useQuery({ queryKey: ['model', 'boltz2'], queryFn: () => fetchModelById('boltz2') });
+    const conditioningMethods: string[] = boltzModelQuery.data?.data?.params?.find(
+        (field: { name: string }) => field.name === 'boltz_method')?.enum ?? [];
     const frustrampnnIntegrationQuery = useModelIntegrationConfig('frustrampnn', fetchFrustraMpnnIntegration);
     const normalizeProtenixModel = (_model?: string) => 'protenix-v2';
     const initialPrimaryProteinComponent = resolveInitialPrimaryProteinComponent(initialValues);
@@ -740,6 +743,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         const params: Record<string, UntypedApiValue> = {
             name: jobName,
             job_name: jobName,
+            saved_pred_method: initialValues?.saved_pred_method ?? initialValues?.pred_method,
             source_structure: continuationSource,
             _source_prepared: initialValues?._source_prepared,
             _continuation_source: continuationCandidateSource,
@@ -748,7 +752,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             execution_target_id: executionTargetId ?? null,
             sequence: sequence.trim(),
             sequence_name: sequenceName,
-            pred_method: resolvedPredictorSelection.valid ? resolvedPredictorSelection.canonicalSelection : resolvedPredictorSelection.requestedSelection,
+            pred_method: resolvedPredictorSelection.requestedSelection,
             num_parallel_jobs: launchConfig.showParallelJobs && !isBoltzCpLaunch ? numParallelJobs : 1,
             pinned_gpus: pinnedGpus,
             lock_gpus: lockGpus && pinnedGpus.length > 0,
@@ -905,7 +909,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     );
 
     useEffect(() => {
-        if (predictor === resolvedPredictorSelection.canonicalSelection) {
+        if (['both', 'all'].includes(String(predictor)) || predictor === resolvedPredictorSelection.canonicalSelection) {
             return;
         }
         if (!resolvedPredictorSelection.valid) {
@@ -983,7 +987,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         const params: Record<string, UntypedApiValue> = {
             sequence: sequence.trim(),
             sequence_name: sequenceName,
-            pred_method: resolvedPredictorSelection.canonicalSelection,
+            pred_method: resolvedPredictorSelection.requestedSelection,
             num_parallel_jobs: launchConfig.showParallelJobs && !isBoltzCpLaunch ? numParallelJobs : 1,
             ...buildStructureFrustraMpnnSubmitParams(runFrustrampnn, frustrampnnSettings),
         };
@@ -1580,9 +1584,12 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                             </div>
                         </div>
                     )}
+                    {(['both', 'all'].includes(String(initialValues?.saved_pred_method ?? initialValues?.pred_method ?? resolvedPredictorSelection.requestedSelection)) && predictionMode === 'complex') && (
+                        <p className="mt-3 text-sm text-amber-100">Saved token: {initialValues?.saved_pred_method ?? initialValues?.pred_method ?? resolvedPredictorSelection.requestedSelection}. For both/all the current complex API executes Boltz + Protenix; this is not a reconstruction of historical engines. Current selection: {resolvedPredictorSelection.requestedSelection}.</p>
+                    )}
                     {!resolvedPredictorSelection.valid && (
                         <div role="alert" className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-                            <div className="font-semibold">Retired historical predictor</div>
+                            <div className="font-semibold">Saved predictor in this launch context</div>
                             <div className="mt-1 text-xs text-amber-100">{resolvedPredictorSelection.error}</div>
                         </div>
                     )}
@@ -2158,13 +2165,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                                 >
                                     <option value="">None (Standard Folding)</option>
-                                    <option value="md">Molecular Dynamics</option>
-                                    <option value="x-ray diffraction">X-ray Diffraction</option>
-                                    <option value="electron microscopy">Electron Microscopy</option>
-                                    <option value="solution nmr">Solution NMR</option>
-                                    <option value="solid-state nmr">Solid-State NMR</option>
-                                    <option value="afdb">AlphaFold DB</option>
-                                    <option value="boltz-1">Boltz-1</option>
+                                    {Array.from(new Set([...conditioningMethods, boltzMethod])).filter(Boolean).map(method => (
+                                        <option key={method} value={method}>{method}</option>
+                                    ))}
                                 </select>
                             </div>
                         )}
