@@ -994,7 +994,10 @@ async def pause_md_production(session: AsyncSession, job: Job, *, operation_id: 
             relative = native.relative_to(remote_root).as_posix()
             local = output
             local.mkdir(parents=True, exist_ok=True)
-            selected = [relative + '/production/production.cpt', relative + '/md-checkpoint-receipt.json']
+            checkpoint_path = checkpoint['receipt']['checkpoint_path']
+            # Reuse canonical relative-path containment before selected transport.
+            _safe_result_path(local / relative, checkpoint_path)
+            selected = [relative + '/' + checkpoint_path, relative + '/md-checkpoint-receipt.json']
             await rsync_selected_from_remote(connection, str(remote_root), local, selected,
                 max_file_bytes=max(checkpoint['receipt']['bytes'], checkpoint['receipt_bytes']), timeout=300)
             checkpoint['local_output_dir'] = str(local / relative)
@@ -1126,6 +1129,41 @@ async def resume_md_production(session: AsyncSession, job: Job, *, operation_id:
         raise
 
 
+def _completed_optional_md_retry(job, component_id):
+    """Read requiredness from the retained request, never from the retry caller."""
+    from component_runtime import ComponentRequest
+    provenance = job.provenance or {}
+    if not job.execution_target_id:
+        from scripts.lib.component_adapter import runtime_from_environment
+        runtime = runtime_from_environment(Path(provenance['component_context_path']))
+        if runtime.root_job_id != str(job.id) or runtime.target_id != 'local':
+            raise RemoteExecutionError('Retry retained root/target conflicts')
+        request = runtime.request(component_id)
+    else:
+        root = Path(job.child_output_dir or job.output_dir).expanduser().resolve()
+        path = root / '.bms-components.json'
+        if path.is_symlink() or not path.is_file():
+            raise RemoteExecutionError('Retry retained component publication is unavailable')
+        publication = json.loads(path.read_bytes())
+        receipt = provenance.get('remote_execution_receipt') or {}
+        expected = receipt.get('component_context_identity') or provenance.get('assignment_context') or {}
+        for key in ('root_job_id', 'attempt_id', 'target_id', 'lease_id', 'source_identity', 'plan_sha256'):
+            if key not in expected or publication.get(key) != expected[key]:
+                raise RemoteExecutionError('Retry retained component attempt conflicts')
+        if (publication.get('schema_name') != 'bms.component-projection.v1'
+                or publication.get('generation') != receipt.get('generation', 0)
+                or publication.get('current_plan_sha256') != receipt.get('plan_sha256', expected['plan_sha256'])):
+            raise RemoteExecutionError('Retry retained component generation conflicts')
+        rows = [row for row in [*publication.get('components', []), *publication.get('unprojected_components', [])]
+                if row['component_id'] == component_id]
+        if len(rows) != 1:
+            raise RemoteExecutionError('Retry retained component request is unavailable')
+        request = ComponentRequest.capture(**rows[0]['request'])
+    if request.component_id != component_id or request.parent_job_id != str(job.id):
+        raise RemoteExecutionError('Retry retained component identity conflicts')
+    return request.optional_md_analysis
+
+
 async def retry_component_execution(session: AsyncSession, job: Job, *, component_id: str,
                                     operation_id: str, actor: str, failure_code: str) -> dict:
     """Explicit native retry outbox; one original root, target and durable edge."""
@@ -1149,10 +1187,12 @@ async def retry_component_execution(session: AsyncSession, job: Job, *, componen
         saved = previous if previous.get('operation_id') == operation_id else history.get(operation_id)
         if saved and any(saved.get(key) != value for key, value in intent.items()):
             raise RemoteExecutionError('Immutable component retry operation conflicts')
+        completed_optional = (job.status == 'completed' and not saved
+                              and _completed_optional_md_retry(job, component_id))
         if saved:
             intent = dict(saved)
         elif previous:
-            if job.status != 'failed' or previous.get('state') not in {'accepted', 'queued'}:
+            if (job.status != 'failed' and not completed_optional) or previous.get('state') not in {'accepted', 'queued'}:
                 raise RemoteExecutionError('Another component retry is still pending')
             history[previous['operation_id']] = previous
         if provenance.get('component_checkpoint_resume'):
@@ -1160,8 +1200,8 @@ async def retry_component_execution(session: AsyncSession, job: Job, *, componen
         if not job.execution_target_id:
             return await _queue_local_component_retry(session, job, intent, history, saved)
         if not saved:
-            if job.status != 'failed':
-                raise RemoteExecutionError('Component retry requires a failed retained root')
+            if job.status != 'failed' and not completed_optional:
+                raise RemoteExecutionError('Component retry requires a failed root or retained optional MD analysis')
             receipt = provenance.get('remote_execution_receipt') or {}
             context = receipt.get('component_context_identity') or provenance.get('assignment_context') or {}
             if (context.get('root_job_id') != str(job.id)
@@ -1215,9 +1255,12 @@ async def _queue_local_component_retry(session, job, intent, history, saved):
         return dict(child_job_id=intent['child_job_id'], attempt_id=intent['attempt_id'],
                     target_id='local', state='queued', operation_id=intent['operation_id'])
     state = runtime.root_state() or {}
-    if (job.status != 'failed' or state.get('state') != 'failed' or not state.get('quiescent')
+    optional = runtime.request(intent['component_id']).optional_md_analysis
+    if (not (job.status == 'failed' or (job.status == 'completed' and optional))
+            or not (state.get('state') == 'failed' or (state.get('state') == 'completed' and optional))
+            or not state.get('quiescent')
             or state.get('boot_id') != Path('/proc/sys/kernel/random/boot_id').read_text().strip()):
-        raise RemoteExecutionError('Local retry requires same-boot failed quiescent root')
+        raise RemoteExecutionError('Local retry requires same-boot quiescent failed root or completed optional MD analysis')
     prepare_retry = (prepare_analysis_retry if runtime.request(intent['component_id']).stage == 'md_analysis'
                      else prepare_replica_retry)
     replacement, _ = prepare_retry(runtime, component_id=intent['component_id'],
@@ -1329,10 +1372,11 @@ async def _retry_remote_component_owned(session, job, intent: dict[str, Any]):
             return edge
     if edge is None and intent.get('state') not in {'requested', 'uncertain'}:
         receipt = (job.provenance or {}).get('remote_execution_receipt') or {}
-        if (status.state != 'failed' or not status.quiescent
+        optional = status.state == 'succeeded' and _completed_optional_md_retry(job, intent['component_id'])
+        if ((status.state != 'failed' and not optional) or not status.quiescent
                 or status.generation != intent['predecessor_generation']
                 or status.continuation_lease_id != receipt.get('continuation_lease_id')):
-            raise RemoteExecutionError('Retry predecessor is not the owned failed quiescent generation')
+            raise RemoteExecutionError('Retry predecessor is not an owned quiescent eligible generation')
         from .targets import admit_target_resources
         target = await get_ready_target(session, str(job.execution_target_id))
         connection, attempt_dir = _connection_for_attempt(target, job)

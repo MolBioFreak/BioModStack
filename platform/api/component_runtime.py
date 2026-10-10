@@ -794,6 +794,12 @@ class ComponentRequest:
     def payload(self) -> dict[str, Any]:
         return json.loads(self.payload_json)
 
+    @property
+    def optional_md_analysis(self) -> bool:
+        return (self.stage == 'md_analysis' and self.required is False
+                and self.payload.get('model_id') == 'molecular_dynamics'
+                and self.payload.get('mode') == 'analyze')
+
     def to_dict(self) -> dict[str, Any]:
         return dict(parent_job_id=self.parent_job_id, stage=self.stage,
                     child_key=self.child_key, payload=self.payload, required=self.required)
@@ -1469,9 +1475,10 @@ class ComponentRuntime(GroupingLedger):
                     raise ValueError("immutable retry operation conflicts")
                 return saved
             root = db.execute("SELECT state,boot,detail FROM root_execution").fetchone()
-            if (not root or root[0] != 'failed' or root[1] != boot_id
+            if (not root or not (root[0] == 'failed' or (root[0] == 'completed' and original.optional_md_analysis))
+                    or root[1] != boot_id
                     or not json.loads(root[2]).get('quiescent')):
-                raise ValueError("retry requires same-boot failed quiescent root")
+                raise ValueError("retry requires same-boot quiescent root: failed or completed optional MD analysis")
             if db.execute("SELECT 1 FROM components WHERE state IN ('queued','running','uncertain')").fetchone():
                 raise ValueError("retry descendants are not quiescent")
             if db.execute("SELECT state FROM components WHERE component=?", (component_id,)).fetchone()[0] != 'failed':

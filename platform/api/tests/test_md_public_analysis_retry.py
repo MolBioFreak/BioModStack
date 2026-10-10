@@ -19,8 +19,20 @@ import routers.md_results as routes
 from test_md_results_trim import store, _tree, _seed, _bytes
 
 
-def retained(tmp_path, monkeypatch, target, *, replicas=1):
+def retained(tmp_path, monkeypatch, target, *, replicas=1, root_state='failed'):
     root, spec = _tree(tmp_path, monkeypatch)
+    if root_state == 'completed':
+        spec['analysis'] = {}
+        manifest_path = root/'replicas/replica_0/manifest.json'
+        manifest = json.loads(manifest_path.read_bytes())
+        manifest['config'] = spec
+        manifest_path.write_bytes(canonical_bytes(manifest))
+        # Rebind the inert analysis sidecar to this fixture's explicit optional config.
+        from component_runtime import file_identity
+        sidecar_path = root/'analysis/md_analysis_replica_0.artifacts.json'
+        sidecar = json.loads(sidecar_path.read_bytes())
+        sidecar['input_manifest_sha256'] = file_identity(manifest_path)[0]
+        sidecar_path.write_bytes(canonical_bytes(sidecar))
     if replicas == 2:
         import shutil
         spec['replicas'] = 2
@@ -72,12 +84,12 @@ def retained(tmp_path, monkeypatch, target, *, replicas=1):
         runtime.claim(row['id'], owner_id='fixture', boot_id=boot)
         runtime.fail(row['id'], owner_id='fixture', boot_id=boot, quiescent=True, reason='inert analysis failure',
             failure_receipt=dict(code='execution_failed', source='worker'))
-    runtime.set_root_state('failed', owner_id='fixture', boot_id=boot, quiescent=True, generation=0)
+    runtime.set_root_state(root_state, owner_id='fixture', boot_id=boot, quiescent=True, generation=0)
     return root, spec, runtime, context, path, child, boot
 
 
-async def seed(maker, root, spec, context, path, target):
-    await _seed(maker, root, spec, status='failed', phase='failed')
+async def seed(maker, root, spec, context, path, target, root_state='failed'):
+    await _seed(maker, root, spec, status=root_state, phase=root_state)
     async with maker() as session:
         parent = await session.get(Job, 'md-job-1')
         _, _, _, aggregate_sha, set_sha = routes._current_dynamics_generation(parent)
@@ -93,24 +105,46 @@ async def seed(maker, root, spec, context, path, target):
             parent.execution_source_tree = context['source_identity']['tree']
             parent.execution_bundle_sha256 = 'c'*64
             parent.nextflow_run_id = 'retained-run'
-            parent.remote_state = 'failed'
+            parent.remote_state = root_state
+            parent.vram_estimate_mb = 8000
             provenance.update(execution_plan_approval=dict(approval_digest='retained', plan=context['execution_plan']),
                 remote_execution_assignment=dict(resources=context['resources']),
                 remote_execution_receipt=dict(component_context_identity=context, boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
                     source_revision=parent.execution_source_revision, source_tree=parent.execution_source_tree,
                     execution_envelope_sha256=parent.execution_bundle_sha256, generation=0, plan_sha256=context['plan_sha256']))
             session.add(ExecutionTarget(id=target, provider='vast', provider_instance_id='fixture',
-                active=True, state='ready', remote_root=str(root), capabilities={}))
+                active=True, state='ready', remote_root=str(root), capabilities={'gpu_count': 1},
+                provider_metadata={'inventory': dict(status='complete', present=True, running=True,
+                    checked_at=__import__('datetime').datetime.utcnow().isoformat())}))
         parent.provenance = provenance
         await session.commit()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('target,lose_response', [('local', False), ('vast:fixture', False), ('vast:fixture', True)])
-async def test_public_route_real_receiving_dispatch_and_analysis_only_compiler(store, tmp_path, monkeypatch, target, lose_response):
+@pytest.mark.parametrize('root_state', ['failed', 'completed'])
+@pytest.mark.parametrize('target,lose_response,cancel_retry', [('local', False, False),
+    ('vast:fixture', False, False), ('vast:fixture', True, False), ('vast:fixture', False, True),
+    ('vast:fixture', False, 'retry-again')])
+async def test_public_route_real_receiving_dispatch_and_analysis_only_compiler(store, tmp_path, monkeypatch, target, lose_response, cancel_retry, root_state):
     _, maker = store
-    root, spec, runtime, context, path, child, boot = retained(tmp_path, monkeypatch, target)
-    await seed(maker, root, spec, context, path, target)
+    root, spec, runtime, context, path, child, boot = retained(tmp_path, monkeypatch, target, root_state=root_state)
+    await seed(maker, root, spec, context, path, target, root_state)
+    from services import gpu_orchestrator as scheduler
+    monkeypatch.setattr(scheduler, 'read_scheduler_config', lambda: {'global': {
+        'target_vram_fill': .75, 'vram_safety_margin_mb': 0, 'busy_threshold': .95, 'cooldown_ms': 0}})
+    async def telemetry(target):
+        return dict(available=True, gpus=[dict(index=0, uuid='GPU-fixture',
+            memory_total_mb=48000, memory_used_mb=0, utilization=0)])
+    monkeypatch.setattr(targets, 'remote_target_telemetry', telemetry)
+    peer_claim = None
+    if target != 'local':
+        async with maker() as session:
+            peer = Job(id='peer', name='peer', model_id='cpu-only', mode='run', params={},
+                status='queued', queue_status='queued', paused=False, execution_target_id=target,
+                vram_estimate_mb=8000)
+            session.add(peer); await session.commit()
+            assert await scheduler._claim_remote_job(session, peer, gpu_id=0, vram_estimate_mb=8000)
+            peer_claim = dict(peer.provenance)
     if target != 'local':
         runtime.publish_projection()
         async with maker() as session:
@@ -132,7 +166,7 @@ async def test_public_route_real_receiving_dispatch_and_analysis_only_compiler(s
             files=[dict(relative_path='inputs/component-context.json', sha256=sha, size_bytes=size)])
         worker.envelope_path(attempt).write_bytes(canonical_bytes(envelope))
         worker.status_path(attempt).write_bytes(canonical_bytes(dict(schema='bms.remote-attempt-status.v1',
-            attempt_id=context['attempt_id'], job_id='md-job-1', state='failed', boot_id=boot, quiescent=True,
+            attempt_id=context['attempt_id'], job_id='md-job-1', state='succeeded' if root_state == 'completed' else root_state, boot_id=boot, quiescent=True,
             generation=0, plan_sha256=context['plan_sha256'])))
         # Only transport, bundle-delivery and process-spawn leaves are inert.
         monkeypatch.setattr(worker, 'verify_bundle', lambda *_: envelope)
@@ -149,6 +183,8 @@ async def test_public_route_real_receiving_dispatch_and_analysis_only_compiler(s
             command, *args = argv
             options = dict(zip(args[::2], args[1::2]))
             calls.append(command)
+            if command == 'cancel':
+                return SimpleNamespace(stdout=json.dumps(worker.cancel(attempt, 0)))
             payload = worker.component_retry_control(attempt, attempt_id=options['--attempt-id'],
                 expected_boot_id=options['--expected-boot-id'], lease_id=options['--lease-id'],
                 component_id=options['--component-id'], operation_id=options['--operation-id'], actor=options['--actor'],
@@ -191,6 +227,9 @@ async def test_public_route_real_receiving_dispatch_and_analysis_only_compiler(s
                 failure_code='execution_failed', actor=pending['actor'], boot_id=boot,
                 continuation_lease_id=edge['continuation_lease_id'], resources=edge['resources'], native_invocations=invocations)
             invocation = invocations[0]
+        if peer_claim:
+            peer = await session.get(Job, 'peer', populate_existing=True)
+            assert peer.provenance == peer_claim
         edge = runtime.retry_status(pending['operation_id'])
         assert reply['created_child_ids'] == [edge['child_job_id']]
         assert reply['scheduled_replica_indices'] == [0] and reply['remaining_replica_indices'] == []
@@ -207,6 +246,44 @@ async def test_public_route_real_receiving_dispatch_and_analysis_only_compiler(s
             continuation_lease_id=edge['continuation_lease_id'], resources=edge['resources'], native_invocations=invocations)
         assert replay == edge and invocations[0].command == invocation.command
         assert invocations[0].generated_inputs == invocation.generated_inputs
+        if cancel_retry == 'retry-again':
+            assert runtime.claim_root(owner_id='fixture', boot_id=boot)
+            runtime.claim(edge['child_job_id'], owner_id='fixture', boot_id=boot)
+            runtime.fail(edge['child_job_id'], owner_id='fixture', boot_id=boot, quiescent=True,
+                reason='inert second analysis failure', failure_receipt={'code': 'execution_failed', 'source': 'worker'})
+            runtime.set_root_state(root_state, owner_id='fixture', boot_id=boot, quiescent=True,
+                generation=edge['generation'], continuation_edge=edge)
+            publication = runtime.publish_projection()
+            parent.child_output_dir = str(publication.parent)
+            await session.commit()
+            assert await executor._publish_remote_transition(session, parent,
+                {'status': root_state, 'queue_status': root_state}, release_lease=True)
+            state = worker.load_json(worker.status_path(attempt))
+            state.update(state='succeeded' if root_state == 'completed' else 'failed', quiescent=True)
+            worker.atomic_json(worker.status_path(attempt), state)
+            second = await executor.retry_component_execution(session, parent, component_id=edge['child_job_id'],
+                operation_id='explicit-second', actor='operator', failure_code='execution_failed')
+            assert second['generation'] == 2 and second['component_id'] == edge['child_job_id']
+            assert calls.count('inert-supervisor') == 2
+            assert (await session.get(Job, 'peer', populate_existing=True)).provenance == peer_claim
+            assert _bytes(root/'replicas') == before
+            return
+        if cancel_retry is True:
+            # Actual controller -> worker prepared-continuation cancellation; no
+            # supervisor was executed, and the peer remains independently claimed.
+            monkeypatch.setattr(executor, 'async_session', maker)
+            parent.queue_status = 'cancelling'
+            await session.commit()
+            assert await executor.cancel_remote_job(parent, graceful_timeout_seconds=1)
+            assert worker.load_json(worker.status_path(attempt))['state'] == 'cancelled'
+            assert (attempt/worker.CANCEL_REQUEST_FILE).is_file()
+            assert await executor._publish_remote_transition(session, parent,
+                {'status': 'cancelled', 'queue_status': 'cancelled'}, release_lease=True)
+            peer = await session.get(Job, 'peer', populate_existing=True)
+            assert peer.provenance == peer_claim
+            assert calls.count('inert-supervisor') == 1 and calls.count('cancel') == 1
+            assert _bytes(root/'replicas') == before
+            return
         monkeypatch.delenv('BMS_COMPONENT_CONTEXT')
         status = root/'inert-scientific-status.json'
         status.write_bytes(canonical_bytes(dict(total=1, completed=1, failed=0, cancelled=0,
@@ -217,7 +294,7 @@ async def test_public_route_real_receiving_dispatch_and_analysis_only_compiler(s
         assert result['status'] == 'completed'
         assert _bytes(generation/'replicas') == before == _bytes(root/'replicas')
         assert (generation/'manifest.json').read_bytes() == (root/'manifest.json').read_bytes()
-        assert len(list((await session.scalars(select(Job))).all())) == 2  # No standalone leaf.
+        assert len(list((await session.scalars(select(Job))).all())) == (3 if peer_claim else 2)  # No standalone leaf.
         # Real mapped publication consumes the collector generation, not original output.
         from services.md.lifecycle import _publish_barrier
         from services.md.completion import validate_and_finalize_md_job
@@ -234,16 +311,22 @@ async def test_public_route_real_receiving_dispatch_and_analysis_only_compiler(s
         assert (await session.get(MdRun, parent.id)).phase == parent.status == 'completed'
         assert list((await session.scalars(select(JobArtifact))).all())
         assert parent.params == original_params
+        if peer_claim:
+            assert await executor._publish_remote_transition(session, parent,
+                {'status': 'completed', 'queue_status': 'completed'}, release_lease=True)
+            peer = await session.get(Job, 'peer', populate_existing=True)
+            assert peer.provenance == peer_claim
     if target != 'local':
         assert calls.count('component-retry') == calls.count('inert-supervisor') == 1
         assert calls.count('component-retry-status') == 2
 
 
 @pytest.mark.asyncio
-async def test_multiple_failed_lanes_remain_explicit_exact_operations(store, tmp_path, monkeypatch):
+@pytest.mark.parametrize('root_state', ['failed', 'completed'])
+async def test_multiple_failed_lanes_remain_explicit_exact_operations(store, tmp_path, monkeypatch, root_state):
     _, maker = store
-    root, spec, runtime, context, path, child, boot = retained(tmp_path, monkeypatch, 'local', replicas=2)
-    await seed(maker, root, spec, context, path, 'local')
+    root, spec, runtime, context, path, child, boot = retained(tmp_path, monkeypatch, 'local', replicas=2, root_state=root_state)
+    await seed(maker, root, spec, context, path, 'local', root_state)
     before = _bytes(root/'replicas')
     async with maker() as session:
         first = await routes.retry_md_analysis('md-job-1', session)
@@ -264,14 +347,23 @@ async def test_multiple_failed_lanes_remain_explicit_exact_operations(store, tmp
         sha, size = file_identity(result_path)
         runtime.complete(edge['child_job_id'], owner_id='fixture', boot_id=boot,
             result={}, references=[ResultReference(edge['child_job_id'], result_path.name, sha, size, 'fixture')])
-        runtime.set_root_state('failed', owner_id='fixture', boot_id=boot, quiescent=True,
+        runtime.set_root_state(root_state, owner_id='fixture', boot_id=boot, quiescent=True,
             generation=edge['generation'], continuation_edge=edge)
-        parent.status = parent.queue_status = 'failed'
+        parent.status = parent.queue_status = root_state
         # A shared root failure can precede the optional MD lifecycle projection.
         # The failed retained owner, not stale 'retrying' presentation, owns retry.
         assert parent.provenance['md']['analysis_state'] == 'retrying'
         await session.commit()
-        second = await routes.retry_md_analysis('md-job-1', session)
+        if root_state == 'completed':
+            # Exercise the shared receiving owner directly before the independent
+            # MD lifecycle has refreshed its analysis_state presentation.
+            remaining = next(row['id'] for row in runtime.children(parent.id, 'md_analysis') if row['status'] == 'failed')
+            received = await executor.retry_component_execution(session, parent, component_id=remaining,
+                operation_id='second-optional', actor='operator', failure_code='execution_failed')
+            second = dict(scheduled_replica_indices=[1], remaining_replica_indices=[],
+                          created_child_ids=[received['child_job_id']])
+        else:
+            second = await routes.retry_md_analysis('md-job-1', session)
         assert second['scheduled_replica_indices'] == [1]
         assert second['remaining_replica_indices'] == []
         assert second['created_child_ids'] != first['created_child_ids']

@@ -22,13 +22,19 @@ from tools import bms_remote_worker as worker
 
 @pytest.fixture
 def retained(tmp_path, monkeypatch, request):
-    target_id=getattr(request,"param","local")
+    selection=getattr(request,"param","local")
+    target_id, native_stage = selection if isinstance(selection, tuple) else (selection, None)
     if target_id != "local":
         tmp_path=tmp_path/"results"; tmp_path.mkdir()
     import model_registry
     monkeypatch.setattr(model_registry, 'molecular_dynamics_feature_enabled', lambda: True)
     monkeypatch.setenv('BMS_RESULTS_DIR', str(tmp_path))
     config = dict(random_seed=71, replicas=2, execution=dict(gpu_id=0), engine='gromacs')
+    if native_stage:
+        from test_md_native_contract import _spec, _files
+        config = _spec(_files(tmp_path/'system'))
+        config.update(random_seed=71, replicas=2, execution=dict(config['execution'], gpu_id=0))
+        config['stages'][-1]['name'] = native_stage
     config_path = tmp_path/'config.json'; config_path.write_bytes(canonical_bytes(config))
     params = dict(md_job_config=str(config_path), md_job_spec=config)
     invocation = nextflow.compile_nextflow_invocation('molecular_dynamics', 'simulate', params,
@@ -67,10 +73,13 @@ def pause_fixture(retained):
     checkpoint=output/'.bms-checkpoints'/'segment-zero'/(sha+'.cpt')
     checkpoint.parent.mkdir(parents=True); checkpoint.write_bytes(data)
     params=runtime.request(child).payload['params']
-    body=dict(schema='bms.md.checkpoint-receipt.v1',checkpoint_path='production/production.cpt',
+    stage=params.get('md_final_stage', 'production')
+    body=dict(schema='bms.md.checkpoint-receipt.v1',checkpoint_path=f'{stage}/{stage}.cpt',
         execution_plan_sha256=params['md_execution_plan_sha256'],compatibility_key=params['md_compatibility_key'],
         step=20,time_ps=0.04,bytes=len(data),sha256=sha)
-    (output/'production').mkdir(); (output/'production/production.cpt').write_bytes(data)
+    if 'md_final_stage' in params:
+        body.update(job_schema='bms.md.job.v3', native_stage=stage)
+    (output/stage).mkdir(); (output/stage/f'{stage}.cpt').write_bytes(data)
     (output/'md-checkpoint-receipt.json').write_bytes(canonical_bytes(body))
     value=dict(md_resume_checkpoint=str(checkpoint),md_resume_checkpoint_sha256=sha,
                md_resume_output_dir=str(output), receipt=body,receipt_bytes=len(canonical_bytes(body)),output_dir=str(output.parent))
@@ -359,7 +368,7 @@ def test_worker_resume_receiver_single_spawn_and_explicit_uncertainty(retained,t
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('retained',['vast:fixture'],indirect=True)
+@pytest.mark.parametrize('retained',['vast:fixture', ('vast:fixture', 'adsorption_final')],indirect=True)
 @pytest.mark.parametrize('lost_response',[False,True])
 async def test_remote_controller_to_actual_worker_pause_resume(store,retained,monkeypatch,lost_response):
     from datetime import datetime
@@ -422,6 +431,15 @@ async def test_remote_controller_to_actual_worker_pause_resume(store,retained,mo
             index=0, uuid='inert-physical-GPU', memory_total_mb=64000, memory_used_mb=0, utilization=0)]}
     monkeypatch.setattr(targets, 'remote_target_telemetry', telemetry)
     from services.remote_execution.claims import job_has_claim
+    from services import gpu_orchestrator as scheduler
+    monkeypatch.setattr(scheduler, 'read_scheduler_config', lambda: {'global': {
+        'target_vram_fill': .75, 'vram_safety_margin_mb': 0, 'busy_threshold': .95, 'cooldown_ms': 0}})
+    peer = Job(id='peer', name='inert peer', model_id='cpu-only', mode='run', params={},
+        execution_target_id=target.id, status='queued', queue_status='queued', paused=False,
+        vram_estimate_mb=8000)
+    session.add(peer); await session.commit()
+    assert await scheduler._claim_remote_job(session, peer, gpu_id=0, vram_estimate_mb=8000)
+    peer_claim = dict(peer.provenance)
     dispatched=[];lost=[lost_response]
     async def transport(conn,argv,**kwargs):
         dispatched.append(argv[0]); fields=dict(zip(argv[1::2],argv[2::2]))
@@ -447,8 +465,12 @@ async def test_remote_controller_to_actual_worker_pause_resume(store,retained,mo
     monkeypatch.setattr(executor,'rsync_selected_from_remote',copy)
     observation=await executor.pause_md_production(session,parent,operation_id='pause-one')
     assert dispatched==['md-pause'] and transfers
-    assert Path(observation['md_checkpoints'][child]['local_output_dir'],'production/production.cpt').read_bytes()==Path(value['md_resume_checkpoint']).read_bytes()
+    assert Path(observation['md_checkpoints'][child]['local_output_dir'],value['receipt']['checkpoint_path']).read_bytes()==Path(value['md_resume_checkpoint']).read_bytes()
+    from services.md.pause_actuator import _checkpoint_receipt
+    received, checkpoint, relative = _checkpoint_receipt([Path(observation['md_checkpoints'][child]['local_output_dir'])])
+    assert received == value['receipt'] and relative == value['receipt']['checkpoint_path']
     await session.refresh(target);assert target.leased_job_id is None
+    await session.refresh(peer); assert peer.provenance == peer_claim and job_has_claim(target, peer)
     parent.provenance=dict(parent.provenance,md_production_pause=dict(operation_id='pause-one',observation=observation))
     await session.commit()
     kwargs=dict(operation_id='resume-one',checkpoints={child:{'md_resume_segment_id':'committed-segment-one'}})
@@ -462,5 +484,6 @@ async def test_remote_controller_to_actual_worker_pause_resume(store,retained,mo
     assert result['state']=='continuing' and len(spawns)==1
     assert runtime.root_state()['continuation_edge']['md_resume'][child]['md_resume_segment_id']=='committed-segment-one'
     assert parent.remote_state=='running' and parent.remote_attempt_id=='attempt'
+    await session.refresh(peer); assert peer.provenance == peer_claim and job_has_claim(target, peer)
     await session.refresh(target)
     assert target.leased_job_id is None and job_has_claim(target, parent)

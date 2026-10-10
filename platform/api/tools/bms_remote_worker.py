@@ -585,11 +585,13 @@ def component_retry_control(attempt_dir: Path, *, attempt_id: str, expected_boot
                     "continuation_lease_id": continuation_lease_id}:
                 raise RuntimeError("Retry launch claim conflicts")
             return {**edge, "worker_status": current}
-        if (current.get("state") != "failed" or not current.get("quiescent")) and not (
+        eligible = (current.get("state") == "failed" or
+                    (current.get("state") == "succeeded" and runtime.request(component_id).optional_md_analysis))
+        if (not eligible or not current.get("quiescent")) and not (
                 edge is not None and current.get("state") == "prepared"
                 and current.get("continuation_lease_id") == continuation_lease_id
                 and current.get("supervisor_pid") is None):
-            raise RuntimeError("Retry requires a failed quiescent predecessor")
+            raise RuntimeError("Retry requires a quiescent failed predecessor or successful optional MD analysis root")
         if (attempt_dir / CANCEL_REQUEST_FILE).exists():
             raise RuntimeError("Cancelled attempt cannot retry")
         if edge is None:
