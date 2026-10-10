@@ -1,3 +1,4 @@
+import { canonicalJson } from '../contracts/m6Reproducibility';
 import type { StructureSceneState } from '../contracts/sceneState.js';
 
 export interface SceneReconciliation {
@@ -14,7 +15,7 @@ export interface SceneReconciliation {
     readonly molecularDynamicsChanged: boolean;
 }
 
-const stable = (value: unknown): string => JSON.stringify(value ?? null);
+const stable = (value: unknown): string => canonicalJson(JSON.parse(JSON.stringify(value ?? null)));
 
 export const reconcileSceneState = (
     previous: StructureSceneState | undefined,

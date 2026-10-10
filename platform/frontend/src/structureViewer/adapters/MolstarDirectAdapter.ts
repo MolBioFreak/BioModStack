@@ -1,5 +1,5 @@
 import { sha256Hex } from '../contracts/m6Reproducibility';
-import type { Loci } from 'molstar/lib/mol-model/loci';
+import { Loci } from 'molstar/lib/mol-model/loci';
 import {
     Queries,
     StructureElement,
@@ -24,6 +24,9 @@ import type { LociLabelProvider } from 'molstar/lib/mol-plugin-state/manager/loc
 import { Asset } from 'molstar/lib/mol-util/assets';
 import { Color } from 'molstar/lib/mol-util/color/color';
 import { Mat4, Vec3 } from 'molstar/lib/mol-math/linear-algebra';
+import { radToDeg } from 'molstar/lib/mol-math/misc';
+import type { AtomRef, ResidueRef } from '../contracts/structureIdentity';
+import type { MeasurementResult } from '../contracts/measurements';
 import { Box3D } from 'molstar/lib/mol-math/geometry';
 import { PluginCommands } from 'molstar/lib/mol-plugin/commands';
 import type { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
@@ -576,25 +579,53 @@ export class MolstarDirectAdapter {
             : viewerUnsupported('No direct Mol* XTC trajectory is loaded', 'trajectories');
     }
 
+    private measurementResults: readonly MeasurementResult[] = [];
+    private measurementRefs = new Map<string, string>();
+    private measurementRepresentationRefs = new Map<string, string>();
+
+    getMeasurementResults(): readonly MeasurementResult[] {
+        const cells = this.requirePlugin().state.data.cells;
+        return this.measurementResults.map(result => result.status === 'computed' && (!cells.has(this.measurementRefs.get(result.measurement.measurementId) ?? '') || !cells.get(this.measurementRepresentationRefs.get(result.measurement.measurementId) ?? '')?.obj)
+            ? { ...result, status: 'removed', value: undefined, reason: 'Removed in native Mol* tools' } : result);
+    }
+
+    subscribeMeasurementResults(handler: () => void): () => void {
+        const subscription = this.requirePlugin().managers.structure.measurement.behaviors.state.subscribe(handler);
+        return () => subscription.unsubscribe();
+    }
+
+    getExactAtomSelections(): ViewerResult<readonly AtomRef[]> {
+        const history = this.requirePlugin().managers.structure.selection.additionsHistory;
+        const atoms: AtomRef[] = [];
+        for (const { loci } of history) {
+            if (!StructureElement.Loci.is(loci) || StructureElement.Loci.size(loci) !== 1)
+                return viewerUnsupported('Select individual atoms using native atom granularity; whole residues are not adopted.', 'measurements');
+            const location = StructureElement.Loci.getFirstLocation(loci)!;
+            const documentId = this.documentStructures.get(loci.structure.root);
+            if (!documentId) return viewerUnsupported('Selected atom document is unavailable', 'measurements');
+            atoms.push({ documentId, authAsymId: StructureProperties.chain.auth_asym_id(location),
+                authSeqId: StructureProperties.residue.auth_seq_id(location), authAtomId: StructureProperties.atom.auth_atom_id(location),
+                insertionCode: StructureProperties.residue.pdbx_PDB_ins_code(location), altLoc: StructureProperties.atom.label_alt_id(location) });
+        }
+        return viewerOk(atoms);
+    }
+
+    getEntityType(residue: ResidueRef): StructureComponentType | undefined {
+        const entry = this.requirePlugin().managers.structure.hierarchy.current.structures.find(entry =>
+            entry.cell.obj?.data && this.documentStructures.get(entry.cell.obj.data.root) === residue.documentId);
+        const structure = entry?.cell.obj?.data;
+        if (!structure) return undefined;
+        const loci = queryLoci([{ struct_asym_id: residue.labelAsymId, auth_asym_id: residue.authAsymId,
+            residue_number: residue.labelSeqId, auth_seq_id: residue.authSeqId, auth_ins_code_id: residue.insertionCode }], structure);
+        const location = StructureElement.Loci.getFirstLocation(loci);
+        return location ? componentTypeForLocation(location) : undefined;
+    }
+
     setMeasurements(measurements: readonly ViewerMeasurement[]): Promise<ViewerResult<void>> {
         const ids = measurements.map((measurement) => measurement.measurementId);
         if (new Set(ids).size !== ids.length) {
             return Promise.resolve(viewerUnsupported('Measurement IDs must be unique', 'measurements'));
         }
-        for (const measurement of measurements) {
-            const assessment = assessMeasurement(measurement);
-            if (assessment.status !== 'ok') return Promise.resolve(assessment);
-            for (const point of measurement.points) {
-                if (point.modelId || point.sourceEntityId || point.sourceInstanceId
-                    || point.assemblyId || point.operatorInstanceId || point.atomIndex !== undefined) {
-                    return Promise.resolve(viewerUnsupported(
-                        'Direct Mol* measurements do not yet support model, source-instance, assembly/operator, or engine atom-index identity',
-                        'measurement-identity',
-                    ));
-                }
-            }
-        }
-
         const sceneGeneration = this.sceneGeneration;
         const measurementGeneration = ++this.measurementGeneration;
         const task = this.measurementQueue.then(async (): Promise<ViewerResult<void>> => {
@@ -604,7 +635,19 @@ export class MolstarDirectAdapter {
             }
             const plugin = this.requirePlugin();
             const planned: Array<{ measurement: ViewerMeasurement; locis: StructureElement.Loci[] }> = [];
-            for (const measurement of measurements) {
+            const results: MeasurementResult[] = [];
+            measurementLoop: for (const measurement of measurements) {
+                const units = measurement.type === 'distance' ? 'Å' : 'degrees';
+                const reject = (reason: string) => results.push({ measurement, units, status: 'unresolved', reason });
+                const assessment = assessMeasurement(measurement);
+                if (assessment.status !== 'ok') {
+                    reject(assessment.status === 'error' ? assessment.error.message : assessment.reason);
+                    continue;
+                }
+                if (measurement.points.some(point => point.modelId || point.sourceEntityId || point.sourceInstanceId || point.assemblyId || point.operatorInstanceId || point.atomIndex !== undefined)) {
+                    reject('Model, source-instance, assembly/operator or engine atom-index identity is unsupported');
+                    continue;
+                }
                 const locis: StructureElement.Loci[] = [];
                 for (const point of measurement.points) {
                     const structureEntry = plugin.managers.structure.hierarchy.current.structures.find((entry) => {
@@ -612,7 +655,7 @@ export class MolstarDirectAdapter {
                         return structure ? this.documentStructures.get(structure.root) === point.documentId : false;
                     });
                     const structure = structureEntry?.cell.obj?.data;
-                    if (!structure) return viewerUnsupported(`Measurement document ${point.documentId} is not loaded in this scene`, 'measurements');
+                    if (!structure) { reject(`Measurement document ${point.documentId} is not loaded in this scene`); continue measurementLoop; }
                     const loci = queryLoci([{
                         entity_id: point.entityId,
                         struct_asym_id: point.labelAsymId,
@@ -626,10 +669,8 @@ export class MolstarDirectAdapter {
                     }], structure);
                     const atomCount = StructureElement.Loci.size(loci);
                     if (atomCount !== 1) {
-                        return viewerUnsupported(
-                            `Measurement atom ${point.labelAtomId ?? point.authAtomId ?? '?'} resolved to ${atomCount} atoms; exactly one is required`,
-                            'measurements',
-                        );
+                        reject(`Measurement atom ${point.authAsymId ?? point.labelAsymId}:${point.authSeqId ?? point.labelSeqId}:${point.labelAtomId ?? point.authAtomId ?? '?'} resolved to ${atomCount} atoms; exactly one is required`);
+                        continue measurementLoop;
                     }
                     locis.push(loci);
                 }
@@ -637,20 +678,44 @@ export class MolstarDirectAdapter {
             }
 
             const stagedRefs: string[] = [];
+            const selectionRefs = new Map<string, string>();
+            const representationRefs = new Map<string, string>();
             try {
                 for (const { measurement, locis } of planned) {
+                    // Same native loci centers and Mol* geometry routines as stock representations.
+                    const centers = locis.map(loci => Loci.getBoundingSphere(loci)!.center);
+                    const value = measurement.type === 'distance' ? Vec3.distance(centers[0]!, centers[1]!)
+                            : measurement.type === 'angle' ? radToDeg(Vec3.angle(Vec3.sub(Vec3(), centers[0]!, centers[1]!), Vec3.sub(Vec3(), centers[2]!, centers[1]!)))
+                        : radToDeg(Vec3.dihedralAngle(centers[0]!, centers[1]!, centers[2]!, centers[3]!));
+                    if (!Number.isFinite(value)) {
+                        results.push({ measurement, status: 'unresolved', units: measurement.type === 'distance' ? 'Å' : 'degrees', reason: 'Native geometry is undefined for these points' });
+                        continue;
+                    }
                     const options = {
-                        customText: measurement.label,
+                        customText: measurement.label ? `${measurement.label}: ${value.toFixed(2)} ${measurement.type === 'distance' ? 'Å' : '°'}` : undefined,
                         selectionTags: `bms-measurement:${measurement.measurementId}`,
                         reprTags: `bms-measurement:${measurement.measurementId}`,
                     };
-                    const created = measurement.type === 'distance'
-                        ? await plugin.managers.structure.measurement.addDistance(locis[0]!, locis[1]!, options)
-                        : measurement.type === 'angle'
-                            ? await plugin.managers.structure.measurement.addAngle(locis[0]!, locis[1]!, locis[2]!, options)
-                            : await plugin.managers.structure.measurement.addDihedral(locis[0]!, locis[1]!, locis[2]!, locis[3]!, options);
-                    if (!created) throw new Error(`Mol* could not stage measurement ${measurement.measurementId}`);
+                    let created;
+                    try {
+                        created = measurement.type === 'distance'
+                            ? await plugin.managers.structure.measurement.addDistance(locis[0]!, locis[1]!, options)
+                            : measurement.type === 'angle'
+                                ? await plugin.managers.structure.measurement.addAngle(locis[0]!, locis[1]!, locis[2]!, options)
+                                : await plugin.managers.structure.measurement.addDihedral(locis[0]!, locis[1]!, locis[2]!, locis[3]!, options);
+                    } catch (error) {
+                        results.push({ measurement, status: 'unresolved', units: measurement.type === 'distance' ? 'Å' : 'degrees', reason: error instanceof Error ? error.message : String(error) });
+                        continue;
+                    }
+                    if (!created?.representation.obj || created.representation.cell?.status !== 'ok') {
+                        if (created) await PluginCommands.State.RemoveObject(plugin, { state: plugin.state.data, ref: created.selection.ref });
+                        results.push({ measurement, status: 'unresolved', units: measurement.type === 'distance' ? 'Å' : 'degrees', reason: `Native representation could not be created: ${created?.representation.cell?.errorText ?? measurement.measurementId}` });
+                        continue;
+                    }
                     stagedRefs.push(created.selection.ref);
+                    selectionRefs.set(measurement.measurementId, created.selection.ref);
+                    representationRefs.set(measurement.measurementId, created.representation.ref);
+                    results.push({ measurement, status: 'computed', value, units: measurement.type === 'distance' ? 'Å' : 'degrees' });
                 }
             } catch (error) {
                 for (const ref of stagedRefs) {
@@ -671,6 +736,9 @@ export class MolstarDirectAdapter {
                 return viewerError(error);
             }
             this.measurementSelectionRefs = stagedRefs;
+            this.measurementRefs = selectionRefs;
+            this.measurementRepresentationRefs = representationRefs;
+            this.measurementResults = results;
             return viewerOk(undefined);
         });
         this.measurementQueue = task.then(() => undefined, () => undefined);
@@ -690,11 +758,12 @@ export class MolstarDirectAdapter {
                 return [{
                     representation,
                     state: {
-                        representationId: `${documentId}:${component.key ?? componentIndex}:${kind}:${representationIndex}`,
+                        representationId: `${documentId}:${component.key ?? componentIndex}:${representationIndex}`,
                         documentId,
                         kind,
                         visible: !representation.cell.state.isHidden,
                         opacity: params?.type?.params?.alpha ?? 1,
+                        nativeParams: JSON.parse(JSON.stringify(representation.cell.transform.params)),
                     } satisfies StructureRepresentationState,
                 }];
             }));
@@ -724,12 +793,13 @@ export class MolstarDirectAdapter {
         if (states.length !== entries.size) throw new Error('Saved representation set does not match the loaded Mol* hierarchy');
         const update = plugin.state.data.build();
         for (const state of states) {
-            const entry = entries.get(state.representationId);
-            if (!entry || entry.state.documentId !== state.documentId || entry.state.kind !== state.kind) {
+            const entry = entries.get(state.representationId) ?? entries.get(state.representationId.replace(`:${state.kind}:`, ':'));
+            if (!entry || entry.state.documentId !== state.documentId) {
                 throw new Error(`Saved representation ${state.representationId} does not match the loaded Mol* hierarchy`);
             }
             plugin.managers.structure.hierarchy.toggleVisibility([entry.representation], state.visible ? 'show' : 'hide');
             update.to(entry.representation.cell).update((params: { type?: { params?: { alpha?: number } } }) => {
+                if (state.nativeParams) Object.assign(params, JSON.parse(JSON.stringify(state.nativeParams)));
                 if (!params.type?.params) throw new Error(`Mol* representation ${state.representationId} has no opacity parameters`);
                 params.type.params.alpha = state.opacity;
             });

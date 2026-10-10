@@ -8,7 +8,7 @@ import type { StructureComponentType, StructurePresentationQuery, StructureScene
 import type { StructureSceneState } from '../contracts/sceneState.js';
 import type { MDPlaybackState, MDSourceFrameRef } from '../contracts/mdTrajectory.js';
 import type { SpatialVolumeDescriptorV1, VolumePresentationStateV1, VolumeRegistrationV1, VolumeSegmentationV1 } from '../contracts/spatialVolumes.js';
-import type { AtomRef } from '../contracts/structureIdentity.js';
+import type { AtomRef, ResidueRef } from '../contracts/structureIdentity.js';
 import {
     viewerCancelled,
     viewerError,
@@ -80,6 +80,11 @@ export class MolstarDirectSceneEngineAdapter implements MolstarEngineAdapter {
     constructor(adapter: MolstarDirectAdapter) {
         this.adapter = adapter;
     }
+
+    getMeasurementResults() { return this.adapter.getMeasurementResults(); }
+    subscribeMeasurementResults(handler: () => void) { return this.adapter.subscribeMeasurementResults(handler); }
+    getExactAtomSelections() { return this.adapter.getExactAtomSelections(); }
+    getEntityType(residue: ResidueRef) { return this.adapter.getEntityType(residue); }
 
     subscribeResidueClicks(handler: (click: EngineResidueClick) => void): () => void {
         let active = true;
@@ -172,7 +177,7 @@ export class MolstarDirectSceneEngineAdapter implements MolstarEngineAdapter {
                 if (selected.status !== 'ok') return selected;
             }
         }
-        if (documentsReloaded || reconciliation.presentationChanged || reconciliation.layerChanged
+        if (documentsReloaded || reconciliation.representationChanged || reconciliation.presentationChanged || reconciliation.layerChanged
             || reconciliation.selectionChanged || reconciliation.filterChanged) {
             try {
                 await this.adapter.applyPresentation(toDirectPresentation(next));

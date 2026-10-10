@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import MolstarViewerImpl from '../components/MolstarViewerImpl';
 import type { MolstarViewerProps } from '../components/MolstarViewerImpl';
@@ -7,7 +7,7 @@ import type { StructureFilterState, StructurePresentationQuery, StructureScenePr
 import { exportMetricIdentity } from './contracts/exportIdentity.js';
 import type { StructureComponentType } from './contracts/scenePresentation.js';
 import { canonicalSpatialRefKey, type AtomRef, type ResidueRef } from './contracts/structureIdentity.js';
-import type { ViewerMeasurement } from './contracts/measurements.js';
+import { measurementResultRows, type MeasurementResult, type ViewerMeasurement } from './contracts/measurements.js';
 import type { DerivedStructureComponent } from './contracts/complexAnalysis.js';
 import { ComplexAnalysisPanel } from './extensions/complex/ComplexAnalysisPanel';
 import { FilterPanel } from './extensions/filters/FilterPanel';
@@ -48,6 +48,8 @@ export interface StructureViewerHostProps extends MolstarViewerProps {
 }
 
 const EMPTY_METRIC_LAYERS: readonly MetricLayer[] = [];
+const EMPTY_RESIDUE_SELECTIONS: readonly ResidueRef[] = [];
+const EMPTY_COMPONENTS: readonly DerivedStructureComponent[] = [];
 const ALL_COMPONENT_TYPES: readonly StructureComponentType[] = ['protein', 'dna', 'rna', 'ligand', 'glycan', 'ion', 'water', 'unknown'];
 const DEFAULT_FILTERS: StructureFilterState = { includeMissing: false, entityTypes: ALL_COMPONENT_TYPES };
 
@@ -67,14 +69,16 @@ const selectedResidues = (selection: MetricSelection | null): readonly ResidueRe
     });
 };
 
-const filterMetricLayer = (layer: MetricLayer, filters: StructureFilterState): MetricLayer => {
+const filterMetricLayer = (layer: MetricLayer, filters: StructureFilterState, entityType: (residue: ResidueRef) => StructureComponentType | undefined): MetricLayer => {
     const chains = new Set(filters.chainIds ?? []);
-    const [residueMin, residueMax] = filters.residueRange ?? [-Infinity, Infinity];
-    const [metricMin, metricMax] = filters.metricRange ?? [-Infinity, Infinity];
+    const residueMin = filters.residueRange?.[0] ?? -Infinity, residueMax = filters.residueRange?.[1] ?? Infinity;
+    const metricMin = filters.metricRange?.[0] ?? -Infinity, metricMax = filters.metricRange?.[1] ?? Infinity;
     const residueMatches = (residue: ResidueRef): boolean => {
         const chain = residue.labelAsymId ?? residue.authAsymId ?? '';
         const number = residue.labelSeqId ?? residue.authSeqId;
-        return (chains.size === 0 || chains.has(chain))
+        const type = filters.entityTypes?.length === ALL_COMPONENT_TYPES.length ? undefined : entityType(residue);
+        return (filters.entityTypes === undefined || type === undefined || filters.entityTypes.includes(type))
+            && (chains.size === 0 || chains.has(chain))
             && number !== undefined && number >= residueMin && number <= residueMax;
     };
     const valueMatches = (entry: MetricValue<unknown>): boolean => {
@@ -103,7 +107,7 @@ export default function StructureViewerHost({
     filters: controlledFilters,
     onFiltersChange,
     onMetricSelection,
-    residueSelections = [],
+    residueSelections = EMPTY_RESIDUE_SELECTIONS,
     controlledResidueSelection = false,
     structureData,
     measurements: controlledMeasurements,
@@ -114,7 +118,7 @@ export default function StructureViewerHost({
     workbenchCollapsed = false,
     jobId,
     artifactJobId: requestedArtifactJobId,
-    derivedComponents = [],
+    derivedComponents = EMPTY_COMPONENTS,
     residueMetricLayer: compatibilityLayer,
     residueColors: compatibilityColors,
     selections: callerSelections,
@@ -138,6 +142,10 @@ export default function StructureViewerHost({
         setOwnedStructureUrl(url);
         return () => { void owner.dispose(); };
     }, [structureData]);
+    const [measurementResults, setMeasurementResults] = useState<readonly MeasurementResult[]>([]);
+    const [restorationEpoch, setRestorationEpoch] = useState(0);
+    const [restoredDraft, setRestoredDraft] = useState<StructureScenePresentation>();
+    const [sceneRevision, setSceneRevision] = useState(0);
     const [localFilters, setLocalFilters] = useState<StructureFilterState>(DEFAULT_FILTERS);
     const [localMeasurements, setLocalMeasurements] = useState<readonly ViewerMeasurement[]>(controlledMeasurements ?? []);
     const [selection, setSelection] = useState<MetricSelection | null>(null);
@@ -146,13 +154,45 @@ export default function StructureViewerHost({
     const [layerOpacity, setLayerOpacity] = useState(1);
     const [cameraResetToken, setCameraResetToken] = useState(0);
     const [controller, setController] = useState<StructureSceneController | null>(null);
+    const restoreCallbacks = useRef({ onFiltersChange, onMeasurementsChange, onMetricSelection });
+    restoreCallbacks.current = { onFiltersChange, onMeasurementsChange, onMetricSelection };
+    const hydratePresentation = useCallback((presentation: StructureScenePresentation) => {
+        setRestoredDraft(presentation);
+        setRestorationEpoch(epoch => epoch + 1);
+        setLocalFilters(presentation.filters ?? DEFAULT_FILTERS);
+        restoreCallbacks.current.onFiltersChange?.(presentation.filters ?? DEFAULT_FILTERS);
+        setLocalMeasurements(presentation.measurements ?? []);
+        restoreCallbacks.current.onMeasurementsChange?.(presentation.measurements ?? []);
+        const layer = presentation.layers?.[0];
+        if (layer) { setLayerVisible(layer.visible); setLayerOpacity(layer.opacity); setSelectedMetricId(layer.metricId); }
+        const restoredResidues = presentation.selection?.flatMap(set => set.residues) ?? [];
+        const next: MetricSelection = { metricId: layer?.metricId ?? 'structure-selection', identities: restoredResidues, origin: 'canvas' };
+        setSelection(next);
+        restoreCallbacks.current.onMetricSelection?.(next);
+    }, []);
+    useEffect(() => { if (restoredPresentation) hydratePresentation(restoredPresentation); }, [restoredPresentation, hydratePresentation]);
+    const previousScope = useRef(`${jobId ?? ''}:${documentId}`);
     useEffect(() => {
-        const layer = restoredPresentation?.layers?.[0];
-        if (!layer) return;
-        setLayerVisible(layer.visible);
-        setLayerOpacity(layer.opacity);
-        if (layer.metricId) setSelectedMetricId(layer.metricId);
-    }, [restoredPresentation]);
+        const scope = `${jobId ?? ''}:${documentId}`;
+        if (previousScope.current === scope) return;
+        previousScope.current = scope;
+        setLocalMeasurements([]); setMeasurementResults([]); setLocalFilters(DEFAULT_FILTERS); setSelection(null); setRestoredDraft(undefined);
+    }, [documentId, jobId]);
+    useEffect(() => {
+        if (!controller) return;
+        setSceneRevision(-1);
+        const refresh = () => {
+            const next = controller.getMeasurementResults();
+            setMeasurementResults(previous => JSON.stringify(previous) === JSON.stringify(next) ? previous : next);
+        };
+        const unsubscribeNative = controller.subscribeMeasurementResults(refresh);
+        const unsubscribe = controller.subscribe(event => {
+            if (event.type === 'scene-ready') { refresh(); setSceneRevision(controller.diagnostics().completedSceneGeneration ?? 0); }
+            if (event.type === 'snapshot-restored' && controller.currentScene?.presentation) hydratePresentation(controller.currentScene.presentation);
+        });
+        refresh();
+        return () => { unsubscribe(); unsubscribeNative(); };
+    }, [controller, hydratePresentation]);
     const handleControllerReady = useCallback((next: StructureSceneController | null) => {
         setController(next);
         callerControllerReady?.(next);
@@ -224,7 +264,7 @@ export default function StructureViewerHost({
     const activeLayer = requestedLayer && visualMetricLayers.some((layer) => layer.descriptor.id === requestedLayer.descriptor.id)
         ? requestedLayer
         : visualMetricLayers[0];
-    const filteredLayer = useMemo(() => activeLayer ? filterMetricLayer(activeLayer, filters) : undefined, [activeLayer, filters]);
+    const filteredLayer = useMemo(() => activeLayer ? filterMetricLayer(activeLayer, filters, residue => controller?.getEntityType(residue)) : undefined, [activeLayer, filters, controller, sceneRevision]);
     const projected = useMemo(() => filteredLayer?.descriptor.dimension === 'residue-scalar' && layerVisible
         ? projectResidueMetricLayer(filteredLayer)
         : undefined, [filteredLayer, layerVisible]);
@@ -241,12 +281,12 @@ export default function StructureViewerHost({
     });
     const residues = useMemo(() => selectedResidues(selection), [selection]);
     const selectedResidueKeys = useMemo(() => new Set([...residues, ...residueSelections].map(canonicalSpatialRefKey)), [residues, residueSelections]);
-    const linkedSelections: NonNullable<MolstarViewerProps['selections']> = residues.flatMap((residue) => {
+    const linkedSelections = useMemo<NonNullable<MolstarViewerProps['selections']>>(() => residues.flatMap((residue) => {
         if ((residue as AtomRef).labelAtomId || (residue as AtomRef).authAtomId) return [];
         const chain = residue.labelAsymId;
         const number = residue.labelSeqId;
         return chain && number !== undefined ? [{ chain_id: chain, start_residue_number: number, end_residue_number: number, color: { r: 59, g: 130, b: 246 }, focus: true }] : [];
-    });
+    }), [residues]);
     const selections = linkedSelections.length > 0 ? linkedSelections : callerSelections;
     const legacyColors = useMemo(() => compatibilityColors?.size ? adaptLegacyResidueColors(compatibilityColors) : null, [compatibilityColors]);
     const colorQueries = useMemo<readonly StructurePresentationQuery[]>(() => {
@@ -344,8 +384,8 @@ export default function StructureViewerHost({
         callerResidueClick?.(residue);
     };
     const scenePresentation = useMemo<StructureScenePresentation>(() => ({
-        camera: restoredPresentation?.camera,
-        representations: restoredPresentation?.representations,
+        camera: (restoredDraft ?? restoredPresentation)?.camera,
+        representations: (restoredDraft ?? restoredPresentation)?.representations,
         layers: activeLayer ? [{
             layerId: `metric:${activeLayer.descriptor.id}`,
             metricId: activeLayer.descriptor.id,
@@ -363,7 +403,7 @@ export default function StructureViewerHost({
         tooltipQueries,
         hiddenQueries,
         nonSelectedColor: residueMetricLayer?.nonSelectedColor ?? (legacyColors?.selections.length ? { r: 68, g: 68, b: 68 } : undefined),
-    }), [activeLayer, colorQueries, filters, hiddenQueries, layerOpacity, layerVisible, legacyColors, measurements, residueMetricLayer, residueSelections, residues, restoredPresentation, tooltipQueries]);
+    }), [activeLayer, colorQueries, filters, hiddenQueries, layerOpacity, layerVisible, legacyColors, measurements, residueMetricLayer, residueSelections, residues, restoredPresentation, restoredDraft, tooltipQueries]);
 
     const residueLayer = filteredLayer && ['residue-scalar', 'atom-scalar'].includes(filteredLayer.descriptor.dimension) ? filteredLayer : undefined;
     const pairLayer = filteredLayer?.descriptor.dimension === 'residue-pair-matrix'
@@ -450,7 +490,7 @@ export default function StructureViewerHost({
                         </details>
                     )}
                     {showMetricWorkbench && activeLayer && <MetricLegendPanel layer={activeLayer} visible={layerVisible} opacity={layerOpacity} onVisibilityChange={setLayerVisible} onOpacityChange={setLayerOpacity} onReset={() => { setLayerVisible(true); setLayerOpacity(1); setFilters(DEFAULT_FILTERS); }} />}
-                    {showMetricWorkbench && !(pairLayer && 'dataset' in pairLayer && pairLayer.dataset?.matrixDirection === 'directed') && <FilterPanel value={filters} availableChains={chains} metricRange={activeLayer?.descriptor.valueRange} onChange={setFilters} />}
+                    {showMetricWorkbench && !(pairLayer && 'dataset' in pairLayer && pairLayer.dataset?.matrixDirection === 'directed') && <FilterPanel value={filters} availableChains={chains} metricRange={activeLayer?.descriptor.valueRange} metricUnits={activeLayer?.descriptor.units ?? undefined} metricDisplayScale={activeLayer?.descriptor.id === 'native-plddt' && ['fraction', 'fractional'].includes(activeLayer.descriptor.units ?? '') ? 100 : 1} onChange={setFilters} />}
                     {showLinkedSequence && residueLayer && <SequenceTrackExtension
                         key={residueLayer.descriptor.id}
                         metricId={residueLayer.descriptor.id}
@@ -461,7 +501,7 @@ export default function StructureViewerHost({
                             value: typeof entry.value === 'number' ? entry.value : null,
                             missingness: entry.missingness,
                             // Display only: the registry, palette and export keep native fractions.
-                            displayValue: residueLayer.descriptor.id === 'native-plddt' && typeof entry.value === 'number'
+                            displayValue: residueLayer.descriptor.id === 'native-plddt' && ['fraction', 'fractional'].includes(residueLayer.descriptor.units ?? '') && typeof entry.value === 'number'
                                 ? `${(entry.value * 100).toFixed(1)}%` : undefined,
                         }))}
                         selectedKeys={selectedResidueKeys}
@@ -470,8 +510,8 @@ export default function StructureViewerHost({
                     {showMetricWorkbench && pairLayer && <PairMatrixExtension layer={pairLayer} onSelection={commitSelection} />}
                     {showMetricWorkbench && metricDetails}
                     {showMetricWorkbench && showComplexWorkbench && <ComplexAnalysisPanel components={derivedComponents} chainPairLayers={chainPairLayers} geometryLayers={geometryLayers} onSelection={commitSelection} />}
-                    {showMetricWorkbench && showMeasurements && <MeasurementPanel documentId={documentId} measurements={measurements} onChange={setMeasurements} />}
-                    {showM6Workbench && <M6WorkbenchPanel controller={controller} jobId={jobId} tableRows={exportRows} />}
+                    {showMetricWorkbench && showMeasurements && <MeasurementPanel key={`${documentId}:${restorationEpoch}`} documentId={documentId} measurements={measurements} results={measurementResults} adoptSelection={() => controller?.getExactAtomSelections()} onChange={setMeasurements} />}
+                    {showM6Workbench && <M6WorkbenchPanel key={jobId ?? documentId} controller={controller} jobId={jobId} tableRows={[...exportRows, ...measurementResultRows(measurementResults)]} />}
                     {showMetricWorkbench && (registryState.issues.length > 0 || (projected && projected.status !== 'ok')) && <div role="alert" className="rounded bg-red-950/80 p-2 text-xs text-red-200">{[...registryState.issues, ...(projected && projected.status !== 'ok' ? [projected.status === 'error' ? projected.error.message : projected.reason] : [])].join(' · ')}</div>}
                 </aside>
             )}

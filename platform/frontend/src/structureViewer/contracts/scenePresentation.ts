@@ -12,6 +12,8 @@ export interface StructureRepresentationState {
     readonly visible: boolean;
     readonly opacity: number;
     readonly selectionSetId?: string;
+    /** Native Mol* representation params (type, color and size themes), not scientific data. */
+    readonly nativeParams?: Readonly<Record<string, unknown>>;
 }
 
 export interface StructureLayerState {
@@ -55,9 +57,9 @@ export interface StructureSelectionSet {
 export interface StructureFilterState {
     readonly entityTypes?: readonly StructureComponentType[];
     readonly chainIds?: readonly string[];
-    readonly residueRange?: readonly [number, number];
+    readonly residueRange?: readonly [number | null | undefined, number | null | undefined];
     readonly metricId?: string;
-    readonly metricRange?: readonly [number, number];
+    readonly metricRange?: readonly [number | null | undefined, number | null | undefined];
     readonly includeMissing?: boolean;
     readonly neighborhoodAngstrom?: number;
 }

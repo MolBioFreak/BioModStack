@@ -33,6 +33,21 @@ export type ViewerMeasurement =
     | ViewerAngleMeasurement
     | ViewerDihedralMeasurement;
 
+/** Runtime readback, never an authored or persisted scientific value. */
+export interface MeasurementResult {
+    readonly measurement: ViewerMeasurement;
+    readonly status: 'computed' | 'unresolved' | 'removed';
+    readonly value?: number;
+    readonly units: 'Å' | 'degrees';
+    readonly reason?: string;
+}
+
+/** Drop absent optional selectors for canonical JSON/CSV, without rounding numbers. */
+export const measurementResultRows = (results: readonly MeasurementResult[]): readonly Readonly<Record<string, unknown>>[] => results.map(result => JSON.parse(JSON.stringify({
+    kind: 'exact-atom-measurement', ...result.measurement,
+    status: result.status, value: result.value ?? null, units: result.units, reason: result.reason ?? null,
+})));
+
 const hasText = (value: string | undefined): boolean => Boolean(value?.trim());
 
 export const assessMeasurement = (measurement: ViewerMeasurement): ViewerResult<ViewerMeasurement> => {

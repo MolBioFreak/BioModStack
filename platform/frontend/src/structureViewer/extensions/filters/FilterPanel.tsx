@@ -4,12 +4,21 @@ export interface FilterPanelProps {
     readonly value: StructureFilterState;
     readonly availableChains: readonly string[];
     readonly metricRange?: readonly [number, number];
+    readonly metricUnits?: string;
+    readonly metricDisplayScale?: number;
     readonly onChange: (value: StructureFilterState) => void;
 }
 
 const ENTITY_TYPES = ['protein', 'dna', 'rna', 'ligand', 'glycan', 'ion', 'water', 'unknown'] as const;
 
-export function FilterPanel({ value, availableChains, metricRange, onChange }: FilterPanelProps) {
+export function FilterPanel({ value, availableChains, metricRange, metricUnits, metricDisplayScale = 1, onChange }: FilterPanelProps) {
+    const setBound = (field: 'residueRange' | 'metricRange', index: 0 | 1, text: string) => {
+        const parsed = text.trim() === '' ? undefined : Number(text) / (field === 'metricRange' ? metricDisplayScale : 1);
+        if (parsed !== undefined && !Number.isFinite(parsed)) return;
+        const bounds = [...(value[field] ?? [undefined, undefined])] as [number | null | undefined, number | null | undefined];
+        bounds[index] = parsed;
+        onChange({ ...value, [field]: bounds.every(bound => bound == null) ? undefined : bounds });
+    };
     const selected = new Set(value.chainIds ?? []);
     const entities = new Set(value.entityTypes ?? ENTITY_TYPES);
     const toggleChain = (chainId: string) => onChange({
@@ -33,13 +42,14 @@ export function FilterPanel({ value, availableChains, metricRange, onChange }: F
             </div>
             {availableChains.length > 0 && <div className="mt-1 text-[10px] text-slate-400">No checked chain means all chains.</div>}
             <div className="mt-2 grid grid-cols-2 gap-2">
-                <label>Residue min<input className="w-full" type="number" value={value.residueRange?.[0] ?? ''} onChange={(event) => onChange({ ...value, residueRange: [Number(event.target.value), value.residueRange?.[1] ?? Number.MAX_SAFE_INTEGER] })} /></label>
-                <label>Residue max<input className="w-full" type="number" value={value.residueRange?.[1] ?? ''} onChange={(event) => onChange({ ...value, residueRange: [value.residueRange?.[0] ?? Number.MIN_SAFE_INTEGER, Number(event.target.value)] })} /></label>
+                <label>Residue min<input className="min-w-0 w-full" type="number" step="any" value={value.residueRange?.[0] ?? ''} onChange={(event) => setBound('residueRange', 0, event.target.value)} /></label>
+                <label>Residue max<input className="min-w-0 w-full" type="number" step="any" value={value.residueRange?.[1] ?? ''} onChange={(event) => setBound('residueRange', 1, event.target.value)} /></label>
             </div>
+            {metricRange && <p className="mt-2 text-slate-400">{metricDisplayScale === 100 ? 'pLDDT display / 100; native fraction = display ÷ 100.' : `Native metric units: ${metricUnits || 'unspecified'}.`} Empty means unbounded; stored values and exports are unchanged.</p>}
             {metricRange && (
                 <div className="mt-2 grid grid-cols-2 gap-2">
-                    <label>Metric min<input className="w-full" type="number" value={value.metricRange?.[0] ?? metricRange[0]} onChange={(event) => onChange({ ...value, metricRange: [Number(event.target.value), value.metricRange?.[1] ?? metricRange[1]] })} /></label>
-                    <label>Metric max<input className="w-full" type="number" value={value.metricRange?.[1] ?? metricRange[1]} onChange={(event) => onChange({ ...value, metricRange: [value.metricRange?.[0] ?? metricRange[0], Number(event.target.value)] })} /></label>
+                    <label>Metric min{metricDisplayScale === 100 || metricUnits === 'percent' ? ' / 100' : ''}<input className="min-w-0 w-full" type="number" step="any" value={value.metricRange?.[0] == null ? '' : value.metricRange[0]! * metricDisplayScale} placeholder="Unbounded" onChange={(event) => setBound('metricRange', 0, event.target.value)} /></label>
+                    <label>Metric max{metricDisplayScale === 100 || metricUnits === 'percent' ? ' / 100' : ''}<input className="min-w-0 w-full" type="number" step="any" value={value.metricRange?.[1] == null ? '' : value.metricRange[1]! * metricDisplayScale} placeholder="Unbounded" onChange={(event) => setBound('metricRange', 1, event.target.value)} /></label>
                 </div>
             )}
             <label className="mt-2 flex items-center gap-1"><input type="checkbox" checked={value.includeMissing ?? false} onChange={(event) => onChange({ ...value, includeMissing: event.target.checked })} /> Include missing values</label>
