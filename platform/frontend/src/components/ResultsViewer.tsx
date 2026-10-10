@@ -8757,7 +8757,8 @@ function ResultsViewerContent() {
                                     {activeTab === 'compare_designs' && (
                                         <DesignComparePane
                                             designs={designs}
-                                            preSelectedId={selectedDesignId}
+                                            selectedDesignIds={selectedDesignIds}
+                                            onSelectedDesignIdsChange={setSelectedDesignIds}
                                         />
                                     )}
 

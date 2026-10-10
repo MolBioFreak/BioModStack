@@ -16,7 +16,7 @@ export function DesignComparePane({ designs, preSelectedId, selectedDesignIds, o
     const colors = useThemeColors();
     const [localIds, setLocalIds] = useState<string[]>(preSelectedId ? [preSelectedId] : designs.slice(0, 3).map(d => d.id));
     const [chain, setChain] = useState('');
-    const selectedIds = (selectedDesignIds ?? localIds).filter(id => designs.some(d => d.id === id));
+    const selectedIds = selectedDesignIds ?? localIds;
     const metrics = useQuery({
         queryKey: ['native-comparison-profiles', [...selectedIds].sort()],
         queryFn: () => Promise.all(selectedIds.map(async (id): Promise<ComparisonProfile> => {
@@ -61,7 +61,7 @@ export function DesignComparePane({ designs, preSelectedId, selectedDesignIds, o
         <div className="overflow-auto"><table className="w-full text-sm text-left"><thead><tr><th>Design / document</th><th>Native scope / units</th><th>Displayed points</th><th>Shared labels / unmatched</th><th>Availability</th></tr></thead>
             <tbody>{selectedIds.map(id => {
                 const row = chart.rows.find(p => p.id === id);
-                return <tr key={id}><td className="p-2">{designs.find(d => d.id === id)?.name} ({id})<br />{row?.metric.status === 'ok' ? row.metric.document.documentId : '—'}</td>
+                return <tr key={id}><td className="p-2">{designs.find(d => d.id === id)?.name ?? profiles.find(p => p.id === id)?.name} ({id})<br />{row?.metric.status === 'ok' ? row.metric.document.documentId : '—'}</td>
                     <td>{row?.metric.status === 'ok' ? `${row.metric.confidenceSource?.scope ?? row.metric.metric} / fraction` : 'Unavailable'}</td>
                     <td>{row?.metric.status === 'ok' ? row.count : '—'}</td><td>{row?.metric.status === 'ok' ? `${row.matched} / ${row.count - row.matched}` : '—'}</td>
                     <td>{row?.metric.status === 'ok' ? 'Native values' : row?.metric.reason ?? 'Not loaded'}</td></tr>;
