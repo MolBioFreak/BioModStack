@@ -23,11 +23,18 @@ function DeviceOperationResult({ event }: { event: Record<string, unknown> }) {
     return <section aria-label="Device command reports" className="min-w-0 break-words">
         <p>Device operation status: {String(event.status ?? 'Unknown')}. Answers, controller completion and physical verification are distinct.</p>
         {outcome.failed_channel !== undefined && <p role="alert">Failed channel: {String(outcome.failed_channel)} · {String(failed?.error ?? 'Failure detail not reported')}</p>}
-        {rows.map((channel, index) => { const result = resultRecord(channel.result) ?? {}; const reports = recordRows(result.reports); return <section key={index} aria-label={`Device channel ${String(channel.channel)}`}>
+        {rows.map((channel, index) => {
+            const result = resultRecord(channel.result) ?? {};
+            const programReports = recordRows(result.reports);
+            const singleReport = resultRecord(result.report);
+            // Standalone report queries publish `report`; buffered/diagnostic
+            // answers publish `reports`. Neither shape proves completion.
+            const reports = programReports.length ? programReports : singleReport ? [singleReport] : [];
+            return <section key={index} aria-label={`Device channel ${String(channel.channel)}`}>
             <h5>Channel {String(channel.channel)}</h5>
             <dl><dt>Controller acknowledged</dt><dd>{proof(result.controller_acknowledged)}</dd><dt>Completion verified</dt><dd>{proof(result.completion_verified)}</dd><dt>Physical effect verified</dt><dd>{proof(result.physical_effect_verified)}</dd><dt>Completion attribution unknown</dt><dd>{proof(result.completion_attribution_unknown)}</dd></dl>
             {reports.length ? <div className="max-w-full overflow-x-auto"><table><thead><tr>{['Command index', 'Answer index', 'Report', 'Value', 'Units', 'Parsed', 'Attribution unknown', 'Receive sequence', 'Robot receive time'].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{reports.map((report, i) => { const ingress = resultRecord(report.response) ?? {}; return <tr key={i}>{[report.command_index, report.answer_index, report.report_kind, report.value, report.units, report.parsed, report.attribution_unknown, ingress.receive_sequence, ingress.received_at].map((value, j) => <td key={j}>{String(value ?? 'Unknown')}</td>)}</tr>; })}</tbody></table></div> : <p>No decoded report retained for this channel.</p>}
-            <details><summary>Exact command intent and report ingress</summary><PipetteValue value={{ requested: result.requested, buffer_action: result.buffer_action, command_effects: result.command_effects, reports: result.reports }} /></details>
+            <details><summary>Exact command intent and report ingress</summary><PipetteValue value={{ requested: result.requested, buffer_action: result.buffer_action, command_effects: result.command_effects, report: result.report, reports: result.reports }} /></details>
         </section>; })}
         {rows.length === 0 && <p>No per-channel outcome retained; completion is unknown.</p>}
     </section>;

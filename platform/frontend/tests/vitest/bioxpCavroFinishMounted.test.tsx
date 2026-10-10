@@ -22,6 +22,11 @@ let host: HTMLDivElement, root: Root, client: QueryClient, child: ChildProcessWi
 let pending: ((value: any) => void)[], calls: any[], errors: string;
 const original = api.defaults.adapter;
 const load = (file: string) => JSON.parse(readFileSync(`${task}/${file}`, 'utf8'));
+// A repaired native reference lowering must be received from a freshly generated
+// compiler export, never patched expected document fields. Historical exports stay usable.
+const calibrationCompilerExport = (id: string) => process.env.BIOXP_CALIBRATION_COMPILER_EXPORTS
+ ? JSON.parse(readFileSync(`${process.env.BIOXP_CALIBRATION_COMPILER_EXPORTS}/${id}-bound.json`, 'utf8'))
+ : load(`bms-model-finish/exports/${id}-bound.json`);
 async function settle() { for(let pass=0;pass<3;pass++) await act(async () => { await new Promise(r=>setTimeout(r,30)); for (let i=0;i<500 && pending.length;i++) await new Promise(r=>setTimeout(r,20)); }); expect(pending.length,errors).toBe(0); }
 async function mount(element: React.ReactNode) { await act(async()=>root.render(<QueryClientProvider client={client}>{element}</QueryClientProvider>)); await settle(); }
 async function click(text: string) { const el=[...host.querySelectorAll('button')].find(e=>e.textContent===text || e.getAttribute('aria-label')===text); expect(el,text).toBeTruthy(); await act(async()=>el!.click()); await settle(); }
@@ -90,13 +95,13 @@ describe('actual facade → typed forms → real compiler / exact scratch revisi
  for(const id of ['pipette_volume_calibration','pipette_height_calibration','rc_calibration','oc_calibration','tc_calibration'])it(`${id}: ordinary starter binding controls → real compiler (inert authored companion)`,async()=>{
   await mount(<BioXpMethodsWorkspace generation={77} connected={false} controlsEnabled={false}/>);
   const examples=calls.find(c=>c.request.url.endsWith('/examples')).response.data,catalog=calls.find(c=>c.request.url.endsWith('/catalog')).response.data;
-  const index=examples.findIndex((e:any)=>e.id===id),companion=load(`bms-model-finish/exports/${id}-bound.json`).request;
+  const index=examples.findIndex((e:any)=>e.id===id),companion=calibrationCompilerExport(id).request;
   await input('Scientific example',String(index));await settle();
   const schema=methodBindingsSchema(examples[index].method,catalog);
   await fill('Bindings',schema,companion.bindings,schema);
   await click('Compile');
   const compile=calls.filter(c=>c.request.url.endsWith('/compile')).at(-1);expect(compile.response.data.document,JSON.stringify(compile.response.data.issues)).toBeTruthy();
-  expect(compile.response.data.document.stages).toEqual(load(`bms-model-finish/exports/${id}-bound.json`).result.document.stages);
+  expect(compile.response.data.document.stages).toEqual(calibrationCompilerExport(id).result.document.stages);
   expect(calls.flatMap(c=>c.response.native_calls??[])).toEqual([]);
  });
  it('pure analysis typed request → real relay → exact returned fit → deliberate immutable class pin',async()=>{

@@ -83,6 +83,14 @@ afterEach(async () => {
 });
 
 describe('mounted BioXP four-channel pipette panel', () => {
+    it.each([undefined, null, false, true])('keeps an absent stop observation unknown without erasing false (%s)', async allowToStop => {
+        const pipettes = { channels: [], allow_to_stop: allowToStop } as never;
+        await act(async () => root.render(<BioXpPipetteControlPanel connected generation={77} pipettes={pipettes} />));
+        const term = [...container.querySelectorAll('dt')].find(node => node.textContent === 'Allow to stop')!;
+        expect(term.nextElementSibling?.textContent).toBe(allowToStop == null ? 'unavailable' : String(allowToStop));
+        expect(state.readbackCalls).toEqual([]);
+        expect(state.planCalls).toEqual([]);
+    });
     it('renders returned fields instead of only semantic success and reuses the deliberate newOperation owner', async () => {
         state.data = {truth_source:'live_hardware_queries', receipt_id:'read-1', semantic_ok:false,
             channels: [{channel:0, semantic_ok:true, firmware:{firmware:'fixture-fw'}, status:{ok:true}, tip:{tip_loaded:false, reply_received:true}, pressure:{pressure:0, hardware_truth_level:'hardware_query'}, data:{samples:[0,1]}}]};

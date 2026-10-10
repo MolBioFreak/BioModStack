@@ -53,7 +53,7 @@ def calibration_examples():
                 {'field_id': 'z', 'label': 'Observed Z', 'unit': 'steps', 'module': 'pipette'}]}}
             by_id['calculate']['inputs'] = {'operation': 'height_calculate', 'scope_id': scope, 'plate': plate,
                 'measured_z': earlier('measure', 'measurements', ['z', 0])}
-            by_id['apply']['inputs'] = {'operation': 'height_apply', 'calculation': earlier('calculate', 'result', [])}
+            by_id['apply']['inputs'] = {'operation': 'height_apply', 'calculation': earlier('calculate', 'result', ['height_adjustment'])}
             by_id['decision']['inputs'] = {'operation': 'height_decision', 'scope_id': deepcopy(scope), 'decision': decision}
         else:
             method['parameters'] = [p for p in parameters if p['id'] in {'dispense_inputs', 'setpoint_inputs', 'settle_inputs'}]

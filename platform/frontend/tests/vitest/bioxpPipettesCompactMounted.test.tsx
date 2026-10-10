@@ -9,6 +9,7 @@ import { BioXpPipetteSettings } from '../../src/components/BioXpPipetteSettings'
 import { BioXpWellPipettingPanel } from '../../src/components/BioXpWellPipettingPanel';
 import { BioXpSchemaInput } from '../../src/components/BioXpSchemaInput';
 import { BioXpMeasurementReview } from '../../src/components/BioXpMeasurementReview';
+import { BioXpPipetteResults } from '../../src/components/BioXpPipetteResults';
 import fixture from '../../../api/tests/fixtures/bioxp_calibration_settings.json';
 
 let host: HTMLDivElement, root: Root, client: QueryClient;
@@ -75,6 +76,21 @@ it('uses documentary source values only after explicit selection and preserves e
     expect(host.querySelectorAll('[aria-label^="Use source value for"]')).toHaveLength(1);
     await click('Use source value: true');
     expect(value).toEqual({keepFalse:false,keepZero:0,keepNull:null,prefill:true});
+    expect(calls).toHaveLength(0);
+});
+
+it.each([false, true])('renders standalone native report outside disclosures, retaining partial=%s and unknown indices', async partial => {
+    // Native standalone query shape, distinct from diagnostic/program `reports`.
+    const report = { parsed: true, raw_ascii: '1.25', raw_bytes: [32, 96, 49, 46, 50, 53], report_kind: 'pressure', units: 'psi', value: 1.25 };
+    const outcome = { channels: [{ channel: 0, result: { report, completion_verified: false, controller_acknowledged: false, physical_effect_verified: false } }] };
+    const event = { operation: 'device_command', status: partial ? 'failed' : 'completed', ...(partial ? { partial: { pipette_partial_result: outcome } } : { result: outcome }) };
+    await mount(<BioXpPipetteResults value={{ pipette_result: { kind: 'cavro_application', events: [event] } }} />);
+    const panel = host.querySelector('[aria-label="Device command reports"]')!;
+    const table = panel.querySelector('table')!;
+    expect(table.closest('details')).toBeNull();
+    expect([...table.querySelectorAll('tbody td')].map(cell => cell.textContent)).toEqual(['Unknown', 'Unknown', 'pressure', '1.25', 'psi', 'true', 'Unknown', 'Unknown', 'Unknown']);
+    const term = [...panel.querySelectorAll('dt')].find(node => node.textContent === 'Completion verified')!;
+    expect(term.nextElementSibling?.textContent).toBe('No');
     expect(calls).toHaveLength(0);
 });
 

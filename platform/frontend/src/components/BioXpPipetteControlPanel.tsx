@@ -253,7 +253,7 @@ export function BioXpPipetteControlPanel({ visible = true, generation = 0, conne
             </div>
 
             <dl className="mt-3 grid gap-2 text-xs text-slate-300 sm:grid-cols-2 xl:grid-cols-3">
-                <div><dt className="text-slate-500">Allow to stop</dt><dd>{pipettes ? String(pipettes.allow_to_stop) : 'unavailable'}</dd></div>
+                <div><dt className="text-slate-500">Allow to stop</dt><dd>{pipettes?.allow_to_stop == null ? 'unavailable' : String(pipettes.allow_to_stop)}</dd></div>
                 <div><dt className="text-slate-500">Group error</dt><dd>{pipettes?.last_error ? `Group error: channel ${pipettes.last_error.channel + 1} · code ${pipettes.last_error.error_code}` : 'Group error: none reported'}</dd></div>
                 <div><dt className="text-slate-500">Group transaction</dt><dd>Last transaction: {transactionOutcome ?? 'unavailable'}</dd></div>
                 <div><dt className="text-slate-500">Receipt evidence</dt><dd>{pipettes?.latest_receipt ? `Latest receipt: ${pipettes.latest_receipt.operation} · ${pipettes.latest_receipt.receipt_id}` : 'Latest receipt: unavailable'}</dd></div>
