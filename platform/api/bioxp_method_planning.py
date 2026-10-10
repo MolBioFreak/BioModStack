@@ -29,14 +29,12 @@ RECIPE_FIELDS = {
 AIR_GAP_SPEED_FIELD = 'air_gap_aspiration_speed_ul_s'
 AIR_GAP_SPEED_PATHS = (('leading_air', 'speed_ul_s'), ('trailing_air', 'speed_ul_s'))
 # Retained explicit representation errors:
-# retract_distance_mm: native Z motion is in steps only (z_move target_steps,
-#   lift height_steps relative to zLow); the native owner defines no Z mm->steps
-#   conversion, so no conversion is invented here.
+# A legacy distance/speed alone supplies no calibrated reference or scale.
+# SurfaceMove owns explicit metric/native geometry; class labels do not.
 # Legacy calibration_function/correction_points are not an explicit selection.
 # selected_correction is pinned and evaluated exactly once by native Recipe.
 UNMAPPED_REASONS = {
-    'retract_distance_mm': 'native Z motion is authored in steps (after_liquid lift height_steps / z_move target_steps); '
-                           'the native owner defines no Z mm-to-steps conversion',
+    'retract_distance_mm': 'A class distance alone defines no Z mm-to-steps conversion; author surface_move with explicit reference, scale and speed',
     'calibration_function': 'Legacy unpinned function is documentary; explicitly select selected_correction with calibration_id, revision, context and function',
     'correction_points': 'Legacy unpinned points are documentary; explicitly select selected_correction with calibration_id, revision, context and function',
 }
@@ -55,10 +53,10 @@ def liquid_field_matrix():
         'excess_destination': 'Native multi.excess requires explicit ordered positioning and segments; a destination label cannot supply these.',
         'separate_carry_dispense_speed_ul_s': 'Recipe has no separate carry-air dispense phase; explicit segments/motions stay native-owned.',
         'separate_blowout_dispense_speed_ul_s': 'Recipe has no separate blowout-air dispense phase; final empty requires its explicit native speed.',
-        'immersion_depth_mm': 'No native calibrated mm-to-Z-steps mapping is published.',
-        'retract_speed_mm_s': 'Native Z motion is not specified by a Cavro liquid flow or a published mm/s conversion.',
+        'immersion_depth_mm': 'Author a surface_move metric displacement with explicit reference and calibration scale; a class depth alone cannot supply those operands.',
+        'retract_speed_mm_s': 'Author surface_move with explicit metric speed calibration or native speed; no apparatus scale is inferred from the class.',
         'search_speed_mm_s': 'Native fluid search uses explicit pressure/search parameters, not an inferred mm/s conversion.',
-        'tracking': 'No equivalent Recipe tracking operation is published.',
+        'tracking': 'Legacy flag does not supply a trajectory; author Recipe.aspiration_tracking or a typed tracked_aspirate instruction with explicit surface reference and motion parameters.',
         'touch_off': 'Requires explicit native positioning; contact coordinates and sequence are not inferred.',
         'lld': 'Native plld requires explicit pressure/search parameters; a class flag cannot supply them.',
         'contact_mode': 'Documentary contact intent; no native contact classification or positioning is inferred.',

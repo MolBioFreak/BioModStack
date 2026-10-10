@@ -40,7 +40,17 @@ for name, document in rows:
                 assert not plan['issues'], (name, plan['issues'])
                 applications.append(plan)
                 if params.get('recipe', {}).get('selected_correction'):
-                    assert plan['application']['liquid_settings']['selected_correction']['application_count'] == 1
+                    ledger = plan['application']['liquid_settings']['selected_correction']
+                    assert ledger['application_count'] == 1
+                    assert ledger['selected'] == params['recipe']['selected_correction']
+                    assert ledger['target_liquid_ul'] == params['recipe']['target_liquid_ul']
+                    assert ledger['measured_liquid_ul'] is None
+                    if name.startswith('actual-analysis-correction-'):
+                        from decimal import Decimal
+                        producer = document['metadata']['bms_method']['dependencies']['liquid_classes'][0]['measurement_provenance']['result']
+                        assert Decimal(str(ledger['commanded_aspiration_ul'])) == Decimal(producer['evaluated'][0]['commanded_ul'])
+                        aspirations = [op for op in plan['application']['operations'] if op['operation'] == 'aspirate']
+                        assert len(aspirations) == 1 and aspirations[0]['volume_ul'] == ledger['commanded_aspiration_ul']
     results.append({'case': name, 'exact_roundtrip': True, 'applications': applications})
 (out / 'native-received.json').write_text(json.dumps(results, indent=2) + '\n')
 producer = []

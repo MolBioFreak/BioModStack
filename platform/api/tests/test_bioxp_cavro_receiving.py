@@ -31,9 +31,8 @@ def test_native_pending_completed_and_review_relay(monkeypatch):
         export('received-native-' + label, response.json())
     held = capture['held'][0]
     pending = held['operator']['pending_review']
-    body = control_body(command_id=held['job_id'], expected_ownership_generation=held['command']['ownership_generation'],
-        stage_id=pending['stage_id'], action_id=pending['action_id'], source_occurrence_id=pending['source_occurrence_id'],
-        measurements={'probe': ['36.750']}, reviewer='offline test agent', note='synthetic transport receiving')
+    body = {**deepcopy(capture['review_requests'][0]), 'expected_connection_generation': 77}
+    assert all(body[key] == pending[key] for key in ('stage_id', 'action_id', 'source_occurrence_id'))
     runtime.connection.client.responses['protocol_review'] = capture['completed']
     response = client.post('/api/bioxp/protocols/jobs/' + held['job_id'] + '/review', json=body)
     assert response.status_code == 200, response.text
@@ -41,15 +40,16 @@ def test_native_pending_completed_and_review_relay(monkeypatch):
     export('review-relay', {'request': body, 'response': response.json()})
 
 
-def test_native_pressure_reader_is_read_only(monkeypatch):
-    capture = captured('pressure-public-receiving.json')['capture']
+@pytest.mark.parametrize('name', ['pressure-public-receiving.json', 'review-pressure-readback-None.json', 'review-pressure-readback-chunks.json'])
+def test_native_pressure_reader_is_read_only(monkeypatch, name):
+    capture = captured(name)['capture']
     client, runtime = make_client(monkeypatch)
     runtime.connection.client.responses['pipette_pressure_capture'] = capture
     response = client.get('/api/bioxp/pipettes/pressure-captures/' + capture['stream']['stream_session_id'])
     assert response.status_code == 200, response.text
     assert response.json() == capture
     assert [route for route, _ in runtime.connection.client.calls] == ['pipette_pressure_capture']
-    export('pressure-readback', response.json())
+    export('pressure-readback-' + Path(name).stem, response.json())
 
 
 def test_native_analysis_pure_relay(monkeypatch):
@@ -91,8 +91,9 @@ def test_review_explicit_native_rejection_preserved(monkeypatch):
     assert len(runtime.connection.client.calls) == 1  # no retry or physical resubmit
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize('index', [0, 1])
-def test_actual_analysis_correction_into_class_compiler(index):
+async def test_actual_analysis_correction_into_class_compiler(store, index):
     from test_bioxp_cavro_finish import correction_request
     from bioxp_method_compiler import compile_method
     data = captured('analysis-producers.json')[index]
@@ -109,6 +110,28 @@ def test_actual_analysis_correction_into_class_compiler(index):
     assert recipe['selected_correction'] == pin
     assert 'commanded_aspiration_ul' not in recipe
     assert result['dependencies'] == request['dependencies']
+    client, transport, _, _ = store
+    saved_class = await client.post(BASE + '/liquid-classes', json={'method': cls, 'name': 'Actual native fit ' + str(index)})
+    assert saved_class.status_code == 201, saved_class.text
+    cold_class = await client.get(BASE + '/liquid-classes/' + saved_class.json()['id'] + '/revisions/1')
+    assert cold_class.json()['method'] == cls
+    raw = deepcopy(request['method'])
+    run_inputs = {k: deepcopy(request[k]) for k in ('bindings', 'dependencies')}
+    raw.setdefault('editor_state', {})['run_inputs'] = deepcopy(run_inputs)
+    saved = await create(client, raw, name='Explicit selected native fit ' + str(index))
+    url = BASE + '/library/' + saved['id']
+    cold = (await client.get(url + '/revisions/1')).json()
+    assert cold['method'] == raw
+    compiled = await client.post(BASE + '/compile', json={'method': cold['method'], **run_inputs})
+    assert compiled.status_code == 200 and compiled.json()['document'], compiled.text
+    from test_bioxp_methods_api import KEY, JOB
+    run = await client.post(url + '/runs', json={'revision': 1, 'idempotency_key': KEY,
+        'expected_generation': 77, 'acknowledge_live': True, **run_inputs})
+    assert run.status_code == 202, run.text
+    recovery = await client.post(BASE + '/runs/' + JOB + '/recovery-draft', json={})
+    assert recovery.status_code == 200 and recovery.json()['dependencies'] == request['dependencies']
+    export('actual-analysis-correction-store-' + str(index), {'class': cold_class.json(), 'cold': cold,
+        'compiled': compiled.json(), 'run': run.json(), 'recovery': recovery.json()})
     export('actual-analysis-correction-' + str(index), {'request': request, 'result': result})
 
 

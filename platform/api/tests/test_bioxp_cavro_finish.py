@@ -113,6 +113,30 @@ def test_forward_reference_not_latest_and_context_not_interpreted():
     assert compile_method(request)['document'] is None
 
 
+@pytest.mark.parametrize('selected', [0, 1])
+def test_explicit_cross_call_occurrence_and_full_native_reference(selected):
+    request = measurement_request()
+    prompt, analysis = request['method']['steps']
+    request['method']['procedures'] = [{'id': 'p', 'parameters': [], 'steps': [prompt]}]
+    request['method']['steps'] = [
+        {'type': 'call', 'step_id': 'first', 'procedure_id': 'p', 'arguments': {}},
+        {'type': 'call', 'step_id': 'second', 'procedure_id': 'p', 'arguments': {}}, analysis]
+    operand = analysis['inputs']['analysis']['samples'][0]['observation']
+    operand['measured_ul']['method_result'] = {'step_path': '/method/procedures/0/steps/0'}
+    assert compile_method(request)['document'] is None  # no guessing across calls
+    operand['measured_ul']['method_result']['occurrence_index'] = selected
+    result = compile_method(request)
+    assert result['document'], result['issues']
+    actions = [a for stage in result['document']['stages'] for a in stage['actions']]
+    lowered = actions[-1]['params']['analysis']['samples'][0]['observation']['measured_ul']
+    assert lowered['source_occurrence_id'] == actions[selected]['source_occurrence_id']
+    operand['measured_ul'] = deepcopy(lowered)
+    explicit = compile_method(request)
+    assert explicit['document'], explicit['issues']
+    assert explicit['document']['stages'][-1]['actions'][-1]['params']['analysis']['samples'][0]['observation']['measured_ul'] == lowered
+    export('reference-explicit-' + str(selected), {'request': request, 'result': explicit})
+
+
 def correction_request():
     from test_bioxp_cavro_transfer import request
     from test_bioxp_method_liquid_mapping import CONTEXT

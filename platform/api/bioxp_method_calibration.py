@@ -111,9 +111,9 @@ def lower_references(params, occurrence, occurrences, stages):
     def operand(value):
         if not isinstance(value, dict) or 'method_result' not in value:
             return value  # complete native references remain valid
-        validate(value, AUTHOR_REFERENCE)
+        value = validate(value, AUTHOR_REFERENCE)
         address = value['method_result']
-        candidates = [o for o in occurrences if o['path'] == address['step_path']]
+        candidates = [o for o in occurrences if o['path'] == address['step_path'] and 'generated_by' not in o]
         if 'occurrence_index' in address:
             index = address['occurrence_index']
             candidates = candidates[index:index + 1]
