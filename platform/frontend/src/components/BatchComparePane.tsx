@@ -90,9 +90,9 @@ export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeM
     }) : [];
 
     return (
-        <div className="flex h-[800px]">
+        <div className="flex min-w-0 flex-col lg:h-[800px] lg:flex-row">
             {/* Sidebar: Job Selector */}
-            <div className="w-80 border-r border-slate-800 bg-slate-900/30 flex flex-col">
+            <div className="flex max-h-64 min-w-0 flex-col border-b border-slate-800 bg-slate-900/30 lg:max-h-none lg:w-80 lg:shrink-0 lg:border-b-0 lg:border-r">
                 <div className="p-4 border-b border-slate-800">
                     <h3 className="font-semibold text-slate-200">Select Jobs</h3>
                     <p className="text-xs text-slate-500 mt-1">Select multiple jobs to compare</p>
@@ -104,39 +104,41 @@ export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeM
                         </div>
                     ) : (
                         jobs.map((job: Job) => (
-                            <div
+                            <button
+                                type="button"
                                 key={job.id}
+                                aria-pressed={selectedJobIds.includes(job.id)}
                                 onClick={() => toggleJob(job.id)}
-                                className={`p-3 rounded-lg mb-1 cursor-pointer transition-colors border ${selectedJobIds.includes(job.id)
+                                className={`block w-full text-left p-3 rounded-lg mb-1 cursor-pointer transition-colors border focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400 ${selectedJobIds.includes(job.id)
                                     ? 'bg-blue-500/10 border-blue-500/50'
                                     : 'bg-transparent border-transparent hover:bg-slate-800'
                                     }`}
                             >
-                                <div className="flex items-start justify-between">
-                                    <span className={`text-sm font-medium ${selectedJobIds.includes(job.id) ? 'text-blue-400' : 'text-slate-300'}`}>
+                                <span className="flex items-start justify-between">
+                                    <span className={`min-w-0 break-words text-sm font-medium ${selectedJobIds.includes(job.id) ? 'text-blue-400' : 'text-slate-300'}`}>
                                         {job.name}
                                     </span>
                                     {selectedJobIds.includes(job.id) && (
-                                        <div className="w-2 h-2 rounded-full bg-blue-500 mt-1.5" />
+                                        <span aria-hidden="true" className="w-2 h-2 shrink-0 rounded-full bg-blue-500 mt-1.5" />
                                     )}
-                                </div>
-                                <div className="flex items-center gap-2 mt-1 text-xs text-slate-500">
+                                </span>
+                                <span className="flex items-center gap-2 mt-1 text-xs text-slate-500">
                                     <span>{job.mode}</span>
                                     <span>•</span>
                                     <span>{new Date(job.created_at).toLocaleDateString()}</span>
-                                </div>
-                            </div>
+                                </span>
+                            </button>
                         ))
                     )}
                 </div>
             </div>
 
             {/* Main Content: Comparison */}
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="min-w-0 flex-1 overflow-y-auto p-4 lg:p-6">
                 {selectedJobIds.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-slate-500">
                         <div className="text-4xl mb-4">📊</div>
-                        <p>Select jobs from the sidebar to begin comparison</p>
+                        <p>Select jobs to begin comparison</p>
                     </div>
                 ) : isLoading ? (
                     <div className="h-full flex items-center justify-center">

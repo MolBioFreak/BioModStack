@@ -44,12 +44,17 @@ export const scalarCell = (evidence: ScalarEvidence, keys: string[]) => {
 };
 
 /** Bounds are typed locally and applied once, in the descriptor's raw unit. */
-export function NativeScalarControls({query, result, onChange}: {
+export function NativeScalarControls({query, result, onChange, jobLabel}: {
     query: NativeScalarQuery; result?: NativeResults | null; onChange: (query: NativeScalarQuery) => void;
+    jobLabel?: (jobId: string) => string | undefined;
 }) {
-    const descriptors = result?.cohorts[query.cohort_key ?? '']?.metric_descriptors ?? {};
-    const descriptor = descriptors[query.metric_id ?? ''];
-    const scale = query.metric_id?.includes('plddt') && descriptor?.unit === 'fraction' ? 100 : 1;
+    const cohorts = Object.entries(result?.cohorts ?? {});
+    const cohortKey = query.cohort_key ?? (cohorts.length === 1 ? cohorts[0][0] : '');
+    const descriptors = result?.cohorts[cohortKey]?.metric_descriptors ?? {};
+    const metricKey = query.metric_id ?? ['complex_plddt', 'plddt', 'plddt_mean', 'ptm'].find(key => key in descriptors) ?? '';
+    const descriptor = descriptors[metricKey];
+    const activeQuery = {...query, cohort_key: cohortKey || undefined, metric_id: metricKey || undefined, unit: descriptor?.unit};
+    const scale = metricKey.includes('plddt') && descriptor?.unit === 'fraction' ? 100 : 1;
     const [minimum, setMinimum] = useState('');
     const [maximum, setMaximum] = useState('');
     useEffect(() => {
@@ -60,34 +65,37 @@ export function NativeScalarControls({query, result, onChange}: {
         const min = minimum.trim() === '' ? null : Number(minimum) / scale;
         const max = maximum.trim() === '' ? null : Number(maximum) / scale;
         if ((min !== null && !Number.isFinite(min)) || (max !== null && !Number.isFinite(max))) return;
-        onChange({...query, minimum: min, maximum: max});
+        onChange({...activeQuery, minimum: min, maximum: max});
     };
-    const style = 'rounded border border-slate-600 bg-slate-900 p-1 text-xs';
-    const summary = result?.summaries[query.cohort_key ?? '']?.[query.metric_id ?? ''];
+    const style = 'min-w-0 max-w-full rounded border border-[var(--border-color)] bg-[var(--bg-primary)] text-[var(--text-primary)] px-2 py-1 text-sm';
+    const summary = result?.summaries[cohortKey]?.[metricKey];
+    const displayValue = (value: number) => (value * scale).toFixed(metricKey.includes('plddt') ? 2 : 4);
+    const displayUnit = metricKey.includes('plddt') ? '0–100' : descriptor?.unit;
     return <div className="space-y-2 text-xs">
         <div className="flex flex-wrap gap-2 items-center">
-            <label>Cohort <select className={style} aria-label="Native cohort" value={query.cohort_key ?? ''} onChange={e => onChange(e.target.value ? {cohort_key: e.target.value} : {})}>
-                <option value="">All cohorts · no pooled ranking</option>
-                {Object.entries(result?.cohorts ?? {}).map(([key, cohort]) => <option key={key} value={key}>{key.split(':').slice(2).join(':')} · {Object.values(cohort.metric_descriptors)[0]?.producer_version} · {cohort.count} rows</option>)}
+            <label className="min-w-0 max-w-full">Result group <select className={style} aria-label="Native cohort" value={cohortKey} onChange={e => onChange(e.target.value ? {cohort_key: e.target.value} : {})}>
+                {cohorts.length !== 1 && <option value="">All result groups</option>}
+                {cohorts.map(([key, cohort], index) => <option key={key} value={key}>{jobLabel?.(key.split(':').slice(2).join(':')) ?? `Result group ${index + 1}`} · {cohort.count} results</option>)}
             </select></label>
-            <label>Metric <select className={style} aria-label="Native metric" value={query.metric_id ?? ''} onChange={e => onChange({cohort_key: query.cohort_key, metric_id: e.target.value || undefined, unit: descriptors[e.target.value]?.unit})}>
-                <option value="">Choose a native metric</option>
-                {Object.entries(descriptors).map(([key, d]) => <option key={key} value={key}>{key} · {d.scope} · {key.includes('plddt') ? '0–100 display' : d.unit}</option>)}
+            <label className="min-w-0 max-w-full">Metric <select className={style} aria-label="Native metric" value={metricKey} onChange={e => onChange({cohort_key: cohortKey || undefined, metric_id: e.target.value || undefined, unit: descriptors[e.target.value]?.unit})}>
+                {!metricKey && <option value="">Choose a native metric</option>}
+                {Object.keys(descriptors).map(key => <option key={key} value={key}>{(nativeSummaryKeys[key] ?? key).replace('(fraction)', '(0–100)')}</option>)}
             </select></label>
             {descriptor && <>
                 <label>Minimum <input className={style} aria-label="Native minimum" inputMode="decimal" value={minimum} onChange={e => setMinimum(e.target.value)} onKeyDown={e => {if (e.key === 'Enter') apply();}} /></label>
                 <label>Maximum <input className={style} aria-label="Native maximum" inputMode="decimal" value={maximum} onChange={e => setMaximum(e.target.value)} onKeyDown={e => {if (e.key === 'Enter') apply();}} /></label>
                 <button className={style} onClick={apply}>Apply bounds</button>
-                <label><input type="checkbox" checked={query.include_missing ?? false} onChange={e => onChange({...query, include_missing: e.target.checked})} /> Include unavailable/invalid under bounds</label>
-                <select className={style} aria-label="Native ordering" value={query.order ?? ''} onChange={e => onChange({...query, order: (e.target.value || null) as NativeScalarQuery['order']})}>
-                    <option value="">Name order</option><option value="desc">Native descending</option><option value="asc">Native ascending</option>
+                <label><input type="checkbox" checked={query.include_missing ?? false} onChange={e => onChange({...activeQuery, include_missing: e.target.checked})} /> Include missing values</label>
+                <select className={style} aria-label="Native ordering" value={query.order ?? ''} onChange={e => onChange({...activeQuery, order: (e.target.value || null) as NativeScalarQuery['order']})}>
+                    <option value="">Name order</option><option value="desc">Highest first</option><option value="asc">Lowest first</option>
                 </select>
             </>}
         </div>
-        {descriptor && <p>{descriptor.scope}; raw {descriptor.unit}{scale === 100 ? '; displayed 0–100 (bounds converted once)' : ''}. Blank is unbounded; zero is a bound. Missing sorts last.</p>}
-        {summary && <p>Matching cohort: {summary.observed_count} observed · {summary.unavailable_count} unavailable · {summary.invalid_count} invalid. {summary.statistics && <>Mean {summary.statistics.avg} {summary.descriptor.unit}; min {summary.statistics.min}; max {summary.statistics.max}.</>}</p>}
+        {descriptor && <p>{(nativeSummaryKeys[metricKey] ?? metricKey).replace('(fraction)', '(0–100)')}. Leave a bound blank for no limit; missing values sort last.</p>}
+        {summary && <p>{summary.observed_count} measured · {summary.unavailable_count + summary.invalid_count} missing. {summary.statistics && <span title={`Raw mean ${summary.statistics.avg} ${summary.descriptor.unit}; min ${summary.statistics.min}; max ${summary.statistics.max}`}>Mean {displayValue(summary.statistics.avg)}; range {displayValue(summary.statistics.min)}–{displayValue(summary.statistics.max)} ({displayUnit}).</span>}</p>}
         {result && !result.count_exact && <p role="status">Partial scalar read: {result.unread_ids.length} unread. Counts and ordering are not global; retry or export the known evidence.</p>}
-        <p>{result?.matching_count ?? '…'} matching / {result?.population_count ?? '…'} in population. Scalar bytes checked against persisted document binding; coordinates are checked when opened, not during table reads.</p>
+        <p>{result?.matching_count ?? '…'} matching of {result?.population_count ?? '…'} results.</p>
+        {result && <details><summary>Metric source details</summary><p>Scalar files are checked against the saved document identity. Coordinate files are checked when opened.</p>{descriptor && <p>{metricKey} · {descriptor.scope} · native {descriptor.unit} · producer {descriptor.producer_version}</p>}</details>}
     </div>;
 }
 

@@ -7973,7 +7973,7 @@ function ResultsViewerContent() {
                                                     {designsError && <p role="status">Scalar read failed; any displayed rows are the previous successfully loaded page, not the requested page. Selected IDs and independent Structure/Charts remain available. Refresh to retry.</p>}
                                                     {showingPreviousPage && <p role="status">Loading requested page; showing the previous page meanwhile.</p>}
                                                     {nativeReadChanged && <p role="status">Population or scalar evidence changed since the preceding read. These pages are not a snapshot; refresh or export in one read.</p>}
-                                                    <NativeScalarControls query={nativeQuery!} result={nativeEnvelope} onChange={query => {setNativeQuery(query); setCurrentPage(1);}} />
+                                                    <NativeScalarControls query={nativeQuery!} result={nativeEnvelope} jobLabel={id => jobsById.get(id)?.name} onChange={query => {setNativeQuery(query); setCurrentPage(1);}} />
                                                     <div className="mt-2 flex flex-wrap gap-2 text-xs">
                                                         <button onClick={selectVisibleDesigns}>Select visible</button>
                                                         <button onClick={selectAllFilteredDesigns}>Select all matching</button>
