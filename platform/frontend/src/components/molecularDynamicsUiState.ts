@@ -72,7 +72,11 @@ export const renderNativeMdp = (mdp: NativeMdp) => Object.entries(mdp).map(([key
 /** Replay original intent first, otherwise reopen the persisted native configuration. */
 export function hydrateMolecularDynamicsNative(initial?: Record<string, unknown>): MolecularDynamicsNativeDraft | null {
     const intent = ((initial?.intent as Record<string, unknown> | undefined)?.schema_version === 'bms.md.launch-intent.v2' ? initial?.intent : (initial?.md_form as Record<string, unknown> | undefined)?.native_intent) as MolecularDynamicsNativeDraft | undefined;
-    if (intent?.schema_version === 'bms.md.launch-intent.v2') return structuredClone(intent);
+    if (intent?.schema_version === 'bms.md.launch-intent.v2') return structuredClone({
+        ...intent,
+        ...('execution_target_id' in (initial ?? {}) ? { execution_target_id: initial!.execution_target_id as string | null } : {}),
+        ...('execution_policy' in (initial ?? {}) ? { execution_policy: initial!.execution_policy as ExecutionPolicy } : {}),
+    });
     const spec = (initial?.md_job_spec ?? initial?.md_job_config) as Record<string, unknown> | undefined;
     if (spec?.schema !== 'bms.md.job.v3') return null;
     const input = spec.input as Record<string, unknown>;

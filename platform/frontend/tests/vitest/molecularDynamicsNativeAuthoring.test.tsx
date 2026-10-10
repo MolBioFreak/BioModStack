@@ -43,6 +43,7 @@ afterEach(async () => { await act(async () => root.unmount()); query.clear(); ho
 it('preserves native document identity, explicit false/zero/null and unknown entries through JSON reopen', () => {
     const intent = fixture(); intent.input = { kind: 'guided', neutralize: false, salt_molar: 0 };
     expect(hydrateMolecularDynamicsNative(JSON.parse(JSON.stringify({ intent })))).toEqual(intent);
+    expect(hydrateMolecularDynamicsNative({ intent: { ...intent, execution_target_id: 'vast:old' }, execution_target_id: null })?.execution_target_id).toBeNull();
     const mdp = parseNativeMdp('; comment\nnsteps = 0\nnative-unknown = 1e-07\ngen-vel = no');
     expect(parseNativeMdp(renderNativeMdp(mdp))).toEqual(mdp);
     const saved = { schema: 'bms.md.job.v3', input: { coordinates: 'inputs/a.gro', topology: 'inputs/a.top' }, stages: intent.stages, execution: { ...intent.execution, gpu_id: '0' }, replicas: 2, random_seed: 12, analysis: { selection: null }, windows: intent.windows };
