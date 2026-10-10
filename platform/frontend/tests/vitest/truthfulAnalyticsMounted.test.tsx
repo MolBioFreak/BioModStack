@@ -19,7 +19,7 @@ const row = (id: string, rmsd: number | null) => parseScientificPoint({
 let root: ReturnType<typeof createRoot> | undefined;
 let client: QueryClient;
 const adapter = api.defaults.adapter;
-afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; client?.clear(); document.body.innerHTML = ''; api.defaults.adapter = adapter; });
+afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; client?.clear(); document.body.innerHTML = ''; sessionStorage.clear(); api.defaults.adapter = adapter; });
 async function mount(points: any[], designs = points, extra = {}, loadedDesignCount?: number) {
     const requests: string[] = [];
     api.defaults.adapter = async config => {
