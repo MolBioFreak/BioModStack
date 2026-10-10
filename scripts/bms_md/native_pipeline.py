@@ -71,7 +71,8 @@ def run_native_stages(config: Mapping[str, Any], *, config_path: Path, output_di
     if inputs.get("structure"):
         if preparation_bundle is None:
             raise ValueError("guided native input requires its preparation bundle")
-        coordinates, topology, _ = _consume_preparation_bundle(config, preparation_bundle, output_dir, ledger)
+        prepared_coordinates, topology, _ = _consume_preparation_bundle(config, preparation_bundle, output_dir, ledger)
+        coordinates = files.get("coordinates", prepared_coordinates)
     previous_checkpoint = files.get("checkpoint")
     stages = config["stages"] if "tpr" not in files else [{"name": "production"}]
     artifacts: dict[str, Path] = {"normalized_config": output_dir / "job.normalized.json",

@@ -828,6 +828,7 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
 
     if workflow in {'orchestrator', 'replica', 'analyze'} and 'molecular_dynamics' in entrypoint:
         a.asset('support_tool', 'scripts/bms_md/native_config.py', entrypoint)
+        a.asset('support_tool', 'scripts/bms_md/native_pipeline.py', entrypoint)
         cfg = p.get('md_config')
         if workflow == 'orchestrator' and isinstance(cfg, dict) and (cfg.get('analysis') or {}).get('wham'):
             a.asset('image', 'gromacs-md-2025.3.sif', 'scripts/bms_md/collect_analysis.py:run_native_wham', 'md_gromacs_container')
