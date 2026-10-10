@@ -67,6 +67,7 @@ export function confidenceProfile(raw: unknown, design: Design): { chains: Recor
         if (native.status !== 'ok') return { chains: {}, description: 'Native confidence', reason: native.reason };
         const chains: Record<string, ConfidenceChainMetric> = {};
         native.residues.forEach((ref, i) => {
+            if (native.metric === 'token_plddt' && (ref.labelAtomId || ref.authAtomId)) return;
             if (native.metric === 'atom_plddt' && ((ref.labelAtomId ?? ref.authAtomId) !== 'CA' || !protein.has(ref.componentId ?? ''))) return;
             const id = chainId(ref), position = ref.authSeqId ?? ref.labelSeqId;
             if (position == null) return;
@@ -78,7 +79,7 @@ export function confidenceProfile(raw: unknown, design: Design): { chains: Recor
             chain.length++;
         });
         for (const chain of Object.values(chains)) chain.avg_plddt = chain.plddt.reduce((a, b) => a + b, 0) / chain.length;
-        return { chains, description: native.metric === 'atom_plddt' ? 'Protein Cα-only confidence profile (0–100); no atom averaging. Native atom and non-protein evidence is available in Structure → Metrics & tools.' : 'Confidence by residue. Higher is better.' };
+        return { chains, description: native.metric === 'token_plddt' ? 'Native polymer-residue token confidence (0–100). Exact atom-token confidence remains separately available in Structure → Metrics & tools; no atom averaging.' : native.metric === 'atom_plddt' ? 'Protein Cα-only confidence profile (0–100); no atom averaging. Native atom and non-protein evidence is available in Structure → Metrics & tools.' : 'Confidence by residue. Higher is better.' };
     }
     return { chains: {}, description: 'Legacy per-chain confidence' };
 }

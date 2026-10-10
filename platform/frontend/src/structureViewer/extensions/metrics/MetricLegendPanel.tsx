@@ -1,6 +1,6 @@
 import type { MetricDescriptor, MetricLayer } from '../../metrics/metricContracts.js';
 
-const formatRange = (descriptor: MetricDescriptor): string => descriptor.id === 'native-plddt' && ['fraction', 'fractional'].includes(descriptor.units ?? '') ? '0–100 display (native fraction × 100)' : descriptor.valueRange
+const formatRange = (descriptor: MetricDescriptor): string => ['native-plddt', 'native-plddt-atoms'].includes(descriptor.id ?? '') && ['fraction', 'fractional'].includes(descriptor.units ?? '') ? '0–100 display (native fraction × 100)' : descriptor.valueRange
     ? `${descriptor.valueRange[0]}–${descriptor.valueRange[1]}${descriptor.units ? ` ${descriptor.units}` : ''}`
     : descriptor.units ?? 'unitless';
 

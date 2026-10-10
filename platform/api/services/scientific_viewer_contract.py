@@ -119,7 +119,8 @@ class NativeMetricBase(IdentityWire):
 
 
 class ScientificResidueMetric(NativeMetricBase):
-    metric: Literal['residue_plddt']
+    # Boltz tokens may bind polymer residues or exact non-polymer atoms.
+    metric: Literal['residue_plddt', 'token_plddt']
     units: Literal['fraction']
     values: list[float]
 

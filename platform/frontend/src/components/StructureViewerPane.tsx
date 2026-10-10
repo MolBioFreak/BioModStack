@@ -592,7 +592,7 @@ export default function StructureViewerPane({
     const nativeResidue = useMemo(()=>parseScientificNativeMetric(residueQuery.data,nativeDocument,'residue_plddt',selectedDesignId ?? undefined),[residueQuery.data,nativeDocument,selectedDesignId]);
     const nativeChains = useMemo(()=>parseScientificNativeMetric(chainQuery.data,nativeDocument,'chain_metrics',selectedDesignId ?? undefined),[chainQuery.data,nativeDocument,selectedDesignId]);
     const nativeResidueLayer = useMemo<MetricLayer | null>(()=>nativeResidue.status !== 'ok' ? null : ({
-        descriptor:{id:'native-plddt',label:nativeResidue.metric === 'atom_plddt' ? 'Native atom pLDDT' : 'Native residue pLDDT',dimension:nativeResidue.metric === 'atom_plddt' ? 'atom-scalar' : 'residue-scalar',units:'fraction',direction:'higher_is_better',valueRange:[0,1],projectionPolicy:'direct',normalization:'none',
+        descriptor:{id:'native-plddt',label:nativeResidue.metric === 'atom_plddt' ? 'Native atom pLDDT' : nativeResidue.metric === 'token_plddt' ? 'Native polymer-residue pLDDT' : 'Native residue pLDDT',dimension:nativeResidue.metric === 'atom_plddt' ? 'atom-scalar' : 'residue-scalar',units:'fraction',direction:'higher_is_better',valueRange:[0,1],projectionPolicy:'direct',normalization:'none',
             categories: {
                 veryHigh: {label: '≥90', color: '#3b82f6'},
                 confident: {label: '70–<90', color: '#22d3ee'},
@@ -601,8 +601,14 @@ export default function StructureViewerPane({
             },
             provenance:{source:'Verified native confidence vector',artifactSha256:nativeResidue.artifactSha256}},
         // Reuse the established confidence bands for display only; retain native fractions.
-        values:nativeResidue.residues.map((identity,index)=>({identity,value:nativeResidue.values[index],displayColor:plddtColor(nativeResidue.values[index]! * 100)})),
+        values:nativeResidue.residues.map((identity,index)=>({identity,value:nativeResidue.values[index],displayColor:plddtColor(nativeResidue.values[index]! * 100)})).filter(entry => nativeResidue.metric !== 'token_plddt' || !(entry.identity.labelAtomId || entry.identity.authAtomId)),
     } as MetricLayer),[nativeResidue]);
+    const nativeTokenAtomLayer = useMemo<MetricLayer | null>(() => {
+        if (nativeResidue.status !== 'ok' || nativeResidue.metric !== 'token_plddt' || !nativeResidueLayer) return null;
+        return { descriptor: { ...nativeResidueLayer.descriptor, id: 'native-plddt-atoms', label: 'Native atom-token pLDDT', dimension: 'atom-scalar' },
+            values: nativeResidue.residues.flatMap((identity, index) => identity.labelAtomId || identity.authAtomId
+                ? [{ identity, value: nativeResidue.values[index], displayColor: plddtColor(nativeResidue.values[index]! * 100) }] : []) };
+    }, [nativeResidue, nativeResidueLayer]);
     const chainMetrics = useMemo(() => requiresBoundMetrics ? {} : viewerAnalyses?.chainMetrics ?? {}, [requiresBoundMetrics, viewerAnalyses?.chainMetrics]);
     const chainMetricsBusy = viewerAnalyses?.chainMetricsBusy ?? false;
     const onRunChainMetrics = viewerAnalyses?.onRunChainMetrics;
@@ -1469,12 +1475,13 @@ export default function StructureViewerPane({
     const allMetricLayers = useMemo<readonly MetricLayer[]>(
         () => [
             ...(nativeResidueLayer ? [nativeResidueLayer] : []),
+            ...(nativeTokenAtomLayer ? [nativeTokenAtomLayer] : []),
             ...structureScalarMetricLayers,
             ...(subunitMeanPlddtLayer ? [subunitMeanPlddtLayer] : []),
             ...pairMetricLayers,
             ...interfaceMetricLayers,
         ],
-        [nativeResidueLayer, interfaceMetricLayers, pairMetricLayers, structureScalarMetricLayers, subunitMeanPlddtLayer],
+        [nativeResidueLayer, nativeTokenAtomLayer, interfaceMetricLayers, pairMetricLayers, structureScalarMetricLayers, subunitMeanPlddtLayer],
     );
 
 
@@ -3080,7 +3087,7 @@ export default function StructureViewerPane({
                                 structureDocumentId={nativeDocument?.documentId ?? governedWorkbenchContext?.structureDocumentId}
                                 structureContentSha256={nativeDocument?.contentSha256}
                                 derivedComponents={derivedComponents}
-                                activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
+                                activeMetricId={overlayView === 'pae' ? 'pae' : nativeResidueLayer?.descriptor.id ?? residueMetricLayer?.descriptor.id}
                                 showMetricWorkbench={!shapeMetrics && metricWorkbenchOpen}
                                 metricDetails={selectedDesign && nativeChains.status === 'ok' ? (
                                     <details className="rounded border border-slate-700 bg-slate-900/95 p-2 text-xs">

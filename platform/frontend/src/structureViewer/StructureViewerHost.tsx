@@ -490,7 +490,7 @@ export default function StructureViewerHost({
                         </details>
                     )}
                     {showMetricWorkbench && activeLayer && <MetricLegendPanel layer={activeLayer} visible={layerVisible} opacity={layerOpacity} onVisibilityChange={setLayerVisible} onOpacityChange={setLayerOpacity} onReset={() => { setLayerVisible(true); setLayerOpacity(1); setFilters(DEFAULT_FILTERS); }} />}
-                    {showMetricWorkbench && !(pairLayer && 'dataset' in pairLayer && pairLayer.dataset?.matrixDirection === 'directed') && <FilterPanel value={filters} availableChains={chains} metricRange={activeLayer?.descriptor.valueRange} metricUnits={activeLayer?.descriptor.units ?? undefined} metricDisplayScale={activeLayer?.descriptor.id === 'native-plddt' && ['fraction', 'fractional'].includes(activeLayer.descriptor.units ?? '') ? 100 : 1} onChange={setFilters} />}
+                    {showMetricWorkbench && !(pairLayer && 'dataset' in pairLayer && pairLayer.dataset?.matrixDirection === 'directed') && <FilterPanel value={filters} availableChains={chains} metricRange={activeLayer?.descriptor.valueRange} metricUnits={activeLayer?.descriptor.units ?? undefined} metricDisplayScale={['native-plddt', 'native-plddt-atoms'].includes(activeLayer?.descriptor.id ?? '') && ['fraction', 'fractional'].includes(activeLayer.descriptor.units ?? '') ? 100 : 1} onChange={setFilters} />}
                     {showLinkedSequence && residueLayer && <SequenceTrackExtension
                         key={residueLayer.descriptor.id}
                         metricId={residueLayer.descriptor.id}
@@ -501,7 +501,7 @@ export default function StructureViewerHost({
                             value: typeof entry.value === 'number' ? entry.value : null,
                             missingness: entry.missingness,
                             // Display only: the registry, palette and export keep native fractions.
-                            displayValue: residueLayer.descriptor.id === 'native-plddt' && ['fraction', 'fractional'].includes(residueLayer.descriptor.units ?? '') && typeof entry.value === 'number'
+                            displayValue: ['native-plddt', 'native-plddt-atoms'].includes(residueLayer.descriptor.id ?? '') && ['fraction', 'fractional'].includes(residueLayer.descriptor.units ?? '') && typeof entry.value === 'number'
                                 ? `${(entry.value * 100).toFixed(1)} / 100` : undefined,
                         }))}
                         selectedKeys={selectedResidueKeys}

@@ -96,7 +96,7 @@ function sampled(value: unknown, count: number): number[] {
 }
 
 export type ScientificNativeMetric = { status: 'unavailable'; reason: string } | {
-    status: 'ok'; reason: null; metric: 'residue_plddt' | 'atom_plddt' | 'chain_metrics';
+    status: 'ok'; reason: null; metric: 'residue_plddt' | 'atom_plddt' | 'token_plddt' | 'chain_metrics';
     document: StructureDocumentRef; artifactSha256: string; residues: AtomRef[];
     confidenceSource?: { producerVersion: string; scope: 'collapsed_residue'; storedUnits: 'percent' };
     values: number[]; chains: { providerIndex: string; chainId: string; residues: AtomRef[]; ptm: number }[];
@@ -112,7 +112,7 @@ export function parseScientificNativeMetric(raw: unknown, expected: StructureDoc
     try {
         if (raw == null) return {status:'unavailable',reason:'Native metric not loaded'};
         const initial = record(raw);
-        const actualMetric: 'residue_plddt' | 'atom_plddt' | 'chain_metrics' = metric === 'residue_plddt' && initial.metric === 'atom_plddt' ? 'atom_plddt' : metric;
+        const actualMetric: 'residue_plddt' | 'atom_plddt' | 'token_plddt' | 'chain_metrics' = metric === 'residue_plddt' && (initial.metric === 'atom_plddt' || initial.metric === 'token_plddt') ? initial.metric : metric;
         const p = exact(raw, initial.status === 'unavailable' ? envelopeKeys : [...nativeBaseKeys,
             ...(metric === 'residue_plddt' ? ['units','values'] : ['chain_index_map','chains_ptm','pair_chains_iptm','role_assignment','role_reason'])]);
         if (p.schema_name !== 'core_protein_viewer_metric' || p.schema_version !== 1 || p.contract_revision !== 1 || p.metric !== actualMetric) throw Error('unsupported native metric schema');

@@ -32,7 +32,7 @@ const finiteValues = (values: readonly MetricValue<ResidueRef>[]): number[] => v
 
 /** Display precision only: native values and provenance remain in the metric layer. */
 const metricTooltip = (layer: MetricLayer, value: number, identity: ResidueRef | AtomRef): string => {
-    const nativePlddt = layer.descriptor.id === 'native-plddt' && layer.descriptor.units === 'fraction';
+    const nativePlddt = ['native-plddt', 'native-plddt-atoms'].includes(layer.descriptor.id ?? '') && layer.descriptor.units === 'fraction';
     const rendered = nativePlddt ? `${(value * 100).toFixed(1)} /100`
         : `${Number(value.toPrecision(4))}${layer.descriptor.units ? ` ${layer.descriptor.units}` : ''}`;
     const author = identity.authAsymId !== undefined && identity.authSeqId !== undefined;

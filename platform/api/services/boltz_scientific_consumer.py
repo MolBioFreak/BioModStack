@@ -238,7 +238,9 @@ def retained_cp_metric(design, job, metric, params=None):
                 values = z['plddt']
             if values.shape != (n,) or not np.isfinite(values).all() or np.any(values < 0) or np.any(values > 1):
                 raise ValueError('invalid_native_confidence_vector')
-            return ScientificResidueMetric.model_validate(dict(payload, axis=axis, native_positions=list(range(n)),
+            return ScientificResidueMetric.model_validate(dict(payload,
+                metric='token_plddt' if any('label_atom_id' in r for r in axis['residues']) else 'residue_plddt',
+                axis=axis, native_positions=list(range(n)),
                 artifact_sha256=selected['artifacts']['plddt']['sha256'], units='fraction', values=values.tolist()))
         if metric == 'chain_metrics':
             confidence = json.loads(selected['snapshots']['metrics'])
@@ -309,6 +311,7 @@ async def compute_persisted_native_metric(design, metric, session, *, selected=N
             with np.load(BytesIO(selected['snapshots']['plddt']), allow_pickle=False) as data:
                 values = data['plddt'].tolist()
             payload.update(artifact_sha256=native['vectors'][0]['artifact_sha256'], units='fraction', values=values)
+            payload['metric'] = 'token_plddt' if any('label_atom_id' in r for r in payload['axis']['residues']) else 'residue_plddt'
             result = ScientificResidueMetric.model_validate(payload)
         elif metric == 'chain_metrics':
             confidence = json.loads(selected['snapshots']['metrics'])
