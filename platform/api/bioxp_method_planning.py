@@ -6,6 +6,7 @@ from bioxp_method_simulation import channel_wells, plan_tip_policy
 
 # Paths are application requests, not guessed Cavro opcodes.
 RECIPE_FIELDS = {
+    'selected_correction': ('selected_correction',),
     'target_volume_ul': ('target_liquid_ul',),
     'commanded_corrected_aspiration_ul': ('commanded_aspiration_ul',),
     'aspirate_speed_ul_s': ('aspiration_speed_ul_s',),
@@ -31,16 +32,13 @@ AIR_GAP_SPEED_PATHS = (('leading_air', 'speed_ul_s'), ('trailing_air', 'speed_ul
 # retract_distance_mm: native Z motion is in steps only (z_move target_steps,
 #   lift height_steps relative to zLow); the native owner defines no Z mm->steps
 #   conversion, so no conversion is invented here.
-# calibration_function/correction_points: native Recipe has no calibration
-#   field and does not call cavro_liquid.correction_at_target; the corrected
-#   displacement is authored directly as commanded_corrected_aspiration_ul.
+# Legacy calibration_function/correction_points are not an explicit selection.
+# selected_correction is pinned and evaluated exactly once by native Recipe.
 UNMAPPED_REASONS = {
     'retract_distance_mm': 'native Z motion is authored in steps (after_liquid lift height_steps / z_move target_steps); '
                            'the native owner defines no Z mm-to-steps conversion',
-    'calibration_function': 'native Recipe has no calibration field and does not call correction_at_target; '
-                            'author commanded_corrected_aspiration_ul explicitly',
-    'correction_points': 'native Recipe has no correction field and does not call correction_at_target; '
-                         'author commanded_corrected_aspiration_ul explicitly',
+    'calibration_function': 'Legacy unpinned function is documentary; explicitly select selected_correction with calibration_id, revision, context and function',
+    'correction_points': 'Legacy unpinned points are documentary; explicitly select selected_correction with calibration_id, revision, context and function',
 }
 
 
@@ -99,6 +97,8 @@ def liquid_selection_schema():
     from bioxp_method_native import SETTINGS
     number = {'anyOf': [{'type': 'number'}, {'type': 'string'}, {'type': 'null'}]}
     settings = {key: deepcopy(number) for key in (*RECIPE_FIELDS, AIR_GAP_SPEED_FIELD) if key != 'dispense_segments'}
+    from bioxp_method_native import EXPORT
+    settings['selected_correction'] = {**deepcopy(EXPORT['recipe']['properties']['selected_correction']), '$defs': deepcopy(EXPORT['recipe']['$defs'])}
     settings.update({key: {'anyOf': [deepcopy(value), {'type': 'null'}]} for key, value in SETTINGS['properties'].items()})
     settings.update({key: deepcopy(number) for key in ('slope_n1', 'slope_n2')})
     settings['dispense_segments'] = {'type': 'array', 'items': {'type': 'object', 'properties': {

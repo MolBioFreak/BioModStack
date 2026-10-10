@@ -192,6 +192,12 @@ def method_catalog():
             entry['effects'] = 'Source cover inspection can relocate covers; not photo-only'
         if entry['action'] == 'thermal_door':
             entry['effects'] = 'Source DO opens thermal door then initializes pipettes; DC closes door'
+    from bioxp_method_calibration import CALIBRATION, action_schema
+    for entry in actions:
+        if entry['action'] == 'calibration':
+            entry['inputs'] = action_schema()
+        elif entry['action'] == 'checkpoint':
+            entry['inputs']['properties']['measurement_form'] = deepcopy(CALIBRATION['measurement_form'])
     from bioxp_method_custody import custody_suggestions
     from bioxp_method_planning import liquid_field_matrix
     return {'schema': SCHEMA, 'actions': actions, 'native_definitions': schema['$defs'],
@@ -211,4 +217,5 @@ def method_examples():
         entry['bound_fixture'] = fixtures[entry['id']]
         if entry['id'] in {'purification', 'dna_purification', 'rna_purification', 'cfps_and_purification'}:
             entry['authoring_variants'] = [magnetic_variant(entry)]
-    return entries
+    from bioxp_method_calibration import calibration_examples
+    return entries + calibration_examples()

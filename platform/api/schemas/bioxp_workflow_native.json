@@ -1,7 +1,102 @@
 {
-  "source_commit": "c9dc0e49246b8825a2c5c1ef54aa98e1bcfba03e",
+  "source_commit": "1f31c87c8ef4ff3f9b984bad1aa8c381e05025d5",
   "request": {
     "$defs": {
+      "AuthoredReference": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "authored",
+            "title": "Kind",
+            "type": "string"
+          },
+          "position_steps": {
+            "title": "Position Steps",
+            "type": "integer"
+          },
+          "reference_id": {
+            "minLength": 1,
+            "title": "Reference Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "position_steps",
+          "reference_id"
+        ],
+        "title": "AuthoredReference",
+        "type": "object"
+      },
+      "AxisCalibration": {
+        "additionalProperties": false,
+        "properties": {
+          "calibration_id": {
+            "minLength": 1,
+            "title": "Calibration Id",
+            "type": "string"
+          },
+          "steps_per_mm": {
+            "exclusiveMinimum": 0,
+            "title": "Steps Per Mm",
+            "type": "number"
+          },
+          "native_speed_per_mm_s": {
+            "exclusiveMinimum": 0,
+            "title": "Native Speed Per Mm S",
+            "type": "number"
+          },
+          "positive_steps_direction": {
+            "enum": [
+              "down",
+              "up"
+            ],
+            "title": "Positive Steps Direction",
+            "type": "string"
+          }
+        },
+        "required": [
+          "calibration_id",
+          "steps_per_mm",
+          "native_speed_per_mm_s",
+          "positive_steps_direction"
+        ],
+        "title": "AxisCalibration",
+        "type": "object"
+      },
+      "DetectedReference": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "detected",
+            "title": "Kind",
+            "type": "string"
+          },
+          "detection_id": {
+            "minLength": 1,
+            "title": "Detection Id",
+            "type": "string"
+          },
+          "penetration_correction_steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Penetration Correction Steps"
+          }
+        },
+        "required": [
+          "kind",
+          "detection_id"
+        ],
+        "title": "DetectedReference",
+        "type": "object"
+      },
       "DiagnosticDetectFluid": {
         "additionalProperties": false,
         "properties": {
@@ -143,6 +238,48 @@
           "operation"
         ],
         "title": "ManualCalwithFluid",
+        "type": "object"
+      },
+      "ManualCavroApplication": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "const": "cavro_application",
+            "title": "Operation",
+            "type": "string"
+          },
+          "application": {
+            "additionalProperties": true,
+            "title": "Application",
+            "type": "object"
+          }
+        },
+        "required": [
+          "operation",
+          "application"
+        ],
+        "title": "ManualCavroApplication",
+        "type": "object"
+      },
+      "ManualCavroRecipe": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "const": "cavro_liquid_recipe",
+            "title": "Operation",
+            "type": "string"
+          },
+          "recipe": {
+            "additionalProperties": true,
+            "title": "Recipe",
+            "type": "object"
+          }
+        },
+        "required": [
+          "operation",
+          "recipe"
+        ],
+        "title": "ManualCavroRecipe",
         "type": "object"
       },
       "ManualDiagnosticPipette": {
@@ -478,6 +615,146 @@
         "title": "ManualMove",
         "type": "object"
       },
+      "MetricOffset": {
+        "additionalProperties": false,
+        "properties": {
+          "unit": {
+            "const": "mm",
+            "title": "Unit",
+            "type": "string"
+          },
+          "depth_mm": {
+            "title": "Depth Mm",
+            "type": "number"
+          },
+          "speed_mm_s": {
+            "exclusiveMinimum": 0,
+            "title": "Speed Mm S",
+            "type": "number"
+          },
+          "calibration": {
+            "$ref": "#/$defs/AxisCalibration"
+          },
+          "tip_offset_mm": {
+            "title": "Tip Offset Mm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "unit",
+          "depth_mm",
+          "speed_mm_s",
+          "calibration",
+          "tip_offset_mm"
+        ],
+        "title": "MetricOffset",
+        "type": "object"
+      },
+      "NativeOffset": {
+        "additionalProperties": false,
+        "properties": {
+          "unit": {
+            "const": "steps",
+            "title": "Unit",
+            "type": "string"
+          },
+          "offset_steps": {
+            "title": "Offset Steps",
+            "type": "integer"
+          },
+          "speed_native": {
+            "exclusiveMinimum": 0,
+            "title": "Speed Native",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "unit",
+          "offset_steps",
+          "speed_native"
+        ],
+        "title": "NativeOffset",
+        "type": "object"
+      },
+      "PickupCalibration": {
+        "additionalProperties": false,
+        "properties": {
+          "calibration_id": {
+            "minLength": 1,
+            "title": "Calibration Id",
+            "type": "string"
+          },
+          "rack_id": {
+            "minLength": 1,
+            "title": "Rack Id",
+            "type": "string"
+          },
+          "positioning": {
+            "additionalProperties": true,
+            "title": "Positioning",
+            "type": "object"
+          },
+          "pickup": {
+            "$ref": "#/$defs/SurfaceMove"
+          },
+          "retract": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SurfaceMove"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "channel_wells": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Channel Wells",
+            "type": "object"
+          },
+          "provenance": {
+            "minLength": 1,
+            "title": "Provenance",
+            "type": "string"
+          }
+        },
+        "required": [
+          "calibration_id",
+          "rack_id",
+          "positioning",
+          "pickup",
+          "retract",
+          "channel_wells",
+          "provenance"
+        ],
+        "title": "PickupCalibration",
+        "type": "object"
+      },
+      "ProfilePickup": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "const": "profile_pickup",
+            "title": "Operation",
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/TipProfile"
+          },
+          "calibration": {
+            "$ref": "#/$defs/PickupCalibration"
+          }
+        },
+        "required": [
+          "operation",
+          "profile",
+          "calibration"
+        ],
+        "title": "ProfilePickup",
+        "type": "object"
+      },
       "SourceAir": {
         "additionalProperties": false,
         "properties": {
@@ -648,6 +925,166 @@
         ],
         "title": "SourcePurge",
         "type": "object"
+      },
+      "SurfaceMove": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "const": "surface_move",
+            "title": "Operation",
+            "type": "string"
+          },
+          "reference": {
+            "discriminator": {
+              "mapping": {
+                "authored": "#/$defs/AuthoredReference",
+                "detected": "#/$defs/DetectedReference"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/AuthoredReference"
+              },
+              {
+                "$ref": "#/$defs/DetectedReference"
+              }
+            ],
+            "title": "Reference"
+          },
+          "displacement": {
+            "discriminator": {
+              "mapping": {
+                "mm": "#/$defs/MetricOffset",
+                "steps": "#/$defs/NativeOffset"
+              },
+              "propertyName": "unit"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/NativeOffset"
+              },
+              {
+                "$ref": "#/$defs/MetricOffset"
+              }
+            ],
+            "title": "Displacement"
+          },
+          "intent": {
+            "enum": [
+              "immersion",
+              "retract",
+              "contact",
+              "authored"
+            ],
+            "title": "Intent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation",
+          "reference",
+          "displacement",
+          "intent"
+        ],
+        "title": "SurfaceMove",
+        "type": "object"
+      },
+      "TipProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "minLength": 1,
+            "title": "Profile Id",
+            "type": "string"
+          },
+          "nominal_volume_ul": {
+            "exclusiveMinimum": 0,
+            "title": "Nominal Volume Ul",
+            "type": "number"
+          },
+          "manufacturer": {
+            "title": "Manufacturer",
+            "type": "string"
+          },
+          "sku": {
+            "title": "Sku",
+            "type": "string"
+          },
+          "filtered": {
+            "title": "Filtered",
+            "type": "boolean"
+          },
+          "length_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Length Mm"
+          },
+          "orifice_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Orifice Mm"
+          },
+          "usable_capacity_ul": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Usable Capacity Ul"
+          },
+          "rack_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rack Id"
+          },
+          "geometry_provenance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Geometry Provenance"
+          }
+        },
+        "required": [
+          "profile_id",
+          "nominal_volume_ul",
+          "manufacturer",
+          "sku",
+          "filtered"
+        ],
+        "title": "TipProfile",
+        "type": "object"
       }
     },
     "additionalProperties": false,
@@ -662,6 +1099,8 @@
           "discriminator": {
             "mapping": {
               "aspirate": "#/$defs/ManualLiquid",
+              "cavro_application": "#/$defs/ManualCavroApplication",
+              "cavro_liquid_recipe": "#/$defs/ManualCavroRecipe",
               "diagnostic_detect_fluid": "#/$defs/DiagnosticDetectFluid",
               "diagnostic_pipette": "#/$defs/ManualDiagnosticPipette",
               "dispense": "#/$defs/ManualLiquid",
@@ -671,6 +1110,7 @@
               "measure_fluid_height": "#/$defs/ManualMeasureFluidHeight",
               "mix": "#/$defs/ManualMix",
               "move": "#/$defs/ManualMove",
+              "profile_pickup": "#/$defs/ProfilePickup",
               "source_aspirate_air": "#/$defs/SourceAir",
               "source_calwith_fluid": "#/$defs/ManualCalwithFluid",
               "source_dispense_air": "#/$defs/SourceAir",
@@ -726,6 +1166,15 @@
             },
             {
               "$ref": "#/$defs/ManualDiagnosticPipette"
+            },
+            {
+              "$ref": "#/$defs/ManualCavroApplication"
+            },
+            {
+              "$ref": "#/$defs/ManualCavroRecipe"
+            },
+            {
+              "$ref": "#/$defs/ProfilePickup"
             }
           ]
         },
@@ -810,6 +1259,7 @@
             "oem_opcode": null,
             "source_occurrence_id": null,
             "source_key": null,
+            "on_error": "stop",
             "metadata": {
               "manual_step": 0
             }
@@ -841,6 +1291,7 @@
             "oem_opcode": null,
             "source_occurrence_id": null,
             "source_key": null,
+            "on_error": "stop",
             "metadata": {
               "manual_step": 1
             }

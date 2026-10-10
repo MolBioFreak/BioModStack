@@ -365,7 +365,7 @@ def emit_rows(rows):
         intent = row['intent']
         from bioxp_method_native import native_action
         try:
-            direct = native_action(intent.get('operation'), {k: v for k, v in intent.items() if k != 'operation'})
+            direct = ('calibration', deepcopy(intent['calibration'])) if intent.get('operation') == 'calibration' else native_action(intent.get('operation'), {k: v for k, v in intent.items() if k != 'operation'})
         except (ValueError, TypeError) as exc:
             issues.append({'step_id': row['step_id'], 'message': str(exc)})
             continue
@@ -403,7 +403,7 @@ def emit_rows(rows):
             action.update(kind=direct[0], params=direct[1], metadata={}, required_capability=row.get('required_capability'))
             generated = [action]
         elif intent.get('operation') in ('checkpoint', 'note'):
-            if set(intent) != {'operation', 'message'} or not isinstance(intent['message'], str):
+            if (set(intent) - ({'operation', 'message', 'measurement_form'} if intent['operation'] == 'checkpoint' else {'operation', 'message'}) or not isinstance(intent.get('message'), str)):
                 issues.append({'step_id': row['step_id'], 'message': 'checkpoint/note requires exactly one string message'})
                 continue
             action = deepcopy(_NATIVE['document_template']['stages'][0]['actions'][0])
@@ -411,6 +411,10 @@ def emit_rows(rows):
                           params={'message': intent['message']}, pause_message=intent['message'],
                           review_required=intent['operation'] == 'checkpoint', metadata={},
                           required_capability=row.get('required_capability'))
+            if 'measurement_form' in intent:
+                from bioxp_method_calibration import CALIBRATION
+                from bioxp_method_native import validate
+                action['params']['measurement_form'] = validate(intent['measurement_form'], CALIBRATION['measurement_form'])
             generated = [action]
         else:
             emitted = preview(WorkflowPreviewRequest.model_validate({'draft': {
@@ -508,6 +512,8 @@ def compile_method(request):
                 if not isinstance(inputs, dict):
                     fail('Action inputs must be an object', occurrence['path'])
                 intent = inputs if occurrence['action'] == 'native_intent' else {'operation': occurrence['action'], **inputs}
+                if occurrence['action'] == 'calibration':
+                    intent = {'operation': 'calibration', 'calibration': inputs}
                 if occurrence['action'] == 'plunger':
                     from bioxp_method_native import validate
                     diagnostic = validate(inputs, _NATIVE['request']['$defs']['DiagnosticPlunger'])
@@ -521,7 +527,7 @@ def compile_method(request):
                     if set(inputs) != {'channels'} or inputs.get('channels') != [0, 1, 2, 3] or any(type(c) is not int for c in inputs['channels']):
                         fail('Source eject requires exactly explicit channels [0,1,2,3]; other settings are not discarded', occurrence['path'])
                     intent = {'operation': 'tip_eject'}
-                if occurrence['action'] != 'native_intent' and inputs.get('operation', occurrence['action']) != occurrence['action']:
+                if occurrence['action'] not in {'native_intent', 'calibration'} and inputs.get('operation', occurrence['action']) != occurrence['action']:
                     fail('Action/operation mismatch', occurrence['path'])
                 # Bound compound expansion before the existing emitter allocates its children.
                 cost = native_cost(intent)
@@ -648,6 +654,11 @@ def compile_method(request):
                 action['stage_id'] = stages[-1]['stage_id']
                 stages[-1]['actions'].append(action)
             document['stages'] = stages
+            from bioxp_method_calibration import lower_references
+            for stage in stages:
+                for action in stage['actions']:
+                    if action['kind'] == 'calibration':
+                        action['params'] = lower_references(action['params'], by_id[action['source_occurrence_id']], occurrences, stages)
             from bioxp_method_native import EXPORT
             content = {'compiler': VERSION, 'native_source_commit': EXPORT['source_commit'],
                        'method': semantic(method), 'bindings': request.get('bindings', {}),
