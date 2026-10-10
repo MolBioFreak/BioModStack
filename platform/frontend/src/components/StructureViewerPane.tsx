@@ -2848,7 +2848,7 @@ export default function StructureViewerPane({
     const renderViewerToolbar = (isCompact = false) => (
         <div className={`flex items-center gap-2 ${isCompact ? 'flex-wrap' : 'mb-3 flex-wrap'}`}>
             {/* The companion owns sample selection; retain the picker in fullscreen. */}
-            {(!confidenceCompanion || isFullscreen) && <div className="relative">
+            {(!confidenceCompanion || isFullscreen) && <div className="relative min-w-0 max-w-full">
                 <select
                     value={selectedDesignId ?? ''}
                     onChange={(e) => setSelectedDesignId(e.target.value)}
@@ -2968,11 +2968,10 @@ export default function StructureViewerPane({
             </button>
             <button
                 onClick={toggleFullscreen}
-                className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${isCompact
-                    ? 'bg-red-500/80 hover:bg-red-500 text-white backdrop-blur-sm'
-                    : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+                aria-pressed={isFullscreen}
+                className="px-3 py-1.5 text-xs rounded-lg transition-colors border border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]"
             >
-                {isCompact ? '✕ Exit Fullscreen' : '⛶ Fullscreen'}
+                {isFullscreen ? '✕ Exit Fullscreen' : '⛶ Fullscreen'}
             </button>
         </div>
     );
@@ -3005,7 +3004,8 @@ export default function StructureViewerPane({
                 className={isFullscreen ? 'prediction-fullscreen-flow' : confidenceCompanion || viewerLayout.isStacked ? 'flex flex-col gap-4' : 'flex gap-4'}
             >
                 {/* Left Column / Fullscreen: Viewer Area */}
-                <div ref={viewerAreaRef} className={isFullscreen ? 'prediction-fullscreen-molecule' : viewerLayout.isStacked ? 'min-w-0' : 'flex-[2] min-w-0'}>
+                <div ref={viewerAreaRef} className={isFullscreen ? 'prediction-fullscreen-molecule' : viewerLayout.isStacked ? 'min-w-0' : 'flex-[2] min-w-0'}
+                    style={isFullscreen && viewportWidth < 700 ? {flex: '0 0 auto'} : undefined}>
                     {/* Toolbar - positioned differently based on mode */}
                     <div className="prediction-viewer-toolbar">
                         {renderViewerToolbar(isFullscreen || viewerLayout.isStacked)}
@@ -3061,7 +3061,9 @@ export default function StructureViewerPane({
                             ? 'prediction-fullscreen-canvas relative'
                             : 'relative rounded-lg border border-slate-700'
                         }
-                        style={isFullscreen ? undefined : { height: confidenceCompanion ? (viewportWidth < 700 ? (metricWorkbenchOpen ? '1320px' : '820px') : 'clamp(560px, 72vh, 800px)') : viewerLayout.viewerHeight }}
+                        style={isFullscreen
+                            ? viewportWidth < 700 ? {height: metricWorkbenchOpen ? '1320px' : '820px', flex: '0 0 auto'} : undefined
+                            : { height: confidenceCompanion ? (viewportWidth < 700 ? (metricWorkbenchOpen ? '1320px' : '820px') : 'clamp(560px, 72vh, 800px)') : viewerLayout.viewerHeight }}
                     >
                         {awaitingGovernedWorkbenchIdentity ? (
                             <div className="flex h-full items-center justify-center text-sm text-slate-400">Preparing governed structure resources…</div>

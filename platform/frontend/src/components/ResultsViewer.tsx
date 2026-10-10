@@ -8902,7 +8902,7 @@ function ResultsViewerContent() {
                                     {/* CHARTS TAB - Full Analytics Dashboard */}
                                     {activeTab === 'charts' && (
                                         <AnalyticsDashboard
-                                            designs={inspectionDesigns}
+                                            designs={nativeResults ? inspectionDesigns : selectedDesign && !designs.some(design => design.id === selectedDesign.id) ? [selectedDesign, ...designs] : designs}
                                             fullPaeRequested={typeof activeJob?.params?.write_full_pae === 'boolean' ? activeJob.params.write_full_pae : undefined}
                                             modelId={predictionModelId}
                                             selectedDesignId={selectedDesignId}
@@ -8910,7 +8910,7 @@ function ResultsViewerContent() {
                                             structure={(selection, onSelection) => selectedDesignSupportsStructureViewer && !exactArtifactId ? <StructureViewerPane confidenceCompanion
                                                 confidenceSelection={selection} onConfidenceSelection={onSelection}
                                                 selectedDesignId={selectedDesignId} setSelectedDesignId={selectDesign}
-                                                designs={inspectionDesigns} selectedDesign={selectedDesign}
+                                                designs={nativeResults ? inspectionDesigns : designs} selectedDesign={selectedDesign}
                                                 colorMode={colorMode} setColorMode={setColorMode} structureFormat={structureFormat}
                                                 viewerAnalyses={structureViewerAnalyses} activeJob={activeJob} getMetricColor={getMetricColor}
                                             /> : <p>Structure document unavailable for this selection.</p>}
