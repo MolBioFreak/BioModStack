@@ -1,6 +1,122 @@
 import type { ExecutionPolicy } from '../lib/executionPolicy';
 
 export type MolecularDynamicsEngine = 'gromacs' | 'openmm';
+
+export type NativeMdp = Record<string, string | number>;
+export interface MolecularDynamicsNativeStage { name: string; mdp: NativeMdp; checkpoint_interval_minutes?: number }
+export interface MolecularDynamicsWindow { id: string; coordinates?: string; mdp?: Record<string, NativeMdp> }
+export interface MolecularDynamicsAnalysisOptions {
+    selection?: string | null;
+    contacts?: Array<{ name: string; selection_a: string; selection_b: string; cutoff_angstrom: number }>;
+    pull_coordinates?: Array<{ coordinate: number; column: number; label: string; unit: string; groups: string[]; window?: string | null }>;
+    wham?: { unit: string; temperature_k: number; bins?: number; begin_ps?: number; end_ps?: number | null;
+        windows: Array<{ replica: number; window: string; coordinate: number; coordinate_count: number }> } | null;
+}
+export interface MolecularDynamicsNativeIntent {
+    schema_version: 'bms.md.launch-intent.v2'; name: string;
+    input: { kind: 'prepared' | 'compiled' | 'guided'; coordinates?: string; topology?: string; tpr?: string;
+        checkpoint?: string | null; index?: string | null; restraint_reference?: string | null;
+        source_ref?: MolecularDynamicsStartingStructureRef; expected_source_sha256?: string;
+        chemistry_profile_id?: string; chemistry_profile_sha256?: string; catalog_digest?: string;
+        box_type?: string; padding_nm?: number; salt_molar?: number; neutralize?: boolean };
+    stages: MolecularDynamicsNativeStage[]; windows?: MolecularDynamicsWindow[];
+    replicas: number; random_seed: number;
+    execution: { ntmpi: number; ntomp: number; gpu_offload: string; pin: string };
+    analysis?: MolecularDynamicsAnalysisOptions | null;
+    execution_target_id?: string | null; execution_policy?: ExecutionPolicy;
+}
+type NativeDraft<T> = T extends number ? number | string : T extends Array<infer U> ? NativeDraft<U>[] : T extends object ? { [K in keyof T]: NativeDraft<T[K]> } : T;
+export type MolecularDynamicsNativeDraft = NativeDraft<MolecularDynamicsNativeIntent>;
+export type MolecularDynamicsAnalysisDraft = NativeDraft<MolecularDynamicsAnalysisOptions>;
+/** Numeric text is converted only when entered, never blank → zero. The API owns invalid input errors. */
+export function serializeMolecularDynamicsNativeDraft(draft: MolecularDynamicsNativeDraft): MolecularDynamicsNativeIntent {
+    const numeric = new Set(['replicas', 'random_seed', 'ntmpi', 'ntomp', 'padding_nm', 'salt_molar', 'checkpoint_interval_minutes', 'cutoff_angstrom', 'coordinate', 'column', 'temperature_k', 'bins', 'begin_ps', 'end_ps', 'replica', 'coordinate_count']);
+    const visit = (value: unknown, key = ''): unknown => {
+        if (key === 'mdp') return value;
+        if (Array.isArray(value)) return value.map(item => visit(item));
+        if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, visit(v, k)]));
+        if (numeric.has(key) && typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value);
+        return value;
+    };
+    return visit(draft) as MolecularDynamicsNativeIntent;
+}
+export interface MolecularDynamicsJobSpecV3 {
+    schema: 'bms.md.job.v3'; job_id: string; engine: 'gromacs';
+    input: Record<string, unknown>; preparation?: Record<string, unknown>; chemistry?: Record<string, unknown>;
+    stages: MolecularDynamicsNativeStage[]; windows?: MolecularDynamicsWindow[];
+    replicas: number; random_seed: number; execution: MolecularDynamicsNativeIntent['execution'];
+    analysis?: MolecularDynamicsAnalysisOptions | null;
+}
+export interface MolecularDynamicsNativePreview extends Omit<MolecularDynamicsLaunchPreview, 'schema_version' | 'source' | 'chemistry' | 'requested_settings'> {
+    schema_version: 'bms.md.launch-preview.v2';
+    input_identity: Record<string, unknown>;
+    source?: MolecularDynamicsLaunchPreview['source'] | null;
+}
+
+/** Import into the same map edited by controls; keep scientific values as written. */
+export function parseNativeMdp(text: string): NativeMdp {
+    const mdp: NativeMdp = {};
+    for (const line of text.split(/\r?\n/)) {
+        const entry = line.split(';', 1)[0].trim();
+        if (!entry) continue;
+        const equals = entry.indexOf('=');
+        if (equals < 1) throw new Error(`Expected native key = value: ${entry}`);
+        const key = entry.slice(0, equals).trim();
+        if (Object.hasOwn(mdp, key)) throw new Error('MDP import requires one key=value entry per key');
+        mdp[key] = entry.slice(equals + 1).trim();
+    }
+    return mdp;
+}
+export const renderNativeMdp = (mdp: NativeMdp) => Object.entries(mdp).map(([key, value]) => `${key} = ${value}`).join('\n');
+
+/** Replay original intent first, otherwise reopen the persisted native configuration. */
+export function hydrateMolecularDynamicsNative(initial?: Record<string, unknown>): MolecularDynamicsNativeDraft | null {
+    const intent = ((initial?.intent as Record<string, unknown> | undefined)?.schema_version === 'bms.md.launch-intent.v2' ? initial?.intent : (initial?.md_form as Record<string, unknown> | undefined)?.native_intent) as MolecularDynamicsNativeDraft | undefined;
+    if (intent?.schema_version === 'bms.md.launch-intent.v2') return structuredClone(intent);
+    const spec = (initial?.md_job_spec ?? initial?.md_job_config) as Record<string, unknown> | undefined;
+    if (spec?.schema !== 'bms.md.job.v3') return null;
+    const input = spec.input as Record<string, unknown>;
+    const fields = ['coordinates', 'topology', 'tpr', 'checkpoint', 'index', 'restraint_reference'];
+    const nativeInput: MolecularDynamicsNativeIntent['input'] = { kind: input.tpr ? 'compiled' : input.structure ? 'guided' : 'prepared' };
+    for (const field of fields) if (typeof input[field] === 'string') Object.assign(nativeInput, { [field]: input[field] });
+    if (input.structure) {
+        Object.assign(nativeInput, spec.preparation);
+        const chemistry = spec.chemistry as Record<string, unknown>;
+        Object.assign(nativeInput, { source_ref: resolveMolecularDynamicsCloneSource(initial ?? {}),
+            chemistry_profile_id: chemistry?.profile_id, chemistry_profile_sha256: chemistry?.profile_sha256, catalog_digest: chemistry?.catalog_digest });
+    }
+    const execution = spec.execution as MolecularDynamicsNativeIntent['execution'];
+    return structuredClone({ schema_version: 'bms.md.launch-intent.v2', name: String(initial?.name ?? initial?.job_name ?? 'molecular_dynamics'),
+        input: nativeInput, stages: spec.stages, replicas: spec.replicas, random_seed: spec.random_seed,
+        execution: { ntmpi: execution.ntmpi, ntomp: execution.ntomp, gpu_offload: execution.gpu_offload, pin: execution.pin }, ...('analysis' in spec ? { analysis: spec.analysis } : {}),
+        ...('windows' in spec ? { windows: spec.windows } : {}),
+        ...('execution_target_id' in (initial ?? {}) ? { execution_target_id: initial!.execution_target_id } : {}),
+        ...('execution_policy' in (initial ?? {}) ? { execution_policy: initial!.execution_policy } : {}),
+    }) as MolecularDynamicsNativeDraft;
+}
+
+export function parseMolecularDynamicsNativePreview(value: unknown, intent?: MolecularDynamicsNativeIntent): MolecularDynamicsNativePreview {
+    const contract = 'native launch preview';
+    const root = wireRecord(value, contract);
+    closedWireKeys(root, ['schema_version', 'execution_target_id', 'execution_policy', 'effective_request', 'input_identity', 'warnings', 'blockers', 'preview_digest'], ['source', 'execution_plan'], contract);
+    if (root.schema_version !== 'bms.md.launch-preview.v2' || !SHA256_RE.test(String(root.preview_digest))) throw new Error(`Invalid ${contract}.`);
+    const policy = wireRecord(root.execution_policy, contract);
+    if (!['manual', 'automatic'].includes(String(policy.remote_result_policy))) throw new Error(`Invalid ${contract} return policy.`);
+    if (intent && (root.execution_target_id !== (intent.execution_target_id ?? null) || policy.remote_result_policy !== (intent.execution_policy?.remote_result_policy ?? 'manual'))) throw new Error('Launch preview changed the requested execution target or return policy.');
+    wireRecord(root.input_identity, contract);
+    const effective = wireRecord(root.effective_request, contract);
+    if (!Array.isArray(effective.stages)) throw new Error(`Invalid ${contract} stages.`);
+    effective.stages.forEach(entry => {
+        const stage = wireRecord(entry, contract); wireString(stage.name, contract);
+        const mdp = wireRecord(stage.mdp, contract);
+        if (Object.values(mdp).some(v => typeof v !== 'string' && (typeof v !== 'number' || !Number.isFinite(v)))) throw new Error(`Invalid ${contract} MDP.`);
+    });
+    for (const key of ['warnings', 'blockers']) {
+        if (!Array.isArray(root[key])) throw new Error(`Invalid ${contract}.`);
+        (root[key] as unknown[]).forEach(value => { const notice = wireRecord(value, contract); wireString(notice.code, contract); wireString(notice.message, contract); });
+    }
+    return value as MolecularDynamicsNativePreview;
+}
 export {
     buildMolecularDynamicsHandoffInitialValues,
     buildMolecularDynamicsPredictionRoute,
@@ -327,7 +443,7 @@ export interface MolecularDynamicsJobSpecV2 {
     };
 }
 
-export type MolecularDynamicsJobSpec = MolecularDynamicsJobSpecV1 | MolecularDynamicsJobSpecV2;
+export type MolecularDynamicsJobSpec = MolecularDynamicsJobSpecV1 | MolecularDynamicsJobSpecV2 | MolecularDynamicsJobSpecV3;
 
 const finitePositive = (value: number) => Number.isFinite(value) && value > 0;
 const stepsFromPs = (picoseconds: number, timestepFs: number) => Math.round((picoseconds * 1000) / timestepFs);
@@ -697,12 +813,16 @@ const REQUESTED_SETTING_KEYS = [
     'energy_interval_ps', 'checkpoint_interval_minutes', 'ntomp',
 ] as const;
 
-export const parseMolecularDynamicsLaunchPreview = (
+export function parseMolecularDynamicsLaunchPreview(value: unknown, expectedIntent: MolecularDynamicsNativeIntent): MolecularDynamicsNativePreview;
+export function parseMolecularDynamicsLaunchPreview(value: unknown, expectedIntent?: MolecularDynamicsLaunchIntent): MolecularDynamicsLaunchPreview;
+export function parseMolecularDynamicsLaunchPreview(
     value: unknown,
-    expectedIntent?: MolecularDynamicsLaunchIntent,
-): MolecularDynamicsLaunchPreview => {
+    expectedIntent?: MolecularDynamicsLaunchIntent | MolecularDynamicsNativeIntent,
+): MolecularDynamicsLaunchPreview | MolecularDynamicsNativePreview {
     const contract = 'launch preview';
     const root = wireRecord(value, contract);
+    if (root.schema_version === 'bms.md.launch-preview.v2') return parseMolecularDynamicsNativePreview(value, expectedIntent?.schema_version === 'bms.md.launch-intent.v2' ? expectedIntent : undefined);
+    if (expectedIntent?.schema_version === 'bms.md.launch-intent.v2') throw new Error(`Invalid ${contract} version.`);
     exactWireKeys(root, ['schema_version', 'execution_target_id', 'execution_policy', 'source', 'chemistry', 'requested_settings', 'effective_request', 'warnings', 'blockers', 'preview_digest', ...('execution_plan' in root ? ['execution_plan'] : [])], contract);
     if (root.execution_target_id !== null && (typeof root.execution_target_id !== 'string' || !root.execution_target_id.trim())) throw new Error(`Invalid ${contract} placement.`);
     const policy = wireRecord(root.execution_policy, contract);
@@ -787,7 +907,7 @@ export const parseMolecularDynamicsLaunchPreview = (
         }
     }
     return value as MolecularDynamicsLaunchPreview;
-};
+}
 
 export const buildMolecularDynamicsLaunchIntent = ({
     form,
@@ -844,9 +964,12 @@ export const resolveMolecularDynamicsCloneSource = (
     if (UUID_RE.test(sourceJobId)) return { kind: 'prior_md_input', id: sourceJobId };
     const intent = initialValues.intent;
     const sourceRef = intent && typeof intent === 'object' && !Array.isArray(intent)
-        ? (intent as Record<string, unknown>).source_ref
+        ? ((intent as Record<string, unknown>).schema_version === 'bms.md.launch-intent.v2' ? ((intent as Record<string, unknown>).input as Record<string, unknown>)?.source_ref : (intent as Record<string, unknown>).source_ref)
         : initialValues.source_ref;
     if (!sourceRef || typeof sourceRef !== 'object' || Array.isArray(sourceRef)) return null;
+    if ((intent as Record<string, unknown> | undefined)?.schema_version === 'bms.md.launch-intent.v2') {
+        try { return parseSourceRef(sourceRef, 'native clone source'); } catch { return null; }
+    }
     const kind = (sourceRef as Record<string, unknown>).kind;
     const id = (sourceRef as Record<string, unknown>).id;
     if (kind !== 'design' || typeof id !== 'string' || !UUID_RE.test(id)) return null;
@@ -876,7 +999,7 @@ export const buildMolecularDynamicsJobSpec = (
     form: MolecularDynamicsForm,
     chemistryProfile?: MolecularDynamicsChemistryProfile,
     catalogDigest?: string,
-): MolecularDynamicsJobSpec => {
+): MolecularDynamicsJobSpecV1 | MolecularDynamicsJobSpecV2 => {
     const automaticPreparation = form.inputMode === 'structure';
     const errors = [
         ...validateMolecularDynamicsForm(form, automaticPreparation ? chemistryProfile : undefined),

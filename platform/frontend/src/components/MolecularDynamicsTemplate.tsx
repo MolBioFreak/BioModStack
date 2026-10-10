@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 
+import { MolecularDynamicsNativeSettings } from './MolecularDynamicsNativeSettings';
+import { hydrateMolecularDynamicsNative, serializeMolecularDynamicsNativeDraft, type MolecularDynamicsNativeDraft, parseMolecularDynamicsNativePreview, type MolecularDynamicsNativeIntent, type MolecularDynamicsNativePreview } from './molecularDynamicsUiState';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { api, prepareExecutionPlacement, completeCurrentLaunchContext, submitJob, type MdLaunchPreviewRequest } from '../lib/api';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
@@ -91,7 +93,7 @@ const displayError = (error: unknown, fallback: string): string => {
 };
 
 const initialForm = (initialValues?: Record<string, unknown>): MolecularDynamicsForm => {
-    const initialSpec = initialValues?.md_job_spec as Record<string, unknown> | undefined;
+    const initialSpec = (initialValues?.md_job_spec ?? initialValues?.md_job_config) as Record<string, unknown> | undefined;
     const intent = initialValues?.intent as Record<string, unknown> | undefined;
     const requested = intent?.requested_settings as Record<string, unknown> | undefined;
     const stages = initialSpec?.stages as Record<string, Record<string, unknown>> | undefined;
@@ -107,7 +109,7 @@ const initialForm = (initialValues?: Record<string, unknown>): MolecularDynamics
     };
     const result: MolecularDynamicsForm = {
         ...DEFAULT_FORM,
-        jobName: String(initialValues?.name || initialValues?.job_name || DEFAULT_FORM.jobName),
+        jobName: String(initialValues?.name ?? initialValues?.job_name ?? intent?.name ?? DEFAULT_FORM.jobName),
         replicas: finite(requested?.replicas ?? initialSpec?.replicas, DEFAULT_FORM.replicas),
         randomSeed: finite(requested?.random_seed ?? initialSpec?.random_seed, DEFAULT_FORM.randomSeed),
         paddingNm: finite(requested?.padding_nm ?? preparation?.padding_nm, DEFAULT_FORM.paddingNm),
@@ -212,7 +214,10 @@ export function MolecularDynamicsTemplate({
         retry: (failureCount, error) => !String(error).includes('Invalid chemistry profile inventory response') && failureCount < 1,
     });
     const [form, setForm] = useState<MolecularDynamicsForm>(() => initialForm(initialValues));
-    const initialSpec = initialValues?.md_job_spec as Record<string, unknown> | undefined;
+    const [native, setNative] = useState<MolecularDynamicsNativeDraft | null>(() => hydrateMolecularDynamicsNative(initialValues));
+    const [nativeEnabled, setNativeEnabled] = useState(() => hydrateMolecularDynamicsNative(initialValues) !== null);
+    const nativeModeDrafts = useRef<Partial<Record<'guided' | 'prepared' | 'compiled', MolecularDynamicsNativeDraft>>>({});
+    const initialSpec = (initialValues?.md_job_spec ?? initialValues?.md_job_config) as Record<string, unknown> | undefined;
     const initialChemistry = initialSpec?.chemistry as Record<string, unknown> | undefined;
     const initialPreparation = initialSpec?.preparation as Record<string, unknown> | undefined;
     const initialIntent = initialValues?.intent as Record<string, unknown> | undefined;
@@ -227,8 +232,8 @@ export function MolecularDynamicsTemplate({
         () => isResultsViewerDesignHandoff ? null : resolveMolecularDynamicsCloneSource(initialValues || {}),
         [initialValues, isResultsViewerDesignHandoff],
     );
-    const [selectedProfileId, setSelectedProfileId] = useState(String(initialIntent?.chemistry_profile_id || initialChemistry?.profile_id || initialPreparation?.chemistry_profile_id || ''));
-    const [selectedProfileDigest, setSelectedProfileDigest] = useState(String(initialIntent?.chemistry_profile_sha256 || initialChemistry?.profile_sha256 || initialPreparation?.chemistry_profile_sha256 || ''));
+    const [selectedProfileId, setSelectedProfileId] = useState(String(native?.input.chemistry_profile_id || initialIntent?.chemistry_profile_id || initialChemistry?.profile_id || initialPreparation?.chemistry_profile_id || ''));
+    const [selectedProfileDigest, setSelectedProfileDigest] = useState(String(native?.input.chemistry_profile_sha256 || initialIntent?.chemistry_profile_sha256 || initialChemistry?.profile_sha256 || initialPreparation?.chemistry_profile_sha256 || ''));
     const returnedPredictionJobId = cloneSource?.kind === 'design' ? '' : routedPredictionJobId;
     const [sourceMode, setSourceMode] = useState<SourceMode>(cloneSource?.kind === 'design' ? 'design' : returnedPredictionJobId ? 'prediction' : 'rcsb');
     const [inspection, setInspection] = useState<MolecularDynamicsStartingStructureInspection | null>(null);
@@ -262,7 +267,7 @@ export function MolecularDynamicsTemplate({
     const [sequenceOffset, setSequenceOffset] = useState(0);
     const [requestedPredictionJobId, setRequestedPredictionJobId] = useState('');
     const [predictionCursor, setPredictionCursor] = useState<string | null>(null);
-    const [preview, setPreview] = useState<MolecularDynamicsLaunchPreview | null>(null);
+    const [preview, setPreview] = useState<MolecularDynamicsLaunchPreview | MolecularDynamicsNativePreview | null>(null);
     const [previewAuthorityIdentity, setPreviewAuthorityIdentity] = useState<string | null>(null);
     const [previewRequestAuthorityIdentity, setPreviewRequestAuthorityIdentity] = useState<string | null>(null);
     const previewRequestGenerationRef = useRef(0);
@@ -270,14 +275,15 @@ export function MolecularDynamicsTemplate({
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [submitError, setSubmitError] = useState('');
     const [showAdvanced, setShowAdvanced] = useState(false);
-    const [placement, setPlacement] = useState(() => prepareExecutionPlacement({}));
+    const [placement, setPlacement] = useState(() => prepareExecutionPlacement({ execution_target_id: native?.execution_target_id, execution_policy: native?.execution_policy }));
     useEffect(() => {
-        const changed = () => setPlacement(prepareExecutionPlacement({}));
+        const changed = () => setPlacement(current => prepareExecutionPlacement({ execution_policy: current.execution_policy }));
+        const policyChanged = () => setPlacement(current => prepareExecutionPlacement({ execution_target_id: current.execution_target_id }));
         window.addEventListener('bms:execution-target-change', changed);
-        window.addEventListener('bms:execution-policy-change', changed);
+        window.addEventListener('bms:execution-policy-change', policyChanged);
         return () => {
             window.removeEventListener('bms:execution-target-change', changed);
-            window.removeEventListener('bms:execution-policy-change', changed);
+            window.removeEventListener('bms:execution-policy-change', policyChanged);
         };
     }, []);
 
@@ -289,7 +295,7 @@ export function MolecularDynamicsTemplate({
     const profileDigestIsStale = Boolean(selectedProfile && selectedProfile.profile_sha256 !== selectedProfileDigest);
     const constraints = selectedProfile?.launch_constraints;
     const currentPreviewAuthorityIdentity = useMemo(() => JSON.stringify({
-        placement,
+        placement, nativeEnabled, native,
         source_ref: inspection?.source_ref ?? null,
         expected_source_sha256: inspection?.identity.sha256 ?? null,
         admission: admissionAuthority,
@@ -305,7 +311,7 @@ export function MolecularDynamicsTemplate({
         requested_settings: molecularDynamicsRequestedSettings(form),
         launch_context_id: launchContextId,
     }), [
-        placement,
+        nativeEnabled, native, placement,
         admissionAuthority,
         chemistryCatalogQuery.data?.catalog_digest,
         form,
@@ -383,9 +389,9 @@ export function MolecularDynamicsTemplate({
     }, [currentPreviewAuthorityIdentity]);
 
     useEffect(() => {
-        if (!selectedProfile || profileDigestIsStale) return;
+        if (nativeEnabled || !selectedProfile || profileDigestIsStale) return;
         setForm((current) => applyMolecularDynamicsProfileDefaults(current, selectedProfile));
-    }, [profileDigestIsStale, selectedProfile]);
+    }, [nativeEnabled, initialValues, profileDigestIsStale, selectedProfile]);
 
     const inspectSource = async (
         sourceRef: MolecularDynamicsStartingStructureRef,
@@ -447,7 +453,7 @@ export function MolecularDynamicsTemplate({
     const selectProfile = (profile: MolecularDynamicsChemistryProfile) => {
         setSelectedProfileId(profile.id);
         setSelectedProfileDigest(profile.profile_sha256);
-        setForm((current) => applyMolecularDynamicsProfileDefaults(current, profile));
+        if (!nativeEnabled) setForm((current) => applyMolecularDynamicsProfileDefaults(current, profile));
         invalidatePreview();
         if (inspection && promotedSha256 === inspection.identity.sha256) {
             void inspectSource(inspection.source_ref, profile);
@@ -455,8 +461,8 @@ export function MolecularDynamicsTemplate({
     };
 
     useEffect(() => {
-        if (!cloneSource || !chemistryCatalogQuery.data || inspection || sourceBusy) return;
-        setSourceMode(cloneSource.kind === 'design' ? 'design' : 'prior_md_input');
+        if (!cloneSource || (nativeEnabled && native?.input.kind !== 'guided') || !chemistryCatalogQuery.data || inspection || sourceBusy) return;
+        setSourceMode(cloneSource.kind === 'managed_fixture' ? 'fixture' : cloneSource.kind);
         void inspectSource(cloneSource, selectedProfile);
         // The clone source is immutable and should be admitted exactly once after catalog hydration.
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -558,6 +564,7 @@ export function MolecularDynamicsTemplate({
             storeMolecularDynamicsDraft(sessionStorage, draftId, {
                 form: {
                     ...form,
+                    native_intent: nativeEnabled ? native : undefined,
                     structurePath: undefined,
                     coordinatesPath: undefined,
                     topologyPath: undefined,
@@ -573,6 +580,7 @@ export function MolecularDynamicsTemplate({
     };
 
     const formErrors = useMemo(() => {
+        if (nativeEnabled) return [];
         if (form.inputMode === 'prepared') return validateMolecularDynamicsForm(form);
         const chemistryErrors = chemistryCatalogQuery.isPending
             ? ['Loading the deployed chemistry profile catalog.']
@@ -583,10 +591,10 @@ export function MolecularDynamicsTemplate({
                     : validateMolecularDynamicsChemistryProfile(selectedProfile, 'gromacs', true, selectedProfileDigest);
         const typedForm = { ...form, engine: 'gromacs' as const, structurePath: inspection ? 'typed-source' : '' };
         return [...validateMolecularDynamicsForm(typedForm, selectedProfile), ...chemistryErrors];
-    }, [chemistryCatalogQuery.isError, chemistryCatalogQuery.isPending, form, inspection, selectedProfile, selectedProfileDigest, selectedProfileId]);
+    }, [nativeEnabled, chemistryCatalogQuery.isError, chemistryCatalogQuery.isPending, form, inspection, selectedProfile, selectedProfileDigest, selectedProfileId]);
     const scope = useMemo(() => estimateMolecularDynamicsScope(form), [form]);
 
-    const typedReady = form.inputMode === 'structure'
+    const typedReady = nativeEnabled ? Boolean(native && (native.input.kind !== 'guided' || inspection && selectedProfile)) : form.inputMode === 'structure'
         && formErrors.length === 0
         && !sourceBusy
         && inspection?.admission.state === 'admitted'
@@ -608,7 +616,12 @@ export function MolecularDynamicsTemplate({
     const previewRequestIsCurrent = isPreviewing
         && previewRequestAuthorityIdentity === currentPreviewAuthorityIdentity;
 
-    const intent = (): MolecularDynamicsLaunchIntent => {
+    const intent = (): MolecularDynamicsLaunchIntent | MolecularDynamicsNativeIntent => {
+        if (nativeEnabled && native) {
+            const input = native.input.kind === 'guided' && inspection && selectedProfile && chemistryCatalogQuery.data
+                ? { ...native.input, source_ref: inspection.source_ref, expected_source_sha256: inspection.identity.sha256, chemistry_profile_id: selectedProfile.id, chemistry_profile_sha256: selectedProfile.profile_sha256, catalog_digest: chemistryCatalogQuery.data.catalog_digest } : native.input;
+            return serializeMolecularDynamicsNativeDraft({ ...native, name: form.jobName, input, stages: input.kind === 'compiled' ? [] : native.stages, ...placement });
+        }
         if (!inspection || !selectedProfile || !chemistryCatalogQuery.data) throw new Error('Inspect and admit one starting structure before preview.');
         return buildMolecularDynamicsLaunchIntent({
             form: { ...form, engine: 'gromacs', inputMode: 'structure' },
@@ -624,7 +637,7 @@ export function MolecularDynamicsTemplate({
         schema_version: 'bms.md.launch-preview-request.v1', intent: intent(),
     });
     const nativeProvisionRequest = (() => {
-        if (form.inputMode === 'prepared' || !typedReady) return null;
+        if ((!nativeEnabled && form.inputMode === 'prepared') || !typedReady) return null;
         try { return buildLaunchPreviewRequest(); } catch { return null; }
     })();
 
@@ -642,7 +655,7 @@ export function MolecularDynamicsTemplate({
             const result = await api.post<unknown>('/api/molecular-dynamics/launch-preview', request);
             if (requestGeneration !== previewRequestGenerationRef.current
                 || requestAuthorityIdentity !== currentPreviewAuthorityIdentityRef.current) return;
-            setPreview(parseMolecularDynamicsLaunchPreview(result.data, launchIntent));
+            setPreview(launchIntent.schema_version === 'bms.md.launch-intent.v2' ? parseMolecularDynamicsNativePreview(result.data, launchIntent) : parseMolecularDynamicsLaunchPreview(result.data, launchIntent));
             setPreviewAuthorityIdentity(requestAuthorityIdentity);
         } catch (error) {
             if (requestGeneration === previewRequestGenerationRef.current
@@ -730,7 +743,7 @@ export function MolecularDynamicsTemplate({
 
     return (
         <div className="mx-auto w-full space-y-5" data-bms-md-launcher="gen2">
-            <ExecutionTargetPicker workflowRequest={form.inputMode === 'prepared'
+            <ExecutionTargetPicker {...(nativeEnabled ? { value: placement.execution_target_id, onChange: (execution_target_id: string | null) => { invalidatePreview(); setPlacement(current => ({ ...current, execution_target_id })); } } : {})} workflowRequest={!nativeEnabled && form.inputMode === 'prepared'
                 ? formErrors.length === 0 ? buildPreparedWorkflowRequest() : null
                 : nativeProvisionRequest ? { workflow_type: 'molecular_dynamics', request: nativeProvisionRequest } : null} />
 
@@ -749,6 +762,21 @@ export function MolecularDynamicsTemplate({
                     <section className={panelClass}>
                         <SectionTitle children="Starting structure" note="Inspect and select exact coordinates." />
                         <label className={labelClass}>Job name<input className={inputClass} value={form.jobName} onChange={(event) => update('jobName', event.target.value)} /></label>
+                        <label className={`${labelClass} mt-4`}>Protocol<select aria-label="Protocol" className={inputClass} value={nativeEnabled ? native?.input.kind : 'original'} onChange={event => {
+                            const kind = event.target.value; invalidatePreview();
+                            if (kind === 'original') { setNativeEnabled(false); return; }
+                            if (native) nativeModeDrafts.current[native.input.kind] = native;
+                            setNativeEnabled(true);
+                            const mode = kind as 'guided' | 'prepared' | 'compiled';
+                            setNative(nativeModeDrafts.current[mode] ?? {
+                                schema_version: 'bms.md.launch-intent.v2', name: form.jobName,
+                                stages: mode === 'compiled' ? [] : structuredClone(native?.stages ?? []),
+                                replicas: native?.replicas ?? 1, random_seed: native?.random_seed ?? 20260717,
+                                execution: native?.execution ?? { ntmpi: 1, ntomp: form.ntomp, gpu_offload: 'auto', pin: 'on' },
+                                input: mode === 'guided' ? { kind: 'guided', box_type: 'dodecahedron', padding_nm: form.paddingNm, salt_molar: form.saltMolar, neutralize: form.neutralize ?? true } : { kind: mode },
+                            });
+                        }}><option value="original">Original guided protocol (historical defaults)</option><option value="guided">Guided preparation → native protocol</option><option value="prepared">Prepared native system</option><option value="compiled">Compiled TPR / CPT</option></select></label>
+                        {(!nativeEnabled || native?.input.kind === 'guided') && <>
                         <div className="mt-4"><Gen2StructureSourceSelector active={activeSourceTab} onChange={changeSourceTab} /></div>
                         {activeSourceTab === 'runs' && <label className={`${labelClass} mt-3`}>Existing source<select aria-label="Existing source" className={inputClass} value={sourceMode} onChange={event => setSourceMode(event.target.value as SourceMode)}><option value="prediction">Prediction Job</option><option value="design">Design</option><option value="prior_md_input">Prior MD input</option><option value="server_file">Governed server file</option></select></label>}
                         {sourceMode !== 'prediction' && <button type="button" onClick={() => setSourceMode('prediction')} className="mt-4 w-full rounded-xl border border-violet-500/30 bg-violet-500/10 p-4 text-left"><span className="block text-sm font-semibold text-violet-100">Predict structure from sequence</span><span className="mt-1 block text-xs text-violet-200/70">Open Structure Prediction with your sequence.</span></button>}
@@ -813,10 +841,10 @@ export function MolecularDynamicsTemplate({
                                 <option value="">Select a deployed profile after structure review</option>
                                 {chemistryProfiles.map((profile) => <option key={profile.id} value={profile.id} disabled={!profile.states.selectable}>{profile.display_name} — {profile.states.selectable ? 'selectable' : 'candidate only'}</option>)}
                             </select>
-                        </label>
+                        </label></>}
                     </section>
-
-                    <section className={panelClass}>
+                    {nativeEnabled && native && <MolecularDynamicsNativeSettings value={native} onChange={value => { invalidatePreview(); setNative(value); }} />}
+                    {!nativeEnabled && <section className={panelClass}>
                         <SectionTitle children="Simulation" note="Profile-fixed values remain visible; editable values are preserved in the request." />
                         <h3 className="mb-3 text-sm text-slate-300">Run</h3><div className="grid gap-4 md:grid-cols-3">
                             <Gen2WorkflowControl label="Independent replicas" value={form.replicas} min={constraints?.replicas ?? 1} max={constraints?.replicas ?? 8} fixed={Boolean(constraints)} onChange={(value) => update('replicas', value)} description="Fixed by the selected validated profile." />
@@ -840,24 +868,24 @@ export function MolecularDynamicsTemplate({
                             <NumberField label="CPU threads per replica" value={form.ntomp} min={1} max={128} step={1} onChange={(value) => update('ntomp', value)} description="Provider-neutral CPU request; GPU placement remains scheduler-owned." />
                         </div>
                         {selectedProfile && <div className="mt-4 rounded-lg border border-slate-700 bg-slate-950/50 p-3 text-xs text-slate-400">Engine <span className="text-slate-200">GROMACS</span> · profile chemistry <span className="text-slate-200">{constraints?.force_field} + {constraints?.water_model}</span> · scope <span className="text-slate-200">{selectedProfile.scientific_validation.scope.launch_scope}</span></div>}
-                    </section>
+                    </section>}
 
-                    <section className={`${panelClass} p-0`}>
+                    {!nativeEnabled && <section className={`${panelClass} p-0`}>
                         <button type="button" onClick={() => setShowAdvanced((value) => !value)} className="flex w-full items-center justify-between p-5 text-left text-sm font-semibold text-slate-300"><span>Advanced prepared-system compatibility</span><span>{showAdvanced ? '▲' : '▼'}</span></button>
                         {showAdvanced && <div className="space-y-4 border-t border-slate-800 p-5"><p className="text-xs text-amber-200">Prepared coordinates/topology remain a compatibility lane for the pinned OpenMM adapter. New automatic-preparation launches use the typed workflow above.</p><div className="grid grid-cols-2 gap-2">{(['structure', 'prepared'] as const).map((mode) => <button key={mode} type="button" disabled={mode === 'prepared' && form.engine !== 'openmm'} onClick={() => update('inputMode', mode)} className="rounded border border-slate-700 px-3 py-2 text-xs text-slate-300">{mode === 'structure' ? 'Typed starting structure' : 'Use prepared system'}</button>)}</div><label className={labelClass}>Compatibility engine<select className={inputClass} value={form.engine} onChange={(event) => { const engine = event.target.value as MolecularDynamicsForm['engine']; update('engine', engine); if (engine === 'openmm') update('inputMode', 'prepared'); }}><option value="gromacs" disabled={form.inputMode === 'prepared'}>GROMACS 2025.3</option><option value="openmm">OpenMM 8.5.2</option></select></label>{form.inputMode === 'prepared' && <div className="grid gap-4 md:grid-cols-2"><label className={labelClass}>Coordinates path (.gro)<input className={inputClass} value={form.coordinatesPath} onChange={(event) => update('coordinatesPath', event.target.value)} /></label><label className={labelClass}>Topology path (.top)<input className={inputClass} value={form.topologyPath} onChange={(event) => update('topologyPath', event.target.value)} /></label><p className="md:col-span-2 text-xs text-amber-300/80">Prepared systems are supported only by OpenMM. Declared topology includes are snapshotted into the verified Job closure.</p><button type="button" disabled={formErrors.length > 0 || isSubmitting} onClick={() => void launchPreparedCompatibility()} className="md:col-span-2 rounded-lg border border-amber-400/40 px-3 py-2 text-sm text-amber-200 disabled:opacity-50">Launch prepared-system compatibility job</button></div>}</div>}
-                    </section>
+                    </section>}
                 </div>
 
                 <aside className="space-y-4 lg:sticky lg:top-5 lg:self-start">
                     <section className={panelClass}>
                         <h2 className="text-sm font-semibold text-slate-200">Launch summary</h2>
-                        <dl className="mt-4 space-y-3 text-xs"><div className="flex justify-between gap-3"><dt className="text-slate-500">Source</dt><dd className="max-w-40 truncate text-right text-slate-200">{inspection?.identity.label ?? 'Not inspected'}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Profile admission</dt><dd className={inspection?.admission.state === 'admitted' ? 'text-cyan-300' : 'text-amber-300'}>{inspection?.admission.state ?? 'pending'}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Engine</dt><dd className="text-slate-200" data-md-active-engine>{activeEngineLabel}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Replicas</dt><dd className="text-slate-200">{form.replicas}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Aggregate simulation</dt><dd className="font-semibold text-cyan-300">{scope.aggregateSimulationNs.toLocaleString()} ns</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Steps / replica</dt><dd className="text-slate-200">{scope.productionStepsPerReplica.toLocaleString()}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Total frames</dt><dd className="text-slate-200">{scope.totalTrajectoryFrames.toLocaleString()}</dd></div></dl>
+                        {nativeEnabled ? <p className="mt-3 text-xs text-slate-300">{native?.input.kind} · {native?.stages.length} ordered stages · {native?.replicas} replicas per window · {native?.windows?.length ?? 0} explicit windows. Effective native time and output follow each stage MDP or the compiled TPR.</p> : <dl className="mt-4 space-y-3 text-xs"><div className="flex justify-between gap-3"><dt className="text-slate-500">Source</dt><dd className="max-w-40 truncate text-right text-slate-200">{inspection?.identity.label ?? 'Not inspected'}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Profile admission</dt><dd className={inspection?.admission.state === 'admitted' ? 'text-cyan-300' : 'text-amber-300'}>{inspection?.admission.state ?? 'pending'}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Engine</dt><dd className="text-slate-200" data-md-active-engine>{activeEngineLabel}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Replicas</dt><dd className="text-slate-200">{form.replicas}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Aggregate simulation</dt><dd className="font-semibold text-cyan-300">{scope.aggregateSimulationNs.toLocaleString()} ns</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Steps / replica</dt><dd className="text-slate-200">{scope.productionStepsPerReplica.toLocaleString()}</dd></div><div className="flex justify-between gap-3"><dt className="text-slate-500">Total frames</dt><dd className="text-slate-200">{scope.totalTrajectoryFrames.toLocaleString()}</dd></div></dl>}
                     </section>
                     {form.inputMode === 'structure' && formErrors.length > 0 && <section className="rounded-xl border border-red-500/30 bg-red-500/8 p-4"><h2 className="text-xs font-semibold uppercase tracking-wider text-red-300">Resolve before preview</h2><ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-red-200/80">{formErrors.map((error) => <li key={error}>{error}</li>)}</ul></section>}
                     {submitError && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/8 p-3 text-xs text-red-200">{submitError}</div>}
-                    {previewIsCurrent && preview && <section className="rounded-xl border border-cyan-500/30 bg-cyan-500/8 p-4 text-xs text-cyan-100"><div className="font-semibold">Effective request digest</div><p className="mt-2">Execution target: {preview.execution_target_id ?? 'Local'} · Successful result return: {preview.execution_policy.remote_result_policy}</p><div className="mt-2 break-all font-mono text-[10px]">{preview.preview_digest}</div>{preview.execution_plan && <p className="mt-2 break-all">Shared plan: {preview.execution_plan.plan_sha256}<br />Source: {preview.execution_plan.source_identity.revision}<br />Components: {[...preview.execution_plan.metadata.static_components, ...preview.execution_plan.metadata.dynamic_templates].map(row => row.component_key).join(', ')}</p>}{preview.blockers.map((blocker) => <div key={blocker.code} className="mt-2 text-red-200">{blocker.message}</div>)}<details className="mt-3"><summary className="cursor-pointer text-cyan-200">Effective JSON</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-[10px] text-slate-300">{JSON.stringify(preview.effective_request, null, 2)}</pre></details></section>}
-                    {form.inputMode === 'structure' && <><button type="button" disabled={!typedReady || previewRequestIsCurrent || isSubmitting} onClick={() => void previewLaunch()} className="w-full rounded-xl border border-cyan-500/50 px-4 py-3 text-sm font-bold text-cyan-200 disabled:cursor-not-allowed disabled:border-slate-700 disabled:text-slate-500">{previewRequestIsCurrent ? 'Compiling preview…' : 'Preview'}</button><button type="button" disabled={!previewIsCurrent || (preview?.blockers.length ?? 0) > 0 || isSubmitting} onClick={() => void launchTyped()} className="w-full rounded-xl bg-cyan-500 px-4 py-3 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-500">{isSubmitting ? 'Materializing MD job…' : 'Launch'}</button></>}
-                    <p className="text-center text-[11px] text-slate-600">Launch creates one canonical scheduler-visible Job. Server-owned runtime paths, GPU placement, and materialization never enter browser state.</p>
+                    {previewIsCurrent && preview && <section className="rounded-xl border border-cyan-500/30 bg-cyan-500/8 p-4 text-xs text-cyan-100"><div className="font-semibold">Effective request digest</div><p className="mt-2">Execution target: {preview.execution_target_id ?? 'Local'} · Successful result return: {preview.execution_policy.remote_result_policy}</p><div className="mt-2 break-all font-mono text-[10px]">{preview.preview_digest}</div>{preview.execution_plan && <p className="mt-2 break-all">Shared plan: {preview.execution_plan.plan_sha256}<br />Source: {preview.execution_plan.source_identity.revision}<br />Components: {[...preview.execution_plan.metadata.static_components, ...preview.execution_plan.metadata.dynamic_templates].map(row => row.component_key).join(', ')}</p>}{preview.warnings.map((warning) => <div key={warning.code} className="mt-2 text-amber-200">{warning.message}</div>)}{preview.blockers.map((blocker) => <div key={blocker.code} className="mt-2 text-red-200">{blocker.message}</div>)}<details className="mt-3"><summary className="cursor-pointer text-cyan-200">Effective JSON</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-2 text-[10px] text-slate-300">{JSON.stringify(preview.effective_request, null, 2)}</pre></details></section>}
+                    {(nativeEnabled || form.inputMode === 'structure') && <><button type="button" disabled={!typedReady || previewRequestIsCurrent || isSubmitting} onClick={() => void previewLaunch()} className="w-full rounded-xl border border-cyan-500/50 px-4 py-3 text-sm font-bold text-cyan-200 disabled:cursor-not-allowed disabled:border-slate-700 disabled:text-slate-500">{previewRequestIsCurrent ? 'Compiling preview…' : 'Preview'}</button><button type="button" disabled={!previewIsCurrent || (preview?.blockers.length ?? 0) > 0 || isSubmitting} onClick={() => void launchTyped()} className="w-full rounded-xl bg-cyan-500 px-4 py-3 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-500">{isSubmitting ? 'Materializing MD job…' : 'Launch'}</button></>}
+                    <p className="text-center text-[11px] text-slate-600">Launch creates one scheduler-visible Job. Managed input references are resolved by the server; GPU placement and materialization remain server-owned.</p>
                 </aside>
             </div>
         </div>
