@@ -4,7 +4,7 @@ import Plot from 'react-plotly.js';
 import type { Data } from 'plotly.js';
 import { useThemeColors } from './useThemeColors';
 import './StructurePredictionResults.css';
-import { fetchNativeConfidenceArtifacts, fetchChainMetrics, fetchDesignResidueMetrics, fetchPAEData, type ChainMetric, type Design } from '../lib/api';
+import { fetchNativeConfidenceArtifacts, fetchChainMetrics, fetchDesignResidueMetrics, fetchPAEData, fetchDesignById, type ChainMetric, type Design } from '../lib/api';
 import { parseScientificNativeMetric, parseScientificPae, type NativePaeToken } from '../lib/scientificViewerIdentity';
 import { scalarCell, usePredictionScalars, type ScalarEvidence } from './predictionScalarEvidence';
 import type { MetricSelection } from '../structureViewer/metrics/metricContracts';
@@ -169,7 +169,15 @@ function NativeArtifactDownloads({ design }: { design: Design }) {
 
 function PaeComparison({ design, onSelect, fullPaeRequested }: { design: Design; onSelect: () => void; fullPaeRequested?: boolean }) {
     const query = useQuery({ queryKey: ['prediction-pae', design.id], queryFn: () => fetchPAEData(design.id).then(r => r.data), retry: false, staleTime: 60_000 });
-    const native = parseScientificPae(query.data, design.scientific_structure_document, design.id);
+    // Comparison mounts only when opened; scalar table rows do not verify coordinates.
+    const detail = useQuery({
+        queryKey: ['design', design.id, design.job_id],
+        queryFn: () => fetchDesignById(design.id, design.job_id).then(r => r.data),
+        enabled: design.core_protein_scientific_contract === 1 && !design.scientific_structure_document,
+        staleTime: 30_000,
+    });
+    const document = design.scientific_structure_document ?? (detail.data?.id === design.id ? detail.data.scientific_structure_document : undefined);
+    const native = parseScientificPae(query.data, document, design.id);
     return <article className="prediction-card">
         <button className="prediction-sample-link" onClick={onSelect}>{design.name}</button>
         {native.status === 'ok' ? <PaePlot matrix={native.matrix}
@@ -177,7 +185,7 @@ function PaeComparison({ design, onSelect, fullPaeRequested }: { design: Design;
             columnLabels={native.axisKind === 'model_token' ? native.columnTokens.map(tokenLabel) : native.columns.map(axisLabel)}
             rowTicks={native.axisKind === 'model_token' ? native.rowTokens.map(tokenLabel) : native.rows.map(residueTick)}
             columnTicks={native.axisKind === 'model_token' ? native.columnTokens.map(tokenLabel) : native.columns.map(residueTick)}
-            axisTitle={native.axisKind === 'model_token' ? 'Prediction position' : 'Residue / atom'} compact /> : <p className="prediction-caption">{query.isPending ? 'Loading…' : query.isError ? 'PAE request failed.' : fullPaeRequested === false && ['full_pae_not_requested', 'pae_not_requested'].includes(native.reason) ? 'Full PAE was not requested.' : missingPae(native.reason)}</p>}
+            axisTitle={native.axisKind === 'model_token' ? 'Prediction position' : 'Residue / atom'} compact /> : <p className="prediction-caption">{query.isPending || (!document && detail.isFetching) ? 'Loading…' : query.isError ? 'PAE request failed.' : detail.isError && !document ? 'Structure identity request failed.' : fullPaeRequested === false && ['full_pae_not_requested', 'pae_not_requested'].includes(native.reason) ? 'Full PAE was not requested.' : missingPae(native.reason)}</p>}
         {native.status === 'ok' && native.axisKind === 'model_token' && <p className="prediction-caption">Residue mapping unavailable.</p>}
     </article>;
 }
