@@ -280,6 +280,15 @@ def liquid_resolution(inputs, dependencies):
         else:
             resolution['issues'].append({'code': 'liquid_field_not_emitted', 'category': 'advisory', 'path': '/' + AIR_GAP_SPEED_FIELD,
                 'message': 'No receiving native air phase (or authored phase speeds retained); not reported applied.'})
+    # Native compile_liquid_recipe emits air-phase settings only inside the
+    # corresponding non-null Air branch. Retain the authored setting payload,
+    # but do not call it emitted when that branch produces no operation.
+    for field, emission in emitted.items():
+        path = emission.get('native_path', '').split('/')
+        if len(path) > 3 and path[2] == 'phase_settings' and path[3] in ('leading_air', 'trailing_air') and recipe.get(path[3]) is None:
+            emission.update(status='not_emitted', reason='receiving_air_phase_absent')
+            resolution['issues'].append({'code': 'liquid_field_not_emitted', 'category': 'advisory',
+                'path': '/' + field, 'message': 'Native recipe omits settings for the absent air phase; no air stroke is added.'})
     resolution = record_liquid_application(resolution, emitted=emitted)
     recipe.setdefault('liquid_settings', {})['bms_resolution'] = deepcopy(resolution)
     return resolution
@@ -290,8 +299,20 @@ def prepare_class_transfer(inputs):
     recipe = inputs.get('recipe')
     if not isinstance(recipe, dict):
         raise ValueError('Class-selected Transfer requires explicit recipe phase options')
-    for key, value in {'mode': 'single', 'channels': inputs['channels'],
-                       'target_liquid_ul': inputs['volume_ul']}.items():
+    # A multi Transfer's amount is the per-destination sample intent. Its
+    # total target/corrected aspiration and conditioning remain authored.
+    mode = recipe.get('mode', 'single')
+    bindings = {'mode': mode, 'channels': inputs['channels']}
+    if mode == 'multi':
+        multi = recipe.get('multi')
+        if not isinstance(multi, dict):
+            raise ValueError('Multi Transfer requires explicit multi recipe options')
+        if 'sample_volume_ul' in multi and not same_setting(multi['sample_volume_ul'], inputs['volume_ul']):
+            raise ValueError('Transfer conflicts with recipe sample_volume_ul')
+        multi['sample_volume_ul'] = deepcopy(inputs['volume_ul'])
+    else:
+        bindings['target_liquid_ul'] = inputs['volume_ul']
+    for key, value in bindings.items():
         if key in recipe and not same_setting(recipe[key], value):
             raise ValueError(f'Transfer conflicts with recipe {key}')
         recipe[key] = deepcopy(value)
@@ -315,10 +336,15 @@ def positioned_transfer_recipes(inputs):
     for endpoint in (source, destination):
         if set(endpoint) - {'station', 'location_id', 'wells'}:
             raise ValueError('Unsupported Transfer endpoint fields')
-    if not source['wells'] or len(source['wells']) != len(destination['wells']):
-        raise ValueError('Transfer requires equal nonempty reference-well pairs')
+    multi = inputs['recipe'].get('mode') == 'multi'
+    samples = len(inputs['recipe'].get('multi', {}).get('aliquots', [])) if multi else 1
+    if not source['wells'] or not samples or len(source['wells']) * samples != len(destination['wells']):
+        raise ValueError('Transfer requires one destination reference per source and authored aliquot' if multi
+                         else 'Transfer requires equal nonempty reference-well pairs')
     recipes = []
-    for sw, dw in zip(source['wells'], destination['wells']):
+    for pair, sw in enumerate(source['wells']):
+        destinations = destination['wells'][pair * samples:(pair + 1) * samples]
+        dw = destinations[-1]
         recipe = deepcopy(inputs['recipe'])
         def position(operation, side, well):
             endpoint = inputs[side]
@@ -328,16 +354,26 @@ def positioned_transfer_recipes(inputs):
             elif operation == 'lift':
                 params['height_steps'] = inputs[side + '_lift_height_steps']
             return {'operation': 'position', 'positioning': native_intent(params)}
-        phases = {
-            'before_leading_air': [position('move', 'source', sw)],
-            'before_liquid': [position('lower', 'source', sw)],
-            'after_liquid': [position('lift', 'source', sw)],
-            'before_dispense': [position('move', 'destination', dw), position('lower', 'destination', dw)],
-            'after_dispense': [position('lift', 'destination', dw)],
-        }
-        for key, moves in phases.items():
-            # Additional authored search/contact motions retain their order.
-            recipe[key] = moves + recipe.get(key, [])
+        recipe['before_leading_air'] = [position('move', 'source', sw)] + recipe.get('before_leading_air', [])
+        # Search precedes ordinary calibrated lowering; authored retraction and
+        # post-dispense motions precede ordinary lifts. Never reorder the arrays.
+        recipe['before_liquid'] = recipe.get('before_liquid', []) + [position('lower', 'source', sw)]
+        recipe['after_liquid'] = recipe.get('after_liquid', []) + [position('lift', 'source', sw)]
+        if multi:
+            m = recipe['multi']
+            if m.get('conditioning_back_to_source_count', 0):
+                m['conditioning_before'] = [position('move', 'source', sw), position('lower', 'source', sw)] + m['conditioning_before']
+                m['conditioning_after'] = m['conditioning_after'] + [position('lift', 'source', sw)]
+            for index, (aliquot, well) in enumerate(zip(m['aliquots'], destinations)):
+                aliquot['before'] = [position('move', 'destination', well), position('lower', 'destination', well)] + aliquot['before']
+                # The last normal lift follows after_dispense/final empty when
+                # there is no separate authored excess destination.
+                if index < samples - 1 or m.get('excess') is not None:
+                    aliquot['after'] = aliquot['after'] + [position('lift', 'destination', well)]
+        else:
+            recipe['before_dispense'] = [position('move', 'destination', dw), position('lower', 'destination', dw)] + recipe.get('before_dispense', [])
+        if recipe.get('final_empty_speed_ul_s') is None and (not multi or recipe['multi'].get('excess') is None):
+            recipe['after_dispense'] = recipe.get('after_dispense', []) + [position('lift', 'destination', dw)]
         recipes.append(recipe)
     return recipes
 
@@ -423,13 +459,17 @@ def prepare_occurrences(occurrences, method, dependencies):
                     endpoints.append([[{'labware_id': vessel['id'], **c} for c in channel_wells(well, inputs['channels'],
                         row_increment=geometry['row_increment'], column_increment=geometry['column_increment'],
                         reference_channel=geometry['reference_channel'])] for well in endpoint['wells']])
-                if len(endpoints[0]) != len(endpoints[1]):
+                multi = inputs.get('recipe', {}).get('multi') if inputs.get('recipe', {}).get('mode') == 'multi' else None
+                samples = len(multi.get('aliquots', [])) if isinstance(multi, dict) else 1
+                if not samples or len(endpoints[0]) * samples != len(endpoints[1]):
                     raise ValueError('Source/destination head-reference pair count differs')
                 inputs['channel_transfers'] = [
                     {'channel': src['channel'], 'source': {'labware_id': src['labware_id'], 'well': src['well']},
                      'destination': {'labware_id': dst['labware_id'], 'well': dst['well']},
-                     'volume_ul': inputs['volume_ul'], 'pair_index': pair}
-                    for pair, (sources, destinations) in enumerate(zip(*endpoints)) for src, dst in zip(sources, destinations)]
+                     'volume_ul': inputs['volume_ul'], 'pair_index': pair // samples,
+                     **({'aliquot_index': pair % samples} if multi is not None else {})}
+                    for pair, destinations in enumerate(endpoints[1])
+                    for src, dst in zip(endpoints[0][pair // samples], destinations)]
             except (KeyError, ValueError, TypeError) as exc:
                 issues.append({'code': 'liquid_geometry_unknown', 'category': 'advisory',
                     'occurrence_id': row['occurrence_id'], 'message': str(exc)})

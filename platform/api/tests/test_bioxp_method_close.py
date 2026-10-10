@@ -47,8 +47,11 @@ def test_positioned_class_transfer_segments_geometry_policy_and_raw():
     assert r['dispense_segments'] == [{'volume_ul': 12.75, 'speed_ul_s': 375}, {'volume_ul': 10, 'speed_ul_s': 875}]
     assert r['before_leading_air'][0]['positioning']['well'] == 'A1'
     assert r['before_dispense'][0]['positioning']['well'] == 'A1'
-    assert result['simulation']['accounting']['liquid'] == {'known_ul': '80.000', 'has_unknown': False}
-    assert result['simulation']['accounting']['commanded_displacement']['known_ul'] == '91.00'
+    # Recipe totals now use the normalized native quantities, not the raw
+    # endpoint spelling; raw authored inputs remain unchanged above.
+    assert result['simulation']['accounting']['liquid'] == {'known_ul': '80.0', 'has_unknown': False}
+    # Both air strokes, aspiration and every dispense segment are counted.
+    assert result['simulation']['accounting']['commanded_displacement']['known_ul'] == '267.00'
     assert result['simulation']['state']['vessels']['fixture-source:G1']['volume_ul'] == '980.000'
     assert all(x['applied']['status'] == 'unknown' for x in result['resolved']['liquids'][0]['fields'].values())
     phases = emitted[1]['metadata']['bms_method']['planned_recipe_phase_effects']
