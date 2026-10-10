@@ -3,6 +3,7 @@ From: /mnt/BioModStack/apptainer/boltzgen.sif
 
 %files
     apptainer/patches/fold-cp/prediction-cli-cp-topology.patch /opt/fold-cp-cli-cp-topology.patch
+    apptainer/patches/fold-cp/writer-association.patch /opt/fold-cp-writer-association.patch
 
 %post
     set -eu
@@ -16,6 +17,11 @@ From: /mnt/BioModStack/apptainer/boltzgen.sif
     git apply /opt/fold-cp-cli-cp-topology.patch
     git apply --reverse --check /opt/fold-cp-cli-cp-topology.patch
     python3 -m py_compile src/boltz/distributed/main.py
+    printf '%s  %s\n' "6048b36a0b5f79aa45fbf58a629a8bca884c02e9016904c8d58fba0c0210d506" /opt/fold-cp-writer-association.patch | sha256sum -c -
+    git apply --check /opt/fold-cp-writer-association.patch
+    git apply /opt/fold-cp-writer-association.patch
+    git apply --reverse --check /opt/fold-cp-writer-association.patch
+    python3 -m py_compile src/boltz/data/write/writer.py
     find /opt/fold-cp -type d -name __pycache__ -prune -exec rm -rf {} +
 
 %environment
@@ -32,16 +38,18 @@ From: /mnt/BioModStack/apptainer/boltzgen.sif
     org.opencontainers.image.title "NVIDIA Fold-CP runtime"
     org.opencontainers.image.source "https://github.com/NVIDIA-BioNeMo/boltz-cp"
     org.opencontainers.image.revision "dedfdba3f33fd650aeb8f2da1005b44ebd03f95e"
-    org.biomodstack.runtime.id "fold-cp-dedfdba-cli-topology"
+    org.biomodstack.runtime.id "fold-cp-dedfdba-cli-topology-writer-association"
     org.biomodstack.runtime.base.sha256 "a62b63635a53f18f3bbb66585817bdd0425f58799696b2a1c19124bd6023a672"
 
     org.biomodstack.runtime.cli-patch.sha256 "68ca9baec4554f0f6e0bd3f935550b5106ca12a7c3368fd5ac56904ebaadb911"
+    org.biomodstack.runtime.association-patch.sha256 "6048b36a0b5f79aa45fbf58a629a8bca884c02e9016904c8d58fba0c0210d506"
 
 %test
     set -eu
     test "$(python3 -c 'import sys; print(sys.version_info >= (3, 11))')" = "True"
     test "$(git -C /opt/fold-cp rev-parse HEAD)" = "dedfdba3f33fd650aeb8f2da1005b44ebd03f95e"
     git -C /opt/fold-cp apply --reverse --check /opt/fold-cp-cli-cp-topology.patch
+    git -C /opt/fold-cp apply --reverse --check /opt/fold-cp-writer-association.patch
     python3 -c "import boltz.distributed.main as main; import boltz.distributed.predict as predict; assert main.__file__.startswith('/opt/fold-cp/src/'); assert predict.__file__.startswith('/opt/fold-cp/src/')"
     python3 -m boltz.distributed.main --help >/dev/null
     python3 -m boltz.distributed.main predict --help | grep -q -- '--cp_topology'
