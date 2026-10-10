@@ -70,6 +70,20 @@ def test_compile_recipe_uses_real_compiler_without_biological_files(tmp_path, mo
     assert [item.relative_path for item in invocation.generated_inputs] == ['complex_definition.json']
     assert invocation.generated_inputs[0].payload == json.dumps(
         {'components': params['complex_components']}, indent=2).encode('utf-8')
+    digest = p.recipe_digest(job)
+    job.provenance = {'remote_execution_receipt': {'state': 'running', 'boot_id': 'boot'},
+        'remote_execution_assignment': {'policy': 'vram_packing', 'lease_id': 'active'}}
+    during_run = []
+    assert p.compile_recipe(job, native_invocations=during_run) == command
+    assert during_run == collected
+    assert p.recipe_digest(job) == digest
+    # A real scientific setting still changes both the compiled invocation and
+    # the preload recipe identity, without materializing any biological files.
+    job.params = dict(params, complex_components=[{'type': 'protein', 'id': 'A', 'sequence': 'ACDEFGH'}])
+    changed = []
+    p.compile_recipe(job, native_invocations=changed)
+    assert changed != collected
+    assert p.recipe_digest(job) != digest
     assert not list(tmp_path.iterdir())
 
 

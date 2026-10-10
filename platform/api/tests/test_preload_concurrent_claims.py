@@ -152,3 +152,57 @@ async def test_saved_recipe_preload_allows_active_claim_and_scalar_progress(stor
             assert after == before
     finally:
         await controller.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['operational', 'params', 'core_protein_requested_params',
+    'core_protein_scientific_contract', 'fampnn_analysis_declaration', 'esmf_msa_preparation',
+    'execution_plan_approval'])
+async def test_saved_recipe_changes_during_blocked_transfer(store, change):
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def prewarm(**kw):
+        entered.set()
+        await release.wait()
+        await kw['check_fence']()
+        await kw['progress']({'phase': 'transferring', 'message': 'Downloading'})
+        return {'source_revision': 'a'*40, 'source_tree': 'b'*40, 'artifacts': []}
+
+    async def quiesce(*args):
+        return True
+
+    controller = p.PreloadController(store, prewarm=prewarm, quiesce=quiesce)
+    try:
+        async with store() as s:
+            await controller.start(s, 'vast:1', PreloadRequest(job_id='recipe'))
+        await asyncio.wait_for(entered.wait(), 5)
+        async with store() as s:
+            job = await s.get(Job, 'recipe')
+            if change == 'operational':
+                job.provenance = dict(job.provenance or {},
+                    remote_execution_assignment={'policy': 'vram_packing', 'execution_target_id': 'vast:1',
+                        'root_job_id': job.id, 'lease_id': 'new-claim'},
+                    remote_execution_receipt={'state': 'running', 'boot_id': 'boot'})
+                job.execution_target_id = 'vast:1'
+                job.status = job.queue_status = job.remote_state = 'running'
+            elif change == 'params':
+                job.params = dict(job.params, science=18)
+            else:
+                job.provenance = dict(job.provenance or {}, **{change: {'changed': True}})
+            await s.commit()
+            before = p.recipe_snapshot(job).__dict__
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*list(controller.tasks.values())), 10)
+        async with store() as s:
+            job, target = await s.get(Job, 'recipe'), await s.get(ExecutionTarget, 'vast:1')
+            progress = target.provider_metadata['preload']
+            if change == 'operational':
+                assert progress['phase'] == 'source_download_ready'
+                assert job_has_claim(target, job)
+            else:
+                assert progress['phase'] == 'failed'
+                assert progress['message'] == 'Saved recipe changed during preload; explicitly retry'
+            assert p.recipe_snapshot(job).__dict__ == before
+    finally:
+        release.set()
+        await controller.close()

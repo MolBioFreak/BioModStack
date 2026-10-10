@@ -57,6 +57,11 @@ def recipe_digest(job):
     values = {key: getattr(job, key, None) for key in (
         "id", "model_id", "mode", "params", "provenance", "output_dir", "child_output_dir",
         "execution_source_revision", "execution_source_tree")}
+    # The executor refreshes these observations while the same recipe runs.
+    # Neither is consumed by compile_recipe; retain all other provenance,
+    # including requested parameters, scientific revisions and MSA authority.
+    values["provenance"] = {key: value for key, value in (values["provenance"] or {}).items()
+        if key not in {"remote_execution_assignment", "remote_execution_receipt"}}
     return hashlib.sha256(json.dumps(values, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
 
 
