@@ -385,13 +385,18 @@ def native_resource_policy(params, label='CPU'):
         'MolecularDynamicsCpu': (1, '2 GB', '1h'),
         'ShapeEvaluate': (2, '8 GB', None),
     }.get(label)
+    md_config = params.get('md_config') or {}
+    native_md = label == 'MolecularDynamicsGromacs' and md_config.get('schema') == 'bms.md.job.v3'
+    if native_md:
+        execution = md_config['execution']
+        fixed = (execution['ntmpi'] * execution['ntomp'], fixed[1], fixed[2])
     return canonical_bytes({
         'authority': 'nextflow.config:process.withLabel.' + label,
         'profile_authority': 'nextflow.config:profiles.workstation_ryzen7960x',
         'execution_role': 'compute',
         'cpus': {'value': fixed[0] if fixed else 2 if label == 'local_cpu' else
                  8 if label == 'pooled_assignment_cpu' else params.get(cpu_key, 4),
-                 'parameter': None if fixed else cpu_key,
+                 'parameter': 'md_config.execution.ntmpi * md_config.execution.ntomp' if native_md else None if fixed else cpu_key,
                  'base_default': 8 if gpu else 24, 'profile_default': 4},
         'memory': {'value': fixed[1] if fixed else '16GB' if label == 'gpu_light' else
                    params.get(mem_key, '12GB' if gpu else '8GB'),

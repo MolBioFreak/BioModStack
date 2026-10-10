@@ -132,6 +132,11 @@ def native_reference_fields(document, format):
         inp = document.get("input", {})
         for key in ("structure", "coordinates", "topology"):
             yield from field(inp, key, ("input",), key)
+        if document.get("schema") == "bms.md.job.v3":
+            for key in ("tpr", "checkpoint", "index", "restraint_reference"):
+                yield from field(inp, key, ("input",), key)
+            for i, stage in enumerate(document.get("stages", [])):
+                yield from field(stage, "mdp_file", ("stages", i), "mdp")
         closure = inp.get("topology_closure", {})
         for i, item in enumerate(closure.get("files", [])):
             yield ("input", "topology_closure", "files", i, "path"), str(Path(closure["root"]) / item["path"]), "topology-include"
