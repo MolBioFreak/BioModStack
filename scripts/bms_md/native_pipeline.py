@@ -176,11 +176,19 @@ def run_native_stages(config: Mapping[str, Any], *, config_path: Path, output_di
     analysis_dir = output_dir / "analysis"
     analysis_dir.mkdir(exist_ok=True)
     representative = directory / f"{name}-final.pdb"
-    _run_command([gmx_binary, "editconf", "-f", str(coordinates), "-o", str(representative)],
-                 cwd=directory, log_path=analysis_dir / "representative_structure.command.log")
+    try:
+        _run_command([gmx_binary, "editconf", "-f", str(coordinates), "-o", str(representative)],
+                     cwd=directory, log_path=analysis_dir / "representative_structure.command.log")
+        artifacts["representative_structure"] = representative
+    except (RuntimeError, OSError) as exc:
+        publication_errors["representative_structure"] = str(exc)
     atom_map = analysis_dir / "atom-order-manifest.json"
-    _, atom_identity = write_atom_order_manifest(coordinates, atom_map)
-    artifacts.update(representative_structure=representative, atom_order_manifest=atom_map)
+    atom_identity = None
+    try:
+        _, atom_identity = write_atom_order_manifest(coordinates, atom_map)
+        artifacts["atom_order_manifest"] = atom_map
+    except (OSError, ValueError) as exc:
+        publication_errors["atom_order_manifest"] = str(exc)
     trajectory = artifacts.get("trajectory")
     frame_map = None
     if trajectory is not None:
@@ -218,23 +226,24 @@ def run_native_stages(config: Mapping[str, Any], *, config_path: Path, output_di
     for key, role in roles.items():
         if key in manifest["artifacts"]:
             manifest["artifacts"][key]["semantic_role"] = role
-            if key in ("coordinates", "atom_order_manifest"):
+            if key in ("coordinates", "atom_order_manifest") and atom_identity is not None:
                 manifest["artifacts"][key]["atom_order_identity"] = atom_identity
-            if key == "trajectory" and frame_map is not None:
+            if key == "trajectory" and frame_map is not None and atom_identity is not None:
                 atom_count = len(json.loads(atom_map.read_text())["atoms"])
                 if frame_map["atom_count"] == atom_count:
                     manifest["artifacts"][key]["atom_order_identity"] = atom_identity
-    representative_record = manifest["artifacts"]["representative_structure"]
-    representative_record.update(semantic_role="representative_structure",
-                                 selection_method="completed_production_final_coordinates", source_frame=None)
+    representative_record = manifest["artifacts"].get("representative_structure")
     endpoint = endpoints[name]
-    if "time_ps" in endpoint:
-        representative_record["time_ps"] = endpoint["time_ps"]
+    if representative_record is not None:
+        representative_record.update(semantic_role="representative_structure",
+                                     selection_method="completed_production_final_coordinates", source_frame=None)
+        if "time_ps" in endpoint:
+            representative_record["time_ps"] = endpoint["time_ps"]
     if frame_map is not None:
         manifest["artifacts"]["trajectory_frame_map"]["source_trajectory_sha256"] = frame_map["trajectory_sha256"]
         # An endpoint need not coincide with the last saved trajectory frame.
         for frame in reversed(frame_map["frames"]):
-            if frame["step"] == endpoint.get("step"):
+            if representative_record is not None and frame["step"] == endpoint.get("step"):
                 representative_record.update(source_frame=frame["source_frame"],
                                              source_trajectory_sha256=frame_map["trajectory_sha256"])
                 break

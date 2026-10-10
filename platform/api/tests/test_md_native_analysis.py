@@ -182,6 +182,74 @@ def test_native_pull_producer_collection_receiver_preserves_failure_and_coordina
     assert snapshot["analysis_state"] == "failed"
 
 
+@pytest.mark.parametrize("malformed", ["wham_record", "wham_inputs", "missing_wham", "collection_utf8", "collection_errors"])
+def test_malformed_optional_collection_is_a_descriptive_analysis_error(tmp_path, monkeypatch, malformed):
+    job, _, _ = _optional_tree(tmp_path, monkeypatch)
+    analysis = tmp_path / "analysis"
+    analysis.mkdir()
+    collection = {"job_id": job.id, "aggregate_manifest_sha256": hashlib.sha256((tmp_path / "manifest.json").read_bytes()).hexdigest()}
+    if malformed == "collection_errors":
+        collection["collection_errors"] = ["partial"]
+    if malformed == "wham_record":
+        collection["wham"] = ["partial"]
+    elif malformed in {"wham_inputs", "missing_wham"}:
+        result = analysis / "wham.json"
+        result.write_text(json.dumps({"status": "completed", "inputs": ["partial"]}))
+        collection["wham"] = _record(result, analysis)
+        if malformed == "missing_wham":
+            result.unlink()
+    path = analysis / "manifest.json"
+    path.write_text(json.dumps(collection))
+    if malformed == "collection_utf8":
+        path.write_bytes(b"\xff")
+    with pytest.raises(MDResultError) as failure:
+        analysis_report(job)
+    assert failure.value.code.startswith("MD_ANALYSIS_") or failure.value.code == "MD_ARTIFACT_MISSING"
+    snapshot = completion_barrier(job)
+    assert snapshot["dynamics_state"] == "completed" and snapshot["analysis_state"] == "failed"
+    assert snapshot["analysis_error"]["message"] == str(failure.value)
+    assert artifact_inventory(job)["artifacts"]
+
+
+@pytest.mark.parametrize("defect", ["missing", "malformed", "checksum", "escape"])
+def test_optional_child_collection_failure_retains_dynamics(tmp_path, monkeypatch, defect):
+    job, manifest, _ = _optional_tree(tmp_path, monkeypatch)
+    child = tmp_path / "analysis-child"
+    child.mkdir()
+    sidecar = child / "md_analysis_replica_0.artifacts.json"
+    if defect == "malformed":
+        sidecar.write_text("[]")
+    elif defect in {"checksum", "escape"}:
+        report = child / "md_analysis_replica_0.json"
+        report.write_text("{}")
+        record = _record(report, child)
+        record["sha256"] = "f" * 64
+        if defect == "escape":
+            record["path"] = "../outside.json"
+        sidecar.write_text(json.dumps({"schema": "bms.md.analysis-artifacts.v1", "status": "completed",
+            "job_id": job.id, "replica": 0, "input_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            "artifacts": {"report": record}}))
+    status = tmp_path / "analysis-status.json"
+    status.write_text(json.dumps({"child_output_dirs": [str(child)], "completed": 1, "child_ids": ["analysis"]}))
+    collection = collect_analysis(status, tmp_path / "manifest.json", tmp_path)
+    assert collection["status"] == "partial_failure"
+    assert collection["completed_analysis_children"] == 0 and collection["failed_analysis_children"] == 1
+    assert collection["collection_errors"] and collection["analyses"] == []
+    assert not (tmp_path / "analysis" / sidecar.name).exists()
+    assert analysis_report(job)["collection"]["collection_errors"] == collection["collection_errors"]
+    assert completion_barrier(job)["dynamics_state"] == "completed"
+    # The same malformed child remains fatal for historical required analysis.
+    document = json.loads(manifest.read_text())
+    del document["config"]["analysis"]
+    manifest.write_text(json.dumps(document))
+    with pytest.raises((ValueError, AttributeError)) as required_error:
+        collect_analysis(status, tmp_path / "manifest.json", tmp_path)
+    assert "analysis" in str(required_error.value) or "get" in str(required_error.value)
+    manifest.unlink()
+    with pytest.raises(ValueError, match="replica manifest is unavailable"):
+        collect_analysis(status, tmp_path / "manifest.json", tmp_path)
+
+
 def test_wham_invokes_native_estimator_and_reports_native_failure(tmp_path, monkeypatch):
     job, manifest_path, _ = _optional_tree(tmp_path, monkeypatch)
     manifest = json.loads(manifest_path.read_text())

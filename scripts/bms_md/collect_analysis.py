@@ -172,86 +172,93 @@ def collect_analysis(
     validated_children = []
     seen_replicas: set[int] = set()
     analysis_root = output_dir / "analysis"
+    collection_errors = []
     for child_dir in child_dirs:
-        sidecar_path = _find_sidecar(child_dir)
-        sidecar_bytes = sidecar_path.read_bytes()
-        sidecar_sha256 = hashlib.sha256(sidecar_bytes).hexdigest()
-        sidecar = json.loads(sidecar_bytes)
-        replica_index = sidecar.get("replica")
-        if (
-            sidecar.get("schema") != "bms.md.analysis-artifacts.v1"
-            or sidecar.get("status") not in {"completed", "not_applicable", "failed"}
-            or sidecar.get("job_id") != parent_job_id
-            or isinstance(replica_index, bool)
-            or not isinstance(replica_index, int)
-            or replica_index not in replica_hashes
-            or replica_index in seen_replicas
-            or sidecar.get("input_manifest_sha256") != replica_hashes[replica_index]
-            or not isinstance(sidecar.get("artifacts"), dict)
-            or not sidecar["artifacts"]
-        ):
-            raise ValueError("analysis artifact sidecar identity is invalid")
-        seen_replicas.add(replica_index)
-
-        artifact_records: list[dict[str, Any]] = []
-        for name, record in sorted(sidecar["artifacts"].items()):
-            if not isinstance(name, str) or not isinstance(record, dict):
-                raise ValueError("analysis artifact record is invalid")
-            relative = record.get("path")
-            if not isinstance(relative, str) or Path(relative).name != relative:
-                raise ValueError("analysis artifact path must be one contained basename")
-            source = _contained_regular_file(sidecar_path.parent, relative)
-            expected_size = record.get("bytes")
-            expected_sha256 = record.get("sha256")
+        try:
+            sidecar_path = _find_sidecar(child_dir)
+            sidecar_bytes = sidecar_path.read_bytes()
+            sidecar_sha256 = hashlib.sha256(sidecar_bytes).hexdigest()
+            sidecar = json.loads(sidecar_bytes)
+            replica_index = sidecar.get("replica")
             if (
-                isinstance(expected_size, bool)
-                or not isinstance(expected_size, int)
-                or expected_size < 0
-                or not isinstance(expected_sha256, str)
-                or not SHA256.fullmatch(expected_sha256)
-                or source.stat().st_size != expected_size
-                or _sha256(source) != expected_sha256
+                sidecar.get("schema") != "bms.md.analysis-artifacts.v1"
+                or sidecar.get("status") not in {"completed", "not_applicable", "failed"}
+                or sidecar.get("job_id") != parent_job_id
+                or isinstance(replica_index, bool)
+                or not isinstance(replica_index, int)
+                or replica_index not in replica_hashes
+                or replica_index in seen_replicas
+                or sidecar.get("input_manifest_sha256") != replica_hashes[replica_index]
+                or not isinstance(sidecar.get("artifacts"), dict)
+                or not sidecar["artifacts"]
             ):
-                raise ValueError("analysis artifact checksum is invalid")
-            destination = analysis_root / relative
+                raise ValueError("analysis artifact sidecar identity is invalid")
+
+            artifact_records: list[dict[str, Any]] = []
+            for name, record in sorted(sidecar["artifacts"].items()):
+                if not isinstance(name, str) or not isinstance(record, dict):
+                    raise ValueError("analysis artifact record is invalid")
+                relative = record.get("path")
+                if not isinstance(relative, str) or Path(relative).name != relative:
+                    raise ValueError("analysis artifact path must be one contained basename")
+                source = _contained_regular_file(sidecar_path.parent, relative)
+                expected_size = record.get("bytes")
+                expected_sha256 = record.get("sha256")
+                if (
+                    isinstance(expected_size, bool)
+                    or not isinstance(expected_size, int)
+                    or expected_size < 0
+                    or not isinstance(expected_sha256, str)
+                    or not SHA256.fullmatch(expected_sha256)
+                    or source.stat().st_size != expected_size
+                    or _sha256(source) != expected_sha256
+                ):
+                    raise ValueError("analysis artifact checksum is invalid")
+                destination = analysis_root / relative
+                publish_file_immutable(
+                    source,
+                    destination,
+                    expected_size=expected_size,
+                    expected_sha256=expected_sha256,
+                )
+                artifact_records.append(
+                    {
+                        "name": name,
+                        "path": relative,
+                        "bytes": expected_size,
+                        "sha256": expected_sha256,
+                        "semantic_role": record.get("semantic_role"),
+                    }
+                )
+
+            published_sidecar = analysis_root / sidecar_path.name
             publish_file_immutable(
-                source,
-                destination,
-                expected_size=expected_size,
-                expected_sha256=expected_sha256,
+                sidecar_path,
+                published_sidecar,
+                expected_size=len(sidecar_bytes),
+                expected_sha256=sidecar_sha256,
             )
-            artifact_records.append(
+            completed_records.append(
                 {
-                    "name": name,
-                    "path": relative,
-                    "bytes": expected_size,
-                    "sha256": expected_sha256,
-                    "semantic_role": record.get("semantic_role"),
+                    "replica_index": replica_index,
+                    "status": sidecar["status"],
+                    "input_manifest_sha256": replica_hashes[replica_index],
+                    "artifact_sidecar": sidecar_path.name,
+                    "artifact_sidecar_sha256": sidecar_sha256,
+                    "artifacts": artifact_records,
                 }
             )
-
-        published_sidecar = analysis_root / sidecar_path.name
-        publish_file_immutable(
-            sidecar_path,
-            published_sidecar,
-            expected_size=len(sidecar_bytes),
-            expected_sha256=sidecar_sha256,
-        )
-        completed_records.append(
-            {
-                "replica_index": replica_index,
-                "status": sidecar["status"],
-                "input_manifest_sha256": replica_hashes[replica_index],
-                "artifact_sidecar": sidecar_path.name,
-                "artifact_sidecar_sha256": sidecar_sha256,
-                "artifacts": artifact_records,
-            }
-        )
-        validated_children.append((child_dir, replica_index, sidecar,
-            [sidecar_path] + [sidecar_path.parent / record["path"] for record in artifact_records]))
+            validated_children.append((child_dir, replica_index, sidecar,
+                [sidecar_path] + [sidecar_path.parent / record["path"] for record in artifact_records]))
+            seen_replicas.add(replica_index)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            if not optional:
+                raise
+            collection_errors.append({"child_output_dir": str(child_dir),
+                "code": "MD_ANALYSIS_COLLECTION_INVALID", "message": f"{type(exc).__name__}: {exc}"})
 
     completed_records.sort(key=lambda item: item["replica_index"])
-    failed = max(int(status.get("failed") or 0), sum(item["status"] == "failed" for item in completed_records))
+    failed = max(int(status.get("failed") or 0), len(collection_errors) + sum(item["status"] == "failed" for item in completed_records))
     cancelled = int(status.get("cancelled") or 0)
     required = len(replica_hashes)
     is_complete = not failed and not cancelled and seen_replicas == set(replica_hashes)
@@ -270,6 +277,7 @@ def collect_analysis(
         "cancelled_analysis_children": cancelled,
         "child_ids": list(status.get("child_ids") or []),
         "analyses": completed_records,
+        **({"collection_errors": collection_errors} if collection_errors else {}),
     }
     wham = (config.get("analysis") or {}).get("wham")
     if wham:

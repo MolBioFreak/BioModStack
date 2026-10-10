@@ -261,7 +261,7 @@ def _assert_finite_json(value: Any, code: str) -> None:
 def _load_json(path: Path, code: str) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise MDResultError(code, "MD result manifest is unavailable or invalid", 404) from exc
     if not isinstance(payload, dict):
         raise MDResultError(code, "MD result manifest must be an object")
@@ -567,8 +567,10 @@ def _wham_report(root: Path, aggregate: Mapping[str, Any], job: MDJobRecord):
         return None
     collection = _load_json(collection_path, "MD_ANALYSIS_COLLECTION_INVALID")
     record = collection.get("wham")
-    if not record:
+    if record is None:
         return None
+    if not isinstance(record, Mapping):
+        raise MDResultError("MD_ANALYSIS_COLLECTION_INVALID", "WHAM artifact record must be an object", 409)
     if (collection.get("job_id") != job.id
             or collection.get("aggregate_manifest_sha256") != _digest(root / "manifest.json")):
         raise MDResultError("MD_ANALYSIS_REPORT_STALE", "WHAM collection does not bind these dynamics", 409)
@@ -594,6 +596,25 @@ def _wham_report(root: Path, aggregate: Mapping[str, Any], job: MDJobRecord):
 
 
 def analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict[str, Any]:
+    if not optional_analysis((job.params or {}).get("md_job_spec")):
+        return _analysis_report(job, _inventory=_inventory, _digests=_digests)
+    # Dynamics inventory errors remain dynamics errors, outside optional parsing.
+    if _inventory is None:
+        root, aggregate, inventory = _load_inventory(job, include_analysis=False, _digests=_digests)
+    else:
+        root, aggregate, inventory = _inventory
+    try:
+        if _inventory is None:
+            inventory += _analysis_inventory(root, aggregate, job, _digests=_digests)
+            if len(inventory) > MAX_ARTIFACTS:
+                raise MDResultError("MD_MANIFEST_INVALID", "MD artifact inventory exceeds its bound")
+        return _analysis_report(job, _inventory=(root, aggregate, inventory), _digests=_digests)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise MDResultError("MD_ANALYSIS_REPORT_INVALID",
+                            f"Optional MD analysis could not be read: {type(exc).__name__}: {exc}", 409) from exc
+
+
+def _analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict[str, Any]:
     digests = _digests if _digests is not None else {}
     root, aggregate, inventory = (_inventory if _inventory is not None
         else _load_inventory(job, _digests=digests))
@@ -707,7 +728,11 @@ def analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict
         collection = _load_json(collection_path, "MD_ANALYSIS_COLLECTION_INVALID")
         if collection.get("job_id") != job.id or collection.get("aggregate_manifest_sha256") != digest(root / "manifest.json"):
             raise MDResultError("MD_ANALYSIS_REPORT_STALE", "Analysis collection does not bind these dynamics", 409)
-        collection_state = {key: collection.get(key) for key in ("status", "completed_analysis_children", "failed_analysis_children", "cancelled_analysis_children")}
+        errors = collection.get("collection_errors", [])
+        if not isinstance(errors, list) or any(not isinstance(error, Mapping)
+                or any(not isinstance(error.get(key), str) for key in ("code", "message")) for error in errors):
+            raise MDResultError("MD_ANALYSIS_COLLECTION_INVALID", "Analysis collection errors are malformed", 409)
+        collection_state = {key: collection.get(key) for key in ("status", "completed_analysis_children", "failed_analysis_children", "cancelled_analysis_children", "collection_errors")}
         if collection.get("failed_analysis_children") or collection.get("cancelled_analysis_children"):
             overall = "partial" if reports and overall != "failed" else "failed"
     wham = _wham_report(root, aggregate, job) if optional_analysis((job.params or {}).get("md_job_spec")) else None
@@ -784,7 +809,7 @@ def completion_barrier(job: MDJobRecord, *, _inventory=None, _digests=None) -> d
         "representative_structure",
     }
     if optional:
-        required_roles = {"representative_structure"}
+        required_roles = set() if job_spec.get("schema") == "bms.md.job.v3" else {"representative_structure"}
     roles_by_replica: dict[int, set[str]] = {index: set() for index in replica_indices}
     for artifact in inventory:
         if artifact.semantic_role:
@@ -833,6 +858,9 @@ def completion_barrier(job: MDJobRecord, *, _inventory=None, _digests=None) -> d
         try:
             report_set = analysis_report(job, _digests=digests)
             analysis_state = report_set["status"]
+            collection_errors = (report_set.get("collection") or {}).get("collection_errors")
+            if collection_errors:
+                analysis_error = {key: collection_errors[0][key] for key in ("code", "message")}
         except MDResultError as exc:
             analysis_state = "failed"
             analysis_error = {"code": exc.code, "message": str(exc)}
@@ -948,7 +976,7 @@ def apply_completion_barrier(job: MDJobRecord, *, _snapshot=None) -> dict[str, A
     return snapshot
 
 
-def _trajectory_playback(inventory: list[ResolvedMDArtifact]) -> dict[str, Any]:
+def _trajectory_playback(inventory: list[ResolvedMDArtifact], *, native: bool = False) -> dict[str, Any]:
     by_replica: dict[int, list[ResolvedMDArtifact]] = {}
     for artifact in inventory:
         by_replica.setdefault(artifact.replica_index, []).append(artifact)
@@ -975,7 +1003,7 @@ def _trajectory_playback(inventory: list[ResolvedMDArtifact]) -> dict[str, Any]:
         if not isinstance(frames, list) or not frames or len(frames) > MAX_TRAJECTORY_PLAYBACK_FRAMES:
             raise MDResultError("MD_TRAJECTORY_PLAYBACK_FRAME_MAP_INVALID", "MD playback frame map is empty or exceeds its bound")
         previous_source_frame = -1
-        previous_time_ps = -1.0
+        previous_time_ps = -math.inf if native else -1.0
         for display_frame, frame in enumerate(frames):
             if not isinstance(frame, Mapping) or frame.get("display_frame") != display_frame:
                 raise MDResultError("MD_TRAJECTORY_PLAYBACK_FRAME_MAP_INVALID", "MD playback display-frame mapping is invalid")
@@ -1013,12 +1041,20 @@ def summary(job: MDJobRecord) -> dict[str, Any]:
         replica_summaries.append({
             "replica": index,
             "status": manifest.get("status"),
+            **({"publication_errors": manifest["publication_errors"]} if "publication_errors" in manifest else {}),
             **{key: manifest.get(key, manifest.get("config", {}).get(key)) for key in ("window_id", "replicate_index") if key in manifest or key in manifest.get("config", {})},
             **({"native_endpoints": manifest["native_endpoints"], "final_stage": manifest.get("final_stage")} if "native_endpoints" in manifest else {}),
             "engine": {key: engine.get(key) for key in ("name", "version", "platform") if isinstance(engine.get(key), (str, int, float, bool))},
             "performance": {str(key): value for key, value in list(performance.items())[:16] if isinstance(value, (int, float)) and not isinstance(value, bool)} if isinstance(performance, Mapping) else {},
         })
     lifecycle = (job.provenance or {}).get("md") if isinstance(job.provenance, Mapping) else None
+    native = ((job.params or {}).get("md_job_spec") or {}).get("schema") == "bms.md.job.v3"
+    try:
+        playback = _trajectory_playback(inventory, native=native)
+    except MDResultError as exc:
+        if not native:
+            raise
+        playback = {"supported": False, "reason": str(exc), "error": {"code": exc.code, "message": str(exc)}}
     return {
         "schema": "bms.md.summary.v1", "job_id": job.id, "status": aggregate.get("status"),
         "result_state": lifecycle.get("result_state") if isinstance(lifecycle, Mapping) else None,
@@ -1029,5 +1065,5 @@ def summary(job: MDJobRecord) -> dict[str, Any]:
         "aggregate_manifest_sha256": _digest(root / "manifest.json"),
         "replica_count": len(aggregate["replicas"]), "artifact_count": len(inventory),
         "replicas": replica_summaries,
-        "trajectory_playback": _trajectory_playback(inventory),
+        "trajectory_playback": playback,
     }
