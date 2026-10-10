@@ -7895,7 +7895,7 @@ async def _validated_typed_md_project_params(
     adapter: Any,
     md_input_resolver: Any,
 ) -> dict[str, Any]:
-    """Bind one current prepared Design authority to one server-compiled MD v2 spec."""
+    """Bind current prepared MD authority to its server-compiled effective request."""
 
     if not isinstance(adapter, TypedMdProjectLaunch):
         raise _typed_md_adapter_error("Typed MD launch requires its sealed internal adapter.")
@@ -7915,9 +7915,17 @@ async def _validated_typed_md_project_params(
     md_job_spec = deepcopy(dict(adapter.md_job_spec))
     source_params = deepcopy(dict(adapter.source_params or {}))
     supplied_params = dict(job_data.params or {})
-    if set(intent) != _TYPED_MD_INTENT_AUTHORITY_FIELDS | {
+    native = intent.get("schema_version") == "bms.md.launch-intent.v2"
+    if native:
+        from services.md.starting_structures import MdNativeLaunchIntent
+        authority_fields = set(MdNativeLaunchIntent.model_fields) - {
+            "name", "launch_context_id", "execution_target_id", "execution_policy",
+        }
+    else:
+        authority_fields = _TYPED_MD_INTENT_AUTHORITY_FIELDS
+    if set(intent) != authority_fields | {
             "name", "launch_context_id", "execution_target_id", "execution_policy"}:
-        raise _typed_md_adapter_error("Typed MD intent authority is not the sealed v1 schema.")
+        raise _typed_md_adapter_error("Typed MD intent authority is not the sealed schema.")
     if (
         intent.get("execution_target_id") != job_data.execution_target_id
         or intent.get("execution_policy") != job_data.execution_policy.model_dump(mode='json')
@@ -7926,7 +7934,7 @@ async def _validated_typed_md_project_params(
     ):
         raise _typed_md_adapter_error('Typed MD placement or execution policy changed after preview.')
     if (
-        intent.get("schema_version") != "bms.md.launch-intent.v1"
+        intent.get("schema_version") != ("bms.md.launch-intent.v2" if native else "bms.md.launch-intent.v1")
         or intent.get("launch_context_id") != context.launch_context_id
         or _canonical_typed_md_document(supplied_params)
         != _canonical_typed_md_document({**source_params, "md_job_spec": md_job_spec})
@@ -7936,13 +7944,13 @@ async def _validated_typed_md_project_params(
         )
 
     intent_authority = {
-        key: intent[key] for key in _TYPED_MD_INTENT_AUTHORITY_FIELDS
+        key: intent[key] for key in authority_fields
     }
     source_ref = intent_authority.get("source_ref")
     preview_source = preview.get("source")
     preview_chemistry = preview.get("chemistry")
     effective_request = preview.get("effective_request")
-    if (
+    if not native and (
         not isinstance(source_ref, dict)
         or source_ref.get("kind") != "design"
         or not isinstance(source_ref.get("id"), str)
@@ -7973,7 +7981,7 @@ async def _validated_typed_md_project_params(
     expected_execution["gpu_id"] = "0"
     spec_input = md_job_spec.get("input")
     spec_chemistry = md_job_spec.get("chemistry")
-    if (
+    if not native and (
         set(md_job_spec)
         != {
             "schema",
@@ -8013,6 +8021,20 @@ async def _validated_typed_md_project_params(
         raise _typed_md_adapter_error(
             "Server-compiled MD v2 authority does not match the current typed preview."
         )
+
+    if native:
+        if (
+            preview.get("schema_version") != "bms.md.launch-preview.v2"
+            or preview.get("preview_digest") != adapter.preview_digest
+            or preview.get("blockers") != []
+            or md_job_spec.get("schema") != "bms.md.job.v3"
+            or _canonical_typed_md_document(md_job_spec)
+            != _canonical_typed_md_document(preview.get("effective_request"))
+            or source_params.get("md_source_provenance", {}).get("native_input_identity")
+            != preview.get("input_identity")
+            or source_params.get("intent") != intent
+        ):
+            raise _typed_md_adapter_error("Native MD effective request or input identity changed after preview.")
 
     from experiment_models import (
         ExperimentAggregateHead,
@@ -8118,15 +8140,17 @@ async def _validated_typed_md_project_params(
         or scheduler.get("model_id") != "molecular_dynamics"
         or scheduler.get("mode") != "simulate"
         or not isinstance(expected_params, dict)
-        or set(expected_params) != _TYPED_MD_INTENT_AUTHORITY_FIELDS
+        or set(expected_params) != authority_fields
         or _canonical_typed_md_document(expected_params)
         != _canonical_typed_md_document(intent_authority)
-        or len(bound_refs) != 1
-        or bound_refs[0].kind != "design"
-        or bound_refs[0].id != source_ref["id"]
+        or (not native and (
+            len(bound_refs) != 1
+            or bound_refs[0].kind != "design"
+            or bound_refs[0].id != source_ref["id"]
+        ))
     ):
         raise _typed_md_adapter_error(
-            "Typed MD intent does not match the one prepared Project Design authority."
+            "Typed MD intent does not match the prepared Project authority."
         )
 
     canonical_params = await validate_bound_job_request(

@@ -442,7 +442,7 @@ def _launch_context_source_refs(
     return refs
 
 
-async def _validate_preview_launch_context(intent: MdLaunchIntent) -> None:
+async def _validate_preview_launch_context(intent: MdLaunchIntent | MdNativeLaunchIntent) -> None:
     if intent.launch_context_id is None:
         return
     from experiment_models import (
@@ -546,6 +546,16 @@ async def _validate_preview_launch_context(intent: MdLaunchIntent) -> None:
                 "Launch context is not scoped to the current Molecular Dynamics workflow.",
                 status_code=409,
             )
+        if isinstance(intent, MdNativeLaunchIntent):
+            authority = intent.model_dump(mode="json", exclude={
+                "name", "launch_context_id", "execution_target_id", "execution_policy",
+            })
+            if scheduler.get("params") != authority:
+                raise LaunchContextError(
+                    "launch_context_preparation_mismatch",
+                    "Native MD intent differs from the prepared Project request.", status_code=409,
+                )
+            return
         bound_refs = _launch_context_source_refs(normalized_request, workflow_payload)
         if intent.source_ref.kind != "design":
             raise LaunchContextError(
@@ -666,6 +676,7 @@ async def _compile_native_preview(intent: MdNativeLaunchIntent, session: AsyncSe
     catalog = None
     view = None
     source_token = "bms-md-starting-structure:selected"
+    await _validate_preview_launch_context(intent)
     try:
         if isinstance(intent.input, MdGuidedNativeInput):
             catalog = get_chemistry_catalog()
@@ -734,7 +745,7 @@ async def _compile_native_preview(intent: MdNativeLaunchIntent, session: AsyncSe
 
 
 async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession):
-    from routers.jobs import create_job, ApprovedExecutionPlan
+    from routers.jobs import create_job, ApprovedExecutionPlan, TypedMdProjectLaunch
     from component_runtime import canonical_bytes
 
     assert isinstance(request.intent, MdNativeLaunchIntent)
@@ -748,7 +759,8 @@ async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession)
             assert preview.source is not None
             provenance.update(source_ref=resolved.source_ref.model_dump(mode="json"), source_sha256=preview.source.sha256)
         provenance["native_input_identity"] = preview.input_identity
-        params = {"md_job_spec": preview.effective_request, "md_source_provenance": provenance}
+        params = {"md_job_spec": preview.effective_request, "md_source_provenance": provenance,
+                  "intent": request.intent.model_dump(mode="json")}
         if resolved is not None and resolved.design_id is not None:
             params.update(
                 source_design_id=resolved.design_id, lineage_root_job_id=provenance.get("lineage_root_job_id"),
@@ -758,7 +770,8 @@ async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession)
             )
         job_data = JobCreate(
             name=request.intent.name, model_id="molecular_dynamics", mode="simulate", parent_job_id=None,
-            params=params, execution_target_id=request.intent.execution_target_id,
+            params=params, launch_context_id=request.intent.launch_context_id,
+            execution_target_id=request.intent.execution_target_id,
             execution_policy=request.intent.execution_policy,
         )
         kwargs = {"_md_output_creation": {}, "_md_input_resolver": resolver}
@@ -768,6 +781,17 @@ async def _launch_native_md_job(request: MdLaunchRequest, session: AsyncSession)
                 canonical_bytes({"approval_digest": preview.preview_digest, "plan": preview.execution_plan,
                                  "admissible": True, "deferred_preparation": [], "blockers": []}),
             )
+        if request.intent.launch_context_id is not None:
+            adapter = TypedMdProjectLaunch(
+                request_schema_version=request.schema_version,
+                intent=request.intent.model_dump(mode="json"), preview=preview.model_dump(mode="json"),
+                preview_digest=request.preview_digest, md_job_spec=copy.deepcopy(preview.effective_request),
+                source_token="bms-md-starting-structure:selected",
+                source_params=copy.deepcopy({key: value for key, value in params.items() if key != "md_job_spec"}),
+            )
+            async with experiment_session_factory() as experiment_session:
+                return await create_job(job_data, BackgroundTasks(), session,
+                    experiment_session=experiment_session, _typed_md_project_launch=adapter, **kwargs)
         return await create_job(job_data, BackgroundTasks(), session, **kwargs)
     finally:
         if resolved is not None:

@@ -279,6 +279,7 @@ class MdNativeWindow(_ClosedModel):
 
 class MdNativeLaunchIntent(_ClosedModel):
     schema_version: Literal["bms.md.launch-intent.v2"]
+    launch_context_id: str | None = None
     name: str = Field(min_length=1, max_length=255)
     input: MdGuidedNativeInput | MdPreparedNativeInput | MdCompiledNativeInput = Field(discriminator="kind")
     replicas: int = Field(default=1, ge=1)

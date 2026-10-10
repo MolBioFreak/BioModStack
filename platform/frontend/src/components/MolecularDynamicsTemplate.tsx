@@ -620,7 +620,7 @@ export function MolecularDynamicsTemplate({
         if (nativeEnabled && native) {
             const input = native.input.kind === 'guided' && inspection && selectedProfile && chemistryCatalogQuery.data
                 ? { ...native.input, source_ref: inspection.source_ref, expected_source_sha256: inspection.identity.sha256, chemistry_profile_id: selectedProfile.id, chemistry_profile_sha256: selectedProfile.profile_sha256, catalog_digest: chemistryCatalogQuery.data.catalog_digest } : native.input;
-            return serializeMolecularDynamicsNativeDraft({ ...native, name: form.jobName, input, stages: input.kind === 'compiled' ? [] : native.stages, ...placement });
+            return serializeMolecularDynamicsNativeDraft({ ...native, name: form.jobName, launch_context_id: launchContextId, input, stages: input.kind === 'compiled' ? [] : native.stages, ...placement });
         }
         if (!inspection || !selectedProfile || !chemistryCatalogQuery.data) throw new Error('Inspect and admit one starting structure before preview.');
         return buildMolecularDynamicsLaunchIntent({

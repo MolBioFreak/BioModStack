@@ -530,6 +530,8 @@ export function JobSubmission() {
                         name: data.name,
                         job_name: data.name,
                         source_job_id: data.source_job_id,
+                        execution_target_id: data.execution_target_id ?? null,
+                        execution_policy: data.execution_policy ?? { remote_result_policy: 'manual' },
                     });
                 }
                 else if (data.model_id === 'boltzgen' && data.mode === 'nanobody_binder' && !data.params?.native_generation_authoring) {

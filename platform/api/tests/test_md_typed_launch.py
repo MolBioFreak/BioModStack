@@ -578,7 +578,7 @@ def test_launch_recompiles_digest_and_calls_one_canonical_job_wrapper(
 
 
 @pytest.fixture
-def project_context_preview_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def project_context_preview_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request):
     import main
     from database import Base, Design, Job, get_session
     from experiment_models import (
@@ -652,6 +652,24 @@ def project_context_preview_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
         "catalog_digest": CATALOG_DIGEST,
         "requested_settings": _settings(),
     }
+    native_intent = None
+    native_catalog = None
+    if getattr(request, "param", None) in {"prepared", "compiled", "guided"}:
+        from test_md_native_contract import _files, _intent as native_request, _guided_intent
+        from services.md.starting_structures import MdNativeLaunchIntent
+        native_intent = native_request(_files(results_root / "native"), compiled=request.param == "compiled")
+        if request.param == "guided":
+            native_intent, native_catalog, _ = _guided_intent()
+            native_intent["input"]["source_ref"] = {"kind": "design", "id": expected_design_id}
+        else:
+            native_catalog = None
+        native_intent["analysis"] = {"selection": None, "enabled": False, "cutoff": 0}
+        if request.param != "compiled":
+            native_intent["windows"] = [{"id": "w0", "mdp": {"adsorption": {"pull-coord1-init": 0}}}]
+        native_intent = MdNativeLaunchIntent.model_validate(native_intent).model_dump(mode="json")
+        native_intent["launch_context_id"] = ids["context"]
+        prepared_md_authority = {key: value for key, value in native_intent.items()
+                                if key not in {"name", "launch_context_id", "execution_target_id", "execution_policy"}}
     workflow_payload = {
         "schema": "bms.workflow.generic.v1",
         "workflow_family": "typed_core_job",
@@ -1023,6 +1041,14 @@ def project_context_preview_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     monkeypatch.setattr(
         starting_structures, "get_allowed_roots", lambda: {"results": results_root}
     )
+    if native_intent is not None:
+        from services.md import launch_contract
+        import paths
+        monkeypatch.setattr(paths, "get_allowed_roots", lambda: {"results": results_root})
+        monkeypatch.setattr(launch_contract, "_bound_engine_runtime_identity", lambda engine: {"image_name": "gromacs.sif", "sif_sha256": "a" * 64})
+        if native_catalog is not None:
+            monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: native_catalog)
+            monkeypatch.setattr(launch_contract, "get_chemistry_catalog", lambda: native_catalog)
     main.app.dependency_overrides[get_session] = override_core_session
     test_client = TestClient(main.app)
     try:
@@ -1035,6 +1061,7 @@ def project_context_preview_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
             "other_design_id": other_design_id,
             "results_root": results_root,
             "scheduler_job_id": scheduler_job_id,
+            "native_intent": native_intent,
         }
     finally:
         test_client.close()

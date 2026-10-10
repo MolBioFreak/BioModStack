@@ -13,7 +13,7 @@ export interface MolecularDynamicsAnalysisOptions {
         windows: Array<{ replica: number; window: string; coordinate: number; coordinate_count: number }> } | null;
 }
 export interface MolecularDynamicsNativeIntent {
-    schema_version: 'bms.md.launch-intent.v2'; name: string;
+    schema_version: 'bms.md.launch-intent.v2'; name: string; launch_context_id?: string | null;
     input: { kind: 'prepared' | 'compiled' | 'guided'; coordinates?: string; topology?: string; tpr?: string;
         checkpoint?: string | null; index?: string | null; restraint_reference?: string | null;
         source_ref?: MolecularDynamicsStartingStructureRef; expected_source_sha256?: string;
@@ -958,6 +958,10 @@ export const buildMolecularDynamicsLaunchIntent = ({
 export const resolveMolecularDynamicsCloneSource = (
     initialValues: Record<string, unknown>,
 ): MolecularDynamicsStartingStructureRef | null => {
+    const nativeIntent = initialValues.intent as MolecularDynamicsNativeIntent | undefined;
+    if (nativeIntent?.schema_version === 'bms.md.launch-intent.v2' && nativeIntent.input.kind === 'guided') {
+        try { return parseSourceRef(nativeIntent.input.source_ref, 'native clone source'); } catch { return null; }
+    }
     const sourceDesignId = typeof initialValues.source_design_id === 'string'
         ? initialValues.source_design_id.trim()
         : '';

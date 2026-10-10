@@ -6,7 +6,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 vi.mock('../../src/components/MolstarViewer', () => ({ default: () => <div data-real-viewer-boundary /> }));
 import { api, parseMDAnalysisReportSet } from '../../src/lib/api';
 import { MolecularDynamicsTemplate } from '../../src/components/MolecularDynamicsTemplate';
-import { hydrateMolecularDynamicsNative, serializeMolecularDynamicsNativeDraft, parseNativeMdp, renderNativeMdp, parseMolecularDynamicsNativePreview, type MolecularDynamicsNativeIntent } from '../../src/components/molecularDynamicsUiState';
+import { resolveMolecularDynamicsCloneSource, hydrateMolecularDynamicsNative, serializeMolecularDynamicsNativeDraft, parseNativeMdp, renderNativeMdp, parseMolecularDynamicsNativePreview, type MolecularDynamicsNativeIntent } from '../../src/components/molecularDynamicsUiState';
 
 const fixture = (): MolecularDynamicsNativeIntent => ({ schema_version: 'bms.md.launch-intent.v2', name: 'native_test',
     input: { kind: 'prepared', coordinates: 'inputs/native.gro', topology: 'inputs/native.top' },
@@ -41,7 +41,8 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); query.clear(); host.remove(); });
 
 it('preserves native document identity, explicit false/zero/null and unknown entries through JSON reopen', () => {
-    const intent = fixture(); intent.input = { kind: 'guided', neutralize: false, salt_molar: 0 };
+    const intent = fixture(); intent.input = { kind: 'guided', neutralize: false, salt_molar: 0, source_ref: { kind: 'managed_fixture', id: 'original-source' } };
+    expect(resolveMolecularDynamicsCloneSource({ intent, source_job_id: '44444444-4444-4444-8444-444444444444' })).toEqual(intent.input.source_ref);
     expect(hydrateMolecularDynamicsNative(JSON.parse(JSON.stringify({ intent })))).toEqual(intent);
     expect(hydrateMolecularDynamicsNative({ intent: { ...intent, execution_target_id: 'vast:old' }, execution_target_id: null })?.execution_target_id).toBeNull();
     const mdp = parseNativeMdp('; comment\nnsteps = 0\nnative-unknown = 1e-07\ngen-vel = no');
@@ -80,6 +81,24 @@ it('uses mounted native controls, managed upload/browser and typed preview/launc
     expect(preview.intent.windows).toEqual(fixture().windows);
     await click('Launch');
     expect(calls.find(c => c.url.endsWith('/launch'))!.body).toMatchObject({ intent: preview.intent, preview_digest: 'b'.repeat(64) });
+});
+it('forwards the selected Project destination to both native preview and launch, not the source context', async () => {
+    const intent = { ...fixture(), launch_context_id: 'consumed-source-context' };
+    await mount({ intent, md_destination_launch_context_id: 'selected-destination-context' });
+    await click('Preview'); await click('Launch');
+    for (const call of calls.filter(c => c.url.endsWith('/launch-preview') || c.url.endsWith('/launch'))) {
+        expect((call.body as { intent: MolecularDynamicsNativeIntent }).intent.launch_context_id).toBe('selected-destination-context');
+    }
+});
+it('keeps compiled window coordinates read-only while retaining their metadata', async () => {
+    const intent = fixture(); intent.input = { kind: 'compiled', tpr: 'inputs/precompiled.tpr' }; intent.stages = [];
+    intent.windows = [{ id: 'retained', coordinates: 'inputs/retained.gro' }];
+    await mount({ intent });
+    expect(host.querySelector('[aria-label="Window 1 coordinates"]')).toBeNull();
+    expect(host.textContent).toContain('Coordinates are defined by the compiled TPR');
+    expect(host.textContent).toContain('inputs/retained.gro');
+    await click('Preview');
+    expect((calls.find(c => c.url.endsWith('/launch-preview'))!.body as { intent: MolecularDynamicsNativeIntent }).intent.windows).toEqual(intent.windows);
 });
 it('starts native authoring inside the original workspace and keeps ordered stages out of compiled TPR requests', async () => {
     await mount();

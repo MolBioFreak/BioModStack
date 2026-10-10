@@ -87,6 +87,8 @@ export default defineConfig({
             './tests/vitest/mdIntegrationReceivingMounted.test.tsx',
             './tests/vitest/mdIntegrationControlsMounted.test.tsx',
             './tests/vitest/mdResultsMolstarMounted.test.tsx',
+            './tests/vitest/mdNativeResultsMounted.test.tsx',
+            './tests/vitest/molecularDynamicsNativeAuthoring.test.tsx',
             './tests/vitest/mdTrajectoryFrameControls.test.tsx',
             './tests/vitest/rfd3GenerationMounted.test.tsx',
             './tests/vitest/deNovoV15*.test.tsx',

@@ -1,4 +1,6 @@
 import React, { act } from 'react';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
@@ -171,7 +173,7 @@ const renderShell = async (
             </QueryClientProvider>,
         );
     });
-    await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain(expectedText)); });
+    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); expect(container.textContent).toContain(expectedText); });
 };
 
 const click = async (label: string) => {
@@ -191,6 +193,36 @@ const completeRoundTrip = async () => {
 };
 
 describe('mounted JobSubmission same-route MD handoff ownership', () => {
+    it.runIf(Boolean(process.env.BMS_MD_CLONE_WIRES)).each(['prepared', 'compiled', 'guided'])('receives persisted server %s Job through Clone into the real editor', async mode => {
+        const job = JSON.parse(readFileSync(join(process.env.BMS_MD_CLONE_WIRES!, `${mode}.json`), 'utf8'));
+        const original = structuredClone(job.params.intent);
+        // Explicit Local on the Clone envelope must beat both stale intent and session placement.
+        job.params.intent.execution_target_id = 'vast:old';
+        sessionStorage.setItem('bms.jobLauncher.executionTargetId', 'vast:unrelated');
+        localStorage.setItem('clonedJobData', JSON.stringify({ ...job, source_job_id: job.id, name: `${job.name}_clone`, execution_target_id: null, execution_policy: { remote_result_policy: 'automatic' } }));
+        const source = mode === 'guided' ? JSON.parse(readFileSync(join(process.env.BMS_MD_CLONE_WIRES!, 'guided-source.json'), 'utf8')) : null;
+        if (source) {
+            const previousGet = apiMocks.get.getMockImplementation()!;
+            apiMocks.get.mockImplementation(async (url: string) => url === '/api/molecular-dynamics/chemistry-profiles' ? response(source.catalog) : previousGet(url));
+        }
+        let received: Record<string, unknown> | undefined;
+        apiMocks.post.mockImplementation(async (url: string, body: { intent: Record<string, unknown> }) => {
+            if (url === '/api/molecular-dynamics/starting-structures/inspect' && source) return response(source.inspection);
+            if (url === '/api/molecular-dynamics/launch-preview') {
+                received = body.intent;
+                return response({ schema_version: 'bms.md.launch-preview.v2', input_identity: {}, source: null, effective_request: job.params.md_job_spec, warnings: [], blockers: [], preview_digest: 'd'.repeat(64), execution_target_id: null, execution_policy: body.intent.execution_policy });
+            }
+            throw new Error(`unexpected POST ${url}`);
+        });
+        await renderShell('/submit');
+        await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); expect(container.querySelector('[aria-label="Protocol"]')).toHaveProperty('value', mode); });
+        await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); expect([...container.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === 'Preview')?.disabled).toBe(false); });
+        await click('Preview');
+        expect(received).toEqual({ ...original, name: `${job.name}_clone`, launch_context_id: null, execution_target_id: null, execution_policy: { remote_result_policy: 'automatic' } });
+        expect(localStorage.getItem('clonedJobData')).toBeNull();
+        if (mode === 'compiled') expect(container.textContent).toContain('MDP editing is not applied');
+        else expect(container.querySelector('[aria-label="nstxout-compressed"]')).toHaveProperty('value', '0');
+    });
     it('shows exactly De Novo Design and Molecular Dynamics as Experimental workflows', async () => {
         apiMocks.fetchTemplates.mockResolvedValueOnce({
             data: [
