@@ -549,11 +549,17 @@ async def gpu_competitors(workers, monkeypatch, *, count=3, capacity=24000, gpu_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("state", ["preparing", "cancelling", "failed"])
-async def test_same_gpu_fit_overflow_and_durable_reservations_across_cycles(workers, monkeypatch, state):
+@pytest.mark.parametrize("preload_phase", [None, "checking", "transferring", "verifying", "cancelling", "recovery_blocked"])
+async def test_same_gpu_fit_overflow_and_durable_reservations_across_cycles(workers, monkeypatch, state, preload_phase):
     from sqlalchemy import select
     from services.remote_execution.claims import outstanding_claim_clause, has_target_claims, target_idle_clause
     from services.remote_execution import executor
     await gpu_competitors(workers, monkeypatch)
+    async with workers() as s:
+        target = await s.get(ExecutionTarget, "vast:1")
+        target.provider_metadata = {**target.provider_metadata, "preload": {
+            "phase": preload_phase, "operation_id": "independent-download"}}
+        await s.commit()
     launched = []
     async def launch(**kwargs):
         launched.append(kwargs["job_id"])
@@ -590,13 +596,22 @@ async def test_same_gpu_fit_overflow_and_durable_reservations_across_cycles(work
         assert target.provider_metadata["job_progress"] == {"job-2": {"phase": "staging"}}
     await owner._process_cycle()
     assert launched == ["job-1", "job-2", "job-3"]
+    async with workers() as s:
+        target = await s.get(ExecutionTarget, "vast:1")
+        assert target.provider_metadata["preload"] == {
+            "phase": preload_phase, "operation_id": "independent-download"}
 
 
 @pytest.mark.asyncio
-async def test_shared_claim_race_revalidates_budget_under_target_write(workers, monkeypatch):
+@pytest.mark.parametrize("preload_phase", [None, "transferring"])
+async def test_shared_claim_race_revalidates_budget_under_target_write(workers, monkeypatch, preload_phase):
     from sqlalchemy import select
     from services.remote_execution.claims import shared_claim_clause
     await gpu_competitors(workers, monkeypatch, count=4)
+    async with workers() as s:
+        target = await s.get(ExecutionTarget, "vast:1")
+        target.provider_metadata = {**target.provider_metadata, "preload": {"phase": preload_phase}}
+        await s.commit()
     loaded = asyncio.Event()
     readers = 0
     async def claim(identifier):
@@ -705,9 +720,14 @@ async def test_same_target_slow_reconciliation_does_not_stall_sibling(workers, m
 
 
 @pytest.mark.asyncio
-async def test_continuation_reacquires_through_same_vram_owner(workers, monkeypatch):
+@pytest.mark.parametrize("preload_phase", [None, "checking", "transferring", "verifying", "cancelling", "recovery_blocked"])
+async def test_continuation_reacquires_through_same_vram_owner(workers, monkeypatch, preload_phase):
     from services.remote_execution import executor
     await gpu_competitors(workers, monkeypatch, count=3, capacity=16000)
+    async with workers() as s:
+        target = await s.get(ExecutionTarget, "vast:1")
+        target.provider_metadata = {**target.provider_metadata, "preload": {"phase": preload_phase}}
+        await s.commit()
     resources = dict(gpu_ids=[0], required=dict(cpus=1, memory_bytes=1, scratch_bytes=0))
     async with workers() as s:
         first = await s.get(Job, "job-1")

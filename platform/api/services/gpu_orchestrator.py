@@ -1487,7 +1487,6 @@ async def _reserve_remote_capacity(
     from database import ExecutionTarget, Job
     from services.remote_execution.claims import POLICY, IDENTITY_FIELDS, outstanding_claim_clause
     from services.remote_execution.targets import INVENTORY_MAX_AGE_SECONDS, remote_target_telemetry
-    from services.remote_execution.progress import preload_idle_clause
     from native_components import job_gpu_capacity_requirements
 
     snapshot = dict(admission_snapshot or {})
@@ -1509,7 +1508,6 @@ async def _reserve_remote_capacity(
         ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() >=
             (now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
         ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() <= now.isoformat(),
-        preload_idle_clause(),
     ).values(updated_at=now).execution_options(synchronize_session=False))
     if locked.rowcount != 1:
         return None

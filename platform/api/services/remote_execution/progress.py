@@ -10,12 +10,8 @@ PRELOAD_ACTIVE_PHASES = ("checking", "transferring", "verifying", "cancelling", 
 
 
 def preload_idle_clause():
-    """Use in the SAME target UPDATE that reserves scientific work/attachment."""
+    """Serialize provisioning and attachment changes, not scientific work."""
     return func.coalesce(ExecutionTarget.provider_metadata["preload"]["phase"].as_string(), "").notin_(PRELOAD_ACTIVE_PHASES)
-
-
-def preload_active(target):
-    return (target.provider_metadata or {}).get("preload", {}).get("phase") in PRELOAD_ACTIVE_PHASES
 
 
 async def publish_job_progress(session, job, *, phase, artifact, message, activity=None):

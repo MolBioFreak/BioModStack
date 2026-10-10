@@ -37,7 +37,7 @@ from .transport import (
     run_remote,
 )
 from .vast import VastInventoryError, list_owned_instances
-from .progress import preload_active, preload_idle_clause
+from .progress import preload_idle_clause
 from .claims import has_target_claims, shared_claim_clause, target_idle_clause
 
 RUNNING_PROVIDER_STATES = frozenset({"running", "ready"})
@@ -57,7 +57,8 @@ def inventory_fresh(target: ExecutionTarget) -> bool:
 
 def target_eligible(target: ExecutionTarget) -> bool:
     inventory = (target.provider_metadata or {}).get("inventory", {})
-    return bool(target.active and target.state == "ready" and not preload_active(target) and inventory_fresh(target)
+    # Asset downloads do not consume a scientific execution slot.
+    return bool(target.active and target.state == "ready" and inventory_fresh(target)
                 and inventory.get("present") is True and inventory.get("running") is True)
 
 
