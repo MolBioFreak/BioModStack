@@ -117,8 +117,6 @@ async def _ingest_durable_artifacts(job: MDJobRecord, session: Any, *, _inventor
         segment = latest_segment.get(replica.id) if replica is not None else None
         if segment is None:
             raise MDResultError("MD_ARTIFACT_PROVENANCE_INVALID", "MD frame-map endpoint has no durable segment owner", 409)
-        if segment.state in {'failed', 'cancelled', 'orphaned'}:
-            raise MDResultError('MD_COMPLETION_CONFLICT', 'Native completion would rewrite a failed segment', 409)
         # Frame endpoints describe saved samples of the whole append trajectory,
         # not segment boundaries (a checkpoint may lie between saved frames).
         production = job.params["md_job_spec"]["stages"]["production"]
@@ -287,8 +285,6 @@ async def validate_and_finalize_md_job(job: Job, session: Any) -> dict[str, Any]
         ).order_by(MdAttemptSegment.segment_index.desc()).limit(1))
         if segment is None:
             raise MDResultError('MD_COMPLETION_CONFLICT', 'Native completion segment is missing', 409)
-        if segment.state in {'failed', 'cancelled', 'orphaned'}:
-            raise MDResultError('MD_COMPLETION_CONFLICT', 'Native completion would rewrite a failed segment', 409)
         segment.state = 'completed'
         segment.completed_at = segment.completed_at or completed_at
     run = await session.get(MdRun, job.id)
