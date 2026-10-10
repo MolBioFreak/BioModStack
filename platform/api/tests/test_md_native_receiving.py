@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts.bms_md import gromacs_pipeline as pipeline, native_pipeline
+from scripts.bms_md import gromacs_pipeline as pipeline
 from scripts.bms_md.aggregate_children import collect_children
 from scripts.bms_md.collect_analysis import collect_analysis
 from services.md import launch_contract, results
@@ -155,9 +155,8 @@ async def test_native_completed_output_reopens_without_optional_publication(stor
             return original(command, **kwargs)
         monkeypatch.setattr(pipeline, '_run_command', run)
     elif publication == 'atom_map':
-        def unavailable(*args):
-            raise OSError('atom-map publication unavailable')
-        monkeypatch.setattr(native_pipeline, 'write_atom_order_manifest', unavailable)
+        # Let the real atom-map writer encounter an OS publication failure.
+        (tmp_path / 'child/analysis/atom-order-manifest.json').mkdir(parents=True)
     elif publication == 'no_trajectory':
         spec['stages'][0]['mdp']['nstxout-compressed'] = 0
     elif publication == 'trr':
