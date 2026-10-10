@@ -117,6 +117,40 @@ async def test_slow_target_control_does_not_block_other_target_or_release_termin
     assert not owner._remote_reconciliation_tasks
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('race', ['claimed', 'cancelled'])
+async def test_losing_cycle_cannot_overwrite_concurrent_owner_state(workers, monkeypatch, race):
+    async with workers() as session:
+        await session.execute(update(Job).where(Job.id == 'job-2').values(paused=True))
+        await session.commit()
+    original = scheduler._claim_remote_job
+    raced = []
+    async def competing_claim(session, job, **kwargs):
+        async with workers() as writer:
+            if race == 'claimed':
+                winner = await writer.get(Job, job.id)
+                assert await original(writer, winner, **kwargs) is not None
+            else:
+                await writer.execute(update(Job).where(Job.id == job.id).values(
+                    status='cancelled', queue_status='cancelled', remote_state='cancelled',
+                    error_message='Cancelled by user'))
+                await writer.commit()
+        raced.append(job.id)
+        return await original(session, job, **kwargs)
+    monkeypatch.setattr(scheduler, '_claim_remote_job', competing_claim)
+    monkeypatch.setattr(scheduler, 'read_scheduler_config', lambda: {'global': {'enabled': True}})
+    launched = []
+    async def launch(**kwargs):
+        launched.append(kwargs['job_id'])
+    await scheduler.GPUOrchestrator(workers, lambda: [], launch)._process_cycle()
+    assert raced == ['job-1'] and launched == []
+    async with workers() as verify:
+        job = await verify.get(Job, 'job-1')
+        assert job.remote_state == ('preparing' if race == 'claimed' else 'cancelled')
+        assert job.queue_status == ('preparing' if race == 'claimed' else 'cancelled')
+        assert job.error_message == (None if race == 'claimed' else 'Cancelled by user')
+
+
 def test_remote_device_zero_is_not_local_device_zero():
     from types import SimpleNamespace
     remote = SimpleNamespace(id="remote", execution_target_id="vast:2", queue_status="running")

@@ -388,7 +388,9 @@ async def test_remote_controller_to_actual_worker_pause_resume(store,retained,mo
     monkeypatch.setattr(worker.subprocess,'Popen',lambda *args,**kwargs:spawns.append(args[0]))
     target=ExecutionTarget(id='vast:fixture',provider='vast',provider_instance_id='fixture',
         state='ready',active=True,host='inert.invalid',port=22,username='inert',remote_root=str(attempt),
-        host_key_sha256='d'*64,leased_job_id='parent',lease_acquired_at=epoch)
+        host_key_sha256='d'*64,leased_job_id='parent',lease_acquired_at=epoch,
+        capabilities={'gpu_count': 1}, provider_metadata={'managed_boot_id': boot, 'inventory': {
+            'status': 'complete', 'present': True, 'running': True, 'checked_at': epoch.isoformat()}})
     remote_receipt=dict(boot_id=boot,source_revision='a'*40,source_tree='b'*40,execution_envelope_sha256='e'*64,
         lease_acquired_at=epoch.isoformat(),component_context_identity=dict(root_job_id='parent',target_id='vast:fixture',
         attempt_id='attempt',lease_id='original-lease'))
@@ -415,6 +417,11 @@ async def test_remote_controller_to_actual_worker_pause_resume(store,retained,mo
     monkeypatch.setattr(targets,'get_ready_target',ready)
     async def admit(*args,**kwargs): return admission
     monkeypatch.setattr(targets,'admit_target_resources',admit)
+    async def telemetry(target):
+        return {'available': True, 'observed_at': 'inert', 'gpus': [dict(
+            index=0, uuid='inert-physical-GPU', memory_total_mb=64000, memory_used_mb=0, utilization=0)]}
+    monkeypatch.setattr(targets, 'remote_target_telemetry', telemetry)
+    from services.remote_execution.claims import job_has_claim
     dispatched=[];lost=[lost_response]
     async def transport(conn,argv,**kwargs):
         dispatched.append(argv[0]); fields=dict(zip(argv[1::2],argv[2::2]))
@@ -449,9 +456,11 @@ async def test_remote_controller_to_actual_worker_pause_resume(store,retained,mo
         with pytest.raises(RemoteTransportError,match='response lost'):
             await executor.resume_md_production(session,parent,**kwargs)
         assert parent.remote_state=='md_resume_uncertain'
-        await session.refresh(target);assert target.leased_job_id=='parent'
+        await session.refresh(target)
+        assert target.leased_job_id is None and job_has_claim(target, parent)
     result=await executor.resume_md_production(session,parent,**kwargs)
     assert result['state']=='continuing' and len(spawns)==1
     assert runtime.root_state()['continuation_edge']['md_resume'][child]['md_resume_segment_id']=='committed-segment-one'
     assert parent.remote_state=='running' and parent.remote_attempt_id=='attempt'
-    await session.refresh(target);assert target.leased_job_id=='parent'
+    await session.refresh(target)
+    assert target.leased_job_id is None and job_has_claim(target, parent)

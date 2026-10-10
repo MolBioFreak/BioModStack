@@ -2965,8 +2965,21 @@ class GPUOrchestrator:
                         admission_snapshot=admission_snapshot,
                     )
                     if claimed_params is None:
-                        job.remote_state = "waiting_remote_capacity"
-                        job.error_message = "Target GPU reservations leave insufficient VRAM capacity"
+                        # Losing a claim can mean another controller won or the
+                        # Job was cancelled, not only insufficient capacity.
+                        from sqlalchemy import update
+                        from services.remote_execution.claims import outstanding_claim_clause
+                        with session.no_autoflush:
+                            await session.execute(update(Job).where(
+                                Job.id == str(job.id), Job.execution_target_id == job.execution_target_id,
+                                Job.status == "queued", Job.queue_status == "queued",
+                                Job.paused.is_(False), Job.assigned_gpu.is_(None),
+                                Job.started_at.is_(None), Job.nextflow_run_id.is_(None),
+                                Job.params == _normalize_job_params(job.params), ~outstanding_claim_clause(),
+                            ).values(remote_state="waiting_remote_capacity",
+                                error_message="Waiting for available target placement and VRAM capacity"
+                            ).execution_options(synchronize_session=False))
+                            await session.refresh(job)
                         continue
                     remote_gpu = job.assigned_gpu
                     await session.commit()
