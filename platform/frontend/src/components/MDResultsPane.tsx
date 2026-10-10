@@ -21,7 +21,7 @@ import {
     type MDTrajectoryFrameMap,
 } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
-import MDNativeAnalysis, { mdLaneLabel, type MDLane, type NativeAnalysis } from './MDNativeAnalysis';
+import MDNativeAnalysis, { mdLaneLabel } from './MDNativeAnalysis';
 import type { MDSceneState } from '../structureViewer/contracts/mdTrajectory';
 
 const layout: Partial<Layout> = {
@@ -161,8 +161,8 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
             return response.json() as Promise<MDTrajectoryFrameMap>;
         },
     });
-    const nativeAnalysis = analysis.isError ? undefined : analysis.data?.data as NativeAnalysis | undefined;
-    const lanes = useMemo(() => (summary.data?.data.replicas ?? []) as Array<MDLane>, [summary.data]);
+    const nativeAnalysis = analysis.isError ? undefined : analysis.data?.data;
+    const lanes = useMemo(() => (summary.data?.data.replicas ?? []), [summary.data]);
     const reports = useMemo(() => (nativeAnalysis?.reports ?? []).map(report => ({ ...lanes.find(lane => lane.replica === report.replica), ...report })), [nativeAnalysis, lanes]);
     const explicitSelection = reports.some(report => report.method === 'md_selection_rmsd_v1');
     const structuralLabel = explicitSelection ? 'Selection' : 'Backbone';
@@ -281,7 +281,7 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
     const loading = !lifecycle.data && lifecycle.isLoading;
     if (loading) return <section className="space-y-4" data-bms-result-pane="molecular-dynamics">{lifecyclePanel}<div className="rounded-xl border border-slate-800 bg-slate-900/70 p-8 text-slate-300">Loading MD results…</div></section>;
     if (preReplicaTerminal) return <section className="space-y-4" data-bms-result-pane="molecular-dynamics">{lifecyclePanel}</section>;
-    const summaryData = summary.isError ? undefined : summary.data?.data as (NonNullable<typeof summary.data>['data'] & { dynamics_state?: string; analysis_state?: string | null; analysis_error?: { code?: string; message: string } | null }) | undefined;
+    const summaryData = summary.isError ? undefined : summary.data?.data;
     const analysisData = nativeAnalysis;
     return (
         <section className="space-y-4" data-bms-result-pane="molecular-dynamics">
@@ -302,6 +302,7 @@ export default function MDResultsPane({ jobId }: { jobId: string }) {
             </div>
             {analysisData && analysisData.status !== 'completed' && <div className="flex items-center justify-between rounded-xl border border-amber-500/20 bg-amber-500/5 p-4"><div><div className="font-medium text-amber-100">Analysis requires attention</div><div className="mt-1 text-xs text-amber-200/70">{analysisData.retry.active ? 'A CPU-only analysis attempt is active.' : 'Retry schedules CPU analysis attempts only. Completed dynamics artifacts remain immutable.'}</div></div>{analysisData.retry.eligible && <button type="button" disabled={retry.isPending} onClick={() => retry.mutate()} className="rounded-lg border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-100 disabled:cursor-not-allowed disabled:opacity-50">{retry.isPending ? 'Scheduling…' : 'Retry analysis'}</button>}</div>}
             {summaryData?.analysis_error && <p role="alert" className="text-amber-200">Optional analysis: {summaryData.analysis_error.message}</p>}
+            {summaryData?.replicas.map(lane => Object.entries(lane.publication_errors ?? {}).map(([artifact, message]) => <p role="alert" className="text-amber-200" key={`${lane.replica}:${artifact}`}>{mdLaneLabel(lane)} publication · {artifact}: {message}</p>))}
             <MDNativeAnalysis analysis={analysisData && { ...analysisData, reports }} />
             {retry.isError && <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">Analysis retry was rejected. Refresh the job state before retrying.</div>}
             {analysisData && !hasWindows && <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-100">

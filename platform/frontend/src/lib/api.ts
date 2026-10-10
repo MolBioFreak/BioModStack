@@ -163,7 +163,7 @@ export interface Job {
 export interface MDArtifact {
     id: string;
     replica: number;
-    window_id?: string | null; replicate_index?: number; stage?: string; step?: number | null;
+    window_id?: string | null; replicate_index?: number | null; stage?: string; step?: number | null;
     name: string;
     bytes: number;
     sha256: string;
@@ -349,13 +349,13 @@ export interface MDSummary {
     aggregate_manifest_sha256: string;
     replica_count: number;
     artifact_count: number;
-    replicas: Array<{ replica: number; window_id?: string | null; replicate_index?: number; status: string; engine: { name?: string; version?: string; platform?: string }; performance: Record<string, number> }>;
+    replicas: Array<{ replica: number; window_id?: string | null; replicate_index?: number | null; status: string; publication_errors?: Record<string, string>; engine: { name?: string; version?: string; platform?: string }; performance: Record<string, number> }>;
     // Analysis availability is owned by the independent analysis endpoint.
-    trajectory_playback: { supported: false; reason: string } | {
+    trajectory_playback: { supported: false; reason: string; error?: { code: string; message: string } } | {
         supported: true;
         replicas: Array<{
             replica: number;
-            window_id?: string | null; replicate_index?: number;
+            window_id?: string | null; replicate_index?: number | null;
             trajectory_sha256: string;
             frame_map_artifact_id: string;
             frame_count: number;
@@ -370,7 +370,7 @@ export interface MDSummary {
 export interface MDTrajectoryFrameMap {
     schema: 'bms.md.trajectory-frame-map.v1';
     replica: number;
-    window_id?: string | null; replicate_index?: number; stage?: string;
+    window_id?: string | null; replicate_index?: number | null; stage?: string;
     trajectory_sha256: string;
     frames: Array<{ display_frame: number; source_frame: number; time_ps: number; step: number }>;
 }
@@ -384,7 +384,7 @@ export interface MDAnalysisPoint {
 }
 
 export interface MDPullCoordinateReport {
-    coordinate: number; column: number; label: string; unit: string; groups: string[]; window: string | null; replica: number;
+    coordinate: number; column: number; label: string; unit: string; groups: string[]; window?: string | null; replica: number; sample_count?: number;
     dimension: 1; time_unit: 'ps'; points: Array<{ time_ps: number; value: number }>;
     histogram: { edges: number[]; counts: number[]; sample_count: number; normalization: 'count' };
 }
@@ -399,8 +399,8 @@ export interface MDAnalysisReplicaReport {
     schema: 'bms.md.analysis.v1';
     status: 'completed' | 'failed' | 'not_applicable';
     method?: string; selection?: string | null; reason?: string;
-    window_id?: string | null; replicate_index?: number;
-    observables?: Record<string, string>; specialized_analyzers?: Array<{ analyzer_id: string; status: string; reason?: string; cutoff_angstrom?: number; [key: string]: unknown }>;
+    window_id?: string | null; replicate_index?: number | null;
+    observables?: Record<string, string>; specialized_analyzers?: Array<{ analyzer_id: string; status: string; reason?: string; definition?: string; selection_a?: string; selection_b?: string; cutoff_angstrom?: number; points?: Array<{ time_ps: number; source_frame: number; minimum_distance_angstrom: number; contact_count: number }> }>;
     pull_coordinates?: MDPullCoordinateReport[];
     pull_source?: { sha256: string; path: string }; pull_error?: { code: string; message: string };
     replica?: number;
@@ -418,8 +418,8 @@ export interface MDAnalysisReportSet {
     status: 'absent' | 'partial' | 'completed' | 'failed';
     bounded: true;
     wham?: MDWhamReport | null;
-    collection?: { status: string | null; completed_analysis_children: number | null; failed_analysis_children: number | null; cancelled_analysis_children: number | null } | null;
-    execution?: Array<{ replica: number; job_id: string; status: string; error: unknown }>;
+    collection?: { status: string | null; completed_analysis_children: number | null; failed_analysis_children: number | null; cancelled_analysis_children: number | null; collection_errors?: Array<{ code: string; message: string }> | null } | null;
+    execution?: Array<{ replica: number; job_id: string; status: string; error?: string | { code?: string; message: string } | null }>;
     replica_states: Array<{ replica: number; status: 'absent' | 'completed' | 'failed' | 'not_applicable' }>;
     reports: MDAnalysisReplicaReport[];
     ensemble: {
@@ -442,6 +442,7 @@ export function parseMDAnalysisReportSet(value: unknown): MDAnalysisReportSet {
     const array = (v: unknown): unknown[] => Array.isArray(v) ? v : fail();
     const number = (v: unknown) => { if (typeof v !== 'number' || !Number.isFinite(v)) fail(); };
     const string = (v: unknown) => { if (typeof v !== 'string') fail(); };
+    const error = (v: unknown) => { const e = record(v); string(e.message); if (e.code !== undefined) string(e.code); };
     const root = record(value);
     if (root.schema !== 'bms.md.analysis-report-set.v1' || root.bounded !== true || !['absent', 'partial', 'completed', 'failed'].includes(String(root.status))) fail();
     string(root.job_id);
@@ -452,12 +453,21 @@ export function parseMDAnalysisReportSet(value: unknown): MDAnalysisReportSet {
         record(r.inputs);
         if (r.selection !== undefined && r.selection !== null) string(r.selection);
         if (r.method !== undefined) string(r.method);
+        if (r.window_id != null) string(r.window_id);
+        if (r.replicate_index != null) number(r.replicate_index);
+        if (r.specialized_analyzers !== undefined) array(r.specialized_analyzers).forEach(v => {
+            const c = record(v); string(c.analyzer_id); string(c.status);
+            ['reason', 'definition', 'selection_a', 'selection_b'].forEach(k => { if (c[k] !== undefined) string(c[k]); });
+            if (c.cutoff_angstrom !== undefined) number(c.cutoff_angstrom);
+            if (c.points !== undefined) array(c.points).forEach(v => { const p = record(v); ['time_ps', 'source_frame', 'minimum_distance_angstrom', 'contact_count'].forEach(k => number(p[k])); });
+        });
         if (r.points !== undefined) array(r.points).forEach(v => { const p = record(v); ['replica', 'time_ps', 'source_frame', 'rmsd_angstrom', 'radius_of_gyration_angstrom'].forEach(k => number(p[k])); });
         if (r.residue_metrics !== undefined) array(r.residue_metrics).forEach(v => { const p = record(v); ['segid', 'resname'].forEach(k => string(p[k])); number(p.resid); ['backbone_rmsf_angstrom', 'backbone_atom_count', 'rmsf_angstrom', 'atom_count'].forEach(k => { if (k in p) number(p[k]); }); });
         if (r.pull_coordinates !== undefined) array(r.pull_coordinates).forEach(v => {
             const p = record(v); if (p.dimension !== 1 || p.time_unit !== 'ps') fail();
             ['coordinate', 'column', 'replica'].forEach(k => number(p[k])); ['label', 'unit'].forEach(k => string(p[k]));
-            array(p.groups).forEach(string); if (p.window !== null) string(p.window);
+            array(p.groups).forEach(string); if (p.window != null) string(p.window);
+            if (p.sample_count !== undefined) number(p.sample_count);
             array(p.points).forEach(v => { const q = record(v); number(q.time_ps); number(q.value); });
             const h = record(p.histogram); if (h.normalization !== 'count') fail(); array(h.edges).forEach(number); array(h.counts).forEach(number); number(h.sample_count);
         });
@@ -469,8 +479,11 @@ export function parseMDAnalysisReportSet(value: unknown): MDAnalysisReportSet {
         if (w.points !== undefined) array(w.points).forEach(v => { const p = record(v); number(p.coordinate); number(p.pmf_kj_mol); });
         if (w.histograms !== undefined) { const h = record(w.histograms); array(h.columns); array(h.rows).forEach(row => array(row).forEach(number)); }
     }
-    if (root.collection != null) record(root.collection);
-    if (root.execution !== undefined) array(root.execution).forEach(v => { const e = record(v); number(e.replica); string(e.job_id); string(e.status); });
+    if (root.collection != null) {
+        const c = record(root.collection);
+        if (c.collection_errors != null) array(c.collection_errors).forEach(error);
+    }
+    if (root.execution !== undefined) array(root.execution).forEach(v => { const e = record(v); number(e.replica); string(e.job_id); string(e.status); if (e.error != null) { if (typeof e.error === 'string') string(e.error); else error(e.error); } });
     return value as MDAnalysisReportSet;
 }
 
@@ -489,7 +502,7 @@ export interface MDRunDetail {
     simulated_time_ps: number; requested_time_ps: number; checkpoint_available: boolean;
     allowed_actions: Array<'pause' | 'resume_dynamics' | 'retry_dynamics' | 'cancel' | 'view_logs' | 'reorchestrate' | 'delete_failed_launch'>;
     action_explanations?: Partial<Record<'resume_dynamics' | 'retry_dynamics', string>>;
-    replicas: Array<{ id: string; replica_index: number; window_id?: string | null; replicate_index?: number; attempt: number; state: string; active: boolean; engine: string; failure: unknown; retry_eligible: boolean }>;
+    replicas: Array<{ id: string; replica_index: number; window_id?: string | null; replicate_index?: number | null; attempt: number; state: string; active: boolean; engine: string; failure: unknown; retry_eligible: boolean }>;
     segments: Array<{ id: string; replica_run_id: string; segment_index: number; state: string; source_segment_id: string | null; source_checkpoint_id: string | null; start_step: number | null; end_step: number | null; start_time_ps: number | null; end_time_ps: number | null }>;
     checkpoints: Array<{ id: string; segment_id: string; logical_role: string; relative_path: string; sha256: string; bytes: number; step: number; time_ps: number }>;
     events: Array<{ id: string; event_type: string; state_version: number; payload: Record<string, unknown>; created_at: string }>;
