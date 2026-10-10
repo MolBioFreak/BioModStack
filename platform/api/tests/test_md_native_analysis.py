@@ -19,6 +19,15 @@ from services.md.completion import validate_and_finalize_md_job
 from routers.md_results import get_md_analysis, get_md_summary
 
 
+def test_historical_analysis_read_does_not_depend_on_collection_or_wham(tmp_path, monkeypatch):
+    root, spec = _tree(tmp_path, monkeypatch)
+    job = SimpleNamespace(id='md-job-1', model_id='molecular_dynamics', output_dir=str(root),
+                          child_output_dir=None, params={'md_job_spec': spec}, provenance={})
+    before = analysis_report(job)
+    (root / 'analysis/manifest.json').write_text('unavailable historical collection')
+    assert analysis_report(job) == before
+
+
 @pytest.mark.asyncio
 async def test_optional_failed_analysis_finalizes_in_scratch_store_and_reopens_routes(store, tmp_path, monkeypatch):
     import shutil

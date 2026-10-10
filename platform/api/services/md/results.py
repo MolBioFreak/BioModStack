@@ -702,7 +702,7 @@ def analysis_report(job: MDJobRecord, *, _inventory=None, _digests=None) -> dict
         collection_state = {key: collection.get(key) for key in ("status", "completed_analysis_children", "failed_analysis_children", "cancelled_analysis_children")}
         if collection.get("failed_analysis_children") or collection.get("cancelled_analysis_children"):
             overall = "partial" if reports and overall != "failed" else "failed"
-    wham = _wham_report(root, aggregate, job)
+    wham = _wham_report(root, aggregate, job) if optional_analysis((job.params or {}).get("md_job_spec")) else None
     if ((wham and wham.get("status") == "failed")
             or any(report.get("pull_error") or any(item.get("status") == "failed" for item in report.get("specialized_analyzers", [])) for report in reports)):
         overall = "partial" if reports and overall != "failed" else "failed"
