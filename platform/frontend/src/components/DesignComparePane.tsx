@@ -1,190 +1,70 @@
-import { useState, useMemo } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchDesignResidueMetrics } from '../lib/api';
-import { DesignMultiLineChart } from './MetricCharts';
+import { fetchDesignById, fetchDesignResidueMetrics } from '../lib/api';
+import { parseScientificNativeMetric } from '../lib/scientificViewerIdentity';
+import { comparisonChain, comparisonProfiles, type ComparisonProfile } from './nativeComparisonProfiles';
+import { useThemeColors } from './useThemeColors';
+const Plot = lazy(() => import('react-plotly.js'));
 
-interface Design {
-    id: string;
-    name: string;
-    plddt_overall: number | null;
-}
-
+interface Design { id: string; name: string; plddt_overall: number | null }
 interface DesignComparePaneProps {
-    designs: Design[];
-    preSelectedId?: string;
-    selectedDesignIds?: string[];
+    designs: Design[]; preSelectedId?: string; selectedDesignIds?: string[];
     onSelectedDesignIdsChange?: (ids: string[]) => void;
 }
 
-const COLORS = [
-    '#3b82f6', // blue
-    '#ef4444', // red
-    '#10b981', // emerald
-    '#f59e0b', // amber
-    '#8b5cf6', // violet
-    '#ec4899', // pink
-    '#06b6d4', // cyan
-    '#f97316', // orange
-];
-
 export function DesignComparePane({ designs, preSelectedId, selectedDesignIds, onSelectedDesignIdsChange }: DesignComparePaneProps) {
-    const [localIds, setLocalIds] = useState<string[]>(
-        preSelectedId ? [preSelectedId] : designs.slice(0, 3).map(d => d.id)
-    );
-
+    const colors = useThemeColors();
+    const [localIds, setLocalIds] = useState<string[]>(preSelectedId ? [preSelectedId] : designs.slice(0, 3).map(d => d.id));
+    const [chain, setChain] = useState('');
     const selectedIds = (selectedDesignIds ?? localIds).filter(id => designs.some(d => d.id === id));
-    const label = (id: string) => `${designs.find(d => d.id === id)?.name ?? id} (${id})`;
-
-    const { data: metricsMap, isLoading } = useQuery({
-        queryKey: ['multiResidueMetrics', [...selectedIds].sort().join(',')],
-        queryFn: async () => {
-            const results = await Promise.all(
-                selectedIds.map(async (id) => {
-                    try {
-                        const res = await fetchDesignResidueMetrics(id);
-                        return { id, data: res.data };
-                    } catch (e) {
-                        console.error(`Failed to fetch metrics for ${id}`, e);
-                        return { id, data: null };
-                    }
-                })
-            );
-            return results;
-        },
-        enabled: selectedIds.length > 0,
-        staleTime: 1000 * 60 * 5, // Cache for 5 mins
+    const metrics = useQuery({
+        queryKey: ['native-comparison-profiles', [...selectedIds].sort()],
+        queryFn: () => Promise.all(selectedIds.map(async (id): Promise<ComparisonProfile> => {
+            try {
+                const [design, raw] = await Promise.all([fetchDesignById(id), fetchDesignResidueMetrics(id)]);
+                return { id, name: design.data.name, metric: parseScientificNativeMetric(raw.data,
+                    design.data.id === id ? design.data.scientific_structure_document : null, 'residue_plddt', id) };
+            } catch { return { id, name: id, metric: { status: 'unavailable', reason: 'Native readback failed' } }; }
+        })), enabled: selectedIds.length > 0, staleTime: 300000,
     });
-
-    const toggleDesign = (id: string) => {
+    const profiles = metrics.data ?? [];
+    const chains = [...new Set(profiles.flatMap(p => p.metric.status === 'ok' ? p.metric.residues.map(comparisonChain) : []))];
+    const chart = useMemo(() => comparisonProfiles(metrics.data ?? [], chain), [metrics.data, chain]);
+    const ticks = chart.categories.filter((_, i) => i % Math.max(1, Math.ceil(chart.categories.length / 6)) === 0);
+    const toggle = (id: string) => {
         const next = selectedIds.includes(id) ? selectedIds.filter(x => x !== id) : [...selectedIds, id];
-        setLocalIds(next);
-        onSelectedDesignIdsChange?.(next);
+        setLocalIds(next); onSelectedDesignIdsChange?.(next);
     };
-
-    // Prepare Chart Data
-    const chartData = useMemo(() => {
-        if (!metricsMap) return [];
-
-        // Use reported residue positions, never an inferred correspondence.
-        const positions = [...new Set(metricsMap.flatMap(m => m.data?.residue_numbers ?? []))].sort((a, b) => a - b);
-        return positions.map(residue => {
-            const point: { residue: number; [key: string]: number } = { residue };
-            metricsMap.forEach(m => {
-                const index = m.data?.residue_numbers.indexOf(residue) ?? -1;
-                const value = index < 0 ? undefined : m.data?.plddt[index];
-                if (typeof value === 'number' && Number.isFinite(value)) point[`${designs.find(d => d.id === m.id)?.name ?? m.id} (${m.id})`] = value;
-            });
-            return point;
-        });
-
-    }, [metricsMap, designs]);
-
-    const designNames = selectedIds.map(label);
-
-    return (
-        <div className="flex h-[800px] gap-6">
-            {/* Sidebar: Design List */}
-            <div className="w-80 border-r border-slate-800 bg-slate-900/30 flex flex-col">
-                <div className="p-4 border-b border-slate-800">
-                    <h3 className="font-semibold text-slate-200">Select Designs</h3>
-                    <p className="text-xs text-slate-500 mt-1">Select designs to overlay</p>
-                </div>
-                <div className="flex-1 overflow-y-auto p-2">
-                    {designs.map(design => (
-                        <div
-                            key={design.id}
-                            onClick={() => toggleDesign(design.id)}
-                            className={`p-3 rounded-lg mb-1 cursor-pointer transition-colors border flex items-center justify-between ${selectedIds.includes(design.id)
-                                ? 'bg-blue-500/10 border-blue-500/50'
-                                : 'bg-transparent border-transparent hover:bg-slate-800'
-                                }`}
-                        >
-                            <div className="truncate pr-2">
-                                <div className={`text-sm font-medium truncate ${selectedIds.includes(design.id) ? 'text-blue-400' : 'text-slate-300'}`}>
-                                    {design.name}
-                                </div>
-                                <div className="text-xs text-slate-500">
-                                    pLDDT: {design.plddt_overall?.toFixed(1) ?? '—'}
-                                </div>
-                            </div>
-                            {selectedIds.includes(design.id) && (
-                                <div
-                                    className="w-3 h-3 rounded-full"
-                                    style={{ backgroundColor: COLORS[selectedIds.indexOf(design.id) % COLORS.length] }}
-                                />
-                            )}
-                        </div>
-                    ))}
-                </div>
-            </div>
-
-            {/* Main Content */}
-            <div className="flex-1 p-6 overflow-y-auto">
-                <div className="mb-6">
-                    <h2 className="text-xl font-bold text-white mb-2">Confidence Overlay</h2>
-                    <p className="text-slate-400 text-sm">Comparing reported per-residue pLDDT across {selectedIds.length} designs. Residue numbers are not a structural alignment; verify compatible chains and producer scales.</p>
-                </div>
-
-                {isLoading ? (
-                    <div className="h-64 flex items-center justify-center">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
-                    </div>
-                ) : chartData.length > 0 ? (
-                    <DesignMultiLineChart
-                        data={chartData}
-                        designNames={designNames}
-                        colors={COLORS}
-                        height={500}
-                    />
-                ) : (
-                    <div className="text-center text-slate-500 mt-20">
-                        Select designs to view overlay chart.
-                    </div>
-                )}
-
-                {/* Stats Table */}
-                {metricsMap && metricsMap.length > 0 && (
-                    <div className="mt-8 bg-slate-800/50 rounded-xl overflow-hidden border border-slate-700/50">
-                        <table className="w-full text-sm text-left">
-                            <thead className="bg-slate-800 text-slate-400">
-                                <tr>
-                                    <th className="px-4 py-3">Design</th>
-                                    <th className="px-4 py-3">Avg pLDDT</th>
-                                    <th className="px-4 py-3">Min</th>
-                                    <th className="px-4 py-3">Max</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-700/50">
-                                {selectedIds.map((id, idx) => {
-                                    const dm = metricsMap.find(m => m.id === id)?.data;
-                                    const d = designs.find(d => d.id === id);
-                                    if (!dm || !dm.plddt) return null;
-
-                                    const vals = dm.plddt.filter(Number.isFinite);
-                                    if (!vals.length) return null;
-                                    const min = Math.min(...vals);
-                                    const max = Math.max(...vals);
-
-                                    return (
-                                        <tr key={id} className="hover:bg-slate-700/20">
-                                            <td className="px-4 py-3 font-medium flex items-center gap-2">
-                                                <div
-                                                    className="w-2 h-2 rounded-full"
-                                                    style={{ backgroundColor: COLORS[idx % COLORS.length] }}
-                                                />
-                                                <span className="text-slate-200">{d?.name}</span>
-                                            </td>
-                                            <td className="px-4 py-3 text-slate-300">{d?.plddt_overall?.toFixed(1)}</td>
-                                            <td className="px-4 py-3 text-slate-400">{min.toFixed(1)}</td>
-                                            <td className="px-4 py-3 text-slate-400">{max.toFixed(1)}</td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
-        </div>
-    );
+    return <section className="flex flex-col gap-4 p-4 text-[var(--text-primary)]" aria-label="Native confidence comparison">
+        <h2 className="text-lg font-semibold">Confidence overlay</h2>
+        <p className="text-sm">Exact published chain, residue, atom, model and alternate-location labels define correspondence. No structural alignment or difference score is inferred. Each atom remains a separate measurement; native fractions are displayed on 0–100. Different confidence scopes are not pooled.</p>
+        <div className="flex flex-wrap gap-3">{designs.map(d => <label key={d.id} title={d.id} className="text-sm">
+            <input type="checkbox" checked={selectedIds.includes(d.id)} onChange={() => toggle(d.id)} /> {d.name} ({d.id})
+        </label>)}</div>
+        <label>Chain <select aria-label="Comparison chain" value={chain} onChange={e => setChain(e.target.value)} className="bg-[var(--bg-secondary)] p-2">
+            <option value="">All chains</option>{chains.map(id => <option key={id}>{id}</option>)}
+        </select></label>
+        {metrics.isLoading ? <p role="status">Loading native profiles…</p> : chart.traces.length ? <Suspense fallback={<p>Loading chart…</p>}><Plot
+            data={chart.traces.map(t => ({ type: 'scatter', mode: 'lines', x: t.x, y: t.y, text: t.text, name: t.name,
+                line: { shape: 'linear', width: 1.5 }, connectgaps: false,
+                hovertemplate: '%{text}<br>pLDDT %{y:.2f} / 100<extra>%{fullData.name}</extra>' }))}
+            layout={{ autosize: true, height: 450, paper_bgcolor: 'transparent', plot_bgcolor: colors.bgSecondary,
+                font: { color: colors.textPrimary }, margin: { l: 55, r: 20, t: 90, b: 80 },
+                xaxis: { type: 'category', categoryorder: 'array', categoryarray: chart.categories.map(([key]) => key),
+                    tickmode: 'array', tickvals: ticks.map(([key]) => key), ticktext: ticks.map(([, label]) => label.split(' · ')[0]),
+                    title: { text: 'Exact native identity labels (not structural alignment)' }, tickangle: 0, automargin: true },
+                yaxis: { range: [0, 100], dtick: 20, title: { text: 'pLDDT (0–100; native fraction)' } },
+                legend: { orientation: 'h', y: 1.05 }, hovermode: 'closest', dragmode: 'zoom' }}
+            config={{ responsive: true, displaylogo: false, toImageButtonOptions: { format: 'svg', filename: 'native-confidence-comparison' } }}
+            useResizeHandler style={{ width: '100%', minWidth: 0 }} /> </Suspense> : <p>Native confidence unavailable for this selection. Retained rows remain below.</p>}
+        <a className="underline" download="native-confidence-comparison.json" href={`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify({ correspondence: 'exact published identity labels; no alignment', profiles, chain }, null, 2))}`}>Export native values and identities</a>
+        <div className="overflow-auto"><table className="w-full text-sm text-left"><thead><tr><th>Design / document</th><th>Native scope / units</th><th>Displayed points</th><th>Shared labels / unmatched</th><th>Availability</th></tr></thead>
+            <tbody>{selectedIds.map(id => {
+                const row = chart.rows.find(p => p.id === id);
+                return <tr key={id}><td className="p-2">{designs.find(d => d.id === id)?.name} ({id})<br />{row?.metric.status === 'ok' ? row.metric.document.documentId : '—'}</td>
+                    <td>{row?.metric.status === 'ok' ? `${row.metric.confidenceSource?.scope ?? row.metric.metric} / fraction` : 'Unavailable'}</td>
+                    <td>{row?.metric.status === 'ok' ? row.count : '—'}</td><td>{row?.metric.status === 'ok' ? `${row.matched} / ${row.count - row.matched}` : '—'}</td>
+                    <td>{row?.metric.status === 'ok' ? 'Native values' : row?.metric.reason ?? 'Not loaded'}</td></tr>;
+            })}</tbody></table></div>
+    </section>;
 }

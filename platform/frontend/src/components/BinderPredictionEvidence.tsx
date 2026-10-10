@@ -1,4 +1,5 @@
-import { lazy, Suspense, useState } from 'react';
+import { useState } from 'react';
+import { EmbeddedNativePae } from './EmbeddedNativePae';
 import { useQuery } from '@tanstack/react-query';
 import { api, type Design, type PersistedAnalysisRun } from '../lib/api';
 import { CandidateRoundProgress } from './CandidateRoundProgress';
@@ -7,8 +8,7 @@ import { nativeCandidateRoute } from '../lib/nativeBinderResults';
 import { parseScientificNativeMetric, parseScientificPae } from '../lib/scientificViewerIdentity';
 import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
 
-// Load useful visualization and operation owners only when their view is demanded.
-const Plot = lazy(() => import('react-plotly.js'));
+
 
 const control = 'rounded border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-sm';
 const object = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
@@ -105,7 +105,7 @@ function AnalysisEvidence({ run }: { run: PersistedAnalysisRun<unknown> }) {
 }
 function PredictionDetail({ prediction: p, launchContextId }: { prediction: BinderPrediction; launchContextId?: string | null }) {
     const design = useQuery({ queryKey: ['binder-evidence-design', p.job_id, p.design_id, p.design_url], enabled: !!p.design_url, retry: false, gcTime: 0,
-        queryFn: ({ signal }) => api.get<Design>(p.design_url!, { signal }).then(response => response.data) });
+        queryFn: ({ signal }) => api.get<Design>(p.design_url!, { params: { job_id: p.job_id }, signal }).then(response => response.data) });
     const pae = useQuery({ queryKey: ['binder-evidence-pae', p.job_id, p.design_id, p.pae_url], enabled: !!p.pae_url, retry: false, gcTime: 0,
         queryFn: ({ signal }) => api.get(p.pae_url!, { params: { max_size: 200 }, signal }).then(response => response.data) });
     const chains = useQuery({ queryKey: ['binder-evidence-chains', p.job_id, p.design_id, p.chain_metrics_url], enabled: !!p.chain_metrics_url, retry: false, gcTime: 0,
@@ -120,7 +120,7 @@ function PredictionDetail({ prediction: p, launchContextId }: { prediction: Bind
         <div className="flex gap-3"><a className="underline" href={`/jobs/${encodeURIComponent(p.job_id)}`}>Open prediction Job</a>{p.design_id && <a className="underline" href={nativeCandidateRoute(p.job_id, p.design_id, undefined, launchContextId)}>Open prediction Mol* workbench</a>}</div>
         <h5 className="font-medium">PAE matrix</h5>
         {boundPae.status === 'ok' && boundPae.axisKind === 'model_token' && <p>Structure mapping unavailable. {boundPae.rowAxis.orientation} · {boundPae.rowAxis.mapping_reason}</p>}
-        {boundPae.status === 'ok' ? <Suspense fallback={<p role="status">Loading PAE chart…</p>}><Plot data={[{ type: 'heatmap', z: boundPae.matrix, x: boundPae.axisKind === 'model_token' ? boundPae.columnTokens.map(t => `Token ${t.index}`) : boundPae.columns.map(r => `${r.authAsymId ?? r.labelAsymId}:${r.authSeqId ?? r.labelSeqId}${r.insertionCode ?? ''}`), y: boundPae.axisKind === 'model_token' ? boundPae.rowTokens.map(t => `Token ${t.index}`) : boundPae.rows.map(r => `${r.authAsymId ?? r.labelAsymId}:${r.authSeqId ?? r.labelSeqId}${r.insertionCode ?? ''}`), colorscale: 'Viridis', colorbar: { title: { text: 'PAE (Å)' } } }]} layout={{ autosize: true, height: 360, margin: { t: 20, l: 70, b: 70 }, xaxis: { title: { text: boundPae.axisKind === 'model_token' ? 'Native column token' : 'Scored residue' } }, yaxis: { title: { text: boundPae.axisKind === 'model_token' ? 'Native row token' : 'Aligned residue' } } }} style={{ width: '100%' }} useResizeHandler /></Suspense> : <p>PAE: Unmeasured / unavailable. {pae.isError ? 'Native readback failed.' : boundPae.reason}</p>}
+        {boundPae.status === 'ok' ? <EmbeddedNativePae pae={boundPae} /> : <p>PAE: Unmeasured / unavailable. {pae.isError ? 'Native readback failed.' : boundPae.reason}</p>}
         {p.pae_url && <a className="underline" href={p.pae_url}>Open native PAE readback</a>}
         <h5 className="font-medium">Native chain-pair iPTM (separate from ipSAE)</h5>
         {boundChains.status === 'ok' ? <table className="text-sm"><thead><tr><th>Native pair</th><th>iPTM</th></tr></thead><tbody>{boundChains.chains.flatMap(a => boundChains.chains.map(b => <tr key={`${a.providerIndex}:${b.providerIndex}`}><td className="p-2">{a.chainId} → {b.chainId}</td><td className="p-2">{evidenceText(boundChains.pairChainsIptm[a.providerIndex]?.[b.providerIndex])}</td></tr>))}</tbody></table> : <p>Native pair iPTM: Unmeasured / unavailable. {boundChains.reason}</p>}
