@@ -34,6 +34,46 @@ def calibration_examples():
             'description': 'Unbound calibration procedure. Author the command, settling, measurement form and analysis model. No measured values, tolerances or corrections supplied.',
             'parameters': parameters, 'procedures': [], 'tip_policy': 'manual',
             'steps': [{'step_id': sid, 'type': 'action', 'action': action, 'inputs': ref(sid + '_inputs')} for sid, action in steps]}
+        # Keep structural measurement/result connections in the ordinary starter,
+        # not only its bound software companion. Scientific operands stay required.
+        by_id = {step['step_id']: step for step in method['steps']}
+        def earlier(step, output, path):
+            index = next(i for i, node in enumerate(method['steps']) if node['step_id'] == step)
+            return {'method_result': {'step_path': f'/method/steps/{index}'}, 'output': output, 'path': path}
+        def parameter(identifier, kind, label):
+            method['parameters'].append({'id': identifier, 'type': kind, 'label': label})
+            return ref(identifier)
+        if key == 'pipette_height_calibration':
+            method['parameters'] = []
+            scope = parameter('scope_id', 'string', 'Authored shared height-calibration scope')
+            plate = parameter('plate', 'string', 'Native plate: TC / MS / OC / RC / STRIP')
+            decision = parameter('decision', 'string', 'Explicit accept or restore decision')
+            by_id['prepare']['inputs'] = {'message': 'Position and measure using the authored height-calibration procedure'}
+            by_id['measure']['inputs'] = {'message': 'Enter externally observed Z', 'measurement_form': {'fields': [
+                {'field_id': 'z', 'label': 'Observed Z', 'unit': 'steps', 'module': 'pipette'}]}}
+            by_id['calculate']['inputs'] = {'operation': 'height_calculate', 'scope_id': scope, 'plate': plate,
+                'measured_z': earlier('measure', 'measurements', ['z', 0])}
+            by_id['apply']['inputs'] = {'operation': 'height_apply', 'calculation': earlier('calculate', 'result', [])}
+            by_id['decision']['inputs'] = {'operation': 'height_decision', 'scope_id': deepcopy(scope), 'decision': decision}
+        else:
+            method['parameters'] = [p for p in parameters if p['id'] in {'dispense_inputs', 'setpoint_inputs', 'settle_inputs'}]
+            volume = key == 'pipette_volume_calibration'
+            module, field_id, unit = ('pipette', 'volume', 'uL') if volume else (key.split('_')[0], 'temperature', 'degC')
+            target = parameter('target', 'number', 'Authored target (' + unit + ')')
+            commanded = parameter('commanded', 'number', 'Authored command (' + unit + ')')
+            context = parameter('measurement_context', 'object', 'Authored instrument / tip / liquid / probe / location context')
+            by_id['measure']['inputs'] = {'message': 'Enter the independent external observation; extend the authored graph for further points',
+                'measurement_form': {'fields': [{'field_id': field_id, 'label': 'External ' + field_id, 'unit': unit,
+                    'module': module, 'target': deepcopy(target), 'commanded': deepcopy(commanded), 'context': deepcopy(context)}]}}
+            if volume:
+                by_id['prepare']['inputs'] = {'message': 'Prepare the explicitly authored consumables, positioning and measurement procedure'}
+                analysis = {'kind': 'pipette', 'model': parameter('fit_model', 'string', 'Explicit descriptive / exact_point_offset / affine_inverse_ols model'),
+                    'context': deepcopy(context), 'samples': [{'point_id': 'point', 'target_ul': target, 'commanded_ul': commanded,
+                        'observation': {'kind': 'volume', 'measured_ul': earlier('measure', 'measurements', [field_id, 0])}}]}
+            else:
+                analysis = {'kind': 'thermal', 'samples': [{'point_id': 'point', 'module': module, 'target_c': target, 'commanded_c': commanded,
+                    'context': deepcopy(context), 'measured_c': earlier('measure', 'measurements', [field_id, 0])}]}
+            by_id['analyze']['inputs'] = {'operation': 'analyze', 'analysis': analysis}
         entries.append({'id': key, 'method': method, 'bindings': {}, 'status': 'intentionally_unbound',
             'coverage': [{'step_id': sid, 'stage_owner': 'operator' if action == 'checkpoint' else 'robot', 'physical_qualification': 'not demonstrated'} for sid, action in steps]})
     return entries
@@ -45,41 +85,24 @@ def calibration_bound_fixture(entry):
     fixture['status'] = 'bound_software_fixture_not_wet_lab_recipe'
     fixture['qualification'] = 'Synthetic authored inputs for compile-only qualification; not measured observations or device execution.'
     key = entry['id']
-    paths = {s['step_id']: f'/method/steps/{index}' for index, s in enumerate(entry['method']['steps'])}
-    def reference(step, output, path):
-        return {'method_result': {'step_path': paths[step]}, 'output': output, 'path': path}
     if key == 'pipette_height_calibration':
-        bindings = {
-            'prepare_inputs': {'message': 'Software-only height fixture; operator positions and measures independently'},
-            'measure_inputs': {'message': 'Enter externally observed Z', 'measurement_form': {'fields': [
-                {'field_id': 'z', 'label': 'Observed Z', 'unit': 'steps', 'module': 'pipette', 'repetitions': 1}]}},
-            'calculate_inputs': {'operation': 'height_calculate', 'scope_id': 'software-height', 'plate': 'TC',
-                'measured_z': reference('measure', 'measurements', ['z', 0])},
-            'apply_inputs': {'operation': 'height_apply', 'calculation': reference('calculate', 'result', [])},
-            'decision_inputs': {'operation': 'height_decision', 'scope_id': 'software-height', 'decision': 'restore'}}
-    elif key == 'pipette_volume_calibration':
-        recipe = {'mode': 'single', 'channels': [0], 'timeout_ms': 1000,
-            'target_liquid_ul': '20', 'commanded_aspiration_ul': '22.5', 'aspiration_speed_ul_s': '50',
-            'aspiration_delay_ms': 0, 'leading_air': None, 'trailing_air': None,
-            'before_leading_air': [], 'before_liquid': [], 'after_liquid': [], 'before_dispense': [], 'after_dispense': [],
-            'dispense_segments': [{'volume_ul': '22.5', 'speed_ul_s': '50'}],
-            'final_empty_speed_ul_s': None, 'final_empty_before': [], 'multi': None}
-        bindings = {'prepare_inputs': {'message': 'Software-only fixture; author actual positioning and consumables before use'},
-            'dispense_inputs': {'recipe': recipe},
-            'measure_inputs': {'message': 'Enter external delivered volume', 'measurement_form': {'fields': [
-                {'field_id': 'volume', 'label': 'External volume', 'unit': 'uL', 'module': 'pipette', 'target': '20', 'commanded': '22.5', 'repetitions': 1}]}},
-            'analyze_inputs': {'operation': 'analyze', 'analysis': {'kind': 'pipette', 'model': 'descriptive', 'context': {'fixture': 'software-only'},
-                'samples': [{'point_id': 'fixture', 'target_ul': '20', 'commanded_ul': '22.5',
-                    'observation': {'kind': 'volume', 'measured_ul': reference('measure', 'measurements', ['volume', 0])}}]}}}
+        bindings = {'scope_id': 'software-height', 'plate': 'TC', 'decision': 'restore'}
     else:
-        module = key.split('_')[0]
-        bindings = {'setpoint_inputs': {'bank': 'nest' if module == 'tc' else module, 'target_temp_c': '25'},
-            'settle_inputs': {'seconds': '1'},
-            'measure_inputs': {'message': 'Enter independent temperature probe observation', 'measurement_form': {'fields': [
-                {'field_id': 'temperature', 'label': 'External probe', 'unit': 'degC', 'module': module, 'target': '25', 'commanded': '25', 'repetitions': 1}]}},
-            'analyze_inputs': {'operation': 'analyze', 'analysis': {'kind': 'thermal', 'samples': [{
-                'point_id': 'fixture', 'module': module, 'target_c': '25', 'commanded_c': '25',
-                'measured_c': reference('measure', 'measurements', ['temperature', 0]), 'context': {'fixture': 'software-only'}}]}}}
+        bindings = {'target': '20' if key == 'pipette_volume_calibration' else '25',
+            'commanded': '22.5' if key == 'pipette_volume_calibration' else '25',
+            'measurement_context': {'fixture': 'software-only'}}
+        if key == 'pipette_volume_calibration':
+            bindings.update(fit_model='descriptive', dispense_inputs={'recipe': {
+                'mode': 'single', 'channels': [0], 'timeout_ms': 1000,
+                'target_liquid_ul': '20', 'commanded_aspiration_ul': '22.5', 'aspiration_speed_ul_s': '50',
+                'aspiration_delay_ms': 0, 'leading_air': None, 'trailing_air': None,
+                'before_leading_air': [], 'before_liquid': [], 'after_liquid': [], 'before_dispense': [], 'after_dispense': [],
+                'dispense_segments': [{'volume_ul': '22.5', 'speed_ul_s': '50'}],
+                'final_empty_speed_ul_s': None, 'final_empty_before': [], 'multi': None}})
+        else:
+            module = key.split('_')[0]
+            bindings.update(setpoint_inputs={'bank': 'nest' if module == 'tc' else module, 'target_temp_c': '25'},
+                settle_inputs={'seconds': '1'})
     fixture['bindings'] = bindings
     return fixture
 

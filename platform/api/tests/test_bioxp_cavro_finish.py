@@ -54,6 +54,7 @@ async def test_facade_exports_and_incomplete_cold_save(store):
     for entry in calibration_examples():
         raw = entry['method']
         assert all('default' not in p for p in raw['parameters'])
+        assert 'method_result' in json.dumps(raw)  # references exist before any fixture is selected
         saved = await create(client, raw)
         cold = await client.get(BASE + '/library/' + saved['id'] + '/revisions/1')
         assert cold.status_code == 200 and cold.json()['method'] == raw
