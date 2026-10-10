@@ -114,7 +114,7 @@ async def get_md_analysis(job_id: str, session: AsyncSession = Depends(get_sessi
              "error": child.error_message}
             for replica, child in sorted(latest.items())
         ]
-        active = any(str(child.status or child.queue_status).lower() in {"queued", "running", "pending"} for child in latest.values())
+        active = any(str(child.status or child.queue_status).lower() in {"queued", "running", "pending"} for child in children)
         raw_states = report.get("replica_states")
         states: list[Any] = raw_states if isinstance(raw_states, list) else []
         failed_or_missing = any(
@@ -262,7 +262,7 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
         current = latest.get(replica)
         if current is None or (child.created_at, str(child.id)) > (current.created_at, str(current.id)):
             latest[replica] = child
-    active = [child for child in latest.values() if str(child.status or child.queue_status).lower() in {"queued", "running", "pending"}]
+    active = [child for child in children if str(child.status or child.queue_status).lower() in {"queued", "running", "pending"}]
     if active and not recovering and not shared:
         raise HTTPException(
             status_code=409,
@@ -291,7 +291,7 @@ async def retry_md_analysis(job_id: str, session: AsyncSession = Depends(get_ses
 
     accepted_sets = {
         value
-        for child in latest.values()
+        for child in (latest.values() if shared else children)
         if isinstance(child.params, dict)
         for value in [child.params.get("md_replica_manifest_set_sha256")]
         if isinstance(value, str)
