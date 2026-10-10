@@ -26,6 +26,14 @@ async def own(lane, state, legacy):
                 'policy': 'vram_packing', 'execution_target_id': TARGET,
                 'root_job_id': JOB, 'lease_id': 'retained-claim', 'released_at': None})
         await s.commit()
+        if state != 'terminal':
+            from services.remote_execution.progress import publish_job_progress
+            assert await publish_job_progress(s, job, phase='running', artifact=None,
+                                              message='Scientific attempt remains active')
+        target = await s.get(ExecutionTarget, TARGET, populate_existing=True)
+        # Preserve unrelated target observations and actual per-Job progress.
+        lane.retained_metadata = {key: value for key, value in target.provider_metadata.items()
+            if key not in {'preload', 'preload_artifact_summary', 'preload_cached_artifact_count', 'artifact_inventory'}}
         return p.recipe_snapshot(job).__dict__
 
 
@@ -35,6 +43,8 @@ async def unchanged(lane, before, legacy):
         assert p.recipe_snapshot(job).__dict__ == before
         assert job_has_claim(target, job)
         assert target.leased_job_id == (JOB if legacy else None)
+        for key, value in lane.retained_metadata.items():
+            assert target.provider_metadata[key] == value
 
 
 @pytest.mark.asyncio
