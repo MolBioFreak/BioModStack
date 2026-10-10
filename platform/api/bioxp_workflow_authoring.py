@@ -262,7 +262,27 @@ def clone_job(request: WorkflowJobCloneRequest) -> WorkflowJobClone:
             step_id=None, message=f"Clone unavailable: {exc}")])
 
 
+def explicit_authoring_schema(schema: Any) -> Any:
+    """Describe the existing explicit-field converter, not Pydantic defaults.
+
+    Source defaults are retained as documentary, opt-in values. Discovery and
+    Save never materialize them (notably source scan's physical prefill).
+    """
+    value = deepcopy(schema)
+    if isinstance(value, dict):
+        if value.get('type') == 'object' and 'properties' in value:
+            value['required'] = list(value['properties'])
+        if 'default' in value:
+            value['source_default'] = value.pop('default')
+        return {key: explicit_authoring_schema(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [explicit_authoring_schema(child) for child in value]
+    return value
+
+
 def discovery() -> dict[str, Any]:
+    authoring_request = deepcopy(_SCHEMA)
+    authoring_request['$defs'] = explicit_authoring_schema(_SCHEMA['$defs'])
     return {
         "draft": DRAFT_ADAPTER.json_schema(),
         "transfer": WorkflowTransferIntent.model_json_schema(),
@@ -271,6 +291,7 @@ def discovery() -> dict[str, Any]:
         "clone_request": WorkflowJobCloneRequest.model_json_schema(),
         "clone_response": WorkflowJobClone.model_json_schema(),
         "native_request": deepcopy(_SCHEMA),
+        "authoring_request": authoring_request,
         "native_source_commit": _NATIVE["source_commit"],
         "native_locations": deepcopy(_NATIVE["locations"]),
         "authoring_policy": "All native fields must be explicit; numeric text converts only for preview. No scientific defaults are inserted.",

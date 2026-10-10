@@ -64,7 +64,7 @@ def method_schema():
 
 def method_catalog():
     native = discovery()
-    schema = native['native_request']
+    schema = native['authoring_request']
     actions = []
     for name, ref in schema['properties']['steps']['items']['discriminator']['mapping'].items():
         actions.append({'action': name, 'inputs': deepcopy(schema['$defs'][ref.rsplit('/', 1)[-1]]),
@@ -134,6 +134,9 @@ def method_catalog():
     transfer_schema.get('properties', {}).pop('operation', None)
     transfer_schema['required'] = [k for k in transfer_schema.get('required', []) if k != 'operation']
     class_transfer = deepcopy(transfer_schema)
+    class_transfer['description'] = ('Single: one destination per source reference. Multi: destinations in contiguous groups of the authored aliquot count per source; '
+        'volume_ul is per-destination sample intent, while target_liquid_ul and commanded_aspiration_ul remain explicitly authored total quantities. '
+        'Authored phase order is retained; ordinary lift follows retraction and final empty. No physical delivery is inferred.')
     class_transfer['required'] = [k for k in class_transfer['required'] if k not in {'aspirate_speed', 'dispense_speed'}] + ['liquid', 'recipe']
     class_transfer['properties'].pop('dispense_speed', None)
     recipe_editor = deepcopy(next(a['inputs'] for a in actions if a['action'] == 'liquid_recipe'))
@@ -192,6 +195,7 @@ def method_catalog():
     from bioxp_method_custody import custody_suggestions
     from bioxp_method_planning import liquid_field_matrix
     return {'schema': SCHEMA, 'actions': actions, 'native_definitions': schema['$defs'],
+        'native_source_definitions': native['native_request']['$defs'],
         'authoring': {'custody': custody_suggestions(), 'liquid_fields': liquid_field_matrix()},
         'geometry': native['alignment'], 'locations': native['native_locations'],
         'limits': {'depth': 64, 'occurrences': 10000, 'native_actions': 100000},
