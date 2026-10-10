@@ -1,5 +1,5 @@
 {
-  "source_commit": "1f31c87c8ef4ff3f9b984bad1aa8c381e05025d5",
+  "source_commit": "475af73de71dddd18e160552e91b038257537958",
   "application": {
     "$defs": {
       "AuthoredReference": {
@@ -37,14 +37,34 @@
             "type": "string"
           },
           "steps_per_mm": {
-            "exclusiveMinimum": 0,
-            "title": "Steps Per Mm",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Steps Per Mm"
           },
           "native_speed_per_mm_s": {
-            "exclusiveMinimum": 0,
-            "title": "Native Speed Per Mm S",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Native Speed Per Mm S"
           },
           "positive_steps_direction": {
             "enum": [
@@ -969,20 +989,52 @@
             "type": "string"
           },
           "depth_mm": {
-            "title": "Depth Mm",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Depth Mm"
           },
           "speed_mm_s": {
-            "exclusiveMinimum": 0,
-            "title": "Speed Mm S",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Speed Mm S"
           },
           "calibration": {
             "$ref": "#/$defs/AxisCalibration"
           },
           "tip_offset_mm": {
-            "title": "Tip Offset Mm",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Tip Offset Mm"
           }
         },
         "required": [
@@ -2775,14 +2827,34 @@
             "type": "string"
           },
           "steps_per_mm": {
-            "exclusiveMinimum": 0,
-            "title": "Steps Per Mm",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Steps Per Mm"
           },
           "native_speed_per_mm_s": {
-            "exclusiveMinimum": 0,
-            "title": "Native Speed Per Mm S",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Native Speed Per Mm S"
           },
           "positive_steps_direction": {
             "enum": [
@@ -3748,20 +3820,52 @@
             "type": "string"
           },
           "depth_mm": {
-            "title": "Depth Mm",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Depth Mm"
           },
           "speed_mm_s": {
-            "exclusiveMinimum": 0,
-            "title": "Speed Mm S",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Speed Mm S"
           },
           "calibration": {
             "$ref": "#/$defs/AxisCalibration"
           },
           "tip_offset_mm": {
-            "title": "Tip Offset Mm",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                "type": "string"
+              }
+            ],
+            "title": "Tip Offset Mm"
           }
         },
         "required": [
@@ -6126,14 +6230,34 @@
               "type": "string"
             },
             "steps_per_mm": {
-              "exclusiveMinimum": 0,
-              "title": "Steps Per Mm",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Steps Per Mm"
             },
             "native_speed_per_mm_s": {
-              "exclusiveMinimum": 0,
-              "title": "Native Speed Per Mm S",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Native Speed Per Mm S"
             },
             "positive_steps_direction": {
               "enum": [
@@ -7058,20 +7182,52 @@
               "type": "string"
             },
             "depth_mm": {
-              "title": "Depth Mm",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Depth Mm"
             },
             "speed_mm_s": {
-              "exclusiveMinimum": 0,
-              "title": "Speed Mm S",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Speed Mm S"
             },
             "calibration": {
               "$ref": "#/$defs/AxisCalibration"
             },
             "tip_offset_mm": {
-              "title": "Tip Offset Mm",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Tip Offset Mm"
             }
           },
           "required": [
@@ -9917,14 +10073,34 @@
               "type": "string"
             },
             "steps_per_mm": {
-              "exclusiveMinimum": 0,
-              "title": "Steps Per Mm",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Steps Per Mm"
             },
             "native_speed_per_mm_s": {
-              "exclusiveMinimum": 0,
-              "title": "Native Speed Per Mm S",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Native Speed Per Mm S"
             },
             "positive_steps_direction": {
               "enum": [
@@ -10504,20 +10680,52 @@
               "type": "string"
             },
             "depth_mm": {
-              "title": "Depth Mm",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Depth Mm"
             },
             "speed_mm_s": {
-              "exclusiveMinimum": 0,
-              "title": "Speed Mm S",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Speed Mm S"
             },
             "calibration": {
               "$ref": "#/$defs/AxisCalibration"
             },
             "tip_offset_mm": {
-              "title": "Tip Offset Mm",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Tip Offset Mm"
             }
           },
           "required": [
@@ -11107,14 +11315,34 @@
               "type": "string"
             },
             "steps_per_mm": {
-              "exclusiveMinimum": 0,
-              "title": "Steps Per Mm",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Steps Per Mm"
             },
             "native_speed_per_mm_s": {
-              "exclusiveMinimum": 0,
-              "title": "Native Speed Per Mm S",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Native Speed Per Mm S"
             },
             "positive_steps_direction": {
               "enum": [
@@ -12039,20 +12267,52 @@
               "type": "string"
             },
             "depth_mm": {
-              "title": "Depth Mm",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Depth Mm"
             },
             "speed_mm_s": {
-              "exclusiveMinimum": 0,
-              "title": "Speed Mm S",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Speed Mm S"
             },
             "calibration": {
               "$ref": "#/$defs/AxisCalibration"
             },
             "tip_offset_mm": {
-              "title": "Tip Offset Mm",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Tip Offset Mm"
             }
           },
           "required": [
@@ -13845,14 +14105,34 @@
               "type": "string"
             },
             "steps_per_mm": {
-              "exclusiveMinimum": 0,
-              "title": "Steps Per Mm",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Steps Per Mm"
             },
             "native_speed_per_mm_s": {
-              "exclusiveMinimum": 0,
-              "title": "Native Speed Per Mm S",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Native Speed Per Mm S"
             },
             "positive_steps_direction": {
               "enum": [
@@ -14818,20 +15098,52 @@
               "type": "string"
             },
             "depth_mm": {
-              "title": "Depth Mm",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Depth Mm"
             },
             "speed_mm_s": {
-              "exclusiveMinimum": 0,
-              "title": "Speed Mm S",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Speed Mm S"
             },
             "calibration": {
               "$ref": "#/$defs/AxisCalibration"
             },
             "tip_offset_mm": {
-              "title": "Tip Offset Mm",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                  "type": "string"
+                }
+              ],
+              "title": "Tip Offset Mm"
             }
           },
           "required": [
@@ -17196,14 +17508,34 @@
                 "type": "string"
               },
               "steps_per_mm": {
-                "exclusiveMinimum": 0,
-                "title": "Steps Per Mm",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                    "type": "string"
+                  }
+                ],
+                "title": "Steps Per Mm"
               },
               "native_speed_per_mm_s": {
-                "exclusiveMinimum": 0,
-                "title": "Native Speed Per Mm S",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                    "type": "string"
+                  }
+                ],
+                "title": "Native Speed Per Mm S"
               },
               "positive_steps_direction": {
                 "enum": [
@@ -18128,20 +18460,52 @@
                 "type": "string"
               },
               "depth_mm": {
-                "title": "Depth Mm",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                    "type": "string"
+                  }
+                ],
+                "title": "Depth Mm"
               },
               "speed_mm_s": {
-                "exclusiveMinimum": 0,
-                "title": "Speed Mm S",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                    "type": "string"
+                  }
+                ],
+                "title": "Speed Mm S"
               },
               "calibration": {
                 "$ref": "#/$defs/AxisCalibration"
               },
               "tip_offset_mm": {
-                "title": "Tip Offset Mm",
-                "type": "number"
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "pattern": "^-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$",
+                    "type": "string"
+                  }
+                ],
+                "title": "Tip Offset Mm"
               }
             },
             "required": [
@@ -22471,6 +22835,12 @@
         "persistent_means": "explicit NVRAM write requested, not verified",
         "append_effects": "deferred until explicit execution",
         "halt_ready_is_completion": false,
+        "program_diagnostics": {
+          "source": "30053815-C p56",
+          "response_descriptors": "ordered authored command indices, report_kind, units and terminal_answer",
+          "received_reports": "ordered active answers retained with ingress provenance; intermediate answer is not whole-program completion",
+          "loop_attribution": "raw ordered answers retained; occurrence attribution unknown without a proven cursor"
+        },
         "automatic_reset": false,
         "automatic_retry": false,
         "reports_while_busy": true,

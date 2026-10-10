@@ -26,6 +26,20 @@ async def test_typed_profile_pickup_nested_numeric_text(store):
     export('typed-profile-pickup', {'request': request, 'result': result})
 
 
+@pytest.mark.parametrize('depth', ['0.10000000000000001', '9007199254740993'])
+def test_metric_geometry_exact_decimal_text(depth):
+    request = deepcopy(PROFILE_REQUEST)
+    displacement = {'unit': 'mm', 'depth_mm': depth, 'tip_offset_mm': '0', 'speed_mm_s': '1',
+        'calibration': {'calibration_id': 'software-exact', 'steps_per_mm': '1',
+            'native_speed_per_mm_s': '1', 'positive_steps_direction': 'down'}}
+    request['method']['steps'][0]['inputs']['calibration']['pickup']['displacement'] = displacement
+    result = compile_method(request)
+    assert result['document'], result['issues']
+    params = result['document']['stages'][0]['actions'][0]['params']
+    assert params['calibration']['pickup']['displacement'] == displacement
+    export('exact-profile-geometry-' + depth, {'request': request, 'result': result})
+
+
 def test_clone_comparison_preserves_nondefault_error_policy():
     legacy = {'stages': [{'actions': [{'action_id': 'old', 'params': {}}]}]}
     explicit = deepcopy(legacy)

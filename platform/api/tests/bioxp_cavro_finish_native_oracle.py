@@ -35,6 +35,10 @@ for name, document in rows:
                 CALIBRATION_ACTION_ADAPTER.validate_python(params)
             if action['kind'] == 'pause_review' and 'measurement_form' in params:
                 MeasurementForm.model_validate(params['measurement_form'])
+            if params.get('operation') == 'profile_pickup':
+                from bioxp.pipette.cavro_geometry import ProfilePickup
+                profile = ProfilePickup.model_validate(params)
+                assert profile.profile.nominal_volume_ul == params['profile']['nominal_volume_ul']
             if params.get('operation') in ('cavro_application', 'cavro_liquid_recipe'):
                 plan = compile_application(params['application']) if 'application' in params else compile_liquid_recipe(params['recipe'])
                 assert not plan['issues'], (name, plan['issues'])

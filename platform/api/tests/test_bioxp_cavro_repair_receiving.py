@@ -23,6 +23,7 @@ def connect_transport(client, receive):
 async def test_actual_review_rejection_and_deliberate_fresh_host_response(store):
     rejected = captured('review-first-fail-same-key-rejected.json')
     fresh = captured('review-deliberate-fresh-attempt.json')
+    replay = captured('review-successful-same-key-replays.json')[0]
     client, _, _, _ = store
     calls = []
     responses = []
@@ -34,15 +35,16 @@ async def test_actual_review_rejection_and_deliberate_fresh_host_response(store)
         if body['idempotency_key'] == rejected['request']['idempotency_key']:
             assert body == rejected['request']
             return httpx.Response(rejected['retry_http'], json=rejected['retry'])
-        assert body == fresh['request']
-        return httpx.Response(fresh['http'], json=fresh['response'])
+        success = fresh if len(calls) == 2 else replay
+        assert body == success['request']
+        return httpx.Response(success['http'], json=success['response'])
     native = connect_transport(client, receive)
     try:
-        for case, status in [(rejected, 409), (fresh, 200), (fresh, 200)]:
+        for case, status in [(rejected, 409), (fresh, 200), (replay, 200)]:
             response = await client.post('/api/bioxp/protocols/jobs/' + case['request']['command_id'] + '/review',
                 json={**deepcopy(case['request']), 'expected_connection_generation': 77})
             assert response.status_code == status, response.text
-            expected = rejected['retry'] if status == 409 else fresh['response']
+            expected = rejected['retry'] if status == 409 else case['response']
             assert response.json() == expected
             responses.append({'status': status, 'body': response.json()})
         assert len(calls) == 3  # exactly authored HOST attempts; no automatic retry/submit
