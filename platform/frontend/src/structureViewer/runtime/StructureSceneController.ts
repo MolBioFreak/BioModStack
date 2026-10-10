@@ -121,7 +121,7 @@ export class StructureSceneController {
         this.emit(type, this.scene, payload, origin);
     }
 
-    async loadScene(state: StructureSceneState, restoreMeasurements = false): Promise<ViewerResult<void>> {
+    async loadScene(state: StructureSceneState, restorePresentation = false): Promise<ViewerResult<void>> {
         if (this.disposed) return viewerCancelled('Structure scene controller is disposed');
         const replacingResources = !this.scene || sceneResourceKey(this.scene) !== sceneResourceKey(state);
         const token = ++this.operationToken;
@@ -133,10 +133,10 @@ export class StructureSceneController {
 
         let result: ViewerResult<void>;
         try {
-            // Snapshot restore replays BMS-owned definitions even when a native tool
-            // removed their representations without changing the authored scene.
-            const previous = restoreMeasurements && this.scene
-                ? { ...this.scene, presentation: { ...this.scene.presentation, measurements: undefined } }
+            // Explicit restore replays captured native state even if authored records
+            // are unchanged after independent native-tool edits.
+            const previous = restorePresentation && this.scene
+                ? { ...this.scene, presentation: { ...this.scene.presentation, measurements: undefined, camera: undefined, representations: undefined } }
                 : this.scene;
             result = await this.adapter.reconcileScene(previous, state, abortController.signal);
         } catch (error) {
@@ -155,6 +155,9 @@ export class StructureSceneController {
                 this.appliedSegmentations.clear();
             }
             this.emit('scene-ready', state, {});
+        } else if (restorePresentation && this.scene && result.status !== 'cancelled') {
+            // The restore caller displays its error locally; keep the current viewer usable.
+            this.emit('scene-ready', this.scene, {});
         } else if (result.status !== 'cancelled') {
             this.emit('scene-error', state, {
                 status: result.status,

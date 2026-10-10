@@ -180,7 +180,13 @@ export class MolstarDirectSceneEngineAdapter implements MolstarEngineAdapter {
         if (documentsReloaded || reconciliation.representationChanged || reconciliation.presentationChanged || reconciliation.layerChanged
             || reconciliation.selectionChanged || reconciliation.filterChanged) {
             try {
-                await this.adapter.applyPresentation(toDirectPresentation(next));
+                const presentation = toDirectPresentation(next);
+                await this.adapter.applyPresentation({
+                    ...presentation,
+                    // Captured styles are not the owner of later native edits.
+                    representations: documentsReloaded || reconciliation.representationChanged
+                        ? presentation.representations : undefined,
+                });
             } catch (error) {
                 if (signal.aborted || error instanceof MolstarDirectAdapterCancelledError) {
                     return viewerCancelled('Presentation reconciliation was superseded or cancelled');

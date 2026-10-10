@@ -585,12 +585,41 @@ export class MolstarDirectAdapter {
 
     getMeasurementResults(): readonly MeasurementResult[] {
         const cells = this.requirePlugin().state.data.cells;
-        return this.measurementResults.map(result => result.status === 'computed' && (!cells.has(this.measurementRefs.get(result.measurement.measurementId) ?? '') || !cells.get(this.measurementRepresentationRefs.get(result.measurement.measurementId) ?? '')?.obj)
-            ? { ...result, status: 'removed', value: undefined, reason: 'Removed in native Mol* tools' } : result);
+        return this.measurementResults.map(result => {
+            const id = result.measurement.measurementId;
+            const ref = this.measurementRepresentationRefs.get(id);
+            if (!ref) return result;
+            const selection = cells.get(this.measurementRefs.get(id) ?? '');
+            const representation = cells.get(ref);
+            if (!selection || !representation) return { ...result, status: 'removed', value: undefined, reason: 'Removed in native Mol* tools' };
+            const unresolved = (reason: string): MeasurementResult => ({ ...result, status: 'unresolved', value: undefined, reason });
+            if (selection.status !== 'ok' || representation.status !== 'ok' || !representation.obj) {
+                return unresolved(representation.errorText || selection.errorText || 'Native measurement representation is unavailable');
+            }
+            // Read the current native representation source, not creation-time requested loci.
+            const source = representation.obj.data.sourceData as {
+                pairs?: { loci: readonly Loci[] }[]; triples?: { loci: readonly Loci[] }[]; quads?: { loci: readonly Loci[] }[];
+            } | undefined;
+            const type = result.measurement.type;
+            const loci = (type === 'distance' ? source?.pairs : type === 'angle' ? source?.triples : source?.quads)?.[0]?.loci;
+            const count = type === 'distance' ? 2 : type === 'angle' ? 3 : 4;
+            if (!loci || loci.length !== count) return unresolved('Native measurement source loci are unavailable');
+            const centers = loci.map(locus => Loci.getBoundingSphere(locus)?.center);
+            if (centers.some(center => !center)) return unresolved('Native measurement source geometry is unavailable');
+            const value = type === 'distance' ? Vec3.distance(centers[0]!, centers[1]!)
+                : type === 'angle' ? radToDeg(Vec3.angle(Vec3.sub(Vec3(), centers[0]!, centers[1]!), Vec3.sub(Vec3(), centers[2]!, centers[1]!)))
+                    : radToDeg(Vec3.dihedralAngle(centers[0]!, centers[1]!, centers[2]!, centers[3]!));
+            return Number.isFinite(value) ? { ...result, status: 'computed', value, reason: undefined }
+                : unresolved('Native geometry is undefined for these points');
+        });
     }
 
     subscribeMeasurementResults(handler: () => void): () => void {
-        const subscription = this.requirePlugin().managers.structure.measurement.behaviors.state.subscribe(handler);
+        // State commits include coordinate/frame, source-loci and representation/status
+        // updates. Readback is demand-driven: no animation-frame polling or state writes.
+        const subscription = this.requirePlugin().state.data.events.changed.subscribe(event => {
+            if (!event.inTransaction) handler();
+        });
         return () => subscription.unsubscribe();
     }
 
@@ -682,17 +711,9 @@ export class MolstarDirectAdapter {
             const representationRefs = new Map<string, string>();
             try {
                 for (const { measurement, locis } of planned) {
-                    // Same native loci centers and Mol* geometry routines as stock representations.
-                    const centers = locis.map(loci => Loci.getBoundingSphere(loci)!.center);
-                    const value = measurement.type === 'distance' ? Vec3.distance(centers[0]!, centers[1]!)
-                            : measurement.type === 'angle' ? radToDeg(Vec3.angle(Vec3.sub(Vec3(), centers[0]!, centers[1]!), Vec3.sub(Vec3(), centers[2]!, centers[1]!)))
-                        : radToDeg(Vec3.dihedralAngle(centers[0]!, centers[1]!, centers[2]!, centers[3]!));
-                    if (!Number.isFinite(value)) {
-                        results.push({ measurement, status: 'unresolved', units: measurement.type === 'distance' ? 'Å' : 'degrees', reason: 'Native geometry is undefined for these points' });
-                        continue;
-                    }
                     const options = {
-                        customText: measurement.label ? `${measurement.label}: ${value.toFixed(2)} ${measurement.type === 'distance' ? 'Å' : '°'}` : undefined,
+                        // Keep labels separate from values; native default text stays live.
+                        customText: measurement.label || undefined,
                         selectionTags: `bms-measurement:${measurement.measurementId}`,
                         reprTags: `bms-measurement:${measurement.measurementId}`,
                     };
@@ -715,7 +736,7 @@ export class MolstarDirectAdapter {
                     stagedRefs.push(created.selection.ref);
                     selectionRefs.set(measurement.measurementId, created.selection.ref);
                     representationRefs.set(measurement.measurementId, created.representation.ref);
-                    results.push({ measurement, status: 'computed', value, units: measurement.type === 'distance' ? 'Å' : 'degrees' });
+                    results.push({ measurement, status: 'computed', units: measurement.type === 'distance' ? 'Å' : 'degrees' });
                 }
             } catch (error) {
                 for (const ref of stagedRefs) {
