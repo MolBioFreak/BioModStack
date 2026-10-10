@@ -83,7 +83,8 @@ export function ConfidenceProfile({ chainMetrics, onInspect, height = 270 }: Con
     const categoryTicks = profile.categories.filter((_, index, all) =>
         index % Math.max(1, Math.ceil(all.length / tickCount)) === 0,
     );
-    const legendColumns = Math.max(1, Math.floor(((width ?? 600) - 64) / 125));
+    // Plotly also reserves legend padding beyond the 64px axis margins.
+    const legendColumns = Math.max(1, Math.floor(((width ?? 600) - 80) / 125));
     const legendRows = Math.min(6, Math.ceil(profile.data.length / legendColumns));
     const legendHeight = Math.max(28, legendRows * 24);
     const plotHeight = height + Math.max(0, legendHeight - 44);
