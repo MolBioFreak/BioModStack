@@ -31,6 +31,7 @@ from .bundle import (
 )
 from .contracts import RemoteAttemptStatus, RemoteResultManifest
 from .targets import ExecutionTargetError, get_ready_target
+from .claims import job_has_claim, shared_assignment, target_claim_authority, job_claim_authority
 from .transport import (
     RemoteConnection,
     RemoteTransportError,
@@ -167,8 +168,7 @@ async def _verify_launch_runner(session, job, connection, target) -> None:
         ExecutionTarget.username == target.username, ExecutionTarget.remote_root == target.remote_root,
         ExecutionTarget.capabilities["runner_sha256"].as_string() == (target.capabilities or {}).get("runner_sha256"),
         ExecutionTarget.capabilities["nextflow_launcher_sha256"].as_string() == (target.capabilities or {}).get("nextflow_launcher_sha256"),
-        ExecutionTarget.leased_job_id == str(job.id),
-        ExecutionTarget.lease_acquired_at == target.lease_acquired_at,
+        target_claim_authority(job),
     ]
     attached_binding = (target.capabilities or {}).get("critical_runtime_binding")
     if attached_binding:
@@ -359,6 +359,7 @@ def _remote_receipt(
     state: str,
     started_at: datetime | None = None,
     error: str | None = None,
+    job: Job | None = None,
 ) -> dict[str, Any]:
     capabilities = target.capabilities if isinstance(target.capabilities, dict) else {}
     context_identity = None
@@ -388,7 +389,9 @@ def _remote_receipt(
         "ssh_host": str(target.host),
         "ssh_port": target.port,
         "ssh_username": str(target.username),
-        "lease_acquired_at": target.lease_acquired_at.isoformat() if target.lease_acquired_at else None,
+        "lease_acquired_at": (target.lease_acquired_at.isoformat()
+            if target.lease_acquired_at and not shared_assignment(job) else None),
+        "claim_lease_id": shared_assignment(job).get("lease_id"),
         "remote_root": str(target.remote_root),
         "remote_attempt_dir": bundle.remote_attempt_dir,
         "source_revision": bundle.envelope.source_revision,
@@ -434,11 +437,7 @@ async def _publish_remote_transition(
     session: AsyncSession, job: Job, values: dict[str, Any], *, release_lease: bool = False, require_lease: bool = True,
 ) -> bool:
     """CAS the complete attempt/claim snapshot; never autoflush a stale owner."""
-    lease_authority = [select(ExecutionTarget.id).where(
-        ExecutionTarget.id == job.execution_target_id,
-        ExecutionTarget.leased_job_id == str(job.id),
-        *_attempt_lease_predicates(job),
-    ).exists()]
+    lease_authority = [job_claim_authority(job)]
     if not require_lease:
         lease_authority = []
     with session.no_autoflush:
@@ -464,7 +463,7 @@ async def _publish_remote_transition(
         await session.rollback()
         return False
     if release_lease:
-        await _release_remote_target_lease(session, job)
+        await _release_remote_target_lease(session, job, flush=False)
     # Discard the stale ORM projection before commit can flush it.
     session.expire(job)
     await session.commit()
@@ -618,7 +617,7 @@ async def _launch_remote_job_owned(
         connection = RemoteConnection.from_target(target)
         def target_generation(row):
             return (RemoteConnection.from_target(row), row.host_key_sha256, row.activated_at,
-                    row.leased_job_id, row.lease_acquired_at,
+                    *((row.leased_job_id, row.lease_acquired_at) if not shared_assignment(job) else ()),
                     (row.provider_metadata or {}).get("setup", {}).get("started_at"),
                     (row.capabilities or {}).get("runner_sha256"),
                     (row.capabilities or {}).get("nextflow_launcher_sha256"))
@@ -665,7 +664,7 @@ async def _launch_remote_job_owned(
         provenance = dict(job.provenance or {})
         provenance['remote_execution_assignment'] = {
             **provenance.get('remote_execution_assignment', {}), 'resources': resources}
-        provenance["remote_execution_receipt"] = _remote_receipt(bundle, target, state="staging")
+        provenance["remote_execution_receipt"] = _remote_receipt(bundle, target, state="staging", job=job)
         if not await _publish_remote_transition(session, job, {
             "nextflow_run_id": run_id, "remote_attempt_id": bundle.attempt_id,
             "remote_state": "staging", "execution_source_revision": bundle.envelope.source_revision,
@@ -689,7 +688,8 @@ async def _launch_remote_job_owned(
                     and (current.status, current.queue_status, current.remote_state) == ("queued", "preparing", "staging")
                     and current.remote_attempt_id == attempt_id
                     and current.nextflow_run_id == run_id and current.execution_target_id == target_id
-                    and owner.leased_job_id == job_id and owner.lease_acquired_at == lease_epoch
+                    and job_has_claim(owner, current)
+                    and (bool(shared_assignment(current)) or owner.lease_acquired_at == lease_epoch)
                     and target_generation(owner) == admitted_generation
                     and dict((current.provenance or {}).get("remote_execution_assignment") or {}) == assignment)
             if not valid:
@@ -747,7 +747,7 @@ async def _launch_remote_job_owned(
             return run_id
         provenance = dict(job.provenance or {})
         provenance["remote_execution_receipt"] = _remote_receipt(
-            bundle, target, state=status.state, started_at=status.started_at,
+            bundle, target, state=status.state, started_at=status.started_at, job=job,
         )
         published = await _publish_started_receipt(
             session, job, status, provenance["remote_execution_receipt"],
@@ -824,11 +824,7 @@ async def _acquire_remote_terminal_fence(session: AsyncSession, job: Job) -> boo
             Job.queue_status == "running",
             Job.execution_target_id == job.execution_target_id,
             Job.remote_state == job.remote_state,
-            select(ExecutionTarget.id).where(
-                ExecutionTarget.id == job.execution_target_id,
-                ExecutionTarget.leased_job_id == str(job.id),
-                *_attempt_lease_predicates(job),
-            ).exists(),
+            job_claim_authority(job),
             Job.nextflow_run_id == job.nextflow_run_id,
             Job.remote_attempt_id == job.remote_attempt_id,
         )
@@ -842,11 +838,45 @@ async def _acquire_remote_terminal_fence(session: AsyncSession, job: Job) -> boo
     return True
 
 
-async def _release_remote_target_lease(session: AsyncSession, job: Job) -> None:
+async def _release_remote_target_lease(session: AsyncSession, job: Job, *, flush: bool = True) -> bool:
     target_id = str(job.execution_target_id or "").strip()
     if not target_id:
-        return
-    await session.execute(
+        return False
+    assignment = shared_assignment(job)
+    if assignment:
+        from sqlalchemy import func
+        from sqlalchemy.orm.attributes import set_committed_value
+        if flush:
+            await session.flush()
+        with session.no_autoflush:
+            current = (await session.execute(select(Job.provenance).where(
+                Job.id == str(job.id), Job.execution_target_id == target_id,
+                Job.provenance["remote_execution_assignment"]["lease_id"].as_string() == assignment.get("lease_id"),
+                Job.provenance["remote_execution_assignment"]["released_at"].as_string().is_(None),
+            ))).scalar_one_or_none()
+            if current is None:
+                return False
+            provenance = dict(current)
+            provenance["remote_execution_assignment"] = dict(
+                current["remote_execution_assignment"], released_at=datetime.utcnow().isoformat() + "Z")
+            released = await session.execute(update(Job).where(
+                Job.id == str(job.id), Job.provenance == current,
+            ).values(provenance=provenance).execution_options(synchronize_session=False))
+            if released.rowcount != 1:
+                return False
+            # Do not replace provider_metadata: a sibling may publish progress.
+            await session.execute(update(ExecutionTarget).where(ExecutionTarget.id == target_id).values(
+                provider_metadata=func.json_remove(ExecutionTarget.provider_metadata,
+                    '$.job_progress.' + json.dumps(str(job.id))),
+            ).execution_options(synchronize_session=False))
+        set_committed_value(job, "provenance", provenance)
+        await session.execute(update(ExecutionTarget).where(
+            ExecutionTarget.id == target_id, ExecutionTarget.leased_job_id == str(job.id),
+            *_attempt_lease_predicates(job),
+        ).values(leased_job_id=None, lease_acquired_at=None,
+                 updated_at=datetime.utcnow()).execution_options(synchronize_session=False))
+        return True
+    released = await session.execute(
         update(ExecutionTarget)
         .where(
             ExecutionTarget.id == target_id,
@@ -860,6 +890,8 @@ async def _release_remote_target_lease(session: AsyncSession, job: Job) -> None:
         )
         .execution_options(synchronize_session=False)
     )
+
+    return released.rowcount == 1
 
 
 def _preparation_expired(job: Job) -> bool:
@@ -973,6 +1005,26 @@ async def pause_md_production(session: AsyncSession, job: Job, *, operation_id: 
     return observed
 
 
+async def _reacquire_remote_claim(session, job, target, resources):
+    """Continue through the scheduler's target-scoped VRAM admission owner.
+
+    The existing continuation Job CAS commits this claim and the operation
+    together; capacity refusal rolls back without disturbing any sibling.
+    """
+    from services.gpu_orchestrator import _reserve_remote_capacity, estimate_vram
+    indices = list(resources.get("gpu_ids") or [])
+    estimate = int(job.vram_estimate_mb or 0)
+    if indices and not estimate:
+        estimate = estimate_vram(job.model_id or "default", job.sequence_length or 300, job.params or {})
+    assignment = await _reserve_remote_capacity(session, job, target,
+        vram_estimate_mb=estimate if indices else 0, gpu_ids=indices)
+    if assignment is None:
+        await session.rollback()
+        raise RemoteExecutionError("Continuation target GPU reservations leave insufficient VRAM capacity")
+    return {**((job.provenance or {}).get("remote_execution_assignment") or {}),
+            **assignment, "resources": resources, "released_at": None}
+
+
 async def resume_md_production(session: AsyncSession, job: Job, *, operation_id: str,
                                checkpoints: dict) -> dict:
     """Reacquire the original root reservation, never queue projected replicas."""
@@ -1037,19 +1089,11 @@ async def resume_md_production(session: AsyncSession, job: Job, *, operation_id:
             gpu_ids=resources['gpu_ids'], minimum_gpu_memory_mb=resources.get('minimum_gpu_memory_mb',0))
         if admission['devices'] != resources.get('admission',{}).get('devices'):
             raise RemoteExecutionError('MD continuation physical devices changed')
-        claimed = await session.execute(update(ExecutionTarget).where(
-            ExecutionTarget.id == target.id, ExecutionTarget.leased_job_id.is_(None),
-            ExecutionTarget.active.is_(True), ExecutionTarget.state == 'ready',
-            *(getattr(ExecutionTarget,key) == getattr(target,key) for key in
-              ('host','port','username','remote_root','host_key_sha256')),
-        ).values(leased_job_id=str(job.id),lease_acquired_at=datetime.utcnow()).execution_options(synchronize_session=False))
-        if claimed.rowcount != 1:
-            await session.rollback()
-            raise RemoteExecutionError('MD continuation target is already reserved')
-        await session.refresh(target)
-        receipt['lease_acquired_at'] = target.lease_acquired_at.isoformat()
+        assignment = await _reacquire_remote_claim(session, job, target, resources)
+        receipt['claim_lease_id'] = assignment['lease_id']
         intent.update(attempt_id=str(job.remote_attempt_id), resources=dict(resources,admission=admission))
-        provenance.update(component_md_resume=intent, remote_execution_receipt=receipt)
+        provenance.update(component_md_resume=intent, remote_execution_receipt=receipt,
+                          remote_execution_assignment=assignment)
         if not await _publish_remote_transition(session, job,
                 {'provenance':provenance,'status':'running','queue_status':'running','paused':False,
                  'remote_state':'md_resume_requested','completed_at':None}, require_lease=False):
@@ -1300,22 +1344,14 @@ async def _retry_remote_component_owned(session, job, intent: dict[str, Any]):
         if admission['devices'] != resources.get('admission', {}).get('devices'):
             raise RemoteExecutionError('Retry physical target devices changed')
         resources['admission'] = admission
-        epoch = datetime.utcnow()
-        keys = ('host', 'port', 'username', 'remote_root', 'host_key_sha256')
-        claimed = await session.execute(update(ExecutionTarget).where(
-            ExecutionTarget.id == target.id, ExecutionTarget.leased_job_id.is_(None),
-            ExecutionTarget.active.is_(True), ExecutionTarget.state == 'ready',
-            *(getattr(ExecutionTarget, key) == getattr(target, key) for key in keys),
-        ).values(leased_job_id=str(job.id), lease_acquired_at=epoch).execution_options(synchronize_session=False))
-        if claimed.rowcount != 1:
-            await session.rollback()
-            raise RemoteExecutionError('Retry target capacity is already reserved')
+        assignment = await _reacquire_remote_claim(session, job, target, resources)
         intent = dict(intent, state='requested', resources=resources)
         provenance = dict(job.provenance or {})
         receipt = dict(provenance.get('remote_execution_receipt') or {},
-            lease_acquired_at=epoch.isoformat(), continuation_lease_id=intent['continuation_lease_id'],
+            claim_lease_id=assignment['lease_id'], continuation_lease_id=intent['continuation_lease_id'],
             generation=intent['predecessor_generation'] + 1)
-        provenance.update(component_retry=intent, remote_execution_receipt=receipt)
+        provenance.update(component_retry=intent, remote_execution_receipt=receipt,
+                          remote_execution_assignment=assignment)
         if not await _publish_remote_transition(session, job, {
                 'provenance': provenance, 'status': 'running', 'queue_status': 'running',
                 'remote_state': 'component_retry_requested', 'completed_at': None,
@@ -1396,16 +1432,7 @@ async def _request_remote_checkpoint_resume_owned(session: AsyncSession, job: Jo
     if admission['devices'] != resources.get('admission', {}).get('devices'):
         raise RemoteExecutionError('Checkpoint physical target devices changed')
     continuation_lease = uuid.uuid4().hex
-    epoch = datetime.utcnow()
-    identity_fields = ("host", "port", "username", "remote_root", "host_key_sha256")
-    claimed = await session.execute(update(ExecutionTarget).where(
-        ExecutionTarget.id == target.id, ExecutionTarget.leased_job_id.is_(None),
-        ExecutionTarget.active.is_(True), ExecutionTarget.state == "ready",
-        *(getattr(ExecutionTarget, key) == getattr(target, key) for key in identity_fields),
-    ).values(leased_job_id=str(job.id), lease_acquired_at=epoch).execution_options(synchronize_session=False))
-    if claimed.rowcount != 1:
-        await session.rollback()
-        raise RemoteExecutionError("Checkpoint worker capacity is already reserved")
+    assignment = await _reacquire_remote_claim(session, job, target, resources)
     provenance = dict(job.provenance or {})
     binding = dict(operation_id=uuid.uuid4().hex, attempt_id=str(job.remote_attempt_id),
         boot_id=receipt['boot_id'], original_lease_id=checkpoint['lease_id'],
@@ -1413,7 +1440,8 @@ async def _request_remote_checkpoint_resume_owned(session: AsyncSession, job: Jo
         decision=decision, continuation_lease_id=continuation_lease, resource_admission=admission)
     provenance['remote_checkpoint_operation'] = dict(binding=binding, state='requested',
         predecessor_receipt=dict(receipt), checkpoint=checkpoint)
-    receipt.update(lease_acquired_at=epoch.isoformat())
+    receipt.update(claim_lease_id=assignment["lease_id"])
+    provenance["remote_execution_assignment"] = assignment
     provenance["remote_execution_receipt"] = receipt
     # Target claim above and full existing job/source/attempt CAS below commit
     # together. Its prior lease epoch no longer applies to this fresh lease.
@@ -1927,7 +1955,7 @@ async def _recover_result_generation(session, job):
 async def _finish_remote_cancellation(session: AsyncSession, job: Job, status=None) -> bool:
     target = (await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
               if job.execution_target_id else None)
-    leased = bool(target and target.leased_job_id == str(job.id))
+    leased = job_has_claim(target, job)
     if job.remote_attempt_id and leased and (status is None or not getattr(status, "quiescent", False)):
         return False
     if not await cancel_local_result_transfer(job, guard_owned=True):
@@ -2024,20 +2052,22 @@ async def _service_remote_external_inputs(session, job, status) -> None:
         ('status', 'queue_status', 'remote_attempt_id', 'nextflow_run_id', 'execution_target_id',
          'execution_source_revision', 'execution_source_tree', 'execution_bundle_sha256', 'params')})
     lease_epoch = receipt.get('lease_acquired_at')
+    claim_id = shared_assignment(job).get('lease_id')
 
     async def check_fence():
         await session.refresh(job)
         current_target = (await session.execute(select(ExecutionTarget).where(
-            ExecutionTarget.id == str(job.execution_target_id), ExecutionTarget.leased_job_id == str(job.id),
-            *_attempt_lease_predicates(job)))).scalar_one_or_none()
+            target_claim_authority(job)))).scalar_one_or_none()
         current = canonical_bytes({key: getattr(job, key) for key in
             ('status', 'queue_status', 'remote_attempt_id', 'nextflow_run_id', 'execution_target_id',
              'execution_source_revision', 'execution_source_tree', 'execution_bundle_sha256', 'params')})
         current_receipt = (job.provenance or {}).get('remote_execution_receipt') or {}
         if (current != snapshot or (job.status, job.queue_status) != ('running', 'running')
                 or current_receipt.get('component_context_identity') != authority
-                or current_target is None or not lease_epoch
-                or current_receipt.get('lease_acquired_at') != lease_epoch):
+                or current_target is None
+                or (claim_id is not None and shared_assignment(job).get('lease_id') != claim_id)
+                or (claim_id is None and (not lease_epoch
+                    or current_receipt.get('lease_acquired_at') != lease_epoch))):
             raise asyncio.CancelledError('External service owner changed')
 
     await check_fence()
@@ -2150,12 +2180,12 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
                 return changed
             return await _finish_remote_cancellation(session, job) or changed
         if job.status == "cancelled" and job.remote_attempt_id and (
-                target is None or target.leased_job_id != str(job.id)):
+                not job_has_claim(target, job)):
             # Compute can release its lease before local result return finishes.
             if job.remote_state == "cancelled":
                 return changed
             return await _finish_remote_cancellation(session, job) or changed
-        if target is None or target.leased_job_id != str(job.id) or not job.remote_attempt_id:
+        if not job_has_claim(target, job) or not job.remote_attempt_id:
             return changed
         identity = _pull_identity(job)
         try:
@@ -2171,7 +2201,7 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
         target = await session.get(ExecutionTarget, str(identity["execution_target_id"]), populate_existing=True)
         if (job is None or _pull_identity(job) != identity or
                 job.status not in {"completed", "failed", "cancelled"} or
-                target is None or target.leased_job_id != job_id):
+                not job_has_claim(target, job)):
             return changed
         if job.status == "cancelled":
             if observed.state not in TERMINAL_REMOTE_STATES or not observed.quiescent:

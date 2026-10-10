@@ -47,7 +47,12 @@ def test_local_checkpoint_uses_actual_plan_and_current_local_authority(tmp_path,
 
 
 @pytest_asyncio.fixture
-async def workers(tmp_path):
+async def workers(tmp_path, monkeypatch):
+    from services.remote_execution import targets
+    async def telemetry(target):
+        return dict(available=True, observed_at="fixture", gpus=[dict(index=i, uuid=f"GPU-{i}",
+            memory_total_mb=100000, memory_used_mb=0, utilization=99) for i in range(4)])
+    monkeypatch.setattr(targets, "remote_target_telemetry", telemetry)
     path = tmp_path / 'workers.db'
     engine = create_async_engine(f"sqlite+aiosqlite:///{path}")
     async with engine.begin() as connection:
@@ -65,7 +70,7 @@ async def workers(tmp_path):
         for ordinal in (1, 2):
             target = f"vast:{ordinal}"
             session.add(ExecutionTarget(id=target, provider="vast", provider_instance_id=str(ordinal),
-                active=True, state="ready", provider_metadata={"inventory": {
+                active=True, state="ready", capabilities={"gpu_count": 4}, provider_metadata={"inventory": {
                     "status": "complete", "present": True, "running": True,
                     "checked_at": datetime.utcnow().isoformat()}}))
             session.add(Job(id=f"job-{ordinal}", name=f"job-{ordinal}", params={},
@@ -137,7 +142,8 @@ async def test_claim_preserves_physical_assignment_and_rejects_endpoint_drift(wo
         assert assignment["root_job_id"] == "job-2" and assignment["lease_id"]
         assert assignment["execution_target_id"] == "vast:2"
         assert assignment["gpu_indices"] == [3]
-        assert assignment["admission_snapshot"]["devices"] == sample["devices"]
+        assert assignment["admission_snapshot"]["devices"][0]["gpu_index"] == 3
+        assert assignment["admission_snapshot"]["devices"][0]["gpu_uuid"] == "GPU-3"
 
 
 @pytest.mark.asyncio
@@ -214,16 +220,16 @@ async def test_selected_plan_binds_native_resources(monkeypatch, unresolved):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("conflict", ["lease", "job_changed"])
+@pytest.mark.parametrize("conflict", ["target_changed", "job_changed"])
 async def test_losing_claim_does_not_expire_other_workers_or_hold_target(workers, conflict):
     async with workers() as session:
         first = await session.get(Job, "job-1")
         second = await session.get(Job, "job-2")
         second.name = "pending-unrelated-edit"
         async with workers() as writer:
-            if conflict == "lease":
+            if conflict == "target_changed":
                 await writer.execute(update(ExecutionTarget).where(ExecutionTarget.id == "vast:1")
-                                     .values(leased_job_id="predecessor"))
+                                     .values(active=False))
             else:
                 await writer.execute(update(Job).where(Job.id == "job-1").values(paused=True))
             await writer.commit()
@@ -235,8 +241,9 @@ async def test_losing_claim_does_not_expire_other_workers_or_hold_target(workers
     async with workers() as verify:
         first_target = await verify.get(ExecutionTarget, "vast:1")
         second_target = await verify.get(ExecutionTarget, "vast:2")
-        assert first_target.leased_job_id == ("predecessor" if conflict == "lease" else None)
-        assert second_target.leased_job_id == "job-2"
+        assert first_target.leased_job_id is None
+        assert second_target.leased_job_id is None
+        assert (await verify.get(Job, "job-2")).provenance["remote_execution_assignment"]["policy"] == "vram_packing"
         assert (await verify.get(Job, "job-2")).name == "pending-unrelated-edit"
 
 
@@ -332,25 +339,25 @@ async def test_cycle_routes_independent_workers_without_idle_reservations(worker
         async with workers() as verify:
             job = await verify.get(Job, kwargs["job_id"])
             target = await verify.get(ExecutionTarget, job.execution_target_id)
-            assert target.leased_job_id == job.id
+            from services.remote_execution.claims import job_has_claim
+            assert job_has_claim(target, job)
             assert job.queue_status == "preparing" and job.started_at is None
             assert "gpu_id" not in kwargs["params"]
             launched.append((job.id, target.id))
     await scheduler.GPUOrchestrator(workers, lambda: [], launch)._process_cycle()
-    assert launched == ([("job-2", "vast:2")] if busy_first else
-                        [("job-1", "vast:1"), ("job-2", "vast:2")])
+    assert launched == [("job-1", "vast:1"), ("job-2", "vast:2")]
     async with workers() as verify:
         retained = await verify.get(Job, "retained")
         assert retained.remote_state == "results_available"
         if busy_first:
             first = await verify.get(Job, "job-1")
             target = await verify.get(ExecutionTarget, "vast:1")
-            assert first.queue_status == "queued"
+            assert first.queue_status == "preparing"
             assert target.leased_job_id == "uncertain-predecessor"
 
 
 @pytest.mark.asyncio
-async def test_same_target_concurrent_claims_have_one_winner_and_leave_other_worker_idle(workers):
+async def test_same_target_concurrent_cpu_claims_share_and_leave_other_worker_idle(workers):
     import asyncio
     async with workers() as session:
         await session.execute(update(Job).where(Job.id == "job-2").values(execution_target_id="vast:1"))
@@ -360,13 +367,11 @@ async def test_same_target_concurrent_claims_have_one_winner_and_leave_other_wor
             job = await session.get(Job, identifier)
             return await scheduler._claim_remote_job(session, job, gpu_id=None, vram_estimate_mb=0)
     results = await asyncio.gather(claim("job-1"), claim("job-2"))
-    assert sum(result is not None for result in results) == 1
+    assert sum(result is not None for result in results) == 2
     async with workers() as session:
-        owner = (await session.get(ExecutionTarget, "vast:1")).leased_job_id
-        assert owner in {"job-1", "job-2"}
-        assert (await session.get(Job, owner)).queue_status == "preparing"
-        other = "job-2" if owner == "job-1" else "job-1"
-        assert (await session.get(Job, other)).queue_status == "queued"
+        assert (await session.get(ExecutionTarget, "vast:1")).leased_job_id is None
+        for identifier in ("job-1", "job-2"):
+            assert (await session.get(Job, identifier)).queue_status == "preparing"
         assert (await session.get(ExecutionTarget, "vast:2")).leased_job_id is None
 
 
@@ -479,3 +484,256 @@ async def test_attachment_is_target_scoped_and_preserves_other_active_worker(wor
         assert (await session.execute(select(ExecutionTarget.__table__).where(ExecutionTarget.id == "vast:1"))).one() == before
         assert (await session.execute(select(Job.__table__).order_by(Job.id))).all() == jobs_before
         assert (await session.get(ExecutionTarget, "vast:2")).leased_job_id is None
+
+
+async def gpu_competitors(workers, monkeypatch, *, count=3, capacity=24000, gpu_count=1, used=0):
+    from services.remote_execution import targets
+    async def telemetry(target):
+        return dict(available=True, observed_at="inert", gpus=[dict(index=i, uuid=f"GPU-{i}",
+            memory_total_mb=capacity, memory_used_mb=used, utilization=99) for i in range(gpu_count)])
+    monkeypatch.setattr(targets, "remote_target_telemetry", telemetry)
+    monkeypatch.setattr(scheduler, "read_scheduler_config", lambda: {
+        "global": {"enabled": True, "target_vram_fill": .75, "vram_safety_margin_mb": 0,
+                   "busy_threshold": .01, "msa_preferred_gpu_ids": [7]},
+        "overrides": {"0": {"disabled": True, "target_vram_fill": .01}},
+        "workflow_pins": {"cpu-only": 7}, "batch_locks": {"batch": 7}})
+    monkeypatch.setitem(scheduler.GPU_CAPABILITIES, 0, {"supports_heavy": False, "supports_protenix": False})
+    async with workers() as s:
+        target = await s.get(ExecutionTarget, "vast:1")
+        target.capabilities = {"gpu_count": gpu_count}
+        for ordinal in range(1, count + 1):
+            job = await s.get(Job, f"job-{ordinal}")
+            if job is None:
+                job = Job(id=f"job-{ordinal}", name=f"job-{ordinal}", model_id="cpu-only", mode="run",
+                          status="queued", queue_status="queued", paused=False, params={}, priority=0)
+                s.add(job)
+            job.execution_target_id = "vast:1"
+            job.vram_estimate_mb = 8000
+            job.pinned_gpu = 0
+        await s.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["preparing", "cancelling", "failed"])
+async def test_same_gpu_fit_overflow_and_durable_reservations_across_cycles(workers, monkeypatch, state):
+    from sqlalchemy import select
+    from services.remote_execution.claims import outstanding_claim_clause, has_target_claims, target_idle_clause
+    from services.remote_execution import executor
+    await gpu_competitors(workers, monkeypatch)
+    launched = []
+    async def launch(**kwargs):
+        launched.append(kwargs["job_id"])
+    owner = scheduler.GPUOrchestrator(workers, lambda: [], launch)
+    await owner._process_cycle()
+    assert launched == ["job-1", "job-2"]
+    async with workers() as s:
+        first = await s.get(Job, "job-1")
+        first.queue_status = state
+        if state == "failed":
+            first.status = "failed"
+        await s.commit()
+    await owner._process_cycle()
+    assert launched == ["job-1", "job-2"]
+    async with workers() as s:
+        assert await has_target_claims(s, "vast:1")
+        assert not (await s.execute(select(ExecutionTarget.id).where(
+            ExecutionTarget.id == "vast:1", target_idle_clause()))).first()
+        assert set((await s.execute(select(Job.id).where(outstanding_claim_clause()))).scalars()) == {"job-1", "job-2"}
+        first = await s.get(Job, "job-1")
+        sibling = await s.get(Job, "job-2")
+        sibling_claim = dict(sibling.provenance)
+        target = await s.get(ExecutionTarget, "vast:1")
+        target.provider_metadata = {**target.provider_metadata, "job_progress": {
+            "job-1": {"phase": "staging"}, "job-2": {"phase": "staging"}}}
+        await s.commit()
+        # Existing quiescent/prestart publication owner releases just this claim.
+        assert await executor._publish_remote_transition(s, first,
+            {"status": "failed", "queue_status": "failed"}, release_lease=True)
+        assert first.provenance["remote_execution_assignment"]["released_at"]
+        await s.refresh(sibling)
+        await s.refresh(target)
+        assert sibling.provenance == sibling_claim
+        assert target.provider_metadata["job_progress"] == {"job-2": {"phase": "staging"}}
+    await owner._process_cycle()
+    assert launched == ["job-1", "job-2", "job-3"]
+
+
+@pytest.mark.asyncio
+async def test_shared_claim_race_revalidates_budget_under_target_write(workers, monkeypatch):
+    from sqlalchemy import select
+    from services.remote_execution.claims import shared_claim_clause
+    await gpu_competitors(workers, monkeypatch, count=4)
+    loaded = asyncio.Event()
+    readers = 0
+    async def claim(identifier):
+        nonlocal readers
+        async with workers() as s:
+            job = await s.get(Job, identifier)
+            readers += 1
+            if readers == 4:
+                loaded.set()
+            await loaded.wait()
+            return await scheduler._claim_remote_job(s, job, gpu_id=0, gpu_ids=[0], vram_estimate_mb=8000)
+    results = await asyncio.gather(*(claim(f"job-{i}") for i in range(1, 5)))
+    assert sum(value is not None for value in results) == 2
+    async with workers() as s:
+        owners = (await s.execute(select(Job).where(shared_claim_clause()))).scalars().all()
+        assert len(owners) == 2
+        assert all(job.queue_status == "preparing" for job in owners)
+        assert (await s.get(ExecutionTarget, "vast:1")).leased_job_id is None
+
+
+@pytest.mark.asyncio
+async def test_shared_claim_keeps_legacy_attempt_receipt_epoch_and_pointer(workers, monkeypatch):
+    from services.remote_execution import executor
+    from services.remote_execution.claims import job_has_claim
+    await gpu_competitors(workers, monkeypatch, count=2, capacity=32000)
+    epoch = datetime(2020, 1, 1)
+    legacy_receipt = {"lease_acquired_at": epoch.isoformat(), "attempt_id": "retained-attempt"}
+    async with workers() as s:
+        target = await s.get(ExecutionTarget, "vast:1")
+        target.leased_job_id, target.lease_acquired_at = "job-1", epoch
+        legacy = await s.get(Job, "job-1")
+        legacy.status = legacy.queue_status = "running"
+        legacy.assigned_gpu = 0
+        legacy.provenance = {"remote_execution_receipt": legacy_receipt}
+        legacy.remote_attempt_id = "retained-attempt"
+        await s.commit()
+        current = await s.get(Job, "job-2")
+        assert await scheduler._claim_remote_job(s, current, gpu_id=0, gpu_ids=[0], vram_estimate_mb=8000)
+        assert job_has_claim(target, current) and job_has_claim(target, legacy)
+        current.status = current.queue_status = "running"
+        await s.commit()
+        assert await executor._acquire_remote_terminal_fence(s, current)
+        assert current.remote_state == "validating_return"
+        assert await executor._publish_remote_transition(s, current,
+            {"status": "failed", "queue_status": "failed"}, release_lease=True)
+        await s.refresh(target)
+        await s.refresh(legacy)
+        assert target.leased_job_id == "job-1" and target.lease_acquired_at == epoch
+        assert legacy.provenance == {"remote_execution_receipt": legacy_receipt}
+        assert legacy.remote_attempt_id == "retained-attempt"
+        assert await executor._publish_remote_transition(s, legacy,
+            {"status": "completed", "queue_status": "completed"}, release_lease=True)
+        await s.refresh(target)
+        assert target.leased_job_id is None
+
+
+@pytest.mark.asyncio
+async def test_remote_requested_gpu_set_reserves_every_device(workers, monkeypatch):
+    await gpu_competitors(workers, monkeypatch, gpu_count=2, capacity=16000)
+    async with workers() as s:
+        first = await s.get(Job, "job-1")
+        assert await scheduler._claim_remote_job(s, first, gpu_id=0, gpu_ids=[0, 1], vram_estimate_mb=8000)
+        assert first.provenance["remote_execution_assignment"]["gpu_indices"] == [0, 1]
+        second = await s.get(Job, "job-2")
+        for index in (0, 1):
+            assert await scheduler._claim_remote_job(s, second, gpu_id=index, gpu_ids=[index], vram_estimate_mb=8000) is None
+
+
+@pytest.mark.asyncio
+async def test_aggregate_usage_is_not_attributed_to_each_shared_claim(workers, monkeypatch):
+    await gpu_competitors(workers, monkeypatch, capacity=24000, used=4000)
+    async with workers() as s:
+        first = await s.get(Job, "job-1")
+        second = await s.get(Job, "job-2")
+        assert await scheduler._claim_remote_job(s, first, gpu_id=0, vram_estimate_mb=8000)
+        # 18GB admissible - 4GB aggregate - 8GB claimed leaves only 6GB.
+        assert await scheduler._claim_remote_job(s, second, gpu_id=0, vram_estimate_mb=8000) is None
+
+
+@pytest.mark.asyncio
+async def test_same_target_slow_reconciliation_does_not_stall_sibling(workers, monkeypatch):
+    from services.remote_execution import executor
+    await gpu_competitors(workers, monkeypatch, count=2)
+    async with workers() as s:
+        for i in (1, 2):
+            job = await s.get(Job, f"job-{i}")
+            assert await scheduler._claim_remote_job(s, job, gpu_id=0, vram_estimate_mb=8000)
+            job.status = job.queue_status = "failed"
+            await s.commit()
+    blocked, other, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    async def reconcile(s, job):
+        if job.id == "job-1":
+            blocked.set()
+            await release.wait()
+        else:
+            other.set()
+    monkeypatch.setattr(executor, "reconcile_remote_job", reconcile)
+    poller = scheduler.GPUOrchestrator(workers, lambda: [], lambda **kwargs: None)
+    try:
+        await poller.check_job_completions()
+        await asyncio.wait_for(blocked.wait(), 2)
+        await asyncio.wait_for(other.wait(), 2)
+    finally:
+        release.set()
+        await poller.stop()
+
+
+@pytest.mark.asyncio
+async def test_continuation_reacquires_through_same_vram_owner(workers, monkeypatch):
+    from services.remote_execution import executor
+    await gpu_competitors(workers, monkeypatch, count=3, capacity=16000)
+    resources = dict(gpu_ids=[0], required=dict(cpus=1, memory_bytes=1, scratch_bytes=0))
+    async with workers() as s:
+        first = await s.get(Job, "job-1")
+        sibling = await s.get(Job, "job-2")
+        assert await scheduler._claim_remote_job(s, first, gpu_id=0, vram_estimate_mb=8000)
+        first.provenance = {**first.provenance, "remote_execution_assignment": {
+            **first.provenance["remote_execution_assignment"], "resources": resources}}
+        await s.commit()
+        prior_lease = first.provenance["remote_execution_assignment"]["lease_id"]
+        assert await executor._publish_remote_transition(s, first,
+            {"status": "awaiting_input", "queue_status": "completed"}, release_lease=True)
+        assert await scheduler._claim_remote_job(s, sibling, gpu_id=0, vram_estimate_mb=8000)
+        with pytest.raises(executor.RemoteExecutionError, match="insufficient VRAM"):
+            await executor._reacquire_remote_claim(s, first, await s.get(ExecutionTarget, "vast:1"), resources)
+    async with workers() as s:
+        sibling = await s.get(Job, "job-2")
+        assert await executor._publish_remote_transition(s, sibling,
+            {"status": "failed", "queue_status": "failed"}, release_lease=True)
+        first = await s.get(Job, "job-1")
+        assignment = await executor._reacquire_remote_claim(s, first,
+            await s.get(ExecutionTarget, "vast:1"), resources)
+        assert assignment["lease_id"] != prior_lease
+        assert assignment["resources"] == resources and not assignment.get("released_at")
+        assert await executor._publish_remote_transition(s, first, {
+            "provenance": {**first.provenance, "remote_execution_assignment": assignment},
+            "status": "running", "queue_status": "running"}, require_lease=False)
+        third = await s.get(Job, "job-3")
+        assert await scheduler._claim_remote_job(s, third, gpu_id=0, vram_estimate_mb=8000) is None
+
+
+@pytest.mark.asyncio
+async def test_stale_shared_lease_cannot_publish_or_release_successor(workers, monkeypatch):
+    from services.remote_execution import executor
+    await gpu_competitors(workers, monkeypatch, count=2)
+    async with workers() as stale:
+        old = await stale.get(Job, "job-1")
+        assert await scheduler._claim_remote_job(stale, old, gpu_id=0, vram_estimate_mb=8000)
+        async with workers() as writer:
+            current = await writer.get(Job, "job-1")
+            current.provenance = {**current.provenance, "remote_execution_assignment": {
+                **current.provenance["remote_execution_assignment"], "lease_id": "successor"}}
+            await writer.commit()
+        await executor._release_remote_target_lease(stale, old)
+        await stale.commit()
+        assert not await executor._publish_remote_transition(stale, old,
+            {"status": "failed", "queue_status": "failed"}, release_lease=True)
+    async with workers() as s:
+        current = await s.get(Job, "job-1")
+        assignment = current.provenance["remote_execution_assignment"]
+        assert assignment["lease_id"] == "successor" and not assignment.get("released_at")
+        assert current.queue_status == "preparing"
+
+
+def test_packer_local_allowlist_and_target_capabilities_are_distinct():
+    job = scheduler.JobInfo(id="heavy", name="heavy", model_type="protenix", vram_estimate_mb=1000,
+        sequence_length=100, priority=1, pinned_gpu=None, pinned_gpus=[0, 1], created_at=datetime.utcnow())
+    gpus = [scheduler.GPUState(index=i, name="inert", memory_used_mb=0, memory_total_mb=24000,
+        memory_free_mb=24000, utilization=0, temperature=0) for i in (0, 1)]
+    config = {"global": {"target_vram_fill": .75, "vram_safety_margin_mb": 0}}
+    packed = scheduler.pack_jobs_to_gpus([job], gpus, .75, config,
+        gpu_capabilities={0: {"supports_protenix": False}, 1: {"supports_protenix": True}})
+    assert len(packed) == 1 and packed[0][1] == 1
+    assert job.pinned_gpus == [0, 1]  # Local pin list remains an allowlist, not a set reservation.

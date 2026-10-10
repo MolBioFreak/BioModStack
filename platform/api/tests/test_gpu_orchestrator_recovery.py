@@ -34,7 +34,14 @@ from services.gpu_orchestrator import (
 
 
 @pytest.mark.asyncio
-async def test_remote_target_lease_allows_exactly_one_concurrent_claim(tmp_path: Path) -> None:
+async def test_remote_vram_budget_allows_exactly_one_concurrent_claim(tmp_path: Path, monkeypatch) -> None:
+    from services.remote_execution import targets
+    async def telemetry(target):
+        return dict(available=True, gpus=[dict(index=0, uuid="GPU-remote", memory_total_mb=7000,
+                                              memory_used_mb=0, utilization=99)])
+    monkeypatch.setattr(targets, "remote_target_telemetry", telemetry)
+    monkeypatch.setattr(gpu_module, "read_scheduler_config", lambda: {"global": {
+        "target_vram_fill": 0.75, "vram_safety_margin_mb": 0}})
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'remote-claim.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -42,6 +49,7 @@ async def test_remote_target_lease_allows_exactly_one_concurrent_claim(tmp_path:
     target_id = "vast:123"
     async with factory() as seed:
         seed.add(ExecutionTarget(
+            capabilities={"gpu_count": 1},
             id=target_id,
             provider="vast",
             provider_instance_id="123",
@@ -82,7 +90,7 @@ async def test_remote_target_lease_allows_exactly_one_concurrent_claim(tmp_path:
     async with factory() as verify:
         target = await verify.get(ExecutionTarget, target_id)
         jobs = [await verify.get(Job, job_id) for job_id in ("remote-a", "remote-b")]
-        assert target is not None and target.leased_job_id in {"remote-a", "remote-b"}
+        assert target is not None and target.leased_job_id is None
         assert sum(job is not None and job.queue_status == "preparing" for job in jobs) == 1
         assert all(job.started_at is None and job.status == "queued" for job in jobs)
     await engine.dispose()
