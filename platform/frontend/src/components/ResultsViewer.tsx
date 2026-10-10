@@ -3171,6 +3171,7 @@ function ResultsViewerContent() {
     }, [currentPage, pageSize, sourceScopedDesigns, useClientSourcePagination]);
     // A validator's producer owns its result semantics, not the enclosing workflow.
     const predictionModelId = String(selectedDesign?.provenance?.producer_model_id ?? activeJob?.model_id ?? '');
+    const tableHasNativeConfidence = ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) || tableDesigns.some(canonicalScalars);
     const nativeTableScalars = usePredictionScalars(tableDesigns, activeTab === 'table');
     const visibleDesignIds = useMemo(() => tableDesigns.map((design) => design.id), [tableDesigns]);
     const visibleSelectionRef = useRef<HTMLInputElement | null>(null);
@@ -7193,7 +7194,7 @@ function ResultsViewerContent() {
                                                                         className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
                                                                     >
                                                                         {availableSortOptions.map((option) => (
-                                                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                                                            <option key={option.value} value={option.value}>{tableHasNativeConfidence && ['plddt_overall', 'ptm', 'iptm'].includes(option.value) ? `Legacy ${option.label}` : option.label}</option>
                                                                         ))}
                                                                     </select>
                                                                 </label>
@@ -7891,6 +7892,7 @@ function ResultsViewerContent() {
 
                                             {/* Quality Filters */}
                                             <div className="mb-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                                                {tableHasNativeConfidence && <p className="mb-3 text-xs text-[var(--text-secondary)]">Confidence cells show native scores where available. These server filters and sorts still use legacy stored scores, which may be empty; they do not operate on the displayed native confidence.</p>}
                                                 <div className="flex items-center gap-4 flex-wrap">
                                                     <label className="flex items-center gap-2">
                                                         <span className="text-xs text-slate-500">Sort by</span>
@@ -7907,7 +7909,7 @@ function ResultsViewerContent() {
                                                             className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200"
                                                         >
                                                             {availableSortOptions.map((option) => (
-                                                                <option key={option.value} value={option.value}>{option.label}</option>
+                                                                <option key={option.value} value={option.value}>{tableHasNativeConfidence && ['plddt_overall', 'ptm', 'iptm'].includes(option.value) ? `Legacy ${option.label}` : option.label}</option>
                                                             ))}
                                                         </select>
                                                     </label>
@@ -7919,7 +7921,7 @@ function ResultsViewerContent() {
                                                         {filterDraft.sortDir === 'asc' ? 'Asc ↑' : 'Desc ↓'}
                                                     </button>
                                                     <div className="flex items-center gap-2">
-                                                        <span className="text-xs text-slate-500">{isPostRFantibodyReview ? 'RF pLDDT ≥' : 'pLDDT ≥'}</span>
+                                                        <span className="text-xs text-slate-500">{isPostRFantibodyReview ? 'RF pLDDT ≥' : tableHasNativeConfidence ? 'Legacy pLDDT ≥' : 'pLDDT ≥'}</span>
                                                         <input
                                                             type="range"
                                                             min="0"
@@ -7933,7 +7935,7 @@ function ResultsViewerContent() {
                                                     {tableReviewCapabilities.interface && (
                                                         <>
                                                     <div className="flex items-center gap-2">
-                                                        <span className="text-xs text-slate-500">iPTM ≥</span>
+                                                        <span className="text-xs text-slate-500">{tableHasNativeConfidence ? 'Legacy iPTM ≥' : 'iPTM ≥'}</span>
                                                         <input
                                                             type="range"
                                                             min="0"
