@@ -60,19 +60,32 @@ async def test_selected_geometry_readers_accept_shared_contained_bytes(tmp_path,
     assert error.value.status_code == 409
 
 
-@pytest.mark.parametrize("shared", [False, True])
-def test_shape_terminal_receiver_regular_and_retained_contract(tmp_path, shared):
-    # Receiving hunk belongs to publication owner; intentionally exercise it
-    # without a DB. New regular-hardlink representation must remain readable.
+@pytest.mark.parametrize("kind", ["regular", "hardlink", "leaf_alias", "root_alias"])
+def test_shape_terminal_receiver_regular_and_retained_contract(tmp_path, kind):
     from services.result_ingester import _shape_contained_artifact
     root = tmp_path / "result"
     root.mkdir()
     member = root / "candidate.cif"
     member.write_bytes(b"data_INERT\n")
-    if shared:
+    if kind == "hardlink":
         os.link(member, tmp_path / "retained.cif")
+    elif kind == "leaf_alias":
+        member.rename(root / "concrete.cif")
+        member.symlink_to("concrete.cif")
+    elif kind == "root_alias":
+        root.rename(tmp_path / "concrete")
+        root.symlink_to("concrete", target_is_directory=True)
     descriptor = {"relative_path": member.name, "sha256": hashlib.sha256(member.read_bytes()).hexdigest(),
                   "bytes": member.stat().st_size}
-    assert _shape_contained_artifact(root, descriptor, "structure") == member
+    assert _shape_contained_artifact(root, descriptor, "structure") == member.resolve()
     with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
         _shape_contained_artifact(root, {**descriptor, "sha256": "0" * 64}, "structure")
+    with pytest.raises(RuntimeError, match="byte count mismatch"):
+        _shape_contained_artifact(root, {**descriptor, "bytes": 0}, "structure")
+    outside = tmp_path / "outside.cif"
+    outside.write_bytes(member.read_bytes())
+    (root / "escape.cif").symlink_to(outside)
+    with pytest.raises(RuntimeError, match="outside"):
+        _shape_contained_artifact(root, {**descriptor, "relative_path": "escape.cif"}, "structure")
+    with pytest.raises(RuntimeError, match="unsafe"):
+        _shape_contained_artifact(root, {**descriptor, "relative_path": "../outside.cif"}, "structure")

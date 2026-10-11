@@ -1,7 +1,9 @@
 nextflow.enable.dsl = 2
 
-// Closed final results retain independent names. Keep Nextflow's publisher so
-// cached tasks republish too; only cross-filesystem publication needs new bytes.
+// Native wrappers have exited before publication; downstream Shape owners only
+// read these completed outputs and write new/private metadata and transforms.
+// Keep Nextflow's publisher for cached republishing and independent retained names.
+// Across filesystems the self-contained publication still requires a copy.
 def shapeResultPublishMode(workDir, outputDir) {
     def destination = file(outputDir).toAbsolutePath()
     while (!java.nio.file.Files.exists(destination)) {
@@ -14,7 +16,7 @@ process ValidateShapeBundle {
     label 'ShapeEvaluate'
     stageInMode 'rellink'
 
-    publishDir "${params.out_dir}/metadata", mode: 'copy', pattern: 'shape_input_receipt.json'
+    publishDir "${params.out_dir}/metadata", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/metadata")}", pattern: 'shape_input_receipt.json'
 
     input:
     path request_json
@@ -44,7 +46,7 @@ process PlanRFD3Batches {
     label 'ShapeEvaluate'
     stageInMode 'copy'
 
-    publishDir "${params.out_dir}/run/shape_batches", mode: 'copy', pattern: 'rfd3_batch_plan.json'
+    publishDir "${params.out_dir}/run/shape_batches", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_batches")}", pattern: 'rfd3_batch_plan.json'
 
     input:
     path request_json
@@ -68,11 +70,11 @@ process RunShapeRFD3 {
     label 'gpu'
     stageInMode 'rellink'
 
-    publishDir "${params.out_dir}/run/shape_rfd3", mode: 'copy', pattern: '*.json'
-    publishDir "${params.out_dir}/run/shape_rfd3", mode: 'copy', pattern: 'rfd3_results/shape_guidance_steps.jsonl', saveAs: { 'shape_guidance_steps.jsonl' }
-    publishDir "${params.out_dir}/run/shape_rfd3", mode: 'copy', pattern: '*.log'
-    publishDir "${params.out_dir}/run/shape_rfd3/native", mode: 'copy', pattern: 'rfd3_results/*.cif.gz'
-    publishDir "${params.out_dir}/run/shape_rfd3/native", mode: 'copy', pattern: 'rfd3_results/*.json'
+    publishDir "${params.out_dir}/run/shape_rfd3", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_rfd3")}", pattern: '*.json'
+    publishDir "${params.out_dir}/run/shape_rfd3", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_rfd3")}", pattern: 'rfd3_results/shape_guidance_steps.jsonl', saveAs: { 'shape_guidance_steps.jsonl' }
+    publishDir "${params.out_dir}/run/shape_rfd3", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_rfd3")}", pattern: '*.log'
+    publishDir "${params.out_dir}/run/shape_rfd3/native", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_rfd3/native")}", pattern: 'rfd3_results/*.cif.gz'
+    publishDir "${params.out_dir}/run/shape_rfd3/native", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_rfd3/native")}", pattern: 'rfd3_results/*.json'
 
     input:
     path request_json
@@ -108,7 +110,7 @@ process AdmitRFD3InitialCandidate {
     label 'ShapeEvaluate'
     stageInMode 'rellink'
 
-    publishDir "${params.out_dir}/run/shape_initial_admission", mode: 'copy'
+    publishDir "${params.out_dir}/run/shape_initial_admission", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_initial_admission")}"
 
     input:
     path candidate
@@ -160,7 +162,7 @@ process BuildRFD3Aggregate {
     label 'ShapeEvaluate'
     stageInMode 'copy'
 
-    publishDir "${params.out_dir}/run/shape_batches", mode: 'copy', pattern: 'rfd3_aggregate_manifest.json'
+    publishDir "${params.out_dir}/run/shape_batches", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_batches")}", pattern: 'rfd3_aggregate_manifest.json'
 
     input:
     path batch_plan
@@ -191,7 +193,7 @@ process RunShapeProteinMPNN {
     label 'gpu_light'
     stageInMode 'rellink'
 
-    publishDir "${params.out_dir}/run/shape_sequences/proteinmpnn", mode: 'copy'
+    publishDir "${params.out_dir}/run/shape_sequences/proteinmpnn", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_sequences/proteinmpnn")}"
 
     input:
     tuple val(candidate_id), path(backbone)
@@ -226,7 +228,7 @@ process RunShapeFAMPNN {
     label 'gpu_light'
     stageInMode 'rellink'
 
-    publishDir "${params.out_dir}/run/shape_sequences/fampnn", mode: 'copy'
+    publishDir "${params.out_dir}/run/shape_sequences/fampnn", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_sequences/fampnn")}"
 
     input:
     tuple val(candidate_id), path(backbone)
@@ -259,7 +261,7 @@ process RunShapeCaliby {
     label 'gpu_light'
     stageInMode 'rellink'
 
-    publishDir "${params.out_dir}/run/shape_sequences/caliby_experimental", mode: 'copy'
+    publishDir "${params.out_dir}/run/shape_sequences/caliby_experimental", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_sequences/caliby_experimental")}"
 
     input:
     tuple val(candidate_id), path(backbone)

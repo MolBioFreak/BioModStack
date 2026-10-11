@@ -2663,19 +2663,15 @@ def _shape_contained_artifact(output_root: Path, descriptor: Dict[str, Any], lab
     if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
         raise RuntimeError(f"Shape {label} path must be a non-empty relative path")
     lexical = output_root / relative
-    current = output_root
     for part in Path(relative).parts:
         if part in {"", ".", ".."}:
             raise RuntimeError(f"Shape {label} path is unsafe")
-        current = current / part
-        if current.is_symlink():
-            raise RuntimeError(f"Shape {label} path contains a symlink")
+    # Closed read-side aliases are allowed, but their resolved bytes must stay
+    # inside this publication and match the existing descriptor authority.
     resolved = lexical.resolve()
     if not resolved.is_relative_to(output_root.resolve()) or not resolved.is_file():
         raise RuntimeError(f"Shape {label} is missing or outside the job output root")
     stat = resolved.stat()
-    if stat.st_nlink != 1:
-        raise RuntimeError(f"Shape {label} must not be hard-linked")
     expected_bytes = descriptor.get("bytes")
     if type(expected_bytes) is not int or expected_bytes != stat.st_size:
         raise RuntimeError(f"Shape {label} byte count mismatch")
@@ -2748,7 +2744,7 @@ def _validate_shape_terminal_closure(
                 suite = json.loads(suite_path.read_text(encoding="utf-8"))
                 records = suite.get("records")
                 validators = request_spec["validator_suite"]
-                if (suite.get("schema") != "bms_shape_validator_suite_v1"
+                if (suite.get("schema") not in {"bms_shape_validator_suite_v1", "bms_shape_validator_suite_v2"}
                         or suite.get("sequence_name") != provenance.get("sequence_name")
                         or suite.get("validators") != validators
                         or not isinstance(records, dict) or set(records) != set(validators)):
@@ -2783,16 +2779,10 @@ async def _ingest_shape_result_manifest(
     commit: bool,
 ) -> int:
     manifest_path = output_root / "results" / "shape_result_manifest.json"
-    current = output_root
-    for part in ("results", "shape_result_manifest.json"):
-        current = current / part
-        if current.is_symlink():
-            raise RuntimeError("Shape result manifest path contains a symlink")
     resolved_manifest = manifest_path.resolve()
     if (
         not resolved_manifest.is_relative_to(output_root.resolve())
         or not resolved_manifest.is_file()
-        or resolved_manifest.stat().st_nlink != 1
     ):
         raise RuntimeError("Shape result manifest is absent or unsafe")
     try:

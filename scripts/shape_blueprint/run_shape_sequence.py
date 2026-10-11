@@ -379,6 +379,11 @@ def run_sequence_lane(
             command.extend(shlex.split(settings.get("fampnn_extra_config") or ""))
             run_environment["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
             subprocess.run(command, check=True, env=run_environment)
+            # The native reader has exited. Close its task-local staging alias
+            # before publishing the whole bundle: Nextflow hardlinks directory
+            # leaves without dereferencing nested symlinks. Retain a regular
+            # name so removing the upstream work cannot break this publication.
+            retain_file(backbone_path, staged_backbone)
             fasta_dir = runtime_dir / "fastas"
             indexed: dict[int, Path] = {}
             pattern = re.compile(rf"^{re.escape(backbone_path.stem)}_sample(\d+)\.fasta$")
