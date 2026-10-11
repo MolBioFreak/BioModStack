@@ -32,7 +32,7 @@ process MD_SPAWN_REPLICAS {
     script:
     """
     export PYTHONPATH="${params.code_root}:\${PYTHONPATH:-}"
-    python3 -m scripts.bms_md.spawn_replicas \
+    '${params.api_python}' -m scripts.bms_md.spawn_replicas \
       --parent-job-id "${parent_job_id}" \
       --parent-name "${parent_name}" \
       --normalized-config ${normalized_config} \
@@ -59,7 +59,7 @@ process MD_WAIT_FOR_REPLICAS {
 
     script:
     """
-    python3 ${params.code_root}/scripts/wait_for_children.py \
+    '${params.api_python}' ${params.code_root}/scripts/wait_for_children.py \
       --parent_job_id "${parent_job_id}" \
       --stage md_replica \
       --poll_interval ${poll_seconds} \
@@ -83,7 +83,7 @@ process MD_COLLECT_REPLICAS {
     script:
     """
     export PYTHONPATH="${params.code_root}:\${PYTHONPATH:-}"
-    python3 -m scripts.bms_md.aggregate_children \
+    '${params.api_python}' -m scripts.bms_md.aggregate_children \
       --child-status ${child_status} \
       --spawn-receipt ${spawn_receipt} \
       --output-dir "${params.out_dir}"
@@ -104,7 +104,7 @@ process MD_ASSERT_REPLICA_OUTCOME {
 
     script:
     """
-    python3 - <<'PY'
+    '${params.api_python}' - <<'PY'
 import json
 from pathlib import Path
 manifest = json.loads(Path('${aggregate_manifest}').read_text())
@@ -135,7 +135,7 @@ process MD_SPAWN_ANALYSIS {
     script:
     """
     export PYTHONPATH="${params.code_root}:\${PYTHONPATH:-}"
-    python3 -m scripts.bms_md.spawn_analysis \
+    '${params.api_python}' -m scripts.bms_md.spawn_analysis \
       --parent-job-id "${parent_job_id}" \
       --parent-name "${parent_name}" \
       --aggregate-manifest "${aggregate_manifest}" \
@@ -162,7 +162,7 @@ process MD_WAIT_FOR_ANALYSIS {
 
     script:
     """
-    python3 ${params.code_root}/scripts/wait_for_children.py \
+    '${params.api_python}' ${params.code_root}/scripts/wait_for_children.py \
       --parent_job_id "${parent_job_id}" \
       --stage md_analysis \
       --poll_interval ${poll_seconds} \
@@ -187,7 +187,7 @@ process MD_COLLECT_ANALYSIS {
     script:
     """
     export PYTHONPATH="${params.code_root}:\${PYTHONPATH:-}"
-    python3 -m scripts.bms_md.collect_analysis \
+    '${params.api_python}' -m scripts.bms_md.collect_analysis \
       --child-status ${child_status} \
       --spawn-receipt ${spawn_receipt} \
       --aggregate-manifest "${aggregate_manifest}" \
@@ -210,7 +210,7 @@ process MD_ASSERT_ANALYSIS_OUTCOME {
 
     script:
     """
-    python3 - <<'PY'
+    '${params.api_python}' - <<'PY'
 import json
 from pathlib import Path
 manifest = json.loads(Path('${analysis_manifest}').read_text())
@@ -239,7 +239,7 @@ process MD_COMPLETION_BARRIER {
 
     script:
     """
-    python3 - <<'PY'
+    '${params.api_python}' - <<'PY'
 import hashlib
 import json
 from pathlib import Path

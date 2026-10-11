@@ -239,7 +239,7 @@ def test_optional_analysis_executes_real_nextflow_barrier_body(tmp_path, monkeyp
         'completed_analysis_children': 0, 'required_analysis_children': 1})
     monkeypatch.chdir(tmp_path)
     for process in ('MD_ASSERT_ANALYSIS_OUTCOME', 'MD_COMPLETION_BARRIER'):
-        body = workflow.split('process ' + process + ' {', 1)[1].split("python3 - <<'PY'", 1)[1].split('\nPY', 1)[0]
+        body = workflow.split('process ' + process + ' {', 1)[1].split(" - <<'PY'", 1)[1].split('\nPY', 1)[0]
         body = body.replace('${aggregate_manifest}', str(aggregate)).replace('${analysis_manifest}', str(analysis))
         exec(compile(body, process, 'exec'), {})
     barrier = json.loads((tmp_path/'md_completion_barrier.json').read_text())
