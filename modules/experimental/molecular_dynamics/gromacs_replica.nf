@@ -3,7 +3,10 @@ nextflow.enable.dsl=2
 process MD_GROMACS_REPLICA {
     tag "gromacs-replica:${replica_index}"
     label 'MolecularDynamicsGromacs'
-    publishDir "${params.out_dir}/replicas/replica_${replica_index}", mode: 'copy', overwrite: true
+    // Native output already belongs to the durable attempt. Publish metadata only;
+    // the artifacts channel is a task-local reference, never another payload tree.
+    publishDir "${params.out_dir}/replicas/replica_${replica_index}", mode: 'copy', overwrite: true, pattern: '*_manifest.json'
+    stageInMode 'symlink'
 
     input:
     tuple val(replica_index), path(normalized_config), path(preparation_bundle)
@@ -13,7 +16,7 @@ process MD_GROMACS_REPLICA {
     path "replica_${replica_index}", emit: artifacts
 
     script:
-    def run_output = params.md_resume_output_dir ?: "replica_${replica_index}"
+    def run_output = params.md_resume_output_dir ?: "${params.out_dir}/native"
     def resume_checkpoint = params.md_resume_checkpoint ?: ""
     def resume_sha256 = params.md_resume_checkpoint_sha256 ?: ""
     def resume_arg = resume_checkpoint ? "--resume-checkpoint '${resume_checkpoint}'" : ""
@@ -73,9 +76,9 @@ PY
     if [ "\${run_status}" -ne 0 ]; then
       exit "\${run_status}"
     fi
-    if [ "${run_output}" != "replica_${replica_index}" ]; then
-      rm -rf replica_${replica_index}
-      cp -a "${run_output}" replica_${replica_index}
+    retained_output="\$(python3 -c 'from pathlib import Path; import sys; from scripts.bms_md.aggregate_children import durable_run_output; print(durable_run_output(Path(sys.argv[1]), Path(sys.argv[2])))' '${run_output}' '${params.out_dir}')"
+    if [ ! -e replica_${replica_index} ]; then
+      ln -s "\${retained_output}" replica_${replica_index}
     fi
     cp replica_${replica_index}/manifest.json gromacs_replica_${replica_index}_manifest.json
     """

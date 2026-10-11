@@ -64,6 +64,83 @@ def publish_tree_immutable(source: Path, destination: Path) -> None:
             shutil.rmtree(temporary)
 
 
+def publish_run_immutable(source_manifest: Path, destination: Path) -> None:
+    """Collect the declared native result, not its mutable execution workspace.
+
+    Native trajectory/checkpoint/log writers may reopen even a completed stage
+    on continuation. Keep an independent terminal snapshot of those declared
+    bytes; never infer immutability from XTC (or any other file extension).
+    Worker inputs, stage caches and private continuation seeds stay at their
+    original attempt. The run manifest and aggregate metadata remain private.
+    """
+    from .analysis import _open_contained_artifact
+
+    run = json.loads(source_manifest.read_text(encoding="utf-8"))
+    sources = {"manifest.json": source_manifest}
+    prepared = set()
+    config = run.get("config") or {}
+    prepared_run = (config.get("schema") == "bms.md.job.v2" or
+                    (config.get("schema") == "bms.md.job.v3" and config.get("input", {}).get("structure")))
+    for name, record in run.get("artifacts", {}).items():
+        descriptor, source = _open_contained_artifact(source_manifest.parent, record["path"])
+        os.close(descriptor)
+        sources[record["path"]] = source
+        # Only preparation leaves explicitly declared by the native consumers
+        # have this ownership. Stage outputs remain independent even read-only.
+        if (prepared_run and name.startswith("preparation_")
+                and Path(record["path"]).parts[0] in {"system", "preparation"}):
+            prepared.add(record["path"])
+    identity = [(name, source.stat().st_size, _sha256(source))
+                for name, source in sorted(sources.items())]
+
+    def matches() -> bool:
+        # Historical collections may also contain undeclared work files. Keep
+        # them on replay; do not backfill, delete or require a new layout.
+        retained = {name: (size, digest) for name, size, digest in _tree_identity(destination)}
+        return all(retained.get(name) == (size, digest) for name, size, digest in identity)
+
+    if destination.exists():
+        if matches():
+            return
+        raise ImmutableCollectionConflict(f"immutable collection destination conflicts: {destination}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.parent / f".{destination.name}.tmp-{uuid.uuid4().hex}"
+    temporary.mkdir()
+    try:
+        for name, size, digest in identity:
+            if name in prepared:
+                from .chemistry.prepare import retain_prepared_file
+                retain_prepared_file(sources[name], temporary / name)
+            else:
+                publish_file_immutable(sources[name], temporary / name,
+                                       expected_size=size, expected_sha256=digest)
+        try:
+            os.rename(temporary, destination)
+        except OSError:
+            if destination.exists() and matches():
+                return
+            raise ImmutableCollectionConflict(f"immutable collection destination conflicts: {destination}")
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+
+
+def durable_run_output(source: Path, output_dir: Path) -> Path:
+    """Keep new runs in their durable owner; retain legacy external continuations.
+
+    Historical pause receipts can still name a native tree in old task work.
+    Never move/delete that seed or link its appendable files into retained
+    results. Only its declared terminal closure needs independent custody.
+    """
+    source = source.resolve()
+    output_dir = output_dir.resolve()
+    if source.is_relative_to(output_dir):
+        return source
+    destination = output_dir / "native"
+    publish_run_immutable(source / "manifest.json", destination)
+    return destination
+
+
 def publish_file_immutable(
     source: Path,
     destination: Path,
@@ -254,9 +331,8 @@ def collect_children(
     for source_manifest in source_manifests:
         run_manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
         replica_index = int(run_manifest["replica_index"])
-        source_replica_dir = source_manifest.parent
         target_replica_dir = output_dir / "replicas" / f"replica_{replica_index}"
-        publish_tree_immutable(source_replica_dir, target_replica_dir)
+        publish_run_immutable(source_manifest, target_replica_dir)
     aggregate["lineage"] = {
         "total_children": int(status.get("total") or len(child_dirs)),
         "completed_children": int(status.get("completed") or len(child_dirs)),

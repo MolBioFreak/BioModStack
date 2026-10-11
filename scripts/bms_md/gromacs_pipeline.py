@@ -252,7 +252,7 @@ def _prepare_system(
 def _consume_preparation_bundle(
     config: Mapping[str, Any], bundle: Path, output_dir: Path, ledger: StageLedger,
 ) -> tuple[Path, Path, list[Path]]:
-    from .chemistry.prepare import verify_preparation_bundle
+    from .chemistry.prepare import retain_prepared_file, verify_preparation_bundle
 
     chemistry = config.get("chemistry") or {}
     manifest = verify_preparation_bundle(
@@ -275,10 +275,10 @@ def _consume_preparation_bundle(
     required = [coordinates, topology, *position_restraints]
     if not ledger.is_complete("preparation", required):
         ledger.mark_running("preparation", ["consume-immutable-bundle", manifest["bundle_sha256"]])
-        shutil.copy2(Path(bundle) / "system.gro", coordinates)
-        shutil.copy2(Path(bundle) / "system.top", topology)
+        retain_prepared_file(Path(bundle) / "system.gro", coordinates)
+        retain_prepared_file(Path(bundle) / "system.top", topology)
         for source_name, destination_path in zip(restraint_names, position_restraints, strict=True):
-            shutil.copy2(Path(bundle) / source_name, destination_path)
+            retain_prepared_file(Path(bundle) / source_name, destination_path)
         ledger.mark_completed(
             "preparation", required,
             performance={"bundle_sha256": manifest["bundle_sha256"]},
@@ -527,10 +527,11 @@ def run_gromacs_job(
             replica_index=replica_index, gmx_binary=gmx_binary,
             version_output=version_output, preparation_bundle=preparation_bundle, ledger=ledger,
         )
+    prepared_inputs: list[Path] = []
     if config.get("schema") == "bms.md.job.v2":
         if preparation_bundle is None:
             raise ValueError("bms.md.job.v2 requires an immutable preparation bundle")
-        coordinates, topology, _ = _consume_preparation_bundle(
+        coordinates, topology, prepared_inputs = _consume_preparation_bundle(
             config, preparation_bundle, output_dir, ledger,
         )
     else:
@@ -613,6 +614,7 @@ def run_gromacs_job(
         engine_version=_version_summary(version_output),
         platform="CUDA" if config["execution"]["gpu_offload"] != "none" else "CPU",
         artifacts={
+            **{f"preparation_{index}": path for index, path in enumerate(prepared_inputs)},
             "normalized_config": normalized_config,
             "topology": topology,
             "coordinates": coordinates,

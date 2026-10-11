@@ -557,6 +557,22 @@ def build_run_manifest(
     config = normalize_job_config(job_config)
     if replica_index < 0 or replica_index >= config["replicas"]:
         raise ValueError("replica_index is outside configured replica range")
+    artifacts = dict(artifacts)
+    # Collection retains declared terminal files rather than the execution tree.
+    # Keep topology includes beside the topology for physical-path consumers.
+    # External native inputs already have an explicit, verified include closure;
+    # legacy pdb2gmx emits its local chain/restraint ITPs next to topol.top.
+    topology = artifacts.get("topology")
+    if topology is not None:
+        candidates = set(Path(topology).parent.glob("*.itp"))
+        closure = config.get("input", {}).get("topology_closure")
+        if isinstance(closure, Mapping):
+            closure_root = Path(str(closure.get("root") or ""))
+            candidates.update(closure_root / record["path"] for record in closure.get("files", []))
+        declared = {Path(path).resolve() for path in artifacts.values()}
+        for path in sorted(candidates):
+            if path.resolve().is_relative_to(output_dir.resolve()) and path.resolve() not in declared:
+                artifacts[f"topology_include_{len(artifacts)}"] = path
     return {
         "schema": MD_RUN_SCHEMA,
         "job_schema": config["schema"],
