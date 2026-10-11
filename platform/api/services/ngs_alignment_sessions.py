@@ -418,15 +418,59 @@ def _uncached_artifact_snapshot(path: Path, expected_size: int, expected_sha256:
         source.close()
 
 
+def _borrow_retained_artifact(path: Path, expected_size: int, expected_sha256: str) -> BinaryIO | None:
+    """Borrow only existing NGS custody owners, not arbitrary read-only uploads.
+
+    The caller still authorizes the artifact and supplies its recorded identity.
+    The descriptor owns the read lifetime, even if the retained name is removed.
+    Legacy writable custody leaves continue through the snapshot implementation.
+    """
+    from paths import get_inputs_dir, get_molbio_ngs_reference_root
+
+    absolute = Path(os.path.abspath(path))
+    roots = [get_molbio_ngs_reference_root(), *(
+        get_inputs_dir() / family for family in (
+            "ont_fastq_launch_snapshots", "ont_external_move_launch_snapshots",
+            "ont_instrument_launch_snapshots", "molbio_ngs_managed_launch_snapshots",
+        )
+    )]
+    if not any(absolute.is_relative_to(root) for root in roots):
+        return None
+    source = _open_regular_file_no_symlinks(absolute)
+    try:
+        before = os.fstat(source.fileno())
+        if before.st_mode & 0o222:
+            source.close()
+            return None
+        if before.st_size != expected_size:
+            raise AlignmentSessionError("artifact integrity size mismatch")
+        digest = hashlib.sha256()
+        while chunk := source.read(SNAPSHOT_CHUNK_BYTES):
+            digest.update(chunk)
+        after = os.fstat(source.fileno())
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+        ) or digest.hexdigest() != expected_sha256:
+            raise AlignmentSessionError("artifact integrity digest mismatch")
+        source.seek(0)
+        return source
+    except BaseException:
+        source.close()
+        raise
+
+
 def open_verified_artifact_snapshot(
     path: Path,
     *,
     expected_size: int,
     expected_sha256: str,
 ) -> BinaryIO:
-    """Return a private exact-byte snapshot bound to the declared digest."""
+    """Return exact bytes, borrowing immutable custody or snapshotting mutable input."""
     if expected_size < 0 or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
         raise AlignmentSessionError("artifact integrity metadata is invalid")
+    borrowed = _borrow_retained_artifact(path, expected_size, expected_sha256)
+    if borrowed is not None:
+        return borrowed
     if expected_size > SNAPSHOT_CACHE_MAX_BYTES:
         return _uncached_artifact_snapshot(path, expected_size, expected_sha256)
     try:

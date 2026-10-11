@@ -224,6 +224,33 @@ def _snapshot_managed_reference(
         created_root = True
         destination_parent_fd = _open_absolute_directory_nofollow(snapshot_root)
         try:
+            # New reference revisions are completion-published read-only by this
+            # owner. Keep independent launch names (and cleanup ownership), but
+            # not another body. Historical writable revisions retain snapshots.
+            if (not source_stat.st_mode & 0o222
+                    and source.is_relative_to(get_molbio_ngs_reference_root().resolve())):
+                digest = hashlib.sha256()
+                copied = 0
+                while chunk := os.read(source_fd, 1024 * 1024):
+                    digest.update(chunk)
+                    copied += len(chunk)
+                if copied != expected_size_bytes or digest.hexdigest() != expected_sha256:
+                    raise StateIntegrityError("managed reference bytes drifted while creating launch snapshot")
+                try:
+                    os.link(source.name, "reference.fasta", src_dir_fd=source_parent_fd,
+                            dst_dir_fd=destination_parent_fd, follow_symlinks=False)
+                except OSError as exc:
+                    import errno
+                    if exc.errno != errno.EXDEV:
+                        raise
+                    os.lseek(source_fd, 0, os.SEEK_SET)
+                else:
+                    linked = os.stat("reference.fasta", dir_fd=destination_parent_fd, follow_symlinks=False)
+                    if (linked.st_dev, linked.st_ino) != (source_stat.st_dev, source_stat.st_ino):
+                        raise StateIntegrityError("managed reference source changed during publication")
+                    os.fsync(destination_parent_fd)
+                    published = True
+                    return snapshot_root / "reference.fasta", digest.hexdigest(), copied
             create_flags = (
                 os.O_WRONLY
                 | os.O_CREAT
@@ -294,6 +321,7 @@ def _write_managed_bytes(relative: str, content: bytes) -> None:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(content)
             stream.flush()
+            os.fchmod(stream.fileno(), 0o400)
             os.fsync(stream.fileno())
         os.replace(temporary_name, destination)
         directory_descriptor = os.open(destination.parent, os.O_RDONLY)
