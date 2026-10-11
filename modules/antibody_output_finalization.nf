@@ -3,10 +3,10 @@ nextflow.enable.dsl = 2
 process FinalizeSequentialValidationOutputs {
     label 'process_low'
 
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.pdb"
+    publishDir "${params.out_dir}/pdb_files", mode: 'link', overwrite: true, pattern: "validated_designs/*.pdb"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.json"
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.cif"
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.npz"
+    publishDir "${params.out_dir}/pdb_files", mode: 'link', overwrite: true, pattern: "validated_designs/*.cif"
+    publishDir "${params.out_dir}/pdb_files", mode: 'link', overwrite: true, pattern: "validated_designs/*.npz"
     publishDir "${params.out_dir}/pdb_files/aligned_error", mode: 'copy', pattern: "validated_designs/aligned_error/*.json", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}", mode: 'copy', pattern: "aggregation_report.json"
 
@@ -15,6 +15,7 @@ process FinalizeSequentialValidationOutputs {
 
     output:
     path "validated_designs/*.pdb", emit: pdbs, optional: true
+    path "validated_designs/*.cif", emit: cifs, optional: true
     path "validated_designs/*.json", emit: scores, optional: true
     path "validated_designs/*.npz", emit: aligned_error, optional: true
     path "validated_designs/aligned_error/*.json", emit: aligned_error_json, optional: true
@@ -35,7 +36,10 @@ process FinalizeSequentialValidationOutputs {
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
+sys.path.insert(0, "${params.code_root}/scripts")
+from child_job_utils import publish_collected_file
 
 manifest = json.loads(Path("${artifact_manifest_file}").read_text(encoding="utf-8"))
 validated_dir = Path("validated_designs")
@@ -67,7 +71,10 @@ for key in ("pdbs", "cifs", "scores", "aligned_error"):
             continue
         dest_root = aligned_error_dir if key == "aligned_error" and source_path.suffix.lower() == ".json" else validated_dir
         dest_path = choose_dest_name(dest_root, source_path.name)
-        shutil.copy2(source_path, dest_path)
+        if key == "scores" or source_path.suffix.lower() == ".json":
+            shutil.copy2(source_path, dest_path)
+        else:
+            publish_collected_file(source_path, dest_path, published=True)
         if source_path.suffix.lower() == ".pdb":
             total_pdbs += 1
             if len(report_files) < 50:
@@ -105,7 +112,7 @@ PY
             rel_path="\${staged_artifact#validated_designs/}"
             dest_dir="${params.out_dir}/pdb_files/validated_designs/\$(dirname "\$rel_path")"
             mkdir -p "\$dest_dir"
-            cp -f "\$staged_artifact" "\$dest_dir/"
+            python3 ${params.code_root}/scripts/child_job_utils.py --validation --published "\$staged_artifact" "\$dest_dir/\$(basename "\$staged_artifact")"
         done < <(find validated_designs -type f -print0)
         cp -f aggregation_report.json "${params.out_dir}/aggregation_report.json"
         echo "Triggering result ingestion for parent job..."

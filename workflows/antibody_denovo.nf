@@ -561,8 +561,10 @@ process NormalizeTargetPDB {
 process StageRFantibodyBackbones {
     label 'process_low'
 
-    publishDir "${params.out_dir}/collected/rfantibody_raw", mode: 'copy', pattern: "staged_output/*.pdb", saveAs: { fn -> fn.replace('staged_output/', '') }
-    publishDir "${params.out_dir}/collected/rfantibody_raw", mode: 'copy', pattern: "staged_output/*.trb", saveAs: { fn -> fn.replace('staged_output/', '') }
+    // The directory output subsumes its leaves in Nextflow's publish set.
+    // Publish that directory recursively; the link strategy retains regular leaves.
+    publishDir "${params.out_dir}/collected", mode: 'link', overwrite: true, pattern: "staged_output", saveAs: { 'rfantibody_raw' }
+    publishDir "${params.out_dir}/collected/rfantibody_raw", mode: 'copy', pattern: "rfantibody_stage_summary.json"
 
     input:
     path pdb_files
@@ -585,15 +587,23 @@ process StageRFantibodyBackbones {
         if [ -e "\$dest" ]; then
             dest="staged_output/\${count}_\$base"
         fi
-        cp "\$pdb" "\$dest"
-        trb="\${pdb%.pdb}.trb"
+        resolved_pdb=\$(readlink -f "\$pdb")
+        publication_arg=--published
+        # RFANTIBODY's legacy output/ tree is also its native resume body.
+        # Snapshot it even if inherited source permissions happen to be read-only.
+        case "\$resolved_pdb" in
+            */output/*|*/run/rfantibody/*) publication_arg="" ;;
+        esac
+        python3 ${params.code_root}/scripts/child_job_utils.py \$publication_arg "\$pdb" "\$dest"
+        # Nextflow stages only the PDB channel; the closed sibling lives beside its referent.
+        trb="\${resolved_pdb%.pdb}.trb"
         if [ -f "\$trb" ]; then
             trb_base="\$(basename "\$trb")"
             trb_dest="staged_output/\$trb_base"
             if [ -e "\$trb_dest" ]; then
                 trb_dest="staged_output/\${count}_\$trb_base"
             fi
-            cp "\$trb" "\$trb_dest"
+            python3 ${params.code_root}/scripts/child_job_utils.py \$publication_arg "\$trb" "\$trb_dest"
         fi
         count=\$((count + 1))
     done
@@ -892,9 +902,10 @@ process WaitForChildren {
 process CollectChildOutputs {
     label 'process_low'
     
-    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.pdb"
-    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.trb"
-    publishDir "${params.out_dir}/collected/${stage_name}/traj", mode: 'copy', pattern: "traj/*.pdb", saveAs: { fn -> fn.replace('traj/', '') }
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'link', overwrite: true, pattern: "*.pdb"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'link', overwrite: true, pattern: "*.trb"
+    publishDir "${params.out_dir}/collected/${stage_name}/traj", mode: 'link', overwrite: true, pattern: "traj/*.pdb", saveAs: { fn -> fn.replace('traj/', '') }
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "collection_manifest.json"
     
     input:
     path child_outputs_json
@@ -918,52 +929,13 @@ process CollectChildOutputs {
     
     import sys
     sys.path.insert(0, "${params.code_root}/scripts")
-    from child_job_utils import complete_native_collection
+    from child_job_utils import complete_native_collection, collect_rfantibody_outputs
     output_dirs = data.get("child_output_dirs", [])
-    accepted = {str(d): [] for d in output_dirs}
-    collected = []
-    collected_trbs = []
-    collected_trajs = []
-    traj_dir = Path("traj")
-    traj_dir.mkdir(exist_ok=True)
-    
-    for job_idx, output_dir in enumerate(output_dirs):
-        dir_path = Path(output_dir)
-        if not dir_path.exists():
-            print(f"Warning: Output dir not found: {output_dir}")
-            continue
-        
-        # Look for PDBs in standard locations
-        for subdir in ["pdb_files", "run/rfantibody/output", "run/rfantibody", "run/fampnn/results", ""]:
-            search_path = dir_path / subdir if subdir else dir_path
-            if not search_path.exists():
-                continue
-            for pdb in search_path.glob("*.pdb"):
-                # Add job index prefix to avoid filename collisions between child jobs
-                dest = Path(f"job{job_idx}_{pdb.name}")
-                if not dest.exists():
-                    shutil.copy(pdb, dest)
-                    collected.append(str(dest))
-                    accepted[output_dir].append(pdb)
-                    print(f"Collected: {pdb} -> {dest}")
-                trb = pdb.with_suffix(".trb")
-                if trb.exists():
-                    trb_dest = Path(f"job{job_idx}_{trb.name}")
-                    if not trb_dest.exists():
-                        shutil.copy(trb, trb_dest)
-                        collected_trbs.append(str(trb_dest))
-                        accepted[output_dir].append(trb)
-                        print(f"Collected: {trb} -> {trb_dest}")
-            traj_search = search_path / "traj"
-            if traj_search.exists():
-                for traj in traj_search.glob("*.pdb"):
-                    traj_dest = traj_dir / f"job{job_idx}_{traj.name}"
-                    if not traj_dest.exists():
-                        shutil.copy(traj, traj_dest)
-                        collected_trajs.append(str(traj_dest))
-                        accepted[output_dir].append(traj)
-                        print(f"Collected trajectory: {traj} -> {traj_dest}")
-    
+    retained, accepted = collect_rfantibody_outputs(output_dirs, Path("."))
+    collected = retained["collected_pdbs"]
+    collected_trbs = retained["collected_trbs"]
+    collected_trajs = retained["collected_trajectories"]
+
     manifest = {
         "stage": "${stage_name}",
         "source_dirs": output_dirs,
@@ -1012,7 +984,7 @@ process WaitForFAMPNNChildren {
 process CollectFAMPNNOutputs {
     label 'process_low'
     
-    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "job*.pdb"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'link', overwrite: true, pattern: "job*.pdb"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "job*.json"
     
     input:
@@ -1035,7 +1007,7 @@ process CollectFAMPNNOutputs {
     
     import sys
     sys.path.insert(0, "${params.code_root}/scripts")
-    from child_job_utils import complete_native_collection
+    from child_job_utils import complete_native_collection, publish_collected_file
     output_dirs = data.get("child_output_dirs", [])
     accepted = {str(d): [] for d in output_dirs}
     collected_pdbs = []
@@ -1074,7 +1046,7 @@ process CollectFAMPNNOutputs {
             for pdb in search_path.glob("*.pdb"):
                 dest = Path(f"job{job_idx}_{pdb.name}")
                 if not dest.exists():
-                    shutil.copy(pdb, dest)
+                    publish_collected_file(pdb, dest, published=subdir in ("pdb_files", "collected/fampnn_filtered"))
                     collected_pdbs.append(str(dest))
                     accepted[output_dir].append(pdb)
                     print(f"Collected PDB: {pdb} -> {dest}")
@@ -1111,7 +1083,7 @@ process CollectFAMPNNOutputs {
 process StageMaturationInputs {
     label 'process_low'
 
-    publishDir "${params.out_dir}/ppiflow/input_pdbs", mode: 'copy', pattern: "*.pdb"
+    publishDir "${params.out_dir}/ppiflow", mode: 'link', overwrite: true, pattern: "input_pdbs"
 
     input:
     path pdbs
@@ -1122,7 +1094,9 @@ process StageMaturationInputs {
     script:
     """
     mkdir -p input_pdbs
-    cp ${pdbs} input_pdbs/ 2>/dev/null || true
+    for pdb in ${pdbs}; do
+        python3 ${params.code_root}/scripts/child_job_utils.py --published "\$pdb" "input_pdbs/\$(basename "\$pdb")" 2>/dev/null || true
+    done
     """
 }
 
@@ -1277,7 +1251,7 @@ process WaitForMaturationChildren {
 process CollectMaturationOutputs {
     label 'process_low'
 
-    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.pdb"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'link', overwrite: true, pattern: "*.pdb"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.json"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.txt"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.csv"
@@ -1305,14 +1279,15 @@ process CollectMaturationOutputs {
 process StageValidatedMaturationInputs {
     label 'process_low'
 
-    publishDir "${params.out_dir}/ppiflow/validated_input_pdbs", mode: 'copy', pattern: "input_pdbs/*.pdb", saveAs: { fn -> fn.replace('input_pdbs/', '') }
+    publishDir "${params.out_dir}/ppiflow/validated_input_pdbs", mode: 'link', overwrite: true, pattern: "input_pdbs/*.pdb", saveAs: { fn -> fn.replace('input_pdbs/', '') }
     publishDir "${params.out_dir}/ppiflow/validated_input_pdbs", mode: 'copy', pattern: "input_pdbs/source_identity.json", saveAs: { fn -> fn.replace('input_pdbs/', '') }
 
     input:
     tuple val(identity_json), path(pdbs)
 
     output:
-    path "input_pdbs", emit: pdb_dir
+    val "${task.workDir}/input_pdbs", emit: pdb_dir
+    path "input_pdbs/*", emit: artifacts
 
     script:
     def encodedIdentity = identity_json.bytes.encodeBase64().toString()
@@ -1473,7 +1448,7 @@ process WaitForValidatedMaturationChildren {
 process CollectValidatedMaturationOutputs {
     label 'process_low'
 
-    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.pdb"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'link', overwrite: true, pattern: "*.pdb"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.json"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.txt"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.csv"
@@ -1501,25 +1476,29 @@ process CollectValidatedMaturationOutputs {
 process StageStructureValidationArtifacts {
     label 'process_low'
 
-    publishDir "${params.out_dir}/collected/structure_validation", mode: 'copy', pattern: "validation_artifacts/*"
+    publishDir "${params.out_dir}/collected/structure_validation", mode: 'link', overwrite: true, pattern: "validation_artifacts/*.{pdb,cif,npz}", saveAs: { fn -> fn.tokenize('/')[-1] }
+    publishDir "${params.out_dir}/collected/structure_validation", mode: 'copy', pattern: "validation_artifacts/*.json", saveAs: { fn -> fn.tokenize('/')[-1] }
 
     input:
     path pdb_list_file
 
     output:
-    path "validation_artifacts", emit: dir
+    val "${task.workDir}/validation_artifacts", emit: dir
+    path "validation_artifacts/*", emit: artifacts, optional: true
 
     script:
     """
     set -euo pipefail
     shopt -s nullglob
     mkdir -p validation_artifacts
-    cp "${pdb_list_file}" pdbs.list
+    if [ ! -e pdbs.list ] || [ ! "${pdb_list_file}" -ef pdbs.list ]; then
+        cp "${pdb_list_file}" pdbs.list
+    fi
 
     copy_if_present() {
         local src="\$1"
         [ -f "\$src" ] || return 0
-        cp -f "\$src" "validation_artifacts/\$(basename "\$src")" 2>/dev/null || true
+        python3 ${params.code_root}/scripts/child_job_utils.py --validation --published "\$src" "validation_artifacts/\$(basename "\$src")" 2>/dev/null || true
     }
 
     while IFS= read -r pdb; do
@@ -1528,7 +1507,7 @@ process StageStructureValidationArtifacts {
         base="\$(basename "\$pdb")"
         stem="\${base%.*}"
         src_dir="\$(dirname "\$pdb")"
-        cp -f "\$pdb" "validation_artifacts/\$base"
+        python3 ${params.code_root}/scripts/child_job_utils.py --published "\$pdb" "validation_artifacts/\$base"
 
         copy_if_present "\${pdb%.*}.json"
         copy_if_present "\${pdb%.*}.cif"
@@ -1811,10 +1790,10 @@ process SpawnChildJobs {
 process WaitAndAggregateChildResults {
     label 'process_low'
     
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.pdb"
+    publishDir "${params.out_dir}/pdb_files", mode: 'link', overwrite: true, pattern: "validated_designs/*.pdb"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.json"
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.cif"
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.npz"
+    publishDir "${params.out_dir}/pdb_files", mode: 'link', overwrite: true, pattern: "validated_designs/*.cif"
+    publishDir "${params.out_dir}/pdb_files", mode: 'link', overwrite: true, pattern: "validated_designs/*.npz"
     publishDir "${params.out_dir}/pdb_files/aligned_error", mode: 'copy', pattern: "validated_designs/aligned_error/*.json", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}", mode: 'copy', pattern: "aggregation_report.json"
     
@@ -1828,6 +1807,7 @@ process WaitAndAggregateChildResults {
 
     output:
     path "validated_designs/*.pdb", emit: pdbs, optional: true
+    path "validated_designs/*.cif", emit: cifs, optional: true
     path "validated_designs/*.json", emit: scores, optional: true
     path "validated_designs/*.npz", emit: aligned_error, optional: true
     path "validated_designs/aligned_error/*.json", emit: aligned_error_json, optional: true
@@ -1919,7 +1899,7 @@ with open('wait_result.json') as f:
                             dest_dir="validated_designs/aligned_error"
                         fi
                         dest_path=\$(choose_dest_name "\$dest_dir" "\$child_idx" "\$basename")
-                        if cp "\$artifact_path" "\$dest_path" 2>/dev/null; then
+                        if python3 ${params.code_root}/scripts/child_job_utils.py --validation --published "\$artifact_path" "\$dest_path" 2>/dev/null; then
                             printf '%s\\0%s\\0' "\$child_dir" "\$artifact_path" >> collection_sources.bin
                         fi
                         COPIED_BASENAMES[\$basename]=1
@@ -1976,7 +1956,7 @@ PY
             rel_path="\${staged_artifact#validated_designs/}"
             dest_dir="${params.out_dir}/pdb_files/validated_designs/\$(dirname "\$rel_path")"
             mkdir -p "\$dest_dir"
-            cp -f "\$staged_artifact" "\$dest_dir/"
+            python3 ${params.code_root}/scripts/child_job_utils.py --validation --published "\$staged_artifact" "\$dest_dir/\$(basename "\$staged_artifact")"
         done < <(find validated_designs -type f -print0)
         cp -f aggregation_report.json "${params.out_dir}/aggregation_report.json"
         # Native host ingestion runs only after authorized result return.

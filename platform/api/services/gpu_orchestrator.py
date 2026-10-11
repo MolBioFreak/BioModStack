@@ -590,48 +590,10 @@ def _recover_rfantibody_parent_after_child_wait(job: Any, child_wait_success: Di
     for directory in (collected_dir, raw_dir, traj_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
-    collected_pdbs: list[str] = []
-    collected_trbs: list[str] = []
-    collected_trajs: list[str] = []
+    from scripts.child_job_utils import collect_rfantibody_outputs
 
     output_dirs = child_wait_success.get("output_dirs") or []
-    for job_idx, child_output_dir in enumerate(output_dirs):
-        dir_path = Path(str(child_output_dir))
-        if not dir_path.exists():
-            continue
-
-        for subdir in ("pdb_files", "run/rfantibody/output", "run/rfantibody", "run/fampnn/results", ""):
-            search_path = dir_path / subdir if subdir else dir_path
-            if not search_path.exists():
-                continue
-
-            for pdb in search_path.glob("*.pdb"):
-                dest_name = f"job{job_idx}_{pdb.name}"
-                collected_dest = collected_dir / dest_name
-                raw_dest = raw_dir / dest_name
-                if not collected_dest.exists():
-                    shutil.copy2(pdb, collected_dest)
-                if not raw_dest.exists():
-                    shutil.copy2(pdb, raw_dest)
-                collected_pdbs.append(str(collected_dest))
-
-                trb = pdb.with_suffix(".trb")
-                if trb.exists():
-                    collected_trb_dest = collected_dir / f"job{job_idx}_{trb.name}"
-                    raw_trb_dest = raw_dir / f"job{job_idx}_{trb.name}"
-                    if not collected_trb_dest.exists():
-                        shutil.copy2(trb, collected_trb_dest)
-                    if not raw_trb_dest.exists():
-                        shutil.copy2(trb, raw_trb_dest)
-                    collected_trbs.append(str(collected_trb_dest))
-
-            traj_search = search_path / "traj"
-            if traj_search.exists():
-                for traj in traj_search.glob("*.pdb"):
-                    traj_dest = traj_dir / f"job{job_idx}_{traj.name}"
-                    if not traj_dest.exists():
-                        shutil.copy2(traj, traj_dest)
-                    collected_trajs.append(str(traj_dest))
+    collect_rfantibody_outputs(output_dirs, collected_dir, raw_destination=raw_dir)
 
     # Make the recovery idempotent by re-listing final files from disk.
     collected_pdbs = sorted(str(path) for path in collected_dir.glob("*.pdb"))

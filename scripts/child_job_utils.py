@@ -27,6 +27,86 @@ ACTIVE_STATUSES = {"queued", "pending", "running", "awaiting_input"}
 FAILED_STATUSES = {"failed", "cancelled"}
 
 
+def publish_collected_file(source: Path, destination: Path, *, published: bool = False) -> Path:
+    """Retain a closed collection leaf with an independent name, atomically.
+
+    Only a publication-owned read-only donor may be shared. Mutable native RF
+    resume files (including read-only legacy files in raw run directories) are
+    snapshots, never donors. No chmod or in-place write touches a shared inode.
+    Metadata callers keep using private copies.
+    """
+    import errno
+    import shutil
+    import tempfile
+
+    source, destination = Path(source), Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".publish", dir=destination.parent)
+    os.close(fd)
+    temporary = Path(name)
+    try:
+        if published and not source.stat().st_mode & 0o222:
+            temporary.unlink()
+            try:
+                os.link(source.resolve(strict=True), temporary)
+            except OSError as exc:
+                if exc.errno != errno.EXDEV:
+                    raise
+                shutil.copyfile(source, temporary)
+                temporary.chmod(0o444)
+        else:
+            shutil.copyfile(source, temporary)
+            temporary.chmod(0o444)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
+
+
+def collect_rfantibody_outputs(output_dirs, destination: Path, *, raw_destination: Path | None = None):
+    """Normal native collection and controller recovery share custody/names.
+
+    Search order and job prefixes are the original collector's policy. Preserve
+    accepted source evidence separately from independent retained output names.
+    """
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / "traj").mkdir(exist_ok=True)
+    accepted = {str(d): [] for d in output_dirs}
+    collected = {"collected_pdbs": [], "collected_trbs": [], "collected_trajectories": []}
+    for job_idx, output_dir in enumerate(output_dirs):
+        root = Path(output_dir)
+        if not root.exists():
+            print(f"Warning: Output dir not found: {output_dir}")
+            continue
+        for subdir in ("pdb_files", "run/rfantibody/output", "run/rfantibody", "run/fampnn/results", ""):
+            search = root / subdir
+            if not search.exists():
+                continue
+            for pdb in search.glob("*.pdb"):
+                for source, key in ((pdb, "collected_pdbs"), (pdb.with_suffix(".trb"), "collected_trbs")):
+                    if not source.exists():
+                        continue
+                    target = destination / f"job{job_idx}_{source.name}"
+                    if not target.exists():
+                        publish_collected_file(source, target, published=subdir == "pdb_files")
+                        accepted[str(output_dir)].append(source)
+                    if raw_destination is not None:
+                        raw_target = Path(raw_destination) / target.name
+                        if not raw_target.exists():
+                            publish_collected_file(target, raw_target, published=True)
+                    if str(target) not in collected[key]:
+                        collected[key].append(str(target))
+            for source in (search / "traj").glob("*.pdb"):
+                target = destination / "traj" / f"job{job_idx}_{source.name}"
+                if not target.exists():
+                    publish_collected_file(source, target, published=subdir == "pdb_files")
+                    accepted[str(output_dir)].append(source)
+                if str(target) not in collected["collected_trajectories"]:
+                    collected["collected_trajectories"].append(str(target))
+    return collected, accepted
+
+
 def component_runtime_enabled() -> bool:
     from lib.component_adapter import runtime_from_environment
     return runtime_from_environment() is not None
@@ -284,3 +364,19 @@ def apply_child_resume_params(
         updated["resume_stage_work_dir"] = resume_stage_work_dir
 
     return updated
+
+
+if __name__ == "__main__":
+    import argparse
+    import shutil
+    parser = argparse.ArgumentParser(description="Retain a completed antibody collection artifact")
+    parser.add_argument("source", type=Path)
+    parser.add_argument("destination", type=Path)
+    parser.add_argument("--published", action="store_true")
+    parser.add_argument("--validation", action="store_true", help="Keep validation JSON/control metadata private")
+    args = parser.parse_args()
+    if args.validation and args.source.suffix.lower() not in {".pdb", ".cif", ".npz"}:
+        args.destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(args.source, args.destination)
+    else:
+        publish_collected_file(args.source, args.destination, published=args.published)
