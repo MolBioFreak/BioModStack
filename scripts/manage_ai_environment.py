@@ -183,7 +183,6 @@ def command_create(args: argparse.Namespace) -> dict[str, object]:
             "worktree": str(worktree),
             "state_root": str(isolated_state),
             "shared_weights_root": str(shared["weights_root"]),
-            "disposable_scratch": str(isolated_state / ".disposable"),
             "api_port": api_port,
             "web_port": web_port,
             "api_url": f"http://127.0.0.1:{api_port}",
@@ -192,6 +191,10 @@ def command_create(args: argparse.Namespace) -> dict[str, object]:
             "bioxp_mutations_enabled": False,
             "created_at": now(),
         }
+        scratch = isolated_state / ".disposable"
+        if not scratch.exists() and not scratch.is_symlink():
+            scratch.mkdir()
+            receipt["disposable_scratch"] = str(scratch)
         save_receipt(receipt)
         return receipt
 

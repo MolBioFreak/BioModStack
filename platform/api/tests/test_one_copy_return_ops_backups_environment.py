@@ -236,7 +236,8 @@ def test_cleanup_failure_is_not_close_policy(tmp_path, monkeypatch):
     assert scratch.exists()
 
 
-def test_environment_create_records_existing_shared_selection(tmp_path, monkeypatch):
+@pytest.mark.parametrize("preexisting_scratch", [False, True])
+def test_environment_create_records_existing_shared_selection(tmp_path, monkeypatch, preexisting_scratch):
     monkeypatch.setenv("BMS_AI_STATE_ROOT", str(tmp_path / "receipts"))
     monkeypatch.setenv("BMS_AI_WORKTREE_ROOT", str(tmp_path / "worktrees"))
     monkeypatch.setenv("BMS_WEIGHTS", str(tmp_path / "shared-weights"))
@@ -247,9 +248,19 @@ def test_environment_create_records_existing_shared_selection(tmp_path, monkeypa
             return ""
         return "not-empty"
     monkeypatch.setattr(env, "git", git)
+    scratch = tmp_path / "receipts/runtime/owned/.disposable"
+    if preexisting_scratch:
+        scratch.mkdir(parents=True)
+        (scratch / "unknown").write_text("prior creator")
     receipt = env.command_create(SimpleNamespace(id="owned", repo=str(tmp_path / "repo")))
     persisted = env.load_receipt("owned")
     assert persisted == receipt
     assert persisted["shared_weights_root"] == str(tmp_path / "shared-weights")
-    assert persisted["disposable_scratch"] == str(Path(persisted["state_root"]) / ".disposable")
+    if preexisting_scratch:
+        assert "disposable_scratch" not in persisted
+        env.cleanup_disposable_scratch(persisted)
+        assert (scratch / "unknown").read_text() == "prior creator"
+    else:
+        assert persisted["disposable_scratch"] == str(scratch)
+        assert scratch.is_dir()
     assert not (Path(persisted["state_root"]) / "weights").exists()
