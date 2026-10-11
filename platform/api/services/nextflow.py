@@ -5735,6 +5735,11 @@ def compile_nextflow_invocation(
         effective_profile = resolve_ont_workflow_alias(effective_profile)
         params = normalize_ont_launch_params(effective_profile, params)
         params['workflow_id'] = effective_profile
+        # Server-generated from the selected publication/owned POD5 version.
+        params.pop('dorado_input_binding_json', None)
+        if params.get('pod5_dir'):
+            from services.ont_submission_trust import dorado_preflight_parameters
+            params.update(dorado_preflight_parameters(params))
         if (effective_profile == 'wf_clone_validation' or
                 (effective_profile == 'ont_construct_screening' and params.get('run_assembly') is True)):
             from scripts.validate_wf_clone_runtime import resolve_nextflow_home

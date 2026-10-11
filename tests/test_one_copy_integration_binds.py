@@ -74,10 +74,10 @@ def test_actual_nextflow_config_keeps_weight_modes_and_environment_values_separa
         assert not writable_indices or min(weight_indices) > max(writable_indices)
 
 
-def _pinned_layout(tmp_path):
+def _pinned_layout(tmp_path, model="protenix"):
     import hashlib
     weights = tmp_path / 'weights'
-    layout = weights / 'layouts/protenix' / ('a' * 64)
+    layout = weights / 'layouts' / model / ('a' * 64)
     layout.mkdir(parents=True)
     objects = {}
     for name in ('checkpoint/model.pt', 'common/components.cif'):
@@ -91,7 +91,7 @@ def _pinned_layout(tmp_path):
         member.parent.mkdir(exist_ok=True)
         member.symlink_to(os.path.relpath(source, member.parent))
         objects[name] = source
-    (weights / 'protenix').symlink_to(os.path.relpath(layout, weights), target_is_directory=True)
+    (weights / model).symlink_to(os.path.relpath(layout, weights), target_is_directory=True)
     unused = weights / 'objects/sha256' / ('f' * 64) / 'runtime.sif'
     unused.parent.mkdir()
     unused.write_bytes(b'not selected')
@@ -127,24 +127,55 @@ def test_pinned_layout_projects_only_selected_referents_at_guest_depth(tmp_path,
     assert all(mode == 'ro' for _, _, mode in binds)
 
 
-def test_actual_apptainer_selected_weight_aliases_readonly_with_writable_cache(tmp_path):
+@pytest.mark.parametrize('selected', ['protenix', 'dorado'])
+def test_actual_apptainer_selected_weight_aliases_readonly_with_writable_cache(tmp_path, selected):
     """Genuine kernel mounts with tiny payloads; no scientific execution."""
     image = os.environ.get('BMS_TEST_READONLY_SIF')
     runtime = shutil.which('apptainer')
     if not image or not Path(image).is_file() or runtime is None:
         pytest.skip('explicit existing readonly SIF and Apptainer required')
-    weights, layout, objects, _ = _pinned_layout(tmp_path)
+    weights, layout, objects, _ = _pinned_layout(tmp_path, selected)
     cache = tmp_path / 'native-cache'
     cache.mkdir()
     control = tmp_path / 'writable-control'
     control.write_bytes(b'control')
     control.chmod(0o400)
-    guest = '/protenix_weights'
-    binding = _emitted_bind(tmp_path, weights / 'protenix', guest)
+    guest = '/weights/dorado/2.1.2' if selected == 'dorado' else '/protenix_weights'
+    binding = _emitted_bind(tmp_path, weights / selected, guest)
+    pod5 = tmp_path / 'pod5-generation'
+    pod5.mkdir()
+    sentinel = pod5 / 'mount-sentinel'  # Byte visibility only, not POD5 format evidence.
+    sentinel.write_bytes(objects['checkpoint/model.pt'].read_bytes())
+    sentinel.chmod(0o444)
+    pod5_alias = tmp_path / 'pod5-selection'
+    pod5_alias.symlink_to(pod5, target_is_directory=True)
+    if selected == 'dorado':
+        # Evaluate the actual GPU label's options; execute only their emitted
+        # mounts in this CPU fixture, not GPU/scientific/scheduling flags.
+        config = (REPO / 'nextflow.config').read_text()
+        label = re.search(r"withLabel:\s*['\"]?dorado_gpu['\"]?\s*\{", config)
+        assert label
+        template = re.search(r'containerOptions = \{ (""".*?""") \}', config[label.end():], re.S).group(1)
+        methods = config[config.index('def weightBind('):config.index('def firstConfiguredGpuIds(')]
+        params = dict(gpu_id='', dorado_runtime_sif=image, code_root=str(REPO),
+                      pod5_dir=str(pod5_alias), dorado_model_root=str(layout), weights_root=str(weights))
+        script = methods + '\ndef params = new groovy.json.JsonSlurper().parseText(' + json.dumps(json.dumps(params)) + ')\n'
+        script += 'println(groovy.json.JsonOutput.toJson(' + template + '))'
+        emitted = subprocess.run(['java', '-cp', str(_jar()), 'groovy.ui.GroovyMain', '-e', script],
+            cwd=tmp_path, capture_output=True, text=True, timeout=60)
+        assert emitted.returncode == 0, emitted.stderr
+        import shlex
+        from tools.bms_container import parse_exec
+        binds = parse_exec([*shlex.split(json.loads(emitted.stdout)), image, 'true']).binds
+        assert (str(layout), guest, 'ro') in binds
+        assert (str(pod5), str(pod5), 'ro') in binds
+        binding = ','.join(':'.join(item) for item in binds)
     before = {str(p): (p.read_bytes(), p.stat().st_ino, p.stat().st_mode, p.stat().st_mtime_ns)
               for p in objects.values()}
     names = [str(objects['checkpoint/model.pt']), str(layout / 'checkpoint/model.pt'),
-             str(weights / 'protenix/checkpoint/model.pt'), guest + '/checkpoint/model.pt']
+             str(weights / selected / 'checkpoint/model.pt'), guest + '/checkpoint/model.pt']
+    if selected == 'dorado':
+        names.extend([str(sentinel), str(pod5_alias / sentinel.name)])
     code = '''set -euo pipefail
 expected="$1"; cache="$2"; control="$3"; shift 3
 # Prove the broad mount is writable despite the original source mode.

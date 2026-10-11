@@ -74,18 +74,35 @@ def test_real_selected_binding_preflight_and_concurrent_shell(tmp_path, monkeypa
     # model member/aggregate verification remains the production implementation.
     pod5_root = tmp_path/'pod5'
     _native_pod5(pod5_root)
+    from services import nextflow
+    invocation = nextflow.compile_nextflow_invocation(
+        'nanopore', 'basecall_dna',
+        {**params, 'pod5_dir': str(pod5_root), 'gpu_id': 0,
+         'dorado_input_binding_json': 'FORGED CLIENT VALUE'},
+        str(tmp_path / 'compiled-output'), job_id='fixture')
+    assert invocation.native_parameters['dorado_model_root'] == str(model_root.resolve())
+    assert json.loads(invocation.native_parameters['dorado_input_binding_json']) == binding
+    assert not (tmp_path / 'compiled-output').exists()
     runtime = tmp_path/'runtime.sif'
     runtime.write_bytes(b'NOT AN IMAGE; capability-double fixture')
     lock['dorado']['sif_sha256'] = _sha(runtime.read_bytes())
     lock_path.write_text(json.dumps(lock))
     import types
+    model_reads = []
+    original_hash = preflight._sha256
+    def count_hash(path):
+        if Path(path).resolve() == body.resolve():
+            model_reads.append(str(path))
+        return original_hash(path)
     with monkeypatch.context() as runtime_double:
+        runtime_double.setattr(preflight, '_sha256', count_hash)
         runtime_double.setattr(preflight, '_verified_runtime_location', lambda path, expected: (path, None))
         runtime_double.setattr(preflight, '_verify_runtime_capabilities', lambda *a, **k: {'scope':'inert-capability-double'})
         runtime_double.setattr(preflight.subprocess, 'run', lambda *a, **k: types.SimpleNamespace(returncode=0,stdout=lock['dorado']['version'],stderr=''))
         receipt = preflight.build_preflight(lock_path=lock_path,pod5_root=pod5_root,molecule='dna',quality='sup',mode='simplex',
             model_root=model_root,runtime_sif=runtime,selected_binding=binding)
     record = receipt['runtime']['assets']['models']['base']
+    assert len(model_reads) == 1  # The original identity pass also supplies retention.
     retained = placement != 'mutable'
     assert record.get('retained',False) is retained
     before = body.stat()
@@ -160,6 +177,11 @@ async def test_native_pod5_owner_preflight_and_shell(tmp_path, monkeypatch):
     now = datetime(2020,1,1,tzinfo=timezone.utc)
     # Real terminal owner, real SQL round trip; no copied/invented preflight input inventory.
     manifest = {'run_id':'fixture-run','observed_generation':1,'artifacts':[raw._file_artifact(source,'fixture-pod5',kind='pod5')]}
+    from sqlalchemy import event, select
+    loaded = []
+    def observed_load(record, _context):
+        loaded.append(record.id)
+    listening = False
     engine = create_async_engine('sqlite+aiosqlite:///'+str(tmp_path/'fixture.db'))
     async with engine.begin() as connection:
         for table in (OntInstrumentRun.__table__,OntInstrumentRunEvent.__table__,OntRawSignalRepresentation.__table__):
@@ -172,6 +194,20 @@ async def test_native_pod5_owner_preflight_and_shell(tmp_path, monkeypatch):
             await session.commit()
             await raw.register_native_pod5_generation(session,run_id='fixture-run',observed_generation=1)
             await session.commit()
+            original = (await session.execute(select(OntRawSignalRepresentation))).scalar_one()
+            for index in range(20):
+                unrelated = json.loads(json.dumps(original.artifact_manifest))
+                for item in unrelated['artifacts']:
+                    item['path'] = str(tmp_path / f'other-{index}' / Path(item['path']).name)
+                session.add(OntRawSignalRepresentation(
+                    id=f'unrelated-{index}', run_id='fixture-run', observed_generation=1,
+                    role='source', source_kind='minknow_native', format='pod5',
+                    state=original.state, reason_code=original.reason_code,
+                    artifact_manifest=unrelated, manifest_sha256=raw._digest(unrelated),
+                    retention_pinned_at=now))
+            await session.commit()
+        event.listen(OntRawSignalRepresentation, 'load', observed_load)
+        listening = True
         async with async_sessionmaker(engine,expire_on_commit=False)() as session:
             owned = await raw.retained_pod5_launch_binding(session,root)
             assert owned is not None
@@ -184,6 +220,7 @@ async def test_native_pod5_owner_preflight_and_shell(tmp_path, monkeypatch):
             projected = trust.dorado_preflight_parameters(job.params)
             selected_binding = json.loads(projected['dorado_input_binding_json'])
             assert selected_binding['inputs'] == owned
+            assert set(loaded) == {owned['representation_id']}
         kwargs = dict(lock_path=ROOT/'config/ngs/dorado_v2.1.2.lock.json',pod5_root=root,molecule='dna',quality='sup',mode='simplex',
             model_root=tmp_path/'unused-models',runtime_sif=tmp_path/'unused-image',verify_assets=False)
         receipt = preflight.build_preflight(**kwargs,selected_binding=selected_binding)
@@ -220,4 +257,6 @@ async def test_native_pod5_owner_preflight_and_shell(tmp_path, monkeypatch):
         assert legacy.stat().st_ino!=before.st_ino
         print(json.dumps({'native_pod5_bytes':before.st_size,'cold_warm_concurrent_consumers':4,'avoided_task_pod5_bytes':before.st_size*4,'mutable_snapshot_bytes':legacy.stat().st_size}))
     finally:
+        if listening:
+            event.remove(OntRawSignalRepresentation, 'load', observed_load)
         await engine.dispose()

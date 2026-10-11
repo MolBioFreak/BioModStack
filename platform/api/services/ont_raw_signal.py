@@ -657,6 +657,10 @@ async def retained_pod5_launch_binding(session: AsyncSession, root: Path) -> dic
         OntRawSignalRepresentation.role == 'source',
         OntRawSignalRepresentation.source_kind == 'minknow_native',
         OntRawSignalRepresentation.retention_pinned_at.is_not(None),
+        # Every eligible manifest must be wholly under this selected root.
+        # Restrict the existing JSON path before loading unrelated manifests.
+        OntRawSignalRepresentation.artifact_manifest['artifacts'][0]['path'].as_string().startswith(
+            root.as_posix().rstrip('/') + '/', autoescape=True),
     ))).scalars().all()
     for record in records:
         manifest = record.artifact_manifest or {}

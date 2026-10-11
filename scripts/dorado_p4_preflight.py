@@ -124,24 +124,28 @@ def resolve_model(lock: dict[str, Any], molecule: str, quality: str) -> dict[str
     return dict(lock["models"][molecule][quality])
 
 
-def _model_aggregate(model_dir: Path, binding: dict | None = None) -> tuple[str, int, int]:
+def _model_aggregate(model_dir: Path, binding: dict | None = None,
+                     observed: dict | None = None) -> tuple[str, int, int]:
     if not model_dir.is_dir() or model_dir.is_symlink():
         raise ValueError(f"model identity directory is unavailable or unsafe: {model_dir}")
     digest = hashlib.sha256()
     count = 0
     total = 0
     for path in sorted(model_dir.rglob("*")):
+        member = None
         if path.is_symlink():
             member = (binding or {}).get('members', {}).get(path.relative_to(model_dir).as_posix(), {})
             if not member.get('alias') or os.readlink(path) != member['alias'] or not path.is_file():
                 raise ValueError(f"model identity contains undeclared symlink: {path}")
-            if (_sha256(path), path.stat().st_size) != (member['sha256'], member['bytes']):
-                raise ValueError(f"model alias identity mismatch: {path}")
         if not path.is_file():
             continue
         relative = path.relative_to(model_dir).as_posix()
         size = path.stat().st_size
         file_digest = _sha256(path)
+        if member is not None and (file_digest, size) != (member['sha256'], member['bytes']):
+            raise ValueError(f"model alias identity mismatch: {path}")
+        if observed is not None:
+            observed[relative] = {'sha256': file_digest, 'bytes': size}
         digest.update(relative.encode("utf-8") + b"\0" + str(size).encode("ascii") + b"\0" + file_digest.encode("ascii") + b"\n")
         count += 1
         total += size
@@ -149,7 +153,8 @@ def _model_aggregate(model_dir: Path, binding: dict | None = None) -> tuple[str,
 
 
 def verify_model_identity(model: dict[str, Any], model_dir: Path, binding: dict | None = None) -> dict[str, Any]:
-    aggregate, count, total = _model_aggregate(Path(model_dir), binding)
+    observed = {}
+    aggregate, count, total = _model_aggregate(Path(model_dir), binding, observed)
     expected = (str(model["aggregate_sha256"]), int(model["files"]), int(model["bytes"]))
     actual = (aggregate, count, total)
     if actual != expected:
@@ -157,8 +162,6 @@ def verify_model_identity(model: dict[str, Any], model_dir: Path, binding: dict 
     result = {"path": str(Path(model_dir).resolve()), "aggregate_sha256": aggregate, "files": count, "bytes": total}
     if binding and binding.get('retained') is True:
         members = binding.get('members', {})
-        observed = {path.relative_to(model_dir).as_posix(): {'sha256': _sha256(path), 'bytes': path.stat().st_size}
-                    for path in sorted(model_dir.rglob('*')) if path.is_file()}
         if observed == {name: {'sha256': row['sha256'], 'bytes': row['bytes']} for name, row in members.items()}:
             result.update(retained=True, members=members)
     return result
