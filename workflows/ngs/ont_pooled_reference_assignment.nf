@@ -5,9 +5,12 @@ nextflow.enable.dsl = 2
 // dispositions and review artifacts.  This entrypoint deliberately ends at
 // operator review and has no downstream sequence-inference stages.
 
+include { ngsResultPublishMode } from '../../modules/ngs/publication'
+
 process ONTPooledReferenceAssignment {
     label 'pooled_assignment_cpu'
-    publishDir "${params.out_dir}/pooled_reference_assignment", mode: 'copy'
+    publishDir "${params.out_dir}/pooled_reference_assignment", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", pattern: '*.{fastq,fasta,fai,bam,bai}'
+    publishDir "${params.out_dir}/pooled_reference_assignment", mode: 'copy', saveAs: { name -> name ==~ /.*\.(fastq|fasta|fai|bam|bai)$/ ? null : name }
     tag "pooled_reference_assignment"
 
     input:
@@ -79,6 +82,7 @@ process ONTPooledReferenceAssignment {
         --out-dir . \\
         --min-mapq ${minMapq} \\
         --min-alignment-score-margin ${scoreMargin}
+    chmod 0444 -- *.fastq *.fasta *.fai *.bam *.bai
     """
 }
 

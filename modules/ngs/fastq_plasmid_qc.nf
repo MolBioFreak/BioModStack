@@ -49,8 +49,8 @@ process FastqPlasmidQC {
 
     script:
 
-    def retainedReference = (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source == 'server_consumed_receipt' || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false'
-    def retainedReadsArg = (params.ont_input_provenance?.source == 'managed_fastq_launch_snapshot' || (params.ont_input_mode ?: params.input_mode ?: '').toString() == 'bam') ? '--retained-source-reads' : ''
+    def retainedReference = (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source in ['server_consumed_receipt', 'pooled_reference_set_receipt'] || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false'
+    def retainedReadsArg = (params.ont_input_provenance?.source == 'managed_fastq_launch_snapshot' || params.pooled_assignment_target_binding?.binding_source == 'reviewed_pooled_assignment_summary' || (params.ont_input_mode ?: params.input_mode ?: '').toString() == 'bam') ? '--retained-source-reads' : ''
     def expectedSize = params.expected_plasmid_size == null ? '' : (params.expected_plasmid_size as Integer).toString()
     def minReadLength = (params.min_fastq_read_length ?: 0) as Integer
     def minimapPreset = ((params.fastq_minimap2_preset ?: 'map-ont') as String).trim()
@@ -177,7 +177,7 @@ process FastqPlasmidQC {
         exit 95
     fi
     ngs_input_snapshot reference.snapshot.fasta reference_qc.fasta true
-    "\${SAMTOOLS_CMD[@]}" faidx reference_qc.fasta
+    ngs_reference_index "${reference}" reference_qc.fasta ${retainedReference} || "\${SAMTOOLS_CMD[@]}" faidx reference_qc.fasta
     reference_raw_sha256_after="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
     if [[ "\${reference_raw_sha256_before}" != "\${reference_raw_sha256_after}" ]]; then
         echo "CRITICAL_FAILURE: REFERENCE_SNAPSHOT_CHANGED" >&2

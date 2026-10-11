@@ -112,24 +112,25 @@ def test_only_basecall_dna_can_emit_barcode_units() -> None:
 
 def test_authorized_bam_alignment_consumes_only_a_verified_task_local_snapshot() -> None:
     text = (ROOT / "modules/ngs/dorado_align.nf").read_text(encoding="utf-8")
-    assert 'cp --reflink=auto -- "${bam}" source.snapshot.bam' in text
+    assert 'ngs_input_snapshot "${bam}" source.snapshot.bam ${retainedBam}' in text
     assert text.count("sha256sum source.snapshot.bam") == 2
-    assert text.count("source.snapshot.bam") >= 7
+    # Both native Dorado alignment branches consume the sealed name.
+    assert text.count("            source.snapshot.bam ") == 2
     assert "task-local source BAM snapshot does not match authorized bam_source_sha256" in text
 
 
 def test_bam_prepare_and_reference_alignment_consume_authenticated_task_local_snapshots() -> None:
     prepare = (ROOT / "modules/ngs/bam_prepare.nf").read_text(encoding="utf-8").split("process ValidateMappedBam", 1)[0]
-    assert 'cp --reflink=auto -- "${bam}" source.snapshot.bam' in prepare
+    assert 'ngs_input_snapshot "${bam}" source.snapshot.bam ${retainedBam}' in prepare
     assert prepare.count("sha256sum source.snapshot.bam") == 2
     assert 'samtools sort -@ ${task.cpus} -o aligned.bam "${bam}"' not in prepare
     assert 'samtools view -c "${bam}"' not in prepare
     assert "task-local source BAM snapshot does not match authorized bam_source_sha256" in prepare
 
     align = (ROOT / "modules/ngs/dorado_align.nf").read_text(encoding="utf-8")
-    assert 'cp --reflink=auto -- "${reference}" reference.snapshot.fasta' in align
+    assert 'ngs_input_snapshot "${reference}" reference.snapshot.fasta ${retainedReference}' in align
     assert align.count("sha256sum reference.snapshot.fasta") == 2
-    assert align.count("reference.snapshot.fasta") >= 8
+    assert align.count("            reference.snapshot.fasta ") == 2
     assert "reference_sequence_sha256 must be exactly 64 hexadecimal characters" in align
     assert "task-local reference snapshot does not match authorized reference_sequence_sha256" in align
     assert 'cp "${reference}" reference.fasta' not in align

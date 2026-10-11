@@ -145,22 +145,30 @@ process DoradoBasecall {
       expected_files="\$(jq -r "\${json_key}.files" dorado_preflight.json)"
       expected_bytes="\$(jq -r "\${json_key}.bytes" dorado_preflight.json)"
       verify_model_tree "\${source}" "\${expected_sha}" "\${expected_files}" "\${expected_bytes}"
-      mkdir -p "\${target}"; cp -a --reflink=auto "\${source}/." "\${target}/"
-      verify_model_tree "\${target}" "\${expected_sha}" "\${expected_files}" "\${expected_bytes}"
+      # The selected dependency/bind owner, not file mode or the client,
+      # supplies retained authority for a concrete publisher-owned generation.
+      if [[ "\$(jq -r "\${json_key}.retained // false" dorado_preflight.json)" == true ]]; then
+        ln -s -- "\${source}" "\${target}"
+      else
+        mkdir -p "\${target}"; cp -a --reflink=auto "\${source}/." "\${target}/"
+      fi
+      verify_model_tree "\$(readlink -f -- "\${target}")" "\${expected_sha}" "\${expected_files}" "\${expected_bytes}"
     }
 
     runtime_expected="\$(jq -r '.runtime.assets.runtime_sif.sha256' dorado_preflight.json)"
     runtime_observed="\$(sha256sum /runtime/dorado.sif | cut -d' ' -f1)"
     [[ "\${runtime_observed}" == "\${runtime_expected}" ]] || { echo 'Dorado runtime changed after preflight' >&2; exit 1; }
 
+    source "${params.code_root ?: projectDir}/scripts/ngs_input_snapshot.sh"
     pod5_source=${doradoShellQuote(pod5_dir)}
+    retained_pod5="\$(jq -r '.inputs.retained // false' dorado_preflight.json)"
     mkdir -p sealed_pod5 sealed_models
     while IFS=\$'\t' read -r relative expected_sha expected_bytes; do
       [[ "\${relative}" != /* && "\${relative}" != *'..'* ]]
       source_file="\${pod5_source}/\${relative}"; target_file="sealed_pod5/\${relative}"
       [[ -f "\${source_file}" && ! -L "\${source_file}" ]]
       [[ "\$(sha256sum "\${source_file}" | cut -d' ' -f1)" == "\${expected_sha}" && "\$(stat -c %s "\${source_file}")" == "\${expected_bytes}" ]] || { echo "POD5 input changed after preflight: \${relative}" >&2; exit 1; }
-      mkdir -p "\$(dirname "\${target_file}")"; cp --reflink=auto --preserve=mode,timestamps "\${source_file}" "\${target_file}"
+      mkdir -p "\$(dirname "\${target_file}")"; ngs_input_snapshot "\${source_file}" "\${target_file}" "\${retained_pod5}"
       [[ "\$(sha256sum "\${target_file}" | cut -d' ' -f1)" == "\${expected_sha}" ]] || { echo "POD5 snapshot identity mismatch: \${relative}" >&2; exit 1; }
     done < <(jq -r '.inputs.files[] | [.relative_path,.sha256,.bytes] | @tsv' dorado_preflight.json)
 
@@ -254,9 +262,12 @@ process DoradoBasecall {
     """
 }
 
+include { ngsResultPublishMode } from './publication'
+
 process DoradoDemux {
     label 'dorado_cpu'
-    publishDir "${params.out_dir}/demux", mode: 'copy'
+    publishDir "${params.out_dir}/demux", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", saveAs: { name -> name ==~ /.*\.bam$/ ? name : null }
+    publishDir "${params.out_dir}/demux", mode: 'copy', saveAs: { name -> name == 'demux' || name ==~ /.*\.bam$/ ? null : name }
     tag 'dorado-demux'
 
     input:
@@ -264,7 +275,8 @@ process DoradoDemux {
     path preflight_json
 
     output:
-    path "demux", emit: directory
+    env published_directory, emit: directory
+    path "demux/**", type: 'file', hidden: true, emit: publication_files
     path "demux_manifest.json", emit: manifest
     path "per_barcode_units.json", emit: units
     path "demux.log", emit: log
@@ -272,6 +284,7 @@ process DoradoDemux {
     script:
     """
     set -euo pipefail
+    export published_directory="\$PWD/demux"
     [[ "\$(jq -r '.schema' ${doradoShellQuote(preflight_json)})" == 'biomodstack.dorado_preflight.v1' ]]
     [[ "\$(jq -r '.selection.mode' ${doradoShellQuote(preflight_json)})" == 'simplex' ]]
     [[ -n "\$(jq -r '.barcoding.kit // empty' ${doradoShellQuote(preflight_json)})" ]]
@@ -314,6 +327,7 @@ process DoradoDemux {
     for source_bam in "\${source_bams[@]}"; do
       [[ -L "\${source_bam}" ]] && { echo 'demux symlink forbidden' >&2; exit 1; }
       samtools quickcheck -u -v "\${source_bam}"
+      chmod 0444 "\${source_bam}"
       if ! source_label="\$(canonical_label "\${source_bam}")"; then
         echo "CRITICAL_FAILURE: UNKNOWN_DEMUX_LABEL" >&2
         exit 86
@@ -336,7 +350,7 @@ process DoradoDemux {
         [[ "\${source_label}" == "\${label}" ]] && label_bams+=("\${source_bam}")
       done
       unit_bam="demux/units/\${label}.bam"
-      if (( \${#label_bams[@]} == 1 )); then chmod 0444 "\${label_bams[0]}"; ln "\${label_bams[0]}" "\${unit_bam}"; else samtools merge -u -f "\${unit_bam}" "\${label_bams[@]}"; fi
+      if (( \${#label_bams[@]} == 1 )); then chmod 0444 "\${label_bams[0]}"; ln "\${label_bams[0]}" "\${unit_bam}"; else samtools merge -u -f "\${unit_bam}" "\${label_bams[@]}"; chmod 0444 "\${unit_bam}"; fi
       samtools quickcheck -u -v "\${unit_bam}"
       reads="\$(samtools view -c "\${unit_bam}")"; sha="\$(sha256sum "\${unit_bam}" | cut -d' ' -f1)"
       sample_alias="\${barcode_to_alias[\${label}]:-}"

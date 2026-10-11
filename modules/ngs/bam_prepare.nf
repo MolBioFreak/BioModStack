@@ -3,9 +3,12 @@
  * Process names are preserved to avoid behavior-changing call-site churn.
  */
 
+include { ngsResultPublishMode } from './publication'
+
 process PrepareBamForAnalysis {
     label 'dorado_cpu'
-    publishDir "${params.out_dir}/align", mode: 'copy'
+    publishDir "${params.out_dir}/align", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", pattern: '*.{bam,bai,fasta,fai}'
+    publishDir "${params.out_dir}/align", mode: 'copy', saveAs: { name -> name ==~ /.*\.(bam|bai|fasta|fai)$/ ? null : name }
     tag "bam_prepare"
 
     input:
@@ -212,7 +215,8 @@ process BamToFastqForQC {
 }
 process PrepareReferenceForIGV {
     label 'dorado_cpu'
-    publishDir "${params.out_dir}/align", mode: 'copy'
+    publishDir "${params.out_dir}/align", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", pattern: '*.{bam,bai,fasta,fai}'
+    publishDir "${params.out_dir}/align", mode: 'copy', saveAs: { name -> name ==~ /.*\.(bam|bai|fasta|fai)$/ ? null : name }
     tag "reference_prepare"
 
     input:
@@ -227,8 +231,11 @@ process PrepareReferenceForIGV {
     """
     set -euo pipefail
     source "${params.code_root ?: projectDir}/scripts/ngs_input_snapshot.sh"
-    ngs_input_snapshot "${reference}" reference.fasta ${ (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source == 'server_consumed_receipt' || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false' }
-    samtools faidx reference.fasta > /dev/null 2>&1
+    ngs_input_snapshot "${reference}" reference.fasta ${ (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source in ['server_consumed_receipt', 'pooled_reference_set_receipt'] || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false' } true
+    if ! ngs_reference_index "${reference}" reference.fasta ${ (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source in ['server_consumed_receipt', 'pooled_reference_set_receipt'] || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false' } true; then
+        samtools faidx reference.fasta > /dev/null 2>&1
+        chmod 0444 reference.fasta.fai
+    fi
     echo "Prepared reference.fasta and reference.fasta.fai for IGV" > reference_prepare.log
     """
 }

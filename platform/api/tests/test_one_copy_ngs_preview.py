@@ -17,6 +17,10 @@ ROOT = Path(__file__).resolve().parents[3]
     ('fastq_align', 'FastqAlign', 'file(params.input), file(params.reference)'),
     ('fastq_plasmid_qc', 'FastqPlasmidQC', 'tuple(file(params.input), file(params.input)), file(params.reference), file(params.input)'),
     ('dorado_basecall', 'DoradoDemux', 'file(params.input), file(params.input)'),
+    ('fastq_dimer_qc', 'FastqDimerAnalysis', 'file(params.input), file(params.reference)'),
+    ('clone_validation', 'RunCloneValidation', 'tuple(file(params.input), params.reference)'),
+    ('clone_validation', 'CloneValidationAdapter', 'file(params.input), file(params.input), tuple(file(params.input), file(params.input)), file(params.reference)'),
+    ('clone_validation', 'ComparePlasmidConsensus', 'file(params.input), file(params.reference)'),
 ])
 def test_native_nextflow_preview(tmp_path, module, process, args):
     jar = os.environ.get('ONE_COPY_NEXTFLOW_JAR')

@@ -428,6 +428,14 @@ def _borrow_retained_artifact(path: Path, expected_size: int, expected_sha256: s
     absolute = Path(os.path.abspath(path))
     if not retained:
         return None
+    # This is only an optimization hint: the opened descriptor is checked again
+    # below. Legacy writable artifacts use the original single-open snapshot
+    # path, including its resolver-to-open replacement protection.
+    try:
+        if absolute.stat().st_mode & 0o222:
+            return None
+    except OSError:
+        return None
     source = _open_regular_file_no_symlinks(absolute)
     try:
         before = os.fstat(source.fileno())

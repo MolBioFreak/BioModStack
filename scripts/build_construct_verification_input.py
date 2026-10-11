@@ -71,6 +71,7 @@ def _publish_input(source: Path, destination: Path, *, retained: bool) -> None:
                 raise
     # Old records and explicitly portable cross-filesystem bundles stay private.
     shutil.copyfile(source, destination)
+    destination.chmod(0o444)
 
 
 def main(argv: list[str] | None = None) -> int:

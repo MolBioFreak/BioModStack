@@ -3918,6 +3918,10 @@ async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJ
                 os.close(descriptor)
 
     manifest = {"schema": "bms.ont.raw-signal-artifacts.v1", "run_id": job.run_id, "observed_generation": job.observed_generation, "format": "blow5", "artifacts": artifacts}
+    # Old/baked validators have no retention observation; preserve their existing
+    # snapshot path rather than changing the meaning of historical receipts.
+    if semantic.get("retained_indexed_pair") is True:
+        manifest["retained_indexed_pair"] = True
     manifest_sha256 = _digest(manifest)
     existing = (
         await session.execute(

@@ -5,16 +5,20 @@ def shellQuote(value) {
     return "'${text.replace("'", "'\"'\"'")}'"
 }
 
+include { ngsResultPublishMode } from './publication'
+
 process RunCloneValidation {
     label 'wf_clone'
-    publishDir "${params.out_dir}/assembly", mode: 'copy'
+    publishDir "${params.out_dir}/assembly", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", saveAs: { name -> name ==~ /.*\.(bam|bai|fasta|fa|fastq|fq)(\.gz)?$/ ? name : null }
+    publishDir "${params.out_dir}/assembly", mode: 'copy', saveAs: { name -> name == 'wf_clone_out' || name ==~ /.*\.(bam|bai|fasta|fa|fastq|fq)(\.gz)?$/ ? null : name }
     tag "clone_validation"
 
     input:
     tuple path(bam), val(reference_fasta)
 
     output:
-    path "wf_clone_out", emit: out
+    env published_directory, emit: out
+    path "wf_clone_out/**", type: 'file', hidden: true, emit: publication_files
     path "wf_clone.log", emit: log
     path "runtime_provenance.json", emit: runtime_provenance
     path "input_model_provenance.json", emit: input_model_provenance
@@ -80,6 +84,7 @@ process RunCloneValidation {
     def wfCloneNxfHome = (params.wf_clone_nxf_home ?: System.getenv("NXF_HOME") ?: "${System.getenv('HOME')}/.nextflow").toString()
     """
     set -euo pipefail
+    export published_directory="\$PWD/wf_clone_out"
     export NXF_OFFLINE=true
     export NXF_DISABLE_CHECK_LATEST=true
     export NXF_DOCKER_ENABLED=false
@@ -149,12 +154,15 @@ PY
         printf 'wf-clone-validation failed (assembly_tool=%s, exit=%s)\n' "${assemblyTool}" "\${wf_clone_rc}" >&2
         exit "\${wf_clone_rc}"
     fi
+    # All nested writers have joined; metadata/logs remain private copies.
+    find wf_clone_out -type f \\( -name '*.bam' -o -name '*.bai' -o -name '*.fasta' -o -name '*.fa' -o -name '*.fastq' -o -name '*.fq' -o -name '*.fasta.gz' -o -name '*.fa.gz' -o -name '*.fastq.gz' -o -name '*.fq.gz' \\) -exec chmod 0444 {} +
     """
 }
 
 process CloneValidationAdapter {
     label 'fastq_qc_cpu'
-    publishDir "${params.out_dir}/assembly/adapter", mode: 'copy'
+    publishDir "${params.out_dir}/assembly/adapter", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", saveAs: { name -> name ==~ /.*\.(fasta|fastq)(\.gz)?$/ ? name : null }
+    publishDir "${params.out_dir}/assembly/adapter", mode: 'copy', saveAs: { name -> name == 'verification_input' || name ==~ /.*\.(fasta|fastq)(\.gz)?$/ ? null : name }
     tag "clone_validation_adapter"
 
     input:
@@ -165,7 +173,8 @@ process CloneValidationAdapter {
 
     output:
     path "adapter_manifest.json", emit: manifest
-    path "verification_input", emit: verification_input
+    env published_directory, emit: verification_input
+    path "verification_input/**", type: 'file', hidden: true, emit: publication_files
     path "per_base_support.tsv", emit: per_base_support
     path "alignment_stats.tsv", emit: alignment_stats
     path "dimer_breakpoint_call.tsv", emit: breakpoint_call
@@ -182,6 +191,7 @@ process CloneValidationAdapter {
 
     """
     set -euo pipefail
+    export published_directory="\$PWD/verification_input"
     if command -v samtools >/dev/null 2>&1; then
         SAMTOOLS_CMD=(samtools)
     else
@@ -191,6 +201,7 @@ process CloneValidationAdapter {
 
     "\${SAMTOOLS_CMD[@]}" fastq -F 2304 -n "${aligned_bam}" > source_reads.fastq
     test -s source_reads.fastq
+    chmod 0444 source_reads.fastq
 
     python3 ${adapter} \
         --result-root "\$(realpath ${result_root})" \
@@ -205,7 +216,7 @@ process CloneValidationAdapter {
     python3 ${inputBuilder} \
         --reference-fasta authoritative_reference.fasta \
         --expected-reference-sha256 "${params.reference_sequence_sha256 ?: ''}" \
-        --source-reads source_reads.fastq \
+        --source-reads source_reads.fastq --retained-source-reads --retained-consensus \
         --consensus-fasta "${result_root}/${sampleName}.final.fasta" \
         --consensus-method wf_clone_validation_final_assembly \
         --out-dir verification_input
@@ -232,7 +243,8 @@ process CloneValidationAdapter {
 
 process ComparePlasmidConsensus {
     label 'fastq_qc_cpu'
-    publishDir "${params.out_dir}/assembly/comparison", mode: 'copy'
+    publishDir "${params.out_dir}/assembly/comparison", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", saveAs: { name -> name ==~ /.*\.(fasta|fastq)(\.gz)?$/ ? name : null }
+    publishDir "${params.out_dir}/assembly/comparison", mode: 'copy', saveAs: { name -> name == 'compared_verification_input' || name ==~ /.*\.(fasta|fastq)(\.gz)?$/ ? null : name }
     tag 'compare_plasmid_consensus'
 
     input:
@@ -240,7 +252,8 @@ process ComparePlasmidConsensus {
     path read_consensus
 
     output:
-    path 'compared_verification_input', emit: verification_input
+    env published_directory, emit: verification_input
+    path "compared_verification_input/**", type: 'file', hidden: true, emit: publication_files
     path 'compared_verification_input/consensus_comparison.json', emit: comparison
 
     script:
@@ -248,6 +261,7 @@ process ComparePlasmidConsensus {
     def comparator = shellQuote("${codeRoot}/scripts/compare_plasmid_consensus.py")
     """
     set -euo pipefail
+    export published_directory="\$PWD/compared_verification_input"
     python3 ${comparator} \
         --bundle "${verification_input}" \
         --read-consensus "${read_consensus}" \

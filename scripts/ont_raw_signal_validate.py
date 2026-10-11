@@ -533,6 +533,15 @@ def semantic_validate(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError("BLOW5 unit name is not a run-info fingerprint")
         if fingerprint in groups:
             raise ValueError("duplicate BLOW5 run-info partition")
+        # These are this conversion's completed native products, not external
+        # inputs. Finalize mode BEFORE the ctime-bound scientific receipt.
+        for completed in (blow5_path, index_path):
+            descriptor = os.open(completed, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                if os.fstat(descriptor).st_mode & 0o222:
+                    os.fchmod(descriptor, 0o444)
+            finally:
+                os.close(descriptor)
         slow5 = _slow5_open(
             blow5_path,
             index_path=index_path,
@@ -635,6 +644,7 @@ def semantic_validate(args: argparse.Namespace) -> dict[str, Any]:
         "partition_count": len(groups),
         "partition_counts": dict(sorted(observed_group_counts.items())),
         "output_identities": output_identities,
+        "retained_indexed_pair": True,
         "total_signal_samples_compared": total_samples,
         "signal_samples": "bit_exact_int16",
         "mapping_contract": "verified_signal_and_full_common_field_contract_exact",

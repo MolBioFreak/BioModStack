@@ -493,6 +493,7 @@ def _stage_reference_set(
                 with path.open("xb") as handle:
                     handle.write(fasta_bytes)
                     handle.flush()
+                    os.fchmod(handle.fileno(), 0o444)
                     os.fsync(handle.fileno())
             entries.append(
                 {

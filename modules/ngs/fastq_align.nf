@@ -3,9 +3,12 @@
  * Process names are preserved to avoid behavior-changing call-site churn.
  */
 
+include { ngsResultPublishMode } from './publication'
+
 process FastqAlign {
     label 'dorado_cpu'
-    publishDir "${params.out_dir}/align", mode: 'copy'
+    publishDir "${params.out_dir}/align", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", pattern: '*.{bam,bai,fasta,fai}'
+    publishDir "${params.out_dir}/align", mode: 'copy', saveAs: { name -> name ==~ /.*\.(bam|bai|fasta|fai)$/ ? null : name }
     tag "fastq_align"
 
     input:
@@ -20,7 +23,7 @@ process FastqAlign {
 
     script:
 
-    def retainedReference = (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source == 'server_consumed_receipt' || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false'
+    def retainedReference = (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source in ['server_consumed_receipt', 'pooled_reference_set_receipt'] || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false'
     def minimapPreset = ((params.fastq_minimap2_preset ?: 'map-ont') as String).trim()
     def allowSecondary = (params.fastq_minimap2_allow_secondary == true) ? 'true' : 'false'
     def declaredReferenceSha256 = params.reference_sequence_sha256?.toString()?.trim()?.toLowerCase() ?: ''
@@ -74,8 +77,12 @@ process FastqAlign {
         echo "ERROR: task-local reference snapshot changed during alignment." >&2
         exit 94
     fi
+    ngs_reference_index "${reference}" reference.fasta ${retainedReference} true || samtools faidx reference.snapshot.fasta
     rm -f -- "${reference}"
-    ngs_input_snapshot reference.snapshot.fasta reference.fasta true
-    samtools faidx reference.fasta
+    ngs_input_snapshot reference.snapshot.fasta reference.fasta true true
+    if [[ ! -f reference.fasta.fai ]]; then
+        mv reference.snapshot.fasta.fai reference.fasta.fai
+        chmod 0444 reference.fasta.fai
+    fi
     """
 }

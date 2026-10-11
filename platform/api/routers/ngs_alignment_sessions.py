@@ -1043,6 +1043,20 @@ def _iter_range(
         snapshot.close()
 
 
+class _ArtifactStreamingResponse(StreamingResponse):
+    """Close the pinned artifact even when disconnect precedes iteration."""
+
+    def __init__(self, snapshot: BinaryIO, *args, **kwargs):
+        self._snapshot = snapshot
+        super().__init__(*args, **kwargs)
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._snapshot.close()
+
+
 async def _serve_artifact(
     path: Path,
     metadata: dict,
@@ -1127,6 +1141,9 @@ async def _serve_artifact(
             path,
             expected_size=size,
             expected_sha256=digest,
+            # Only called after the existing job-scoped artifact authorization.
+            # Historical writable leaves still take the private snapshot path.
+            retained=True,
         )
     except service.AlignmentSessionError:
         return _ngs_error_response(
@@ -1139,7 +1156,8 @@ async def _serve_artifact(
     if request.method == "HEAD":
         snapshot.close()
         return Response(status_code=200, headers=headers)
-    return StreamingResponse(
+    return _ArtifactStreamingResponse(
+        snapshot,
         _iter_range(snapshot, start, end),
         status_code=status_code,
         headers=headers,

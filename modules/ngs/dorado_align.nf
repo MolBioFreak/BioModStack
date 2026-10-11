@@ -29,7 +29,7 @@ process DoradoAlign {
 
     script:
 
-    def retainedReference = (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source == 'server_consumed_receipt' || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false'
+    def retainedReference = (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source in ['server_consumed_receipt', 'pooled_reference_set_receipt'] || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false'
     def retainedBam = params.source_external_move_registration_receipt_id ? 'true' : 'false'
     def rawBamMinMapq = (params.bam_min_mapq ?: '0').toString().trim()
     if (!(rawBamMinMapq ==~ /[0-9]+/)) {
@@ -117,7 +117,7 @@ process DoradoAlign {
     samtools index aligned.bam
     chmod 0444 aligned.bam aligned.bam.bai
     rm -f -- reference.fasta
-    ngs_input_snapshot reference.snapshot.fasta reference.fasta true
+    ngs_input_snapshot reference.snapshot.fasta reference.fasta true true
     samtools faidx reference.fasta
 
     input_records=\$(samtools view -c source.snapshot.bam)

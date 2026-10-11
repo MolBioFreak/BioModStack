@@ -8,39 +8,51 @@ def shellQuote(value) {
     return "'${text.replace("'", "'\"'\"'")}'"
 }
 
+include { ngsResultPublishMode } from './publication'
+
+def dimerPublishName(filename, options) {
+    def mode = (options.dimer_output_mode ?: 'core').toString().trim().toLowerCase()
+    def emitLegacy = options.dimer_emit_legacy_outputs == true
+    def legacyArtifacts = [
+        'dimer_consensus.fasta',
+        'dimer_consensus.log',
+        'dimer_junction_profile.tsv',
+        'dimer_read_junctions.tsv',
+        'dimer_junction_events.tsv',
+        'dimer_junction_clusters.tsv',
+        'dimer_junction_hotspots.tsv',
+        'dimer_junction_rotated_profile.tsv',
+        'dimer_junction_rotation_summary.tsv',
+        'dimer_breakpoint_screen.tsv',
+        'dimer_breakpoint_start_counts.tsv',
+        'dimer_read_ledger.tsv',
+        'dimer_breakpoint_reads.tsv',
+        'dimer_rotated_remap_summary.tsv',
+        'dimer_rotated_remap_breakpoints.tsv',
+        'dimer_single_ref_split_events.tsv',
+        'dimer_single_ref_split_profile.tsv',
+        'dimer_candidates.single_ref.aligned.bam',
+        'dimer_candidates.single_ref.aligned.bam.bai',
+        'dimer_single_ref_alignment.log',
+        'dimer_alignment.log',
+    ] as Set
+    if (mode == 'debug' || emitLegacy || !legacyArtifacts.contains(filename.toString())) {
+        return filename
+    }
+    return null
+}
+
+// Keep descriptive notes outside the native script literal (JVM 64 KiB limit).
+// Stage reference to deterministic local filename to avoid escaping issues
+// when upstream path includes spaces.
+// Secondary pass: remap dimer candidates to single-copy reference and
+// call split transitions between adjacent query segments.
+// Position 1 can be inflated when a circular reference is linearized.
+// Track support near the reference boundaries separately.
 process FastqDimerAnalysis {
     label 'dorado_cpu'
-    publishDir "${params.out_dir}/multimer_qc", mode: 'copy', saveAs: { filename ->
-        def mode = (params.dimer_output_mode ?: 'core').toString().trim().toLowerCase()
-        def emitLegacy = params.dimer_emit_legacy_outputs == true
-        def legacyArtifacts = [
-            'dimer_consensus.fasta',
-            'dimer_consensus.log',
-            'dimer_junction_profile.tsv',
-            'dimer_read_junctions.tsv',
-            'dimer_junction_events.tsv',
-            'dimer_junction_clusters.tsv',
-            'dimer_junction_hotspots.tsv',
-            'dimer_junction_rotated_profile.tsv',
-            'dimer_junction_rotation_summary.tsv',
-            'dimer_breakpoint_screen.tsv',
-            'dimer_breakpoint_start_counts.tsv',
-            'dimer_read_ledger.tsv',
-            'dimer_breakpoint_reads.tsv',
-            'dimer_rotated_remap_summary.tsv',
-            'dimer_rotated_remap_breakpoints.tsv',
-            'dimer_single_ref_split_events.tsv',
-            'dimer_single_ref_split_profile.tsv',
-            'dimer_candidates.single_ref.aligned.bam',
-            'dimer_candidates.single_ref.aligned.bam.bai',
-            'dimer_single_ref_alignment.log',
-            'dimer_alignment.log',
-        ] as Set
-        if (mode == 'debug' || emitLegacy || !legacyArtifacts.contains(filename.toString())) {
-            return filename
-        }
-        return null
-    }
+    publishDir "${params.out_dir}/multimer_qc", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", saveAs: { name -> name ==~ /.*\.(bam|bai|fasta|fai|fastq)$/ ? dimerPublishName(name, params) : null }
+    publishDir "${params.out_dir}/multimer_qc", mode: 'copy', saveAs: { name -> name ==~ /.*\.(bam|bai|fasta|fai|fastq)$/ ? null : dimerPublishName(name, params) }
     tag "dimer_analysis"
 
     input:
@@ -85,6 +97,7 @@ process FastqDimerAnalysis {
     path "dimer_alignment.log", emit: align_log, optional: true
 
     script:
+    def retainedReference = (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source in ['server_consumed_receipt', 'pooled_reference_set_receipt'] || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false'
     def expectedSize = params.expected_plasmid_size == null ? '' : (params.expected_plasmid_size as Integer).toString()
     def minReadLength = (params.min_fastq_read_length ?: 0) as Integer
     def enableRotation = params.enable_rotating_reference_frames == false ? 'false' : 'true'
@@ -130,10 +143,9 @@ process FastqDimerAnalysis {
     fi
     bash "${codeRoot}/scripts/init_fastq_dimer_outputs.sh"
 
-    # Stage reference to deterministic local filename to avoid escaping issues
-    # when upstream path includes spaces.
-    cp ${reference} reference_input.fasta
-    samtools faidx reference_input.fasta
+    source "${codeRoot}/scripts/ngs_input_snapshot.sh"
+    ngs_input_snapshot "${reference}" reference_input.fasta ${retainedReference}
+    ngs_reference_index "${reference}" reference_input.fasta ${retainedReference} || samtools faidx reference_input.fasta
     ref_name=\$(head -n1 reference_input.fasta.fai | cut -f1)
     ref_len=\$(head -n1 reference_input.fasta.fai | cut -f2)
 
@@ -576,8 +588,6 @@ process FastqDimerAnalysis {
         event_split_support=\$(awk -F"\\t" 'NR > 1 && (\$5 + 0) > 0 && \$6 == "split" {c++} END {print c + 0}' dimer_junction_events.tsv)
         total_split_support="\${event_split_support}"
 
-        # Secondary pass: remap dimer candidates to single-copy reference and
-        # call split transitions between adjacent query segments.
         if minimap2 "\${MM2_ARGS[@]}" \\
             ref_single.fasta dimer_candidates.fastq \\
             2> dimer_single_ref_alignment.log \\
@@ -696,8 +706,6 @@ process FastqDimerAnalysis {
             }
         }')
 
-        # Position 1 can be inflated when a circular reference is linearized.
-        # Track support near the reference boundaries separately.
         boundary_window_bp=\$(awk -v L="\${ref_len}" 'BEGIN {
             w = int((L * 0.02) + 0.5)
             if (w < 25) w = 25
@@ -1323,6 +1331,7 @@ process FastqDimerAnalysis {
         echo "Consensus: \${consensus_status}; dominant: \${dominant_consensus_status}"
     } > dimer_analysis.log
 
+    ngs_finalize_dimer_outputs
     bash "${codeRoot}/scripts/build_alignment_session_manifest.sh" \
         ${manifestJobIdArg} \
         ${referenceSequenceSha256Arg} \

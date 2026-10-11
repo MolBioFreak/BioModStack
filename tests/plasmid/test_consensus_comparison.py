@@ -37,6 +37,26 @@ def test_tampered_read_consensus_is_rejected(tmp_path):
     source,read=setup(tmp_path,'ACGTTG');out=tmp_path/'out'
     prepare_comparison(source,read,out)
     state=json.loads((out/'observed_state.json').read_text())
-    (out/'read_guided_consensus.fasta').write_text('>x\nAAAAAA\n')
+    replacement=out/'replacement.fasta'
+    replacement.write_text('>x\nAAAAAA\n')
+    replacement.replace(out/'read_guided_consensus.fasta')
     with pytest.raises(ValueError,match='DIGEST_MISMATCH'):
         check_consensus_comparison(state,out,'ACGTTG')
+
+
+def test_retained_comparison_payloads_share_but_state_is_private(tmp_path):
+    source,read=setup(tmp_path,'ACGTTG')
+    observed=source/'observed_consensus.fasta'
+    observed.chmod(0o444)
+    read.chmod(0o444)
+    alias=tmp_path/'staged_bundle'
+    alias.symlink_to(source, target_is_directory=True)
+    out=tmp_path/'out'
+    prepare_comparison(alias,read,out)
+    assert (out/'observed_consensus.fasta').stat().st_ino == observed.stat().st_ino
+    assert (out/'read_guided_consensus.fasta').stat().st_ino == read.stat().st_ino
+    assert (out/'observed_state.json').stat().st_ino != (source/'observed_state.json').stat().st_ino
+    observed.unlink()
+    read.unlink()
+    state=json.loads((out/'observed_state.json').read_text())
+    assert check_consensus_comparison(state,out,'ACGTTG')['agreement'] is True
