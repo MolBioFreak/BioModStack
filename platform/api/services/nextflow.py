@@ -5737,7 +5737,8 @@ def compile_nextflow_invocation(
         params['workflow_id'] = effective_profile
         # Server-generated from the selected publication/owned POD5 version.
         params.pop('dorado_input_binding_json', None)
-        if params.get('pod5_dir'):
+        if (params.get('pod5_dir') and
+                (params.get('ont_input_mode') or params.get('input_mode') or 'pod5') == 'pod5'):
             from services.ont_submission_trust import dorado_preflight_parameters
             params.update(dorado_preflight_parameters(params))
         if (effective_profile == 'wf_clone_validation' or

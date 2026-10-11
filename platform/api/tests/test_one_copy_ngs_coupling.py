@@ -142,6 +142,22 @@ def test_binding_is_server_controlled():
     assert 'dorado_input_binding_json' in trust.ONT_SERVER_CONTROLLED_RUNTIME_PARAMS
 
 
+def test_inactive_pod5_draft_does_not_observe_models_for_fastq(tmp_path, monkeypatch):
+    from services import nextflow
+    fastq = tmp_path / 'input.fastq'
+    fastq.write_text('@r\nACGT\n+\nIIII\n')
+    def unselected(_params):
+        pytest.fail('inactive POD5 authoring settings must not inventory Dorado models')
+    monkeypatch.setattr(trust, 'dorado_preflight_parameters', unselected)
+    invocation = nextflow.compile_nextflow_invocation(
+        'nanopore', 'fastq_qc',
+        {'ont_input_mode': 'fastq', 'fastq_path': str(fastq),
+         'pod5_dir': str(tmp_path / 'inactive-pod5'),
+         'dorado_input_binding_json': 'FORGED CLIENT VALUE'},
+        str(tmp_path / 'output'), job_id='fixture')
+    assert 'dorado_input_binding_json' not in invocation.native_parameters
+
+
 def _native_pod5(root):
     from datetime import datetime, timezone
     import uuid
