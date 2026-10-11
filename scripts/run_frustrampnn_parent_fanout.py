@@ -36,6 +36,7 @@ def _canonical_bytes(value: Any) -> bytes:
 
 
 def _candidate_authority(candidate_dir: Path, parent_job_id: str, workflow_id: str) -> tuple[dict[str, Any], Path]:
+    candidate_dir = candidate_dir.resolve(strict=True)
     metadata_path = candidate_dir / "metadata.json"
     sources = [path for path in candidate_dir.iterdir() if path.name.startswith("source.")]
     if candidate_dir.is_symlink() or not candidate_dir.is_dir() or len(sources) != 1:
@@ -230,7 +231,11 @@ def execute_parent_fanout(
                     raise ValueError("FrustraMPNN retained input directory is unsafe")
             retained.resolve().relative_to(runtime.artifact_root.resolve())
             immutable_write(retained.parent / "metadata.json", _canonical_bytes(metadata))
-            immutable_write(retained, raw)
+            if not retained.exists():
+                from stage_frustrampnn_parent_candidate import stage_source
+                stage_source(_source, retained)
+            if retained.read_bytes() != raw:
+                raise ValueError("FrustraMPNN retained source authority conflicts")
             sources[metadata["candidate_id"]] = {"metadata": metadata,
                 "source_relative_path": retained.relative_to(runtime.artifact_root).as_posix(),
                 "source_sha256": hashlib.sha256(raw).hexdigest(), "source_size_bytes": len(raw)}

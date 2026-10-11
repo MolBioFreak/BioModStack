@@ -32,7 +32,7 @@ def test_group_fanout_and_parent_share_payload_not_metadata(tmp_path, record_pro
     groups.reconcile_tree(source, group, authority, staging_root=tmp_path / '.staging')
     result = publisher.publish(source_bundle=group, allowed_root=parent,
                                destination=parent / 'candidate', marker=parent / 'marker.json')
-    for name in ('normalized_input.pdb', 'raw_frustrampnn.csv'):
+    for name in ('normalized_input.pdb', 'raw_frustrampnn.csv', 'frustrampnn_landscape_v1.json', 'frustrampnn_summary_v1.json'):
         paths = [source / name, group / name, parent / 'candidate' / name]
         assert len({(p.stat().st_dev, p.stat().st_ino) for p in paths}) == 1
         assert all(not p.is_symlink() and not p.stat().st_mode & 0o222 for p in paths)

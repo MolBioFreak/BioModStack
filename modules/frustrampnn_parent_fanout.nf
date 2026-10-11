@@ -3,7 +3,7 @@ nextflow.enable.dsl = 2
 process StageFrustraMPNNParentCandidate {
     tag "frustrampnn-parent-source:${candidate_meta.candidate_id}"
     label 'CPU'
-    stageInMode 'copy'
+    stageInMode 'symlink'
     errorStrategy 'terminate'
     maxRetries 0
 
@@ -26,7 +26,7 @@ process StageFrustraMPNNParentCandidate {
 process SpawnWaitFrustraMPNNParentChildren {
     tag "frustrampnn-parent-fanout:${parent_workflow_id}:${parent_job_id}"
     label 'CPU'
-    stageInMode 'copy'
+    stageInMode 'symlink'
     errorStrategy 'terminate'
     maxRetries 0
 
@@ -61,7 +61,7 @@ process SpawnWaitFrustraMPNNParentChildren {
 process ReportFrustraMPNNParentChildrenComplete {
     tag "frustrampnn-parent-report:${parent_workflow_id}:${parent_job_id}"
     label 'CPU'
-    stageInMode 'copy'
+    stageInMode 'symlink'
     errorStrategy 'terminate'
     maxRetries 0
 

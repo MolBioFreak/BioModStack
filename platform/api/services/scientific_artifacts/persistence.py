@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 import uuid
 
@@ -61,6 +62,7 @@ async def publish_json_payload(
     payload: Mapping[str, Any],
     source_sha256: str | None = None,
     installed_artifacts: list[Any] | None = None,
+    native_payload: Path | str | None = None,
 ) -> dict[str, Any]:
     source_sha = source_sha256 or canonical_sha256(payload)
     schema = pa.schema(
@@ -81,6 +83,7 @@ async def publish_json_payload(
         rows=envelope_rows(payload),
         schema=schema,
         transaction_id=_transaction_id(session),
+        native_payload=native_payload,
     )
     if installed_artifacts is not None:
         installed_artifacts.append(artifact)
@@ -100,6 +103,7 @@ async def publish_table_rows(
     rows: Iterable[Mapping[str, Any]],
     schema: pa.Schema,
     installed_artifacts: list[Any] | None = None,
+    native_payload: Path | str | None = None,
     source_receipts: Mapping[str, Any] | None = None,
 ) -> Any:
     if source_receipts is not None and canonical_sha256(source_receipts) != source_sha256:
@@ -115,6 +119,7 @@ async def publish_table_rows(
         rows=rows,
         schema=schema,
         transaction_id=_transaction_id(session),
+        native_payload=native_payload,
     )
     if installed_artifacts is not None:
         installed_artifacts.append(artifact)

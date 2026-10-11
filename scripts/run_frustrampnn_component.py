@@ -99,14 +99,34 @@ def _write_json(path: Path, value: Mapping[str, Any]) -> bytes:
     return payload
 
 
+def _retain_validated_input(source: Path, target: Path, payload: bytes) -> None:
+    """Keep exact completed input bytes without sharing writable legacy input."""
+    import errno
+    linked = False
+    if not source.stat().st_mode & 0o222:
+        try:
+            os.link(source, target, follow_symlinks=False)
+            linked = True
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+    if not linked:
+        target.write_bytes(payload)
+        target.chmod(0o444)
+    if target.is_symlink() or target.read_bytes() != payload:
+        raise ComponentRunError("artifact_changed", "retained input differs from validated bytes")
+
+
 def _fsync_regular(path: Path) -> None:
     descriptor = _runtime.open_regular_no_follow(path, label=f"published artifact {path.name}")
     try:
         # These are this runner's completed private staging files, after native
         # execution and manifest validation. Freeze payloads before any retained
         # collector can create another name; metadata stays independently owned.
-        if path.suffix.lower() in {'.pdb', '.csv', '.npz', '.parquet'}:
-            os.fchmod(descriptor, stat.S_IMODE(os.fstat(descriptor).st_mode) & ~0o222)
+        if path.suffix.lower() in {'.pdb', '.csv', '.npz', '.parquet'} or path.name in {'frustrampnn_structure_map_v1.json', 'frustrampnn_landscape_v1.json', 'frustrampnn_landscape_v2.json', 'frustrampnn_landscape_v3.json', 'frustrampnn_summary_v1.json', 'frustrampnn_summary_v2.json', 'frustrampnn_summary_v3.json'}:
+            mode = os.fstat(descriptor).st_mode
+            if mode & 0o222:
+                os.fchmod(descriptor, stat.S_IMODE(mode) & ~0o222)
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
@@ -133,12 +153,14 @@ def _file_generation(metadata: os.stat_result) -> tuple[int, ...]:
     )
 
 
-def _read_regular(path: Path | str, *, label: str, max_bytes: int, immutable_input: bool = False) -> bytes:
+def _read_regular(path: Path | str, *, label: str, max_bytes: int, immutable_input: bool = False, input_root: Path | str | None = None) -> bytes:
     """Read a role-bounded regular file without following links or races."""
 
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0:
         raise ValueError("regular-file read bound must be a non-negative integer")
 
+    if input_root is not None:
+        path = _runtime.resolve_read_input(path, allowed_root=input_root, label=label)
     descriptor = _runtime.open_regular_no_follow(path, label=label)
     try:
         metadata = os.fstat(descriptor)
@@ -842,15 +864,15 @@ def _run_component_v2(
     result_name = f"workflow_component_result_v{generation}.json"
     manifest_name = V3_MANIFEST_PATH if generation == 3 else V2_MANIFEST_PATH
     normalized = work_root / "normalized.pdb"
-    normalized.write_bytes(normalized_payload)
+    _retain_validated_input(Path(source_structure), normalized, normalized_payload)
     pinned: _runtime.PinnedContainer | None = None
     published = False
     try:
         _write_json(staging / request_name, request)
         if authority_payload is not None:
             (staging / AUTHORITY_ARTIFACT_PATH).write_bytes(authority_payload)
-        (staging / "normalized_input.pdb").write_bytes(normalized_payload)
-        (staging / "frustrampnn_structure_map_v1.json").write_bytes(structure_map_payload)
+        _retain_validated_input(normalized, staging / "normalized_input.pdb", normalized_payload)
+        _retain_validated_input(Path(structure_map_path), staging / "frustrampnn_structure_map_v1.json", structure_map_payload)
         (staging / "frustrampnn_stdout.log").write_bytes(b"")
         (staging / "frustrampnn_stderr.log").write_bytes(b"")
         try:
@@ -1131,8 +1153,8 @@ def finalize_batched_component(
     staging.mkdir(mode=0o700)
     try:
         _write_json(staging / "workflow_component_request_v3.json", request)
-        (staging / "normalized_input.pdb").write_bytes(normalized_payload)
-        (staging / "frustrampnn_structure_map_v1.json").write_bytes(structure_map_payload)
+        _retain_validated_input(Path(source_structure), staging / "normalized_input.pdb", normalized_payload)
+        _retain_validated_input(Path(structure_map), staging / "frustrampnn_structure_map_v1.json", structure_map_payload)
         shutil.copyfile(stdout_log, staging / "frustrampnn_stdout.log")
         shutil.copyfile(stderr_log, staging / "frustrampnn_stderr.log")
         if terminal_evidence["status"] == "failed":
@@ -1341,7 +1363,15 @@ def main(argv: list[str] | None = None) -> int:
                 "request_invalid",
                 "normal execution requires --structure, --output-dir, and --physical-gpu-id",
             )
+        # CLI arguments name the caller-selected incoming leaves. Nextflow may
+        # stage each as an alias outside its task directory. Resolve these exact
+        # inputs only; request/structure closure hashes still bind their bytes.
+        # Never resolve image/output arguments through this incoming boundary.
+        args.structure = args.structure.resolve(strict=True)
+        if args.structure_map is not None:
+            args.structure_map = args.structure_map.resolve(strict=True)
         if args.request is not None:
+            args.request = args.request.resolve(strict=True)
             payload = _read_regular(
                 args.request,
                 label="component request",

@@ -131,7 +131,10 @@ def check_cache(
     legacy_candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
     best_depth, _best_mtime, best_path, best_profile = legacy_candidates[0]
     canonical_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(best_path, canonical_path)
+    # Migration transfers the selected generation, not a second gzip payload.
+    # Both names are in this cache directory; retain mtime/depth selection and
+    # the existing obsolete-profile cleanup semantics.
+    os.replace(best_path, canonical_path)
     removed = _cleanup_profile_caches(cache_dir, seq_hash)
     print(
         "CACHE MIGRATION: promoted legacy profile cache to canonical single cache "

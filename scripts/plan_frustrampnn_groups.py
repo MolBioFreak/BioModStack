@@ -84,7 +84,7 @@ def reconcile_tree(source: Path, destination: Path, authority: dict, *, staging_
             donor = source / name
             # The completed input/result owner freezes these scientific leaves.
             # Metadata/logs and legacy writable donors remain private snapshots.
-            share = donor.suffix.lower() in {'.pdb', '.cif', '.mmcif', '.csv', '.npz', '.parquet'}
+            share = (donor.suffix.lower() in {'.pdb', '.cif', '.mmcif', '.csv', '.npz', '.parquet'} or donor.name in {'frustrampnn_structure_map_v1.json', 'frustrampnn_landscape_v1.json', 'frustrampnn_landscape_v2.json', 'frustrampnn_landscape_v3.json', 'frustrampnn_summary_v1.json', 'frustrampnn_summary_v2.json', 'frustrampnn_summary_v3.json'})
             linked = False
             try:
                 if share and not donor.stat().st_mode & 0o222:

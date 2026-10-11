@@ -116,7 +116,7 @@ def publish(*, source_bundle: Path, allowed_root: Path, destination: Path, marke
                     target.parent.mkdir(parents=True, exist_ok=True)
                     donor = source_bundle / relative
                     linked = False
-                    if (donor.suffix.lower() in {'.pdb', '.csv', '.npz', '.parquet'}
+                    if ((donor.suffix.lower() in {'.pdb', '.csv', '.npz', '.parquet'} or donor.name in {'frustrampnn_structure_map_v1.json', 'frustrampnn_landscape_v1.json', 'frustrampnn_landscape_v2.json', 'frustrampnn_landscape_v3.json', 'frustrampnn_summary_v1.json', 'frustrampnn_summary_v2.json', 'frustrampnn_summary_v3.json'})
                             and not donor.stat().st_mode & 0o222):
                         try:
                             os.link(donor, target, follow_symlinks=False)
