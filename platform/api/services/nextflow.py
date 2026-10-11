@@ -4315,6 +4315,14 @@ def _native_plan_metadata_settings(model_id, params):
                 or document.get('request_sha256') != params.get('shape_request_sha256')):
             raise ValueError('Shape request snapshot identity mismatch')
     settings[key] = document
+    if key == 'cm_request' and document.get('backend') == 'protenix_v2_ensemble':
+        registry_path = path.parent / 'cm_runtime_registry_v1.json'
+        if registry_path.is_file():
+            from scripts.lib.portable_inputs import _contained
+            registry_path = _contained(registry_path, roots)
+            if registry_path.stat().st_size > 16 * 1024 * 1024:
+                raise ValueError('CM runtime registry is not a bounded managed input')
+            settings['cm_runtime_registry'] = json.loads(registry_path.read_bytes())
     return settings
 
 
@@ -4405,6 +4413,48 @@ async def compile_native_workflow_provision_request(workflow_request, http_reque
     return plan
 
 
+def cm_runtime_references(params):
+    """Concrete selected CM inventory for preview, discovery and local placement."""
+    if not params.get('cm_request_path'):
+        return None
+    document = _native_plan_metadata_settings('conformational_mapping', params)['cm_request']
+    if document.get('backend') != 'confornets':
+        return None
+    from paths import get_weights_root
+    from scripts.lib.portable_inputs import cm_checkpoint_inventory, _contained, _identity
+    try:
+        return cm_checkpoint_inventory(document, weights_root=get_weights_root())
+    except (OSError, ValueError) as installed_error:
+        # Old requests can own a retained private snapshot of an uninstalled
+        # version. Preserve that exact supported source, never the current
+        # default. Retry custody still treats this legacy body as private.
+        from paths import get_inputs_dir, get_results_dir, get_data_root
+        checkpoint = document['confornets']['checkpoint']
+        try:
+            source = _contained(Path(params['cm_request_path']).parent / checkpoint['path'],
+                [root.resolve() for root in (get_inputs_dir(), get_results_dir(), get_data_root())])
+            digest, size = _identity(source)
+        except (OSError, ValueError):
+            raise installed_error
+        if digest != checkpoint['sha256']:
+            raise ValueError('Retained CM checkpoint digest mismatch') from installed_error
+        return {str(source): dict(sha256=digest, size_bytes=size, format='pt', path=str(source))}
+
+
+def cm_portable_bindings(params):
+    inventory = cm_runtime_references(params)
+    if inventory is None:
+        return None
+    from paths import get_weights_root, get_inputs_dir, get_results_dir, get_data_root, get_work_dir
+    from scripts.lib.portable_inputs import bind_cm_checkpoint, SCHEMA
+    document = _native_plan_metadata_settings('conformational_mapping', params)['cm_request']
+    binding = bind_cm_checkpoint(document, owner=params['cm_request_path'], runtime_references=inventory)
+    return dict(schema=SCHEMA, results_root=str(get_results_dir().resolve()),
+        roots=[str(root.resolve()) for root in (
+        get_weights_root(), get_inputs_dir(), get_results_dir(), get_data_root(), get_work_dir())],
+        bindings=[binding])
+
+
 def compile_workflow_provision_request(request):
     """Compile an unsaved typed request without staging inputs or creating a Job.
 
@@ -4489,28 +4539,6 @@ def compile_workflow_provision_request(request):
         output_dir=str(output), child_output_dir=None,
     )
     invocation = compile_job_nextflow_invocation(snapshot, params, str(output), _preview_only=True)
-    if (typed.model_id, typed.mode) == ('conformational_mapping', 'map'):
-        # The same managed checkpoint selected by native CM submission must own
-        # the request snapshot. Inspect only that registered file, never recurse
-        # through model trees during a read-only preview.
-        cm = _native_plan_metadata_settings(typed.model_id, typed.params).get('cm_request', {})
-        if cm.get('backend') == 'confornets':
-            from paths import get_weights_root, get_inputs_dir
-            from scripts.lib.portable_inputs import _contained, _identity
-            root = get_weights_root()
-            selected = invocation.execution_plan.dependencies
-            if not any(row.kind == 'weights' and row.relative_path == 'openfold3' for row in selected):
-                raise ValueError('CM checkpoint has no selected OpenFold3 dependency')
-            checkpoint = _contained(root / 'openfold3/of3-p2-155k.pt', [root.resolve()])
-            source_sha, source_size = _identity(checkpoint)
-            record = cm['confornets']['checkpoint']
-            request_path = Path(typed.params['cm_request_path'])
-            snapshot = Path(record['path'])
-            if not snapshot.is_absolute():
-                snapshot = request_path.parent / snapshot
-            snapshot = _contained(snapshot, [get_results_dir().resolve(), get_inputs_dir().resolve(), get_data_root().resolve()])
-            if source_sha != record['sha256'] or _identity(snapshot) != (source_sha, source_size):
-                raise ValueError('CM checkpoint snapshot differs from selected managed runtime source')
     if invocation.requested_json != canonical_bytes(original):
         raise ValueError('Workflow provision changed requested scientific identity')
     return invocation
@@ -5427,13 +5455,15 @@ def compile_nextflow_invocation(
                     "conformational_mapping resume_work_dir must equal the authoritative work directory"
                 )
         gpu_id = params.get("gpu_id")
-        if isinstance(gpu_id, int) and not isinstance(gpu_id, bool):
+        if _preview_only and gpu_id is None:
+            normalized_gpu_id = None
+        elif isinstance(gpu_id, int) and not isinstance(gpu_id, bool):
             normalized_gpu_id = gpu_id
         elif isinstance(gpu_id, str) and gpu_id.isascii() and gpu_id.isdecimal():
             normalized_gpu_id = int(gpu_id)
         else:
             raise ValueError("conformational_mapping gpu_id must be a non-negative integer")
-        if normalized_gpu_id < 0:
+        if normalized_gpu_id is not None and normalized_gpu_id < 0:
             raise ValueError("conformational_mapping gpu_id must be a non-negative integer")
         workflow_entrypoint = resolve_nextflow_entrypoint(
             effective_profile="conformational_mapping",
@@ -5461,14 +5491,31 @@ def compile_nextflow_invocation(
         command.extend(["--cm_request_path", request_path])
         for key, value in msa_params.items():
             command.extend(['--' + key, str(value).lower() if isinstance(value, bool) else str(value)])
-        command.extend([
-            "--run_frustrampnn", "true",
-            "--gpu_id", str(normalized_gpu_id),
-            "--frustrampnn_physical_gpu_id", str(normalized_gpu_id),
-        ])
+        command.extend(["--run_frustrampnn", "true"])
         native_parameters.update(out_dir=str(output_dir), cm_request_path=request_path,
-            run_frustrampnn=True, gpu_id=normalized_gpu_id,
-            frustrampnn_physical_gpu_id=normalized_gpu_id)
+            run_frustrampnn=True)
+        if not _preview_only:
+            command.extend(["--gpu_id", str(normalized_gpu_id),
+                "--frustrampnn_physical_gpu_id", str(normalized_gpu_id)])
+            native_parameters.update(gpu_id=normalized_gpu_id,
+                frustrampnn_physical_gpu_id=normalized_gpu_id)
+        if cm_request.get('backend') == 'protenix_v2_ensemble':
+            weights = Path(os.environ.get('BMS_PROTENIX_WEIGHTS') or get_weights_root() / 'protenix')
+            # Pin an installed generation, not a mutable activation alias beneath
+            # the preflight and native consumer. Missing runtime stays with the
+            # existing acquisition/preflight owner, not a new compiler gate.
+            if weights.is_dir():
+                native_parameters['protenix_weights'] = str(weights.resolve(strict=True))
+                command.extend(['--protenix_weights', native_parameters['protenix_weights']])
+        envelope = cm_portable_bindings(params)
+        if envelope is not None:
+            binding_path = Path(output_dir) / '.cm-portable-input-bindings.json'
+            plan_input(binding_path, json.dumps(envelope, sort_keys=True, separators=(',', ':')).encode())
+            selected_checkpoint = envelope['bindings'][0]['path']
+            native_parameters.update(cm_portable_input_bindings=str(binding_path),
+                                     cn_checkpoint_path=selected_checkpoint)
+            command.extend(['--cm_portable_input_bindings', str(binding_path),
+                            '--cn_checkpoint_path', selected_checkpoint])
         if job_id:
             native_parameters['job_id'] = str(job_id)
         return finish_command(command)

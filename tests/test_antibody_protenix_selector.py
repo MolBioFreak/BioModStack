@@ -17,7 +17,8 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 def test_antibody_process_transports_configured_image_without_original(tmp_path):
-    jars = sorted((Path.home() / '.nextflow/framework').glob('*/*-one.jar'))
+    configured = os.environ.get('BMS_TEST_NEXTFLOW_JAR')
+    jars = [Path(configured)] if configured else sorted((Path.home() / '.nextflow/framework').glob('*/*-one.jar'))
     if not jars or not shutil.which('java'):
         pytest.skip('installed Nextflow and Java required; no downloads')
     source = (REPO / 'modules/antibody_batch.nf').read_text()

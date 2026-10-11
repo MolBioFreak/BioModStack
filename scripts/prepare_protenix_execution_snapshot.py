@@ -200,7 +200,7 @@ def snapshot_opened_file(
             temporary.unlink(missing_ok=True)
 
 
-def _checkpoint_source(weights_root: Path, relative_value: object) -> tuple[Path, PurePosixPath]:
+def _checkpoint_source(weights_root: Path, relative_value: object, *, sha256: str | None = None) -> tuple[Path, PurePosixPath]:
     if not isinstance(relative_value, str):
         raise ProtenixExecutionSnapshotError("registry checkpoint_relative_path is missing")
     relative = PurePosixPath(relative_value)
@@ -214,7 +214,13 @@ def _checkpoint_source(weights_root: Path, relative_value: object) -> tuple[Path
     try:
         source.relative_to(root)
     except ValueError as exc:
-        raise ProtenixExecutionSnapshotError("checkpoint escapes configured weights root") from exc
+        if sha256 is None:
+            raise ProtenixExecutionSnapshotError("checkpoint escapes configured weights root") from exc
+        from lib.portable_inputs import selected_weight_member
+        try:
+            source = selected_weight_member(weights_root, relative_value, sha256=sha256)
+        except ValueError as authority_error:
+            raise ProtenixExecutionSnapshotError("checkpoint escapes configured weights root or selected object identity") from authority_error
     return source, relative
 
 
@@ -228,7 +234,7 @@ def prepare_execution_snapshot(
 ) -> dict[str, Any]:
     registry = json.loads(_read_stable_bytes(registry_path).decode("utf-8"))
     checkpoint_source, checkpoint_relative = _checkpoint_source(
-        weights_root, registry.get("checkpoint_relative_path")
+        weights_root, registry.get("checkpoint_relative_path"), sha256=registry.get("checkpoint_sha256")
     )
     expected_checkpoint = registry.get("checkpoint_sha256")
     if not isinstance(expected_checkpoint, str) or len(expected_checkpoint) != 64:

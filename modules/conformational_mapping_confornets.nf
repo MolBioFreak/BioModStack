@@ -21,6 +21,7 @@ process PrepCanonicalConforNetsRequest {
     def coordinatePlanJson = shellQuote(request_root.resolve('cm_coordinate_plan_v1.json').toString())
     """
     set -euo pipefail
+    export BMS_PORTABLE_INPUT_BINDINGS="\${BMS_PORTABLE_INPUT_BINDINGS:-${params.cm_portable_input_bindings ?: ''}}"
     python3 ${params.code_root}/scripts/prep_canonical_confornets_request.py \
         --request ${requestJson} \
         --coordinate-plan ${coordinatePlanJson} \

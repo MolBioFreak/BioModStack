@@ -3073,10 +3073,36 @@ def _copy_clean_retry_authority(
         raise HTTPException(status_code=409, detail="retry input files disagree with persisted CM authority")
 
     expected_files = _validated_retry_authority(persisted_authority)
+    installed_checkpoint = None
+    checkpoint_name = None
+    if request_payload.get('backend') == 'confornets':
+        from scripts.lib.portable_inputs import cm_checkpoint_inventory
+        checkpoint = request_payload['confornets']['checkpoint']
+        candidate = Path(checkpoint['path'])
+        if not candidate.is_absolute() and '..' not in candidate.parts:
+            try:
+                inventory = cm_checkpoint_inventory(request_payload, weights_root=get_weights_root())
+            except (OSError, ValueError):
+                # Historical private-only sources keep their existing custody;
+                # an unavailable managed version is not permission to use latest.
+                inventory = {}
+            if inventory:
+                installed_checkpoint = next(iter(inventory.values()))
+                checkpoint_name = candidate.as_posix()
+                expected_checkpoint = expected_files.get(checkpoint_name)
+                if expected_checkpoint is not None and expected_checkpoint != {
+                    'sha256': installed_checkpoint['sha256'], 'size_bytes': installed_checkpoint['size_bytes']
+                }:
+                    raise HTTPException(status_code=409, detail='persisted CM checkpoint authority differs from selected runtime')
     try:
         source_files = _retry_authority_paths(source_root)
     except OSError as exc:
         raise HTTPException(status_code=409, detail="persisted CM retry authority contains unsafe source paths") from exc
+    if installed_checkpoint is not None:
+        # Retain old authority/document identities but do not create another
+        # checkpoint body. Subsequent retries resolve the same sealed digest.
+        source_files.pop(checkpoint_name, None)
+        expected_files.pop(checkpoint_name, None)
     if set(source_files) != set(expected_files):
         raise HTTPException(status_code=409, detail="persisted CM retry authority does not match registered source files")
 

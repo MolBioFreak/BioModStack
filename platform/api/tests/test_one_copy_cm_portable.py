@@ -13,7 +13,9 @@ from tests.test_one_copy_cm_bindings import load_script
 
 def test_real_compiler_portable_placement_and_canonical_reprep(roots, tmp_path, monkeypatch):
     root = roots['results']/'native-request'; root.mkdir()
-    installed = roots['weights']/'selected.pt'; installed.write_bytes(b'cold-host-installed fixture')
+    installed = roots['weights']/'openfold3/of3-p2-155k.pt'
+    installed.parent.mkdir()
+    installed.write_bytes(b'cold-host-installed fixture')
     params = _request_params('confornets')
     params['confornets']['checkpoint'] = dict(path='registered/old-source-id.pt',
         sha256=hashlib.sha256(installed.read_bytes()).hexdigest())
@@ -27,11 +29,21 @@ def test_real_compiler_portable_placement_and_canonical_reprep(roots, tmp_path, 
     nextflow.build_nextflow_command('conformational_mapping','map',
         dict(materialized.launch_params,gpu_id=0,run_frustrampnn=True),str(roots['results']/'job'),
         job_id='fixture',materialize_inputs=False,native_invocations=invocations)
+    invocations[0].materialize_inputs(roots['results']/'job')
     worker_checkpoint = tmp_path/'worker-attempt/materialized/runtime/weights/selected.pt'
     worker_checkpoint.parent.mkdir(parents=True)
     worker_checkpoint.write_bytes(installed.read_bytes())  # one necessary cold worker installation
     runtime = {str(installed):dict(sha256=hashlib.sha256(installed.read_bytes()).hexdigest(),
         size_bytes=installed.stat().st_size,format='pt',path=str(worker_checkpoint))}
+    # The shared fixture predates selected file dependencies and supplies an
+    # empty runtime_paths set. Supply the same selected roots as the bundle's
+    # real caller; retain its actual enumeration/record/envelope implementation.
+    from services.remote_execution import bundle
+    input_assets = bundle._input_assets
+    def selected_input_assets(*args, **kwargs):
+        kwargs['runtime_paths'] = {installed}
+        return input_assets(*args, **kwargs)
+    monkeypatch.setattr(bundle, '_input_assets', selected_input_assets)
     remote, refs, transfer = _place_closure(roots,tmp_path,monkeypatch,invocations[0],runtime_references=runtime)
     runtime_refs = [ref for ref in refs if ref['role']=='runtime']
     assert len(runtime_refs)==1 and runtime_refs[0]['source_path']==str(installed)

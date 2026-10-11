@@ -113,8 +113,8 @@ def test_selected_concrete_member_is_not_resolved_twice(tmp_path, monkeypatch):
     original_source = module._checkpoint_source
     outside = tmp_path / 'outside.pt'
     outside.write_bytes(checkpoint.read_bytes())
-    def swapped_source(*args):
-        result = original_source(*args)
+    def swapped_source(*args, **kwargs):
+        result = original_source(*args, **kwargs)
         checkpoint.unlink()
         checkpoint.symlink_to(outside)
         return result
@@ -278,8 +278,20 @@ def render(script, **values):
     return script.replace('\\$', '$')
 
 
-def test_extracted_paired_shell_concurrent_no_checkpoint_copy(tmp_path):
+@pytest.mark.parametrize('layout_form', ['legacy', 'pinned'])
+def test_extracted_paired_shell_concurrent_no_checkpoint_copy(tmp_path, layout_form):
     weights, checkpoint, wrapper, registry = fixture(tmp_path)
+    if layout_form == 'pinned':
+        selected = tmp_path / 'weight-store/objects/sha256' / sha(checkpoint) / 'runtime.sif'
+        selected.parent.mkdir(parents=True)
+        checkpoint.rename(selected)
+        selected.chmod(0o400)
+        layout = tmp_path / 'weight-store/layouts/protenix' / ('e' * 64)
+        layout.parent.mkdir(parents=True)
+        weights.rename(layout)
+        weights = layout
+        checkpoint = weights / 'checkpoint/protenix-v2.pt'
+        checkpoint.symlink_to(os.path.relpath(selected, checkpoint.parent))
     before = {str(p.relative_to(weights)): (identity(p), sha(p)) for p in weights.rglob('*') if p.is_file()}
     text = (ROOT / 'modules/conformational_mapping_protenix.nf').read_text()
     start = '    ${params.api_python} ${params.code_root}/scripts/prepare_protenix_execution_snapshot.py'
@@ -312,10 +324,12 @@ def test_extracted_paired_shell_concurrent_no_checkpoint_copy(tmp_path):
         attempts = list(pool.map(attempt, range(2)))
     after = {str(p.relative_to(weights)): (identity(p), sha(p)) for p in weights.rglob('*') if p.is_file()}
     assert after == before
-    payloads = [p for p in tmp_path.rglob('*.pt') if p.is_file()]
-    assert payloads == [checkpoint]
-    print(json.dumps({'checkpoint_bytes': checkpoint.stat().st_size, 'checkpoint_blocks': checkpoint.stat().st_blocks,
-                      'payload_count': len(payloads), 'task_checkpoint_bytes': 0, 'concurrent_attempts': len(attempts)}))
+    payloads = [p for p in tmp_path.rglob('*') if p.is_file() and (p.suffix == '.pt' or p.name == 'runtime.sif')]
+    identities = {(p.stat().st_dev, p.stat().st_ino) for p in payloads}
+    assert identities == {(checkpoint.stat().st_dev, checkpoint.stat().st_ino)}
+    print(json.dumps({'layout_form': layout_form, 'checkpoint_bytes': checkpoint.stat().st_size,
+                      'checkpoint_blocks': checkpoint.stat().st_blocks, 'payload_body_count': len(identities),
+                      'task_checkpoint_bytes': 0, 'concurrent_attempts': len(attempts)}))
     checkpoint.chmod(0o644)
     checkpoint.write_bytes(b'tampered before execution')
     staged, env = attempts[0]

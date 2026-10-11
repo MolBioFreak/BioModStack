@@ -342,7 +342,12 @@ def native_checkpoint_dependencies(process: str, params: dict):
             compatibility_authority='model_acquisition_plan; scripts/lib/pinned_weight_layout.py'))
         blockers.append(UnresolvedField(key, 'dependency_closure', authority, reason))
 
-    if process in {'RunCaliby', 'RunCalibyBinder'}:
+    if process in {'PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets'}:
+        dependencies.append(SelectedDependency('weights:openfold3:checkpoint', 'weights',
+            'openfold3/of3-p2-155k.pt', 'cm_request.confornets.checkpoint',
+            selector='cn_checkpoint_path', semantic_release=(params.get('cm_request') or {}).get(
+                'confornets', {}).get('checkpoint', {}).get('sha256')))
+    elif process in {'RunCaliby', 'RunCalibyBinder'}:
         from scripts.caliby_runtime import resolve_expected_caliby_checkpoint
         root = Path('/weights/caliby/model_params')
         selected = resolve_expected_caliby_checkpoint(
@@ -366,7 +371,7 @@ def native_checkpoint_dependencies(process: str, params: dict):
         dependencies.append(SelectedDependency('weights:' + relative, 'weights', relative,
             'services.caliby_native:selected_assets; MODEL_PARAMS_DIR'))
     elif process in {'ProtenixPredict', 'ProtenixFromComplex', 'BatchProtenixValidation',
-                   'CanonicalProtenixEnsemble', 'RunShapeProtenixValidator'}:
+                   'CanonicalProtenixEnsemble', 'PrepareProtenixExecution', 'RunShapeProtenixValidator'}:
         # Installed Protenix bd54a05d047b8925a241056f36d619700604068a:
         # runner/inference.py:download_inference_cache,load_checkpoint and
         # configs/configs_data.py,configs_inference.py. These are native input
@@ -374,7 +379,14 @@ def native_checkpoint_dependencies(process: str, params: dict):
         owner = ('Protenix:runner/inference.py:download_inference_cache,load_checkpoint; '
                  'configs/configs_data.py; configs/configs_inference.py; '
                  'scripts/run_protenix_inference.py')
-        members = ['checkpoint/protenix-v2.pt', 'common/components.cif',
+        checkpoint_member = 'checkpoint/protenix-v2.pt'
+        if process in {'CanonicalProtenixEnsemble', 'PrepareProtenixExecution'}:
+            checkpoint_member = (params.get('cm_runtime_registry') or {}).get(
+                'checkpoint_relative_path', checkpoint_member)
+            if (not isinstance(checkpoint_member, str) or Path(checkpoint_member).is_absolute()
+                    or any(p in {'', '.', '..'} for p in checkpoint_member.split('/'))):
+                raise ValueError('CM registry checkpoint member is invalid')
+        members = [checkpoint_member, 'common/components.cif',
                    'common/components.cif.rdkit_mol.pkl',
                    'common/clusters-by-entity-40.txt', 'common/obsolete_release_date.csv']
         selected_params = params

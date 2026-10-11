@@ -67,15 +67,15 @@ def test_protenix_binds_a_self_contained_declared_canonical_runtime() -> None:
     assert "uv sync --locked" in launcher
     assert "provision_cm_api_runtime" in launcher
     assert "flock -x 9" in launcher
-    assert "rewrite_cm_api_pyvenv_home" in launcher
-    assert 'target_python="$runtime_dir/python-runtime/bin/' in launcher
+    assert 'runtime_dir="$CM_API_RUNTIME_DIR/releases/runtime-$payload_id"' in launcher
+    assert 'if [ ! -f "$runtime_dir/support-payload.json" ]; then' in launcher
     assert 'stage="$(mktemp -d "${CM_API_RUNTIME_DIR}/.stage.XXXXXX")"' in launcher
-    assert '--bind "$CM_API_RUNTIME_DIR:$CM_API_RUNTIME_DIR"' in launcher
-    assert 'if [ -e "$runtime_dir" ] || [ -L "$runtime_dir" ]; then' in launcher
     assert 'mv -T "$stage" "$runtime_dir"' in launcher
-    assert 'export BMS_API_PYTHON="$CM_API_RUNTIME_DIR/current/venv/bin/python"' in launcher
-    assert 'ln -s "releases/$runtime_name" "$next_link"' in launcher
-    assert 'mv -Tf "$next_link" "$CM_API_RUNTIME_DIR/current"' in launcher
+    assert 'export BMS_API_PYTHON="$selected_runtime/venv/bin/python"' in launcher
+    assert 'export BMS_SUPPORT_PAYLOAD_RECEIPT="$selected_runtime/support-payload.json"' in launcher
+    assert 'if [ ! -e "$CM_API_RUNTIME_DIR/current" ] && [ ! -L "$CM_API_RUNTIME_DIR/current" ]; then' in launcher
+    assert 'mv -Tf "$next_link" "$CM_API_RUNTIME_DIR/current"' not in launcher
+    assert 'exec 9>&-' in launcher
 
 
 def test_canonical_protenix_uses_api_interpreter_only_for_contract_scripts() -> None:
