@@ -173,7 +173,7 @@ def test_real_filter_cli_retains_accepted_payloads(tmp_path, script):
 
 
 def nextflow(tmp_path, workflow, params, resume=False):
-    jar = Path('/home/dalab/.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar')
+    jar = Path(os.environ.get('BMS_TEST_NEXTFLOW_JAR') or os.environ.get('ONE_COPY_NEXTFLOW_JAR') or Path.home() / '.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar')
     assert jar.is_file()
     script = tmp_path / 'fixture.nf'
     config = tmp_path / 'fixture.config'

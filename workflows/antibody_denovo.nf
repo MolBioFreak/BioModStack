@@ -1,6 +1,17 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
+// Keep independent retained payload names across supported filesystem layouts.
+def antibodyPublicationMode(workDir, outputDir) {
+    def destination = file(outputDir).toAbsolutePath()
+    while (!java.nio.file.Files.exists(destination)) destination = destination.parent
+    try {
+        return java.nio.file.Files.getFileStore(workDir) == java.nio.file.Files.getFileStore(destination) ? 'link' : 'copy'
+    } catch (java.io.IOException | UnsupportedOperationException ignored) {
+        return 'copy' // Preserve independent export on non-local providers.
+    }
+}
+
 include { PublishIgGMMaturedCandidates } from './maturation_child_core.nf'
 
 import groovy.json.JsonOutput
@@ -563,7 +574,7 @@ process StageRFantibodyBackbones {
 
     // The directory output subsumes its leaves in Nextflow's publish set.
     // Publish that directory recursively; the link strategy retains regular leaves.
-    publishDir "${params.out_dir}/collected", mode: 'link', overwrite: true, pattern: "staged_output", saveAs: { 'rfantibody_raw' }
+    publishDir "${params.out_dir}/collected", mode: "${antibodyPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "staged_output", saveAs: { 'rfantibody_raw' }
     publishDir "${params.out_dir}/collected/rfantibody_raw", mode: 'copy', pattern: "rfantibody_stage_summary.json"
 
     input:
@@ -902,9 +913,9 @@ process WaitForChildren {
 process CollectChildOutputs {
     label 'process_low'
     
-    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'link', overwrite: true, pattern: "*.pdb"
-    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'link', overwrite: true, pattern: "*.trb"
-    publishDir "${params.out_dir}/collected/${stage_name}/traj", mode: 'link', overwrite: true, pattern: "traj/*.pdb", saveAs: { fn -> fn.replace('traj/', '') }
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: "${antibodyPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "*.pdb"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: "${antibodyPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "*.trb"
+    publishDir "${params.out_dir}/collected/${stage_name}/traj", mode: "${antibodyPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "traj/*.pdb", saveAs: { fn -> fn.replace('traj/', '') }
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "collection_manifest.json"
     
     input:
@@ -984,7 +995,7 @@ process WaitForFAMPNNChildren {
 process CollectFAMPNNOutputs {
     label 'process_low'
     
-    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'link', overwrite: true, pattern: "job*.pdb"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: "${antibodyPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "job*.pdb"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "job*.json"
     
     input:
@@ -1083,7 +1094,7 @@ process CollectFAMPNNOutputs {
 process StageMaturationInputs {
     label 'process_low'
 
-    publishDir "${params.out_dir}/ppiflow", mode: 'link', overwrite: true, pattern: "input_pdbs"
+    publishDir "${params.out_dir}/ppiflow", mode: "${antibodyPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "input_pdbs"
 
     input:
     path pdbs
@@ -1251,7 +1262,7 @@ process WaitForMaturationChildren {
 process CollectMaturationOutputs {
     label 'process_low'
 
-    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'link', overwrite: true, pattern: "*.pdb"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: "${antibodyPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "*.pdb"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.json"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.txt"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.csv"
@@ -1279,7 +1290,7 @@ process CollectMaturationOutputs {
 process StageValidatedMaturationInputs {
     label 'process_low'
 
-    publishDir "${params.out_dir}/ppiflow/validated_input_pdbs", mode: 'link', overwrite: true, pattern: "input_pdbs/*.pdb", saveAs: { fn -> fn.replace('input_pdbs/', '') }
+    publishDir "${params.out_dir}/ppiflow/validated_input_pdbs", mode: "${antibodyPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "input_pdbs/*.pdb", saveAs: { fn -> fn.replace('input_pdbs/', '') }
     publishDir "${params.out_dir}/ppiflow/validated_input_pdbs", mode: 'copy', pattern: "input_pdbs/source_identity.json", saveAs: { fn -> fn.replace('input_pdbs/', '') }
 
     input:
@@ -1448,7 +1459,7 @@ process WaitForValidatedMaturationChildren {
 process CollectValidatedMaturationOutputs {
     label 'process_low'
 
-    publishDir "${params.out_dir}/collected/${stage_name}", mode: 'link', overwrite: true, pattern: "*.pdb"
+    publishDir "${params.out_dir}/collected/${stage_name}", mode: "${antibodyPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "*.pdb"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.json"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.txt"
     publishDir "${params.out_dir}/collected/${stage_name}", mode: 'copy', pattern: "*.csv"
@@ -1476,7 +1487,7 @@ process CollectValidatedMaturationOutputs {
 process StageStructureValidationArtifacts {
     label 'process_low'
 
-    publishDir "${params.out_dir}/collected/structure_validation", mode: 'link', overwrite: true, pattern: "validation_artifacts/*.{pdb,cif,npz}", saveAs: { fn -> fn.tokenize('/')[-1] }
+    publishDir "${params.out_dir}/collected/structure_validation", mode: "${antibodyPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "validation_artifacts/*.{pdb,cif,npz}", saveAs: { fn -> fn.tokenize('/')[-1] }
     publishDir "${params.out_dir}/collected/structure_validation", mode: 'copy', pattern: "validation_artifacts/*.json", saveAs: { fn -> fn.tokenize('/')[-1] }
 
     input:
@@ -1790,10 +1801,10 @@ process SpawnChildJobs {
 process WaitAndAggregateChildResults {
     label 'process_low'
     
-    publishDir "${params.out_dir}/pdb_files", mode: 'link', overwrite: true, pattern: "validated_designs/*.pdb"
+    publishDir "${params.out_dir}/pdb_files", mode: "${antibodyPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "validated_designs/*.pdb"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.json"
-    publishDir "${params.out_dir}/pdb_files", mode: 'link', overwrite: true, pattern: "validated_designs/*.cif"
-    publishDir "${params.out_dir}/pdb_files", mode: 'link', overwrite: true, pattern: "validated_designs/*.npz"
+    publishDir "${params.out_dir}/pdb_files", mode: "${antibodyPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "validated_designs/*.cif"
+    publishDir "${params.out_dir}/pdb_files", mode: "${antibodyPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "validated_designs/*.npz"
     publishDir "${params.out_dir}/pdb_files/aligned_error", mode: 'copy', pattern: "validated_designs/aligned_error/*.json", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}", mode: 'copy', pattern: "aggregation_report.json"
     

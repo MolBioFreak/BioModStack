@@ -79,18 +79,33 @@ def boltz_native_identity(*, native_root: Path, predictions_root: Path,
         source=source, structure_name=structure.name, ledger_bytes=ledger_bytes,
         pae_bytes=snapshots["pae"], plddt_bytes=snapshots["plddt"], confidence_bytes=snapshots["confidence"],
         candidate_id=candidate_id, document_id=document_id)
-    transported = [(name, snapshots[key]) for key, name in names.items()]
-    transported.append((evidence["processed_structure"]["artifact_key"], ledger_bytes))
-    # Validate every destination before transporting any native bytes.
-    for name, data in transported:
+    transported = [(name, snapshots[key], native_dir / name) for key, name in names.items()]
+    transported.append((evidence["processed_structure"]["artifact_key"], ledger_bytes,
+                        native_root / "processed" / "structures" / f"{record_id}.npz"))
+    # Native prediction has closed these exact evidence files. Preserve separate
+    # retained names without another NPZ body; metadata/evidence semantics stay exact.
+    for name, data, original_path in transported:
         target = predictions_root / name
         if target.exists() and _regular_file_bytes(target, root=predictions_root) != data:
             raise ValueError("foreign existing native artifact at transport destination")
         if target.is_symlink():
             raise ValueError("symlink native artifact destination")
-    for name, data in transported:
+    for name, data, original_path in transported:
         target = predictions_root / name
         if not target.exists():
+            import errno
+            import os
+            try:
+                os.link(original_path, target, follow_symlinks=False)
+            except OSError as exc:
+                if exc.errno != errno.EXDEV:
+                    raise
+            else:
+                if _regular_file_bytes(target, root=predictions_root) == data:
+                    continue
+                # A genuinely changing legacy donor keeps the measured snapshot;
+                # do not turn the reuse optimization into a new refusal.
+                target.unlink()
             with target.open("xb") as handle:
                 handle.write(data)
     return evidence

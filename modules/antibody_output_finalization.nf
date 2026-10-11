@@ -1,12 +1,23 @@
 nextflow.enable.dsl = 2
 
+// Keep independent retained payload names across supported filesystem layouts.
+def antibodyFinalPublicationMode(workDir, outputDir) {
+    def destination = file(outputDir).toAbsolutePath()
+    while (!java.nio.file.Files.exists(destination)) destination = destination.parent
+    try {
+        return java.nio.file.Files.getFileStore(workDir) == java.nio.file.Files.getFileStore(destination) ? 'link' : 'copy'
+    } catch (java.io.IOException | UnsupportedOperationException ignored) {
+        return 'copy' // Preserve independent export on non-local providers.
+    }
+}
+
 process FinalizeSequentialValidationOutputs {
     label 'process_low'
 
-    publishDir "${params.out_dir}/pdb_files", mode: 'link', overwrite: true, pattern: "validated_designs/*.pdb"
+    publishDir "${params.out_dir}/pdb_files", mode: "${antibodyFinalPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "validated_designs/*.pdb"
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "validated_designs/*.json"
-    publishDir "${params.out_dir}/pdb_files", mode: 'link', overwrite: true, pattern: "validated_designs/*.cif"
-    publishDir "${params.out_dir}/pdb_files", mode: 'link', overwrite: true, pattern: "validated_designs/*.npz"
+    publishDir "${params.out_dir}/pdb_files", mode: "${antibodyFinalPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "validated_designs/*.cif"
+    publishDir "${params.out_dir}/pdb_files", mode: "${antibodyFinalPublicationMode(workflow.workDir, params.out_dir)}", overwrite: true, pattern: "validated_designs/*.npz"
     publishDir "${params.out_dir}/pdb_files/aligned_error", mode: 'copy', pattern: "validated_designs/aligned_error/*.json", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}", mode: 'copy', pattern: "aggregation_report.json"
 

@@ -15,7 +15,7 @@ import pytest
 from scripts import child_job_utils as owner
 
 ROOT = Path(__file__).resolve().parents[3]
-JAR = Path('/home/dalab/.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar')
+JAR = Path(os.environ.get('BMS_TEST_NEXTFLOW_JAR') or os.environ.get('ONE_COPY_NEXTFLOW_JAR') or Path.home() / '.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar')
 PDB = b'ATOM      1  CA  ALA A   1       1.000   2.000   3.000  1.00 80.00           C  \nTER\nEND\n'
 
 
@@ -110,6 +110,52 @@ def test_real_nextflow_normal_recovery_parity_and_cached_republish(tmp_path, mon
     assert raw.read_bytes() == PDB
     from Bio.PDB import PDBParser
     assert len(list(PDBParser(QUIET=True).get_structure('candidate', raw).get_atoms())) == 1
+
+
+def test_nextflow_publication_across_real_private_filesystems(tmp_path):
+    """A namespace-local tmpfs exercises actual Nextflow copy publication."""
+    source = child(tmp_path / 'child')
+    receipt = tmp_path / 'children.json'
+    receipt.write_text(json.dumps({'child_output_dirs': [str(source)]}))
+    destination = tmp_path / 'separate-results'
+    destination.mkdir()
+    harness = tmp_path / 'collection.nf'
+    harness.write_text(f"include {{ CollectChildOutputs }} from '{ROOT}/workflows/antibody_denovo'\n"
+                       "workflow { CollectChildOutputs(Channel.value(file(params.fixture)), 'rfantibody') }\n")
+    driver = tmp_path / 'crossfs.py'
+    driver.write_text('''import importlib.util, json, shutil, subprocess, sys
+from pathlib import Path
+base, module_path = Path(sys.argv[1]), Path(sys.argv[2])
+out = base / 'separate-results'
+mounted = subprocess.run(['mount', '-t', 'tmpfs', 'tmpfs', str(out)], capture_output=True, text=True)
+if mounted.returncode:
+    print(mounted.stderr)
+    raise SystemExit(77)
+spec = importlib.util.spec_from_file_location('crossfs_receiving', module_path)
+owner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(owner)
+params = {'code_root': str(owner.ROOT), 'out_dir': str(out), 'fixture': str(base / 'children.json'), 'job_id': 'parent'}
+owner.run_nf(base, base / 'collection.nf', params)
+source = base / 'child/pdb_files/candidate.pdb'
+published = out / 'collected/rfantibody/job0_candidate.pdb'
+assert source.stat().st_dev != published.stat().st_dev
+assert source.read_bytes() == published.read_bytes()
+shutil.rmtree(out / 'collected')
+assert 'Cached process' in owner.run_nf(base, base / 'collection.nf', params, resume=True)
+shutil.rmtree(base / 'work')
+shutil.rmtree(base / 'child')
+assert published.read_bytes() == owner.PDB
+(base / 'crossfs-result.json').write_text(json.dumps({'different_devices': True, 'cached_republish': True, 'retained_after_work_deletion': True}))
+''')
+    result = subprocess.run(['unshare', '--user', '--map-root-user', '--mount', '--net',
+                             sys.executable, str(driver), str(tmp_path), str(Path(__file__))],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=300)
+    if result.returncode == 77 or (result.returncode and 'unshare failed' in result.stderr):
+        pytest.skip('private user/mount namespace unavailable: ' + result.stderr + result.stdout)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads((tmp_path / 'crossfs-result.json').read_text()) == {
+        'different_devices': True, 'cached_republish': True, 'retained_after_work_deletion': True,
+    }
 
 
 @pytest.mark.parametrize('readonly', [False, True])

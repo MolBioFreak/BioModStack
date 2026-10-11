@@ -6,8 +6,8 @@ remain unknown; a basename is only a lookup key within an explicit emitted sidec
 """
 import argparse
 import json
-import shutil
 from pathlib import Path
+from child_job_utils import publish_collected_file
 
 
 def stage(manifest_path, output_dir):
@@ -22,7 +22,7 @@ def stage(manifest_path, output_dir):
         if name in used:
             raise ValueError(f'duplicate staged name: {name}')
         used.add(name)
-        shutil.copy2(source, output_dir / name)
+        publish_collected_file(source, output_dir / name, published=True)
         staged.append({'staged_name': name, 'source_path': str(source),
                        'source_meta': row['meta']})
     (output_dir / 'source_identity.json').write_text(json.dumps(staged, indent=2))

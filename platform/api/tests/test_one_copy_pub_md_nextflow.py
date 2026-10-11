@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-JAR = Path('/home/dalab/.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar')
+JAR = Path(os.environ.get('BMS_TEST_NEXTFLOW_JAR') or os.environ.get('ONE_COPY_NEXTFLOW_JAR') or Path.home() / '.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar')
 
 
 @pytest.mark.parametrize('engine,exit_code', [('gromacs', 0), ('openmm', 0), ('gromacs', 17), ('openmm', 17)])
