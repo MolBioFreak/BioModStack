@@ -4023,16 +4023,18 @@ def resolve_nextflow_executable() -> str:
 
     BioModStack keeps versioned official Nextflow launchers under
     ``~/.local/lib/nextflow/<version>/nextflow``.  Prefer an explicitly pinned
-    binary, then the managed 25.10.1 launcher, and only then fall back to PATH.
+    binary (BMS_NEXTFLOW_BIN), then the launch owner's bound worker executable
+    (BMS_NEXTFLOW_EXECUTABLE), then the managed 25.10.1 launcher and PATH.
     An invalid explicit pin is an operator error and must fail loudly instead of
     silently selecting a different wrapper.
     """
-    explicit = str(os.getenv("BMS_NEXTFLOW_BIN") or "").strip()
-    if explicit:
-        candidate = Path(explicit).expanduser()
-        if not candidate.is_file() or not os.access(candidate, os.X_OK):
-            raise RuntimeError(f"BMS_NEXTFLOW_BIN is not an executable file: {candidate}")
-        return str(candidate.resolve())
+    for key in ('BMS_NEXTFLOW_BIN', 'BMS_NEXTFLOW_EXECUTABLE'):
+        explicit = str(os.getenv(key) or '').strip()
+        if explicit:
+            candidate = Path(explicit).expanduser()
+            if not candidate.is_file() or not os.access(candidate, os.X_OK):
+                raise RuntimeError(f"{key} is not an executable file: {candidate}")
+            return str(candidate.resolve())
 
     version = resolve_nextflow_version()
     managed = Path.home() / ".local" / "lib" / "nextflow" / version / "nextflow"
@@ -4294,6 +4296,11 @@ def _native_plan_metadata_settings(model_id, params):
         return settings
     path = Path(str(name)).expanduser()
     roots = (get_results_dir().resolve(), get_inputs_dir().resolve(), get_data_root().resolve())
+    if key == 'md_config':
+        # MD preparation publishes normalized configs in the installation-owned
+        # Nextflow work root, which need not be inside BMS_DATA on a worker.
+        # Never trust params.work_dir or a config's parent as input authority.
+        roots += (get_work_dir().resolve(),)
     if (not path.is_absolute() or any(part.is_symlink() for part in (path, *path.parents))
             or not any(path.resolve().is_relative_to(root) for root in roots)
             or not path.is_file() or path.stat().st_size > 16 * 1024 * 1024):
