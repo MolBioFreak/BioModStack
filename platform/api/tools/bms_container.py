@@ -11,6 +11,7 @@ from __future__ import annotations
 import ctypes
 import fcntl
 import hashlib
+import json
 import selectors
 import uuid
 import os
@@ -325,6 +326,75 @@ def copy_input(source, target, guest, direct_images, *, writable=False):
     return identities
 
 
+def project_bindings(requested, inputs, direct_images, *, shared=None):
+    """Shadow protected descendants of broad binds, preserving writable siblings.
+
+    PRoot cannot enforce a kernel read-only bind. One private reflink projection
+    is reused at every alias in this invocation; no full-copy fallback is used.
+    Broad rw directories remain native and only protected descendants are shadowed.
+    """
+    requested = [(Path(source).resolve(strict=True), target, mode)
+                 for source, target, mode in requested]
+    roots = {source for source, _, mode in requested if mode == 'ro'}
+    if shared is not None:
+        roots.add(shared)
+    # Project each maximal protected root only once, including nested ro aliases.
+    roots = sorted((root for root in roots if not any(root != other and root.is_relative_to(other)
+                    for other in roots)), key=str)
+    projected, guarded = {}, []
+    for index, source in enumerate(roots):
+        view = inputs / str(index)
+        before = copy_input(source, view, str(source), direct_images,
+                            writable=shared is not None and source.is_relative_to(shared))
+        if snapshot(source) != before:
+            raise ValueError('declared input changed during projection')
+        strict = any(mode == 'ro' and source == path for path, _, mode in requested)
+        guarded.append((source, before, view, snapshot(view) if strict else None))
+        projected[source] = view
+    # The selected weight layout already records its CAS identities. Reuse that
+    # authority to shadow direct object aliases too, without copying/scanning the
+    # cache or inventing an alias registry. Legacy local roots have no marker.
+    aliases = dict(projected)
+    if shared is not None and (shared / '.bms-weights.json').is_file():
+        donor = next(root for root in roots if shared.is_relative_to(root))
+        view = projected[donor] / shared.relative_to(donor)
+        for row in json.loads((shared / '.bms-weights.json').read_bytes()):
+            if 'target' in row:
+                continue
+            digest = row['sha256']
+            objects = shared.parent.parent / 'objects'
+            candidates = [objects / 'sha256' / digest[:2] / digest,
+                          objects / 'modes' / digest[:2] / (digest + '-' + format(row['mode'], '03o'))]
+            for candidate in candidates:
+                if candidate.is_file():
+                    aliases[candidate] = view / row['name']
+    volumes, shadows = [], []
+    for source, target, mode in requested:
+        donor = next((root for root in roots if source.is_relative_to(root)), None)
+        if donor is not None:
+            volumes.append((str(projected[donor] / source.relative_to(donor)), target))
+        else:
+            volumes.append((str(source), target))
+            for protected, view in aliases.items():
+                if protected.is_relative_to(source):
+                    shadows.append((str(view),
+                                    str(PurePosixPath(target) / protected.relative_to(source))))
+    # Later nested binds must override *every* broad alias, including auto-mounts/home.
+    volumes.extend(shadows)
+    # Absolute scientific paths/symlink referents must see the same private view,
+    # even when the declared guest target is different from the host path.
+    volumes.extend((str(view), str(source)) for source, view in aliases.items())
+    # Keep explicit writable cache/output submounts more specific than a broad
+    # protected alias. Equal guest targets retain last-writer projection order.
+    volumes.sort(key=lambda volume: len(PurePosixPath(volume[1]).parts))
+    for source, target, mode in requested:
+        if mode == 'ro' and source not in projected:
+            donor = next(root for root in roots if source.is_relative_to(root))
+            view = projected[donor] / source.relative_to(donor)
+            guarded.append((source, snapshot(source), view, snapshot(view)))
+    return volumes, guarded
+
+
 def inherited_fds():
     result = []
     for name in os.listdir('/proc/self/fd'):
@@ -387,35 +457,6 @@ def execute(invocation, identity):
                 mount = resolved if resolved.is_dir() else resolved.parent
                 volumes.append((str(mount), str(mount)))
         volumes.extend(host_system_bindings(private))
-        shared = os.environ.get('BMS_SHARED_WEIGHTS_ROOT')
-        shared = Path(shared).absolute() if shared else None
-        requested = [(source, target, 'rw') for source, target in volumes] + invocation.binds
-        volumes = []
-        for index, (source_name, target, mode) in enumerate(requested):
-            source = Path(source_name).resolve(strict=True)
-            protected = shared is not None and source.is_relative_to(shared)
-            if shared is not None and shared != source and shared.is_relative_to(source):
-                raise ValueError('broad bind exposes the shared weight authority')
-            if mode == 'rw' and not protected:
-                volumes.append((str(source), target))
-                continue
-            projected = inputs / str(index)
-            # PRoot can temporarily chmod frozen 0444/0555 inputs even for a
-            # read. Normalize only the PRIVATE CoW view before its strict ro
-            # baseline; shared originals and write-and-restore detection stay.
-            if protected:
-                before = copy_input(source, projected, target, direct_images, writable=True)
-            else:
-                before = copy_input(source, projected, target, direct_images)
-            if snapshot(source) != before:
-                raise ValueError('declared input changed during projection')
-            guarded.append((source, before, projected, snapshot(projected) if mode == "ro" else None))
-            volumes.append((str(projected), target))
-        volumes.extend(direct_images)
-        # Bind the canonical object directory, not only the SIF: attestation
-        # verifies its real 0500 parent as well as the file's inode and ctime.
-        # This is one CAS object, not the store or derived-rootfs authority.
-        volumes.append((str(image.parent), str(image.parent)))
         if invocation.home is not None:
             home_parts = invocation.home.split(':')
             if len(home_parts) > 2:
@@ -425,6 +466,15 @@ def execute(invocation, identity):
             volumes.append((home_source, home_guest))
         else:
             home_guest = '/root'
+        shared = os.environ.get('BMS_SHARED_WEIGHTS_ROOT')
+        shared = Path(shared).resolve(strict=True) if shared else None
+        requested = [(source, target, 'rw') for source, target in volumes] + invocation.binds
+        volumes, guarded = project_bindings(requested, inputs, direct_images, shared=shared)
+        volumes.extend(direct_images)
+        # Bind the canonical object directory, not only the SIF: attestation
+        # verifies its real 0500 parent as well as the file's inode and ctime.
+        # This is one CAS object, not the store or derived-rootfs authority.
+        volumes.append((str(image.parent), str(image.parent)))
         extra = dict(invocation.environment)
         for prefix in ('SINGULARITYENV_', 'APPTAINERENV_'):
             for name, value in os.environ.items():

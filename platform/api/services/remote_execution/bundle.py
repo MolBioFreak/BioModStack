@@ -99,17 +99,28 @@ def bind_resource_admission(bundle: PreparedRemoteBundle, admission: dict, *,
 
 
 def uncached_runtime_transfers(bundle: PreparedRemoteBundle) -> tuple[TransferPlan, ...]:
-    """Only destination-dependent support-python bypasses the shared cache."""
-    return tuple(transfer for transfer in bundle.runtime_transfers
-                 if transfer.remote_destination == bundle.remote_runtime_dir.rstrip('/') + '/support-python')
+    """Private generated metadata only; shared support bodies use the CAS path."""
+    private = []
+    for row in bundle.envelope.files:
+        if row.role != 'runtime' or row.link_target is not None or not row.mode & 0o222:
+            continue
+        destination = bundle.remote_runtime_dir.rstrip('/') + '/' + row.relative_path.removeprefix('runtime/')
+        matches = [t for t in bundle.runtime_transfers if destination == t.remote_destination
+                   or destination.startswith(t.remote_destination.rstrip('/') + '/')]
+        if len(matches) != 1:
+            raise RemoteBundleError('Private runtime file has ambiguous transport authority')
+        transfer = matches[0]
+        suffix = destination[len(transfer.remote_destination):].lstrip('/')
+        private.append(TransferPlan(transfer.source / suffix if suffix else transfer.source, destination))
+    return tuple(private)
 
 
 def cache_transfer_artifacts(bundle: PreparedRemoteBundle) -> tuple[CacheTransferArtifact, ...]:
     """Project the existing authoritative envelope, never a second model registry.
 
-    Relocated support-python contains destination-dependent bytes and symlinks;
-    it deliberately stays on the verified legacy transport path. Regular source,
-    workflow and model files share the ordinary byte-addressed cache protocol.
+    Relocated support-python bodies and internal links use the same cache path.
+    Small destination-dependent configs/listings travel privately; they do not
+    populate the shared payload cache. Source archives carry source members.
     Shared SIF identities/aliases come from the authenticated manifest and use the
     worker's shared-image store. Scientific readers pin canonical regular objects;
     semantic aliases exist only for compatible callers.
@@ -120,7 +131,7 @@ def cache_transfer_artifacts(bundle: PreparedRemoteBundle) -> tuple[CacheTransfe
         if (record.link_target is not None or relative.parts[0] not in {"source", "runtime"}
                 or record.role != relative.parts[0]):
             continue
-        if relative.parts[:2] == ("runtime", "support-python"):
+        if record.role == "runtime" and record.mode & 0o222:
             continue
         if relative.parts[0] == "source":
             # The archive carries every workflow/source leaf without thousands of SSH calls.
@@ -224,6 +235,23 @@ def resolve_job_result_contract(job: Any) -> dict[str, Any]:
     ).model_dump(mode="json")
 
 
+def _source_archive_records(archive_path: Path, digest: str) -> list[RemoteFileRecord]:
+    """Inventory actual archived bytes without allocating an extracted hash tree."""
+    records = [_record_file(archive_path, 'source/' + archive_path.name, 'source',
+                            staged_sha256=digest)]
+    with tarfile.open(archive_path, 'r|*') as archive:
+        for member in archive:
+            path = PurePosixPath(member.name)
+            if path.is_absolute() or '..' in path.parts or not (member.isfile() or member.isdir()):
+                raise RemoteBundleError('Git archive contains an unsafe member')
+            if member.isfile():
+                with archive.extractfile(member) as stream:
+                    sha = hashlib.file_digest(stream, 'sha256').hexdigest()
+                records.append(RemoteFileRecord(relative_path='source/' + path.as_posix(),
+                    size_bytes=member.size, sha256=sha, role='source', mode=member.mode & 0o555))
+    return records
+
+
 def _safe_extract(archive_path: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     root = destination.resolve()
@@ -238,6 +266,21 @@ def _safe_extract(archive_path: Path, destination: Path) -> None:
             if resolved != root and root not in resolved.parents:
                 raise RemoteBundleError("Git archive path escapes the revision root")
         archive.extractall(destination, filter="fully_trusted")
+
+
+def _private_runtime_file(path: Path, relative: str) -> bool:
+    if relative in {'runtime/.bms-runtime-images.json',
+                    'runtime/data/ngs/wf-clone-validation/relocated.lock.json'}:
+        return True
+    if relative.startswith('runtime/support-python/'):
+        if path.name == 'pyvenv.cfg' or path.name in {'activate', 'activate.csh', 'activate.fish',
+                'activate.nu', 'activate.ps1', 'Activate.ps1', 'activate_this.py'}:
+            return True
+        if relative.startswith('runtime/support-python/venv/bin/'):
+            with path.open('rb') as stream:
+                header = stream.read(22)
+                return header.startswith(b"#!/bin/sh\n") and b"exec'" in header
+    return False
 
 
 def _record_file(
@@ -270,7 +313,8 @@ def _record_file(
         size_bytes=path.stat().st_size,
         sha256=digest,
         role=role,
-        mode=path.stat().st_mode & 0o777,
+        mode=(path.stat().st_mode & 0o777) if role != "runtime"
+             or _private_runtime_file(path, relative_path) else (path.stat().st_mode & 0o555),
     )
 
 
@@ -463,6 +507,19 @@ def _published_runtime_records(source: Path, prefix: str, *, publication=None, r
 
 
 def _runtime_records(source: Path, prefix: str, *, publication=None, resolved=None):
+    if prefix == 'runtime/support-python':
+        from .critical_runtime import support_receipt, _support_members
+        receipt = support_receipt(source)
+        members = {row['path']: row for row in receipt['members']} if receipt else {}
+        result = []
+        for name, path, target in _support_members(source):
+            relative = prefix + '/' + name
+            if target is not None:
+                result.append(_record_runtime_symlink(path, relative))
+            else:
+                result.append(_record_file(path, relative, 'runtime',
+                    staged_sha256=members.get(name, {}).get('sha256')))
+        return result
     rows = _published_runtime_records(source, prefix, publication=publication, resolved=resolved)
     return rows if rows is not None else _records_for_source(source, prefix, 'runtime')
 
@@ -523,9 +580,8 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
             continue
         if dependency.kind == 'support_python':
             if include_support:
-                runtime = Path(os.getenv('BMS_CM_API_RUNTIME_DIR',
-                    str(get_data_root() / 'runtime/cm-api-python'))) / 'current'
-                assets['support-python'] = runtime.resolve()
+                from .critical_runtime import selected_support_root
+                assets['support-python'] = selected_support_root()
             continue
         if dependency.kind not in roots:
             raise RemoteBundleError('Unsupported declared runtime role: ' + dependency.kind)
@@ -1164,10 +1220,29 @@ def _write_portable_bindings(*, staging_root: Path, remote_attempt: str,
 
 
 def _relocate_python_runtime(source: Path, destination: Path, remote_destination: str) -> Path:
-    """Materialize a self-contained release and hash its final-path bytes later."""
+    """Project immutable bodies; only relocation-owned files get private bytes."""
     source = source.resolve()
-    shutil.copytree(source, destination, symlinks=True,
-                    ignore=lambda directory, names: [".venv"] if Path(directory) == source / "venv" and ".venv" in names else [])
+    from .critical_runtime import support_receipt
+    receipt = support_receipt(source)
+    changed = set()
+    def share(original, target):
+        original, target = Path(original), Path(target)
+        if original.stat().st_mode & 0o222:
+            # Legacy mutable installations require adoption by their installer.
+            # Never change their mode or expose a writable donor through links.
+            return shutil.copy2(original, target)
+        os.link(original, target)
+        return str(target)
+    shutil.copytree(source, destination, symlinks=True, copy_function=share,
+                    ignore=lambda directory, names: [n for n in names if n in {
+                        'support-payload.json', '.bms-support-payload.json'} or
+                        (n == '.venv' and Path(directory) == source / 'venv')])
+    # copytree preserves donor directory modes; these directories belong only
+    # to the projection and must permit private config replacement as non-root.
+    destination.chmod(0o700)
+    for directory in destination.rglob('*'):
+        if directory.is_dir() and not directory.is_symlink():
+            directory.chmod(0o700)
     mapping = {str(source): remote_destination}
     # Absolute internal links become relative so validation also works in staging.
     for original in sorted(source.rglob("*")):
@@ -1193,7 +1268,11 @@ def _relocate_python_runtime(source: Path, destination: Path, remote_destination
                     raise RemoteBundleError("Python base runtime is not contained in its managed release")
                 line = f"{key.strip()} = {translated}"
             lines.append(line)
+        changed.add(config.relative_to(destination).as_posix())
+        mode = config.stat().st_mode & 0o777
+        config.unlink()
         config.write_text("\n".join(lines) + "\n")
+        config.chmod(mode | 0o200)
     # A shell/Python prologue supports long or spaced remote interpreter paths.
     launcher = ("#!/bin/sh\n'''exec' " + shlex.quote(remote_destination + '/venv/bin/python')
                 + " \"$0\" \"$@\"\n' '''\n").encode()
@@ -1202,9 +1281,44 @@ def _relocate_python_runtime(source: Path, destination: Path, remote_destination
             continue
         with script.open("rb") as handle:
             first = handle.readline(4096)
-        if first.startswith(b"#!") and b"python" in first:
-            payload = script.read_bytes()
-            script.write_bytes(launcher + payload[len(first):])
+        activation = script.name in {'activate', 'activate.csh', 'activate.fish', 'activate.nu',
+                                     'activate.ps1', 'Activate.ps1', 'activate_this.py'}
+        if not first.startswith(b"#!") and not activation:
+            continue
+        payload = script.read_bytes()
+        if activation:
+            relocated = payload.replace(str(source / 'venv').encode(),
+                                        (remote_destination + '/venv').encode())
+        elif first.startswith(b"#!") and b"python" in first:
+            relocated = launcher + payload[len(first):]
+        else:
+            # Installer-owned /bin/sh trampoline may already contain the Python
+            # path on its second line. Never rewrite arbitrary module bodies.
+            lines = payload.splitlines(keepends=True)
+            for index in range(min(3, len(lines))):
+                lines[index] = lines[index].replace(str(source).encode(), remote_destination.encode())
+            relocated = b''.join(lines)
+        if relocated != payload:
+            changed.add(script.relative_to(destination).as_posix())
+            mode = script.stat().st_mode & 0o777
+            script.unlink()
+            script.write_bytes(relocated)
+            script.chmod(mode | 0o200)
+    if receipt:
+        members = []
+        for row in receipt['members']:
+            row = dict(row)
+            path = destination / row['path']
+            if row['path'] in changed:
+                row.update(sha256=_sha256_file(path), size=path.stat().st_size,
+                           mode=path.stat().st_mode & 0o777)
+            elif row['kind'] == 'symlink':
+                row['target'] = os.readlink(path)
+            members.append(row)
+        receipt = dict(receipt, members=members, payload_root=str(destination))
+        receipt['published_member_manifest_sha256'] = hashlib.sha256(
+            json.dumps(members, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        (destination / 'support-payload.json').write_bytes(_canonical_bytes(receipt))
     return destination
 
 
@@ -1259,24 +1373,17 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
                     output.flush()
                     os.fsync(output.fileno())
                 expected = _sha256_file(temporary)
+                temporary.chmod(0o444)
                 os.replace(temporary, archive)
                 _SOURCE_ARCHIVE_DIGESTS[key] = expected
             finally:
                 temporary.unlink(missing_ok=True)
-        # Each attempt owns its archive as well as its writable extracted tree.
         staged = source_root / '.bms-source.tar.gz'
         source_root.mkdir(parents=True, exist_ok=False)
-        # Hash the bytes as they enter this private attempt; rereading the
-        # staged copy after copyfile adds a full archive pass to every warm run.
-        staged_digest = hashlib.sha256()
-        with archive.open('rb') as source, staged.open('xb') as destination:
-            for chunk in iter(lambda: source.read(1024 * 1024), b''):
-                destination.write(chunk)
-                staged_digest.update(chunk)
-        if staged_digest.hexdigest() != expected:
-            # Retry regenerates through Git; never extract mismatched private bytes.
+        if _sha256_file(archive) != expected:
             _SOURCE_ARCHIVE_DIGESTS.pop(key, None)
             raise RemoteBundleError('Cached source archive changed during staging')
+        os.link(archive, staged)
         os.utime(archive, None, follow_symlinks=False)
         _prune_source_archives(cache_root)
     # Only the shared archive/copy needs serialization. Extraction writes into
@@ -1407,13 +1514,12 @@ def prepare_remote_bundle(
     tree = _git(repo_root, "rev-parse", f"{revision}^{{tree}}")
     if inherited_tree != tree:
         raise RemoteBundleError("Inherited source tree does not match the inherited revision")
-    source_archive_sha256 = _staged_source_archive(repo_root, data_root, revision, source_root)
+    source_archive_sha256 = _staged_source_archive(repo_root, data_root, revision, source_root, extract=False)
     archive_copy = source_root / '.bms-source.tar.gz'
     if current_revision != revision or current_tree != inherited_tree:
         # Historical NGS was compiled in its private verified source tree. Check
         # those exact executable bytes against this bundle's Git-owned archive;
         # accepting an old identity on a current compiler is not sufficient.
-        import filecmp
         compiled_root = Path(native_invocation.native_parameters['code_root'])
         if compiled_root == repo_root:
             raise RemoteBundleError('Retained ONT command was compiled from current source')
@@ -1421,15 +1527,14 @@ def prepare_remote_bundle(
             for member in archive:
                 if member.isdir():
                     continue
-                original = source_root / member.name
                 compiled = compiled_root / member.name
                 if member.issym():
                     matches = compiled.is_symlink() and os.readlink(compiled) == member.linkname
                 else:
                     matches = (not any(p.is_symlink() for p in (compiled, *compiled.parents))
                         and compiled.is_file() and
-                        (compiled.stat().st_mode & 0o111) == (original.stat().st_mode & 0o111) and
-                        filecmp.cmp(original, compiled, shallow=False))
+                        (compiled.stat().st_mode & 0o111) == (member.mode & 0o111) and
+                        _sha256_file(compiled) == hashlib.file_digest(archive.extractfile(member), "sha256").hexdigest())
                 if not matches:
                     raise RemoteBundleError('Retained ONT compiler source changed: ' + member.name)
         repo_root = compiled_root
@@ -1482,7 +1587,8 @@ def prepare_remote_bundle(
     support_root = (str(PurePosixPath(binding["paths"]["python"]).parents[2])
                     if binding else f"{remote_runtime}/support-python")
     if binding:
-        host_support = Path(os.getenv("BMS_CM_API_RUNTIME_DIR", str(data_root / "runtime/cm-api-python"))) / "current"
+        from .critical_runtime import selected_support_root
+        host_support = selected_support_root()
         runtime_path_map[str(host_support)] = support_root
         runtime_path_map[str(host_support.resolve())] = support_root
         runtime_paths.add(host_support.resolve())
@@ -1608,9 +1714,13 @@ def prepare_remote_bundle(
         runtime_transfers.append(clone_transfer)
         runtime_records.append(clone_record)
         clone_placement = (clone_transfer.remote_destination, clone_home, engine, clone_version)
-    runtime_payload = [record.model_dump(mode="json") for record in runtime_records]
+    runtime_payload = [record.model_dump(mode="json") for record in runtime_records
+                       if record.link_target is not None or not record.mode & 0o222]
     runtime_identity = hashlib.sha256(_canonical_bytes(
-        {"files": runtime_payload, "critical_runtime": binding} if binding else runtime_payload
+        {"files": runtime_payload, "critical_runtime": binding,
+         "images": [{"sha256": image.sha256, "size_bytes": image.size_bytes}
+                    for image in sorted(images.values(), key=lambda value: value.sha256)],
+         "weights": weight_entries}
     )).hexdigest()
 
     if job.model_id == "nanopore":
@@ -1673,8 +1783,7 @@ def prepare_remote_bundle(
 
     verify_approved_native_inputs(job, runtime_references, input_hashes, input_inventory)
     verify_selected_preparation_inputs(native_invocation.execution_plan, input_hashes)
-    source_records = _records_for_source(source_root, "source", "source",
-                                         source_archive_sha256=source_archive_sha256)
+    source_records = _source_archive_records(archive_copy, source_archive_sha256)
     remote_results = f"{remote_attempt}/results"
     from scripts.lib.portable_inputs import selected_ngs_input_fields
     bindings_transfer, bindings_record = _write_portable_bindings(
@@ -1782,6 +1891,7 @@ def prepare_remote_bundle(
         "BMS_POD5_PYTHON": f"{support_root}/venv/bin/python",
         "BMS_MSA_CACHE": f"{remote_attempt}/msa-cache",
         "BMS_REMOTE_EXECUTION": "1",
+        "PYTHONPYCACHEPREFIX": f"{remote_attempt}/pycache",
         "BMS_REMOTE_ATTEMPT_ID": attempt_id,
         "BMS_REMOTE_JOB_ID": str(job.id),
         "BMS_REMOTE_OUTPUT_ROOT": remote_results,

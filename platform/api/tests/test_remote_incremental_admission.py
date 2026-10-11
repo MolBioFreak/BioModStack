@@ -41,10 +41,10 @@ def account(rows, installed, cached):
 
 
 @pytest.mark.parametrize('cache_state,installed,expected', [
-    ('missing', 'missing', 30), ('cache_hit', 'missing', 10),
+    ('missing', 'missing', 20), ('cache_hit', 'missing', 0),
     ('cache_hit', 'verified', 0), ('missing', 'verified', 20),
-    ('corrupt', 'missing', 30), ('cache_hit', 'incompatible', 10),
-    ('cache_hit', 'corrupt', 10),
+    ('corrupt', 'missing', 20), ('cache_hit', 'incompatible', 0),
+    ('cache_hit', 'corrupt', 0),
 ])
 def test_weight_budget_matches_actual_upload_and_install(cache_state, installed, expected):
     total, _, _ = account([row()], [installed], cache_state)
@@ -57,9 +57,9 @@ def test_image_never_receives_a_managed_copy(cached, expected):
     assert total == expected * GiB
 
 
-def test_deduplicate_uploads_but_not_distinct_install_destinations():
+def test_deduplicate_uploads_and_distinct_link_destinations():
     total, _, storage = account([row('weights/a'), row('weights/b')], ['missing'] * 2, 'missing')
-    assert total == 40 * GiB  # one upload + one CAS + two distinct destinations
+    assert total == 20 * GiB  # one upload + one CAS, two directory-only destinations
     assert len(storage.calls) == 1
 
 
@@ -67,7 +67,7 @@ def test_links_are_generated_metadata_not_cache_uploads():
     link = row('weights/link', size=6, kind='runtime_link')
     link.update(target='model', mode=0o777)
     total, _, storage = account([link], ['missing'], 'missing')
-    assert total == 6
+    assert total == 0  # link inode/directory entries are covered by metadata allowance
     assert storage.calls == []
 
 
@@ -128,7 +128,7 @@ def test_warm_retry_fits_when_cold_admission_does_not(monkeypatch):
     with pytest.raises(OSError) as caught:
         managed.check_space(123, {'artifacts': rows}, cold)
     assert caught.value.errno == errno.ENOSPC
-    assert managed.check_space(123, {'artifacts': rows}, warm)['additional_copy_bytes'] == 10 * GiB
+    assert managed.check_space(123, {'artifacts': rows}, warm)['additional_copy_bytes'] == 0
 
 
 def test_headroom_is_preserved_even_for_fully_installed_release(monkeypatch):
@@ -142,4 +142,4 @@ def test_large_closure_deduplicates_once_per_content_identity():
     rows = [row(f'weights/model/{i:05d}', size=1024, digest=f'{i % 1024:064x}') for i in range(88037)]
     total, _, storage = account(rows, ['missing'] * len(rows), 'missing')
     assert len(storage.calls) == 1024
-    assert total == (88037 + 2 * 1024) * 1024
+    assert total == (2 * 1024) * 1024

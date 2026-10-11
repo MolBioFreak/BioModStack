@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import uuid
 
 from paths import get_code_root, get_data_root
-from .bundle import (CacheTransferArtifact, cache_transfer_artifacts, current_source_identity,
+from .bundle import (CacheTransferArtifact, cache_transfer_artifacts, uncached_runtime_transfers, current_source_identity,
                      compile_remote_dependencies, _runtime_assets, _records_for_source, _published_runtime_records,
                      _staged_source_archive, _is_runtime_image, verify_selected_runtime_hashes, verify_selected_preparation_inputs)
 from .transport import run_remote, rsync_to_remote
@@ -383,7 +383,8 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
             async with materialize_limit:
                 await call({'action': 'extract_source',
                             'artifact': {'sha256': entry.sha256, 'size_bytes': entry.size_bytes},
-                            'destination': str(Path(entry.remote_destination).parent)})
+                            'destination': str(Path(entry.remote_destination).parent),
+                            'immutable': not bool(entry.mode & 0o222)})
 
         await _bounded_group(source_entries, extract_source_entry)
     await check_fence()
@@ -480,10 +481,10 @@ async def _install_weight_archive(*, connection, helper, layout, operation_id, p
 
 
 async def stage_cached_bundle(*, connection, bundle, progress=_noop, check_fence=_noop):
-    """Stage eligible source/runtime leaves; executor retains inputs/support-python.
+    """Stage shared source/runtime bodies and private generated runtime metadata.
 
-    Do NOT run the old full source/runtime rsync after this call. Preserve the
-    existing support-python transfer, attempt staging, symlinks and final verify.
+    Do NOT run the old full source/runtime/support rsync after this call. Preserve
+    executor-owned scientific input transfer, attempt symlinks and final verify.
     """
     # Claim one fresh generation before any upload/materialization. A failed or
     # replayed stage must use a new attempt, never merge into an existing tree.
@@ -512,28 +513,26 @@ p.mkdir(mode=0o700,exist_ok=False)
               'target': record.link_target}
              for record in bundle.envelope.files
              if record.role == 'runtime' and record.link_target is not None
-             and record.relative_path.startswith('runtime/')
-             and record.relative_path != 'runtime/support-python'
-             and not record.relative_path.startswith('runtime/support-python/')]
+             and record.relative_path.startswith('runtime/')]
     helper = await _install_helper(connection, check_fence)
     transferable = cache_transfer_artifacts(bundle)
     receipts = []
+    for transfer in uncached_runtime_transfers(bundle):
+        await check_fence()
+        await run_remote(connection, ['mkdir', '-p', str(Path(transfer.remote_destination).parent)])
+        await rsync_to_remote(connection, transfer.source, transfer.remote_destination)
+        await check_fence()
     if bundle.weight_layout:
         # The layout travels by reference to the runtime listing this bundle
         # already carries and the envelope already authenticates; its production
-        # row count exceeds the helper's declared request budget. Stage and
-        # materialize that one document first, then let the helper re-verify its
+        # row count exceeds the helper's declared request budget. The private
+        # document was transferred above; let the helper re-verify its
         # digest, schema and placement before it is used.
         listing_destination = bundle.remote_runtime_dir.rstrip('/') + '/.bms-runtime-images.json'
-        listing = next((entry for entry in transferable
-                        if entry.remote_destination == listing_destination), None)
+        listing = next((row for row in bundle.envelope.files
+                        if row.relative_path == 'runtime/.bms-runtime-images.json'), None)
         if listing is None:
             raise ValueError('Weight layout listing is unavailable for this bundle')
-        receipts = await _cache_artifacts(connection=connection, artifacts=(listing,),
-            operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence,
-            materialize=True, helper=helper, runtime_root=bundle.remote_runtime_dir)
-        transferable = tuple(entry for entry in transferable
-                             if entry.remote_destination != listing_destination)
         layout = {'path': listing_destination, 'sha256': listing.sha256}
         async def weights(action):
             await check_fence()

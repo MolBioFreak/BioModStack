@@ -259,6 +259,8 @@ def verify_bundle(attempt_dir: Path) -> dict[str, Any]:
             continue
         if path.is_symlink() or not path.is_file():
             raise RuntimeError(f"bundle file is missing: {relative}")
+        # New immutable directory views declare 0444/0555; retained envelopes
+        # keep their original modes. Hardlink count is not file byte identity.
         mode = record.get("mode", 0o644)
         if type(mode) is not int or not 0 <= mode <= 0o777 or path.stat().st_mode & 0o7777 != mode:
             raise RuntimeError(f"bundle file mode mismatch: {relative}")

@@ -57,7 +57,7 @@ from services.remote_execution.bundle import CacheTransferArtifact, TransferPlan
 
 def record(path, data, role='runtime', link_target=None):
     return SimpleNamespace(relative_path=path, sha256=hashlib.sha256(data).hexdigest(),
-                           size_bytes=len(data), mode=0o644, role=role, link_target=link_target)
+                           size_bytes=len(data), mode=0o444, role=role, link_target=link_target)
 
 
 @pytest.fixture
@@ -72,7 +72,7 @@ def local_transport(monkeypatch):
         if Path(source).is_dir():
             shutil.copytree(source, destination, dirs_exist_ok=True)
         else:
-            shutil.copyfile(source, destination)
+            shutil.copy2(source, destination)
     monkeypatch.setattr(cache, 'run_remote', run)
     monkeypatch.setattr(cache, 'rsync_to_remote', rsync)
     return calls, uploads
@@ -95,6 +95,9 @@ def make_bundle(tmp_path, compressed=False):
     weights.mkdir()
     (weights / 'model').write_bytes(b'model')
     (weights / 'alias').symlink_to('model')
+    support = tmp_path / 'support'
+    support.mkdir()
+    (support / 'library').write_bytes(b'support payload')
     remote = tmp_path / 'worker'
     attempt_id = str(uuid.uuid4())
     generation = remote / 'attempts' / attempt_id / 'materialized'
@@ -103,7 +106,7 @@ def make_bundle(tmp_path, compressed=False):
              record('source/workflow.nf', b'workflow', 'source'),
              record('runtime/weights/model', b'model'),
              record('runtime/weights/alias', b'model', link_target='model'),
-             record('runtime/support-python/secret', b'excluded'),
+             record('runtime/support-python/library', b'support payload'),
              record('inputs/secret', b'excluded', 'input'),
              record('results/secret', b'excluded', 'result')]
     bundle = SimpleNamespace(attempt_id=attempt_id, envelope=SimpleNamespace(files=files),
@@ -131,8 +134,8 @@ def next_attempt(connection, bundle):
 async def test_prewarm_launch_share_verified_cache_and_links(tmp_path, monkeypatch, local_transport, compressed):
     connection, bundle = make_bundle(tmp_path, compressed=compressed)
     artifacts = cache_transfer_artifacts(bundle)
-    assert len(artifacts) == 2
-    assert [p.remote_destination for p in uncached_runtime_transfers(bundle)] == [bundle.remote_runtime_dir + '/support-python']
+    assert len(artifacts) == 3
+    assert uncached_runtime_transfers(bundle) == ()
     invocation = cache_invocation_fixture()
     def prewarm_plan(*args, native_invocation):
         assert native_invocation is invocation
@@ -152,10 +155,11 @@ async def test_prewarm_launch_share_verified_cache_and_links(tmp_path, monkeypat
     model = Path(bundle.remote_runtime_dir) / 'weights/model'
     alias = model.with_name('alias')
     assert alias.is_symlink() and alias.read_bytes() == b'model'
-    alias.write_bytes(b'job mutation')
+    assert alias.resolve().stat().st_ino == model.stat().st_ino
+    assert model.stat().st_mode & 0o777 == 0o444
     with pytest.raises(subprocess.CalledProcessError):
         await cache.stage_cached_bundle(connection=connection, bundle=bundle)
-    assert model.read_bytes() == b'job mutation' and len(uploads) == 1
+    assert model.read_bytes() == b'model' and len(uploads) == 1
     bundle = next_attempt(connection, bundle)
     await cache.stage_cached_bundle(connection=connection, bundle=bundle)
     model = Path(bundle.remote_runtime_dir) / 'weights/model'
@@ -233,7 +237,7 @@ def test_prewarm_plan_pins_source_and_excludes_support(tmp_path, monkeypatch, id
                                 native_invocation=invocation)
     assert calls == [(tmp_path, revision, False)]
     launched = cache_transfer_artifacts(bundle)
-    assert {(a.sha256, a.size_bytes) for a in planned} == {(a.sha256, a.size_bytes) for a in launched}
+    assert {(a.sha256, a.size_bytes) for a in planned} == {(a.sha256, a.size_bytes) for a in launched if '/support-python/' not in a.remote_destination}
     assert all('support-python' not in a.remote_destination for a in planned)
 
 
@@ -263,8 +267,11 @@ async def test_real_bundle_generations_exclude_stale_files(package, local_transp
     assert first.attempt_id != second.attempt_id
     await cache.stage_cached_bundle(connection=target, bundle=second)
     # Each attempt transports its small authenticated, destination-specific manifest.
-    assert len(uploads) == upload_count + 1
-    assert Path(uploads[-1]).name.startswith('bms-cache-batch-')
+    private = uncached_runtime_transfers(second)
+    assert uploads[upload_count:] == [str(t.source) for t in private]
+    assert all(not Path(p).name.startswith('bms-cache-batch-') for p in uploads[upload_count:])
+    for name in ('main.nf',):
+        assert (Path(first.remote_source_dir) / name).stat().st_ino == (Path(second.remote_source_dir) / name).stat().st_ino
     upload_count = len(uploads)
     assert second.remote_source_dir == second.remote_attempt_dir + '/materialized/source'
     assert second.remote_runtime_dir == second.remote_attempt_dir + '/materialized/runtime'
