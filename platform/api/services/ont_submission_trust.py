@@ -69,6 +69,7 @@ ONT_SERVER_CONTROLLED_RUNTIME_PARAMS = frozenset(
         "dorado_lock_sha256",
         "dorado_device",
         "dorado_model_root",
+        "dorado_input_binding_json",
         "dorado_preflight",
         "dorado_resolved_model_id",
         "dorado_runtime_sif",
@@ -715,6 +716,63 @@ def verify_fastq_launch_custody(params: Mapping[str, Any]) -> None:
         os.close(descriptor)
     if digest.hexdigest() != expected_sha256 or size != expected_size:
         raise ValueError("managed FASTQ launch custody bytes changed")
+
+
+def dorado_selected_input_binding(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Project existing published selections, never infer custody from chmod.
+
+    Called by the native compiler, not accepted from an operator. Logical member
+    names/digests survive worker relocation; controller alias text is used only
+    when the local selected layout actually contains that declared alias.
+    """
+    import json
+    from paths import get_weights_root
+    from model_registry import model_acquisition_plan
+    from services.runtime_acquisition import _layouts
+    from services.remote_execution.hf_assets import published_asset_rows
+    from scripts.lib.pinned_weight_layout import _verify_tree
+    from scripts.dorado_p4_preflight import load_lock, resolve_model
+
+    code = Path(__file__).resolve().parents[3]
+    lock = load_lock(Path(params.get('dorado_lock_manifest') or code / 'config/ngs/dorado_v2.1.2.lock.json'))
+    version = lock['dorado']['version'].split('+')[0]
+    weights = get_weights_root().resolve()
+    selected = Path(params.get('dorado_model_root') or weights / 'dorado' / version).resolve()
+    models = [resolve_model(lock, params.get('ont_molecule_type') or 'dna', params.get('dorado_quality_mode') or 'sup')]
+    if params.get('dorado_basecall_mode') == 'duplex':
+        models.append(lock['models']['stereo'])
+    modified = params.get('modified_bases') or 'none'
+    if modified != 'none':
+        models.append(lock['models']['modified_bases'][modified])
+    bindings = {}
+    layouts = list(_layouts(model_acquisition_plan('nanopore')))
+    for model in models:
+        directory = selected / model['id']
+        members = None
+        for dependency, entries in layouts:
+            digest = hashlib.sha256(json.dumps({'dependency': dependency, 'members': sorted(entries, key=lambda e: e['member_path'])}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            layout = weights / 'layouts' / dependency['relative_path'] / digest
+            if not directory.is_relative_to(layout):
+                continue
+            observed = _verify_tree(layout, entries, frozen=True, weights_root=weights)
+            members = {}
+            for name, row in observed.items():
+                native = layout / name
+                if native.is_relative_to(directory):
+                    members[native.relative_to(directory).as_posix()] = dict(
+                        sha256=row['sha256'], bytes=row['size'],
+                        alias=os.readlink(native) if native.is_symlink() else None)
+            break
+        if members is None and selected == (weights / 'dorado' / version).resolve():
+            prefix = f"weights/dorado/{version}/{model['id']}"
+            rows = published_asset_rows(prefix)
+            if rows and all(not row.get('target') for row in rows):
+                members = {row['name'][len(prefix) + 1:]: dict(sha256=row['sha256'], bytes=row['size_bytes'], alias=None) for row in rows}
+        if members:
+            bindings[model['id']] = dict(retained=True, members=members)
+    provenance = params.get('ont_input_provenance') or {}
+    inputs = provenance.get('retained_pod5') if provenance.get('source') == 'retained_pod5_generation' else None
+    return {'models': bindings, 'inputs': inputs or {}}
 
 
 def verify_launch_input_snapshots(params: Mapping[str, Any]) -> None:

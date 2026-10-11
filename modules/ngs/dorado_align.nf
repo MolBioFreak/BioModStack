@@ -8,11 +8,12 @@ def shellQuote(value) {
     return "'${text.replace("'", "'\"'\"'")}'"
 }
 
+include { ngsResultPublishMode } from './publication'
+
 process DoradoAlign {
     label 'dorado_cpu'
-    publishDir "${params.out_dir}/align", mode: 'copy', saveAs: { filename ->
-        filename == 'qc_manifest.json' ? null : filename
-    }
+    publishDir "${params.out_dir}/align", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", saveAs: { name -> name in ['aligned.bam', 'aligned.bam.bai', 'reference.fasta', 'reference.fasta.fai'] ? name : null }
+    publishDir "${params.out_dir}/align", mode: 'copy', saveAs: { name -> name in ['aligned.bam', 'aligned.bam.bai', 'reference.fasta', 'reference.fasta.fai', 'qc_manifest.json'] ? null : name }
     publishDir "${params.out_dir}", mode: 'copy', pattern: 'qc_manifest.json'
     tag "align"
 
@@ -119,6 +120,7 @@ process DoradoAlign {
     rm -f -- reference.fasta
     ngs_input_snapshot reference.snapshot.fasta reference.fasta true true
     samtools faidx reference.fasta
+    chmod 0444 reference.fasta.fai
 
     input_records=\$(samtools view -c source.snapshot.bam)
     output_records=\$(samtools view -c aligned.bam)

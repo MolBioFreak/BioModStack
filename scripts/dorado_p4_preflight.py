@@ -124,7 +124,7 @@ def resolve_model(lock: dict[str, Any], molecule: str, quality: str) -> dict[str
     return dict(lock["models"][molecule][quality])
 
 
-def _model_aggregate(model_dir: Path) -> tuple[str, int, int]:
+def _model_aggregate(model_dir: Path, binding: dict | None = None) -> tuple[str, int, int]:
     if not model_dir.is_dir() or model_dir.is_symlink():
         raise ValueError(f"model identity directory is unavailable or unsafe: {model_dir}")
     digest = hashlib.sha256()
@@ -132,7 +132,11 @@ def _model_aggregate(model_dir: Path) -> tuple[str, int, int]:
     total = 0
     for path in sorted(model_dir.rglob("*")):
         if path.is_symlink():
-            raise ValueError(f"model identity contains symlink: {path}")
+            member = (binding or {}).get('members', {}).get(path.relative_to(model_dir).as_posix(), {})
+            if not member.get('alias') or os.readlink(path) != member['alias'] or not path.is_file():
+                raise ValueError(f"model identity contains undeclared symlink: {path}")
+            if (_sha256(path), path.stat().st_size) != (member['sha256'], member['bytes']):
+                raise ValueError(f"model alias identity mismatch: {path}")
         if not path.is_file():
             continue
         relative = path.relative_to(model_dir).as_posix()
@@ -144,13 +148,20 @@ def _model_aggregate(model_dir: Path) -> tuple[str, int, int]:
     return digest.hexdigest(), count, total
 
 
-def verify_model_identity(model: dict[str, Any], model_dir: Path) -> dict[str, Any]:
-    aggregate, count, total = _model_aggregate(Path(model_dir))
+def verify_model_identity(model: dict[str, Any], model_dir: Path, binding: dict | None = None) -> dict[str, Any]:
+    aggregate, count, total = _model_aggregate(Path(model_dir), binding)
     expected = (str(model["aggregate_sha256"]), int(model["files"]), int(model["bytes"]))
     actual = (aggregate, count, total)
     if actual != expected:
         raise ValueError(f"model identity mismatch for {model.get('id')}: expected {expected}, observed {actual}")
-    return {"path": str(Path(model_dir).resolve()), "aggregate_sha256": aggregate, "files": count, "bytes": total}
+    result = {"path": str(Path(model_dir).resolve()), "aggregate_sha256": aggregate, "files": count, "bytes": total}
+    if binding and binding.get('retained') is True:
+        members = binding.get('members', {})
+        observed = {path.relative_to(model_dir).as_posix(): {'sha256': _sha256(path), 'bytes': path.stat().st_size}
+                    for path in sorted(model_dir.rglob('*')) if path.is_file()}
+        if observed == {name: {'sha256': row['sha256'], 'bytes': row['bytes']} for name, row in members.items()}:
+            result.update(retained=True, members=members)
+    return result
 
 
 def _verify_scientific_tools(runtime_sif: Path, lock: dict[str, Any]) -> dict[str, Any]:
@@ -480,7 +491,8 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
                     model_root: Path, runtime_sif: Path, modified_bases: str = "none",
                     barcode_kit: str | None = None, sample_sheet: Path | None = None,
                     pairs: Path | None = None, batch_size: int | None = None,
-                    min_qscore: int = 10, device: str = "cuda:0", verify_assets: bool = True) -> dict[str, Any]:
+                    min_qscore: int = 10, device: str = "cuda:0", verify_assets: bool = True,
+                    selected_binding: dict | None = None) -> dict[str, Any]:
     lock = load_lock(Path(lock_path))
     molecule = str(molecule).strip().lower()
     quality = str(quality).strip().lower()
@@ -536,6 +548,13 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
         raise ValueError("pairs file is only valid in duplex mode")
     sheet_record = _validate_sample_sheet(Path(sample_sheet), root, str(barcode_kit), inventory) if sample_sheet is not None else None
 
+    selected_binding = selected_binding or {}
+    model_bindings = selected_binding.get('models', {})
+    owned_inputs = selected_binding.get('inputs', {})
+    observed_inputs = {item['relative_path']: {'sha256': item['sha256'], 'bytes': item['bytes']} for item in inventory['files']}
+    if owned_inputs.get('files') == observed_inputs and owned_inputs.get('representation_id'):
+        inventory['retained'] = True
+        inventory['retained_source'] = {key: owned_inputs[key] for key in ('representation_id', 'manifest_sha256')}
     assets: dict[str, Any] = {"verified": False}
     if verify_assets:
         runtime_sif, image_identity = _verified_runtime_location(
@@ -546,12 +565,12 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
         if completed.returncode != 0 or version != lock["dorado"]["version"]:
             raise ValueError("Dorado runtime version identity mismatch")
         capabilities = _verify_runtime_capabilities(runtime_sif, lock, mode=mode, barcode_kit=barcode_kit, modified_bases=modified_bases)
-        verified_models = {"base": verify_model_identity(model, Path(model_root) / model["id"])}
+        verified_models = {"base": verify_model_identity(model, Path(model_root) / model["id"], model_bindings.get(model["id"]))}
         if stereo:
-            verified_models["stereo"] = verify_model_identity(stereo, Path(model_root) / stereo["id"])
+            verified_models["stereo"] = verify_model_identity(stereo, Path(model_root) / stereo["id"], model_bindings.get(stereo["id"]))
         if modified_bases != "none":
             mod_model = lock["models"]["modified_bases"][modified_bases]
-            verified_models["modified_bases"] = verify_model_identity(mod_model, Path(model_root) / mod_model["id"])
+            verified_models["modified_bases"] = verify_model_identity(mod_model, Path(model_root) / mod_model["id"], model_bindings.get(mod_model["id"]))
         if image_identity is not None:
             if verify_image(runtime_sif, lock["dorado"]["sif_sha256"]) != image_identity:
                 raise ValueError("Dorado runtime canonical object identity changed during preflight")
@@ -617,13 +636,14 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--min-qscore", type=int, default=10)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--selected-binding-json", default="{}")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     payload = build_preflight(lock_path=args.lock, pod5_root=args.pod5_root, molecule=args.molecule,
         quality=args.quality, mode=args.mode, model_root=args.model_root, runtime_sif=args.runtime_sif,
         modified_bases=args.modified_bases, barcode_kit=args.barcode_kit, sample_sheet=args.sample_sheet,
         pairs=args.pairs, batch_size=args.batch_size, min_qscore=args.min_qscore,
-        device=args.device, verify_assets=True)
+        device=args.device, verify_assets=True, selected_binding=json.loads(args.selected_binding_json))
     _atomic_json(args.output, payload)
     return 0
 

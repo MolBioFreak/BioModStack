@@ -645,6 +645,37 @@ def _seal_native_pod5_artifacts(terminal_artifacts: list[dict[str, Any]]) -> lis
     return artifacts
 
 
+async def retained_pod5_launch_binding(session: AsyncSession, root: Path) -> dict[str, Any] | None:
+    """Select an existing closed, retention-pinned native POD5 generation.
+
+    External uploads/live chunks remain mutable and retain the task snapshot.
+    This is a reuse observation, never a new submission admission condition.
+    """
+    root = root.resolve()
+    records = (await session.execute(select(OntRawSignalRepresentation).where(
+        OntRawSignalRepresentation.format == 'pod5',
+        OntRawSignalRepresentation.role == 'source',
+        OntRawSignalRepresentation.source_kind == 'minknow_native',
+        OntRawSignalRepresentation.retention_pinned_at.is_not(None),
+    ))).scalars().all()
+    for record in records:
+        manifest = record.artifact_manifest or {}
+        if not manifest.get('source_terminal_manifest_sha256') or _digest(manifest) != record.manifest_sha256:
+            continue
+        artifacts = manifest.get('artifacts') or []
+        if not artifacts or any(not Path(item['path']).is_relative_to(root) for item in artifacts):
+            continue
+        files = {}
+        try:
+            for item in artifacts:
+                path = _revalidate_descriptor_artifact(item, authority='retained POD5 generation')
+                files[path.relative_to(root).as_posix()] = {'sha256': item['sha256'], 'bytes': item['bytes']}
+        except (OSError, ValueError):
+            continue
+        return {'representation_id': record.id, 'manifest_sha256': record.manifest_sha256, 'files': files}
+    return None
+
+
 async def register_native_pod5_generation(session: AsyncSession, *, run_id: str, observed_generation: int) -> list[dict[str, Any]]:
     """Register immutable MinKNOW POD5 shards from the sealed acquisition manifest."""
     run, _event = await _exact_generation(session, run_id, observed_generation)

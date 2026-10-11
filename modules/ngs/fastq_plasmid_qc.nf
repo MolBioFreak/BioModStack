@@ -8,9 +8,12 @@ def shellQuote(value) {
     return "'${text.replace("'", "'\"'\"'")}'"
 }
 
+include { ngsResultPublishMode } from './publication'
+
 process FastqPlasmidQC {
     label 'fastq_qc_cpu'
-    publishDir "${params.out_dir}/fastq_qc", mode: 'copy'
+    publishDir "${params.out_dir}/fastq_qc", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", saveAs: { name -> name ==~ /.*\.(bam|bai|fasta|fai|fastq)(\.gz)?$/ ? name : null }
+    publishDir "${params.out_dir}/fastq_qc", mode: 'copy', saveAs: { name -> name == 'construct_verification_input' || name ==~ /.*\.(bam|bai|fasta|fai|fastq)(\.gz)?$/ ? null : name }
     tag "fastq_qc"
 
     input:
@@ -27,7 +30,8 @@ process FastqPlasmidQC {
     path "fastq_coverage.tsv", emit: coverage
     path "per_base_support.tsv", emit: per_base_support
     path "qc_manifest.json", emit: qc_manifest
-    path "construct_verification_input", emit: verification_input
+    env published_directory, emit: verification_input
+    path "construct_verification_input/**", type: 'file', hidden: true, emit: publication_files
     path "reference_qc.fasta", emit: reference
     path "reference_qc.fasta.fai", emit: reference_index
     path "igv_coverage_depth.bedgraph", emit: igv_coverage_depth
@@ -81,6 +85,7 @@ process FastqPlasmidQC {
     def inputModeArg = shellQuote(inputMode)
     """
     set -euo pipefail
+    export published_directory="\$PWD/construct_verification_input"
     source "${params.code_root ?: projectDir}/scripts/ngs_input_snapshot.sh"
 
     if ! command -v samtools >/dev/null 2>&1; then
@@ -176,8 +181,8 @@ process FastqPlasmidQC {
         echo "CRITICAL_FAILURE: REFERENCE_DIGEST_MISMATCH" >&2
         exit 95
     fi
-    ngs_input_snapshot reference.snapshot.fasta reference_qc.fasta true
-    ngs_reference_index "${reference}" reference_qc.fasta ${retainedReference} || "\${SAMTOOLS_CMD[@]}" faidx reference_qc.fasta
+    ngs_input_snapshot reference.snapshot.fasta reference_qc.fasta true true
+    ngs_reference_index "${reference}" reference_qc.fasta ${retainedReference} true || "\${SAMTOOLS_CMD[@]}" faidx reference_qc.fasta
     reference_raw_sha256_after="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
     if [[ "\${reference_raw_sha256_before}" != "\${reference_raw_sha256_after}" ]]; then
         echo "CRITICAL_FAILURE: REFERENCE_SNAPSHOT_CHANGED" >&2
@@ -327,11 +332,11 @@ process FastqPlasmidQC {
     bam_local=\$(basename "${bam}")
     bai_local=\$(basename "${bai}")
     if [[ "\${bam_local}" != "aligned.bam" ]]; then
-        ngs_input_snapshot "${bam}" aligned.bam true
+        ngs_input_snapshot "${bam}" aligned.bam true true
         bam_local="aligned.bam"
     fi
     if [[ "\${bai_local}" != "aligned.bam.bai" ]]; then
-        ngs_input_snapshot "${bai}" aligned.bam.bai true
+        ngs_input_snapshot "${bai}" aligned.bam.bai true true
         bai_local="aligned.bam.bai"
     fi
 
@@ -527,5 +532,9 @@ process FastqPlasmidQC {
         --igv-report igv_report.html \\
         --igv-report-log igv_report.log \\
         --log fastq_qc.log
+    # Native writers are finished; metadata/logs remain private publications.
+    for completed in aligned.bam aligned.bam.bai reference_qc.fasta reference_qc.fasta.fai fastq_consensus.fasta fastq_consensus.fasta.fai; do
+        if [[ -f "\${completed}" && ! -L "\${completed}" ]] && (( (8#\$(stat -c %a "\${completed}") & 8#222) != 0 )); then chmod 0444 "\${completed}"; fi
+    done
     """
 }

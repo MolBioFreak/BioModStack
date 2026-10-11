@@ -31,6 +31,7 @@ process DoradoPreflight {
     def modified = doradoShellQuote(params.modified_bases ?: 'none')
     def device = doradoShellQuote(params.dorado_device ?: 'cuda:0')
     def minQscore = doradoShellQuote(params.min_qscore != null ? params.min_qscore : 10)
+    def selectedBinding = doradoShellQuote(params.dorado_input_binding_json ?: '{}')
     def optional = []
     if (params.dorado_batch_size != null && params.dorado_batch_size.toString().trim()) optional += "--batch-size ${doradoShellQuote(params.dorado_batch_size)}"
     if (params.duplex_pairs) optional += "--pairs ${doradoShellQuote(params.duplex_pairs)}"
@@ -52,6 +53,7 @@ process DoradoPreflight {
       --quality ${quality} \
       --mode ${mode} \
       --model-root ${modelRoot} \
+      --selected-binding-json ${selectedBinding} \
       --runtime-sif ${runtimeSif} \
       --modified-bases ${modified} \
       --device ${device} \
@@ -122,16 +124,20 @@ process DoradoBasecall {
     fi
 
     verify_model_tree() {
-      local model_dir="\$1" expected_sha="\$2" expected_files="\$3" expected_bytes="\$4"
+      local model_dir="\$1" expected_sha="\$2" expected_files="\$3" expected_bytes="\$4" json_key="\$5"
       local inventory observed_sha observed_files=0 observed_bytes=0 file rel size file_sha
       [[ -d "\${model_dir}" && ! -L "\${model_dir}" ]]
-      if find "\${model_dir}" -type l -print -quit | grep -q .; then echo "model tree contains a symlink: \${model_dir}" >&2; exit 1; fi
+      while IFS= read -r -d '' file; do
+        rel="\${file#\${model_dir}/}"
+        declared_alias="\$(jq -r "\${json_key}.members" dorado_preflight.json | jq -r --arg rel "\${rel}" '.[\$rel].alias // empty')"
+        [[ -n "\${declared_alias}" && "\$(readlink -- "\${file}")" == "\${declared_alias}" && -f "\${file}" ]] || { echo "undeclared model alias: \${file}" >&2; exit 1; }
+      done < <(find "\${model_dir}" -type l -print0)
       inventory="\$(mktemp)"
       while IFS= read -r -d '' file; do
-        rel="\${file#\${model_dir}/}"; size="\$(stat -c %s "\${file}")"; file_sha="\$(sha256sum "\${file}" | cut -d' ' -f1)"
+        rel="\${file#\${model_dir}/}"; size="\$(stat -Lc %s "\${file}")"; file_sha="\$(sha256sum "\${file}" | cut -d' ' -f1)"
         printf '%s\\0%s\\0%s\\n' "\${rel}" "\${size}" "\${file_sha}" >> "\${inventory}"
         observed_files=\$((observed_files + 1)); observed_bytes=\$((observed_bytes + size))
-      done < <(find "\${model_dir}" -type f -print0 | sort -z)
+      done < <(find -L "\${model_dir}" -type f -print0 | sort -z)
       observed_sha="\$(sha256sum "\${inventory}" | cut -d' ' -f1)"; rm -f "\${inventory}"
       [[ "\${observed_sha}" == "\${expected_sha}" && "\${observed_files}" == "\${expected_files}" && "\${observed_bytes}" == "\${expected_bytes}" ]] || {
         echo "model identity changed after preflight: \${model_dir}; sha=\${observed_sha}/\${expected_sha} files=\${observed_files}/\${expected_files} bytes=\${observed_bytes}/\${expected_bytes}" >&2; exit 1;
@@ -144,7 +150,7 @@ process DoradoBasecall {
       expected_sha="\$(jq -r "\${json_key}.aggregate_sha256" dorado_preflight.json)"
       expected_files="\$(jq -r "\${json_key}.files" dorado_preflight.json)"
       expected_bytes="\$(jq -r "\${json_key}.bytes" dorado_preflight.json)"
-      verify_model_tree "\${source}" "\${expected_sha}" "\${expected_files}" "\${expected_bytes}"
+      verify_model_tree "\${source}" "\${expected_sha}" "\${expected_files}" "\${expected_bytes}" "\${json_key}"
       # The selected dependency/bind owner, not file mode or the client,
       # supplies retained authority for a concrete publisher-owned generation.
       if [[ "\$(jq -r "\${json_key}.retained // false" dorado_preflight.json)" == true ]]; then
@@ -152,7 +158,7 @@ process DoradoBasecall {
       else
         mkdir -p "\${target}"; cp -a --reflink=auto "\${source}/." "\${target}/"
       fi
-      verify_model_tree "\$(readlink -f -- "\${target}")" "\${expected_sha}" "\${expected_files}" "\${expected_bytes}"
+      verify_model_tree "\$(readlink -f -- "\${target}")" "\${expected_sha}" "\${expected_files}" "\${expected_bytes}" "\${json_key}"
     }
 
     runtime_expected="\$(jq -r '.runtime.assets.runtime_sif.sha256' dorado_preflight.json)"
@@ -168,7 +174,13 @@ process DoradoBasecall {
       source_file="\${pod5_source}/\${relative}"; target_file="sealed_pod5/\${relative}"
       [[ -f "\${source_file}" && ! -L "\${source_file}" ]]
       [[ "\$(sha256sum "\${source_file}" | cut -d' ' -f1)" == "\${expected_sha}" && "\$(stat -c %s "\${source_file}")" == "\${expected_bytes}" ]] || { echo "POD5 input changed after preflight: \${relative}" >&2; exit 1; }
-      mkdir -p "\$(dirname "\${target_file}")"; ngs_input_snapshot "\${source_file}" "\${target_file}" "\${retained_pod5}"
+      mkdir -p "\$(dirname "\${target_file}")"
+      if [[ "\${retained_pod5}" == true ]]; then
+        # Keep the owned source's ctime-bound receipt intact (no hardlink/chmod).
+        ln -s -- "\$(readlink -f -- "\${source_file}")" "\${target_file}"
+      else
+        ngs_input_snapshot "\${source_file}" "\${target_file}" false
+      fi
       [[ "\$(sha256sum "\${target_file}" | cut -d' ' -f1)" == "\${expected_sha}" ]] || { echo "POD5 snapshot identity mismatch: \${relative}" >&2; exit 1; }
     done < <(jq -r '.inputs.files[] | [.relative_path,.sha256,.bytes] | @tsv' dorado_preflight.json)
 

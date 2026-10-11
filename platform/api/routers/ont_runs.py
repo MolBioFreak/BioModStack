@@ -1196,6 +1196,10 @@ async def _prepare_ont_ngs_workflow(
             retained.params["fastq_path"] = provenance["submitted_path"]
         elif replay_fastq is not None:
             raise ValueError("FASTQ snapshot replay requires the ordinary FASTQ input branch")
+        if job.params.get('ont_input_mode') == 'pod5':
+            binding = await ont_raw_signal.retained_pod5_launch_binding(session, Path(job.params['pod5_dir']))
+            if binding is not None:
+                job.params['ont_input_provenance'].update(source='retained_pod5_generation', retained_pod5=binding)
         if managed_launch is not None:
             ont_submission_trust.verify_managed_reference_snapshot(job.params)
             retained.managed_reference = request.managed_reference.model_copy(update={

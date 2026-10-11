@@ -44,6 +44,8 @@ def native(tmp_path):
 @pytest.mark.parametrize('module,process,directory,publication', [
     ('modules/ngs/dorado_basecall.nf', 'DoradoDemux', 'demux', 'demux'),
     ('modules/ngs/fastq_align.nf', 'FastqAlign', '', 'align'),
+    ('modules/ngs/dorado_align.nf', 'DoradoAlign', '', 'align'),
+    ('modules/ngs/fastq_plasmid_qc.nf', 'FastqPlasmidQC', 'construct_verification_input', 'fastq_qc'),
     ('modules/ngs/fastq_dimer_qc.nf', 'FastqDimerAnalysis', '', 'multimer_qc'),
     ('modules/ngs/bam_prepare.nf', 'PrepareReferenceForIGV', '', 'align'),
     ('modules/ngs/clone_validation.nf', 'RunCloneValidation', 'wf_clone_out', 'assembly'),
