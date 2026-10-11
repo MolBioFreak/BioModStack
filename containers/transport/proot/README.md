@@ -100,7 +100,7 @@ scientific Job or rental action is part of this candidate.
   exact installation, offline repeat, and rejection of corrupted engine bytes
   even with a rewritten manifest. Managed packaging/attachment tests also pass.
 - On the exact BC target, using task-owned stores/workspaces and the original
-  OpenMM MD SIF bytes: cold read, repeated warm reads, real in-container canonical
+  MD preparation SIF bytes: cold read, repeated warm reads, real in-container canonical
   attestation, and two concurrent shared-image attestations all exited zero with
   unchanged file **and parent** identities. Fake root remained UID 0.
 - An intentional write-and-restore completed its body but was rejected with exit
