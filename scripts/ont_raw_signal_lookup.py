@@ -188,11 +188,24 @@ def _write_output_no_follow(path: Path, payload: dict[str, object]) -> None:
         os.close(parent_fd)
 
 
+def _expose_retained_pair(root: Path, blow5_fd: int, index_fd: int) -> tuple[Path, Path]:
+    """Expose a socket-pinned pair under the adjacent filenames slow5 requires.
+
+    The caller owns both descriptors until the native reader has closed.
+    """
+    blow5 = root / "source.blow5"
+    index = root / "source.blow5.idx"
+    blow5.symlink_to(f"/proc/self/fd/{blow5_fd}")
+    index.symlink_to(f"/proc/self/fd/{index_fd}")
+    return blow5, index
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--blow5", required=True)
     parser.add_argument("--index", required=True)
     parser.add_argument("--fd-socket", required=True)
+    parser.add_argument("--retained-pair", action="store_true")
     parser.add_argument("--read-id", required=True)
     parser.add_argument("--max-samples", required=True, type=int)
     parser.add_argument("--output", required=True)
@@ -234,8 +247,13 @@ def main() -> int:
             _expected_root_identity(args, "index"),
             "BLOW5 index",
         )
-        _copy_attested(blow5_fd, blow5_identity, snapshot_blow5, "BLOW5")
-        _copy_attested(index_fd, index_identity, snapshot_index, "BLOW5 index")
+        if args.retained_pair:
+            # SCM_RIGHTS installs these descriptors in this container process;
+            # adjacent native names must target its /proc, never host paths.
+            _expose_retained_pair(snapshot_dir, blow5_fd, index_fd)
+        else:
+            _copy_attested(blow5_fd, blow5_identity, snapshot_blow5, "BLOW5")
+            _copy_attested(index_fd, index_identity, snapshot_index, "BLOW5 index")
         slow5 = pyslow5.Open(str(snapshot_blow5), "r")
         read = slow5.get_read(args.read_id, pA=True)
         if read is None:

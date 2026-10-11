@@ -909,6 +909,73 @@ def _hold_source_descriptors_through_transaction(session: AsyncSession, fds: lis
     event.listen(session.sync_session, "after_transaction_end", close_descriptors)
 
 
+def _retain_external_indexed_pair(
+    artifacts: list[dict[str, Any]], *, run_id: str, observed_generation: int,
+) -> list[dict[str, Any]]:
+    """Acquire a mutable external pair once in the representation publication owner."""
+    import tempfile
+
+    configured = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).expanduser()
+    root = configured.parent / "ont-raw-signal" / _publication_component(run_id, authority="run ID") / str(observed_generation)
+    parent_fd = _open_absolute_directory_nofollow(configured.parent)
+    try:
+        root_fd = _open_relative_directory(parent_fd, ("ont-raw-signal", run_id, str(observed_generation)), create=True)
+    finally:
+        os.close(parent_fd)
+    destination = root / ("external-" + _digest(artifacts))
+    final_fd = -1
+    try:
+        try:
+            final_fd = _open_relative_directory(root_fd, (destination.name,))
+        except FileNotFoundError:
+            stage = Path(tempfile.mkdtemp(prefix=".external-pair-", dir=f"/proc/self/fd/{root_fd}"))
+            try:
+                for record, name in zip(artifacts, ("source.blow5", "source.blow5.idx"), strict=True):
+                    _, descriptor = _open_descriptor_confined_artifact(record, authority="external indexed pair")
+                    try:
+                        digest = hashlib.sha256()
+                        size = 0
+                        with (stage / name).open("xb") as target:
+                            while chunk := os.read(descriptor, 1024 * 1024):
+                                target.write(chunk)
+                                digest.update(chunk)
+                                size += len(chunk)
+                            target.flush()
+                            os.fchmod(target.fileno(), 0o400)
+                            os.fsync(target.fileno())
+                        if size != record["bytes"] or digest.hexdigest() != record["sha256"]:
+                            raise ValueError("external indexed pair changed during custody")
+                    finally:
+                        os.close(descriptor)
+                try:
+                    os.rename(stage.name, destination.name, src_dir_fd=root_fd, dst_dir_fd=root_fd)
+                    os.fsync(root_fd)
+                except OSError as exc:
+                    if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
+                        raise
+            finally:
+                shutil.rmtree(stage, ignore_errors=True)
+            final_fd = _open_relative_directory(root_fd, (destination.name,))
+        retained = []
+        for record, name in zip(artifacts, ("source.blow5", "source.blow5.idx"), strict=True):
+            descriptor = _open_publication_regular(final_fd, name)
+            try:
+                item = _file_artifact(destination / name, record["artifact_id"], kind=record["kind"],
+                    opened_fd=descriptor, governed_root_path=destination,
+                    governed_root_fd=final_fd, governed_relative_path=name)
+            finally:
+                os.close(descriptor)
+            if item["sha256"] != record["sha256"] or item["bytes"] != record["bytes"]:
+                raise ValueError("retained indexed pair identity diverged")
+            retained.append(item)
+        _assert_publication_directory_identity(destination, final_fd, authority="external pair")
+        return retained
+    finally:
+        if final_fd >= 0:
+            os.close(final_fd)
+        os.close(root_fd)
+
+
 async def register_external_source(
     session: AsyncSession,
     *,
@@ -953,6 +1020,11 @@ async def register_external_source(
         artifacts.append(_file_artifact(index_path, index_record.id, kind="blow5_index"))
         validation_receipts["adjacent_index"] = True
         reason = "blow5_index_semantic_validation_required"
+    original_artifacts = artifacts
+    if normalized_format == "blow5":
+        artifacts = _retain_external_indexed_pair(
+            artifacts, run_id=run_id, observed_generation=observed_generation,
+        )
     manifest = {
         "schema": "bms.ont.raw-signal-artifacts.v1",
         "run_id": run_id,
@@ -961,6 +1033,9 @@ async def register_external_source(
         "external_native": True,
         "artifacts": artifacts,
     }
+    if normalized_format == "blow5":
+        manifest["retained_indexed_pair"] = True
+        manifest["source_artifacts"] = original_artifacts
     manifest_sha256 = _digest(manifest)
     existing = (
         await session.execute(
@@ -2131,6 +2206,7 @@ def _external_blow5_validation_commands(job: OntRawSignalDerivationJob, source: 
         "--index", "/proc/self/fd/unbound-external-index",
         *expected_args,
         "--fd-socket", "/stage/source-fd.sock",
+        *(["--retained-pair"] if source.artifact_manifest.get("retained_indexed_pair") is True else []),
     ]
     return {
         "stage": str(stage), "output": str(blow5), "index": str(index),
@@ -2850,6 +2926,7 @@ async def claim_next_waveform_lookup(
         "--blow5", "/proc/self/fd/unbound-waveform-blow5",
         "--index", "/proc/self/fd/unbound-waveform-index",
         "--fd-socket", "/output/source-fd.sock",
+        *(["--retained-pair"] if representation.artifact_manifest.get("retained_indexed_pair") is True else []),
         "--read-id", lookup.read_id,
         "--max-samples", str(RAW_SIGNAL_MAX_WAVEFORM_SAMPLES), "--output", f"/output/{output_name}",
         *_waveform_identity_args(blow5_identity, "blow5"),
