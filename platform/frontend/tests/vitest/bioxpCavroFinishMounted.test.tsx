@@ -30,7 +30,14 @@ const calibrationCompilerExport = (id: string) => process.env.BIOXP_CALIBRATION_
 async function settle() { for(let pass=0;pass<3;pass++) await act(async () => { await new Promise(r=>setTimeout(r,30)); for (let i=0;i<500 && pending.length;i++) await new Promise(r=>setTimeout(r,20)); }); expect(pending.length,errors).toBe(0); }
 async function mount(element: React.ReactNode) { await act(async()=>root.render(<QueryClientProvider client={client}>{element}</QueryClientProvider>)); await settle(); }
 async function click(text: string) { const el=[...host.querySelectorAll('button')].find(e=>e.textContent===text || e.getAttribute('aria-label')===text); expect(el,text).toBeTruthy(); await act(async()=>el!.click()); await settle(); }
-async function input(label: string, value: string) { const el=[...host.querySelectorAll<HTMLInputElement|HTMLSelectElement>('[aria-label]')].find(e=>e.getAttribute('aria-label')===label); expect(el,label).toBeTruthy(); await act(async()=>{ Object.getOwnPropertyDescriptor(el!.tagName==='SELECT'?HTMLSelectElement.prototype:HTMLInputElement.prototype,'value')!.set!.call(el,value); el!.dispatchEvent(new Event(el!.tagName==='SELECT'?'change':'input',{bubbles:true})); }); }
+async function input(label: string, value: string) {
+ const locate=()=>[...host.querySelectorAll<HTMLInputElement|HTMLSelectElement>('[aria-label]')].find(e=>e.getAttribute('aria-label')===label);
+ // A returned bridge response is not yet a rendered React Query option.
+ // Never turn an unavailable choice into the select's empty placeholder.
+ await vi.waitFor(()=>{const el=locate();expect(el,label).toBeTruthy();if(el?.tagName==='SELECT')expect([...(el as HTMLSelectElement).options].map(option=>option.value),label).toContain(value);});
+ const el=locate()!;
+ await act(async()=>{ Object.getOwnPropertyDescriptor(el.tagName==='SELECT'?HTMLSelectElement.prototype:HTMLInputElement.prototype,'value')!.set!.call(el,value); expect(el.value,label).toBe(value); el.dispatchEvent(new Event(el.tagName==='SELECT'?'change':'input',{bubbles:true})); });
+}
 function resolve(schema: any, root: any): any { while(schema.$ref) schema = schema.$ref.slice(2).split('/').reduce((v:any,k:string)=>v[k],root); return schema; }
 /** Drive ordinary published controls. Only test inputs come from retained native producers. */
 async function fill(label: string, raw: any, value: any, rootSchema: any): Promise<void> {
@@ -77,7 +84,9 @@ describe('actual facade → typed forms → real compiler / exact scratch revisi
   await mount(<BioXpMethodsWorkspace generation={77} connected={false} controlsEnabled={false}/>);
   const examples=calls.find(c=>c.request.url.endsWith('/examples')).response.data;
   const index=examples.findIndex((e:any)=>e.id===id);expect(index).toBeGreaterThanOrEqual(0);
-  await input('Scientific example',String(index));await settle();await click('Save');
+  await input('Scientific example',String(index));await settle();
+  expect((host.querySelector('[aria-label="Method name"]') as HTMLInputElement).value).toBe(examples[index].method.name);
+  await click('Save');
   const save=calls.find(c=>c.request.method==='post'&&c.request.url.endsWith('/library'));expect(save.response.status).toBe(201);
   expect(save.request.body.method.steps).toEqual(examples[index].method.steps);
   expect(host.textContent).toContain('Saved exact revision 1.');
