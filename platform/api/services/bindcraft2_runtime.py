@@ -201,7 +201,7 @@ def materialize_action_tree(source_root: Path, destination: Path, action: dict, 
             return (name in ('scored.csv', 'filtered.csv', 'rejected.csv')
                     or name.startswith('ranked_by_') and name.endswith('.csv'))
         if operation == 'campaign_output':
-            return name in ('!_Ranked.csv', 'summary.csv')
+            return name in ('!_Ranked.csv', 'ranked.csv', 'summary.csv')
         if operation == 'unarchive':
             return path in collisions
         return False  # archive writes .partial, replaces ZIP, unlinks child names

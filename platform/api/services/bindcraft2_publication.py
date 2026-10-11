@@ -36,6 +36,30 @@ _TABLES = (
 _NATIVE_DIRS = ("1_Trajectories", "2_Refolded", "3_Ranked", "trajectories", "refolded", "accepted", "workers")
 
 
+def published_campaign_immutable(job: Job) -> bool:
+    """Custody hint for action seeding, never an admission/success predicate.
+
+    Native execution writes directly into output_dir/bindcraft2/campaign. The
+    result ingester registers those bytes (no second publication tree). Only a
+    completed, non-paused publication of that exact attempt can donate them;
+    failed/active/legacy sources keep the existing private snapshot behavior.
+    Native actions/resume allocate another Job root, and completed Jobs are not
+    eligible for the generic in-place resume endpoint.
+    """
+    receipt = (job.provenance or {}).get('bindcraft2_native_publication')
+    return bool(job.model_id == 'bindcraft2' and job.status == 'completed'
+        and not job.awaiting_input and not job.paused and job.output_dir
+        # Generic cache resume deliberately reuses a failed ancestor's output
+        # root. That ancestor can still resume again, so it is a mutable donor.
+        and not (job.params or {}).get('resume_source_dir')
+        and not (job.params or {}).get('resume_job_id')
+        and isinstance(receipt, dict) and receipt.get('schema') == _SCHEMA
+        and receipt.get('root') == str(Path(job.output_dir).absolute())
+        and receipt.get('campaign_root') == 'bindcraft2/campaign'
+        and receipt.get('attempt') == (job.retry_count or 0)
+        and receipt.get('remote_attempt_id') == job.remote_attempt_id)
+
+
 def native_campaign_root(job: Job, root: Path, campaign_root: Path | None = None) -> Path:
     """Resolve an explicit execution root within the owned Job; never glob for it.
 
