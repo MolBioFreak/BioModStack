@@ -2,7 +2,7 @@
 
 Image lookup remains read-only, not scientific admission. Payload helpers run
 under the existing provision/install locks; there is no separate runtime store
-or service. A missing optional image on Development needs no portable Python.
+or service. Portable Python publication does not require a scientific image.
 """
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from biomodstack_runtime_profile import resolve_runtime_paths
-from lib.runtime_image_lifecycle import object_path
-from select_workflow_adapter_image import select_probe_image
-from lib.shared_runtime_images import verify_image
 
 
 def support_image(project_root: Path) -> Path | None:
+    from biomodstack_runtime_profile import resolve_runtime_paths
+    from scripts.lib.runtime_image_lifecycle import object_path
+    from select_workflow_adapter_image import select_probe_image
+    from scripts.lib.shared_runtime_images import verify_image
     container_dir = Path(str(resolve_runtime_paths(project_root=project_root)["container_dir"]))
     root = Path(os.environ.get("BMS_RUNTIME_IMAGE_STORE", "").strip() or container_dir / ".image-store")
     path = select_probe_image(containers=container_dir)
@@ -192,6 +192,73 @@ def prepare_payload(stage: Path, destination: Path, venv: Path, runtime: Path) -
         if not path.is_symlink():
             path.chmod(0o555 if path.is_dir() or path.stat().st_mode & 0o111 else 0o444)
     stage.chmod(0o555)
+
+
+def publish_installed_payload(venv: Path, runtime: Path) -> dict:
+    """Image-independent publication by the existing bootstrap/launch owner.
+
+    Caller releases operation.lock before entering this provision lock. State
+    publication happens under operation.lock inside the provision lock, matching
+    the adapter's lock ordering and preventing concurrent installer mutation.
+    Mutable installation bodies are copied only on a cold content publication.
+    """
+    import fcntl
+    import json
+    import shutil
+    import tempfile
+    root = Path(os.environ.get("BMS_CM_API_RUNTIME_DIR") or
+                Path(os.environ.get("BMS_DATA", "/mnt/BioModStack")) / "runtime/cm-api-python")
+    from contextlib import ExitStack
+    root.mkdir(parents=True, exist_ok=True)
+    with ExitStack() as locks:
+        lock = locks.enter_context((root / ".provision.lock").open("a"))
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        managed = venv.name == "environment" and (venv.parent / "state.json").is_file()
+        if managed:
+            operation = locks.enter_context((venv.parent / "operation.lock").open("a"))
+            fcntl.flock(operation, fcntl.LOCK_EX)
+        for abandoned in root.glob(".stage.*"):
+            if abandoned.is_dir() and not abandoned.is_symlink():
+                _remove_unpublished(abandoned)
+        receipt = json.loads((venv / ".bms-support-payload.json").read_text())
+        destination = root / "releases" / ("runtime-" + receipt["payload_id"])
+        destination.parent.mkdir(exist_ok=True)
+        if not (destination / "support-payload.json").is_file():
+            stage = Path(tempfile.mkdtemp(prefix=".stage.", dir=root))
+            try:
+                shutil.copytree(runtime, stage / "python-runtime", symlinks=True)
+                shutil.copytree(venv, stage / "venv", symlinks=True)
+                prepare_payload(stage, destination, venv, runtime)
+                if destination.is_dir():
+                    # Only incomplete publications are recoverable, never a
+                    # completed generation or its frozen legacy current alias.
+                    _remove_unpublished(destination)
+                stage.chmod(0o755)  # rename across parents updates the directory's '..'
+                os.replace(stage, destination)
+                destination.chmod(0o555)
+            finally:
+                if stage.exists():
+                    _remove_unpublished(stage)
+        current = root / "current"
+        if not current.exists() and not current.is_symlink():
+            current.symlink_to(destination.relative_to(root))
+        published = json.loads((destination / "support-payload.json").read_text())
+        if managed:
+            from biomodstack_python_prerequisites import save
+            state = json.loads((venv.parent / "state.json").read_text())
+            if state.get("support_payload") != published:
+                state["support_payload"] = published
+                save(venv.parent, state)
+    return published
+
+
+def _remove_unpublished(path: Path) -> None:
+    import shutil
+    for member in path.rglob("*"):
+        if not member.is_symlink() and member.is_dir():
+            member.chmod(0o700)
+    path.chmod(0o700)
+    shutil.rmtree(path)
 
 
 if __name__ == "__main__":

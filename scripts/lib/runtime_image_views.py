@@ -59,7 +59,7 @@ def _remove(parent, name):
         os.unlink(name, dir_fd=parent)
 
 
-def _walk_tree(path):
+def _walk_tree(path, *, excluded=()):
     """Walk once using held no-follow ancestry; reject replacement/mutation.
 
     Yielded parent FDs are borrowed only until the next iteration. No regular
@@ -78,7 +78,9 @@ def _walk_tree(path):
                     raise Error('tree directory changed')
                 yield parent, name, relative, before
                 for child in sorted(os.listdir(fd)):
-                    yield from walk(fd, child, relative + '/' + child)
+                    child_relative = relative + '/' + child
+                    if child_relative.removeprefix('./') not in excluded:
+                        yield from walk(fd, child, child_relative)
                 if not _same(before, os.fstat(fd)):
                     raise Error('tree directory membership changed')
             finally:
@@ -92,10 +94,10 @@ def _walk_tree(path):
         _check_directory(path.parent, parent)
 
 
-def snapshot_tree(path):
+def snapshot_tree(path, *, excluded=()):
     return {relative: _identity(info) + (
                 os.readlink(name, dir_fd=parent) if stat.S_ISLNK(info.st_mode) else None,)
-            for parent, name, relative, info in _walk_tree(path)}
+            for parent, name, relative, info in _walk_tree(path, excluded=excluded)}
 
 
 def _inventory(path, *, freeze=False, identities=None):

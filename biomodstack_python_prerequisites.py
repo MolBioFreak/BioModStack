@@ -176,12 +176,15 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
         if state and state.get("status") == "complete":
             try:
                 resolve_python_environment(project_root)
-                receipt = refresh_installed_support(root, expected)
+                receipt = refresh_installed_support(root, expected, refresh=False)
                 if receipt is not None and receipt["payload_id"] != (state.get("support_payload") or {}).get("payload_id"):
                     state["support_payload"] = receipt
                     save(root, state)
                 report.update(status="already-installed", dependencies_installed=True,
                               steps=[{"step": "offline-check", "status": "complete"}])
+                locked.close()
+                locked = None
+                publish_installed_support(root)
                 return report
             except PrerequisiteError:
                 pass  # Explicit bootstrap may repair same-identity dependencies.
@@ -224,10 +227,14 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
             state["support_payload"] = receipt
         state["steps"].append({"step": "offline-check", "status": "complete"})
         save(root, state)
+        locked.close()
+        locked = None
+        publish_installed_support(root)
         report.update(status="installed", dependencies_installed=True, steps=state["steps"])
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         error = {"code": getattr(exc, "code", "prerequisite_failed"), "message": str(exc)}
         report["errors"].append(error)
+        report["status"] = "blocked"
         if state and locked and getattr(exc, "code", "") != "operation_busy":
             state.update(status="failed", error=error)
             try:
@@ -274,6 +281,8 @@ def _resolve_python_environment(project_root: Path) -> dict | None:
         raise PrerequisiteError("environment_changed", "Installed distribution inventory changed; run explicit python-bootstrap to repair")
     env = subprocess_env(root)
     support_payload = state.get("support_payload")
+    if not isinstance(support_payload, dict):
+        support_payload = None
     python = root / "environment/bin/python"
     if isinstance(support_payload, dict) and support_payload.get("python"):
         selected = Path(support_payload["python"])
@@ -283,19 +292,39 @@ def _resolve_python_environment(project_root: Path) -> dict | None:
             support_payload = None  # optional representation, not a new refusal
     env["PATH"] = str(python.parent) + os.pathsep + str(root / "toolchain/bin") + os.pathsep + env.get("PATH", os.defpath)
     env["VIRTUAL_ENV"] = str(python.parent.parent)
+    if isinstance(support_payload, dict) and support_payload.get("payload_root"):
+        env["BMS_API_PYTHON"] = str(python)
+        env["BMS_SUPPORT_PAYLOAD_RECEIPT"] = str(Path(support_payload["payload_root"]) / "support-payload.json")
     return {"python": str(python), "source_python": str(root / "environment/bin/python"),
             "uv": str(root / "toolchain/bin/uv"), "root": str(root), "env": env,
             "support_payload": support_payload}
 
 
-def refresh_installed_support(root: Path, expected: dict) -> dict | None:
+def publish_installed_support(root: Path) -> dict | None:
+    """One-time managed adoption/publication, independent of optional CM images."""
+    runtime = (root / "environment/bin/python").resolve().parent.parent
+    if runtime in {Path(p) for p in ("/", "/usr", "/usr/local", "/opt", "/home", "/bin", "/lib", "/lib64")} or not (runtime / "lib").is_dir():
+        return None  # Preserve supported host-system-Python setup.
+    from scripts.cm_api_support_runtime import publish_installed_payload
+    with (root / "operation.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        state = json.loads((root / "state.json").read_text())
+        receipt = state.get("support_payload")
+        receipt = receipt if isinstance(receipt, dict) else {}
+        if receipt.get("payload_root") and Path(receipt["payload_root"], "support-payload.json").is_file():
+            return receipt
+        refresh_installed_support(root, state["identity"], refresh=False)
+    return publish_installed_payload(root / "environment", runtime)
+
+
+def refresh_installed_support(root: Path, expected: dict, *, refresh=True) -> dict | None:
     """Explicit install/refresh boundary; system-Python setup remains supported."""
     runtime = (root / "environment/bin/python").resolve().parent.parent
     if runtime in {Path(p) for p in ("/", "/usr", "/usr/local", "/opt", "/home", "/bin", "/lib", "/lib64")} or not (runtime / "lib").is_dir():
         return None
     return support_payload_receipt(root / "environment", runtime,
         selection={"groups": [], "extras": [], "install_project": False,
-                   "policy": expected["policy"]}, installer_version=UV_VERSION, refresh=True)
+                   "policy": expected["policy"]}, installer_version=UV_VERSION, refresh=refresh)
 
 
 def support_payload_receipt(venv: Path, runtime: Path, *, selection: dict,

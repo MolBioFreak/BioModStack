@@ -6,11 +6,20 @@ bms_python_runtime_resolve() {
     local resolved_python
     resolved_python="$(PYTHONPATH="$_BMS_PYTHON_GUARD_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -B -c '
 import sys
+import subprocess
 sys.path.insert(0, sys.argv[2])
 from pathlib import Path
-from biomodstack_python_prerequisites import resolve_python_environment
+from biomodstack_python_prerequisites import resolve_python_environment, publish_installed_support
 try:
     resolved = resolve_python_environment(Path(sys.argv[1]))
+    if resolved is not None and not (resolved.get("support_payload") or {}).get("payload_root"):
+        try:
+            publish_installed_support(Path(resolved["root"]))
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            # Optional adoption is not a new startup admission requirement.
+            print(f"BioModStack optional support publication unavailable: {exc}", file=sys.stderr)
+        else:
+            resolved = resolve_python_environment(Path(sys.argv[1]))
     print(resolved["python"] if resolved is not None else "")
     print(resolved.get("root", "") if resolved is not None else "")
     receipt = resolved.get("support_payload") if resolved is not None else None

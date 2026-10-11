@@ -37,13 +37,15 @@ def resolve_python_environment(project):
         return {'python': os.environ['TEST_VENV'] + '/bin/python',
                 'root': str(Path(os.environ['TEST_VENV']).parent)}
     return None
+def publish_installed_support(root):
+    return None  # This fixture isolates adapter publication; bootstrap has its own real fixture.
 ''')
     # Only image lookup is inert; receipt, relocation and publication are real.
     text = (scripts / 'cm_api_support_runtime.py').read_text()
     text = text.replace('from biomodstack_runtime_profile import resolve_runtime_paths', '')
-    text = text.replace('from lib.runtime_image_lifecycle import object_path', '')
-    text = text.replace('from select_workflow_adapter_image import select_probe_image', '')
-    text = text.replace('from lib.shared_runtime_images import verify_image', '')
+    text = text.replace('from scripts.lib.runtime_image_lifecycle import object_path', '')
+    text = text.replace('from scripts.select_workflow_adapter_image import select_probe_image', '')
+    text = text.replace('from scripts.lib.shared_runtime_images import verify_image', '')
     text = text.replace('selected = support_image(Path(sys.argv[2]))',
                         "selected = Path(os.environ['TEST_IMAGE'])")
     (scripts / 'cm_api_support_runtime.py').write_text(text)

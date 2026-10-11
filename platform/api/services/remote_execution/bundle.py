@@ -295,8 +295,8 @@ def _record_file(
     before = file_stamp(path) if input_inventory is not None else None
     if path.is_symlink() or not path.is_file():
         raise RemoteBundleError(f"Package input is not one regular file: {path}")
-    if role == "input" and path.stat().st_nlink != 1:
-        raise RemoteBundleError(f"Package input must be an unaliased regular file: {path}")
+    if role == "input" and path.stat().st_nlink != 1 and path.stat().st_mode & 0o222:
+        raise RemoteBundleError(f"Package writable input must be an unaliased regular file: {path}")
     if path.stat().st_mode & 0o7000:
         raise RemoteBundleError(f"Package file has an unapproved special mode: {path}")
     if role == 'runtime' and path.name == 'runtime.sif' and path.parent.parent.name == 'sha256':
@@ -337,7 +337,31 @@ def _records_for_source(
     *,
     source_archive_sha256: str | None = None,
     input_inventory: dict | None = None,
+    runtime_sources: dict | None = None,
 ) -> list[RemoteFileRecord]:
+    if role == 'runtime' and prefix.startswith(('runtime/weights/', 'weights/')):
+        # Native weight snapshots (including HF internal aliases) travel as
+        # concrete files. Only the manifest-bound path above may escape the
+        # selected tree into acquisition storage; never serialize host targets.
+        root = source.resolve(strict=True)
+        records = []
+        def visit(native, name, ancestry):
+            concrete = native.resolve(strict=True)
+            if concrete != root and not concrete.is_relative_to(root):
+                raise RemoteBundleError(f'Runtime package symlink escapes its release: {native}')
+            if concrete.is_dir():
+                if concrete in ancestry:
+                    raise RemoteBundleError(f'Runtime package symlink cycles: {native}')
+                for child in sorted(concrete.iterdir()):
+                    visit(child, name + '/' + child.name, ancestry | {concrete})
+            else:
+                records.append(_record_file(concrete, name, role))
+                if runtime_sources is not None:
+                    runtime_sources[("runtime-source", name)] = concrete
+        visit(source, prefix.rstrip('/'), set())
+        if not records:
+            raise RemoteBundleError(f'Required package directory is empty: {source}')
+        return records
     if source.is_symlink():
         if role != "runtime":
             raise RemoteBundleError(f"Package path cannot be a symlink: {source}")
@@ -449,7 +473,7 @@ def verify_selected_preparation_inputs(plan, observed=None):
             descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             with os.fdopen(descriptor, 'rb') as stream:
                 before = os.fstat(stream.fileno())
-                if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > MAX_DOCUMENT_BYTES:
+                if not stat.S_ISREG(before.st_mode) or (before.st_nlink != 1 and before.st_mode & 0o222) or before.st_size > MAX_DOCUMENT_BYTES:
                     raise RemoteBundleError('Native preparation input is not a bounded regular file')
                 data = stream.read(MAX_DOCUMENT_BYTES + 1)
                 after = os.fstat(stream.fileno())
@@ -506,7 +530,46 @@ def _published_runtime_records(source: Path, prefix: str, *, publication=None, r
         link_target=r.get('target')) for r in rows]
 
 
-def _runtime_records(source: Path, prefix: str, *, publication=None, resolved=None):
+def _selected_weight_members(source: Path, model_id: str, *, resolved=None):
+    """Resolve only exact registry-manifest layouts to their acquisition bodies.
+
+    Native names survive transport. A controller link target is never a worker
+    alias, and an arbitrary external symlink is not a selected acquisition.
+    """
+    if not source.exists():
+        return None  # Existing HF publication may supply bytes absent on this controller.
+    from model_registry import model_acquisition_plan
+    from services.runtime_acquisition import _layouts
+    from scripts.lib.pinned_weight_layout import _verify_tree
+    weights = get_weights_root().resolve()
+    # Resolve a selected directory alias, but keep a leaf's native name until
+    # the manifest authenticates its acquisition referent.
+    source = source.resolve(strict=True) if source.is_dir() else source.parent.resolve(strict=True) / source.name
+    for dependency, entries in _layouts(model_acquisition_plan(model_id)):
+        digest = hashlib.sha256(json.dumps({'dependency': dependency, 'members': sorted(
+            entries, key=lambda e: e['member_path'])}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        root = weights / 'layouts' / dependency['relative_path'] / digest
+        if source != root and not source.is_relative_to(root):
+            continue
+        key = ('pinned-weight-layout', str(root))
+        inventory = resolved.get(key) if resolved is not None else None
+        if inventory is None:
+            inventory = _verify_tree(root, entries, frozen=True, weights_root=weights)
+            inventory = {name: dict(row, source=(root / name).resolve(strict=True))
+                         for name, row in inventory.items()}
+            if resolved is not None:
+                resolved[key] = inventory
+        result = {}
+        for name, row in inventory.items():
+            native = root / name
+            if native == source or native.is_relative_to(source):
+                suffix = '' if native == source else native.relative_to(source).as_posix()
+                result[suffix] = (row['source'], row)
+        return result
+    return None
+
+
+def _runtime_records(source: Path, prefix: str, *, publication=None, resolved=None, model_id=None):
     if prefix == 'runtime/support-python':
         from .critical_runtime import support_receipt, _support_members
         receipt = support_receipt(source)
@@ -520,8 +583,19 @@ def _runtime_records(source: Path, prefix: str, *, publication=None, resolved=No
                 result.append(_record_file(path, relative, 'runtime',
                     staged_sha256=members.get(name, {}).get('sha256')))
         return result
+    if prefix.startswith(('runtime/weights/', 'weights/')) and model_id is not None:
+        selected = _selected_weight_members(source, model_id, resolved=resolved)
+        if selected is not None:
+            records = []
+            for suffix, (concrete, row) in sorted(selected.items()):
+                name = prefix + ('/' + suffix if suffix else '')
+                records.append(RemoteFileRecord(relative_path=name, role='runtime',
+                    sha256=row['sha256'], size_bytes=row['size'], mode=0o400))
+                if resolved is not None:
+                    resolved[('runtime-source', name)] = concrete
+            return records
     rows = _published_runtime_records(source, prefix, publication=publication, resolved=resolved)
-    return rows if rows is not None else _records_for_source(source, prefix, 'runtime')
+    return rows if rows is not None else _records_for_source(source, prefix, 'runtime', runtime_sources=resolved)
 
 
 def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
@@ -619,13 +693,16 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
             if selected and path is not None:
                 selected_root = path
                 path = selected_root / member
-                if not path.resolve().is_relative_to(selected_root.resolve()):
+                if (not path.resolve().is_relative_to(selected_root.resolve())
+                        and not (dependency.kind == "weights" and _selected_weight_members(path, model_id, resolved=resolved))):
                     raise RemoteBundleError('Selected runtime dependency escapes selector root: ' + dependency.logical_id)
         if path is None or not path.is_absolute():
             raise RemoteBundleError('Selected runtime dependency has no managed binding: ' + dependency.logical_id)
         if dependency.kind == 'image' and (path.is_symlink() or any(parent.is_symlink() for parent in path.parents)):
             raise RemoteBundleError(f'Selected runtime image is not a no-follow path: {path}')
-        path = path.resolve()
+        # Preserve manifest-native weight names until their concrete inventory.
+        if dependency.kind != "weights":
+            path = path.resolve()
         allowed = (get_container_dir().resolve(), get_weights_root().resolve(), get_data_root().resolve(),
             Path(os.environ.get('BMS_RUNTIME_IMAGE_STORE') or get_container_dir() / '.image-store').resolve())
         # Lock/patch are source-owned; the selected framework JAR is supplied by
@@ -1615,7 +1692,8 @@ def prepare_remote_bundle(
             source = _relocate_python_runtime(path, staging_root / "support-python", destination)
             lexical_runtime = Path(os.getenv("BMS_CM_API_RUNTIME_DIR", str(data_root / "runtime" / "cm-api-python")))
             runtime_path_map[str(lexical_runtime / "current")] = destination
-        recorded = _runtime_records(source, f"runtime/{relative}", publication=publication, resolved=resolved)
+        recorded = _runtime_records(source, f"runtime/{relative}", publication=publication, resolved=resolved,
+                                    model_id=str(job.model_id))
         (weight_records if relative.startswith("weights/") else runtime_records).extend(recorded)
         runtime_hashes.update({record.relative_path.removeprefix("runtime/"): record.sha256
                                for record in recorded if record.link_target is None})
@@ -1624,7 +1702,7 @@ def prepare_remote_bundle(
             suffix = record.relative_path[len(f"runtime/{relative}"):].lstrip("/")
             original = path / suffix if suffix else path
             if relative.startswith("weights/"):
-                weight_sources[record.relative_path] = original
+                weight_sources[record.relative_path] = (resolved.get(('runtime-source', record.relative_path)) or original.resolve()) if record.link_target is None else original
             if record.link_target is None:
                 runtime_references[str(original)] = dict(
                     sha256=record.sha256, size_bytes=record.size_bytes,
@@ -1645,6 +1723,7 @@ def prepare_remote_bundle(
                     size_bytes=sum(r.size_bytes for r in members), format="runtime-directory",
                     path=destination if suffix == "." else destination + "/" + suffix)
         runtime_transfers.append(TransferPlan(source, destination, origin=path))
+        runtime_path_map[str(path)] = destination
         runtime_path_map[str(path.resolve())] = destination
     # Member selectors bind an installed root even when only selected files
     # belong to the dependency closure. Keep custom root relocation intact.

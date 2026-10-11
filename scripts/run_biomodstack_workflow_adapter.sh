@@ -269,9 +269,12 @@ if [ -n "$CM_API_SUPPORT_IMAGE" ]; then
     fi
 elif [ "${BMS_WORKFLOW_ADAPTER_LANE,,}" = development ]; then
     # The host control plane does not require optional scientific containers.
-    # Do not advertise a stale/unprobed portable interpreter. Model admission
-    # continues to require the existing registered runtime and attestation.
-    unset BMS_API_PYTHON BMS_SUPPORT_PAYLOAD_RECEIPT
+    # Model admission continues to require the registered runtime/attestation.
+    # Bootstrap may already have published an image-independent host payload.
+    # Keep that exact receipt for controller preparation; no local image claim.
+    if [ -z "$BMS_MANAGED_PYTHON" ] || [ -z "${BMS_SUPPORT_PAYLOAD_RECEIPT:-}" ]; then
+        unset BMS_API_PYTHON BMS_SUPPORT_PAYLOAD_RECEIPT
+    fi
     echo "CM support runtime unprovisioned: no installed/selected Protenix or Frustra image; scientific runtime admission remains required." >&2
 else
     echo "BioModStack workflow adapter is blocked: CM support image is unprovisioned." >&2

@@ -26,9 +26,9 @@ def fixture(tmp_path):
     (root / "biomodstack_configuration.py").write_text(
         "def configuration_identity(): return None\ndef assert_configuration_readable(): pass\n")
     (root / "biomodstack_python_prerequisites.py").write_text(
-        "import os\ndef resolve_python_environment(root):\n"
+        "import os\nfrom pathlib import Path\ndef publish_installed_support(root): return None\ndef resolve_python_environment(root):\n"
         "    if os.environ.get('TEST_INVALID'): raise RuntimeError('managed inventory changed')\n"
-        "    return {'python': os.environ['TEST_INTERPRETER']}\n")
+        "    return {'python': os.environ['TEST_INTERPRETER'], 'root': str(Path(os.environ['TEST_INTERPRETER']).parents[2])}\n")
     interpreter = tmp_path / "external dependencies/environment/bin/python"
     interpreter.parent.mkdir(parents=True)
     interpreter.write_text(f"#!{sys.executable}\n" +

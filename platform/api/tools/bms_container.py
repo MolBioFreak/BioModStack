@@ -281,26 +281,45 @@ def inspect_files(image_name, paths, identity):
     return 0
 
 
-def snapshot(path):
-    """Stable no-follow identities, without reopening ancestors per member."""
-    return views.snapshot_tree(path)
+def snapshot(path, excluded=()):
+    """Stable no-follow identities, excluding explicitly writable submounts."""
+    return views.snapshot_tree(path, excluded=excluded)
 
 
-def copy_input(source, target, guest, direct_images, *, writable=False):
+def _weight_acquisition_object(path):
+    # Pinned weight acquisitions share the filename runtime.sif, not the image
+    # store or its execution/attestation contract. Declared weight roots only.
+    for key in ('BMS_HOST_WEIGHTS', 'BMS_WEIGHTS'):
+        root = os.environ.get(key)
+        if root:
+            objects = Path(root) / 'objects/sha256'
+            if (path.name == 'runtime.sif' and path.parent.parent == objects
+                    and len(path.parent.name) == 64
+                    and all(c in '0123456789abcdef' for c in path.parent.name)):
+                return True
+    return False
+
+
+def copy_input(source, target, guest, direct_images, *, writable=False, excluded=()):
     """Return source snapshot from the checked private CoW projection walk."""
     directories = []
     identities, cloned = {}, {}
-    for parent, name, relative, info in views._walk_tree(source):
+    for parent, name, relative, info in views._walk_tree(source, excluded=excluded):
         link = os.readlink(name, dir_fd=parent) if stat.S_ISLNK(info.st_mode) else None
         identities[relative] = views._identity(info) + (link,)
         destination = target if relative == '.' else target / relative
         if stat.S_ISLNK(info.st_mode):
             assert link is not None
-            os.symlink(link, destination)
+            original = source if relative == "." else source / relative
+            resolved = original.resolve(strict=True)
+            # Preserve external acquisition referents at their canonical bind;
+            # the private view has a different directory depth from the layout.
+            os.symlink(link if resolved.is_relative_to(source) else str(resolved), destination)
         elif stat.S_ISDIR(info.st_mode):
             destination.mkdir(mode=0o700)
             directories.append((destination, stat.S_IMODE(info.st_mode) | (0o200 if writable else 0)))
-        elif Path(name).suffix == '.sif':
+        elif (Path(name).suffix == '.sif' and not _weight_acquisition_object(
+                source if relative == '.' else source / relative)):
             # SIFs remain original provenance capabilities, not copied storage.
             original = source if relative == '.' else source / relative
             canonical_image(str(original), Path(os.environ['BMS_RUNTIME_IMAGE_STORE']))
@@ -321,12 +340,19 @@ def copy_input(source, target, guest, direct_images, *, writable=False):
                     cloned[key] = destination
                 finally:
                     os.close(out)
+    for name in excluded:
+        mountpoint = target / name
+        mountpoint.parent.mkdir(parents=True, exist_ok=True)
+        if (source / name).is_dir():
+            mountpoint.mkdir(exist_ok=True)
+        else:
+            mountpoint.touch()
     for directory, mode in reversed(directories):
         directory.chmod(mode)
     return identities
 
 
-def project_bindings(requested, inputs, direct_images, *, shared=None):
+def project_bindings(requested, inputs, direct_images, *, shared=None, writable_overrides=()):
     """Shadow protected descendants of broad binds, preserving writable siblings.
 
     PRoot cannot enforce a kernel read-only bind. One private reflink projection
@@ -342,14 +368,17 @@ def project_bindings(requested, inputs, direct_images, *, shared=None):
     roots = sorted((root for root in roots if not any(root != other and root.is_relative_to(other)
                     for other in roots)), key=str)
     projected, guarded = {}, []
+    writable = {Path(s).resolve(strict=True) for s, _, mode in writable_overrides if mode == "rw"}
+    writable -= {source for source, _, mode in requested if mode == "ro"}
     for index, source in enumerate(roots):
         view = inputs / str(index)
-        before = copy_input(source, view, str(source), direct_images,
+        excluded = [p.relative_to(source).as_posix() for p in writable if p != source and p.is_relative_to(source)]
+        before = copy_input(source, view, str(source), direct_images, excluded=excluded,
                             writable=shared is not None and source.is_relative_to(shared))
-        if snapshot(source) != before:
+        if snapshot(source, excluded) != before:
             raise ValueError('declared input changed during projection')
         strict = any(mode == 'ro' and source == path for path, _, mode in requested)
-        guarded.append((source, before, view, snapshot(view) if strict else None))
+        guarded.append((source, before, view, snapshot(view, excluded) if strict else None))
         projected[source] = view
     # The selected weight layout already records its CAS identities. Reuse that
     # authority to shadow direct object aliases too, without copying/scanning the
@@ -384,6 +413,19 @@ def project_bindings(requested, inputs, direct_images, *, shared=None):
     # Absolute scientific paths/symlink referents must see the same private view,
     # even when the declared guest target is different from the host path.
     volumes.extend((str(view), str(source)) for source, view in aliases.items())
+    # Explicit native cache/output binds remain writable through every alias of
+    # a protected ancestor. Automatic cwd/home mounts are not override authority.
+    for source, target, mode in writable_overrides:
+        if mode != 'rw':
+            continue
+        source = Path(source).resolve(strict=True)
+        if source not in writable or not any(source.is_relative_to(root) for root in roots):
+            continue
+        volumes.append((str(source), target))
+        volumes.append((str(source), str(source)))
+        for ancestor, guest, _ in requested:
+            if source != ancestor and source.is_relative_to(ancestor):
+                volumes.append((str(source), str(PurePosixPath(guest) / source.relative_to(ancestor))))
     # Keep explicit writable cache/output submounts more specific than a broad
     # protected alias. Equal guest targets retain last-writer projection order.
     volumes.sort(key=lambda volume: len(PurePosixPath(volume[1]).parts))
@@ -392,7 +434,17 @@ def project_bindings(requested, inputs, direct_images, *, shared=None):
             donor = next(root for root in roots if source.is_relative_to(root))
             view = projected[donor] / source.relative_to(donor)
             guarded.append((source, snapshot(source), view, snapshot(view)))
+    guarded = [(source, _without_writable(before, source, writable), view,
+                _without_writable(original, source, writable) if original is not None else None)
+               for source, before, view, original in guarded]
     return volumes, guarded
+
+
+def _without_writable(records, source, writable):
+    prefixes = ['./' + path.relative_to(source).as_posix() for path in writable
+                if path != source and path.is_relative_to(source)]
+    return {name: row for name, row in records.items()
+            if not any(name == prefix or name.startswith(prefix + '/') for prefix in prefixes)}
 
 
 def inherited_fds():
@@ -469,7 +521,8 @@ def execute(invocation, identity):
         shared = os.environ.get('BMS_SHARED_WEIGHTS_ROOT')
         shared = Path(shared).resolve(strict=True) if shared else None
         requested = [(source, target, 'rw') for source, target in volumes] + invocation.binds
-        volumes, guarded = project_bindings(requested, inputs, direct_images, shared=shared)
+        volumes, guarded = project_bindings(requested, inputs, direct_images, shared=shared,
+                                            writable_overrides=invocation.binds)
         volumes.extend(direct_images)
         # Bind the canonical object directory, not only the SIF: attestation
         # verifies its real 0500 parent as well as the file's inode and ctime.
@@ -518,8 +571,11 @@ def execute(invocation, identity):
         command.extend('--volume=' + source + ':' + target for source, target in volumes)
         command += ['bms-pinned-image', '/bin/bash', '/.bms-exec.sh', *invocation.command]
         result = run_owned(command, environment, original_fds + [view['image_fd']], identity)
+        writable = {Path(s).resolve(strict=True) for s, _, mode in invocation.binds if mode == "rw"}
+        writable -= {Path(s).resolve(strict=True) for s, _, mode in invocation.binds if mode == "ro"}
         for source, before, projected, original_view in guarded:
-            if snapshot(source) != before or (original_view is not None and snapshot(projected) != original_view):
+            excluded = [p.relative_to(source).as_posix() for p in writable if p != source and p.is_relative_to(source)]
+            if snapshot(source, excluded) != before or (original_view is not None and snapshot(projected, excluded) != original_view):
                 raise ValueError('declared scientific input changed during execution')
         return result
 

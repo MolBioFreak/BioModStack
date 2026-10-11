@@ -13,6 +13,7 @@ import pytest
 from services.remote_execution import bundle, critical_runtime
 from tools import bms_artifact_cache as cache, bms_remote_worker as worker
 from test_managed_runtime_safety import critical_package, install_critical_fixture
+from test_remote_cache_integration import local_transport
 
 
 def ingest(storage, payload):
@@ -231,3 +232,47 @@ def test_local_completed_receipt_selects_concrete_payload_and_reuses_hashes(crit
     library = next(entry for entry in support if entry.remote_destination.endswith('example.py'))
     assert library.source.stat().st_ino == (selected / 'venv/lib/python3.11/site-packages/example.py').stat().st_ino
     assert manifest['critical']['schema'] == 'bms.critical-runtime.v2'
+
+
+@pytest.mark.asyncio
+async def test_controller_real_cache_helper_then_managed_code_only_releases(critical_package, local_transport, monkeypatch, tmp_path):
+    import asyncio
+    import uuid
+    from types import SimpleNamespace
+    from services.remote_execution import cache as controller
+    from test_managed_runtime_safety import load
+    first, artifacts, requirements, host = critical_package
+    managed, module = load('bms_managed_runtime'), load('bms_artifact_cache')
+    monkeypatch.setattr(managed, 'observed_compatibility', lambda: dict(requirements))
+    # Scientific compatibility probes are inert fixture outputs, not native qualification.
+    monkeypatch.setattr(managed, 'qualify_container', lambda *a: dict(backend='apptainer', cuda='BMS_CUDA_OK', nextflow='BMS_NEXTFLOW_INTERPRETERS_OK'))
+    connection = SimpleNamespace(remote_root=str(host))
+    async def stage(entries):
+        await controller._cache_artifacts(connection=connection, artifacts=entries,
+            operation_id=str(uuid.uuid4()), progress=controller._noop,
+            check_fence=controller._noop, materialize=False)
+    await stage(artifacts)
+    root = host / 'managed-assets/v1'
+    managed.install(root, first, managed.boot_id(), module)
+    original = managed.release_path(root, first)
+    support = (Path(os.environ['BMS_CM_API_RUNTIME_DIR']) / 'current').resolve()
+    for path in support.rglob('*'):
+        if path.is_file() and not path.is_symlink():
+            path.chmod(path.stat().st_mode & 0o555)
+    monkeypatch.setattr(bundle, 'current_source_identity', lambda _: ('c'*40, 'd'*40))
+    second, entries = critical_runtime.project_runtime(str(host), tmp_path / 'next-source')
+    # Concurrent controller deliveries run the actual serialized helper protocol.
+    await asyncio.gather(stage(entries), stage(entries))
+    managed.install(root, second, managed.boot_id(), module)
+    newer = managed.release_path(root, second)
+    for name in ('venv/bin/python', 'venv/lib/python3.11/site-packages/example.py',
+                 'base/lib/python3.11/encodings/__init__.py'):
+        assert (original / 'support-python' / name).stat().st_ino == (newer / 'support-python' / name).stat().st_ino
+    retained = managed.observe(root, first, module)
+    assert retained['state'] == 'unverified'  # retained bytes, no longer the active release
+    assert all(row['state'] == 'verified' for row in retained['artifacts'])
+    assert managed.observe(root, second, module)['state'] == 'verified'
+    calls, uploads = local_transport
+    assert calls and uploads
+    assert all('bms-cache-batch-' in source or Path(source).is_file() for source in uploads)
+    assert not any('support-python' in source for source in uploads)

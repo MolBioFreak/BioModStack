@@ -319,7 +319,12 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
         if states[key(entry)] == 'cache_hit':
             continue
         use_hf = hf_enabled and key(entry) in bulk
-        direct = use_hf or entry.role == 'image' or entry.size_bytes > BATCH_BYTES
+        # Acquisition objects retain their single-link identity while another
+        # controller may verify the selected layout. Relay them directly, not
+        # through temporary hardlinks (or duplicate staging copies).
+        acquisition_object = (entry.source.name == 'runtime.sif'
+                              and entry.source.parent.parent.name == 'sha256')
+        direct = use_hf or entry.role == 'image' or acquisition_object or entry.size_bytes > BATCH_BYTES
         if batch and (direct or len(batch) >= BATCH_COUNT or size + entry.size_bytes > BATCH_BYTES):
             staged_plans.append((batch, False, False))
             batch, size = [], 0
@@ -598,9 +603,12 @@ def _prewarm_plan(job, command, source_revision, source_tree, directory, *, nati
     for path, prefix in assets:
         if prefix.startswith('runtime/') and _is_runtime_image(path, prefix):
             path = path.resolve()
-        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved):
+        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved,
+                                                model_id=native_invocation.model_id):
             suffix = record.relative_path[len(prefix):].lstrip('/')
-            local = path / suffix if suffix else path
+            local = resolved.get(('runtime-source', record.relative_path)) or (path / suffix if suffix else path)
+            if record.link_target is None and local.is_symlink():
+                local = local.resolve(strict=True)
             entries.append(CacheTransferArtifact(local, record.relative_path, record.sha256,
                                                   record.size_bytes, record.mode,
                                                   'image' if _is_runtime_image(local, record.relative_path) else 'runtime',
@@ -635,15 +643,16 @@ def workflow_pack_weight_layouts(selection, entries):
         for member in members)) for name, members in groups.items()}
 
 
-def _declared_runtime_records(path, prefix, publication, *, resolved=None):
-    rows = _published_runtime_records(path, prefix, publication=publication, resolved=resolved)
-    return rows if rows is not None else _records_for_source(path, prefix, 'runtime')
+def _declared_runtime_records(path, prefix, publication, *, resolved=None, model_id=None):
+    from .bundle import _runtime_records
+    return _runtime_records(path, prefix, publication=publication, resolved=resolved, model_id=model_id)
 
 
 def independent_plan(selection, *, dependencies=None, publication=None):
     """Resolve only reviewed registry dependencies; no Job or biological inputs."""
     from paths import get_container_dir, get_weights_root
     entries = []
+    resolved = {}
     refs = _independent_dependencies(selection) if dependencies is None else dependencies
     publication = hf_assets.publication_index() or {} if publication is None else publication
     for ref in {(r.kind, r.relative_path): r for r in refs}.values():
@@ -653,12 +662,17 @@ def independent_plan(selection, *, dependencies=None, publication=None):
         # Preserve installation selection authority before resolving legacy aliases.
         path = (image_reference(ref.relative_path, root)[0].resolve() if ref.kind == 'image'
                 else root / ref.relative_path)
-        if (path.is_symlink() or (ref.kind != 'image' and not path.resolve().is_relative_to(root))):
+        from .bundle import _selected_weight_members
+        selected = (_selected_weight_members(path, selection.model_id, resolved=resolved) if ref.kind == 'weights' and path.exists() else None)
+        if ((path.is_symlink() and selected is None) or (ref.kind != 'image' and not path.resolve().is_relative_to(root))):
             raise ValueError('Independent runtime asset is not a contained regular asset')
         prefix = ('containers/' if ref.kind == 'image' else 'weights/') + ref.relative_path
-        for record in _declared_runtime_records(path, prefix, publication):
+        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved, model_id=selection.model_id):
             suffix = record.relative_path[len(prefix):].lstrip('/')
-            entries.append(CacheTransferArtifact(path / suffix if suffix else path,
+            local = resolved.get(('runtime-source', record.relative_path)) or (path / suffix if suffix else path)
+            if record.link_target is None and local.is_symlink():
+                local = local.resolve(strict=True)
+            entries.append(CacheTransferArtifact(local,
                 record.relative_path, record.sha256, record.size_bytes, record.mode,
                 'image' if ref.kind == 'image' else 'runtime', link_target=record.link_target))
     return entries
@@ -720,9 +734,11 @@ def workflow_plan(selection, *, compiled_plan=None, publication=None):
     for path, prefix in _runtime_assets(plan.model_id, plan.mode,
             json.loads(plan.native_parameters_json), include_support=False, selected_plan=plan,
             publication=publication, resolved=resolved):
-        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved):
+        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved, model_id=plan.model_id):
             suffix = record.relative_path[len(prefix):].lstrip('/')
-            local = path / suffix if suffix else path
+            local = resolved.get(('runtime-source', record.relative_path)) or (path / suffix if suffix else path)
+            if record.link_target is None and local.is_symlink():
+                local = local.resolve(strict=True)
             entries.append(CacheTransferArtifact(local, record.relative_path, record.sha256,
                 record.size_bytes, record.mode, 'image' if _is_runtime_image(local, record.relative_path) else 'runtime',
                 link_target=record.link_target))
