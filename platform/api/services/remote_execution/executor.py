@@ -1869,6 +1869,9 @@ async def _fetch_result_manifest(
                     path.unlink()
                 else:
                     raise RemoteExecutionError("Retained result staging contains undeclared files")
+    from .result_generation import committed_payloads, reuse_payload
+
+    previous = committed_payloads(job)
     missing = []
     for artifact in manifest.artifacts:
         path = _safe_result_path(incoming, artifact.relative_path)
@@ -1881,9 +1884,7 @@ async def _fetch_result_manifest(
         missing.append(artifact)
     total_bytes = sum(int(artifact.size_bytes) for artifact in manifest.artifacts)
     configured_limit = int(os.environ.get("BMS_REMOTE_MAX_RETURN_BYTES", DEFAULT_MAX_RESULT_BYTES))
-    free_budget = max(0, shutil.disk_usage(incoming.parent).free - RESULT_DISK_RESERVE_BYTES)
-    missing_bytes = sum(int(artifact.size_bytes) for artifact in missing)
-    if total_bytes > configured_limit or missing_bytes + len(manifest_bytes) > free_budget:
+    if total_bytes > configured_limit:
         raise RemoteExecutionError("Remote result package exceeds the local return-byte budget")
     # A deterministic sibling temp cannot pollute the declared payload inventory.
     from .result_generation import move
@@ -1897,6 +1898,13 @@ async def _fetch_result_manifest(
     for relative in manifest.directories:
         directory = checked(_safe_result_path(incoming, relative))
         directory.mkdir(parents=True, exist_ok=True)
+    for artifact in missing:
+        reuse_payload(job, artifact, previous, _safe_result_path(incoming, artifact.relative_path))
+    missing_bytes = sum(int(artifact.size_bytes) for artifact in missing
+                        if not _safe_result_path(incoming, artifact.relative_path).is_file())
+    free_budget = max(0, shutil.disk_usage(incoming.parent).free - RESULT_DISK_RESERVE_BYTES)
+    if missing_bytes > free_budget:
+        raise RemoteExecutionError("Remote result package exceeds the local return-byte budget")
     return manifest
 
 
@@ -1974,6 +1982,9 @@ async def _recover_result_generation(session, job):
     if not journal_path(job).exists():
         return False
     identity = _pull_identity(job)
+    # Discard even flushed-but-uncommitted importer state. Only a new read
+    # transaction can authorize rollback-tree retirement.
+    await session.rollback()
     await session.refresh(job)
     if _pull_identity(job) != identity:
         raise RemoteExecutionError("Result publication recovery authority changed")
@@ -3222,6 +3233,7 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
                     or str(job.execution_target_id or "") != expected_target_id
                     or (job.status, job.queue_status, job.remote_state) != expected_terminal):
                 return False
+            await _recover_result_generation(session, job)
             # The finalizer committed the terminal state and lease release
             # atomically. Consume that result without claiming its old lease.
             if result.completed:
@@ -3261,6 +3273,7 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
     job.completed_at = job.completed_at or datetime.utcnow()
     await _release_remote_target_lease(session, job)
     await session.commit()
+    await _recover_result_generation(session, job)
     return True
 
 

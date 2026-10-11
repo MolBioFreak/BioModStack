@@ -6,7 +6,7 @@ import os
 import sqlite3
 import stat
 import tempfile
-from contextlib import nullcontext
+from contextlib import closing, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -288,6 +288,42 @@ def verify_sqlite_backup(
     connection.close()
 
 
+def _copy_sqlite_online(source_connection: sqlite3.Connection, destination: Path) -> None:
+    """The common SQLite snapshot primitive, independent of reconciliation."""
+    with closing(sqlite3.connect(destination, timeout=30.0)) as connection:
+        source_connection.backup(connection)
+        connection.commit()
+
+
+def copy_sqlite_database(source_path: Path, backup_path: Path) -> None:
+    """User-requested online backup including WAL, without reconciliation gates.
+
+    Keep the UI's replace-on-same-name behavior, but never expose a partial copy.
+    Source writes are supported by SQLite's online backup API.
+    """
+    source = Path(source_path).expanduser().resolve()
+    destination = Path(backup_path).expanduser().absolute()
+    if source == destination.resolve():
+        raise ValueError("SQLite backup source and destination must be distinct")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(prefix=f".{destination.name}.tmp-", dir=destination.parent)
+    os.close(descriptor)
+    staging = Path(name)
+    try:
+        with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True, timeout=30.0)) as connection:
+            _copy_sqlite_online(connection, staging)
+        with staging.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(staging, destination)
+        directory = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        staging.unlink(missing_ok=True)
+
+
 def backup_sqlite_database(
     source_path: Path,
     backup_path: Path,
@@ -387,9 +423,7 @@ def backup_sqlite_database(
                     "integrity_check": source_integrity_check[0],
                     "foreign_key_violations": source_foreign_key_violations,
                 }
-                with sqlite3.connect(staging, timeout=30.0) as backup_connection:
-                    active_source_connection.backup(backup_connection)
-                    backup_connection.commit()
+                _copy_sqlite_online(active_source_connection, staging)
 
             source_stat_after = os.fstat(source_descriptor)
             source_path_after = _lstat(source)
