@@ -102,6 +102,11 @@ def _write_json(path: Path, value: Mapping[str, Any]) -> bytes:
 def _fsync_regular(path: Path) -> None:
     descriptor = _runtime.open_regular_no_follow(path, label=f"published artifact {path.name}")
     try:
+        # These are this runner's completed private staging files, after native
+        # execution and manifest validation. Freeze payloads before any retained
+        # collector can create another name; metadata stays independently owned.
+        if path.suffix.lower() in {'.pdb', '.csv', '.npz', '.parquet'}:
+            os.fchmod(descriptor, stat.S_IMODE(os.fstat(descriptor).st_mode) & ~0o222)
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
@@ -128,7 +133,7 @@ def _file_generation(metadata: os.stat_result) -> tuple[int, ...]:
     )
 
 
-def _read_regular(path: Path | str, *, label: str, max_bytes: int) -> bytes:
+def _read_regular(path: Path | str, *, label: str, max_bytes: int, immutable_input: bool = False) -> bytes:
     """Read a role-bounded regular file without following links or races."""
 
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0:
@@ -144,7 +149,11 @@ def _read_regular(path: Path | str, *, label: str, max_bytes: int) -> bytes:
                 "artifact_too_large",
                 f"{label} size {metadata.st_size} exceeds its {max_bytes}-byte read limit",
             )
-        generation = _file_generation(metadata)
+        stamp = _file_generation
+        if immutable_input and not metadata.st_mode & 0o222:
+            stamp = lambda item: (item.st_dev, item.st_ino, item.st_mode,
+                                  item.st_size, item.st_mtime_ns)
+        generation = stamp(metadata)
         chunks: list[bytes] = []
         offset = 0
         while offset < metadata.st_size:
@@ -158,7 +167,7 @@ def _read_regular(path: Path | str, *, label: str, max_bytes: int) -> bytes:
             chunks.append(chunk)
             offset += len(chunk)
         metadata_after = os.fstat(descriptor)
-        if offset != metadata.st_size or _file_generation(metadata_after) != generation:
+        if offset != metadata.st_size or stamp(metadata_after) != generation:
             raise ComponentRunError(
                 "artifact_changed",
                 f"{label} changed size or identity during bounded read",
@@ -789,13 +798,11 @@ def _run_component_v2(
         normalized_payload = _read_regular(
             source_structure,
             label="normalized PDB",
-            max_bytes=MAX_SOURCE_STRUCTURE_BYTES,
-        )
+            max_bytes=MAX_SOURCE_STRUCTURE_BYTES, immutable_input=True)
         structure_map_payload = _read_regular(
             structure_map_path,
             label="structure map",
-            max_bytes=MAX_STRUCTURE_MAP_BYTES,
-        )
+            max_bytes=MAX_STRUCTURE_MAP_BYTES, immutable_input=True)
         closure_validator = (
             validate_v3_input_closure if generation == 3 else validate_v2_input_closure
         )
@@ -1095,17 +1102,14 @@ def finalize_batched_component(
 ) -> Path:
     """Finalize one v3 candidate from one real shared predict_batch execution."""
     request_payload = _read_regular(
-        request_path, label="component request", max_bytes=MAX_COMPONENT_REQUEST_BYTES
-    )
+        request_path, label="component request", max_bytes=MAX_COMPONENT_REQUEST_BYTES, immutable_input=True)
     request = _load_request_payload(request_payload)
     if request.get("schema_version") != 3:
         raise ComponentRunError("request_invalid", "grouped execution requires a v3 request")
     normalized_payload = _read_regular(
-        source_structure, label="normalized PDB", max_bytes=MAX_SOURCE_STRUCTURE_BYTES
-    )
+        source_structure, label="normalized PDB", max_bytes=MAX_SOURCE_STRUCTURE_BYTES, immutable_input=True)
     structure_map_payload = _read_regular(
-        structure_map, label="structure map", max_bytes=MAX_STRUCTURE_MAP_BYTES
-    )
+        structure_map, label="structure map", max_bytes=MAX_STRUCTURE_MAP_BYTES, immutable_input=True)
     try:
         structure, effective, configuration = validate_v3_input_closure(
             request, normalized_payload, structure_map_payload

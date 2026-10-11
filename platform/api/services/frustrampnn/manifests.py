@@ -214,6 +214,7 @@ def _read_regular(
     relative: str,
     *,
     max_bytes: int | None = None,
+    immutable_input: bool = False,
 ) -> bytes:
     try:
         validate_relative_path(relative)
@@ -241,7 +242,13 @@ def _read_regular(
             raise ManifestValidationError(
                 f"artifact size exceeds the {limit}-byte read limit: {relative}"
             )
-        generation_before = _file_generation(metadata)
+        # Link publication changes nlink/ctime without changing immutable
+        # input bytes. Mutable sources and destination rereads keep all stamps.
+        generation = _file_generation
+        if immutable_input and not metadata.st_mode & 0o222:
+            generation = lambda item: (item.st_dev, item.st_ino, item.st_mode,
+                                       item.st_size, item.st_mtime_ns)
+        generation_before = generation(metadata)
         with os.fdopen(descriptor, "rb", closefd=True) as handle:
             descriptor = -1
             payload = handle.read(limit + 1)
@@ -250,7 +257,7 @@ def _read_regular(
             raise ManifestValidationError(f"artifact grew beyond its read limit: {relative}")
         if (
             len(payload) != metadata.st_size
-            or _file_generation(metadata_after) != generation_before
+            or generation(metadata_after) != generation_before
         ):
             raise ManifestValidationError(f"artifact changed size or identity during read: {relative}")
         return payload
@@ -374,6 +381,7 @@ def _snapshot_bundle(
     require_manifest: bool,
     expected: set[str] | tuple[set[str], ...],
     manifest: Mapping[str, Any] | None = None,
+    immutable_input: bool = False,
 ) -> dict[str, bytes]:
     """Read one exact bundle generation through one retained root descriptor."""
 
@@ -418,6 +426,7 @@ def _snapshot_bundle(
                 root_fd,
                 relative,
                 max_bytes=limits[relative],
+                immutable_input=immutable_input,
             )
         _enforce_actual_bundle_size(payloads)
         generation_after = _root_generation(root_fd)
@@ -1221,6 +1230,7 @@ def _validate_physical_semantics(pdb: bytes, raw: bytes, structure: Mapping[str,
 
 def _validate_result_manifest_v1(
     root: Path | str, manifest: Mapping[str, Any],
+    *, immutable_input: bool = False,
 ) -> dict[str, bytes]:
     """Rehash and close every manifest field against no-follow filesystem reads."""
 
@@ -1236,6 +1246,7 @@ def _validate_result_manifest_v1(
     payloads = _snapshot_bundle(
         bundle,
         require_manifest=True,
+        immutable_input=immutable_input,
         expected=expected_options,
         manifest=manifest,
     )
@@ -1283,6 +1294,7 @@ def _snapshot_v2(
     *,
     require_manifest: bool,
     manifest: Mapping[str, Any] | None = None,
+    immutable_input: bool = False,
 ) -> dict[str, bytes]:
     root_fd = _open_root(root)
     try:
@@ -1338,6 +1350,7 @@ def _snapshot_v2(
                 root_fd,
                 relative,
                 max_bytes=limits[relative],
+                immutable_input=immutable_input,
             )
         _enforce_actual_bundle_size(payloads)
         generation_after = _root_generation(root_fd)
@@ -1357,6 +1370,7 @@ def _snapshot_v3(
     *,
     require_manifest: bool,
     manifest: Mapping[str, Any] | None = None,
+    immutable_input: bool = False,
 ) -> dict[str, bytes]:
     root_fd = _open_root(root)
     try:
@@ -1412,6 +1426,7 @@ def _snapshot_v3(
                 root_fd,
                 relative,
                 max_bytes=limits[relative],
+                immutable_input=immutable_input,
             )
         _enforce_actual_bundle_size(payloads)
         generation_after = _root_generation(root_fd)
@@ -2418,12 +2433,13 @@ def _validate_result_manifest_v2(
     manifest: Mapping[str, Any],
     *,
     allow_legacy_external_authority: bool = False,
+    immutable_input: bool = False,
 ) -> dict[str, bytes]:
     try:
         validate_schema("frustrampnn_result_manifest_v2", manifest)
     except Exception as exc:
         raise ManifestValidationError(f"v2 manifest schema failed: {exc}") from exc
-    payloads = _snapshot_v2(root, require_manifest=True, manifest=manifest)
+    payloads = _snapshot_v2(root, require_manifest=True, manifest=manifest, immutable_input=immutable_input)
     physical = _json_identity(payloads[V2_MANIFEST_PATH], V2_MANIFEST_PATH)[2]
     if physical != dict(manifest) or payloads[V2_MANIFEST_PATH] != canonical_json_bytes(physical):
         raise ManifestValidationError("physical v2 result manifest is not exact canonical supplied bytes")
@@ -2521,12 +2537,13 @@ def _validate_result_manifest_v3(
     manifest: Mapping[str, Any],
     *,
     allow_legacy_external_authority: bool = False,
+    immutable_input: bool = False,
 ) -> dict[str, bytes]:
     try:
         validate_schema("frustrampnn_result_manifest_v3", manifest)
     except Exception as exc:
         raise ManifestValidationError(f"v3 manifest schema failed: {exc}") from exc
-    payloads = _snapshot_v3(root, require_manifest=True, manifest=manifest)
+    payloads = _snapshot_v3(root, require_manifest=True, manifest=manifest, immutable_input=immutable_input)
     physical = _json_identity(payloads[V3_MANIFEST_PATH], V3_MANIFEST_PATH)[2]
     if physical != dict(manifest) or payloads[V3_MANIFEST_PATH] != canonical_json_bytes(physical):
         raise ManifestValidationError("physical v3 result manifest is not exact canonical supplied bytes")
@@ -2576,18 +2593,20 @@ def validate_result_manifest(
     manifest: Mapping[str, Any],
     *,
     allow_legacy_v2_external_authority: bool = False,
+    immutable_input: bool = True,
 ) -> dict[str, bytes]:
     version = manifest.get("schema_version") if isinstance(manifest, Mapping) else None
     if version == 3:
-        return _validate_result_manifest_v3(root, manifest)
+        return _validate_result_manifest_v3(root, manifest, immutable_input=immutable_input)
     if version == 2:
         return _validate_result_manifest_v2(
             root,
             manifest,
+            immutable_input=immutable_input,
             allow_legacy_external_authority=allow_legacy_v2_external_authority,
         )
     if version == 1:
-        return _validate_result_manifest_v1(root, manifest)
+        return _validate_result_manifest_v1(root, manifest, immutable_input=immutable_input)
     raise ManifestValidationError("result manifest schema generation is unsupported")
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -103,6 +104,7 @@ def publish(*, source_bundle: Path, allowed_root: Path, destination: Path, marke
             existing = validate_result_manifest(
                 destination,
                 load_result_manifest(destination),
+                immutable_input=False,
             )
             if not _same_payloads(payloads, existing):
                 raise ValueError("existing published bundle contradicts immutable candidate authority")
@@ -112,11 +114,25 @@ def publish(*, source_bundle: Path, allowed_root: Path, destination: Path, marke
                 for relative, payload in payloads.items():
                     target = temporary / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(payload)
-                    target.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+                    donor = source_bundle / relative
+                    linked = False
+                    if (donor.suffix.lower() in {'.pdb', '.csv', '.npz', '.parquet'}
+                            and not donor.stat().st_mode & 0o222):
+                        try:
+                            os.link(donor, target, follow_symlinks=False)
+                            linked = True
+                        except OSError as exc:
+                            if exc.errno != errno.EXDEV:
+                                raise
+                    if not linked:
+                        target.write_bytes(payload)
+                        target.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+                    # No chmod through a shared leaf; destination validation
+                    # below still checks the complete published generation.
                 copied = validate_result_manifest(
                     temporary,
                     load_result_manifest(temporary),
+                    immutable_input=False,
                 )
                 if not _same_payloads(payloads, copied):
                     raise ValueError("published snapshot differs from retained validated bytes")
