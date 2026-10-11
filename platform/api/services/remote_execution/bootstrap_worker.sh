@@ -64,18 +64,19 @@ apptainer --version >/dev/null || fail 'Apptainer installation failed'
 # Only the managed actor requests the fallback toolset after real Apptainer
 # execution fails. Normal bootstrap leaves working Apptainer workers alone.
 [ "${1:-}" = udocker ] || exit 0
-# Exact upstream toolset; real backend qualification is managed below.
-python3 - "$2" <<'PY_INSTALL'
+# Exact upstream toolset plus the bundled, reproducibly built read-only PRoot fix.
+# This mode is invoked from the managed release (not the initial stdin bootstrap).
+python3 - "$2" "$(dirname "$0")/proot-x86_64-4_8_0" <<'PY_INSTALL'
 import hashlib, json, os, pathlib, shutil, tarfile, tempfile, urllib.request, zipfile
 root = pathlib.Path(__import__('sys').argv[1])
-final = root / 'tools/udocker-1.3.17'
+final = root / 'tools/udocker-1.3.17-bms1'
 final.parent.mkdir(parents=True, exist_ok=True)
 if final.parent.is_symlink():
     raise ValueError('udocker tool root must not be a symlink')
-# Derived from the two checksum-pinned upstream archives and launcher below.
+# Derived from both checksum-pinned upstream archives, bundled PRoot and launcher.
 # This independently authenticates the receipt; a locally rewritten receipt
 # must never be able to bless altered installed files.
-INSTALLED_MANIFEST_SHA256 = 'ef096a752afa07c42be568c2b4ff4eda2ce5fbf8ea25191d28829596df159c76'
+INSTALLED_MANIFEST_SHA256 = 'b1bafbf468885612e118d8e85302f83ce6bba540e795ea4e5c3c49fb08e988ae'
 
 def installed_file(name, *, retain=False):
     import stat
@@ -150,6 +151,12 @@ if not installed():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(archive.extractfile(member).read())
                 target.chmod(0o755 if name.startswith('bin/') else 0o644)
+        # Only the modern-kernel engine changes; udocker and the legacy engine
+        # remain byte-pinned upstream. Recipe/source: containers/transport/proot.
+        patched = pathlib.Path(__import__('sys').argv[2]).read_bytes()
+        if hashlib.sha256(patched).hexdigest() != '5ff4fd4367f2cdf3fcbb8088f5e36eed2070a97fc0e401f97ca30b2f90facd5a':
+            raise ValueError('bundled PRoot checksum mismatch')
+        (stage / 'engines/bin/proot-x86_64-4_8_0').write_bytes(patched)
         launcher = stage / 'bin/udocker'
         launcher.write_text("#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\nsys.path.insert(0,str(Path(__file__).resolve().parents[1]/'lib'))\nfrom udocker.maincmd import main\nsys.exit(main())\n")
         launcher.chmod(0o755)

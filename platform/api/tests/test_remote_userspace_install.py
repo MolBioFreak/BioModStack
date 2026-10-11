@@ -44,9 +44,9 @@ def test_selected_backend_executes_only_canonical_sif(tmp_path, monkeypatch, app
         assert not any(value.startswith('docker://') for value in argv)
     if not apptainer_ok:
         env = calls[-1][1]['env']
-        assert env['BMS_UDOCKER'] == str(tmp_path / 'tools/udocker-1.3.17/bin/udocker')
-        assert env['UDOCKER_BIN'] == str(tmp_path / 'tools/udocker-1.3.17/engines/bin')
-        assert env['UDOCKER_LIB'] == str(tmp_path / 'tools/udocker-1.3.17/engines/lib')
+        assert env['BMS_UDOCKER'] == str(tmp_path / 'tools/udocker-1.3.17-bms1/bin/udocker')
+        assert env['UDOCKER_BIN'] == str(tmp_path / 'tools/udocker-1.3.17-bms1/engines/bin')
+        assert env['UDOCKER_LIB'] == str(tmp_path / 'tools/udocker-1.3.17-bms1/engines/lib')
         assert env['BMS_CONTAINER_WORK_ROOT'] == str(tmp_path / 'container-workspaces')
         assert env['BMS_RUNTIME_IMAGE_STORE'] == str(tmp_path / 'cache/runtime-images')
         assert env['BMS_NEXTFLOW_EXECUTABLE'] == str(release / 'bin/bms-nextflow')
@@ -289,15 +289,17 @@ def test_upstream_checksum_failure_publishes_nothing(tmp_path, monkeypatch):
     import urllib.request
     source = (Path(__file__).parents[1] / 'services/remote_execution/bootstrap_worker.sh').read_text()
     embedded = source.split("<<'PY_INSTALL'\n", 1)[1].split('\nPY_INSTALL', 1)[0]
-    monkeypatch.setattr(sys, 'argv', ['installer', str(tmp_path)])
+    artifact = Path(__file__).parents[3] / 'containers/transport/proot/proot-x86_64-4_8_0'
+    monkeypatch.setattr(sys, 'argv', ['installer', str(tmp_path), str(artifact)])
     monkeypatch.setattr(urllib.request, 'urlopen', lambda *args, **kwargs: io.BytesIO(b'wrong upstream bytes'))
     with pytest.raises(ValueError, match='upstream checksum mismatch'):
         exec(compile(embedded, 'bootstrap-upstream-installer', 'exec'), {})
-    assert not (tmp_path / 'tools/udocker-1.3.17').exists()
+    assert not (tmp_path / 'tools/udocker-1.3.17-bms1').exists()
     assert not list((tmp_path / 'tools').iterdir())
 
 
-def test_exact_upstream_install_repeat_and_corruption(tmp_path, monkeypatch):
+@pytest.mark.parametrize('engine', ['proot-x86_64', 'proot-x86_64-4_8_0'])
+def test_exact_upstream_install_repeat_and_corruption(tmp_path, monkeypatch, engine):
     """Use caller-supplied independently acquired pinned upstream artifacts."""
     import os
     import sys
@@ -309,7 +311,8 @@ def test_exact_upstream_install_repeat_and_corruption(tmp_path, monkeypatch):
         pytest.skip('independently downloaded pinned upstream artifacts not supplied')
     source = (Path(__file__).parents[1] / 'services/remote_execution/bootstrap_worker.sh').read_text()
     embedded = source.split("<<'PY_INSTALL'\n", 1)[1].split('\nPY_INSTALL', 1)[0]
-    monkeypatch.setattr(sys, 'argv', ['installer', str(tmp_path)])
+    artifact = Path(__file__).parents[3] / 'containers/transport/proot/proot-x86_64-4_8_0'
+    monkeypatch.setattr(sys, 'argv', ['installer', str(tmp_path), str(artifact)])
     monkeypatch.setattr(urllib.request, 'urlopen', lambda url, **kwargs:
                         Path(wheel if url.endswith('.whl') else engines).open('rb'))
     exec(compile(embedded, 'bootstrap-upstream-installer', 'exec'), {})
@@ -317,7 +320,7 @@ def test_exact_upstream_install_repeat_and_corruption(tmp_path, monkeypatch):
         raise AssertionError('verified repeat installation must stay offline')
     monkeypatch.setattr(urllib.request, 'urlopen', no_network)
     exec(compile(embedded, 'bootstrap-upstream-installer', 'exec'), {})
-    installed = tmp_path / 'tools/udocker-1.3.17'
+    installed = tmp_path / 'tools/udocker-1.3.17-bms1'
     record = json.loads((installed / 'manifest.json').read_text())
     assert 'bin/udocker' in record['files']
     assert 'engines/bin/proot-x86_64' in record['files']
@@ -325,11 +328,11 @@ def test_exact_upstream_install_repeat_and_corruption(tmp_path, monkeypatch):
                             capture_output=True, text=True, timeout=30)
     assert output.returncode == 0, output.stdout + output.stderr
     assert '1.3.17' in output.stdout
-    (installed / 'engines/bin/proot-x86_64').write_bytes(b'corrupt')
+    (installed / 'engines/bin' / engine).write_bytes(b'corrupt')
     with pytest.raises(ValueError, match='udocker installed byte mismatch'):
         exec(compile(embedded, 'bootstrap-upstream-installer', 'exec'), {})
     import hashlib
-    record['files']['engines/bin/proot-x86_64'] = hashlib.sha256(b'corrupt').hexdigest()
+    record['files']['engines/bin/' + engine] = hashlib.sha256(b'corrupt').hexdigest()
     (installed / 'manifest.json').write_text(json.dumps(record, sort_keys=True))
     with pytest.raises(ValueError, match='udocker installation identity mismatch'):
         exec(compile(embedded, 'bootstrap-upstream-installer', 'exec'), {})

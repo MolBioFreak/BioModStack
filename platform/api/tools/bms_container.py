@@ -412,8 +412,10 @@ def execute(invocation, identity):
             guarded.append((source, before, projected, snapshot(projected) if mode == "ro" else None))
             volumes.append((str(projected), target))
         volumes.extend(direct_images)
-        # Executing SIF identity stays truthful for native provenance consumers.
-        volumes.append((str(image), str(image)))
+        # Bind the canonical object directory, not only the SIF: attestation
+        # verifies its real 0500 parent as well as the file's inode and ctime.
+        # This is one CAS object, not the store or derived-rootfs authority.
+        volumes.append((str(image.parent), str(image.parent)))
         if invocation.home is not None:
             home_parts = invocation.home.split(':')
             if len(home_parts) > 2:

@@ -93,6 +93,7 @@ def project_runtime(remote_root, staging_root):
     sources.append(('bin/bms-nextflow', code_root / 'platform/api/tools/bms_nextflow.sh'))
     sources.append(('nextflow/container-bin/singularity', code_root / 'platform/api/tools/bms_nextflow_singularity.py'))
     sources.append(('lib/bootstrap_worker.sh', Path(__file__).with_name('bootstrap_worker.sh')))
+    sources.append(('lib/proot-x86_64-4_8_0', code_root / 'containers/transport/proot/proot-x86_64-4_8_0'))
     for name in ('scripts/__init__.py', 'scripts/lib/__init__.py',
                  'scripts/lib/shared_runtime_images.py', 'scripts/lib/runtime_image_lifecycle.py',
                  'scripts/lib/runtime_image_views.py', 'scripts/lib/container_runtime.py'):
