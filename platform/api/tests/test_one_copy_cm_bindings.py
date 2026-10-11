@@ -89,7 +89,7 @@ def test_cold_warm_concurrent_prep_uses_one_selected_body(tmp_path, monkeypatch,
     assert (materialized.request_path.parent / 'registered/historical-source-id.pt').exists() is retained
     print(json.dumps(dict(checkpoint_bytes=before.st_size, prep_invocations=10,
         additional_checkpoint_bodies=0, unique_selected_inodes=1,
-        avoided_per_request_payload_bytes=before.st_size * 10)))
+        checkpoint_bytes_referenced_across_prep_calls=before.st_size * 10)))
 
 
 def test_discovery_binds_absent_logical_checkpoint_without_hash_or_upload(tmp_path, monkeypatch):
