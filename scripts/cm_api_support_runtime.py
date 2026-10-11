@@ -163,6 +163,14 @@ def prepare_payload(stage: Path, destination: Path, venv: Path, runtime: Path) -
             elif path.is_symlink():
                 target = os.readlink(path)
                 reference = os.path.normpath(str(donor / path.relative_to(root).parent / target))
+                if not any(reference == str(source) or reference.startswith(str(source) + "/")
+                           for source in (venv, runtime)):
+                    # Resolve the installed uv selector before rebasing into
+                    # the selected concrete distribution; never bind host uv.
+                    try:
+                        reference = str(Path(reference).resolve())
+                    except (OSError, RuntimeError):
+                        pass
                 for part, source in (("venv", venv), ("python-runtime", runtime)):
                     if reference == str(source) or reference.startswith(str(source) + "/"):
                         target = str(destination / part) + reference[len(str(source)):]

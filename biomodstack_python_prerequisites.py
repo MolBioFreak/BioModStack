@@ -347,7 +347,9 @@ def support_payload_receipt(venv: Path, runtime: Path, *, selection: dict,
     receipt_path = venv / ".bms-support-payload.json"
     executable = (venv / "bin/python").resolve()
     stat = executable.stat()
+    interpreter_link = venv / "bin/python"
     observation = {"selection": selection, "installer_version": installer_version,
+                   "interpreter_reference": os.readlink(interpreter_link) if interpreter_link.is_symlink() else None,
                    "interpreter": [str(executable), stat.st_dev, stat.st_ino,
                                    stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]}
     previous = None
@@ -422,6 +424,13 @@ def support_members(venv: Path, runtime: Path, *, normalize: bool) -> list[dict]
                 target = os.readlink(path)
                 if normalize:
                     reference = os.path.normpath(str(path.parent / target))
+                    if not any(reference == str(donor) or reference.startswith(str(donor) + "/")
+                               for _, donor in roots):
+                        # uv's minor-version prefix can alias its concrete build.
+                        try:
+                            reference = str(Path(reference).resolve())
+                        except (OSError, RuntimeError):
+                            pass  # Unrelated legacy links keep their old spelling.
                     for label, donor in roots:
                         if reference == str(donor) or reference.startswith(str(donor) + "/"):
                             target = "${" + label + "}" + reference[len(str(donor)):]
@@ -454,9 +463,23 @@ def support_relocated_bytes(relative: str, data: bytes, venv: Path, runtime: Pat
                             target_venv: str, target_runtime: str) -> bytes:
     if relative == "pyvenv.cfg":
         lines = data.decode().splitlines(keepends=True)
-        return "".join(line.replace(str(runtime), target_runtime).replace(str(venv), target_venv)
-                       if line.startswith(("home =", "executable =", "command =")) else line
-                       for line in lines).encode()
+        for index, line in enumerate(lines):
+            if line.startswith(("home =", "executable =")):
+                key, _, value = line.partition("=")
+                try:
+                    resolved = Path(value.strip()).resolve()
+                    for donor, target in ((runtime, target_runtime), (venv, target_venv)):
+                        if resolved.is_relative_to(donor):
+                            suffix = resolved.relative_to(donor).as_posix()
+                            ending = line[len(line.rstrip("\r\n")):]
+                            line = f"{key}= {target}/{suffix}{ending}"
+                            break
+                except (OSError, RuntimeError):
+                    pass
+            if line.startswith(("home =", "executable =", "command =")):
+                line = line.replace(str(runtime), target_runtime).replace(str(venv), target_venv)
+            lines[index] = line
+        return "".join(lines).encode()
     if relative in {"bin/activate", "bin/activate.csh", "bin/activate.fish", "bin/activate.nu",
                     "bin/activate.ps1", "bin/Activate.ps1", "bin/activate_this.py"}:
         return data.replace(str(venv).encode(), target_venv.encode())

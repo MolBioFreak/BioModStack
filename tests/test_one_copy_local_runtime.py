@@ -172,6 +172,32 @@ def test_unchanged_restart_and_source_image_changes_do_not_copy_or_hash(runtime)
     assert not any(member['path'].endswith('__init__.cpython-312.pyc') for member in receipt['members'])
 
 
+def test_uv_interpreter_prefix_alias_is_closed_inside_published_payload(runtime):
+    source, standalone, venv, _ = runtime
+    alias = standalone.with_name('cpython-3.12-current')
+    alias.symlink_to(standalone, target_is_directory=True)
+    (venv / 'bin/python').unlink()
+    (venv / 'bin/python').symlink_to(alias / 'bin/python3.12')
+    (venv / 'pyvenv.cfg').write_text(
+        f'home = {alias}/bin\nexecutable = {alias}/bin/python3.12\n'
+        'include-system-site-packages = false\nversion = 3.12.fake\n')
+    assert_ok(launch(runtime))
+    published = Path(rows(runtime)[-1]['python'])
+    payload = published.parent.parent.parent
+    assert published.resolve().is_relative_to(payload / 'python-runtime')
+    config = (payload / 'venv/pyvenv.cfg').read_text()
+    assert str(alias) not in config
+    assert f'home = {payload}/python-runtime/bin\n' in config
+    assert f'executable = {payload}/python-runtime/bin/python3.12\n' in config
+    before = operations(runtime)
+    assert_ok(launch(runtime))
+    assert rows(runtime)[-1]['python'] == str(published)
+    assert operations(runtime).count('cp') == before.count('cp')
+    assert operations(runtime).count('hash-tree') == before.count('hash-tree')
+    alias.unlink()  # Container has no access to the host uv installation alias.
+    assert published.is_file()
+
+
 @pytest.mark.parametrize('change', ['groups', 'interpreter', 'abi-build', 'installed-package'])
 def test_real_selection_change_adds_one_version_and_freezes_current(runtime, change):
     assert_ok(launch(runtime))
