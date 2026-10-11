@@ -283,6 +283,14 @@ class Cache:
                 [item['sha256']], owner, identities={item['sha256']: identity},
                 expected_sizes={item['sha256']: item['size_bytes']})
 
+    def rebuild_runtime_image(self, value, **maintenance):
+        """Operator-only recovery; external target maintenance fence is required."""
+        item = artifact(value)
+        if item.get('kind') != 'runtime_image':
+            raise ValueError('runtime_image_required')
+        return runtime_lifecycle().rebuild_image_derivation(
+            self.image_store, item['sha256'], expected_size=item['size_bytes'], **maintenance)
+
     def prepare_runtime_image(self, value, backend, operation_id):
         """Warm the backend's shared image representation, never execute it.
 
@@ -1177,6 +1185,11 @@ def main():
         result = {'state': 'ready', 'schema': 'bms.artifact-cache.v1'}
     elif action == 'probe':
         result = {'artifacts': [cache.probe(a) for a in request['artifacts']]}
+    elif action == 'rebuild_runtime_image':
+        result = cache.rebuild_runtime_image(request['artifact'],
+            operation_id=request['operation_id'], source_identity=request['source_identity'],
+            retire_leases=request['retire_leases'],
+            maintenance_authorization=request['maintenance_authorization'])
     elif action == 'prepare_runtime_image':
         result = cache.prepare_runtime_image(request['artifact'], request['backend'], request['operation_id'])
     elif action == 'prepare_incoming':
