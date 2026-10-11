@@ -2645,6 +2645,9 @@ def validate_result_manifest(
     immutable_input: bool = True,
     input_root: Path | str | None = None,
 ) -> dict[str, bytes]:
+    # Publication/destination rereads always retain the no-alias boundary.
+    if not immutable_input:
+        input_root = None
     version = manifest.get("schema_version") if isinstance(manifest, Mapping) else None
     if version == 3:
         return _validate_result_manifest_v3(root, manifest, immutable_input=immutable_input, input_root=input_root)

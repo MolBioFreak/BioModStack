@@ -161,7 +161,7 @@ def test_actual_bundle_incoming_aliases(tmp_path, kind):
         assert manifests.validate_result_manifest(incoming, loaded) == expected
     else:
         with pytest.raises(manifests.ManifestValidationError):
-            manifests.validate_result_manifest(incoming, loaded, immutable_input=False)
+            manifests.validate_result_manifest(incoming, loaded, immutable_input=False, input_root=tmp_path)
         with pytest.raises(manifests.ManifestValidationError):
             manifests.validate_result_manifest(incoming, loaded, input_root=tmp_path / 'incoming' if kind == 'leaf' else tmp_path / 'forbidden')
 
