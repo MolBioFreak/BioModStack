@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+
+try:
+    from build_shape_result import retain_file
+except ModuleNotFoundError:  # Package import by API-side callers.
+    from scripts.shape_blueprint.build_shape_result import retain_file
 import json
 from pathlib import Path
-import shutil
 from typing import Any
 
 
@@ -23,7 +27,7 @@ def _sha(path: Path) -> str:
 
 
 def _json(path: Path, label: str) -> dict[str, Any]:
-    if path.is_symlink() or not path.is_file():
+    if not path.is_file():
         raise ValueError(f"{label} is absent or unsafe")
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -73,8 +77,8 @@ def build_skip_bundle(
     output_dir.mkdir(parents=True)
     structure = output_dir / f"{candidate_id}.pdb"
     source = output_dir / f"{candidate_id}.source.pdb"
-    shutil.copyfile(backbone, structure)
-    shutil.copyfile(backbone, source)
+    retain_file(backbone, structure)
+    retain_file(backbone, source)
     admission_metrics = dict(admission.get("metrics") or {})
     metrics = {
         "schema": "bms_shape_candidate_metrics_v1",

@@ -5,6 +5,11 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
+
+try:
+    from build_shape_result import retain_file
+except ModuleNotFoundError:  # Package import by API-side callers.
+    from scripts.shape_blueprint.build_shape_result import retain_file
 import json
 import os
 import shutil
@@ -26,8 +31,8 @@ def _sha(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _json(path: Path, label: str) -> dict[str, Any]:
-    if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
+def _json(path: Path, label: str, root: Path | None = None) -> dict[str, Any]:
+    if not path.is_file() or (root is not None and not path.resolve().is_relative_to(root.resolve())):
         raise ValueError(f"{label} is absent or unsafe")
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -60,9 +65,30 @@ def attach_post_refold(
     points_path: Path,
     sdf_path: Path,
     sequence_bundle: Path | None = None,
+    source_bundle: Path | None = None,
 ) -> dict[str, Any]:
+    if source_bundle is not None:
+        # Never copy a staged directory symlink: output and mutable metadata
+        # belong to this task; only closed evidence leaves share payloads.
+        source_root = source_bundle.resolve(strict=True)
+        source_metadata = _json(source_root / "candidate_bundle.json", "candidate bundle", source_root)
+        mutable_names = {"candidate_bundle.json", str(source_metadata["metrics"]["filename"]),
+                         "post_refold_evaluation.json", f"{source_metadata['candidate_id']}.post_refold.cif.gz"}
+        bundle_dir.mkdir(parents=True)
+        for source_leaf in source_root.rglob("*"):
+            destination = bundle_dir / source_leaf.relative_to(source_root)
+            if source_leaf.is_dir():
+                destination.mkdir(parents=True, exist_ok=True)
+            else:
+                if not source_leaf.resolve().is_relative_to(source_root):
+                    raise ValueError("candidate artifact escaped its bundle")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if source_leaf.relative_to(source_root).as_posix() in mutable_names:
+                    shutil.copyfile(source_leaf, destination)
+                else:
+                    retain_file(source_leaf, destination)
     bundle_path = bundle_dir / "candidate_bundle.json"
-    bundle = _json(bundle_path, "candidate bundle")
+    bundle = _json(bundle_path, "candidate bundle", bundle_dir)
     if bundle.get("schema") != "bms_shape_candidate_bundle_v1":
         raise ValueError("candidate bundle schema is invalid")
     metrics_descriptor = bundle.get("metrics")
@@ -76,7 +102,7 @@ def attach_post_refold(
     structure = bundle_dir / str(structure_descriptor["filename"])
     source = bundle_dir / str(source_descriptor["filename"])
     metrics_path = bundle_dir / str(metrics_descriptor["filename"])
-    metrics = _json(metrics_path, "candidate metrics")
+    metrics = _json(metrics_path, "candidate metrics", bundle_dir)
     validator_envelope = _json(validator_records_path, "validator suite")
     if validator_envelope.get("schema") not in {"bms_shape_validator_suite_v1", "bms_shape_validator_suite_v2"}:
         raise ValueError("validator suite schema is invalid")
@@ -98,21 +124,19 @@ def attach_post_refold(
             if relative.is_absolute() or ".." in relative.parts:
                 raise ValueError("validator artifact path is unsafe")
             native = evidence_root / relative
-            if (native.is_symlink() or not native.is_file() or native.stat().st_nlink != 1
-                    or not native.resolve().is_relative_to(evidence_root)
-                    or any((evidence_root / Path(*relative.parts[:i])).is_symlink() for i in range(1, len(relative.parts)))):
+            if not native.is_file() or not native.resolve().is_relative_to(evidence_root):
                 raise ValueError("validator artifact is absent or unsafe")
             if descriptor.get("sha256") != _sha(native) or descriptor.get("bytes") != native.stat().st_size:
                 raise ValueError("validator native artifact binding mismatch")
             destination = bundle_dir / f"validator_{validator}_{index:04d}{native.suffix}"
-            shutil.copyfile(native, destination)
+            retain_file(native, destination)
             bindings.append({**_descriptor(destination), "validator": validator, "native_path": relative.as_posix()})
     suite_destination = bundle_dir / "shape_validator_records.json"
-    shutil.copyfile(validator_records_path, suite_destination)
+    retain_file(validator_records_path, suite_destination)
     bundle["validator_evidence"] = _descriptor(suite_destination)
     bundle["validator_artifacts"] = bindings
     if sequence_bundle is not None:
-        sequence_payload = _json(sequence_bundle / "sequence_records.json", "sequence records")
+        sequence_payload = _json(sequence_bundle / "sequence_records.json", "sequence records", sequence_bundle)
         source_key = validator_envelope["sequence_name"]
         rows = [row for row in sequence_payload["records"] if row["sequence_name"] == source_key]
         if len(rows) != 1:
@@ -127,7 +151,7 @@ def attach_post_refold(
             if _sha(native) != descriptor["sha256"] or native.stat().st_size != descriptor["bytes"]:
                 raise ValueError("native sequence structure changed")
             destination = bundle_dir / ("sequence_native" + native.suffix)
-            shutil.copyfile(native, destination)
+            retain_file(native, destination)
             row["native_structure"] = {**_descriptor(destination), "format": descriptor["format"]}
         row_path = bundle_dir / "sequence_record.json"
         _write(row_path, row)
@@ -198,6 +222,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sequence-bundle", type=Path)
     parser.add_argument("--bundle", required=True, type=Path)
+    parser.add_argument("--source-bundle", type=Path)
     parser.add_argument("--validator-records", required=True, type=Path)
     parser.add_argument("--request", required=True, type=Path)
     parser.add_argument("--geometry-manifest", required=True, type=Path)
@@ -207,6 +232,7 @@ def main() -> int:
     attach_post_refold(
         sequence_bundle=args.sequence_bundle,
         bundle_dir=args.bundle,
+        source_bundle=args.source_bundle,
         validator_records_path=args.validator_records,
         request_path=args.request,
         geometry_manifest_path=args.geometry_manifest,

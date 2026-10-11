@@ -12,6 +12,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+
+try:
+    from build_shape_result import retain_file
+except ModuleNotFoundError:  # Package import by API-side callers.
+    from scripts.shape_blueprint.build_shape_result import retain_file
 import json
 import os
 import re
@@ -114,8 +119,8 @@ def _record(
 
 
 def _artifact(path: Path) -> dict[str, Any]:
-    if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
-        raise ValueError("validator artifact must be a private regular file")
+    if not path.is_file():
+        raise ValueError("validator artifact must be a regular file")
     return {"filename": str(path.resolve()), "sha256": _sha(path), "bytes": path.stat().st_size}
 
 
@@ -126,7 +131,7 @@ def _native_artifacts(root: Path) -> list[dict[str, Any]]:
     for path in sorted(root.rglob("*")):
         if path.name == "shape_native_samples.json" or path.suffix not in {".pdb", ".cif", ".json", ".npz"}:
             continue
-        if path.is_symlink() or not path.is_file():
+        if not path.is_file():
             continue
         if not path.resolve().is_relative_to(root.resolve()):
             raise ValueError("validator artifact escaped native output root")
@@ -375,7 +380,6 @@ def run_validator_suite(
                 relative = Path(descriptor["filename"])
                 source = bundle / relative
                 if (relative.is_absolute() or ".." in relative.parts
-                        or source.is_symlink()
                         or not source.resolve(strict=True).is_relative_to(bundle)):
                     raise ValueError("native validator artifact escaped evidence bundle")
                 relocated[descriptor["filename"]] = str(source)
@@ -413,13 +417,13 @@ def run_validator_suite(
         record["effective_settings"] = settings.get(validator, {})
         for index, descriptor in enumerate(record["artifacts"]):
             source = Path(descriptor["filename"])
-            if source.is_symlink() or not source.is_file() or source.stat().st_nlink != 1:
-                raise ValueError("validator artifact is not a private regular file")
+            if not source.is_file():
+                raise ValueError("validator artifact is not a regular file")
             if _sha(source) != descriptor["sha256"] or source.stat().st_size != descriptor["bytes"]:
                 raise ValueError("validator artifact changed before publication")
             destination = output_path.parent / "native" / validator / f"{index:04d}_{source.name}"
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, destination)
+            retain_file(source, destination)
             relocated[descriptor["filename"]] = destination.relative_to(output_path.parent).as_posix()
             descriptor["filename"] = relocated[descriptor["filename"]]
         for sample in record.get("samples", []):

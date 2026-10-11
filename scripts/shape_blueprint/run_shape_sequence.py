@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+
+try:
+    from build_shape_result import retain_file
+except ModuleNotFoundError:  # Package import by API-side callers.
+    from scripts.shape_blueprint.build_shape_result import retain_file
 import json
 import math
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
 from typing import Any
@@ -37,9 +41,8 @@ def _write_json(path: Path, value: Any) -> None:
 
 def _regular(path: Path, label: str) -> Path:
     path = path.resolve(strict=True)
-    stat_result = path.stat()
-    if not path.is_file() or path.is_symlink() or stat_result.st_nlink != 1:
-        raise ValueError(f"{label} must be a private regular file")
+    if not path.is_file():
+        raise ValueError(f"{label} must be a regular file")
     return path
 
 
@@ -324,7 +327,7 @@ def run_sequence_lane(
             input_dir = output_dir / "input"
             input_dir.mkdir()
             staged_backbone = input_dir / backbone_path.name
-            shutil.copyfile(backbone_path, staged_backbone)
+            staged_backbone.symlink_to(backbone_path.resolve())
             command = _command_prefix(runner) + [
                 f"seed={effective_seed}",
                 f"batch_size={settings['fampnn_batch_size']}",
@@ -406,7 +409,7 @@ def run_sequence_lane(
                     }
                 )
         source_backbone = output_dir / "source_backbone.pdb"
-        shutil.copyfile(backbone_path, source_backbone)
+        retain_file(backbone_path, source_backbone)
         for record in records:
             record["sequence_settings"] = settings
             record["requested_sequence_settings"] = request["requested_sequence_settings"]

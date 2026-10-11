@@ -185,7 +185,7 @@ async def get_geometry_preview(geometry_id: str, session: AsyncSession = Depends
     root = (get_data_root() / "shape_blueprint").resolve()
     relative = str(row.artifacts["preview_obj"])
     path = (root / relative).resolve()
-    if not path.is_relative_to(root) or not path.is_file() or path.is_symlink() or path.stat().st_nlink != 1:
+    if not path.is_relative_to(root) or not path.is_file():
         raise HTTPException(status_code=409, detail="Shape preview artifact is unavailable")
     expected_sha256 = row.manifest.get("preview_obj_sha256")
     if not isinstance(expected_sha256, str) or len(expected_sha256) != 64:
@@ -209,7 +209,7 @@ async def get_geometry_points(geometry_id: str, session: AsyncSession = Depends(
     row = await _geometry_or_404(session, geometry_id)
     root = (get_data_root() / "shape_blueprint").resolve()
     path = (root / str(row.artifacts["points_f32"])).resolve()
-    if not path.is_relative_to(root) or not path.is_file() or path.is_symlink() or path.stat().st_nlink != 1:
+    if not path.is_relative_to(root) or not path.is_file():
         raise HTTPException(status_code=409, detail="Shape point-pool artifact is unavailable")
     payload = path.read_bytes()
     manifest = dict(row.manifest)

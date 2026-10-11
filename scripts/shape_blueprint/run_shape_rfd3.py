@@ -79,7 +79,7 @@ def _rfd3_runtime_identity() -> dict[str, object]:
 
 
 def _load_profile_registry() -> tuple[dict[str, dict[str, object]], str]:
-    if PROFILE_REGISTRY_PATH.is_symlink() or not PROFILE_REGISTRY_PATH.is_file():
+    if not PROFILE_REGISTRY_PATH.is_file():
         raise ValueError(f"RFD3 profile registry is unavailable: {PROFILE_REGISTRY_PATH}")
     registry = json.loads(PROFILE_REGISTRY_PATH.read_text(encoding="utf-8"))
     if not isinstance(registry, dict) or registry.get("schema") != "bms_rfd3_profile_registry_v1":
@@ -96,8 +96,8 @@ RFD3_PROFILE_REGISTRY, PROFILE_REGISTRY_SHA256 = _load_profile_registry()
 
 
 def _load(path: Path) -> dict:
-    if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
-        raise ValueError(f"{path.name} must be a regular, single-link staged input")
+    if not path.is_file():
+        raise ValueError(f"{path.name} must be a regular staged input")
     payload = json.loads(path.read_text())
     if not isinstance(payload, dict):
         raise ValueError(f"{path.name} must contain one JSON object")
@@ -299,8 +299,8 @@ def run_shape_rfd3(
         raise ValueError("staged point-pool hash mismatch")
     if _sha256(sdf_path) != manifest.get("sdf_sha256"):
         raise ValueError("staged SDF hash mismatch")
-    if checkpoint_path.is_symlink() or not checkpoint_path.is_file():
-        raise ValueError("RFD3 checkpoint is unavailable or indirect")
+    if not checkpoint_path.is_file():
+        raise ValueError("RFD3 checkpoint is unavailable")
     installed_sampler_sha256 = _verify_installed_sampler()
     installed_shape_sampler_sha256 = _verify_installed_shape_sampler() if bool(profile["guidance_enabled"]) else None
     if not 10 <= num_timesteps <= 500:
