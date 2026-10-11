@@ -231,11 +231,12 @@ def execute_parent_fanout(
                     raise ValueError("FrustraMPNN retained input directory is unsafe")
             retained.resolve().relative_to(runtime.artifact_root.resolve())
             immutable_write(retained.parent / "metadata.json", _canonical_bytes(metadata))
-            if not retained.exists():
+            if not retained.exists() and not _source.stat().st_mode & 0o222 and _source.read_bytes() == raw:
                 from stage_frustrampnn_parent_candidate import stage_source
                 stage_source(_source, retained)
-            if retained.read_bytes() != raw:
-                raise ValueError("FrustraMPNN retained source authority conflicts")
+            # Mutable legacy sources may change after grouping. Preserve the
+            # already-selected bytes, not a second read of that mutable path.
+            immutable_write(retained, raw)
             sources[metadata["candidate_id"]] = {"metadata": metadata,
                 "source_relative_path": retained.relative_to(runtime.artifact_root).as_posix(),
                 "source_sha256": hashlib.sha256(raw).hexdigest(), "source_size_bytes": len(raw)}
