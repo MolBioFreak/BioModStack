@@ -9,7 +9,11 @@ def shapeResultPublishMode(workDir, outputDir) {
     while (!java.nio.file.Files.exists(destination)) {
         destination = destination.parent
     }
-    java.nio.file.Files.getFileStore(workDir) == java.nio.file.Files.getFileStore(destination) ? 'link' : 'copy'
+    try {
+        return java.nio.file.Files.getFileStore(workDir) == java.nio.file.Files.getFileStore(destination) ? 'link' : 'copy'
+    } catch (java.io.IOException | UnsupportedOperationException ignored) {
+        return 'copy' // Preserve independent publication on other providers.
+    }
 }
 
 process ValidateShapeBundle {

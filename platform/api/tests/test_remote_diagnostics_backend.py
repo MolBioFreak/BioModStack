@@ -116,7 +116,8 @@ async def test_stage_uses_cache_and_only_explicit_support_and_inputs(tmp_path, m
     monkeypatch.setattr(ex, 'run_remote', noop)
     monkeypatch.setattr(ex, 'rsync_to_remote', noop)
     await ex._stage_bundle(None, bundle)
-    assert seen == ['cache', support, inputs]
+    # Cache owns every runtime payload; executor transfers only Job inputs.
+    assert seen == ['cache', inputs]
 
 
 @pytest.mark.asyncio

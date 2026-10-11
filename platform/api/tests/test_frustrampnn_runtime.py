@@ -836,12 +836,13 @@ def test_bms_api_python_is_provisioned_once_for_nextflow_and_cm_host_scripts() -
     )
 
     assert launcher.index("provision_cm_api_runtime") < launcher.index(
-        'export BMS_API_PYTHON="$CM_API_RUNTIME_DIR/current/venv/bin/python"'
+        'export BMS_API_PYTHON="$selected_runtime/venv/bin/python"'
     )
-    assert 'export BMS_API_PYTHON="$CM_API_RUNTIME_DIR/current/venv/bin/python"' in launcher
+    assert 'export BMS_API_PYTHON="$selected_runtime/venv/bin/python"' in launcher
     assert "uv sync --locked" in launcher
     assert "flock -x 9" in launcher
-    assert "mv -Tf \"$next_link\" \"$CM_API_RUNTIME_DIR/current\"" in launcher
+    assert 'ln -s "releases/runtime-$payload_id" "$CM_API_RUNTIME_DIR/current"' in launcher
+    assert 'mv -Tf "$next_link" "$CM_API_RUNTIME_DIR/current"' not in launcher
     assert "api_python = System.getenv('BMS_API_PYTHON')" in config
     assert "prepare_conformational_mapping_frustrampnn_v2.py" in cm_module
     assert "postprocess_conformational_mapping_frustrampnn_v2.py" in cm_module

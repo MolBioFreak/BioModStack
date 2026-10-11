@@ -172,7 +172,8 @@ def test_real_nextflow_attachment_result_publication_and_cached_republish(tmp_pa
     unused.write_text("not read by pre-rejected candidate")
     (tmp_path / "points.f32").write_bytes(b"\x00" * 12)
     (tmp_path / "sdf.f32").write_bytes(b"\x00" * 32)
-    jar = Path("/home/dalab/.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar")
+    jar = Path(os.environ.get("BMS_TEST_NEXTFLOW_JAR") or os.environ.get("ONE_COPY_NEXTFLOW_JAR")
+               or Path.home() / ".nextflow/framework/25.10.1/nextflow-25.10.1-one.jar")
     assert jar.is_file(), "installed offline Nextflow is required; never download"
     binary = tmp_path / "bin"
     binary.mkdir()

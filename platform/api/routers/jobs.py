@@ -6703,6 +6703,7 @@ async def _create_job(
                 # The response contains a receipt reference, not a writable output
                 # override. Approval must bind these exact already-prepared bytes.
                 from services.bindcraft2_launch import materialize_native_action
+                from services.bindcraft2_publication import published_campaign_immutable
                 if not isinstance(_preallocated_job_id, str):
                     _preallocated_job_id = str(uuid.uuid5(uuid.NAMESPACE_URL, 'bms-bc2-action:' + str(uuid.uuid4())))
                 output = _standard_job_output_dir(job_data.name, '', _preallocated_job_id).resolve()
@@ -6710,7 +6711,8 @@ async def _create_job(
                     job_data.params.update(await asyncio.to_thread(
                         materialize_native_action, Path(bc2_action_source.output_dir), output,
                         operation=normalized_mode, options=job_data.params.get('bc2_action_options', {}),
-                        source_job_id=bc2_action_source.id))
+                        source_job_id=bc2_action_source.id,
+                        source_campaign_immutable=published_campaign_immutable(bc2_action_source)))
                 except (OSError, ValueError) as exc:
                     raise HTTPException(status_code=422, detail=str(exc)) from exc
                 job_data.execution_plan_approval = None
@@ -7400,11 +7402,13 @@ async def _create_job(
 
         if bc2_action_source is not None and not bc2_action_prepared:
             from services.bindcraft2_launch import materialize_native_action
+            from services.bindcraft2_publication import published_campaign_immutable
             try:
                 job_params = {**job_params, **await asyncio.to_thread(
                     materialize_native_action, Path(bc2_action_source.output_dir), Path(output_dir),
                     operation=normalized_mode, options=job_params.get('bc2_action_options', {}),
                     source_job_id=bc2_action_source.id,
+                    source_campaign_immutable=published_campaign_immutable(bc2_action_source),
                 )}
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc

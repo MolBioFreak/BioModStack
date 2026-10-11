@@ -69,3 +69,50 @@ def test_selection_materializes_cif_once_preserving_manifest_and_mutable_source_
     primary.write_bytes(b'changed mutable source after selection')
     assert (selection / 'selected.cif').read_bytes() == b'opaque CIF fixture\n'
     assert (selection / 'selected.json').read_bytes() == (source / 'selected.json').read_bytes()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('callsite', [0, 1])
+@pytest.mark.parametrize('published', [False, True])
+async def test_actual_jobs_action_calls_pass_published_custody(tmp_path, monkeypatch, callsite, published):
+    """Exact Jobs call expressions + real materializer; settings compiler inert."""
+    import ast
+    import asyncio
+    from functools import partial
+    from types import SimpleNamespace
+    from services.bindcraft2_launch import materialize_native_action
+    from services.bindcraft2_publication import published_campaign_immutable, _SCHEMA
+    from test_bindcraft2_lifecycle import setup, compiler
+
+    campaign, _ = setup(tmp_path, monkeypatch)
+    retained = campaign / '3_Ranked/example.cif'
+    retained.parent.mkdir()
+    retained.write_bytes(b'inert closed native structure\n')
+    source = Job(id='source', model_id='bindcraft2', status='completed' if published else 'failed',
+                 paused=False, awaiting_input=False, params={}, retry_count=0,
+                 output_dir=str(tmp_path / 'parent'), remote_attempt_id=None,
+                 provenance={'bindcraft2_native_publication': {
+                     'schema': _SCHEMA, 'root': str(tmp_path / 'parent'),
+                     'campaign_root': 'bindcraft2/campaign', 'attempt': 0,
+                     'remote_attempt_id': None,
+                 }})
+    tree = ast.parse(Path(jobs.__file__).read_text())
+    owner = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == '_create_job')
+    calls = [node for node in ast.walk(owner) if isinstance(node, ast.Await)
+             and isinstance(node.value, ast.Call) and node.value.args
+             and isinstance(node.value.args[0], ast.Name)
+             and node.value.args[0].id == 'materialize_native_action']
+    calls.sort(key=lambda node: node.lineno)
+    assert len(calls) == 2  # Remote preparation and ordinary local submission.
+    output = tmp_path / 'child'
+    namespace = dict(asyncio=asyncio, Path=Path, bc2_action_source=source,
+        output=output, output_dir=str(output), normalized_mode='rank', job_params={},
+        job_data=SimpleNamespace(params={}),
+        published_campaign_immutable=published_campaign_immutable,
+        materialize_native_action=partial(materialize_native_action, compiler=compiler))
+    result = await eval(compile(ast.Expression(calls[callsite].value), jobs.__file__, 'eval'), namespace)
+    received = Path(result['bc2_campaign_dir']) / 'campaign' / retained.relative_to(campaign)
+    assert received.samefile(retained) is published
+    assert received.read_bytes() == retained.read_bytes()
+    retained.unlink()
+    assert received.read_bytes() == b'inert closed native structure\n'
