@@ -134,6 +134,8 @@ async def test_redundant_previous_removed_only_after_commit_and_recovery_repeats
         _, incoming, _ = package(job, payloads, 2)
         _, backup = ex._publish_result_generation(job, incoming)
         assert backup.is_dir()
+        job.provenance = dict(job.provenance, remote_execution_receipt={
+            "previous_generation_quarantine": str(backup)})
         await session.commit()
         assert backup.is_dir()  # publication/commit do not themselves delete it
         original = gen.shutil.rmtree
@@ -143,6 +145,7 @@ async def test_redundant_previous_removed_only_after_commit_and_recovery_repeats
         monkeypatch.setattr(gen.shutil, "rmtree", original)
         assert await ex._recover_result_generation(session, job)
         assert not backup.exists()
+        assert job.provenance["remote_execution_receipt"]["previous_generation_quarantine"] is None
         assert not await ex._recover_result_generation(session, job)
     async with store() as fresh:
         job = await fresh.get(Job, "job")
@@ -193,3 +196,47 @@ async def test_cancelled_thread_drains_before_owned_cleanup(tmp_path):
     with pytest.raises(asyncio.CancelledError):
         await task
     assert finished.is_set() and not stage.exists()
+
+@pytest.mark.asyncio
+async def test_crash_after_retirement_readback_is_idempotent(store, tmp_path, monkeypatch):
+    payloads = {"structure.pdb": b"one retained body"}
+    await initial(store, tmp_path, payloads)
+    async with store() as session:
+        job = await session.get(Job, "job")
+        _, incoming, _ = package(job, payloads, 2)
+        _, backup = ex._publish_result_generation(job, incoming)
+        job.status = job.queue_status = "completed"
+        await session.commit()
+        def crash(name):
+            if name == "previous_retired":
+                raise RuntimeError("postcommit interruption")
+        monkeypatch.setattr(gen, "_checkpoint", crash)
+        with pytest.raises(RuntimeError, match="postcommit interruption"):
+            await ex._recover_result_generation(session, job)
+        await session.rollback()
+        assert not backup.exists()
+    monkeypatch.setattr(gen, "_checkpoint", lambda name: None)
+    async with store() as fresh:
+        job = await fresh.get(Job, "job")
+        assert await ex._recover_result_generation(fresh, job)
+        assert not await ex._recover_result_generation(fresh, job)
+        assert job.status == "completed"
+        assert job.nextflow_run_id == "remote:attempt"
+        assert (Path(job.output_dir) / "structure.pdb").read_bytes() == payloads["structure.pdb"]
+
+
+@pytest.mark.asyncio
+async def test_cross_filesystem_projection_is_private_without_retransfer(store, tmp_path, monkeypatch):
+    import errno
+    await initial(store, tmp_path, {"structure.pdb": b"same"})
+    async with store() as session:
+        job = await session.get(Job, "job")
+        previous = gen.committed_payloads(job)
+        artifact = previous["structure.pdb"]
+        def cross_device(*args, **kwargs):
+            raise OSError(errno.EXDEV, "fixture cross-device boundary")
+        monkeypatch.setattr(gen.os, "link", cross_device)
+        destination = tmp_path / "projection" / "structure.pdb"
+        assert gen.reuse_payload(job, artifact, previous, destination)
+        assert destination.stat().st_ino != (Path(job.output_dir) / "structure.pdb").stat().st_ino
+        assert destination.read_bytes() == b"same"

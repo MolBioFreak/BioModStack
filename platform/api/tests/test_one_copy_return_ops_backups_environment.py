@@ -112,3 +112,22 @@ def test_environment_start_uses_shared_dependencies_and_private_state(tmp_path, 
     assert f"--setenv=TMPDIR={state / '.disposable/tmp'}" in commands[0]
     assert not (state / "weights").exists()
     assert (shared / "selected.pt").read_bytes() == b"one body"
+
+
+def test_environment_create_records_existing_shared_selection(tmp_path, monkeypatch):
+    monkeypatch.setenv("BMS_AI_STATE_ROOT", str(tmp_path / "receipts"))
+    monkeypatch.setenv("BMS_AI_WORKTREE_ROOT", str(tmp_path / "worktrees"))
+    monkeypatch.setenv("BMS_WEIGHTS", str(tmp_path / "shared-weights"))
+    monkeypatch.setattr(env, "assert_canonical_test", lambda _: "a" * 40)
+    monkeypatch.setattr(env, "allocate_port_pair", lambda: (24000, 24001))
+    def git(repo, *args, **kwargs):
+        if args[0] == "ls-remote":
+            return ""
+        return "not-empty"
+    monkeypatch.setattr(env, "git", git)
+    receipt = env.command_create(SimpleNamespace(id="owned", repo=str(tmp_path / "repo")))
+    persisted = env.load_receipt("owned")
+    assert persisted == receipt
+    assert persisted["shared_weights_root"] == str(tmp_path / "shared-weights")
+    assert persisted["disposable_scratch"] == str(Path(persisted["state_root"]) / ".disposable")
+    assert not (Path(persisted["state_root"]) / "weights").exists()

@@ -340,6 +340,10 @@ def recover(job) -> bool:
             # Cleanup is not a new scientific-success condition. Keep the
             # existing journal for the next recovery owner to finish.
             return False
+        receipt = dict((job.provenance or {}).get("remote_execution_receipt") or {})
+        if not backup.exists() and receipt.get("previous_generation_quarantine") == str(backup):
+            receipt["previous_generation_quarantine"] = None
+            job.provenance = dict(job.provenance or {}, remote_execution_receipt=receipt)
     else:
         # Each move is itself recoverable; repeated recovery after either move
         # observes incoming present and will never move prior output into it.
