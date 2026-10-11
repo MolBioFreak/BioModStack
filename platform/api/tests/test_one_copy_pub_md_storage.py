@@ -277,7 +277,8 @@ def test_openmm_consumes_shared_preparation_then_keeps_native_output_private(pre
     assert len(seen) == 4 and identity(prepared) == before
 
 
-def test_native_manifest_retains_nested_topology_includes_not_worker_caches(tmp_path):
+@pytest.mark.parametrize('manifest_kind', ['current', 'legacy', 'relocated_legacy'])
+def test_native_manifest_retains_nested_topology_includes_not_worker_caches(tmp_path, manifest_kind):
     child = tmp_path / 'child/native'
     config, _ = emit_native(child)
     topology_root = child / '.worker_inputs/topology_closure'
@@ -287,16 +288,103 @@ def test_native_manifest_retains_nested_topology_includes_not_worker_caches(tmp_
     include = topology_root / 'nested/chain.itp'
     include.parent.mkdir()
     include.write_text('inert nested include\n')
+    config['input']['topology'] = str(topology)
     config['input']['topology_closure'] = {'root': str(topology_root), 'files': [{'path': 'nested/chain.itp'}]}
     manifest = build_run_manifest(output_dir=child, job_config=config, replica_index=0,
         engine_version='inert', platform='CPU', artifacts={'topology': topology}, stages={})
     manifest['status'] = 'completed'
-    (child / 'manifest.json').write_text(json.dumps(manifest))
+    if manifest_kind != 'current':
+        # Historical manifests keep the config closure but predate its separate
+        # artifact rows. The external A/B probe also executes the baseline writer.
+        manifest['artifacts'] = {'topology': manifest['artifacts']['topology']}
+    manifest_bytes = json.dumps(manifest, indent=1).encode()
+    (child / 'manifest.json').write_bytes(manifest_bytes)
+    if manifest_kind == 'relocated_legacy':
+        retained_root = tmp_path / 'returned-child'
+        shutil.move(child.parent, retained_root)
+        assert not topology_root.exists()
+        child = retained_root / 'native'
+        topology_root = child / '.worker_inputs/topology_closure'
+        topology = topology_root / 'topology.top'
+        include = topology_root / 'nested/chain.itp'
+    before = identity(child)
     parent, _ = collect(tmp_path, child.parent)
     target = parent / 'replicas/replica_0/.worker_inputs/topology_closure'
     assert (target / 'topology.top').read_text() == topology.read_text()
     assert (target / 'nested/chain.itp').read_text() == include.read_text()
+    assert (parent / 'replicas/replica_0/manifest.json').read_bytes() == manifest_bytes
     assert not (parent / 'replicas/replica_0/undeclared-cache').exists()
+    assert identity(child) == before
+    retained = identity(parent)
+    collect(tmp_path, child.parent)
+    include.write_text('a later native continuation changes the source\n')
+    shutil.rmtree(child.parent)
+    assert identity(parent) == retained
+
+
+def test_legacy_topology_companions_without_new_artifact_rows(tmp_path):
+    child = tmp_path / 'child/native'
+    config, _ = emit_native(child)
+    topology = child / 'system.top'
+    topology.write_text('#include "chain.itp"\n#include "posre.itp"\n')
+    manifest = build_run_manifest(output_dir=child, job_config=config, replica_index=0,
+        engine_version='inert', platform='CPU', artifacts={'topology': topology}, stages={})
+    manifest['status'] = 'completed'
+    assert set(manifest['artifacts']) == {'topology'}
+    # Legacy pdb2gmx companions were retained physically, without config records.
+    for name in ['chain.itp', 'posre.itp']:
+        (child / name).write_text(f'inert {name}\n')
+    (child / 'manifest.json').write_text(json.dumps(manifest))
+    parent, _ = collect(tmp_path, child.parent)
+    for name in ['chain.itp', 'posre.itp']:
+        assert (parent / 'replicas/replica_0' / name).read_bytes() == (child / name).read_bytes()
+    assert not (parent / 'replicas/replica_0/undeclared-cache').exists()
+
+
+def test_legacy_optional_closure_does_not_require_absent_or_external_evidence(tmp_path):
+    child = tmp_path / 'child/native'
+    config, _ = emit_native(child)
+    topology = child / 'system.top'
+    topology.write_text('[ system ]\ninert topology\n')
+    manifest = build_run_manifest(output_dir=child, job_config=config, replica_index=0,
+        engine_version='inert', platform='CPU', artifacts={'topology': topology}, stages={})
+    manifest['status'] = 'completed'
+    external = tmp_path / 'external.itp'
+    external.write_text('outside result custody\n')
+    manifest['config']['input']['topology_closure'] = {
+        'root': str(tmp_path),
+        'files': [{'path': 'absent.itp'}, {'path': str(external)}, {'path': '../../external.itp'}],
+    }
+    before = external.read_bytes()
+    (child / 'manifest.json').write_text(json.dumps(manifest))
+    parent, _ = collect(tmp_path, child.parent)
+    retained = parent / 'replicas/replica_0'
+    assert {p.name for p in retained.rglob('*') if p.is_file()} == {'manifest.json', 'system.top'}
+    assert external.read_bytes() == before
+    # Unusable optional historical metadata was not an admission condition.
+    manifest['config']['input']['topology_closure']['files'] = 1
+    (child / 'manifest.json').write_text(json.dumps(manifest))
+    destination = tmp_path / 'metadata-only-collection'
+    collection.publish_run_immutable(child / 'manifest.json', destination)
+    assert {p.name for p in destination.iterdir()} == {'manifest.json', 'system.top'}
+
+
+def test_legacy_topology_include_preserves_contained_nofollow_reader(tmp_path):
+    from scripts.bms_md.analysis import MDAnalysisContractError
+    child = tmp_path / 'child/native'
+    config, _ = emit_native(child)
+    topology = child / 'system.top'
+    topology.write_text('#include "chain.itp"\n')
+    manifest = build_run_manifest(output_dir=child, job_config=config, replica_index=0,
+        engine_version='inert', platform='CPU', artifacts={'topology': topology}, stages={})
+    manifest['status'] = 'completed'
+    external = tmp_path / 'external.itp'
+    external.write_text('outside result custody\n')
+    (child / 'chain.itp').symlink_to(external)
+    (child / 'manifest.json').write_text(json.dumps(manifest))
+    with pytest.raises(MDAnalysisContractError):
+        collect(tmp_path, child.parent)
+    assert not (tmp_path / 'parent/replicas/replica_0').exists()
 
 
 def test_legacy_external_resume_keeps_original_seed_and_only_retains_terminal_files(tmp_path):

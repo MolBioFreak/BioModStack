@@ -90,6 +90,32 @@ def publish_run_immutable(source_manifest: Path, destination: Path) -> None:
         if (prepared_run and name.startswith("preparation_")
                 and Path(record["path"]).parts[0] in {"system", "preparation"}):
             prepared.add(record["path"])
+    # Older writers record includes in config, not the artifact inventory.
+    # Worker preparation places topology.top at the closure root. Anchor its
+    # relative members to the retained topology, not stale controller/worker
+    # absolute paths. Also keep pdb2gmx's local chain/restraint companions.
+    topology_record = run.get("artifacts", {}).get("topology")
+    if topology_record:
+        topology = sources[topology_record["path"]]
+        candidates = set(topology.parent.glob("*.itp"))
+        closure = config.get("input", {}).get("topology_closure")
+        if isinstance(closure, dict) and isinstance(closure.get("files"), list):
+            for record in closure["files"]:
+                relative = record.get("path") if isinstance(record, dict) else None
+                if (isinstance(relative, str) and relative
+                        and not Path(relative).is_absolute() and "\\" not in relative
+                        and ".." not in Path(relative).parts
+                        and Path(relative).as_posix() == relative):
+                    candidates.add(topology.parent / relative)
+        for candidate in sorted(candidates):
+            relative = candidate.relative_to(source_manifest.parent.resolve()).as_posix()
+            # Preserve available historical companions without making missing
+            # optional evidence a new collection prerequisite.
+            if relative in sources or not candidate.is_file():
+                continue
+            descriptor, source = _open_contained_artifact(source_manifest.parent, relative)
+            os.close(descriptor)
+            sources[relative] = source
     identity = [(name, source.stat().st_size, _sha256(source))
                 for name, source in sorted(sources.items())]
 
