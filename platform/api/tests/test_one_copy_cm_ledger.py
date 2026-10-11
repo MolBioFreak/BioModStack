@@ -101,9 +101,10 @@ def test_real_nextflow_thin_ledger_finalize_and_resume(tmp_path, monkeypatch):
     import sys
     from tests.test_one_copy_cm_bindings import ROOT
     root, _ = instrumented_output_fixture(tmp_path, monkeypatch)
-    launcher = Path('/home/dalab/.local/lib/nextflow/25.10.1/nextflow')
-    jar_root = Path('/home/dalab/.local/lib/nextflow/25.04.8/framework')
-    assert launcher.is_file() and (jar_root/'25.10.1/nextflow-25.10.1-one.jar').is_file()
+    jar = Path(os.environ.get('BMS_TEST_NEXTFLOW_JAR') or
+               Path.home() / '.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar')
+    if not jar.is_file() or not shutil.which('java'):
+        pytest.skip('existing offline Nextflow JAR and Java required; no downloads')
     # Real task definitions and Python finalizers; no model process is included.
     workflow = tmp_path/'probe.nf'
     workflow.write_text(f'''nextflow.enable.dsl=2
@@ -120,10 +121,13 @@ workflow {{
 ''')
     config = tmp_path/'probe.config'
     config.write_text(f"params.code_root='{ROOT}'\nprocess.executor='local'\nprocess.cpus=1\nprocess.memory='256 MB'\n")
-    env = dict(os.environ, NXF_HOME=str(tmp_path/'nxf'), NXF_DIST=str(jar_root),
+    env = dict(os.environ, NXF_HOME=str(tmp_path/'nxf'),
                NXF_VER='25.10.1', NXF_OFFLINE='true', NXF_DISABLE_CHECK_LATEST='true',
                PATH=str(Path(sys.executable).parent)+os.pathsep+os.environ['PATH'])
-    command = [str(launcher), '-C', str(config), 'run', str(workflow), '-w', str(tmp_path/'work'), '-ansi-log', 'false']
+    command = ['java', '--add-opens=java.base/java.lang=ALL-UNNAMED',
+               '--add-opens=java.base/java.util=ALL-UNNAMED',
+               '--add-opens=java.base/java.nio=ALL-UNNAMED', '-jar', str(jar),
+               '-C', str(config), 'run', str(workflow), '-w', str(tmp_path/'work'), '-ansi-log', 'false']
     first = subprocess.run(command, cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
     (tmp_path/'nextflow-first.log').write_text(first.stdout+first.stderr)
     assert first.returncode == 0, first.stdout+first.stderr
