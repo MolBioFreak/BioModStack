@@ -91,27 +91,37 @@ def retained_selection(source, root, designs, *, kind, create, extra=None) -> Pa
                 'source_params': source.params, 'source_provenance': source.provenance,
                 'root_params': root.params, 'rows': rows, 'extra': extra}
     key = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
-    index = get_inputs_dir() / 'design_selections' / '.binder-retained'
-    index.mkdir(parents=True, exist_ok=True)
-    receipt = index / (key + '.json')
-    descriptor = os.open(index, os.O_RDONLY)
+    selection_root = get_inputs_dir() / 'design_selections' / (
+        'protein_local_redesign' if kind == 'native' else 'binder')
+    selection_root.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(selection_root, os.O_RDONLY)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX)
-        if receipt.exists():
+        # Reopen the existing owner's selection manifests, not a new cache or
+        # registry. Retention/deletion of the selection remains with that owner.
+        for receipt in selection_root.glob('*/selection_manifest.json'):
             try:
-                retained = json.loads(receipt.read_text())
-                directory = Path(retained['directory'])
-                directory.resolve().relative_to(get_inputs_dir().resolve())
-                if retained['files'] and all(digest(directory / name) == value
-                                             for name, value in retained['files'].items()):
+                manifest = json.loads(receipt.read_text())
+                retained = manifest.pop('retained_input_binding', {})
+                if retained.get('identity_sha256') != key:
+                    continue
+                manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+                directory = receipt.parent
+                if (manifest_hash == retained.get('manifest_sha256') and retained.get('files')
+                        and all(digest(directory / name) == value for name, value in retained['files'].items())):
                     return directory
             except (OSError, ValueError, KeyError):
-                pass
+                continue
         directory = create()
-        files = {p.relative_to(directory).as_posix(): digest(p)
-                 for p in directory.rglob('*') if p.is_file()}
-        partial = receipt.with_suffix('.partial')
-        partial.write_text(json.dumps({'directory': str(directory), 'files': files}, sort_keys=True))
+        receipt = directory / 'selection_manifest.json'
+        manifest = json.loads(receipt.read_text())
+        manifest['retained_input_binding'] = {
+            'identity_sha256': key,
+            'manifest_sha256': hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
+            'files': {p.relative_to(directory).as_posix(): digest(p)
+                      for p in directory.rglob('*') if p.is_file() and p != receipt}}
+        partial = receipt.with_suffix('.json.partial')
+        partial.write_text(json.dumps(manifest, indent=2, sort_keys=True))
         partial.replace(receipt)
         return directory
     finally:

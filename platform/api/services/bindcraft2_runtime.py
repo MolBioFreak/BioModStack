@@ -125,9 +125,9 @@ def materialize_action_tree(source_root: Path, destination: Path, action: dict, 
                             campaign_immutable: bool = True) -> None:
     """Private directories with retained immutable bodies and isolated writers.
 
-    Both callers own retained publication/preparation inputs, not a live native
-    execution directory. Resume campaign working state is genuinely mutable;
-    only its snapshotted target/scaffold sources are immutable donors.
+    A live campaign donor requires independent custody. Preparation/publication
+    donors may share read-only bodies; resume shares only completed hash-named
+    leaves protected by native attempted state plus retained source snapshots.
     """
     import errno
     import zipfile
