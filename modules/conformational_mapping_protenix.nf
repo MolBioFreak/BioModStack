@@ -171,21 +171,20 @@ if path.is_absolute() or any(part in {'', '.', '..'} for part in path.parts):
 print(path.as_posix())
 PY
 )"
-    CHECKPOINT_SNAPSHOT="\$SNAPSHOT_ROOT/\$CHECKPOINT_REL"
+    # Same selected native root as standalone prediction and antibody validation.
+    # The installed bind is read-only; no checkpoint bytes enter task staging.
+    export PROTENIX_ROOT_DIR="/protenix_weights"
+    CHECKPOINT="\$PROTENIX_ROOT_DIR/\$CHECKPOINT_REL"
     WRAPPER="\$SNAPSHOT_ROOT/bms-wrapper/run_protenix_inference.py"
-    test -f "\$CHECKPOINT_SNAPSHOT"
+    test -f "\$CHECKPOINT"
     test -f "\$WRAPPER"
-
-    mkdir -p protenix_runtime_weights
-    for entry in /protenix_weights/*; do
-      [ -e "\$entry" ] || continue
-      name="\$(basename "\$entry")"
-      [ "\$name" = "\$(printf '%s' "\$CHECKPOINT_REL" | cut -d/ -f1)" ] && continue
-      ln -s "\$entry" "protenix_runtime_weights/\$name"
-    done
-    mkdir -p "protenix_runtime_weights/\$(dirname "\$CHECKPOINT_REL")"
-    cp --reflink=auto "\$CHECKPOINT_SNAPSHOT" "protenix_runtime_weights/\$CHECKPOINT_REL"
-    export PROTENIX_ROOT_DIR="\$PWD/protenix_runtime_weights"
+    python3 - "${params.code_root}/scripts" "\$EXECUTION_RECEIPT" "\$CHECKPOINT" "\$WRAPPER" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from attest_protenix_runtime import _validate_execution_receipt
+_validate_execution_receipt(*(Path(value) for value in sys.argv[2:]))
+PY
     # Installed weights/common data are immutable; generated caches are task-owned.
     export XDG_CACHE_HOME="\$PWD/.protenix_cache"
     export TRITON_CACHE_DIR="\$XDG_CACHE_HOME/triton"
@@ -257,7 +256,7 @@ JSON
     test -f "\$RUNTIME_IMAGE"
     python3 ${params.code_root}/scripts/attest_protenix_runtime.py \
       --registry "\$REGISTRY" --image-receipt "\$IMAGE_RECEIPT" \
-      --runtime-image "\$RUNTIME_IMAGE" --checkpoint "\$PROTENIX_ROOT_DIR/\$CHECKPOINT_REL" \
+      --runtime-image "\$RUNTIME_IMAGE" --checkpoint "\$CHECKPOINT" \
       --wrapper "\$WRAPPER" --execution-receipt "\$EXECUTION_RECEIPT" \
       --command-json native_protenix/runtime/command.json \
       --global-artifacts-json native_protenix/runtime/global-artifacts.json \
