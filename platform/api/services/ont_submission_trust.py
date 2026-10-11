@@ -766,14 +766,20 @@ def dorado_selected_input_binding(params: Mapping[str, Any]) -> dict[str, Any]:
             layout = weights / 'layouts' / dependency['relative_path'] / digest
             if not directory.is_relative_to(layout):
                 continue
-            observed = _verify_tree(layout, entries, frozen=True, weights_root=weights)
+            selected_entries = [dict(member_path=(layout / entry['member_path']).relative_to(directory).as_posix(), manifest=entry['manifest'])
+                                for entry in entries if (layout / entry['member_path']).is_relative_to(directory)]
+            try:
+                # Observe only this model, not unused quality/stereo siblings.
+                observed = _verify_tree(directory, selected_entries, frozen=True, weights_root=weights)
+            except (OSError, RuntimeError, ValueError):
+                # Retention evidence never adds a compiler admission gate.
+                # The original scientific preflight still verifies its lock.
+                continue
             members = {}
             for name, row in observed.items():
-                native = layout / name
-                if native.is_relative_to(directory):
-                    members[native.relative_to(directory).as_posix()] = dict(
-                        sha256=row['sha256'], bytes=row['size'],
-                        alias=os.readlink(native) if native.is_symlink() else None)
+                native = directory / name
+                members[name] = dict(sha256=row['sha256'], bytes=row['size'],
+                                     alias=os.readlink(native) if native.is_symlink() else None)
             break
         if members is None and selected == (weights / 'dorado' / version).resolve():
             prefix = f"weights/dorado/{version}/{model['id']}"

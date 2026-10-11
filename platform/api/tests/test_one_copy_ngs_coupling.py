@@ -175,9 +175,18 @@ async def test_native_pod5_owner_preflight_and_shell(tmp_path, monkeypatch):
         async with async_sessionmaker(engine,expire_on_commit=False)() as session:
             owned = await raw.retained_pod5_launch_binding(session,root)
             assert owned is not None
+            from routers import ont_runs
+            monkeypatch.setattr(ont_runs, 'get_allowed_roots', lambda: {'inputs': tmp_path})
+            request = ont_runs.OntNgsSubmitRequest(name='retained-native-fixture', params={'pod5_dir':str(root)})
+            job, replay, _, _ = await ont_runs._prepare_ont_ngs_workflow('ont_basecall_dna',request,session,session)
+            assert job.params['ont_input_provenance']['source'] == 'retained_pod5_generation'
+            assert replay.params == request.params  # no client retention flag
+            projected = trust.dorado_preflight_parameters(job.params)
+            selected_binding = json.loads(projected['dorado_input_binding_json'])
+            assert selected_binding['inputs'] == owned
         kwargs = dict(lock_path=ROOT/'config/ngs/dorado_v2.1.2.lock.json',pod5_root=root,molecule='dna',quality='sup',mode='simplex',
             model_root=tmp_path/'unused-models',runtime_sif=tmp_path/'unused-image',verify_assets=False)
-        receipt = preflight.build_preflight(**kwargs,selected_binding={'inputs':owned})
+        receipt = preflight.build_preflight(**kwargs,selected_binding=selected_binding)
         assert receipt['inputs']['retained'] is True
         assert receipt['inputs']['read_count']==1
         assert 'retained' not in preflight.build_preflight(**kwargs)['inputs']
