@@ -23,7 +23,7 @@ def bundle(tmp_path):
     return source, manifest
 
 
-def test_group_fanout_and_parent_share_payload_not_metadata(tmp_path):
+def test_group_fanout_and_parent_share_payload_not_metadata(tmp_path, record_property):
     source, manifest = bundle(tmp_path)
     authority = groups.tree_authority(source)
     group = tmp_path / 'group' / 'candidate'
@@ -36,6 +36,10 @@ def test_group_fanout_and_parent_share_payload_not_metadata(tmp_path):
         paths = [source / name, group / name, parent / 'candidate' / name]
         assert len({(p.stat().st_dev, p.stat().st_ino) for p in paths}) == 1
         assert all(not p.is_symlink() and not p.stat().st_mode & 0o222 for p in paths)
+        record_property(name + '.retained_names', len(paths))
+        record_property(name + '.unique_inodes', 1)
+        record_property(name + '.payload_bytes', paths[0].stat().st_size)
+        record_property(name + '.allocated_bytes', paths[0].stat().st_blocks * 512)
     name = 'workflow_component_request_v1.json'
     assert not (group / name).samefile(source / name)
     assert not (parent / 'candidate' / name).samefile(group / name)

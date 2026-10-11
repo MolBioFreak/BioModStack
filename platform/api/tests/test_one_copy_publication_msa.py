@@ -28,7 +28,7 @@ def generated(tmp_path, *, paired=False):
 
 
 @pytest.mark.parametrize('paired', [False, True])
-def test_generated_alignment_seal_survives_operation_removal(tmp_path, paired):
+def test_generated_alignment_seal_survives_operation_removal(tmp_path, paired, record_property):
     root, source, _ = generated(tmp_path, paired=paired)
     original = source.read_bytes()
     record = handoff._seal_native_alignment({'msa': str(source), 'sequence': 'ACD'}, root)
@@ -37,6 +37,10 @@ def test_generated_alignment_seal_survives_operation_removal(tmp_path, paired):
     assert not target.is_symlink()
     assert not target.stat().st_mode & 0o222
     assert record['sha256'] == digest(original)
+    record_property('retained_names', 2)
+    record_property('unique_inodes', 1)
+    record_property('payload_bytes', target.stat().st_size)
+    record_property('allocated_bytes', target.stat().st_blocks * 512)
     shutil.rmtree(root / 'operations')
     shutil.rmtree(tmp_path / 'cache')
     assert validate_boltz_msa(target, 'ACD') == original
