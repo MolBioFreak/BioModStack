@@ -2,7 +2,7 @@
 
 Trusted registry entries bind the layout to the existing weights dependency.
 No archives are interpreted. Only explicitly named, individually pinned regular
-files are copied from the shared acquisition store. Store must be service-owned.
+files reference the shared acquisition store through declared immutable aliases. Store must be service-owned.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from .pinned_acquisition import AcquisitionError, Artifact, acquire
 from .shared_runtime_images import (
-    _directory, _file, _hash, _check_file, _check_directory, _lock, _copy,
+    _directory, _file, _hash, _check_file, _check_directory, _lock, _same,
 )
 
 
@@ -47,7 +47,9 @@ def validate_members(dependency, entries, *, test_only=False):
     return paths
 
 
-def _verify_tree(root, entries, *, frozen):
+def _verify_tree(root, entries, *, frozen, weights_root=None):
+    root = Path(root)
+    weight_store = Path(weights_root) if weights_root is not None else root.parents[2]
     expected = {e['member_path']: e['manifest'] for e in entries}
     directories = {str(p) for name in expected for p in Path(name).parents if str(p) != '.'}
     observed = {}
@@ -61,13 +63,22 @@ def _verify_tree(root, entries, *, frozen):
                 info = os.stat(name, dir_fd=parent, follow_symlinks=False)
                 if stat.S_ISDIR(info.st_mode) and relative in directories:
                     visit(path / name, relative + '/')
-                elif stat.S_ISREG(info.st_mode) and relative in expected:
+                elif (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)) and relative in expected:
                     manifest = expected[relative]
-                    with _file(path / name) as (fd, owner, before):
-                        if before.st_nlink != 1 or (frozen and stat.S_IMODE(before.st_mode) != 0o400):
+                    member = path / name
+                    if stat.S_ISLNK(info.st_mode):
+                        # Only this manifest's existing acquisition object is an alias authority.
+                        concrete = weight_store / 'objects' / 'sha256' / manifest['sha256'] / 'runtime.sif'
+                        if member.resolve(strict=True) != concrete:
+                            raise AcquisitionError('layout alias escapes selected acquisition object')
+                        member = concrete
+                    with _file(member) as (fd, owner, before):
+                        if before.st_nlink != 1 or ((frozen or stat.S_ISLNK(info.st_mode)) and stat.S_IMODE(before.st_mode) != 0o400):
                             raise AcquisitionError('invalid layout member identity/mode')
                         digest = _hash(fd)
-                        _check_file(path / name, fd, owner, before)
+                        _check_file(member, fd, owner, before)
+                        if stat.S_ISLNK(info.st_mode) and not _same(info, os.stat(name, dir_fd=parent, follow_symlinks=False)):
+                            raise AcquisitionError('layout alias changed during verification')
                         if (digest, before.st_size) != (manifest['sha256'], manifest['size_bytes']):
                             raise AcquisitionError('layout member SHA-256/size mismatch')
                         observed[relative] = {'sha256': digest, 'size': before.st_size,
@@ -86,8 +97,8 @@ def materialize_weights(dependency, entries, store_root, *, accepted_licenses=()
     """Return immutable generation path; caller owns activation/transaction binding.
 
     entries = [{member_path: relative POSIX path, manifest: Artifact kwargs}].
-    Validate all licenses before IO. Completed acquisitions and copied members
-    survive interruption; uncommitted copy temps are discarded, never promoted.
+    Validate all licenses before IO. Completed acquisitions and immutable aliases
+    survive interruption; old uncommitted copy temps are discarded, never promoted.
     Corrupt completed members/publications block instead of being repaired.
     """
     dependency, entries = copy.deepcopy((dependency, entries))
@@ -129,34 +140,26 @@ def materialize_weights(dependency, entries, store_root, *, accepted_licenses=()
                     if os.path.lexists(target):
                         # Full tree verification below rejects corrupt completed files.
                         continue
-                    with _file(Path(receipt['path'])) as (source, source_parent, before):
-                        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                                     0o600, dir_fd=parent)
-                        try:
-                            observed = _copy(source, fd)
-                            _check_file(Path(receipt['path']), source, source_parent, before)
-                            if observed != (artifact.sha256, artifact.size_bytes):
-                                raise AcquisitionError('source changed during member copy')
-                            os.fchmod(fd, 0o400)
-                            os.fsync(fd)
-                        finally:
-                            os.close(fd)
+                    # Native names are directory-only views, never another payload body.
+                    # stage and destination have identical depth, so this relative alias
+                    # remains valid after the atomic generation rename.
+                    os.symlink(os.path.relpath(receipt['path'], target.parent),
+                               target.name, dir_fd=parent)
                     _check_directory(target.parent, parent)
-                    os.rename(temp, target.name, src_dir_fd=parent, dst_dir_fd=parent)
                     os.fsync(parent)
-            _verify_tree(stage, entries, frozen=False)
-            # Freeze children first; reruns can reuse a fully copied frozen stage.
+            _verify_tree(stage, entries, frozen=False, weights_root=weight_store)
+            # Freeze children first; reruns can reuse a fully prepared frozen stage.
             dirs = {stage} | {stage / p for e in entries for p in Path(e['member_path']).parents
                               if str(p) != '.'}
             for directory in sorted(dirs, key=lambda p: len(p.parts), reverse=True):
                 with _directory(directory) as fd:
                     os.fchmod(fd, 0o500)
                     os.fsync(fd)
-            _verify_tree(stage, entries, frozen=True)
+            _verify_tree(stage, entries, frozen=True, weights_root=weight_store)
             with _directory(layouts) as parent:
                 os.rename(stage.name, destination.name, src_dir_fd=parent, dst_dir_fd=parent)
                 os.fsync(parent)
-        verification = _verify_tree(destination, entries, frozen=True)
+        verification = _verify_tree(destination, entries, frozen=True, weights_root=weight_store)
         return {'dependency': dependency, 'path': str(destination),
                 'layout_digest': digest, 'members': verification,
                 'qualification': 'not_checked', 'test_only': test_only}

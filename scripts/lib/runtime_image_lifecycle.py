@@ -244,7 +244,7 @@ def _ensure_lease_locked(root, state, digests, owner, *, identities=None, expect
     return _acquire_lease_locked(root, state, digests, owner, identities=identities)
 
 
-def publish_leased_image(source, root, digest, *, owner):
+def publish_leased_image(source, root, digest, *, owner, adopt_owned=False):
     """Publish and durably pin before releasing the retirement fence.
 
     Reuse the publisher's streaming-copy/no-follow publication receipt under the
@@ -257,7 +257,7 @@ def publish_leased_image(source, root, digest, *, owner):
     with transaction(root) as root:
         state = load_state(root)
         receipts = {}
-        path = _publish_image_locked(source, root, digest, _receipts=receipts)
+        path = _publish_image_locked(source, root, digest, _receipts=receipts, adopt_owned=adopt_owned)
         token, identities = _ensure_lease_locked(root, state, [digest], owner, identities=receipts)
         return path, token, identities
 

@@ -92,7 +92,8 @@ def revalidate_model_receipt(model_id, store_root, *, weights_root, expected_pla
             sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         path = roots['weights'] / 'layouts' / dependency['relative_path'] / digest
         fresh = {'dependency': dependency, 'path': str(path), 'layout_digest': digest,
-                 'members': _verify_tree(path, entries, frozen=True), 'test_only': test_only}
+                 'members': _verify_tree(path, entries, frozen=True, weights_root=roots['weights']),
+                 'test_only': test_only}
         if not isinstance(saved, dict) or any(saved.get(k) != v for k, v in fresh.items()):
             raise AcquisitionError('provision layout path/bytes/identity drift')
         layouts.append({**fresh, 'qualification': 'not_checked'})

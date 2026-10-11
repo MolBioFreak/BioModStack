@@ -212,11 +212,17 @@ def _lock(root: Path, digest: str) -> Iterator[None]:
             os.close(fd)  # Releases flock, including on exceptions; lock files are never unlinked.
 
 
-def publish_image(source: Path, store_root: Path, expected_sha256: str) -> Path:
-    """Publish under the same admission fence used by references and retirement."""
+def publish_image(source: Path, store_root: Path, expected_sha256: str, *, adopt_owned=False) -> Path:
+    """Publish under the same admission fence used by references and retirement.
+
+    adopt_owned explicitly transfers a caller-owned source (not a live legacy
+    consumer's path). A same-device single-link donor is renamed, not copied.
+    Callers needing old filenames retain the default non-destructive behavior.
+    Interrupted transfers are completed under this same lifecycle fence.
+    """
     _digest(expected_sha256)  # Invalid input must not create a store.
     with _lock(_absolute(store_root), "lifecycle"):
-        return _publish_image_locked(source, store_root, expected_sha256)
+        return _publish_image_locked(source, store_root, expected_sha256, adopt_owned=adopt_owned)
 
 
 def _recover_stages(objects_fd: int, digest: str) -> None:
@@ -250,6 +256,51 @@ def _recover_stages(objects_fd: int, digest: str) -> None:
             os.close(fd)
 
 
+def _recover_adoptions(objects_fd: int, digest: str) -> None:
+    """Finish an interrupted ownership transfer, never discard its only body."""
+    prefix = ".adopt-" + digest + "-"
+    for name in os.listdir(objects_fd):
+        if not name.startswith(prefix):
+            continue
+        suffix = name[len(prefix):]
+        if len(suffix) != 32 or any(c not in "0123456789abcdef" for c in suffix):
+            raise SharedRuntimeImageError("unknown adoption staging name")
+        fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=objects_fd)
+        try:
+            entries = os.listdir(fd)
+            if not entries:
+                os.rmdir(name, dir_fd=objects_fd)
+                os.fsync(objects_fd)
+                continue
+            if entries != ["runtime.sif"]:
+                raise SharedRuntimeImageError("unknown adoption staging contents")
+            body = os.open("runtime.sif", _FILE_FLAGS, dir_fd=fd)
+            try:
+                before = os.fstat(body)
+                if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                        or _hash(body) != digest
+                        or not _same(before, os.fstat(body))
+                        or not _same(before, os.stat("runtime.sif", dir_fd=fd, follow_symlinks=False))):
+                    raise SharedRuntimeImageError("adopted image identity mismatch")
+                os.fchmod(body, 0o400)
+                os.fsync(body)
+            finally:
+                os.close(body)
+            os.fchmod(fd, 0o500)
+            os.fsync(fd)
+            # Lifecycle lock excludes all publication and retirement owners.
+            try:
+                os.stat(digest, dir_fd=objects_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise SharedRuntimeImageError("adoption destination already exists")
+            os.rename(name, digest, src_dir_fd=objects_fd, dst_dir_fd=objects_fd)
+            os.fsync(objects_fd)
+        finally:
+            os.close(fd)
+
+
 def recover_publications(store_root: Path) -> None:
     """Explicit restart recovery; excludes every cooperating publisher."""
     with _lock(_absolute(store_root), "lifecycle"):
@@ -260,6 +311,10 @@ def _recover_publications_locked(root: Path) -> None:
     try:
         with _directory(root / "objects" / "sha256") as fd:
             for name in os.listdir(fd):
+                if name.startswith(".adopt-"):
+                    digest = _digest(name[len(".adopt-"):len(".adopt-") + 64])
+                    with _lock(root, digest):
+                        _recover_adoptions(fd, digest)
                 if name.startswith(".publish-"):
                     digest = _digest(name[len(".publish-"):len(".publish-") + 64])
                     if not name.startswith(".publish-" + digest + "-"):
@@ -272,7 +327,7 @@ def _recover_publications_locked(root: Path) -> None:
             raise
 
 
-def _publish_image_locked(source: Path, store_root: Path, expected_sha256: str, *, _receipts=None) -> Path:
+def _publish_image_locked(source: Path, store_root: Path, expected_sha256: str, *, _receipts=None, adopt_owned=False) -> Path:
     """Publish once, or verify/reuse objects/sha256/<digest>/runtime.sif.
 
     Hash/count the sole byte copy; check source descriptor identity before/after.
@@ -300,6 +355,30 @@ def _publish_image_locked(source: Path, store_root: Path, expected_sha256: str, 
                 _receipts[expected] = receipt
             _check_directory(objects, objects_fd)
             return result
+
+        if adopt_owned:
+            # Explicit transfer of a caller-owned incoming allocation. Cross-device
+            # and non-exclusive donors retain the existing copy publication path.
+            with _file(source) as (fd, parent, before):
+                if before.st_dev == os.fstat(objects_fd).st_dev and before.st_nlink == 1:
+                    if _hash(fd) != expected:
+                        raise SharedRuntimeImageError("source runtime image SHA-256 mismatch")
+                    _check_file(source, fd, parent, before)
+                    stage = ".adopt-" + expected + "-" + uuid.uuid4().hex
+                    os.mkdir(stage, 0o700, dir_fd=objects_fd)
+                    with _directory(objects / stage) as stage_fd:
+                        # Recoverable before and after rename; never delete adopted bytes.
+                        os.fsync(objects_fd)
+                        os.rename(source.name, "runtime.sif", src_dir_fd=parent, dst_dir_fd=stage_fd)
+                        os.fsync(parent)
+                        os.fchmod(fd, 0o400)
+                        os.fsync(fd)
+                        os.fsync(stage_fd)
+                    _recover_adoptions(objects_fd, expected)
+                    receipt = image_identity(result, expected)
+                    if _receipts is not None:
+                        _receipts[expected] = receipt
+                    return result
 
         stage = ".publish-" + expected + "-" + uuid.uuid4().hex
         os.mkdir(stage, 0o700, dir_fd=objects_fd)
