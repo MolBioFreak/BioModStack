@@ -70,7 +70,7 @@ def test_native_payload_controller_publication_and_resume(native, module, proces
     if directory:
         script = f'export published_directory="\\$PWD/{directory}"; ' + script
     main = root/'main.nf'
-    main.write_text(f"include {{ ngsResultPublishMode }} from '{ROOT}/modules/ngs/publication'\n" + f'process PublicationFixture {{\n{directives}\ninput:\nval seed\noutput:\n{output}\nscript:\n"""\n{script}\n"""\n}}\nworkflow {{ PublicationFixture(1) }}\n')
+    main.write_text(f"include {{ ngsResultPublishMode }} from '{ROOT}/modules/ngs/publication'\n" + "assert ngsResultPublishMode(file('absent-work-directory'), params.out_dir) == 'copy'\n" + f'process PublicationFixture {{\n{directives}\ninput:\nval seed\noutput:\n{output}\nscript:\n"""\n{script}\n"""\n}}\nworkflow {{ PublicationFixture(1) }}\n')
     if directory:
         consumer = 'process Observe {\ninput:\npath result_dir\noutput:\npath "observed.txt"\nscript:\n"""sha256sum ${result_dir}/aligned.bam > observed.txt"""\n}\n'
         text = main.read_text().replace('workflow { PublicationFixture(1) }', 'workflow { PublicationFixture(1); Observe(PublicationFixture.out.directory) }')

@@ -551,10 +551,11 @@ def build_preflight(*, lock_path: Path, pod5_root: Path, molecule: str, quality:
     selected_binding = selected_binding or {}
     model_bindings = selected_binding.get('models', {})
     owned_inputs = selected_binding.get('inputs', {})
-    observed_inputs = {item['relative_path']: {'sha256': item['sha256'], 'bytes': item['bytes']} for item in inventory['files']}
-    if owned_inputs.get('files') == observed_inputs and owned_inputs.get('representation_id'):
-        inventory['retained'] = True
-        inventory['retained_source'] = {key: owned_inputs[key] for key in ('representation_id', 'manifest_sha256')}
+    if owned_inputs:
+        observed_inputs = {item['relative_path']: {'sha256': item['sha256'], 'bytes': item['bytes']} for item in inventory['files']}
+        if owned_inputs.get('files') == observed_inputs and owned_inputs.get('representation_id'):
+            inventory['retained'] = True
+            inventory['retained_source'] = {key: owned_inputs[key] for key in ('representation_id', 'manifest_sha256')}
     assets: dict[str, Any] = {"verified": False}
     if verify_assets:
         runtime_sif, image_identity = _verified_runtime_location(

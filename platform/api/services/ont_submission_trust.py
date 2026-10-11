@@ -718,6 +718,18 @@ def verify_fastq_launch_custody(params: Mapping[str, Any]) -> None:
         raise ValueError("managed FASTQ launch custody bytes changed")
 
 
+def dorado_preflight_parameters(params: Mapping[str, Any]) -> dict[str, str]:
+    """Pin the existing selected root and its preflight transport together."""
+    import json
+    from paths import get_weights_root
+    selected = Path(params.get('dorado_model_root') or get_weights_root() / 'dorado/2.1.2')
+    # Missing assets remain the native preflight owner's error, not a new gate.
+    root = str(selected.resolve()) if selected.is_dir() else str(selected)
+    bound = {**dict(params), 'dorado_model_root': root}
+    return {'dorado_model_root': root, 'dorado_input_binding_json': json.dumps(
+        dorado_selected_input_binding(bound), sort_keys=True, separators=(',', ':'))}
+
+
 def dorado_selected_input_binding(params: Mapping[str, Any]) -> dict[str, Any]:
     """Project existing published selections, never infer custody from chmod.
 

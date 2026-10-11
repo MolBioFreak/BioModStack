@@ -67,8 +67,25 @@ def test_real_selected_binding_preflight_and_concurrent_shell(tmp_path, monkeypa
     monkeypatch.setattr(hf_assets,'publication_index_path',lambda: index if placement == 'published' else None)
     monkeypatch.setattr(hf_assets,'weights_archive',lambda: ('a'*64,123))
     params = {'dorado_lock_manifest':str(lock_path),'dorado_model_root':str(model_root)}
-    binding = trust.dorado_selected_input_binding(params)
-    record = preflight.verify_model_identity(selected,model,binding['models'].get(selected['id']))
+    native_parameters = trust.dorado_preflight_parameters({**params, 'dorado_input_binding_json':'FORGED CLIENT VALUE'})
+    assert native_parameters['dorado_model_root'] == str(model_root.resolve())
+    binding = json.loads(native_parameters['dorado_input_binding_json'])
+    # Genuine generated POD5 parsing with an inert runtime-capability double;
+    # model member/aggregate verification remains the production implementation.
+    pod5_root = tmp_path/'pod5'
+    _native_pod5(pod5_root)
+    runtime = tmp_path/'runtime.sif'
+    runtime.write_bytes(b'NOT AN IMAGE; capability-double fixture')
+    lock['dorado']['sif_sha256'] = _sha(runtime.read_bytes())
+    lock_path.write_text(json.dumps(lock))
+    import types
+    with monkeypatch.context() as runtime_double:
+        runtime_double.setattr(preflight, '_verified_runtime_location', lambda path, expected: (path, None))
+        runtime_double.setattr(preflight, '_verify_runtime_capabilities', lambda *a, **k: {'scope':'inert-capability-double'})
+        runtime_double.setattr(preflight.subprocess, 'run', lambda *a, **k: types.SimpleNamespace(returncode=0,stdout=lock['dorado']['version'],stderr=''))
+        receipt = preflight.build_preflight(lock_path=lock_path,pod5_root=pod5_root,molecule='dna',quality='sup',mode='simplex',
+            model_root=model_root,runtime_sif=runtime,selected_binding=binding)
+    record = receipt['runtime']['assets']['models']['base']
     retained = placement != 'mutable'
     assert record.get('retained',False) is retained
     before = body.stat()
@@ -108,16 +125,11 @@ def test_binding_is_server_controlled():
     assert 'dorado_input_binding_json' in trust.ONT_SERVER_CONTROLLED_RUNTIME_PARAMS
 
 
-@pytest.mark.asyncio
-async def test_native_pod5_owner_preflight_and_shell(tmp_path, monkeypatch):
+def _native_pod5(root):
     from datetime import datetime, timezone
     import uuid
     import numpy as np
     import pod5
-    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-    from database import OntInstrumentRun, OntInstrumentRunEvent, OntRawSignalRepresentation
-    from services import ont_raw_signal as raw
-    root = tmp_path/'pod5'
     root.mkdir()
     source = root/'read.pod5'
     now = datetime(2020,1,1,tzinfo=timezone.utc)
@@ -131,6 +143,21 @@ async def test_native_pod5_owner_preflight_and_shell(tmp_path, monkeypatch):
         end_reason=pod5.EndReason(pod5.EndReasonEnum.UNKNOWN,False),run_info=info,signal=np.array([1,2,3,4],dtype=np.int16))
     with pod5.Writer(source) as writer:
         writer.add_read(read)
+    return source
+
+
+@pytest.mark.asyncio
+async def test_native_pod5_owner_preflight_and_shell(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    import uuid
+    import numpy as np
+    import pod5
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from database import OntInstrumentRun, OntInstrumentRunEvent, OntRawSignalRepresentation
+    from services import ont_raw_signal as raw
+    root = tmp_path/'pod5'
+    source = _native_pod5(root)
+    now = datetime(2020,1,1,tzinfo=timezone.utc)
     # Real terminal owner, real SQL round trip; no copied/invented preflight input inventory.
     manifest = {'run_id':'fixture-run','observed_generation':1,'artifacts':[raw._file_artifact(source,'fixture-pod5',kind='pod5')]}
     engine = create_async_engine('sqlite+aiosqlite:///'+str(tmp_path/'fixture.db'))
