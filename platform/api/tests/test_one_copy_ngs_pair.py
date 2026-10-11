@@ -12,6 +12,7 @@ from services import ont_raw_signal as raw
 def _lookup():
     path = Path(__file__).resolve().parents[3] / 'scripts/ont_raw_signal_lookup.py'
     spec = importlib.util.spec_from_file_location('one_copy_lookup', path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

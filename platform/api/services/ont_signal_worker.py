@@ -1762,11 +1762,18 @@ class OntSignalWorker:
         inventory_sha, inventory_size = await self._stable_file_identity_async(inventory_path)
         self._require_hash_contract("filtered move BAM", {"sha256": filtered_sha, "size_bytes": filtered_size}, report.get("filtered_move_bam"))
         self._require_hash_contract("move inventory", inventory_sha, report.get("read_inventory_sha256"))
+        # Final native products: later launches retain names, never mutate bodies.
+        for retained_output in (filtered_path, inventory_path):
+            descriptor = os.open(retained_output, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                os.fchmod(descriptor, 0o400)
+            finally:
+                os.close(descriptor)
         async with self._session_factory() as session:
             parents.assert_unbroken()
             source = await session.get(OntMoveTableSource, item_id)
             if source is None: raise TerminalFenceLost("move-source disappeared before publication")
-            receipt = {**report, "producer_runtime_authority_validation": producer_validation, "command": command_receipt, "managed_outputs": {"filtered_move_bam": str(filtered_path), "read_inventory": str(inventory_path)}, "managed_output_sha256s": {"filtered_move_bam_sha256": filtered_sha, "filtered_move_bam_size_bytes": filtered_size, "read_inventory_sha256": inventory_sha, "read_inventory_size_bytes": inventory_size}}
+            receipt = {**report, "retained_outputs": True, "producer_runtime_authority_validation": producer_validation, "command": command_receipt, "managed_outputs": {"filtered_move_bam": str(filtered_path), "read_inventory": str(inventory_path)}, "managed_output_sha256s": {"filtered_move_bam_sha256": filtered_sha, "filtered_move_bam_size_bytes": filtered_size, "read_inventory_sha256": inventory_sha, "read_inventory_size_bytes": inventory_size}}
             result = await session.execute(update(OntMoveTableSource).where(
                 *self._move_publication_fence(item_id, token, registration_authority),
             ).values(

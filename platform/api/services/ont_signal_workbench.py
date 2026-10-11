@@ -2348,6 +2348,7 @@ async def resolve_external_alignment_launch_authority(
             source_root=Path(get_results_dir()),
             family="ont_external_move_launch_snapshots",
             authority_id=receipt.id,
+            source_retained=validation_receipt.get("retained_outputs") is True,
             expected_sha256=filtered_sha256,
             expected_size_bytes=filtered_size,
             suffix=".bam",

@@ -336,7 +336,7 @@ process DoradoDemux {
         [[ "\${source_label}" == "\${label}" ]] && label_bams+=("\${source_bam}")
       done
       unit_bam="demux/units/\${label}.bam"
-      if (( \${#label_bams[@]} == 1 )); then cp "\${label_bams[0]}" "\${unit_bam}"; else samtools merge -u -f "\${unit_bam}" "\${label_bams[@]}"; fi
+      if (( \${#label_bams[@]} == 1 )); then chmod 0444 "\${label_bams[0]}"; ln "\${label_bams[0]}" "\${unit_bam}"; else samtools merge -u -f "\${unit_bam}" "\${label_bams[@]}"; fi
       samtools quickcheck -u -v "\${unit_bam}"
       reads="\$(samtools view -c "\${unit_bam}")"; sha="\$(sha256sum "\${unit_bam}" | cut -d' ' -f1)"
       sample_alias="\${barcode_to_alias[\${label}]:-}"

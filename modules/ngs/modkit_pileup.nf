@@ -52,8 +52,10 @@ process ValidateModifiedBaseBam {
         exit 1
     fi
 
-    cp "${bam}" modified_base_input.bam
-    cp "${bai}" modified_base_input.bam.bai
+    # Completed alignment products; legacy writable records still snapshot.
+    source "${params.code_root ?: projectDir}/scripts/ngs_input_snapshot.sh"
+    ngs_input_snapshot "${bam}" modified_base_input.bam true
+    ngs_input_snapshot "${bai}" modified_base_input.bam.bai true
     """
 }
 process ModkitPileup {

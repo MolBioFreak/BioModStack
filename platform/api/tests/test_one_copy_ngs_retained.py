@@ -63,11 +63,11 @@ def test_retained_reader_borrows_descriptor_without_body_allocation(roots, monke
     monkeypatch.setattr(reader, '_uncached_artifact_snapshot', no_snapshot)
     for _ in range(3):
         with reader.open_verified_artifact_snapshot(source, expected_size=len(payload),
-                expected_sha256=hashlib.sha256(payload).hexdigest()) as handle:
+                expected_sha256=hashlib.sha256(payload).hexdigest(), retained=True) as handle:
             assert os.fstat(handle.fileno()).st_ino == source.stat().st_ino
             assert handle.read() == payload
     handle = reader.open_verified_artifact_snapshot(source, expected_size=len(payload),
-                expected_sha256=hashlib.sha256(payload).hexdigest())
+                expected_sha256=hashlib.sha256(payload).hexdigest(), retained=True)
     descriptor = handle.fileno()
     source.unlink()
     source.write_bytes(b'replacement')
@@ -90,4 +90,23 @@ def test_retained_reader_preserves_digest_refusal(roots):
     refs._write_managed_bytes('reference.fasta', b'>ref\nACGT\n')
     with pytest.raises(reader.AlignmentSessionError, match='digest mismatch'):
         reader.open_verified_artifact_snapshot(managed / 'reference.fasta',
-            expected_size=10, expected_sha256='0' * 64)
+            expected_size=10, expected_sha256='0' * 64, retained=True)
+
+
+def test_governed_completed_oversized_artifact_borrows_pinned_directory(tmp_path, monkeypatch):
+    payload = b'completed alignment transport control'
+    source = tmp_path / 'aligned.bam'
+    source.write_bytes(payload)
+    source.chmod(0o444)
+    monkeypatch.setattr(reader, 'SNAPSHOT_CACHE_MAX_BYTES', 1)
+    directory = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    descriptor_path = type(source)(f'/proc/self/fd/{directory}/aligned.bam')
+    try:
+        for _ in range(3):
+            with reader.open_verified_artifact_snapshot(descriptor_path,
+                    expected_size=len(payload), expected_sha256=hashlib.sha256(payload).hexdigest(),
+                    retained=True) as handle:
+                assert os.fstat(handle.fileno()).st_ino == source.stat().st_ino
+                assert handle.read() == payload
+    finally:
+        os.close(directory)

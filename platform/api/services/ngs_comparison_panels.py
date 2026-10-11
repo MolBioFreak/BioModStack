@@ -98,6 +98,7 @@ async def seed_approved_panel(
             filename = f"{item['id']}.fasta"
             fasta = f">panel__{item['id']}\n{item['sequence']}\n".encode("ascii")
             (root / filename).write_bytes(fasta)
+            (root / filename).chmod(0o400)
             manifest_entries.append({key: item[key] for key in ("id", "role", "label", "sequence_id", "revision_id", "revision_sha256")}
                                   | {"fasta_filename": filename, "fasta_sha256": hashlib.sha256(fasta).hexdigest()})
         manifest = {"schema": PANEL_SCHEMA, "panel_id": panel_id, "version": 1, "status": "APPROVED", "entries": manifest_entries}
@@ -222,6 +223,20 @@ async def consume_comparison_panel_receipt(session: AsyncSession, *, receipt_id:
     return receipt
 
 
+def _publish_reference_name(source: Path, destination: Path) -> None:
+    # Callers already resolved receipt/panel authority; this is not an upload
+    # read-only predicate. Keep old writable records independently snapshotted.
+    if not source.stat().st_mode & 0o222:
+        try:
+            os.link(source, destination)
+            return
+        except OSError as exc:
+            import errno
+            if exc.errno != errno.EXDEV:
+                raise
+    shutil.copy2(source, destination)
+
+
 def materialize_comparison_launch(
     *, expected_fasta: str, expected_sha256: str,
     panel_receipt: NgsComparisonPanelReceipt, comparison_launch_id: str | None = None,
@@ -251,10 +266,10 @@ def materialize_comparison_launch(
                           if comparison_launch_id is not None else str(uuid.uuid4()))
 
     def build(stage: Path) -> None:
-        shutil.copy2(expected, stage / "expected_reference.fasta")
+        _publish_reference_name(expected, stage / "expected_reference.fasta")
         for entry in source["entries"]:
             filename = entry["fasta_filename"]
-            shutil.copy2(manifest.parent / filename, stage / filename)
+            _publish_reference_name(manifest.parent / filename, stage / filename)
         (stage / "comparison_panel_snapshot.json").write_bytes(snapshot_bytes)
 
     if comparison_launch_id is None:

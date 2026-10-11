@@ -418,23 +418,15 @@ def _uncached_artifact_snapshot(path: Path, expected_size: int, expected_sha256:
         source.close()
 
 
-def _borrow_retained_artifact(path: Path, expected_size: int, expected_sha256: str) -> BinaryIO | None:
+def _borrow_retained_artifact(path: Path, expected_size: int, expected_sha256: str, *, retained: bool = False) -> BinaryIO | None:
     """Borrow only existing NGS custody owners, not arbitrary read-only uploads.
 
     The caller still authorizes the artifact and supplies its recorded identity.
     The descriptor owns the read lifetime, even if the retained name is removed.
     Legacy writable custody leaves continue through the snapshot implementation.
     """
-    from paths import get_inputs_dir, get_molbio_ngs_reference_root
-
     absolute = Path(os.path.abspath(path))
-    roots = [get_molbio_ngs_reference_root(), *(
-        get_inputs_dir() / family for family in (
-            "ont_fastq_launch_snapshots", "ont_external_move_launch_snapshots",
-            "ont_instrument_launch_snapshots", "molbio_ngs_managed_launch_snapshots",
-        )
-    )]
-    if not any(absolute.is_relative_to(root) for root in roots):
+    if not retained:
         return None
     source = _open_regular_file_no_symlinks(absolute)
     try:
@@ -464,11 +456,16 @@ def open_verified_artifact_snapshot(
     *,
     expected_size: int,
     expected_sha256: str,
+    retained: bool = False,
 ) -> BinaryIO:
-    """Return exact bytes, borrowing immutable custody or snapshotting mutable input."""
+    """Borrow completed, authorized read-only artifacts; snapshot legacy mutable input.
+
+    ``retained`` is set by the existing governed artifact resolver, not clients.
+    It supplies publisher lifetime authority; mode alone is never sufficient.
+    """
     if expected_size < 0 or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
         raise AlignmentSessionError("artifact integrity metadata is invalid")
-    borrowed = _borrow_retained_artifact(path, expected_size, expected_sha256)
+    borrowed = _borrow_retained_artifact(path, expected_size, expected_sha256, retained=retained)
     if borrowed is not None:
         return borrowed
     if expected_size > SNAPSHOT_CACHE_MAX_BYTES:
@@ -1191,14 +1188,15 @@ def _validate_alignment_bundle(
             index_sha256, index_size = _sha256_file_and_size(index)
         if reference_sha256 is None or reference_size is None:
             reference_sha256, reference_size = _sha256_file_and_size(reference)
-        bam_snapshot = open_verified_artifact_snapshot(bam, expected_size=bam_size, expected_sha256=bam_sha256)
+        bam_snapshot = open_verified_artifact_snapshot(bam, expected_size=bam_size, expected_sha256=bam_sha256, retained=True)
         snapshots.append(bam_snapshot)
-        index_snapshot = open_verified_artifact_snapshot(index, expected_size=index_size, expected_sha256=index_sha256)
+        index_snapshot = open_verified_artifact_snapshot(index, expected_size=index_size, expected_sha256=index_sha256, retained=True)
         snapshots.append(index_snapshot)
         reference_snapshot = open_verified_artifact_snapshot(
             reference,
             expected_size=reference_size,
             expected_sha256=reference_sha256,
+            retained=True,
         )
         snapshots.append(reference_snapshot)
         bam_path = _descriptor_path(bam_snapshot.fileno())
@@ -3799,7 +3797,7 @@ def _iter_sam_lines(
     try:
         if bam_sha256 is None or bam_size_bytes is None:
             bam_sha256, bam_size_bytes = _sha256_file_and_size(bam)
-        bam_snapshot = open_verified_artifact_snapshot(bam, expected_size=bam_size_bytes, expected_sha256=bam_sha256)
+        bam_snapshot = open_verified_artifact_snapshot(bam, expected_size=bam_size_bytes, expected_sha256=bam_sha256, retained=True)
         snapshots.append(bam_snapshot)
         command = [*samtools, "view"]
         if primary_only:
@@ -3811,6 +3809,7 @@ def _iter_sam_lines(
                 index,
                 expected_size=index_size_bytes,
                 expected_sha256=index_sha256,
+                retained=True,
             )
             snapshots.append(index_snapshot)
             command.extend(["-X", _descriptor_path(bam_snapshot.fileno()), _descriptor_path(index_snapshot.fileno())])

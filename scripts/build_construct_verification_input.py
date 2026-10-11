@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import errno
+import os
 import shutil
 from pathlib import Path
 
@@ -50,10 +52,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--reference-fasta", type=Path, required=True)
     parser.add_argument("--expected-reference-sha256", default="")
     parser.add_argument("--source-reads", type=Path, required=True)
+    parser.add_argument("--retained-source-reads", action="store_true")
+    parser.add_argument("--retained-consensus", action="store_true")
     parser.add_argument("--consensus-fasta", type=Path, required=True)
     parser.add_argument("--consensus-method", required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
     return parser.parse_args(argv)
+
+
+def _publish_input(source: Path, destination: Path, *, retained: bool) -> None:
+    concrete = source.resolve(strict=True)
+    if retained and not concrete.stat().st_mode & 0o222:
+        try:
+            os.link(concrete, destination)
+            return
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+    # Old records and explicitly portable cross-filesystem bundles stay private.
+    shutil.copyfile(source, destination)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -74,11 +91,11 @@ def main(argv: list[str] | None = None) -> int:
     forbidden_method = args.consensus_method.strip().lower() in FORBIDDEN_METHODS
 
     if source_reads_present:
-        shutil.copyfile(args.source_reads, output_source_reads)
+        _publish_input(args.source_reads, output_source_reads, retained=args.retained_source_reads)
     source_reads_digest = sha256_file(output_source_reads) if output_source_reads.is_file() else None
 
     if consensus_present:
-        shutil.copyfile(args.consensus_fasta, output_consensus)
+        _publish_input(args.consensus_fasta, output_consensus, retained=args.retained_consensus)
         # Validate the copied object, not only its source path.
         normalized_fasta_sha256(output_consensus)
         candidate_for_recomputation = source_reads_present and not forbidden_method

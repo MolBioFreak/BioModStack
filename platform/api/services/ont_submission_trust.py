@@ -265,8 +265,9 @@ def publish_immutable_launch_snapshot(
     expected_sha256: str,
     expected_size_bytes: int,
     suffix: str,
+    source_retained: bool = False,
 ) -> Path:
-    """Copy exact governed bytes into a private no-follow launch snapshot."""
+    """Publish a private launch name, sharing only completion-retained bodies."""
     if (
         not family.isidentifier()
         or not authority_id
@@ -312,6 +313,35 @@ def publish_immutable_launch_snapshot(
         unique = uuid4().hex
         temp_name = f".launch-{unique}.partial"
         final_name = f"launch-{unique}{suffix}"
+        if source_retained and not os.fstat(source_fd).st_mode & 0o222:
+            digest = hashlib.sha256()
+            size = 0
+            while chunk := os.read(source_fd, 1024 * 1024):
+                digest.update(chunk)
+                size += len(chunk)
+            if size != expected_size_bytes or digest.hexdigest() != expected_sha256:
+                raise ValueError("launch snapshot source bytes diverged from authority")
+            source_parent_fd, source_name = _open_runtime_snapshot_parent(source, source_root_path, label=family)
+            try:
+                try:
+                    os.link(source_name, final_name, src_dir_fd=source_parent_fd,
+                            dst_dir_fd=destination_fd, follow_symlinks=False)
+                except OSError as exc:
+                    import errno
+                    if exc.errno != errno.EXDEV:
+                        raise
+                    os.lseek(source_fd, 0, os.SEEK_SET)
+                else:
+                    linked = True
+                    before = os.fstat(source_fd)
+                    current = os.stat(final_name, dir_fd=destination_fd, follow_symlinks=False)
+                    if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
+                        raise ValueError("launch snapshot source identity changed")
+                    os.fsync(destination_fd)
+                    temp_name = None
+                    return destination_directory / final_name
+            finally:
+                os.close(source_parent_fd)
         snapshot_fd = os.open(
             temp_name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,

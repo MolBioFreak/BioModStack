@@ -66,6 +66,7 @@ def _atomic_write(path: Path, data: bytes) -> None:
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(data)
             handle.flush()
+            os.fchmod(handle.fileno(), 0o400)
             os.fsync(handle.fileno())
         os.replace(temporary, path)
     except BaseException:

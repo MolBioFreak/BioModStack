@@ -48,6 +48,9 @@ process FastqPlasmidQC {
     path "fastq_qc.log", emit: log
 
     script:
+
+    def retainedReference = (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source == 'server_consumed_receipt' || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false'
+    def retainedReadsArg = (params.ont_input_provenance?.source == 'managed_fastq_launch_snapshot' || (params.ont_input_mode ?: params.input_mode ?: '').toString() == 'bam') ? '--retained-source-reads' : ''
     def expectedSize = params.expected_plasmid_size == null ? '' : (params.expected_plasmid_size as Integer).toString()
     def minReadLength = (params.min_fastq_read_length ?: 0) as Integer
     def minimapPreset = ((params.fastq_minimap2_preset ?: 'map-ont') as String).trim()
@@ -78,6 +81,7 @@ process FastqPlasmidQC {
     def inputModeArg = shellQuote(inputMode)
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_input_snapshot.sh"
 
     if ! command -v samtools >/dev/null 2>&1; then
         echo "CRITICAL_FAILURE: SAMTOOLS_RUNTIME_UNAVAILABLE" >&2
@@ -150,8 +154,7 @@ process FastqPlasmidQC {
         n50_read_length=0
     fi
 
-    cp --reflink=auto -- "${reference}" reference.snapshot.fasta
-    chmod 0444 reference.snapshot.fasta
+    ngs_input_snapshot "${reference}" reference.snapshot.fasta ${retainedReference}
     reference_raw_sha256_before="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
     normalized_reference="\$(awk '
       BEGIN { records=0; sequence="" }
@@ -173,7 +176,7 @@ process FastqPlasmidQC {
         echo "CRITICAL_FAILURE: REFERENCE_DIGEST_MISMATCH" >&2
         exit 95
     fi
-    cp --reflink=auto -- reference.snapshot.fasta reference_qc.fasta
+    ngs_input_snapshot reference.snapshot.fasta reference_qc.fasta true
     "\${SAMTOOLS_CMD[@]}" faidx reference_qc.fasta
     reference_raw_sha256_after="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
     if [[ "\${reference_raw_sha256_before}" != "\${reference_raw_sha256_after}" ]]; then
@@ -324,11 +327,11 @@ process FastqPlasmidQC {
     bam_local=\$(basename "${bam}")
     bai_local=\$(basename "${bai}")
     if [[ "\${bam_local}" != "aligned.bam" ]]; then
-        cp -- "${bam}" aligned.bam
+        ngs_input_snapshot "${bam}" aligned.bam true
         bam_local="aligned.bam"
     fi
     if [[ "\${bai_local}" != "aligned.bam.bai" ]]; then
-        cp -- "${bai}" aligned.bam.bai
+        ngs_input_snapshot "${bai}" aligned.bam.bai true
         bai_local="aligned.bam.bai"
     fi
 
@@ -478,11 +481,13 @@ process FastqPlasmidQC {
         echo "Consensus: \${consensus_status} (\${consensus_length} bp)"
     } > fastq_qc.log
 
+    if [[ -f fastq_consensus.fasta ]]; then chmod 0444 fastq_consensus.fasta; fi
     "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_construct_verification_input.py" \\
         --reference-fasta reference_qc.fasta \\
         --expected-reference-sha256 ${referenceSequenceSha256} \\
         --source-reads "${fastq}" \\
         --consensus-fasta fastq_consensus.fasta \\
+        --retained-consensus ${retainedReadsArg} \\
         --consensus-method samtools_consensus \\
         --out-dir construct_verification_input
 
