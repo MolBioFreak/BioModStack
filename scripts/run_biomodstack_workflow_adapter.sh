@@ -152,95 +152,137 @@ export BMS_CPU_POWER_COLLECTOR_URL="${BMS_CPU_POWER_COLLECTOR_URL:-http://127.0.
 BMS_WORKFLOW_ADAPTER_BIND_HOST="${BMS_WORKFLOW_ADAPTER_BIND_HOST:-127.0.0.1}"
 CM_API_RUNTIME_DIR="${BMS_CM_API_RUNTIME_DIR:-${BMS_DATA:-/mnt/BioModStack}/runtime/cm-api-python}"
 
-rewrite_cm_api_pyvenv_home() {
-    local config_path="$1" runtime_bin="$2"
-    python3 - "$config_path" "$runtime_bin" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-runtime_bin = sys.argv[2]
-lines = path.read_text(encoding="utf-8").splitlines()
-if not any(line.startswith("home = ") for line in lines):
-    raise SystemExit(f"missing venv home declaration: {path}")
-path.write_text(
-    "\n".join(
-        f"home = {runtime_bin}" if line.startswith("home = ") else line
-        for line in lines
-    ) + "\n",
-    encoding="utf-8",
-)
-PY
-}
-
-provision_cm_api_runtime() {
+# This subshell owns the existing lock and every unpublished stage. EXIT runs
+# under errexit (RETURN did not); signals leave the old selected version intact.
+provision_cm_api_runtime() (
+    set -euo pipefail
     local source_venv="$API_SOURCE_VENV"
-    local source_python source_runtime stage runtime_name runtime_dir target_python next_link
-    # CM_API_SUPPORT_IMAGE was selected by the shared read-only probe authority
-    # before entering this function; clean controllers do not create a generation.
-    source_python="$(readlink -f "$source_venv/bin/python")"
-    [ -x "$source_python" ] || { echo "locked API interpreter is unavailable: $source_python" >&2; return 1; }
-    source_runtime="$(python3 "$SCRIPT_DIR/cm_api_support_runtime.py" python-runtime "$source_python")" || return $?
+    local source_python source_runtime stage="" runtime_dir payload_id owned="" pending
+    cleanup_cm_api_runtime() {
+        if [ -n "$stage" ] && [ -d "$stage" ]; then
+            chmod -R u+w "$stage"
+            rm -rf -- "$stage"
+        fi
+        if [ -n "$owned" ] && [ -d "$owned" ]; then
+            chmod -R u+w "$owned"
+            rm -rf -- "$owned"
+        fi
+        exec 9>&-
+    }
+    trap cleanup_cm_api_runtime EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM HUP
     mkdir -p "$CM_API_RUNTIME_DIR/releases"
-    exec 9>"${CM_API_RUNTIME_DIR}/.provision.lock"
-    flock -x 9
-
-    stage="$(mktemp -d "${CM_API_RUNTIME_DIR}/.stage.XXXXXX")"
-    runtime_name="runtime-${stage##*.stage.}"
-    runtime_dir="$CM_API_RUNTIME_DIR/releases/$runtime_name"
-    trap 'test -z "$stage" || rm -rf "$stage"' RETURN
-    cp -a "$source_runtime" "$stage/python-runtime"
-    cp -a "$source_venv" "$stage/venv"
-    target_python="$runtime_dir/python-runtime/bin/$(basename "$source_python")"
-    [ -x "$stage/python-runtime/bin/$(basename "$source_python")" ] || { echo "copied API interpreter is unavailable: $target_python" >&2; return 1; }
-    for link in python python3 python3.12; do
-        rm -f "$stage/venv/bin/$link"
-        ln -s "$target_python" "$stage/venv/bin/$link"
+    # Only this owner's unpublished stage prefix is recoverable. Never prune
+    # published versions by count, process FDs, timestamps or current selection.
+    for stage in "$CM_API_RUNTIME_DIR"/.stage.*; do
+        [ -d "$stage" ] && [ ! -L "$stage" ] || continue
+        chmod -R u+w "$stage"
+        rm -rf -- "$stage"
     done
-    rewrite_cm_api_pyvenv_home "$stage/venv/pyvenv.cfg" "$runtime_dir/python-runtime/bin"
-
-    if [ -e "$runtime_dir" ] || [ -L "$runtime_dir" ]; then
-        echo "refusing to replace existing CM API runtime generation: $runtime_dir" >&2
-        return 1
-    fi
-    mv -T "$stage" "$runtime_dir"
-    stage="$runtime_dir"
-    apptainer exec --no-home --bind "$CM_API_RUNTIME_DIR:$CM_API_RUNTIME_DIR" \
-        "$CM_API_SUPPORT_IMAGE" \
-        "$runtime_dir/venv/bin/python" -c 'import jsonschema'
-
-    next_link="${CM_API_RUNTIME_DIR}/.current.${runtime_name}"
-    ln -s "releases/$runtime_name" "$next_link"
-    mv -Tf "$next_link" "$CM_API_RUNTIME_DIR/current"
     stage=""
-    trap - RETURN
-}
+    for pending in "$CM_API_RUNTIME_DIR"/releases/runtime-*/.pending-support-payload.json; do
+        [ -f "$pending" ] || continue
+        local incomplete="${pending%/.pending-support-payload.json}"
+        if [ ! -L "$incomplete" ] && [ ! -e "$incomplete/support-payload.json" ]; then
+            chmod -R u+w "$incomplete"
+            rm -rf -- "$incomplete"
+        fi
+    done
+    source_venv="$(cd "$source_venv" && pwd)"
+    source_python="$(readlink -f "$source_venv/bin/python")"
+    [ -x "$source_python" ] || { echo "locked API interpreter is unavailable: $source_python" >&2; exit 1; }
+    source_runtime="$(python3 "$SCRIPT_DIR/cm_api_support_runtime.py" python-runtime "$source_python")"
+    payload_id="$(python3 "$SCRIPT_DIR/cm_api_support_runtime.py" receipt "$source_venv" "$source_runtime" "$PROJECT_DIR" "${sync_log:-}")"
+    runtime_dir="$CM_API_RUNTIME_DIR/releases/runtime-$payload_id"
+    if [ ! -f "$runtime_dir/support-payload.json" ]; then
+        # An interrupted publication with no completion marker is our private
+        # incomplete target, not a retained completed runtime.
+        if [ -d "$runtime_dir" ]; then
+            chmod -R u+w "$runtime_dir"
+            rm -rf -- "$runtime_dir"
+        fi
+        stage="$(mktemp -d "${CM_API_RUNTIME_DIR}/.stage.XXXXXX")"
+        cp -a "$source_runtime" "$stage/python-runtime"
+        cp -a "$source_venv" "$stage/venv"
+        python3 "$SCRIPT_DIR/cm_api_support_runtime.py" prepare "$stage" "$runtime_dir" "$source_venv" "$source_runtime"
+        # Keep completion outside the visible payload until the existing probe
+        # succeeds. Both publication and failure cleanup remain lock-owned.
+        chmod u+w "$stage"
+        mv "$stage/support-payload.json" "$stage/.pending-support-payload.json"
+        mv -T "$stage" "$runtime_dir"
+        stage=""
+        owned="$runtime_dir"
+    fi
+    apptainer exec --no-home --bind "$CM_API_RUNTIME_DIR:$CM_API_RUNTIME_DIR:ro" \
+        "$CM_API_SUPPORT_IMAGE" "$runtime_dir/venv/bin/python" -B -c 'import jsonschema' >&2
+    if [ -n "$owned" ]; then
+        mv "$runtime_dir/.pending-support-payload.json" "$runtime_dir/support-payload.json"
+        chmod 555 "$runtime_dir"
+        owned=""
+    fi
+    # An old current may be embedded in queued/resume commands: never retarget.
+    if [ ! -e "$CM_API_RUNTIME_DIR/current" ] && [ ! -L "$CM_API_RUNTIME_DIR/current" ]; then
+        ln -s "releases/runtime-$payload_id" "$CM_API_RUNTIME_DIR/current"
+    fi
+    python3 "$SCRIPT_DIR/cm_api_support_runtime.py" published "$source_venv" "$runtime_dir"
+    printf '%s\n' "$runtime_dir"
+)
 
 cd "$PROJECT_DIR/platform/api"
+sync_log=""
+image_status=0
+CM_API_SUPPORT_IMAGE="$(python3 "$SCRIPT_DIR/cm_api_support_runtime.py" image "$PROJECT_DIR")" || image_status=$?
+if [ -n "$CM_API_SUPPORT_IMAGE" ] && [ "$image_status" = 0 ]; then
+    mkdir -p "$CM_API_RUNTIME_DIR"
+    exec 9>"$CM_API_RUNTIME_DIR/.provision.lock"
+    flock -x 9
+fi
+trap 'test -z "$sync_log" || rm -f -- "$sync_log"; exec 9>&-' EXIT
 if [ -n "$BMS_MANAGED_PYTHON" ]; then
-    API_SOURCE_VENV="$(dirname "$(dirname "$BMS_MANAGED_PYTHON")")"
+    API_SOURCE_VENV="${BMS_MANAGED_PYTHON_ROOT}/environment"
 else
     if ! command -v uv >/dev/null 2>&1; then
         echo "BioModStack workflow adapter launcher requires uv on PATH" >&2
         exit 1
     fi
-    uv sync --locked
-    API_SOURCE_VENV="$PROJECT_DIR/platform/api/.venv"
+    # Serialize the legacy mutation boundary as well as its receipt/publication.
+    # No change to supported uv flags or default dependency-group selection.
+    sync_log="$(mktemp "$UV_CACHE_DIR/.support-sync.XXXXXX")"
+    if uv sync --locked 2> "$sync_log"; then
+        cat "$sync_log" >&2
+    else
+        sync_status=$?
+        cat "$sync_log" >&2
+        exit "$sync_status"
+    fi
+    API_SOURCE_VENV="${UV_PROJECT_ENVIRONMENT:-$PROJECT_DIR/platform/api/.venv}"
 fi
-CM_API_SUPPORT_IMAGE="$(python3 "$SCRIPT_DIR/cm_api_support_runtime.py" image "$PROJECT_DIR")" || exit $?
+[ "$image_status" = 0 ] || exit "$image_status"
 if [ -n "$CM_API_SUPPORT_IMAGE" ]; then
-    provision_cm_api_runtime
+    selected_runtime="$(provision_cm_api_runtime)"
     export BMS_CM_API_RUNTIME_DIR="$CM_API_RUNTIME_DIR"
-    export BMS_API_PYTHON="$CM_API_RUNTIME_DIR/current/venv/bin/python"
+    export BMS_API_PYTHON="$selected_runtime/venv/bin/python"
+    export BMS_SUPPORT_PAYLOAD_RECEIPT="$selected_runtime/support-payload.json"
+    if [ -n "$BMS_MANAGED_PYTHON" ]; then
+        BMS_MANAGED_PYTHON="$BMS_API_PYTHON"
+    fi
 elif [ "${BMS_WORKFLOW_ADAPTER_LANE,,}" = development ]; then
     # The host control plane does not require optional scientific containers.
     # Do not advertise a stale/unprobed portable interpreter. Model admission
     # continues to require the existing registered runtime and attestation.
-    unset BMS_API_PYTHON
+    unset BMS_API_PYTHON BMS_SUPPORT_PAYLOAD_RECEIPT
     echo "CM support runtime unprovisioned: no installed/selected Protenix or Frustra image; scientific runtime admission remains required." >&2
 else
     echo "BioModStack workflow adapter is blocked: CM support image is unprovisioned." >&2
     exit 78
 fi
+if [ -n "$sync_log" ]; then
+    rm -f -- "$sync_log"
+    sync_log=""
+fi
+exec 9>&-
+trap - EXIT
 if [ -n "$BMS_MANAGED_PYTHON" ]; then
     exec "$BMS_MANAGED_PYTHON" -m uvicorn workflow_adapter_app:app --port "$BMS_WORKFLOW_ADAPTER_PORT" --host "$BMS_WORKFLOW_ADAPTER_BIND_HOST" --no-proxy-headers --no-access-log
 fi

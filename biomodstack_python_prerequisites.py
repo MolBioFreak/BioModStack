@@ -176,6 +176,10 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
         if state and state.get("status") == "complete":
             try:
                 resolve_python_environment(project_root)
+                receipt = refresh_installed_support(root, expected)
+                if receipt is not None and receipt["payload_id"] != (state.get("support_payload") or {}).get("payload_id"):
+                    state["support_payload"] = receipt
+                    save(root, state)
                 report.update(status="already-installed", dependencies_installed=True,
                               steps=[{"step": "offline-check", "status": "complete"}])
                 return report
@@ -215,6 +219,9 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
         if identity(project_root) != expected:
             raise PrerequisiteError("source_changed", "Source identity changed during bootstrap")
         state.update(status="complete", inventory_sha256=fingerprint)
+        receipt = refresh_installed_support(root, expected)
+        if receipt is not None:
+            state["support_payload"] = receipt
         state["steps"].append({"step": "offline-check", "status": "complete"})
         save(root, state)
         report.update(status="installed", dependencies_installed=True, steps=state["steps"])
@@ -268,8 +275,163 @@ def _resolve_python_environment(project_root: Path) -> dict | None:
     env = subprocess_env(root)
     env["PATH"] = str(root / "environment/bin") + os.pathsep + str(root / "toolchain/bin") + os.pathsep + env.get("PATH", os.defpath)
     env["VIRTUAL_ENV"] = str(root / "environment")
-    return {"python": str(root / "environment/bin/python"),
-            "uv": str(root / "toolchain/bin/uv"), "root": str(root), "env": env}
+    support_payload = state.get("support_payload")
+    python = root / "environment/bin/python"
+    if isinstance(support_payload, dict) and support_payload.get("python"):
+        selected = Path(support_payload["python"])
+        if selected.is_file():
+            python = selected
+        else:
+            support_payload = None  # optional representation, not a new refusal
+    return {"python": str(python), "source_python": str(root / "environment/bin/python"),
+            "uv": str(root / "toolchain/bin/uv"), "root": str(root), "env": env,
+            "support_payload": support_payload}
+
+
+def refresh_installed_support(root: Path, expected: dict) -> dict | None:
+    """Explicit install/refresh boundary; system-Python setup remains supported."""
+    runtime = (root / "environment/bin/python").resolve().parent.parent
+    if runtime in {Path(p) for p in ("/", "/usr", "/usr/local", "/opt", "/home", "/bin", "/lib", "/lib64")} or not (runtime / "lib").is_dir():
+        return None
+    return support_payload_receipt(root / "environment", runtime,
+        selection={"groups": [], "extras": [], "install_project": False,
+                   "policy": expected["policy"]}, installer_version=UV_VERSION, refresh=True)
+
+
+def support_payload_receipt(venv: Path, runtime: Path, *, selection: dict,
+                            installer_version: str, refresh: bool = False,
+                            state_root: Path | None = None) -> dict:
+    """Inventory at the install/sync boundary, never at each Job or restart.
+
+    Called under the support provision lock. Mutable input is copied, not used
+    as a hardlink donor. Its optional receipt is observation, not admission.
+    Explicit bootstrap/uv mutations refresh it; arbitrary developer edits are
+    deliberately not continuously attested.
+    """
+    receipt_path = venv / ".bms-support-payload.json"
+    executable = (venv / "bin/python").resolve()
+    stat = executable.stat()
+    observation = {"selection": selection, "installer_version": installer_version,
+                   "interpreter": [str(executable), stat.st_dev, stat.st_ino,
+                                   stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]}
+    previous = None
+    try:
+        previous = json.loads(receipt_path.read_text())
+    except (OSError, ValueError):
+        pass
+    payload_id = previous.get("payload_id") if isinstance(previous, dict) else None
+    if (not refresh and isinstance(previous, dict) and previous.get("observation") == observation
+            and isinstance(payload_id, str) and len(payload_id) == 64
+            and all(char in "0123456789abcdef" for char in payload_id)
+            and isinstance(previous.get("members"), list)
+            and isinstance(previous.get("interpreter"), dict)):
+        return previous
+    probe = subprocess.run([str(venv / "bin/python"), "-I", "-B", "-c",
+        "import json,platform,sys,sysconfig; print(json.dumps(dict("
+        "implementation=platform.python_implementation(),version=sys.version,"
+        "build=platform.python_build(),platform=sys.platform,machine=platform.machine(),"
+        "soabi=sysconfig.get_config_var('SOABI'))))"], check=True,
+        capture_output=True, text=True)
+    interpreter = json.loads(probe.stdout)
+    members = support_members(venv, runtime, normalize=True)
+    member_sha = hashlib.sha256(json.dumps(members, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    identity_data = {"selection": selection, "installer_version": installer_version,
+                     "interpreter": interpreter, "member_manifest_sha256": member_sha}
+    receipt = {**identity_data, "payload_id": hashlib.sha256(json.dumps(
+        identity_data, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+        "members": members, "observation": observation}
+    _write_support_json(receipt_path, receipt)
+    if state_root is not None:
+        state = json.loads((state_root / "state.json").read_text())
+        state["support_payload"] = receipt
+        save(state_root, state)
+    return receipt
+
+
+def _write_support_json(path: Path, value: dict) -> None:
+    fd, temporary = tempfile.mkstemp(prefix=".support-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(value, stream, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def support_regenerable_bytecode(path: Path) -> bool:
+    if path.suffix != ".pyc":
+        return False
+    if path.parent.name == "__pycache__":
+        return (path.parent.parent / (path.name.split(".")[0] + ".py")).is_file()
+    return path.with_suffix(".py").is_file()
+
+
+def support_members(venv: Path, runtime: Path, *, normalize: bool) -> list[dict]:
+    """Regular bodies include standalone stdlib and native interpreter libraries.
+
+    Only installer-owned relocation fields are normalized. Final output bytes
+    have their own member inventory at publication for existing transports.
+    """
+    members = []
+    roots = (("python-runtime", runtime), ("venv", venv))
+    for prefix, root in roots:
+        for path in sorted(root.rglob("*")):
+            if path == venv / ".bms-support-payload.json" or support_regenerable_bytecode(path):
+                continue
+            relative = path.relative_to(root).as_posix()
+            row: dict = {"path": prefix + "/" + relative}
+            if path.is_symlink():
+                target = os.readlink(path)
+                if normalize:
+                    reference = os.path.normpath(str(path.parent / target))
+                    for label, donor in roots:
+                        if reference == str(donor) or reference.startswith(str(donor) + "/"):
+                            target = "${" + label + "}" + reference[len(str(donor)):]
+                            break
+                row.update(kind="symlink", target=target, mode=0o777, size=0)
+            elif path.is_dir():
+                row.update(kind="directory", mode=0o555, size=0)
+            elif path.is_file():
+                digest = hashlib.sha256()
+                size = 0
+                if normalize and (relative == "pyvenv.cfg" or relative.startswith("bin/")):
+                    data = support_relocated_bytes(relative, path.read_bytes(), venv, runtime,
+                                                   "${venv}", "${python-runtime}")
+                    digest.update(data)
+                    size = len(data)
+                else:
+                    with path.open("rb") as stream:
+                        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                            size += len(chunk)
+                row.update(kind="file", size=size, sha256=digest.hexdigest(),
+                           mode=0o555 if path.stat().st_mode & 0o111 else 0o444)
+            else:
+                continue
+            members.append(row)
+    return members
+
+
+def support_relocated_bytes(relative: str, data: bytes, venv: Path, runtime: Path,
+                            target_venv: str, target_runtime: str) -> bytes:
+    if relative == "pyvenv.cfg":
+        lines = data.decode().splitlines(keepends=True)
+        return "".join(line.replace(str(runtime), target_runtime).replace(str(venv), target_venv)
+                       if line.startswith(("home =", "executable =", "command =")) else line
+                       for line in lines).encode()
+    if relative in {"bin/activate", "bin/activate.csh", "bin/activate.fish", "bin/activate.nu",
+                    "bin/activate.ps1", "bin/Activate.ps1", "bin/activate_this.py"}:
+        return data.replace(str(venv).encode(), target_venv.encode())
+    if relative.startswith("bin/") and data.startswith(b"#!"):
+        # uv entrypoint shebangs (including the /bin/sh space-path trampoline).
+        lines = data.splitlines(keepends=True)
+        for index in range(min(3, len(lines))):
+            lines[index] = lines[index].replace(str(venv).encode(), target_venv.encode()).replace(
+                str(runtime).encode(), target_runtime.encode())
+        return b"".join(lines)
+    return data
 
 
 def dispatch_setup(project_root: Path) -> None:

@@ -129,7 +129,8 @@ def test_invalid_managed_receipt_never_reaches_legacy_uv(isolated, monkeypatch):
 def test_managed_launcher_uses_external_venv_not_checkout():
     launcher = (ROOT / "scripts/run_biomodstack_workflow_adapter.sh").read_text()
     assert launcher.index("bms_configuration_read_finish") < launcher.index("bms_python_runtime_resolve")
-    assert 'API_SOURCE_VENV="$(dirname "$(dirname "$BMS_MANAGED_PYTHON")")"' in launcher
+    assert 'API_SOURCE_VENV="${BMS_MANAGED_PYTHON_ROOT}/environment"' in launcher
+    assert 'BMS_API_PYTHON="$selected_runtime/venv/bin/python"' in launcher
     assert 'exec "$BMS_MANAGED_PYTHON" -m uvicorn' in launcher
     assert 'local source_venv="$API_SOURCE_VENV"' in launcher
 

@@ -1369,6 +1369,10 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     from biomodstack_local_resources import configured_local_policy
     local_policy = configured_local_policy()
     shared_data_root = Path(str(resolved.get("data_root", Path("/mnt/BioModStack")))).expanduser().resolve()
+    # Host support bodies are independent of lane-local BMS_DATA/job state.
+    support_payload_root = Path(os.environ.get("BMS_CM_API_RUNTIME_DIR", "").strip() or
+        str(Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) /
+            "biomodstack/runtime/cm-api-python")).expanduser().resolve()
     # All lanes share bytes, but consume only their own published references.
     runtime_image_store = Path(
         os.environ.get("BMS_RUNTIME_IMAGE_STORE", "").strip()
@@ -1448,6 +1452,8 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             Environment={systemd_value(f"BMS_HOME={root}")}
             Environment={systemd_value(f"BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}")}
             Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={PRODUCTION_LANE}")}
+            Environment={systemd_value(f"BMS_CM_API_RUNTIME_DIR={support_payload_root}")}
+            {python_root_directive}
             Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
             Environment={systemd_value(f"BMS_STATE_DIR={production_state_root}")}
             Environment={systemd_value(f"BMS_DATA={production_state_root}")}
@@ -1498,6 +1504,8 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             Environment={systemd_value(f"BMS_HOME={root}")}
             Environment={systemd_value(f"BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}")}
             Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={PRODUCTION_LANE}")}
+            Environment={systemd_value(f"BMS_CM_API_RUNTIME_DIR={support_payload_root}")}
+            {python_root_directive}
             Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
             Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_URL={workflow_adapter_url_for_lane(PRODUCTION_LANE)}")}
             Environment={systemd_value(f"BMS_STATE_DIR={production_state_root}")}
@@ -1717,6 +1725,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_HOME={root}")}
         Environment={systemd_value(f"BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}")}
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}")}
+        Environment={systemd_value(f"BMS_CM_API_RUNTIME_DIR={support_payload_root}")}
         {python_root_directive}
         Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
         Environment={systemd_value(f"BMS_STATE_DIR={dev_data_root}")}
@@ -1775,6 +1784,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_HOME={root}")}
         Environment={systemd_value(f"BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}")}
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}")}
+        Environment={systemd_value(f"BMS_CM_API_RUNTIME_DIR={support_payload_root}")}
         {python_root_directive}
         Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_URL={workflow_adapter_url_for_lane(DEVELOPMENT_LANE)}")}
@@ -1912,6 +1922,21 @@ def install_user_units(
                                                        "Environment=BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST=")))
             if retained != original:
                 legacy.write_text(retained, encoding="utf-8")
+
+    # Retire the known operator override, not arbitrary user service settings.
+    # Leave retention/environment/RestartPreventExitStatus intact. The wrapper
+    # is no longer invoked, and no destructive wrapper is saved for rollback.
+    legacy_guard = target_dir / f"{DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE}.d" / "zzzz-runtime-retention-guard.conf"
+    if legacy_guard.is_file():
+        original = legacy_guard.read_text(encoding="utf-8")
+        lines = original.splitlines(keepends=True)
+        if any(line.strip().startswith("ExecStart=") and
+               "development_workflow_adapter_guard.sh" in line for line in lines):
+            retained = "".join(line for line in lines if not (
+                line.strip() == "ExecStart=" or
+                (line.strip().startswith("ExecStart=") and
+                 "development_workflow_adapter_guard.sh" in line)))
+            legacy_guard.write_text(retained, encoding="utf-8")
 
     written_paths: list[Path] = []
     for unit_name, content in render_user_units(root, runtime_mode=runtime_mode).items():
