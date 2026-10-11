@@ -80,7 +80,7 @@ PROCESS_CONTRACTS = {
     'modules/ligandmpnn_interface_context.nf:RunLigandMPNNInterfaceContext': (('gpu',), ('tuple val(invocation_id), path(request_snapshot), path(source_snapshot)',), ("tuple val(invocation_id), path('context_result'), emit: evidence",), ('scripts/stage_ligandmpnn_interface_context.py', 'scripts/run_ligandmpnn_interface_context.py', 'platform/api/services/ligandmpnn_interface_context.py'), ("errorStrategy 'terminate'", 'maxRetries 0')),
     'modules/frustrampnn.nf:CanonicalFrustraMPNNV2Task': (('frustrampnn_gpu',), ('tuple path(component_request), path(source_structure), path(structure_map)',), ("tuple path('candidate_bundle/workflow_component_result_v3.json'), \\", "path('candidate_bundle'), \\", "path('candidate_bundle/frustrampnn_result_manifest_v3.json'), emit: result"), ('scripts/run_frustrampnn_component.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
     'modules/frustrampnn_parent_fanout.nf:StageFrustraMPNNParentCandidate': (('CPU',), ('tuple val(candidate_meta), path(terminal_structure)',), ("path 'candidate_*', emit: candidate",), ('scripts/stage_frustrampnn_parent_candidate.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
-    'modules/frustrampnn_parent_fanout.nf:SpawnWaitFrustraMPNNParentChildren': (('CPU',), ('val parent_job_id', 'val parent_workflow_id', 'val settings_json', 'val settings_value_origin', 'path candidate_dirs'), ("path 'frustrampnn_parent_terminal_v1.json', emit: receipt", "path 'frustrampnn_child_bundles', emit: bundles"), ('scripts/run_frustrampnn_parent_fanout.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
+    'modules/frustrampnn_parent_fanout.nf:SpawnWaitFrustraMPNNParentChildren': (('CPU',), ('val parent_job_id', 'val parent_workflow_id', 'val settings_json', 'val settings_value_origin', 'path candidate_dirs'), ("path 'frustrampnn_parent_terminal_v1.json', emit: receipt", "path 'frustrampnn_child_bundles', emit: bundles"), ('scripts/run_frustrampnn_parent_fanout.py', 'scripts/stage_frustrampnn_parent_candidate.py'), ("errorStrategy 'terminate'", 'maxRetries 0')),
     'modules/frustrampnn_parent_fanout.nf:ReportFrustraMPNNParentChildrenComplete': (('CPU',), ('val parent_job_id', 'val parent_workflow_id', 'path terminal_receipt'), ("path 'frustrampnn_children_complete.reported', emit: marker",), ('scripts/stage_reporter.py',), ("errorStrategy 'terminate'", 'maxRetries 0')),
     'modules/iggm.nf:IGGM_DENOVO': (('process_gpu',), ('tuple val(meta), path(antigen_pdb)', 'val epitope_residues'), ('tuple val(meta), path("output/*.pdb"), emit: designs', 'tuple val(meta), path("output/*.json"), emit: scores, optional: true', 'path "iggm_denovo_${meta.id}.log"'), (), ('container "${params.container_dir}/iggm.sif"',)),
     'modules/iggm.nf:IGGM_AFFINITY_MATURATION': (('process_gpu',), ('tuple val(meta), path(antibody_pdb), path(antigen_pdb)',), ('tuple val(meta), path("output/*_matured.pdb"), emit: matured_designs', 'tuple val(meta), path("output/*_mutations.json"), emit: mutations', 'path "iggm_maturation_${meta.id}.log"'), (), ('container "${params.container_dir}/iggm.sif"',)),
@@ -624,7 +624,9 @@ class _NativeAnnotations:
             (key,), 'planned_from_generated_candidates' if enabled else 'disabled'))
 
     def frustra(self, after, *, owner=None):
-        deps = (self.asset('image', 'frustrampnn.sif', 'modules/frustrampnn_remote.nf', 'frustrampnn_container_path'),)
+        deps = (self.asset('image', 'frustrampnn.sif', 'modules/frustrampnn_remote.nf', 'frustrampnn_container_path'),
+                self.asset('support_tool', 'scripts/stage_frustrampnn_parent_candidate.py',
+                           'modules/frustrampnn_remote.nf; scripts/remote_frustrampnn_batch.py'))
         # The canonical process consumes the native batch manifest; its allowed
         # expansion binds ordering and joins, not future candidate identities.
         name = 'RunPersistedFrustraMPNNGroupedBatch'

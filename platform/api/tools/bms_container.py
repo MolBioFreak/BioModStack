@@ -292,7 +292,7 @@ def _weight_acquisition_object(path):
     for key in ('BMS_HOST_WEIGHTS', 'BMS_WEIGHTS'):
         root = os.environ.get(key)
         if root:
-            objects = Path(root) / 'objects/sha256'
+            objects = Path(root).resolve() / 'objects/sha256'
             if (path.name == 'runtime.sif' and path.parent.parent == objects
                     and len(path.parent.name) == 64
                     and all(c in '0123456789abcdef' for c in path.parent.name)):

@@ -6330,7 +6330,7 @@ def _execution_plan_preview(job_data: JobCreate, declared_expansions=None) -> di
     """
     from dataclasses import replace
     from component_runtime import digest
-    from services.nextflow import compile_workflow_provision_request
+    from services.nextflow import compile_workflow_provision_request, cm_runtime_references
     from paths import get_data_root, get_inputs_dir, get_results_dir
     from scripts.lib.portable_inputs import discover_native_input_references
     import yaml
@@ -6370,7 +6370,9 @@ def _execution_plan_preview(job_data: JobCreate, declared_expansions=None) -> di
         request.model_id, request.mode, request.params, (),
         output_dir=Path(invocation.native_parameters['out_dir']),
         allowed_roots=(get_data_root(), get_inputs_dir(), get_results_dir()),
-        yaml_loader=yaml.safe_load)
+        yaml_loader=yaml.safe_load,
+        runtime_references=cm_runtime_references(request.params)
+        if request.model_id == 'conformational_mapping' else None)
     authority = {
         'schema': 'bms.job.execution-preview.v1',
         'request': request.model_dump(mode='json', exclude={'execution_plan_approval'}),

@@ -143,6 +143,13 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
               "read_only": action != "python-bootstrap"}
     state = None
     locked = None
+    def publish_support(root):
+        try:
+            publish_installed_support(root)
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            # The installed interpreter remains usable if this optional storage
+            # representation cannot be published. Do not add a bootstrap gate.
+            print(f"BioModStack optional support publication unavailable: {exc}", file=sys.stderr)
     try:
         if action not in ACTIONS:
             raise PrerequisiteError("action_invalid", "Unsupported Python prerequisite action")
@@ -184,7 +191,7 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
                               steps=[{"step": "offline-check", "status": "complete"}])
                 locked.close()
                 locked = None
-                publish_installed_support(root)
+                publish_support(root)
                 return report
             except PrerequisiteError:
                 pass  # Explicit bootstrap may repair same-identity dependencies.
@@ -229,7 +236,7 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
         save(root, state)
         locked.close()
         locked = None
-        publish_installed_support(root)
+        publish_support(root)
         report.update(status="installed", dependencies_installed=True, steps=state["steps"])
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         error = {"code": getattr(exc, "code", "prerequisite_failed"), "message": str(exc)}

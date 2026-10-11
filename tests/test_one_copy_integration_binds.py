@@ -72,3 +72,107 @@ def test_actual_nextflow_config_keeps_weight_modes_and_environment_values_separa
         writable_indices = [i for i, line in enumerate(lines)
                             if '--bind ${params.code_root}' in line or '--bind ${params.data_root' in line]
         assert not writable_indices or min(weight_indices) > max(writable_indices)
+
+
+def _pinned_layout(tmp_path):
+    import hashlib
+    weights = tmp_path / 'weights'
+    layout = weights / 'layouts/protenix' / ('a' * 64)
+    layout.mkdir(parents=True)
+    objects = {}
+    for name in ('checkpoint/model.pt', 'common/components.cif'):
+        body = ('inert selected ' + name).encode()
+        digest = hashlib.sha256(body).hexdigest()
+        source = weights / 'objects/sha256' / digest / 'runtime.sif'
+        source.parent.mkdir(parents=True)
+        source.write_bytes(body)
+        source.chmod(0o400)
+        member = layout / name
+        member.parent.mkdir(exist_ok=True)
+        member.symlink_to(os.path.relpath(source, member.parent))
+        objects[name] = source
+    (weights / 'protenix').symlink_to(os.path.relpath(layout, weights), target_is_directory=True)
+    unused = weights / 'objects/sha256' / ('f' * 64) / 'runtime.sif'
+    unused.parent.mkdir()
+    unused.write_bytes(b'not selected')
+    return weights, layout, objects, unused
+
+
+def _emitted_bind(tmp_path, source, guest):
+    config = (REPO / 'nextflow.config').read_text()
+    method = config[config.index('def weightBind('):config.index('def gpuPrefix(')]
+    script = method + '\nprintln(groovy.json.JsonOutput.toJson(weightBind(' + json.dumps(str(source)) + ', ' + json.dumps(guest) + ')))'
+    result = subprocess.run(['java', '-cp', str(_jar()), 'groovy.ui.GroovyMain', '-e', script],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout.strip())
+
+
+@pytest.mark.parametrize('guest', ['/protenix_weights', '/nested/native/model/weights', None])
+def test_pinned_layout_projects_only_selected_referents_at_guest_depth(tmp_path, guest):
+    import posixpath
+    from tools.bms_container import parse_exec
+    weights, layout, objects, unused = _pinned_layout(tmp_path)
+    source = weights / 'protenix'
+    binds = parse_exec(['--bind', _emitted_bind(tmp_path, source, guest), '/fixture.sif', 'true']).binds
+    assert (str(layout), guest or str(source), 'ro') in binds
+    assert (str(layout), str(source), 'ro') in binds
+    assert (str(layout), str(layout), 'ro') in binds
+    for native in objects.values():
+        projected = posixpath.normpath(posixpath.join(guest or str(source), os.path.relpath(native, layout)))
+        assert (str(native), projected, 'ro') in binds
+        assert (str(native), str(native), 'ro') in binds
+        assert native.stat().st_nlink == 1 and native.stat().st_mode & 0o777 == 0o400
+    assert not any(str(unused) == source or source == str(weights / 'objects') for source, _, _ in binds)
+    assert all(mode == 'ro' for _, _, mode in binds)
+
+
+def test_actual_apptainer_selected_weight_aliases_readonly_with_writable_cache(tmp_path):
+    """Genuine kernel mounts with tiny payloads; no scientific execution."""
+    image = os.environ.get('BMS_TEST_READONLY_SIF')
+    runtime = shutil.which('apptainer')
+    if not image or not Path(image).is_file() or runtime is None:
+        pytest.skip('explicit existing readonly SIF and Apptainer required')
+    weights, layout, objects, _ = _pinned_layout(tmp_path)
+    cache = tmp_path / 'native-cache'
+    cache.mkdir()
+    control = tmp_path / 'writable-control'
+    control.write_bytes(b'control')
+    control.chmod(0o400)
+    guest = '/protenix_weights'
+    binding = _emitted_bind(tmp_path, weights / 'protenix', guest)
+    before = {str(p): (p.read_bytes(), p.stat().st_ino, p.stat().st_mode, p.stat().st_mtime_ns)
+              for p in objects.values()}
+    names = [str(objects['checkpoint/model.pt']), str(layout / 'checkpoint/model.pt'),
+             str(weights / 'protenix/checkpoint/model.pt'), guest + '/checkpoint/model.pt']
+    code = '''set -euo pipefail
+expected="$1"; cache="$2"; control="$3"; shift 3
+# Prove the broad mount is writable despite the original source mode.
+chmod 0600 "$control"
+printf '%s' 'writable broad control' > "$control"
+printf '%s' 'private native cache' > "$cache/generated"
+for name in "$@"; do
+    [[ "$(< "$name")" == "$expected" ]]
+    if chmod 0600 "$name" 2>/dev/null; then
+        printf 'selected alias permits chmod: %s\\n' "$name" >&2; exit 1
+    fi
+    if (printf '%s' 'forbidden mutation' > "$name") 2>/dev/null; then
+        printf 'selected alias permits write: %s\\n' "$name" >&2; exit 1
+    fi
+    [[ "$(< "$name")" == "$expected" ]]
+done
+printf '%s\\n' ACTUAL_APPTAINER_SELECTED_ALIAS_READONLY
+'''
+    env = dict(os.environ, APPTAINER_CACHEDIR=str(tmp_path / 'apptainer-cache'),
+               APPTAINER_TMPDIR=str(tmp_path / 'apptainer-tmp'))
+    Path(env['APPTAINER_TMPDIR']).mkdir()
+    result = subprocess.run(['unshare', '--user', '--map-root-user', '--net', runtime, 'exec',
+        '--containall', '--no-home', '--bind', f'{tmp_path}:{tmp_path}', '--bind', binding,
+        image, '/bin/bash', '-c', code, 'fixture', objects['checkpoint/model.pt'].read_text(),
+        str(cache), str(control), *names], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'ACTUAL_APPTAINER_SELECTED_ALIAS_READONLY' in result.stdout
+    assert (cache / 'generated').read_text() == 'private native cache'
+    assert control.read_bytes() == b'writable broad control'
+    assert {str(p): (p.read_bytes(), p.stat().st_ino, p.stat().st_mode, p.stat().st_mtime_ns)
+            for p in objects.values()} == before

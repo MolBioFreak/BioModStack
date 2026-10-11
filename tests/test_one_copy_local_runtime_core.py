@@ -185,7 +185,7 @@ def test_optional_adoption_storage_failure_does_not_add_startup_gate(runtime, mo
     assert json.loads((root / 'state.json').read_text())['status'] == 'complete'
 
 
-def test_image_less_publication_failure_recovers_without_retargeting_current(runtime, monkeypatch):
+def test_image_less_publication_failure_recovers_without_retargeting_current(runtime, monkeypatch, capsys):
     root, _ = managed(runtime, monkeypatch)
     project, _, _, env = runtime
     shared = Path(env['BMS_CM_API_RUNTIME_DIR'])
@@ -198,7 +198,9 @@ def test_image_less_publication_failure_recovers_without_retargeting_current(run
         raise OSError('fixture copy failure')
     monkeypatch.setattr(shutil, 'copytree', fail)
     report = prerequisites.prerequisite_report('python-bootstrap', project_root=project)
-    assert report['errors'] and report['status'] == 'blocked'
+    assert not report['errors'] and report['status'] == 'already-installed', report
+    assert report['dependencies_installed'] is True
+    assert 'optional support publication unavailable' in capsys.readouterr().err
     assert json.loads((root / 'state.json').read_text())['status'] == 'complete'
     assert not list(shared.glob('.stage.*'))
     assert os.readlink(shared / 'current') == 'retained'
