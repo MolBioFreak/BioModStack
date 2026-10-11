@@ -71,14 +71,18 @@ def _retain_prepared_input(source, destination):
     import errno
     import os
     import shutil
-    # The destination is new and private. No chmod or in-place overwrite of
-    # a retained input, including a previously linked sibling, is permitted.
-    try:
-        os.link(Path(source).resolve(strict=True), destination)
-    except OSError as exc:
-        if exc.errno != errno.EXDEV:
-            raise
-        shutil.copyfile(source, destination)  # independent cross-filesystem owner
+    # New snapshots are frozen by their producer. Historical writable custody
+    # remains independent; never chmod or overwrite a shared donor inode.
+    source = Path(source).resolve(strict=True)
+    if not source.stat().st_mode & 0o222:
+        try:
+            os.link(source, destination)
+            return str(destination)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+    shutil.copyfile(source, destination)
+    Path(destination).chmod(0o444)  # This newly copied inode belongs only here.
     return str(destination)
 
 
@@ -115,6 +119,7 @@ def prepare_for_job(mode, params, directory, *, allowed_roots, retain_prepared=F
         _retain_prepared_input(source, owned)
     else:
         owned.write_bytes(regular_bytes(source))
+        owned.chmod(0o444)
     (destination / 'request.json').write_text(json.dumps(document, sort_keys=True, allow_nan=False) + '\n')
     return {REQUEST_FIELD:str((destination/'request.json').resolve()), INPUT_FIELD:str(owned.resolve())}
 

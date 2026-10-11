@@ -17,7 +17,8 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 
 
 @pytest.mark.parametrize('model', ['caliby_native', 'ppiflow_generation', 'ligandmpnn_design', 'protonpottsmpnn_design'])
-def test_prepared_custody_two_new_owners_survive_source_and_sibling_deletion(tmp_path, model):
+@pytest.mark.parametrize('legacy_writable', [False, True])
+def test_prepared_custody_two_new_owners_survive_source_and_sibling_deletion(tmp_path, model, legacy_writable):
     native = importlib.import_module('services.' + model)
     source = tmp_path / 'external.pdb'
     source.write_text('REMARK INERT SOURCE\nEND\n')
@@ -46,11 +47,28 @@ def test_prepared_custody_two_new_owners_survive_source_and_sibling_deletion(tmp
     leaf = tmp_path / 'first' / relative
     assert not source.samefile(leaf), 'external mutable acquisition must stay private'
     expected = read(first)
+    assert not leaf.stat().st_mode & 0o222
+    if legacy_writable:
+        leaf.chmod(0o644)  # Accepted older snapshots predate producer freezing.
+    original_mode = leaf.stat().st_mode
     source.write_text('REPLACED EXTERNAL SOURCE\n')
     second = prepare(mode, {**science, **first}, tmp_path / 'second', allowed_roots=[tmp_path])
-    third = prepare(mode, {**science, **first}, tmp_path / 'third', allowed_roots=[tmp_path])
+    third = prepare(mode, {**science, **second}, tmp_path / 'third', allowed_roots=[tmp_path])
     leaves = [tmp_path / name / relative for name in ['first', 'second', 'third']]
-    assert len({(p.stat().st_dev, p.stat().st_ino) for p in leaves}) == 1
+    assert leaves[1].samefile(leaves[2])
+    assert leaves[0].samefile(leaves[1]) is not legacy_writable
+    assert leaves[0].stat().st_mode == original_mode
+    assert not leaves[1].stat().st_mode & 0o222
+    if legacy_writable:
+        leaves[0].write_text('later legacy source mutation\n')
+        assert read(second) == expected
+    elif model == 'caliby_native':
+        # Its CLI also permits repreparing an owned directory. The new input
+        # must replace that name instead of overwriting the sibling's inode.
+        native.materialize_request(mode, science, tmp_path / 'first')
+        assert not leaves[0].samefile(leaves[1])
+        assert leaves[0].read_text() == 'REPLACED EXTERNAL SOURCE\n'
+        assert read(second) == expected
     assert leaves[0].stat().st_blocks == leaves[2].stat().st_blocks
     assert not (tmp_path / 'first/request.json').samefile(tmp_path / 'third/request.json')
     shutil.rmtree(tmp_path / 'first')

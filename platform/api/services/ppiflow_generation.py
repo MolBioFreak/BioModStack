@@ -215,6 +215,7 @@ def materialize_ppiflow_generation_request(mode: str, params: dict, directory: s
             authorize_source(source)
         dest = inputs / name
         shutil.copyfile(source, dest)
+        dest.chmod(0o444)
         relative = dest.relative_to(root).as_posix()
         bindings.append({"role": role, "original_path": str(source), "path": relative,
                          "sha256": _digest(dest), "size": dest.stat().st_size})
@@ -265,14 +266,18 @@ def _retain_prepared_input(source, destination):
     import errno
     import os
     import shutil
-    # The destination is new and private. No chmod or in-place overwrite of
-    # a retained input, including a previously linked sibling, is permitted.
-    try:
-        os.link(Path(source).resolve(strict=True), destination)
-    except OSError as exc:
-        if exc.errno != errno.EXDEV:
-            raise
-        shutil.copyfile(source, destination)  # independent cross-filesystem owner
+    # New snapshots are frozen by their producer. Historical writable custody
+    # remains independent; never chmod or overwrite a shared donor inode.
+    source = Path(source).resolve(strict=True)
+    if not source.stat().st_mode & 0o222:
+        try:
+            os.link(source, destination)
+            return str(destination)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+    shutil.copyfile(source, destination)
+    Path(destination).chmod(0o444)  # This newly copied inode belongs only here.
     return str(destination)
 
 

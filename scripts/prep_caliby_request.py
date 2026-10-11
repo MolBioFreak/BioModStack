@@ -6,7 +6,9 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import shutil
+import tempfile
 from pathlib import Path
 
 
@@ -29,7 +31,17 @@ def prepare_request(request: dict, output_dir: Path, *, authorize_source=None) -
         relative = Path("structures") / f"state_{index:06d}{suffix}"
         target = output_dir / relative
         target.parent.mkdir(exist_ok=True)
-        shutil.copyfile(source, target)
+        # A repeated preparation replaces this name, never a retained sibling's
+        # inode. Freeze the new private snapshot before any consumer can share it.
+        descriptor, name = tempfile.mkstemp(prefix='.source-', dir=target.parent)
+        os.close(descriptor)
+        temporary = Path(name)
+        try:
+            shutil.copyfile(source, temporary)
+            temporary.chmod(0o444)
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
         sources.append({"state_id": state["state_id"], "source_path": state["path"],
                         "path": relative.as_posix(), "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
                         "native_example_id": target.stem})

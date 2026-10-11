@@ -112,6 +112,7 @@ def test_offline_retention_copy_and_relocation_hash_inventory(case, roots, tmp_p
     for member, (data, _) in before.items():
         assert resolve_input_path(root / member).read_bytes() == data
     member = Path(document['sources'][0]['path'])
+    (remote / member).chmod(0o644)  # Deliberate byte-corruption control.
     (remote / member).write_bytes(b'changed')
     with pytest.raises(ValueError, match='digest/size mismatch'):
         resolve_input_path(root / member)
@@ -141,6 +142,7 @@ def test_requested_effective_and_coherent_byte_tampering(case, roots):
     request.write_bytes(original)
     doc = json.loads(original)
     source = root / doc['sources'][0]['path']
+    source.chmod(0o644)  # Deliberate corruption of a published snapshot.
     source.write_bytes(b'data_CHANGED\n')
     with pytest.raises(ValueError, match='bytes changed'):
         read_prepared_request(mode, params, root)
@@ -156,8 +158,13 @@ def test_real_input_assets_containment_and_no_missing_tree_fallback(case, roots,
     mode, _, sources, output = case
     params, root = prepare(case, roots)
     (root / 'escape.cif').symlink_to(Path(sources[0]['path']))
+    # Discovery addresses declared leaves; the actual transfer inventory still
+    # refuses an undeclared symlink in the directory being transported.
+    selected = dict(assets(roots, mode, params, output))
+    assert root in selected
     with pytest.raises(bundle.RemoteBundleError, match='symlink'):
-        assets(roots, mode, params, output)
+        bundle._input_records(root, 'inputs/' + selected[root],
+                              native_invocation=invocation(mode, params), output_dir=output)
     (root / 'escape.cif').unlink()
     outside = tmp_path / 'unowned'
     shutil.copytree(root, outside)
@@ -207,10 +214,10 @@ def test_full_bundle_inventory_contains_every_retained_member(case, roots, tmp_p
         provenance={**bundle_assignment_fixture(()), 'execution_plan_approval': approval})
     inventories = []
     verify = bundle.verify_approved_native_inputs
-    def observe(job, runtime_references, input_hashes=None):
+    def observe(job, runtime_references, input_hashes=None, input_inventory=None):
         if input_hashes is not None:
             inventories.append(dict(input_hashes))
-        return verify(job, runtime_references, input_hashes)
+        return verify(job, runtime_references, input_hashes, input_inventory)
     monkeypatch.setattr(bundle, 'verify_approved_native_inputs', observe)
     dispatch = bundle.prepare_remote_bundle(job=job,
         target=SimpleNamespace(id='target', remote_root=str(tmp_path / 'remote')),
@@ -236,7 +243,7 @@ def test_source_containment_and_retained_path_escape(case, roots, tmp_path):
     outside = tmp_path / 'outside.cif'
     outside.write_bytes(data)
     source.symlink_to(outside)
-    with pytest.raises(ValueError, match='symlink'):
+    with pytest.raises(ValueError, match='outside approved roots'):
         prepare_for_job(mode, original, output / 'bad', allowed_roots=[roots['inputs'], roots['results']])
     source.unlink()
     source.write_bytes(data)
