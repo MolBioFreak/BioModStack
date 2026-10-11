@@ -212,7 +212,13 @@ def native_resource_config(plan: dict, resources: dict, lock_path: str, source_r
 
 
 def resource_bound_command(command, invocation, context, run_dir) -> list[str]:
-    """Append only typed execution config to unchanged compiler-produced argv."""
+    """Place child source operands and append typed execution config.
+
+    The immutable compiler argv stays logical. Children own their launch/cache
+    directories, so source-relative workflow/config paths are placed here, not
+    by moving their cwd back into the shared checkout. Root argv is already
+    placed by its launch owner (including retained-source/resume launches).
+    """
     resources = context.get('resources', {})
     if not resources.get('required'):
         raise ValueError('component execution requires selected-plan resource reservation')
@@ -231,7 +237,22 @@ def resource_bound_command(command, invocation, context, run_dir) -> list[str]:
     config = Path(run_dir) / 'component-resources.config'
     config.write_text(native_resource_config(plan, resources, context['resource_lock_path'],
                                            Path(context['working_directory'])))
-    return [*command, '-c', str(config)]
+    placed = list(command)
+    if invocation is not None:
+        source = Path(context['working_directory'])
+        def source_path(value):
+            return value if Path(value).is_absolute() else str(source / value)
+        run = command.index('run') + 1
+        placed[run] = source_path(command[run])
+        for index, value in enumerate(command[:-1]):
+            if value in ('-c', '-C'):
+                placed[index + 1] = ','.join(source_path(path) for path in command[index + 1].split(','))
+        # Nextflow discovers config from project/launch directories, neither of
+        # which is the checkout root for a nested workflow in a child cwd.
+        # An explicit -C retains its native replacement-config semantics.
+        if '-C' not in command:
+            placed[1:1] = ['-c', str(source / 'nextflow.config')]
+    return [*placed, '-c', str(config)]
 
 
 def retry_component_workflow(context_path: Path, *, component_id: str,
