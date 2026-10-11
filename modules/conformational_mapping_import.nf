@@ -3,7 +3,7 @@ nextflow.enable.dsl = 2
 process CanonicalConformationalImport {
     tag "cm-import:${request_id}"
     label 'local_cpu'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
     input:
     tuple val(request_id), path(request_root)

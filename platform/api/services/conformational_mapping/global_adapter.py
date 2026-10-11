@@ -375,7 +375,7 @@ async def _materialize_preallocated_cm_job(
             await _source(core_session, str(submission["registered_transfer_id"]), "confornets_state")
             if submission.get("registered_transfer_id") else None
         )
-        confor_sources = [sequence_source, checkpoint_source, *references]
+        confor_sources = [sequence_source, *references]
         if config_source is not None:
             confor_sources.append(config_source)
         if transfer_source is not None:
@@ -397,7 +397,7 @@ async def _materialize_preallocated_cm_job(
             {
                 "sequence": sequence,
                 "checkpoint": {
-                    "path": staged_assets[checkpoint_source.source_id].relative_to(output_root).as_posix(),
+                    "path": f"registered/{checkpoint_source.source_id}{Path(checkpoint_source.relative_path).suffix.lower()}",
                     "sha256": checkpoint_source.content_sha256,
                 },
                 "config": None if config_source is None else {

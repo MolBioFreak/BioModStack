@@ -778,7 +778,8 @@ async def _read_managed_confornets_checkpoint(
     """Expose one server-owned checkpoint identity without accepting a host path."""
     global _confornets_discovery_digest
     checkpoint = get_weights_root() / "openfold3" / "of3-p2-155k.pt"
-    if not checkpoint.is_file() or checkpoint.is_symlink():
+    checkpoint = checkpoint.resolve(strict=False)
+    if not checkpoint.is_file() or not checkpoint.is_relative_to(get_weights_root().resolve()):
         if reuse_discovery_checksum:
             _confornets_discovery_digest = None
         return None
@@ -2323,11 +2324,11 @@ async def submit_request(
         if confor_sources:
             assert checkpoint_source is not None
             staged_assets = stage_registered_assets(
-                [_registered(source) for source in confor_sources],
+                [_registered(source) for source in confor_sources if source is not checkpoint_source],
                 principal_id=principal_id, destination_root=root / "registered",
             )
             settings = params["confornets"]
-            settings["checkpoint"]["path"] = staged_assets[checkpoint_source.source_id].relative_to(root).as_posix()
+            settings["checkpoint"]["path"] = f"registered/{checkpoint_source.source_id}{Path(checkpoint_source.relative_path).suffix.lower()}"
             if config_source is not None:
                 settings["config"]["path"] = staged_assets[config_source.source_id].relative_to(root).as_posix()
             for item, source in zip(settings["references"], references, strict=True):

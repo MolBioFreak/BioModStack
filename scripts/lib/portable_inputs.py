@@ -20,8 +20,6 @@ MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
 
 def _contained(path, roots):
     candidate = Path(os.path.abspath(path))
-    if any(p.is_symlink() for p in (candidate, *candidate.parents)):
-        raise ValueError(f"Portable input traverses a symlink: {candidate}")
     resolved = candidate.resolve(strict=True)
     if not any(resolved == root or root in resolved.parents for root in roots):
         raise ValueError(f"Portable input outside approved roots: {candidate}")
@@ -39,12 +37,34 @@ def _identity(path):
     digest = hashlib.sha256()
     size = 0
     with path.open("rb") as stream:
-        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode) or os.fstat(stream.fileno()).st_nlink != 1:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise ValueError("Portable input must be a regular file")
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             size += len(block)
             digest.update(block)
     return digest.hexdigest(), size
+
+
+def bind_cm_checkpoint(document, *, owner, runtime_references):
+    """Bind sealed logical identity to an exact inventoried installed member.
+
+    The caller owns inventory and placement; this does not select a default,
+    acquire bytes, rewrite a request or create another payload registry.
+    Returned shape is the existing portable envelope's binding entry.
+    """
+    checkpoint = document["confornets"]["checkpoint"]
+    source = os.path.abspath(Path(owner).parent / checkpoint["path"])
+    matches = [(path, item) for path, item in runtime_references.items()
+               if item.get("sha256") == checkpoint["sha256"]]
+    if not matches:
+        raise ValueError("CM checkpoint digest is not a selected dependency")
+    path, selected = sorted(matches, key=lambda pair: str(pair[0]))[0]
+    selector = ["confornets", "checkpoint", "path"]
+    reference = dict(selected, source_path=str(path), reference_path=source,
+                     owner=str(owner), selector=selector, role="runtime")
+    reference["logical_id"] = "native-runtime:" + hashlib.sha256(
+        json.dumps([source, str(owner), selector], separators=(",", ":")).encode()).hexdigest()
+    return {"reference": reference, "path": str(path)}
 
 
 def _bindings():
@@ -79,7 +99,7 @@ def resolve_input_path(value, *, owner=None):
                if key in (item["reference"]["source_path"], item["reference"].get("reference_path"), item["path"])]
     # Nextflow may stage an exact verified artifact through a task symlink.
     # Only its already-declared immutable target is accepted, never a new read.
-    if not matches and raw.is_symlink():
+    if not matches and raw.exists():
         target = str(raw.resolve(strict=True))
         matches = [item for item in payload.get("bindings", []) if item["path"] == target]
     if matches:
@@ -334,8 +354,7 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
                 return
             scanned_directories.add(path)
             for child in sorted(path.rglob("*")):
-                if child.is_symlink():
-                    raise ValueError("Portable input directory contains a symlink")
+                _contained(child, roots)
                 if child.is_file():
                     visit(child, owner, selector + (child.relative_to(path).as_posix(),), role, lineage)
             return
@@ -357,6 +376,8 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         identity = json.dumps([model_id, mode, str(owner or "params"), selector, digest], separators=(",", ":"))
         logical_id = "native-input:" + hashlib.sha256(identity.encode()).hexdigest()
         record = dict(logical_id=logical_id, role=role, format=path.suffix.lstrip(".") or "binary", source_path=str(path), sha256=digest, size_bytes=size, owner=str(owner or "params"), lineage=list(lineage), selector=list(selector))
+        if os.path.abspath(raw) != str(path):
+            record["reference_path"] = os.path.abspath(raw)
         if source_owner and not Path(value).is_absolute():
             record["reference_path"] = os.path.abspath(Path(owner).parent / value)
         records.append(record)
@@ -386,6 +407,15 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         fmt = _format(document, path)
         record["format"] = fmt
         for child_selector, child, child_role in native_reference_fields(document, fmt):
+            if fmt == "cm-request" and child_role == "runtime-snapshot" and inventory_supplied:
+                binding = bind_cm_checkpoint(document, owner=document_owners.get(str(path), path),
+                                             runtime_references=runtime_references)
+                checkpoint_record = binding["reference"]
+                checkpoint_record["owner"] = str(path)
+                checkpoint_record["reference_path"] = os.path.abspath(path.parent / child)
+                checkpoint_record["lineage"] = [*lineage, logical_id]
+                records.append(checkpoint_record)
+                continue
             visit(child, path, child_selector, child_role, (*lineage, logical_id),
                   source_owner=document_owners.get(str(path)) if child_role != "msa" else None,
                   snapshot_sha256=document.get("confornets", {}).get("checkpoint", {}).get("sha256")

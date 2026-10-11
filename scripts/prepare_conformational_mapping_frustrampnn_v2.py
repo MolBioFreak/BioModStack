@@ -36,8 +36,9 @@ def _safe_candidate_source(canonical_dir: Path, relative_value: object) -> Path:
         part in {"", ".", ".."} for part in relative.parts
     ):
         raise ValueError("candidate authoritative structure path is noncanonical")
-    source = canonical_dir.joinpath(*relative.parts)
-    if source.is_symlink() or not source.is_file():
+    canonical_dir = canonical_dir.resolve(strict=True)
+    source = canonical_dir.joinpath(*relative.parts).resolve(strict=True)
+    if not source.is_relative_to(canonical_dir) or not source.is_file():
         raise ValueError("candidate authoritative structure is missing or not a regular file")
     return source
 
@@ -59,6 +60,7 @@ def prepare_ensemble_candidates(
     output_dir: Path,
     manifest_path: Path,
 ) -> dict[str, Any]:
+    canonical_dir = canonical_dir.resolve(strict=True)
     request = json.loads(request_path.read_text(encoding="utf-8"))
     ensemble = json.loads(
         (canonical_dir / "cm_ensemble_v1.json").read_text(encoding="utf-8")

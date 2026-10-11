@@ -1,9 +1,5 @@
 nextflow.enable.dsl = 2
 
-include {
-    FinalizeConforNetsOutputs;
-} from './confornets_experimental.nf'
-
 def shellQuote(value) {
     String text = value == null ? '' : value.toString()
     return "'${text.replace("'", "'\"'\"'")}'"
@@ -61,18 +57,18 @@ process RunCanonicalConforNets {
 
 process BindCanonicalConforNetsOutputLedger {
     label 'local_cpu'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
     input:
-    path request_root
+    tuple path(request_json), path(coordinate_plan_json)
     path native_results
 
     output:
     path 'bound_confornets_results', emit: results_dir
 
     script:
-    def requestJson = shellQuote(request_root.resolve('cm_request_v1.json').toString())
-    def coordinatePlanJson = shellQuote(request_root.resolve('cm_coordinate_plan_v1.json').toString())
+    def requestJson = shellQuote(request_json.toString())
+    def coordinatePlanJson = shellQuote(coordinate_plan_json.toString())
     """
     set -euo pipefail
     python3 ${params.code_root}/scripts/bind_confornets_output_ledger.py \
@@ -85,13 +81,12 @@ process BindCanonicalConforNetsOutputLedger {
 
 process FinalizeCanonicalConforNets {
     label 'local_cpu'
-    stageInMode 'copy'
-
-    publishDir "${params.out_dir}/final/conformational_mapping", mode: 'copy'
+    stageInMode 'rellink'
 
     input:
-    path request_root
+    tuple path(request_json), path(coordinate_plan_json), path(snapshot_json)
     path native_results
+    path ledger_root
 
     output:
     path 'canonical_confornets', emit: canonical_dir
@@ -99,9 +94,9 @@ process FinalizeCanonicalConforNets {
     path 'canonical_confornets/cm_ensemble_v1.json', emit: ensemble_manifest
 
     script:
-    def requestPath = shellQuote(request_root.resolve('cm_request_v1.json').toString())
-    def coordinatePlanPath = shellQuote(request_root.resolve('cm_coordinate_plan_v1.json').toString())
-    def snapshotPath = shellQuote(request_root.resolve('cm_complex_snapshots_v1.json').toString())
+    def requestPath = shellQuote(request_json.toString())
+    def coordinatePlanPath = shellQuote(coordinate_plan_json.toString())
+    def snapshotPath = shellQuote(snapshot_json.toString())
     def nativePath = shellQuote(native_results.toString())
     """
     set -euo pipefail
@@ -110,6 +105,7 @@ process FinalizeCanonicalConforNets {
     python3 ${params.code_root}/scripts/finalize_confornets_conformational_mapping.py \
         --request ${requestPath} \
         --native-root ${nativePath} \
+        --ledger-root ${shellQuote(ledger_root.toString())} \
         --snapshot ${snapshotPath} \
         --out canonical_confornets
     """
@@ -131,13 +127,13 @@ workflow CONFORMATIONAL_MAPPING_CONFORNETS {
         PrepCanonicalConforNetsRequest.out.request,
         PrepCanonicalConforNetsRequest.out.assets_dir,
     )
-    FinalizeConforNetsOutputs(RunCanonicalConforNets.out.results_dir)
     BindCanonicalConforNetsOutputLedger(
-        request_roots,
-        FinalizeConforNetsOutputs.out.results_dir,
+        request_roots.map { root -> tuple(root.resolve('cm_request_v1.json'), root.resolve('cm_coordinate_plan_v1.json')) },
+        RunCanonicalConforNets.out.results_dir,
     )
     FinalizeCanonicalConforNets(
-        request_roots,
+        request_roots.map { root -> tuple(root.resolve('cm_request_v1.json'), root.resolve('cm_coordinate_plan_v1.json'), root.resolve('cm_complex_snapshots_v1.json')) },
+        RunCanonicalConforNets.out.results_dir,
         BindCanonicalConforNetsOutputLedger.out.results_dir,
     )
 
