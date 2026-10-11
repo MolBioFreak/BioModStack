@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from threading import RLock
 from dataclasses import dataclass
 import fcntl
-import errno
 import hashlib
 import json
 import os
@@ -239,7 +238,6 @@ def install_parquet_rows(
     rows: Iterable[Mapping[str, Any]],
     schema: pa.Schema,
     transaction_id: str | None = None,
-    native_payload: Path | str | None = None,
 ) -> InstalledArtifact:
     """Write deterministic Parquet bytes and atomically install one artifact."""
     import pyarrow as pa
@@ -267,32 +265,7 @@ def install_parquet_rows(
         with staging.open("rb") as handle:
             os.fsync(handle.fileno())
         content_sha256, size_bytes = _content_digest(staging)
-        # Reuse only this caller's exact native publication. IDs/provenance
-        # remain owner/role-specific; there is no cross-owner content registry.
-        native_linked = False
-        if native_payload is not None:
-            donor = Path(native_payload)
-            if (not donor.is_symlink() and donor.is_file()
-                    and not donor.stat().st_mode & 0o222
-                    and _content_digest(donor) == (content_sha256, size_bytes)):
-                linked = staging.with_name(staging.name + '.native')
-                try:
-                    try:
-                        os.link(donor, linked, follow_symlinks=False)
-                    except OSError as exc:
-                        if exc.errno != errno.EXDEV:
-                            raise
-                    else:
-                        if (linked.is_symlink() or
-                                _content_digest(linked) != (content_sha256, size_bytes)):
-                            raise ScientificArtifactError("native publication changed during reuse")
-                        os.replace(linked, staging)
-                        native_linked = True
-                finally:
-                    linked.unlink(missing_ok=True)
-        # A linked native leaf is already frozen; never chmod its shared inode.
-        if not native_linked:
-            staging.chmod(0o444)
+        staging.chmod(0o444)
         publication_claim: str | None = None
         with _artifact_lock(destination):
             ownership = _read_ownership(destination)

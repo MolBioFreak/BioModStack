@@ -10,7 +10,6 @@ import subprocess
 import sys
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 
 from services.frustrampnn import manifests, runtime
@@ -25,31 +24,27 @@ from test_remote_close_confornets import staged, package_fixture, upstream_names
 
 def test_cm_delivered_retainer_real_shared_manifest_receiver(tmp_path, monkeypatch, record_property):
     from test_frustrampnn_manifests import _v2_bundle
-    cm_repo = ROOT.parent / 'cm'
-    commit = '46e0093ae4b0f5c8dcf186985f82ec4510fb8029'
-    result = subprocess.run(['git', 'show', commit + ':scripts/postprocess_conformational_mapping_frustrampnn_v2.py'],
-                            cwd=cm_repo, capture_output=True, text=True, check=True)
-    namespace = {'__name__': 'cm_delivered_retainer', '__file__': str(ROOT / 'scripts/postprocess_conformational_mapping_frustrampnn_v2.py')}
-    exec(compile(result.stdout, namespace['__file__'], 'exec'), namespace)
-    assert namespace['validate_result_manifest'] is manifests.validate_result_manifest
+    from scripts import postprocess_conformational_mapping_frustrampnn_v2 as cm
+    assert Path(cm.__file__).resolve() == ROOT / 'scripts/postprocess_conformational_mapping_frustrampnn_v2.py'
+    assert cm.validate_result_manifest is manifests.validate_result_manifest
     native = tmp_path / 'native'
     manifest, _ = _v2_bundle(native, monkeypatch)
     expected = manifests.validate_result_manifest(native, manifest)
     staged = tmp_path / 'staged'; staged.symlink_to(native, target_is_directory=True)
     # CM resolves the incoming bundle root, then invokes these real shared readers.
-    _, _, loaded = namespace['load_result_manifest_bytes_and_document'](staged.resolve(strict=True))
-    assert namespace['validate_result_manifest'](staged.resolve(strict=True), loaded) == expected
+    _, _, loaded = cm.load_result_manifest_bytes_and_document(staged.resolve(strict=True))
+    assert cm.validate_result_manifest(staged.resolve(strict=True), loaded) == expected
     retained = tmp_path / 'cm_retained'
-    shutil.copytree(staged, retained, copy_function=namespace['_retain_result_file'])
+    shutil.copytree(staged, retained, copy_function=cm._retain_result_file)
     for name in expected:
         assert (native / name).samefile(retained / name)
     shutil.rmtree(native); staged.unlink()
-    assert namespace['validate_result_manifest'](retained, loaded) == expected
+    assert cm.validate_result_manifest(retained, loaded) == expected
     bad = retained / 'raw_frustrampnn.csv'
     bad.chmod(0o644); bad.write_bytes(bad.read_bytes() + b'tamper')
     with pytest.raises(manifests.ManifestValidationError):
-        namespace['validate_result_manifest'](retained, loaded)
-    record_property('cm_tested_commit', commit)
+        cm.validate_result_manifest(retained, loaded)
+    record_property('cm_tested_source', str(Path(cm.__file__).resolve()))
     record_property('shared_manifest_receiver_mocked', False)
 
 
@@ -277,86 +272,13 @@ def test_cache_migration_keeps_deepest_generation_and_freshness(tmp_path):
 
 
 
-@pytest.mark.asyncio
-async def test_native_persistence_receipts_commit_and_rollback(tmp_path, monkeypatch):
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-    from database import Base, ScientificArtifactReceipt
-    from services.scientific_artifacts.persistence import publish_table_rows
-    store = tmp_path / 'artifacts'
-    monkeypatch.setenv('BMS_SCIENTIFIC_ARTIFACT_ROOT', str(store))
-    rows, schema, native = native_table(tmp_path)
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'receipts.db'}")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    session_factory = async_sessionmaker(engine)
-    args = dict(owner_kind='job', role='landscape', schema_id='native.v1',
-                source_sha256='a'*64, rows=rows, schema=schema, native_payload=native)
-    try:
-        async with session_factory() as session:
-            parent = await publish_table_rows(session, owner_id='parent', **args)
-            await session.commit()
-        async with session_factory() as session:
-            child = await publish_table_rows(session, owner_id='child', **args)
-            assert parent.storage_path.samefile(child.storage_path)
-            await session.rollback()
-        assert parent.storage_path.exists() and not child.storage_path.exists()
-        native.unlink()
-        async with session_factory() as session:
-            receipt = await session.get(ScientificArtifactReceipt, parent.artifact_id)
-            assert (receipt.owner_kind, receipt.owner_id, receipt.role, receipt.schema_id) == ('job', 'parent', 'landscape', 'native.v1')
-            assert receipt.source_receipts_json == dict(source_sha256='a'*64, owner_kind='job', owner_id='parent', role='landscape')
-            assert await session.get(ScientificArtifactReceipt, child.artifact_id) is None
-        assert writer.read_rows(parent, root=store) == rows
-    finally:
-        await engine.dispose()
-
-
-def native_table(tmp_path):
+def test_artifact_digest_link_churn_then_same_mtime_tamper(tmp_path, monkeypatch):
     rows = [{'residue': 1, 'energy': 0.125}, {'residue': 2, 'energy': None}]
     schema = pa.schema([('residue', pa.int64()), ('energy', pa.float64())])
-    native = tmp_path / 'native.parquet'
-    pq.write_table(pa.Table.from_pylist(rows, schema=schema), native, compression='zstd',
-                   use_dictionary=True, write_statistics=True, version='2.6')
-    native.chmod(0o444)
-    return rows, schema, native
-
-
-def test_typed_native_registration_keeps_ids_roles_and_parent_child_lifetime(tmp_path, record_property):
-    rows, schema, native = native_table(tmp_path)
-    args = dict(root=tmp_path / 'artifacts', owner_kind='job', role='landscape', schema_id='native.v1',
-                schema_version=1, source_sha256='a'*64, rows=rows, schema=schema, native_payload=native)
-    parent = writer.install_parquet_rows(**args, owner_id='parent', transaction_id='parent-tx')
-    child = writer.install_parquet_rows(**args, owner_id='child', transaction_id='child-tx')
-    assert parent.artifact_id != child.artifact_id
-    assert parent.storage_path.samefile(native) and child.storage_path.samefile(native)
-    assert parent.column_schema_sha256 == child.column_schema_sha256
-    assert writer.finalize_artifact_publication(child, committed=False)
-    native.unlink()
-    assert writer.read_rows(parent, root=args['root']) == rows
-    writer.finalize_artifact_publication(parent, committed=True)
-    record_property('native_retained_names_before_cleanup', 3)
-    record_property('native_unique_payload_inodes', 1)
-    record_property('native_payload_bytes', parent.size_bytes)
-    record_property('native_allocated_bytes', parent.storage_path.stat().st_blocks * 512)
-
-
-@pytest.mark.parametrize('different', ['bytes', 'mutable'])
-def test_native_table_nonidentical_or_mutable_keeps_private_typed_payload(tmp_path, different):
-    rows, schema, native = native_table(tmp_path)
-    if different == 'bytes': rows[0]['energy'] = 5.0
-    else: native.chmod(0o644)
     artifact = writer.install_parquet_rows(root=tmp_path / 'artifacts', owner_kind='job', owner_id='one',
         role='landscape', schema_id='native.v1', schema_version=1, source_sha256='a'*64,
-        rows=rows, schema=schema, native_payload=native)
-    assert not artifact.storage_path.samefile(native)
-    assert writer.read_rows(artifact, root=tmp_path / 'artifacts') == rows
-
-
-def test_native_digest_link_churn_then_same_mtime_tamper(tmp_path, monkeypatch):
-    rows, schema, native = native_table(tmp_path)
-    artifact = writer.install_parquet_rows(root=tmp_path / 'artifacts', owner_kind='job', owner_id='one',
-        role='landscape', schema_id='native.v1', schema_version=1, source_sha256='a'*64,
-        rows=rows, schema=schema, native_payload=native)
+        rows=rows, schema=schema)
+    native = artifact.storage_path
     real = os.pread
     called = False
     def churn(fd, count, offset):

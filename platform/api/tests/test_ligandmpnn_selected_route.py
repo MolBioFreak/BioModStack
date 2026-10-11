@@ -263,12 +263,30 @@ async def test_native_publication_reopens_exact_hashed_files_and_rejects_tamper(
                          params={publication.KEY: binding}, output_dir=str(root))
             db.add(child)
             await db.commit()
+            native_before = {path.name: (path.read_bytes(), path.stat().st_ino)
+                             for path in result_dir.iterdir()}
+            await publication.publish_selected(child, root, db)
+            await db.rollback()
+        async with factory() as db:
+            assert not (await db.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == 'child'))).all()
+            assert {path.name: (path.read_bytes(), path.stat().st_ino)
+                    for path in result_dir.iterdir()} == native_before
+            child = await db.get(Job, 'child')
             completed = await finalize_successful_job(child, str(root), db)
             assert completed.completed and completed.design_count == 0
         async with factory() as db:
             reopened_job = await db.get(Job, 'child')
             assert reopened_job.status == 'completed'
-            assert len((await db.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == 'child'))).all()) == 3
+            artifacts = (await db.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == 'child'))).all()
+            assert len(artifacts) == 3
+            assert {row.storage_path for row in artifacts} == {str(result_dir / name) for name in native_before}
+            assert {path.name: (path.read_bytes(), path.stat().st_ino)
+                    for path in result_dir.iterdir()} == native_before
+            assert 'conditions' not in reopened_job.provenance['ligandmpnn_interface_publication']['records'][0]
+            ids = {row.logical_path: row.id for row in artifacts}
+            await publication.publish_selected(reopened_job, root, db)
+            assert {row.logical_path: row.id for row in (await db.scalars(
+                select(JobArtifact).where(JobArtifact.owner_job_id == 'child'))).all()} == ids
             assert not (await db.scalars(select(Design).where(Design.job_id == 'child'))).all()
             assert (await publication.read_selected(reopened_job, db))['records'][0]['conditions'] == conditions
     finally:
