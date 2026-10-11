@@ -431,14 +431,44 @@ def _convert_cif_to_pdb(source: Path, target: Path) -> None:
     structure.write_pdb(str(target))
 
 
+def _retain_closed_result(source, destination):
+    """Retain a completed native leaf; replace names, never shared bytes."""
+    import errno
+    import os
+    import tempfile
+    source, destination = Path(source), Path(destination)
+    fd, name = tempfile.mkstemp(prefix=".result-", dir=destination.parent)
+    os.close(fd)
+    temporary = Path(name)
+    temporary.unlink()
+    try:
+        try:
+            os.link(source.resolve(strict=True), temporary)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            shutil.copyfile(source, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def publish_structure(source: Path, target_dir: Path, target_name: str) -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"{target_name}.pdb"
     suffix = source.suffix.lower()
     if suffix == ".pdb":
-        shutil.copy2(source, target_path)
+        _retain_closed_result(source, target_path)
     else:
-        _convert_cif_to_pdb(source, target_path)
+        import tempfile
+        fd, name = tempfile.mkstemp(prefix=".converted-", suffix=".pdb", dir=target_dir)
+        os.close(fd)
+        temporary = Path(name)
+        try:
+            _convert_cif_to_pdb(source, temporary)
+            os.replace(temporary, target_path)
+        finally:
+            temporary.unlink(missing_ok=True)
     return target_path
 
 
@@ -483,7 +513,7 @@ def normalize_sampling_results(
         native_relative = Path("native_outputs") / design_id / structure_source.name
         native_path = output_meta_dir / native_relative
         native_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(structure_source, native_path)
+        _retain_closed_result(structure_source, native_path)
 
         metadata = {
             "design_id": design_id,

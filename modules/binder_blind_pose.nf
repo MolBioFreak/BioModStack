@@ -1,10 +1,17 @@
 // Optional, selected-candidate blind pose leaf. Candidate PDBs are sequence
 // sources only; the native runner receives components.json, never the PDBs.
+// Closed outputs retain independent names; cache hits republish too.
+def binderblindposePublishMode(workDir, outputDir) {
+    def destination = file(outputDir).toAbsolutePath()
+    while (!java.nio.file.Files.exists(destination)) destination = destination.parent
+    java.nio.file.Files.getFileStore(workDir) == java.nio.file.Files.getFileStore(destination) ? 'link' : 'copy'
+}
+
 process BinderBlindPoseESMFold2 {
     label 'ESMFold2'
     label 'gpu'
-    stageInMode 'copy'
-    publishDir "${params.out_dir}", mode: 'copy', pattern: 'blind_pose_results'
+    stageInMode 'symlink'
+    publishDir "${params.out_dir}", mode: "${binderblindposePublishMode(workflow.workDir, params.out_dir)}", pattern: 'blind_pose_results'
     container "${params.container_dir}/esmfold2.sif"
 
     input:
@@ -26,7 +33,25 @@ process BinderBlindPoseESMFold2 {
     """
     set -euo pipefail
     mkdir -p staged_candidates
-    cp -- ${candidate_pdbs} staged_candidates/
+    python3 - ${candidate_pdbs} <<'PY'
+import errno
+import os
+import shutil
+import sys
+from pathlib import Path
+root = Path('staged_candidates')
+root.mkdir(exist_ok=True)
+for value in sys.argv[1:]:
+    source = Path(value).resolve(strict=True)
+    target = root / Path(value).name
+    try:
+        os.link(source, target)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        shutil.copyfile(source, target)
+PY
+
     python3 ${codeRoot}/scripts/run_binder_blind_pose.py \\
         --selection-manifest ${selection_manifest} \\
         --candidate-dir staged_candidates \\

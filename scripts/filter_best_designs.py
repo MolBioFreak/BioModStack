@@ -9,6 +9,7 @@ seq_id column is not present in the CSV.
 """
 
 import argparse
+from pathlib import Path
 import os
 import shutil
 import re
@@ -62,6 +63,28 @@ def extract_ids_from_pdb(pdb_filename):
     return None, None
 
 
+def _retain_closed_result(source, destination):
+    """Retain a completed native leaf; replace names, never shared bytes."""
+    import errno
+    import os
+    import tempfile
+    source, destination = Path(source), Path(destination)
+    fd, name = tempfile.mkstemp(prefix=".result-", dir=destination.parent)
+    os.close(fd)
+    temporary = Path(name)
+    temporary.unlink()
+    try:
+        try:
+            os.link(source.resolve(strict=True), temporary)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            shutil.copyfile(source, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def main():
     """Main function to filter CSV and copy PDB files."""
     args = parse_arguments()
@@ -100,7 +123,7 @@ def main():
             raise ValueError('stale structure in terminal publication directory')
         # All identities and bytes checked before any publication copies.
         for source in sources:
-            shutil.copyfile(source, Path(args.output_dir) / source.name)
+            _retain_closed_result(source, Path(args.output_dir) / source.name)
         df.to_csv(args.output_csv, index=False)
         print(f'Published {len(sources)} canonical terminal candidates')
         return 0
@@ -171,7 +194,7 @@ def main():
     # Copy the PDB files to the output directory
     for fold_id, seq_id, pdb_path in pdb_info:
         dest = os.path.join(args.output_dir, os.path.basename(pdb_path))
-        shutil.copy(pdb_path, dest)
+        _retain_closed_result(pdb_path, dest)
         print(f"Copied {os.path.basename(pdb_path)} to {args.output_dir}")
     
     print("Done!")

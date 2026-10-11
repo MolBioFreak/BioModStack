@@ -10,6 +10,13 @@ def paramValueOrDefault(params, String key, defaultValue) {
 }
 
 // Native INITIAL generation. Do not route this through RunPartialFlow.
+// Closed outputs retain independent names; cache hits republish too.
+def ppiflowPublishMode(workDir, outputDir) {
+    def destination = file(outputDir).toAbsolutePath()
+    while (!java.nio.file.Files.exists(destination)) destination = destination.parent
+    java.nio.file.Files.getFileStore(workDir) == java.nio.file.Files.getFileStore(destination) ? 'link' : 'copy'
+}
+
 process RunPPIFlowGeneration {
     label 'gpu'
     label 'PPIFlow'
@@ -355,7 +362,7 @@ process RunMaturationFAMPNN {
     // Keep pre-filter redesign artifacts out of the final results directory.
     // FilterByMaturation is the stage that should decide which matured designs
     // are exposed as child outputs to the parent workflow and ingester.
-    publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: "${ppiflowPublishMode(workflow.workDir, params.out_dir)}", pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
     publishDir "${params.out_dir}/run/ppiflow/redesign_debug", mode: 'copy', pattern: "results/*.json", saveAs: { fn -> fn.replace('results/', '') }
 
     input:
@@ -415,7 +422,7 @@ process RunMaturationFAMPNN {
     for file in fampnn_output/samples/*_sample*.pdb; do
         base_name=\$(basename "\$file")
         new_name=\$(echo "\$base_name" | sed 's/sample/seq_/')
-        cp "\$file" "results/\$new_name"
+        cp -L -l --remove-destination "\$file" "results/\$new_name"
         if [ "${params.get('core_protein_scientific_contract') ?: ''}" = "1" ]; then
             cp "\$file.comparison.json" "results/\$new_name.comparison.json"
         fi
@@ -427,13 +434,26 @@ process RunMaturationFAMPNN {
         --ignore_cbeta \\
         --out_dir results
 
+    # Native writers and analysis have returned before these retained names.
+    publish_closed_structure() {
+        local source destination
+        destination="\${@: -1}"
+        for source in "\${@:1:\$#-1}"; do
+            [ -f "\$source" ] || continue
+            if [ "\$(stat -Lc %d "\$source")" = "\$(stat -Lc %d "\$destination")" ]; then
+                cp -L -l --remove-destination "\$source" "\$destination/"
+            else
+                cp -L --remove-destination "\$source" "\$destination/"
+            fi
+        done
+    }
     mkdir -p matured_pdbs matured_jsons
-    cp results/*.pdb matured_pdbs/
+    cp -L -l --remove-destination results/*.pdb matured_pdbs/
     cp results/*.json matured_jsons/
 
     if [ -n "${params.out_dir}" ]; then
         mkdir -p "${params.out_dir}/run/ppiflow/redesign_debug" 2>/dev/null || true
-        cp results/*.pdb "${params.out_dir}/run/ppiflow/redesign_debug/" 2>/dev/null || true
+        publish_closed_structure results/*.pdb "${params.out_dir}/run/ppiflow/redesign_debug/" 2>/dev/null || true
         cp results/*.json "${params.out_dir}/run/ppiflow/redesign_debug/" 2>/dev/null || true
     fi
     """

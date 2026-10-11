@@ -260,6 +260,22 @@ def materialize_ppiflow_generation_request(mode: str, params: dict, directory: s
     return {"ppiflow_generation_request": str(root.resolve())}
 
 
+def _retain_prepared_input(source, destination):
+    """A verified custody leaf; new owners have independent retained names."""
+    import errno
+    import os
+    import shutil
+    # The destination is new and private. No chmod or in-place overwrite of
+    # a retained input, including a previously linked sibling, is permitted.
+    try:
+        os.link(Path(source).resolve(strict=True), destination)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        shutil.copyfile(source, destination)  # independent cross-filesystem owner
+    return str(destination)
+
+
 def prepare_ppiflow_generation_request(mode: str, params: dict, directory: str | Path,
                                        *, allowed_roots, source_identity=None,
                                        requested_settings=None, retain_prepared: bool = False) -> dict:
@@ -274,12 +290,15 @@ def prepare_ppiflow_generation_request(mode: str, params: dict, directory: str |
         return materialize_ppiflow_generation_request(mode, science, destination,
             source_identity=source_identity, requested_settings=requested_settings,
             authorize_source=lambda path: _contained(path, roots))
-    read_prepared_ppiflow_generation_request(mode, science, retained, allowed_roots=roots)
+    prepared = read_prepared_ppiflow_generation_request(mode, science, retained, allowed_roots=roots)
     if retain_prepared:
         return {'ppiflow_generation_request': str(Path(retained).resolve())}
     if Path(retained).resolve() != destination.resolve():
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(retained, destination)
+        leaves = {str((Path(retained) / row["path"]).resolve()) for row in prepared["source_bindings"]}
+        shutil.copytree(retained, destination, copy_function=lambda src, dst:
+                        _retain_prepared_input(src, dst) if str(Path(src).resolve()) in leaves
+                        else shutil.copyfile(src, dst))
         # Check the copied bytes, never reopen the external original source.
         read_prepared_ppiflow_generation_request(mode, science, destination, allowed_roots=roots)
     return {'ppiflow_generation_request': str(destination.resolve())}

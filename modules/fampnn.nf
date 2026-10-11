@@ -9,6 +9,13 @@ def formatFilterParams(params, paramPrefix, paramNames) {
     }.findAll { value -> value != "" }.join(' ')
 }
 
+// Closed outputs retain independent names; cache hits republish too.
+def fampnnPublishMode(workDir, outputDir) {
+    def destination = file(outputDir).toAbsolutePath()
+    while (!java.nio.file.Files.exists(destination)) destination = destination.parent
+    java.nio.file.Files.getFileStore(workDir) == java.nio.file.Files.getFileStore(destination) ? 'link' : 'copy'
+}
+
 process PrepFAMPNN {
     label 'pyrosetta_tools'
 
@@ -104,15 +111,15 @@ process RunFAMPNN {
     // GPU assignment handled by orchestrator via params.gpu_id -> config's gpu_light containerOptions
 
     publishDir "${params.out_dir}/run/fampnn", mode: 'copy', pattern: "*.log"
-    publishDir "${params.out_dir}/run/fampnn/results", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/run/fampnn/results", mode: "${fampnnPublishMode(workflow.workDir, params.out_dir)}", pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
     publishDir "${params.out_dir}/run/fampnn/results", mode: 'copy', pattern: "results/*.json", saveAs: { fn -> fn.replace('results/', '') }
-    publishDir "${params.out_dir}/run/fampnn/sample_pkls", mode: 'copy', pattern: "fampnn_output/sample_pkls/*.pkl", saveAs: { fn -> fn.replace('fampnn_output/sample_pkls/', '') }
+    publishDir "${params.out_dir}/run/fampnn/sample_pkls", mode: "${fampnnPublishMode(workflow.workDir, params.out_dir)}", pattern: "fampnn_output/sample_pkls/*.pkl", saveAs: { fn -> fn.replace('fampnn_output/sample_pkls/', '') }
     publishDir "${params.out_dir}/run/fampnn/seq_prob_metrics", mode: 'copy', pattern: "fampnn_seq_prob_metrics_*.jsonl"
     // Additional publishDir for child job collection - CollectFAMPNNOutputs looks in pdb_files
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/pdb_files", mode: "${fampnnPublishMode(workflow.workDir, params.out_dir)}", pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "results/*.json", saveAs: { fn -> fn.replace('results/', '') }
 
-    publishDir "${params.out_dir}/run/fampnn", mode: 'copy', pattern: "fampnn_output", saveAs: { fn -> "raw" }
+    publishDir "${params.out_dir}/run/fampnn", mode: "${fampnnPublishMode(workflow.workDir, params.out_dir)}", pattern: "fampnn_output", saveAs: { fn -> "raw" }
     publishDir "${params.out_dir}/run/fampnn", mode: 'copy', pattern: "fampnn_metadata_*.jsonl"
 
     input:
@@ -211,7 +218,7 @@ process RunFAMPNN {
         # Extract the base filename
         base_name=\$(basename "\$file")
         new_name=\$(echo "\$base_name" | sed 's/sample/seq_/')
-        cp "\$file" "results/\$new_name"
+        cp -L -l --remove-destination "\$file" "results/\$new_name"
         if [ -f "\$file.fa_binding.json" ]; then cp "\$file.fa_binding.json" "results/\$new_name.fa_binding"; fi
     done
 
@@ -238,14 +245,27 @@ process RunFAMPNN {
         printf '' > "fampnn_seq_prob_metrics_${batch_id}.jsonl"
     fi
     
+    # Native writers and analysis have returned before these retained names.
+    publish_closed_structure() {
+        local source destination
+        destination="\${@: -1}"
+        for source in "\${@:1:\$#-1}"; do
+            [ -f "\$source" ] || continue
+            if [ "\$(stat -Lc %d "\$source")" = "\$(stat -Lc %d "\$destination")" ]; then
+                cp -L -l --remove-destination "\$source" "\$destination/"
+            else
+                cp -L --remove-destination "\$source" "\$destination/"
+            fi
+        done
+    }
     # EXPLICIT SYNC: Ensure files are written to output dir even if publishDir fails
     # This is a fallback for orchestrator-spawned child jobs where Nextflow may not complete publishDir
     if [ -n "${params.out_dir}" ]; then
         mkdir -p "${params.out_dir}/pdb_files" 2>/dev/null || true
-        cp results/*.pdb "${params.out_dir}/pdb_files/" 2>/dev/null || true
+        publish_closed_structure results/*.pdb "${params.out_dir}/pdb_files/" 2>/dev/null || true
         cp results/*.json "${params.out_dir}/pdb_files/" 2>/dev/null || true
         mkdir -p "${params.out_dir}/run/fampnn/sample_pkls" "${params.out_dir}/run/fampnn/seq_prob_metrics" 2>/dev/null || true
-        cp fampnn_output/sample_pkls/*.pkl "${params.out_dir}/run/fampnn/sample_pkls/" 2>/dev/null || true
+        publish_closed_structure fampnn_output/sample_pkls/*.pkl "${params.out_dir}/run/fampnn/sample_pkls/" 2>/dev/null || true
         cp fampnn_seq_prob_metrics_${batch_id}.jsonl "${params.out_dir}/run/fampnn/seq_prob_metrics/" 2>/dev/null || true
         cp fampnn_seq_prob_metrics_${batch_id}.csv "${params.out_dir}/run/fampnn/seq_prob_metrics/" 2>/dev/null || true
         echo "FAMPNN outputs synced to ${params.out_dir}/pdb_files/"
@@ -258,7 +278,7 @@ process FilterFAMPNN {
     label 'pyrosetta_tools'
 
     publishDir "${params.out_dir}/run/filter_fampnn", mode: 'copy', pattern: '*.log'
-    publishDir "${params.out_dir}/collected/fampnn_filtered", mode: 'copy', pattern: 'filtered_output/*.pdb', saveAs: { fn -> fn.replace('filtered_output/', '') }
+    publishDir "${params.out_dir}/collected/fampnn_filtered", mode: "${fampnnPublishMode(workflow.workDir, params.out_dir)}", pattern: 'filtered_output/*.pdb', saveAs: { fn -> fn.replace('filtered_output/', '') }
     publishDir "${params.out_dir}/collected/fampnn_filtered", mode: 'copy', pattern: 'filtered_output/*.json', saveAs: { fn -> fn.replace('filtered_output/', '') }
 
     input:

@@ -66,6 +66,22 @@ def read_prepared_request(mode, params, *, allowed_roots=None):
     return document
 
 
+def _retain_prepared_input(source, destination):
+    """A verified custody leaf; new owners have independent retained names."""
+    import errno
+    import os
+    import shutil
+    # The destination is new and private. No chmod or in-place overwrite of
+    # a retained input, including a previously linked sibling, is permitted.
+    try:
+        os.link(Path(source).resolve(strict=True), destination)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        shutil.copyfile(source, destination)  # independent cross-filesystem owner
+    return str(destination)
+
+
 def prepare_for_job(mode, params, directory, *, allowed_roots, retain_prepared=False):
     import shutil
     from scripts.lib.portable_inputs import _contained
@@ -95,7 +111,10 @@ def prepare_for_job(mode, params, directory, *, allowed_roots, retain_prepared=F
         raise ValueError('ProtonPottsMPNN requires a PDB/mmCIF structure')
     destination.mkdir(parents=True, exist_ok=False)
     owned = destination / ('source' + source.suffix.lower())
-    owned.write_bytes(regular_bytes(source))
+    if retained:
+        _retain_prepared_input(source, owned)
+    else:
+        owned.write_bytes(regular_bytes(source))
     (destination / 'request.json').write_text(json.dumps(document, sort_keys=True, allow_nan=False) + '\n')
     return {REQUEST_FIELD:str((destination/'request.json').resolve()), INPUT_FIELD:str(owned.resolve())}
 

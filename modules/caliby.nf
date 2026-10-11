@@ -10,18 +10,25 @@ def formatCalibyFilterParams(params) {
     }.findAll { flagValue -> flagValue }.join(' ')
 }
 
+// Closed outputs retain independent names; cache hits republish too.
+def calibyPublishMode(workDir, outputDir) {
+    def destination = file(outputDir).toAbsolutePath()
+    while (!java.nio.file.Files.exists(destination)) destination = destination.parent
+    java.nio.file.Files.getFileStore(workDir) == java.nio.file.Files.getFileStore(destination) ? 'link' : 'copy'
+}
+
 process RunCaliby {
     label 'Caliby'
     label 'gpu'
 
     publishDir "${params.out_dir}/run/caliby", mode: 'copy', pattern: "*.log"
-    publishDir "${params.out_dir}/collected/caliby_raw", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/collected/caliby_raw", mode: "${calibyPublishMode(workflow.workDir, params.out_dir)}", pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
     publishDir "${params.out_dir}/collected/caliby_raw", mode: 'copy', pattern: "results/generator_*.json", saveAs: { fn -> fn.replace('results/', '') }
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/pdb_files", mode: "${calibyPublishMode(workflow.workDir, params.out_dir)}", pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "results/generator_*.json", saveAs: { fn -> fn.replace('results/', '') }
 
-    publishDir "${params.out_dir}/collected/caliby_raw", mode: 'copy', pattern: "results/native_outputs/**/*", saveAs: { fn -> fn.replace('results/', '') }
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "results/native_outputs/**/*", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/collected/caliby_raw", mode: "${calibyPublishMode(workflow.workDir, params.out_dir)}", pattern: "results/native_outputs/**/*", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/pdb_files", mode: "${calibyPublishMode(workflow.workDir, params.out_dir)}", pattern: "results/native_outputs/**/*", saveAs: { fn -> fn.replace('results/', '') }
 
     input:
     tuple val(meta), path(pdb_files)
@@ -118,13 +125,13 @@ process RunCalibyBinder {
 
     publishDir "${params.out_dir}/run/caliby_binder", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/caliby_binder", mode: 'copy', pattern: "caliby_metadata.jsonl"
-    publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: 'copy', pattern: "results/native_outputs/*", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: "${calibyPublishMode(workflow.workDir, params.out_dir)}", pattern: "results/native_outputs/*", saveAs: { fn -> fn.replace('results/', '') }
     publishDir "${params.out_dir}/run/caliby_binder", mode: 'copy', pattern: "caliby_constraints.csv"
     publishDir "${params.out_dir}/run/caliby_binder", mode: 'copy', pattern: "caliby_selection.json"
-    publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: 'copy', pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: "${calibyPublishMode(workflow.workDir, params.out_dir)}", pattern: "results/*.pdb", saveAs: { fn -> fn.replace('results/', '') }
     publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: 'copy', pattern: "results/generator_*.json", saveAs: { fn -> fn.replace('results/', '') }
 
-    publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: 'copy', pattern: "results/native_outputs/**/*", saveAs: { fn -> fn.replace('results/', '') }
+    publishDir "${params.out_dir}/collected/binder_generation/caliby", mode: "${calibyPublishMode(workflow.workDir, params.out_dir)}", pattern: "results/native_outputs/**/*", saveAs: { fn -> fn.replace('results/', '') }
 
     input:
     tuple path(pdb_files), path(source_identity)
@@ -190,7 +197,7 @@ process FilterCaliby {
     label 'Caliby'
 
     publishDir "${params.out_dir}/run/filter_caliby", mode: 'copy', pattern: '*.log'
-    publishDir "${params.out_dir}/collected/caliby", mode: 'copy', pattern: 'filtered_output/*.pdb', saveAs: { fn -> fn.replace('filtered_output/', '') }
+    publishDir "${params.out_dir}/collected/caliby", mode: "${calibyPublishMode(workflow.workDir, params.out_dir)}", pattern: 'filtered_output/*.pdb', saveAs: { fn -> fn.replace('filtered_output/', '') }
     publishDir "${params.out_dir}/collected/caliby", mode: 'copy', pattern: 'filtered_output/generator_*.json', saveAs: { fn -> fn.replace('filtered_output/', '') }
 
     input:

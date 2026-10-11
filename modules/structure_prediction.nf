@@ -1,4 +1,13 @@
 // Structure Prediction from Sequence
+
+// Closed outputs retain independent names. The existing Nextflow publisher
+// also runs on cache hits; only cross-filesystem exports need new payload bytes.
+def structurepredictionPublishMode(workDir, outputDir) {
+    def destination = file(outputDir).toAbsolutePath()
+    while (!java.nio.file.Files.exists(destination)) destination = destination.parent
+    java.nio.file.Files.getFileStore(workDir) == java.nio.file.Files.getFileStore(destination) ? 'link' : 'copy'
+}
+
 // Modules for predicting 3D protein structure directly from amino acid sequence
 // Supported predictors: Boltz-2, Protenix, ESMFold2
 
@@ -688,11 +697,11 @@ process BoltzFromSequenceTask {
     publishDir "${params.out_dir}/run/boltz_seq", mode: 'copy', pattern: "*.log"
     // Marked evidence stays task-scoped; legacy flattened publication is unchanged.
     publishDir { "${params.out_dir}/scientific/boltz/${producer_meta.producer_artifact_id}" }, mode: 'copy', pattern: "producer_candidates.json", enabled: params.protein_science_contract_revision == 1
-    publishDir { "${params.out_dir}/scientific/boltz/${producer_meta.producer_artifact_id}" }, mode: 'copy', pattern: "predictions/*", enabled: params.protein_science_contract_revision == 1
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.npz", enabled: params.protein_science_contract_revision == 1, saveAs: { filename -> filename.split('/')[-1] }
+    publishDir { "${params.out_dir}/scientific/boltz/${producer_meta.producer_artifact_id}" }, mode: "${structurepredictionPublishMode(workflow.workDir, params.out_dir)}", pattern: "predictions/*", enabled: params.protein_science_contract_revision == 1
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: "${structurepredictionPublishMode(workflow.workDir, params.out_dir)}", pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: "${structurepredictionPublishMode(workflow.workDir, params.out_dir)}", pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: "${structurepredictionPublishMode(workflow.workDir, params.out_dir)}", pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: "${structurepredictionPublishMode(workflow.workDir, params.out_dir)}", pattern: "predictions/*.npz", enabled: params.protein_science_contract_revision == 1, saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa/*.a3m"
 
     input:
@@ -850,14 +859,14 @@ PYEOF
     for dir in boltz_results_yamls/predictions/*/; do
         # Copy all model files
         for model_file in \${dir}/*.pdb \${dir}/*.cif; do
-            if [ -f "\$model_file" ]; then cp "\$model_file" predictions/; fi
+            if [ -f "\$model_file" ]; then cp -L -l --remove-destination "\$model_file" predictions/; fi
         done
         # Copy confidence JSON
         for json_file in \${dir}/*.json; do
-            if [ -f "\$json_file" ]; then cp "\$json_file" predictions/; fi
+            if [ -f "\$json_file" ]; then cp -L -l --remove-destination "\$json_file" predictions/; fi
         done
         # Copy affinity JSONs (generated when --sampling_steps_affinity is set)
-        cp "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
+        cp -L -l --remove-destination "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
     done
     
     # Output validation: fail if no structure files produced
@@ -924,11 +933,11 @@ process BoltzFromSequenceWithMSATask {
     publishDir "${params.out_dir}/run/boltz_seq", mode: 'copy', pattern: "*.log"
     // Marked evidence stays task-scoped; legacy flattened publication is unchanged.
     publishDir { "${params.out_dir}/scientific/boltz/${producer_meta.producer_artifact_id}" }, mode: 'copy', pattern: "producer_candidates.json", enabled: params.protein_science_contract_revision == 1
-    publishDir { "${params.out_dir}/scientific/boltz/${producer_meta.producer_artifact_id}" }, mode: 'copy', pattern: "predictions/*", enabled: params.protein_science_contract_revision == 1
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.npz", enabled: params.protein_science_contract_revision == 1, saveAs: { filename -> filename.split('/')[-1] }
+    publishDir { "${params.out_dir}/scientific/boltz/${producer_meta.producer_artifact_id}" }, mode: "${structurepredictionPublishMode(workflow.workDir, params.out_dir)}", pattern: "predictions/*", enabled: params.protein_science_contract_revision == 1
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: "${structurepredictionPublishMode(workflow.workDir, params.out_dir)}", pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: "${structurepredictionPublishMode(workflow.workDir, params.out_dir)}", pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: "${structurepredictionPublishMode(workflow.workDir, params.out_dir)}", pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: "${structurepredictionPublishMode(workflow.workDir, params.out_dir)}", pattern: "predictions/*.npz", enabled: params.protein_science_contract_revision == 1, saveAs: { filename -> filename.split('/')[-1] }
 
     input:
     tuple val(producer_meta), val(sequence), val(sequence_name), path(msa_file)
@@ -1056,13 +1065,13 @@ PYEOF
     # Move outputs to predictions directory
     for dir in boltz_results_yamls/predictions/*/; do
         for model_file in \${dir}/*.pdb \${dir}/*.cif; do
-            if [ -f "\$model_file" ]; then cp "\$model_file" predictions/; fi
+            if [ -f "\$model_file" ]; then cp -L -l --remove-destination "\$model_file" predictions/; fi
         done
         for json_file in \${dir}/*.json; do
-            if [ -f "\$json_file" ]; then cp "\$json_file" predictions/; fi
+            if [ -f "\$json_file" ]; then cp -L -l --remove-destination "\$json_file" predictions/; fi
         done
         # Copy affinity JSONs (generated when --sampling_steps_affinity is set)
-        cp "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
+        cp -L -l --remove-destination "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
     done
     
     # Output validation: fail if no structure files produced
@@ -1634,12 +1643,12 @@ process BoltzFromComplex {
     publishDir { "${params.out_dir}/scientific/boltz/${complex_name}" }, mode: 'copy', pattern: 'boltz_task_binding.json', enabled: params.protein_science_contract_revision == 1
     label 'gpu'
     publishDir { "${params.out_dir}/scientific/boltz/${complex_name}" }, mode: 'copy', pattern: "producer_candidates.json", enabled: params.protein_science_contract_revision == 1
-    publishDir { "${params.out_dir}/scientific/boltz/${complex_name}" }, mode: 'copy', pattern: "predictions/*", enabled: params.protein_science_contract_revision == 1
+    publishDir { "${params.out_dir}/scientific/boltz/${complex_name}" }, mode: "${structurepredictionPublishMode(workflow.workDir, params.out_dir)}", pattern: "predictions/*", enabled: params.protein_science_contract_revision == 1
     publishDir "${params.out_dir}/run/boltz_complex", mode: 'copy', pattern: "*.log"
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/*.npz", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: "${structurepredictionPublishMode(workflow.workDir, params.out_dir)}", pattern: "predictions/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: "${structurepredictionPublishMode(workflow.workDir, params.out_dir)}", pattern: "predictions/*.cif", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: "${structurepredictionPublishMode(workflow.workDir, params.out_dir)}", pattern: "predictions/*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: "${structurepredictionPublishMode(workflow.workDir, params.out_dir)}", pattern: "predictions/*.npz", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
     tuple val(complex_name), path(complex_yaml), path(msa_dir)
@@ -1692,13 +1701,13 @@ process BoltzFromComplex {
 
     for dir in boltz_results_yamls/predictions/*/; do
         for model_file in \${dir}/*.pdb \${dir}/*.cif; do
-            if [ -f "\${model_file}" ]; then cp "\${model_file}" predictions/; fi
+            if [ -f "\${model_file}" ]; then cp -L -l --remove-destination "\${model_file}" predictions/; fi
         done
         for json_file in \${dir}/*.json; do
-            if [ -f "\${json_file}" ]; then cp "\${json_file}" predictions/; fi
+            if [ -f "\${json_file}" ]; then cp -L -l --remove-destination "\${json_file}" predictions/; fi
         done
-        cp "\${dir}"/pae_*.npz predictions/ 2>/dev/null || :
-        cp "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
+        cp -L -l --remove-destination "\${dir}"/pae_*.npz predictions/ 2>/dev/null || :
+        cp -L -l --remove-destination "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
     done
 
     if [ -z "\$(ls predictions/*.pdb predictions/*.cif 2>/dev/null)" ]; then

@@ -9,6 +9,13 @@ def formatFilterParams(params, paramPrefix, paramNames) {
     }.findAll { value -> value != "" }.join(' ')
 }
 
+// Closed outputs retain independent names; cache hits republish too.
+def proteinmpnnPublishMode(workDir, outputDir) {
+    def destination = file(outputDir).toAbsolutePath()
+    while (!java.nio.file.Files.exists(destination)) destination = destination.parent
+    java.nio.file.Files.getFileStore(workDir) == java.nio.file.Files.getFileStore(destination) ? 'link' : 'copy'
+}
+
 process PrepMPNN {
     label 'pyrosetta_tools'
     publishDir "${params.out_dir}/run/mpnn", mode: 'copy', pattern: "mpnn_prep_*.log"
@@ -52,8 +59,9 @@ process RunMPNN {
 
     publishDir "${params.out_dir}/run/mpnn", mode: 'copy', pattern: "*.log"
 
-    publishDir "${params.out_dir}/run/mpnn", mode: 'copy', pattern: "mpnn_native_output", saveAs: { fn -> "raw" }
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "{results,mpnn_canonical}/*.{pdb,json}", saveAs: { fn -> fn.replaceFirst(/^(results|mpnn_canonical)\//, '') }
+    publishDir "${params.out_dir}/run/mpnn", mode: "${proteinmpnnPublishMode(workflow.workDir, params.out_dir)}", pattern: "mpnn_native_output", saveAs: { fn -> "raw" }
+    publishDir "${params.out_dir}/pdb_files", mode: "${proteinmpnnPublishMode(workflow.workDir, params.out_dir)}", pattern: "{results,mpnn_canonical}/*.pdb", saveAs: { fn -> fn.replaceFirst(/^(results|mpnn_canonical)\//, '') }
+    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "{results,mpnn_canonical}/*.json", saveAs: { fn -> fn.replaceFirst(/^(results|mpnn_canonical)\//, '') }
     publishDir "${params.out_dir}/run/mpnn", mode: 'copy', pattern: "mpnn_metadata_*.jsonl"
 
     // Retry only when allow_retries is enabled (off by default for debugging)
@@ -109,7 +117,7 @@ process RunMPNN {
 
     # Retain all native files under a separate declared output root so the
     # canonical PDB/JSON declarations are not subsumed by a directory output.
-    cp -a results mpnn_native_output
+    cp -a -l results mpnn_native_output
     if ${params.get('sequence_design_engine') == 'proteinmpnn' ? 'true' : 'false'}; then
         python /scripts/prep_mpnn_designs.py --canonical_results --input_dir results --out_dir mpnn_canonical
     fi
@@ -122,7 +130,8 @@ process FilterMPNN {
 
     publishDir "${params.out_dir}/run/filter_mpnn", mode: 'copy', pattern: '*.log'
 
-    publishDir "${params.out_dir}/collected/mpnn_filtered", mode: 'copy', pattern: "filtered_output/*.{pdb,json}", saveAs: { fn -> fn.replaceFirst('filtered_output/', '') }
+    publishDir "${params.out_dir}/collected/mpnn_filtered", mode: "${proteinmpnnPublishMode(workflow.workDir, params.out_dir)}", pattern: "filtered_output/*.pdb", saveAs: { fn -> fn.replaceFirst('filtered_output/', '') }
+    publishDir "${params.out_dir}/collected/mpnn_filtered", mode: 'copy', pattern: "filtered_output/*.json", saveAs: { fn -> fn.replaceFirst('filtered_output/', '') }
 
     input:
     tuple path(pdb_files), path(json_files)

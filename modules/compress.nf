@@ -13,11 +13,11 @@ process Compress {
     script:
     def num_processes = task.cpus - 1
     """
-    # To avoid line length limits, first need to copy files into a new directory
-    # Will exclude nextflow files .command.out, .command.err etc.
+    # A private name view avoids another payload before the portable archive.
+    # tar -h below dereferences it, so the archive never depends on task lifetime.
     mkdir ${program}_results/
     for file in \$(find *.*); do
-        cp -L "\$file" ./${program}_results/
+        ln -sfn "\$(readlink -f "\$file")" "./${program}_results/\$(basename "\$file")"
     done
 
     # Uses pigz for parallel compression

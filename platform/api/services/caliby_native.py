@@ -150,6 +150,22 @@ def read_prepared_request(mode: str, params: dict, directory: str | Path, *, all
     return payload
 
 
+def _retain_prepared_input(source, destination):
+    """A verified custody leaf; new owners have independent retained names."""
+    import errno
+    import os
+    import shutil
+    # The destination is new and private. No chmod or in-place overwrite of
+    # a retained input, including a previously linked sibling, is permitted.
+    try:
+        os.link(Path(source).resolve(strict=True), destination)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        shutil.copyfile(source, destination)  # independent cross-filesystem owner
+    return str(destination)
+
+
 def prepare_for_job(mode: str, params: dict, directory: str | Path, *, allowed_roots,
                     retain_prepared: bool = False) -> dict:
     """Snapshot once, or reuse/copy retained bytes through existing input custody."""
@@ -161,7 +177,7 @@ def prepare_for_job(mode: str, params: dict, directory: str | Path, *, allowed_r
     retained = params.get("caliby_request_dir")
     destination = Path(directory)
     if retained:
-        read_prepared_request(mode, science, retained, allowed_roots=roots)
+        prepared = read_prepared_request(mode, science, retained, allowed_roots=roots)
         if retain_prepared or Path(retained).resolve() == destination.resolve():
             return {"caliby_request_dir": str(Path(retained).resolve())}
     # Check the destination's existing ancestor before any write, including links.
@@ -171,7 +187,11 @@ def prepare_for_job(mode: str, params: dict, directory: str | Path, *, allowed_r
     _contained(ancestor, roots)
     if retained:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(retained, destination, symlinks=True)
+        # Request metadata is private; only the validated structures are shared.
+        leaves = {str((Path(retained) / row["path"]).resolve()) for row in prepared["sources"]}
+        shutil.copytree(retained, destination, copy_function=lambda src, dst:
+                        _retain_prepared_input(src, dst) if str(Path(src).resolve()) in leaves
+                        else shutil.copyfile(src, dst))
     else:
         materialize_request(mode, science, destination,
                             authorize_source=lambda path: _contained(path, roots))

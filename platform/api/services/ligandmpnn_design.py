@@ -175,6 +175,22 @@ def read_prepared_request(mode: str, params: dict, *, allowed_roots=None) -> dic
     return document
 
 
+def _retain_prepared_input(source, destination):
+    """A verified custody leaf; new owners have independent retained names."""
+    import errno
+    import os
+    import shutil
+    # The destination is new and private. No chmod or in-place overwrite of
+    # a retained input, including a previously linked sibling, is permitted.
+    try:
+        os.link(Path(source).resolve(strict=True), destination)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        shutil.copyfile(source, destination)  # independent cross-filesystem owner
+    return str(destination)
+
+
 def prepare_for_job(mode: str, params: dict, directory: str | Path, *, allowed_roots,
                     retain_prepared: bool = False) -> dict:
     """Use existing input custody and retain the reviewed native files unchanged."""
@@ -204,7 +220,7 @@ def prepare_for_job(mode: str, params: dict, directory: str | Path, *, allowed_r
     destination.mkdir(parents=True, exist_ok=False)
     owned = destination / ('source' + source.suffix.lower())
     if retained:
-        shutil.copyfile(source, owned)
+        _retain_prepared_input(source, owned)
         shutil.copyfile(params[fields[0]], destination / 'request.json')
     else:
         data = source.read_bytes()

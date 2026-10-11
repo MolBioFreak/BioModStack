@@ -845,6 +845,28 @@ def screen_design(
     }
 
 
+def _retain_closed_result(source, destination):
+    """Retain a completed native leaf; replace names, never shared bytes."""
+    import errno
+    import os
+    import tempfile
+    source, destination = Path(source), Path(destination)
+    fd, name = tempfile.mkstemp(prefix=".result-", dir=destination.parent)
+    os.close(fd)
+    temporary = Path(name)
+    temporary.unlink()
+    try:
+        try:
+            os.link(source.resolve(strict=True), temporary)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            shutil.copyfile(source, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Screen RFantibody backbones against the selected epitope")
     parser.add_argument("--pdb-dir", required=True, help="Directory containing RFantibody PDBs")
@@ -966,10 +988,10 @@ def main() -> int:
         results.append(result)
         if result["passed_screen"]:
             passed_count += 1
-            shutil.copy2(pdb_path, output_dir / pdb_path.name)
+            _retain_closed_result(pdb_path, output_dir / pdb_path.name)
             trb_path = pdb_path.with_suffix(".trb")
             if trb_path.exists():
-                shutil.copy2(trb_path, output_dir / trb_path.name)
+                _retain_closed_result(trb_path, output_dir / trb_path.name)
         else:
             failed_count += 1
 
