@@ -4439,7 +4439,9 @@ def _candidate_sidecar_paths(design: Design, source_path: Path) -> List[Path]:
     if pae_candidate.exists():
         candidates.append(pae_candidate.resolve())
     unique_paths: List[Path] = []
-    seen: set[str] = set()
+    # A selected CIF is the primary payload, not also its own .cif sidecar.
+    # Compare concrete paths so staging aliases do not duplicate it either.
+    seen: set[str] = {str(source_path.resolve())}
     for candidate in candidates:
         normalized = str(candidate.resolve())
         if normalized in seen or not candidate.exists():
