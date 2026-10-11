@@ -66,6 +66,36 @@ def test_seed_no_clobber_sparse_collisions(tmp_path, monkeypatch, immutable, ind
     assert all((p.stat().st_ino, p.read_bytes()) == value for p, value in before.items())
 
 
+def test_pinned_native_pdb_trb_writer_collisions(tmp_path):
+    import pickle
+    native_root = Path(os.environ.get('RF_ACTION_SOURCE', '/mnt/BioModStack/weights/rfantibody/rfantibody_repo'))
+    if not native_root.exists():
+        pytest.skip('set RF_ACTION_SOURCE to pinned native source')
+    assert subprocess.check_output(['git', '-C', str(native_root), 'rev-parse', 'HEAD'], text=True).strip() == '8d9d402a99fd63052ad538b3d670e467b800123c'
+    script = native_root / 'scripts/rfdiffusion_inference.py'
+    tree = ast.parse(script.read_text())
+    blocks = [node for node in ast.walk(tree) if isinstance(node, ast.With)
+              and any(isinstance(item.context_expr, ast.Call)
+                      and isinstance(item.context_expr.func, ast.Name)
+                      and item.context_expr.func.id == 'open'
+                      and ast.unparse(item.context_expr.args[0]) in ("f'{out_prefix}.trb'", 'out')
+                      for item in node.items)]
+    assert len(blocks) == 2
+    source, child = tmp_path / 'source', tmp_path / 'child'
+    # Sparse count=2 attempts index 2, despite already retaining index 2.
+    for index in (0, 2):
+        put(source, f'design_{index}.pdb')
+        put(source, f'design_{index}.trb')
+    helper()(source, child, prefix='design', num_designs=3, immutable=True)
+    scope = {'out_prefix': str(child / 'design_2'), 'out': str(child / 'design_2.pdb'),
+             'pdblines': ['native replacement'], 'trb': {'native': True}, 'pickle': pickle}
+    exec(compile(ast.Module(body=blocks, type_ignores=[]), str(script), 'exec'), scope)
+    assert (child / 'design_2.pdb').read_text() == 'native replacement'
+    assert pickle.loads((child / 'design_2.trb').read_bytes()) == {'native': True}
+    assert (source / 'design_2.pdb').read_text() == 'parent'
+    assert (source / 'design_2.trb').read_text() == 'parent'
+
+
 def test_actual_cli_raw_source_and_non_cow(tmp_path, monkeypatch):
     import fcntl
     source, child = tmp_path / 'source', tmp_path / 'child'
