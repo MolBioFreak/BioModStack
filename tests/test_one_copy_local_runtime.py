@@ -462,6 +462,8 @@ def test_completed_installer_resolver_exposes_optional_concrete_receipt(tmp_path
     assert resolved['python'] == str(python)
     assert resolved['source_python'] == str(root / 'environment/bin/python')
     assert resolved['support_payload'] == receipt
+    assert resolved['env']['VIRTUAL_ENV'] == str(python.parent.parent)
+    assert resolved['env']['PATH'].split(os.pathsep)[0] == str(python.parent)
     python.unlink()
     missing = prerequisites.resolve_python_environment(source)
     assert missing['python'] == str(root / 'environment/bin/python')
@@ -507,3 +509,19 @@ def test_missing_or_malformed_optional_receipt_converges_without_refusal(runtime
     assert operations(runtime).count('hash-tree') == 4
     assert_ok(launch(runtime))
     assert operations(runtime).count('hash-tree') == 4
+
+
+def test_setup_dispatch_does_not_reexec_selected_payload_forever(tmp_path, monkeypatch):
+    import biomodstack_python_prerequisites as prerequisites
+    selected = tmp_path / 'support/releases/runtime-inert/venv/bin/python'
+    original = tmp_path / 'installer/environment'
+    resolved = {'root': str(original.parent), 'python': str(selected), 'env': {}}
+    monkeypatch.setattr(prerequisites, 'resolve_python_environment', lambda source: resolved)
+    calls = []
+    monkeypatch.setattr(prerequisites.os, 'execve', lambda *args: calls.append(args))
+    monkeypatch.setattr(prerequisites.sys, 'prefix', str(original))
+    prerequisites.dispatch_setup(tmp_path / 'source')
+    assert len(calls) == 1 and calls[0][0] == str(selected)
+    monkeypatch.setattr(prerequisites.sys, 'prefix', str(selected.parent.parent))
+    prerequisites.dispatch_setup(tmp_path / 'source')
+    assert len(calls) == 1  # already selected: no re-exec loop

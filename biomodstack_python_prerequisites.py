@@ -273,8 +273,6 @@ def _resolve_python_environment(project_root: Path) -> dict | None:
     if state.get("inventory_sha256") != fingerprint:
         raise PrerequisiteError("environment_changed", "Installed distribution inventory changed; run explicit python-bootstrap to repair")
     env = subprocess_env(root)
-    env["PATH"] = str(root / "environment/bin") + os.pathsep + str(root / "toolchain/bin") + os.pathsep + env.get("PATH", os.defpath)
-    env["VIRTUAL_ENV"] = str(root / "environment")
     support_payload = state.get("support_payload")
     python = root / "environment/bin/python"
     if isinstance(support_payload, dict) and support_payload.get("python"):
@@ -283,6 +281,8 @@ def _resolve_python_environment(project_root: Path) -> dict | None:
             python = selected
         else:
             support_payload = None  # optional representation, not a new refusal
+    env["PATH"] = str(python.parent) + os.pathsep + str(root / "toolchain/bin") + os.pathsep + env.get("PATH", os.defpath)
+    env["VIRTUAL_ENV"] = str(python.parent.parent)
     return {"python": str(python), "source_python": str(root / "environment/bin/python"),
             "uv": str(root / "toolchain/bin/uv"), "root": str(root), "env": env,
             "support_payload": support_payload}
@@ -439,7 +439,7 @@ def dispatch_setup(project_root: Path) -> None:
     resolved = resolve_python_environment(project_root)
     if resolved is None:
         return
-    if Path(sys.prefix).resolve() == (Path(resolved["root"]) / "environment").resolve():
-        return
     python = resolved["python"]
+    if Path(sys.prefix).resolve() == Path(python).parent.parent.resolve():
+        return
     os.execve(python, [python, "-B", *sys.argv], resolved["env"])
