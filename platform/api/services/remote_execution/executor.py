@@ -243,10 +243,6 @@ async def _stage_bundle(
             f"{bundle.remote_runtime_dir}/data/runtime/cm-api-python/releases",
         ],
     )
-    for transfer in bundle.runtime_transfers:
-        if transfer.remote_destination.rstrip('/') == f"{bundle.remote_runtime_dir}/support-python":
-            await check_fence()
-            await _transfer_plan(connection, transfer)
     await run_remote(
         connection,
         [
@@ -1982,9 +1978,9 @@ async def _recover_result_generation(session, job):
     if not journal_path(job).exists():
         return False
     identity = _pull_identity(job)
-    # Discard even flushed-but-uncommitted importer state. Only a new read
-    # transaction can authorize rollback-tree retirement.
-    await session.rollback()
+    # Import failure belongs to the pull transaction owner: it rolls back before
+    # calling us (including flushed state). Do not discard unrelated caller work
+    # here. Successful finalizers commit before entering this recovery boundary.
     await session.refresh(job)
     if _pull_identity(job) != identity:
         raise RemoteExecutionError("Result publication recovery authority changed")

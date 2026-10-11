@@ -15,6 +15,44 @@ from test_remote_lifecycle_gaps import store
 from test_remote_manual_result_pull import success
 
 
+@pytest.mark.asyncio
+async def test_stage_bundle_has_one_runtime_placement_owner(tmp_path, monkeypatch):
+    from services.remote_execution import cache
+    from services.remote_execution.bundle import TransferPlan
+    support = tmp_path / "support-python"
+    support.mkdir()
+    (support / "body").write_bytes(b"shared body")
+    local_attempt = tmp_path / "attempt"
+    local_attempt.mkdir()
+    source = tmp_path / "input.fa"
+    source.write_bytes(b">seq\nACD\n")
+    bundle = SimpleNamespace(remote_runtime_dir="/r/runtime", remote_attempt_dir="/r/attempt",
+        remote_source_dir="/r/source", local_attempt_dir=local_attempt,
+        runtime_transfers=(TransferPlan(support, "/r/runtime/support-python"),),
+        input_transfers=(TransferPlan(source, "/r/attempt/inputs/input.fa"),))
+    events, transfers = [], []
+    async def cached(**kwargs):
+        # Core remote-runtime owns all placements. This receiving contract test
+        # does not pretend the wave2 base contains that unowned implementation.
+        assert kwargs["bundle"] is bundle
+        events.append("cache")
+    async def remote(connection, command, **kwargs):
+        events.append(command)
+    async def rsync(connection, source, destination, **kwargs):
+        transfers.append((source, destination, kwargs))
+    monkeypatch.setattr(cache, "stage_cached_bundle", cached)
+    monkeypatch.setattr(ex, "run_remote", remote)
+    monkeypatch.setattr(ex, "rsync_to_remote", rsync)
+    await ex._stage_bundle(None, bundle)
+    assert events[0] == "cache"
+    assert transfers == [(local_attempt, "/r/attempt", {"delete": False}),
+                         (source, "/r/attempt/inputs/input.fa", {})]
+    assert ["ln", "-sfn", "/r/source", "/r/attempt/bundle/source"] in events
+    assert ["ln", "-sfn", "/r/runtime", "/r/attempt/bundle/runtime"] in events
+    assert any(isinstance(e, list) and "/r/attempt/work" in e for e in events)
+    assert any(isinstance(e, list) and "/r/runtime/containers" in e for e in events)
+
+
 def package(job, payloads, generation=1):
     status = success().model_copy(update={"generation": generation})
     manifest = RemoteResultManifest(job_id=job.id, attempt_id=job.remote_attempt_id,
@@ -107,7 +145,9 @@ async def test_real_publisher_sqlite_fault_boundaries(store, tmp_path, monkeypat
         except RuntimeError:
             pass
         monkeypatch.setattr(gen, "_checkpoint", lambda name: None)
-        # Recovery itself discards the pending transaction before readback.
+        # The actual pull exception owner discards its failed transaction first.
+        await session.rollback()
+        job = await session.get(Job, "job", populate_existing=True)
         assert await ex._recover_result_generation(session, job)
         assert not await ex._recover_result_generation(session, job)
     async with store() as fresh:
@@ -151,6 +191,115 @@ async def test_redundant_previous_removed_only_after_commit_and_recovery_repeats
         job = await fresh.get(Job, "job")
         assert (Path(job.output_dir) / "structure.pdb").read_bytes() == b"same"
         assert job.remote_attempt_id == "attempt"  # no terminal-attempt sweep
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flushed", [False, True])
+async def test_recovery_does_not_rollback_unrelated_caller_change(store, tmp_path, flushed):
+    from database import ExecutionTarget
+    await initial(store, tmp_path, {"structure.pdb": b"same"})
+    async with store() as session:
+        job = await session.get(Job, "job")
+        _, incoming, _ = package(job, {"structure.pdb": b"same"}, 2)
+        _, backup = ex._publish_result_generation(job, incoming)
+        await session.commit()
+        target = await session.get(ExecutionTarget, "target")
+        target.provider_instance_id = "caller-change"
+        if flushed:
+            await session.flush()
+        assert await ex._recover_result_generation(session, job)
+        assert not backup.exists()
+    async with store() as fresh:
+        assert (await fresh.get(ExecutionTarget, "target")).provider_instance_id == "caller-change"
+        job = await fresh.get(Job, "job")
+        assert job.provenance["remote_result_generation"]["manifest_sha256"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("committed", [False, True])
+async def test_actual_ingester_reads_shared_pdb_and_preserves_rollback(store, tmp_path, committed):
+    from database import Design
+    from sqlalchemy import select
+    from services.result_ingester import ingest_job_results
+    pdb = (b"ATOM      1  CA  ALA A   1       1.000   2.000   3.000  1.00 80.00           C  \n"
+           b"ATOM      2  CA  GLY A   2       2.000   3.000   4.000  1.00 85.00           C  \nEND\n")
+    payloads = {"pdb_files/design.pdb": pdb, "metrics.json": b"{}"}
+    await initial(store, tmp_path, payloads)
+    async with store() as session:
+        job = await session.get(Job, "job")
+        manifest, incoming, _ = package(job, payloads, 2)
+        previous = gen.committed_payloads(job)
+        for artifact in manifest.artifacts:
+            path = incoming / artifact.relative_path
+            path.unlink()
+            assert gen.reuse_payload(job, artifact, previous, path)
+        output, backup = ex._publish_result_generation(job, incoming)
+        assert (output/'pdb_files/design.pdb').stat().st_ino == (backup/'pdb_files/design.pdb').stat().st_ino
+        # No injected ingester/converter. Real legacy archive skip and loose-file
+        # importer parse the shared PDB, write ORM rows, and leave bodies intact.
+        assert await ingest_job_results(job.id, str(output), session, commit=False) == 1
+        await session.flush()
+        assert (backup/'pdb_files/design.pdb').read_bytes() == pdb
+        assert (output/'pdb_files/design.pdb').read_bytes() == pdb
+        if committed:
+            await session.commit()
+        else:
+            await session.rollback()
+        job = await session.get(Job, "job", populate_existing=True)
+        assert await ex._recover_result_generation(session, job)
+    async with store() as fresh:
+        designs = list((await fresh.scalars(select(Design))).all())
+        assert len(designs) == int(committed)
+        if committed:
+            assert Path(designs[0].pdb_path).read_bytes() == pdb
+        job = await fresh.get(Job, "job")
+        assert (Path(job.output_dir)/'pdb_files/design.pdb').read_bytes() == pdb
+
+
+@pytest.mark.asyncio
+async def test_pull_owner_rolls_back_flushed_import_before_recovery(store, tmp_path, monkeypatch):
+    from database import Design
+    from sqlalchemy import select
+    from services.result_ingester import ingest_job_results
+    pdb = b"ATOM      1  CA  ALA A   1       1.000   2.000   3.000  1.00 80.00           C  \nEND\n"
+    old = {"pdb_files/design.pdb": pdb, "unique-old.txt": b"historical"}
+    await initial(store, tmp_path, old)
+    async with store() as session:
+        job = await session.get(Job, "job")
+        manifest, incoming, status = package(job, {"pdb_files/design.pdb": pdb}, 2)
+        previous = gen.committed_payloads(job)
+        artifact = manifest.artifacts[0]
+        (incoming / artifact.relative_path).unlink()
+        assert gen.reuse_payload(job, artifact, previous, incoming / artifact.relative_path)
+        identity = ex._pull_identity(job)
+        job.remote_state = "returning"
+        job.provenance = dict(job.provenance, remote_execution_receipt={
+            **identity, "state": "succeeded", "exit_code": 0,
+            "received_manifest_sha256": status.result_manifest_sha256,
+            "result_manifest_sha256": status.result_manifest_sha256,
+            "terminal_status": status.model_dump(mode="json"), "generation": status.generation,
+        })
+        await session.commit()
+    called = []
+    async def fail_after_real_import(session, job, status, manifest, incoming):
+        output, backup = ex._publish_result_generation(job, incoming)
+        assert await ingest_job_results(job.id, str(output), session, commit=False) == 1
+        await session.flush()
+        called.append(backup)
+        raise RuntimeError("flushed importer fault")
+    monkeypatch.setattr(ex, "_finalize_pulled_results", fail_after_real_import)
+    guard = ex._controller_attempt_guard("job")
+    assert guard.__enter__()
+    await ex._run_requested_pull("job", identity, guard)
+    assert len(called) == 1
+    async with store() as fresh:
+        job = await fresh.get(Job, "job")
+        assert not list((await fresh.scalars(select(Design))).all())
+        assert (Path(job.output_dir) / "unique-old.txt").read_bytes() == b"historical"
+        assert (Path(job.output_dir) / "pdb_files/design.pdb").read_bytes() == pdb
+        assert job.provenance["remote_result_generation"]["manifest_sha256"] != status.result_manifest_sha256
+        assert not gen.journal_path(job).exists()
+        assert incoming.is_dir()
 
 
 @pytest.mark.asyncio

@@ -244,6 +244,12 @@ def wait_http(url: str, timeout: float = 180.0) -> None:
 
 
 def command_start(args: argparse.Namespace) -> dict[str, object]:
+    # Serialize launches with close's stop/join and creator-owned scratch removal.
+    with lifecycle_lock():
+        return _start_owned(args)
+
+
+def _start_owned(args: argparse.Namespace) -> dict[str, object]:
     environment_id = validate_id(args.id)
     receipt = load_receipt(environment_id)
     worktree = Path(str(receipt["worktree"]))
@@ -262,7 +268,12 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
     if not receipt.get("shared_weights_root"):
         weights.mkdir(parents=True, exist_ok=True)
     scratch = isolated / ".disposable"
-    receipt.setdefault("disposable_scratch", str(scratch))
+    if not scratch.exists() and not scratch.is_symlink():
+        scratch.mkdir(parents=True)
+        receipt["disposable_scratch"] = str(scratch)
+        # Persist custody before starting a writer, including failed starts.
+        save_receipt(receipt)
+    # A pre-existing unclaimed legacy directory is not ours to delete.
     for child in ("inputs", "work", "msa_cache", "sabdab_cache", ".disposable/tmp", ".disposable/pycache"):
         (isolated / child).mkdir(parents=True, exist_ok=True)
     frontend = worktree / "platform/frontend"
@@ -366,7 +377,11 @@ def cleanup_disposable_scratch(receipt: dict[str, object]) -> None:
     if any(path.is_symlink() for path in (expected, *expected.parents)):
         return
     if expected.is_dir():
-        shutil.rmtree(expected)
+        try:
+            shutil.rmtree(expected)
+        except OSError:
+            # Optional scratch reclamation must not change close/discard success.
+            pass
 
 
 def command_close(args: argparse.Namespace) -> dict[str, object]:

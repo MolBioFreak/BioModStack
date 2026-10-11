@@ -206,9 +206,14 @@ def _checkpoint(name: str) -> None:
     """Test fault-injection seam; deliberately no environment-controlled crash hook."""
 
 
-# These are retained scientific bodies read by importers. Metadata, tables,
-# checkpoints, logs and unknown native leaves remain private: suffix equality
-# alone is not authority to reuse a mutable control document.
+# Body formats consumed read-only at the controller return boundary, NOT a
+# general promise that these extensions are immutable in native workspaces.
+# Native geometry/CIF/sequence/trajectory writers run before worker sealing;
+# controller ingest registers those bytes rather than rerunning the producers.
+# The legacy tar extractor skips when pdb_files already contains a PDB.
+# Metadata, tables, checkpoints, logs and unknown leaves remain private.
+# Keep this boundary coupled to the actual-ingester regression, not suffix-only
+# tests; a new in-place receiving writer must privatize its exact destination.
 _IMMUTABLE_PAYLOAD_SUFFIXES = {
     ".pdb", ".cif", ".mmcif", ".a3m", ".fasta", ".fa", ".fna",
     ".fastq", ".fq", ".bam", ".bai", ".cram", ".crai", ".dcd", ".xtc",
