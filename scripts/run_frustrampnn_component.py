@@ -632,9 +632,13 @@ def _run_component_v1(
             summary = summarize_landscape(landscape, structure_map)
         except LandscapeValidationError as exc:
             raise ComponentRunError(_raw_failure_class(exc), str(exc)) from exc
-        shutil.copyfile(normalized, staging / "normalized_input.pdb")
-        shutil.copyfile(
-            structure_map_path, staging / "frustrampnn_structure_map_v1.json"
+        # Normalization completed in this runner's private preparation tree.
+        # Freeze once at that owner, then retain the exact scientific leaves.
+        _fsync_regular(normalized)
+        _fsync_regular(structure_map_path)
+        _retain_validated_input(normalized, staging / "normalized_input.pdb", normalized.read_bytes())
+        _retain_validated_input(
+            structure_map_path, staging / "frustrampnn_structure_map_v1.json", structure_map_path.read_bytes()
         )
         if authority_path is not None:
             shutil.copyfile(authority_path, staging / AUTHORITY_ARTIFACT_PATH)
