@@ -1812,6 +1812,18 @@ def prepare_remote_bundle(
             if alias in image.aliases:
                 effective_environment[selector] = image.remote_destination
 
+    # MD gates and analysis identities belong to the controller installation,
+    # not scientific params or the caller's per-job environment. Keep absent and
+    # explicit OFF values unchanged. Image paths remain relocation-owned above.
+    for key in (
+        "BMS_FEATURE_MOLECULAR_DYNAMICS",
+        "BMS_MD_ANALYSIS_ENABLED",
+        "BMS_MD_ANALYSIS_SIF_SHA256",
+        "BMS_MD_ANALYSIS_IMPLEMENTATION_SHA256",
+    ):
+        if key in os.environ:
+            effective_environment[key] = os.environ[key]
+
     for key, value in dict(environment or {}).items():
         if key in {
             "PYTORCH_CUDA_ALLOC_CONF",

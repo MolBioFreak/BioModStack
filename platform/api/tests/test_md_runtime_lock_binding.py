@@ -84,6 +84,83 @@ def test_md_compiler_lock_relocates_through_actual_bundle(md_package):
     assert record.sha256 == hashlib.sha256(original).hexdigest()
 
 
+@pytest.mark.parametrize('value', ['1', '0', '', None])
+def test_md_controller_environment_survives_bundle_and_worker(md_package, monkeypatch, tmp_path, value):
+    """Real compiler/bundle and worker env consumer; no native MD execution."""
+    import sys
+    from tools import bms_remote_worker as worker
+    from test_remote_execution_bridge import _worker_attempt
+
+    roots, job, target, lock = md_package
+    command = compile_native(job, job.params)
+    before = (job.native_invocation.requested_json, job.native_invocation.effective_json,
+              job.native_invocation.native_parameters_json, tuple(command))
+    keys = ('BMS_FEATURE_MOLECULAR_DYNAMICS', 'BMS_MD_ANALYSIS_ENABLED',
+            'BMS_MD_ANALYSIS_SIF_SHA256', 'BMS_MD_ANALYSIS_IMPLEMENTATION_SHA256')
+    expected = {} if value is None else dict(zip(keys, (value, value, 'a' * 64, 'b' * 64)))
+    for key in keys:
+        monkeypatch.delenv(key, raising=False)
+    for key, val in expected.items():
+        monkeypatch.setenv(key, val)
+    excluded = {
+        'BMS_MD_ANALYSIS_CONTAINER': '/controller-only/md-analysis.sif',
+        'BMS_MD_ANALYSIS_PROBE_INNER': '1',
+        'BMS_MD_UNRELATED': 'not-a-runtime-contract',
+        'BMS_MD_API_TOKEN': 'fixture-secret',
+        'AWS_SECRET_ACCESS_KEY': 'fixture-secret',
+        'HF_TOKEN': 'fixture-secret',
+        'UNRELATED_SETTING': 'not-forwarded',
+    }
+    for key, val in excluded.items():
+        monkeypatch.setenv(key, val)
+    # The production caller only supplies launch tuning, not the controller env.
+    # Untrusted per-job values must not override installation-owned MD settings.
+    caller = {'NXF_ANSI_LOG': 'false', 'OMP_NUM_THREADS': '3', **excluded,
+              **dict.fromkeys(keys, 'caller-must-not-win')}
+    prepared = bundle.prepare_remote_bundle(job=job, target=target, command=command,
+        native_invocation=job.native_invocation, environment=caller)
+    wire = json.loads((prepared.local_attempt_dir / 'execution-envelope.json').read_bytes())
+    env = wire['environment']
+    assert {key: env[key] for key in keys if key in env} == expected
+    assert not set(excluded).intersection(env)
+    assert env['OMP_NUM_THREADS'] == '3'
+    assert before == (job.native_invocation.requested_json, job.native_invocation.effective_json,
+                      job.native_invocation.native_parameters_json, tuple(command))
+    context = json.loads(next(t.source for t in prepared.input_transfers
+                             if t.source.name == 'component-context.json').read_bytes())
+    argv = context['root_command']
+    image = next(image for image in prepared.runtime_images
+                 if any(alias.endswith('/md-analysis-1.0.0.sif') for alias in image.aliases))
+    # The selected image is already placed by the runtime owner, never copied
+    # from BMS_MD_ANALYSIS_CONTAINER on the controller.
+    assert str(roots['containers']) not in ' '.join(argv)
+    assert image.remote_destination.startswith(target.remote_root)
+    assert env['BMS_CONTAINER_DIR'] + '/md-analysis-1.0.0.sif' in image.aliases
+    assert excluded['BMS_MD_ANALYSIS_CONTAINER'] not in json.dumps(wire)
+    assert argv[argv.index('--md_preparation_runtime_lock') + 1].endswith(
+        '/data/md-preparation/env-v1-explicit.txt')
+
+    # Consume the serialized bundle env unchanged through the real supervisor.
+    # Only native MD/component execution is replaced with an inert env recorder.
+    observed = tmp_path / 'observed-env.json'
+    attempt = _worker_attempt(tmp_path / 'consumer', [sys.executable, '-c',
+        'import json,os; from pathlib import Path; '
+        f'Path({str(observed)!r}).write_text(json.dumps(dict(os.environ)))'])
+    envelope_path = attempt / worker.ENVELOPE_FILE
+    consumer = json.loads(envelope_path.read_bytes())
+    consumer['environment'] = env
+    envelope_path.write_text(json.dumps(consumer))
+    monkeypatch.setattr(worker, '_component_checkpoint_runtime', lambda _: None)
+    # Remove controller inheritance, so missing transport cannot pass by accident.
+    for key in (*keys, *excluded):
+        monkeypatch.delenv(key, raising=False)
+    worker.prepare(attempt)
+    assert worker.supervise(attempt) == 0
+    consumed = json.loads(observed.read_bytes())
+    assert {key: consumed[key] for key in keys if key in consumed} == expected
+    assert not set(excluded).intersection(consumed)
+
+
 def test_md_lock_retains_managed_containment(md_package, tmp_path):
     roots, job, target, lock = md_package
     compile_native(job, job.params)
