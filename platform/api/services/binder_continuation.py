@@ -64,7 +64,79 @@ async def resolve_candidate_documents(session, designs, candidate_documents):
     return resolved
 
 
+def retained_selection(source, root, designs, *, kind, create, extra=None) -> Path:
+    """Reuse this owner's retained input bytes, not a writable producer inode.
+
+    The key includes exact source bytes and producer/selection metadata. Missing
+    or changed retained files mean a fresh snapshot, not a new admission gate.
+    A directory flock serializes preparation without allocating a lock per retry.
+    """
+    import fcntl
+    import hashlib
+    import os
+    from routers.jobs import get_inputs_dir, _resolve_design_structure_path, _candidate_sidecar_paths
+
+    def digest(path):
+        with Path(path).open('rb') as stream:
+            return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+    rows = []
+    for design in designs:
+        path = _resolve_design_structure_path(design.pdb_path)
+        members = [path, *(_candidate_sidecar_paths(design, path) if kind == 'native' else [])]
+        rows.append({'design': {column.key: getattr(design, column.key, None)
+                                for column in Design.__table__.columns},
+                     'members': {str(p.resolve()): digest(p) for p in members}})
+    identity = {'kind': kind, 'source_job_id': source.id, 'root_job_id': root.id,
+                'source_params': source.params, 'source_provenance': source.provenance,
+                'root_params': root.params, 'rows': rows, 'extra': extra}
+    key = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
+    index = get_inputs_dir() / 'design_selections' / '.binder-retained'
+    index.mkdir(parents=True, exist_ok=True)
+    receipt = index / (key + '.json')
+    descriptor = os.open(index, os.O_RDONLY)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        if receipt.exists():
+            try:
+                retained = json.loads(receipt.read_text())
+                directory = Path(retained['directory'])
+                directory.resolve().relative_to(get_inputs_dir().resolve())
+                if retained['files'] and all(digest(directory / name) == value
+                                             for name, value in retained['files'].items()):
+                    return directory
+            except (OSError, ValueError, KeyError):
+                pass
+        directory = create()
+        files = {p.relative_to(directory).as_posix(): digest(p)
+                 for p in directory.rglob('*') if p.is_file()}
+        partial = receipt.with_suffix('.partial')
+        partial.write_text(json.dumps({'directory': str(directory), 'files': files}, sort_keys=True))
+        partial.replace(receipt)
+        return directory
+    finally:
+        os.close(descriptor)
+
+
 def snapshot_selection(source: Job, root: Job, designs: list[Design], *,
+                       candidate_documents: dict | None = None, native_sources: list | None = None) -> Path:
+    import hashlib
+    from types import SimpleNamespace
+    resolved = candidate_documents or {}
+    inputs = [SimpleNamespace(**{column.key: getattr(design, column.key)
+                                 for column in Design.__table__.columns}) for design in designs]
+    for design in inputs:
+        if design.id in resolved:
+            design.pdb_path = str(resolved[design.id][0])
+    extra = {'documents': {key: (str(value[0]), value[1]) for key, value in resolved.items()},
+             'native': [(str(path), identity, hashlib.sha256(path.read_bytes()).hexdigest())
+                        for path, identity in native_sources or []]}
+    return retained_selection(source, root, inputs, kind='pdb', extra=extra,
+        create=lambda: _snapshot_selection(source, root, designs,
+            candidate_documents=candidate_documents, native_sources=native_sources))
+
+
+def _snapshot_selection(source: Job, root: Job, designs: list[Design], *,
                        candidate_documents: dict | None = None, native_sources: list | None = None) -> Path:
     from routers.jobs import _materialize_antibody_selection
     from types import SimpleNamespace
