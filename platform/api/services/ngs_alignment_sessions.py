@@ -1156,6 +1156,7 @@ def _fasta_contigs(
         reference,
         expected_size=expected_size,
         expected_sha256=expected_sha256,
+        retained=True,
     )
     try:
         contigs, _normalized_reference = _fasta_contigs_from_handle(handle)

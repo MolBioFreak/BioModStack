@@ -110,3 +110,32 @@ def test_governed_completed_oversized_artifact_borrows_pinned_directory(tmp_path
                 assert handle.read() == payload
     finally:
         os.close(directory)
+
+
+def test_comparison_launch_reuses_receipt_bound_fasta_leaves(tmp_path, monkeypatch):
+    import json
+    from pathlib import Path
+    from database import NgsComparisonPanelReceipt
+    from services import ngs_comparison_panels as panels
+    from services import molbio_ngs_receipts as receipts
+
+    monkeypatch.setattr(panels, 'get_inputs_dir', lambda: tmp_path)
+    expected = tmp_path / 'receipt' / 'expected_reference.fasta'
+    receipts._atomic_write(expected, b'>expected\nACGT\n')
+    panel = tmp_path / 'approved_panel'
+    panel.mkdir()
+    fasta = panel / 'host.fasta'
+    fasta.write_bytes(b'>host\nTGCA\n')
+    fasta.chmod(0o400)
+    manifest = panel / 'manifest.json'
+    manifest.write_text(json.dumps({'schema': panels.PANEL_SCHEMA, 'status': 'APPROVED',
+        'panel_id': 'panel', 'version': 1, 'entries': [{'id': 'host', 'label': 'Host', 'role': 'host',
+        'fasta_filename': fasta.name, 'fasta_sha256': hashlib.sha256(fasta.read_bytes()).hexdigest()}]}))
+    receipt = NgsComparisonPanelReceipt(panel_id='panel', panel_version=1,
+        panel_snapshot_path=str(manifest), panel_snapshot_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest())
+    for _ in range(2):
+        launch = panels.materialize_comparison_launch(expected_fasta=str(expected),
+            expected_sha256=hashlib.sha256(expected.read_bytes()).hexdigest(), panel_receipt=receipt)
+        assert Path(launch['reference_fasta']).stat().st_ino == expected.stat().st_ino
+        assert (Path(launch['input_root']) / fasta.name).stat().st_ino == fasta.stat().st_ino
+        assert json.loads(Path(launch['comparison_panel_snapshot']).read_text())['entries'][0]['fasta_path'] == 'host.fasta'
