@@ -78,8 +78,12 @@ def make_publication(tmp_path, *, custody='local'):
     raw=json.dumps(manifest,sort_keys=True,separators=(',',':')).encode()
     root=tmp_path/'returned'; root.mkdir()
     producer.write_publication(manifest_bytes=raw, native_candidates=manifest['candidates'], manifest=manifest,
-        predictions_root=native, publication_dir=root/'run/protenix/producer', published_structure_root='pdb_files/predictions')
-    target=root/'pdb_files/predictions'; shutil.copytree(source_path.parent,target)
+        predictions_root=native, publication_dir=root/'run/protenix/producer', published_structure_root='pdb_files/predictions',
+        structure_publication_dir=tmp_path/'structure_publication')
+    publication_path = next((root/'run/protenix/producer').glob('*/publication.json'))
+    binding = json.loads(publication_path.read_bytes())['bindings'][0]
+    shutil.copytree(tmp_path/'structure_publication', root/'pdb_files/predictions')
+    target = (root / binding['published_relative_path']).parent
     job=Job(id='job',name='generated native fixture',model_id='protenix',mode='complex',params={},
             provenance={'core_protein_scientific_contract':1}, output_dir=str(root), status='completed')
     design=Design(id='candidate',job_id='job',name=source_path.stem,pdb_path=str(target/source_path.name),

@@ -7676,6 +7676,19 @@ async def ingest_loose_files(
                         candidate = json_file.with_name(f"{design_name}.pdb")
                     if candidate.exists():
                         structure_path = candidate
+                        # The publication transport retains the native task/seed
+                        # hierarchy. Rank alone is not a candidate identity. Keep
+                        # historical flat names unchanged; nested names retain the
+                        # full relative identity in a filesystem-safe projection.
+                        publication_root = output_path / "pdb_files" / "predictions"
+                        if candidate.is_relative_to(publication_root):
+                            relative = candidate.relative_to(publication_root)
+                            if relative.parent != Path('.'):
+                                import hashlib
+                                import re
+                                label = re.sub(r"[^A-Za-z0-9._-]", "_", relative.with_suffix('').as_posix())[:100]
+                                digest = hashlib.sha256(relative.as_posix().encode()).hexdigest()[:12]
+                                design_name = f"protenix_{label}_{digest}"
 
                 if design_name in ingested_names:
                     metric_results_found = True

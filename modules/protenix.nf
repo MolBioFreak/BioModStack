@@ -37,9 +37,7 @@ process ProtenixPredict {
     publishDir "${params.out_dir}/run/protenix", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/protenix/producer", mode: 'copy', pattern: "producer_publication/**/*.json", saveAs: { filename -> filename.substring('producer_publication/'.length()) }
     publishDir "${params.out_dir}/msa", mode: 'copy', pattern: "msa_prepared/msa_report.json", saveAs: { ignoredFilename -> "protenix_msa_report.json" }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*.cif", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*confidence*.json", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "predictions/**/*full_data*.json", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: "structure_publication/**", saveAs: { filename -> filename.substring('structure_publication/'.length()) }
 
     input:
     tuple val(producer_meta), val(sequence), val(sequence_name), path(prepared_msa)
@@ -47,6 +45,7 @@ process ProtenixPredict {
     output:
     tuple val(producer_meta), path("producer_candidates.json"), path("predictions/**/*.cif"), emit: typed_cifs
     path "producer_publication/**/*.json", emit: producer_publication
+    path "structure_publication/**/*.{cif,pdb,json}", emit: publication_files
     path "predictions/**/*confidence*.json", emit: confidence, optional: true
     path "predictions/**/*full_data*.json", emit: full_confidence, optional: true
     path "msa_prepared/msa_report.json", emit: msa_report, optional: true
@@ -305,11 +304,9 @@ process ProtenixFromComplex {
     publishDir "${params.out_dir}/run/protenix_complex", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/protenix/producer", mode: 'copy', pattern: "producer_publication/**/*.json", saveAs: { filename -> filename.substring('producer_publication/'.length()) }
     publishDir "${params.out_dir}/${params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'validation/protenix_v2/' + input_sample.candidate_id : 'msa'}", mode: 'copy', pattern: "msa_prepared/msa_report.json", saveAs: { ignoredFilename -> params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'msa_report.json' : 'protenix_complex_msa_report.json' }
-    publishDir "${params.out_dir}/${params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'validation/protenix_v2/' + input_sample.candidate_id : 'pdb_files/predictions'}", mode: 'copy', pattern: "predictions/**/*.${protenixComplexFinalizesGeometry(params) ? 'pdb' : 'cif'}", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/${params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'validation/protenix_v2/' + input_sample.candidate_id : 'pdb_files/predictions'}", mode: 'copy', pattern: "structure_publication/**", saveAs: { filename -> filename.substring('structure_publication/'.length()) }
     // Use the module's lexical helper, not the process-directive delegate.
     publishDir "${params.out_dir}/run/protenix_complex/raw", mode: 'copy', pattern: "predictions/**/*.cif", enabled: this.protenixComplexFinalizesGeometry(params)
-    publishDir "${params.out_dir}/${params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'validation/protenix_v2/' + input_sample.candidate_id : 'pdb_files/predictions'}", mode: 'copy', pattern: "predictions/**/*confidence*.json", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/${params.containsKey('plr_validator_suite_active') && params.plr_validator_suite_active == true ? 'validation/protenix_v2/' + input_sample.candidate_id : 'pdb_files/predictions'}", mode: 'copy', pattern: "predictions/**/*full_data*.json", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
     tuple val(input_sample), path(complex_json), path(prepared_msa)
@@ -317,6 +314,7 @@ process ProtenixFromComplex {
     output:
     tuple val(input_sample), path("producer_candidates.json"), path("predictions/**/*.${protenixComplexFinalizesGeometry(params) ? 'pdb' : 'cif'}"), emit: canonical_structures
     path "producer_publication/**/*.json", emit: producer_publication
+    path "structure_publication/**/*.{cif,pdb,json}", emit: publication_files
     path "predictions/**/*.cif", emit: raw_structures
     path "predictions/**/*confidence*.json", emit: confidence, optional: true
     path "predictions/**/*full_data*.json", emit: full_confidence, optional: true

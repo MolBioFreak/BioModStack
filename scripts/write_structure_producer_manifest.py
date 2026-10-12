@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import re
+import shutil
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
@@ -218,14 +219,20 @@ def protenix_confidence_names(structure_name: str) -> dict[str, str]:
 
 def write_publication(*, manifest_bytes: bytes, native_candidates: list[dict[str, Any]],
                       manifest: dict[str, Any], predictions_root: Path,
-                      publication_dir: Path, published_structure_root: str) -> None:
-    """Bind native keys to the existing flat publishDir, without rewriting identity.
+                      publication_dir: Path, published_structure_root: str,
+                      structure_publication_dir: Path | None = None) -> None:
+    """Preserve invocation and native seed/sample paths in publication custody.
 
-    This is task-native custody used identically by local and remote publication.
+    The unchanged manifest digest scopes separate predictor tasks; native paths
+    scope their seeds/samples. Nextflow copies this staged tree, not basenames.
     The archived manifest is byte-for-byte the original downstream document.
     """
-    target_root = _relative_path(published_structure_root)
+    manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
+    target_root = _relative_path(published_structure_root) / manifest_digest
+    staged_root = (structure_publication_dir if structure_publication_dir is not None
+                   else publication_dir.parent / "structure_publication") / manifest_digest
     root = predictions_root.resolve(strict=True)
+    staged_sources: dict[PurePosixPath, Path] = {}
     bindings = []
     destinations: set[str] = set()
     for native, candidate in zip(native_candidates, manifest["candidates"], strict=True):
@@ -236,10 +243,11 @@ def write_publication(*, manifest_bytes: bytes, native_candidates: list[dict[str
         digest = _sha256(source)
         if digest != candidate["producer_artifact_sha256"]:
             raise ValueError("publication source changed after manifest creation")
-        destination = (target_root / relative.name).as_posix()
+        destination = (target_root / relative).as_posix()
         if destination in destinations:
-            raise ValueError("flat publication has duplicate native destinations")
+            raise ValueError("publication has duplicate native destinations")
         destinations.add(destination)
+        staged_sources[relative] = source
         bindings.append({"producer_output_key": candidate["producer_output_key"],
                          "published_relative_path": destination, "sha256": digest,
                          "size_bytes": source.stat().st_size,
@@ -253,10 +261,21 @@ def write_publication(*, manifest_bytes: bytes, native_candidates: list[dict[str
                 companion = source.with_name(name)
                 if companion.exists() or companion.is_symlink():
                     raw = _regular_file_bytes(companion, root=root)
-                    confidence[kind] = dict(published_relative_path=(target_root / name).as_posix(),
+                    companion_relative = relative.with_name(name)
+                    staged_sources[companion_relative] = companion
+                    confidence[kind] = dict(published_relative_path=(target_root / companion_relative).as_posix(),
                                             sha256=hashlib.sha256(raw).hexdigest(), size_bytes=len(raw))
             bindings[-1]['confidence'] = confidence
-    manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
+    # Preserve the same optional confidence inventory in finalized-PDB mode,
+    # where the CIF companions are retained but not native-CIF bindings.
+    for pattern in ("*confidence*.json", "*full_data*.json"):
+        for companion in root.rglob(pattern):
+            if companion.is_file() and not companion.is_symlink():
+                staged_sources[_relative_path(companion.relative_to(root).as_posix())] = companion
+    for relative, source in staged_sources.items():
+        staged = staged_root.joinpath(*relative.parts)
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, staged)
     descriptor = {
         "schema_name": "structure_producer_publication", "schema_version": 1,
         "producer_manifest": {
