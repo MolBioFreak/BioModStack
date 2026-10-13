@@ -384,6 +384,43 @@ def _derive(root, digest, image_fd, identity, extract, *, verification=None):
         return path, manifest
 
 
+def allocate_private_file(source_fd, destination_fd, before):
+    """Populate an exclusive private inode from a checked no-follow donor.
+
+    Callers own opening, modes and cleanup. Only unsupported reflink features
+    allow byte allocation; operational faults are propagated unchanged.
+    """
+    target = os.fstat(destination_fd)
+    if (not stat.S_ISREG(target.st_mode) or target.st_nlink != 1
+            or (target.st_dev, target.st_ino) == (before.st_dev, before.st_ino)):
+        raise Error('private allocation requires an independent exclusive inode')
+    if not _same(before, os.fstat(source_fd)):
+        raise Error('private allocation source changed')
+    try:
+        fcntl.ioctl(destination_fd, FICLONE, source_fd)
+    except OSError as exc:
+        if exc.errno not in {errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY, errno.EINVAL, errno.ENOSYS}:
+            raise
+        os.ftruncate(destination_fd, 0)
+        offset = 0
+        while offset < before.st_size:
+            chunk = os.pread(source_fd, min(1024 * 1024, before.st_size - offset), offset)
+            if not chunk:
+                raise Error('private allocation source changed')
+            written = 0
+            while written < len(chunk):
+                count = os.pwrite(destination_fd, chunk[written:], offset + written)
+                if count <= 0:
+                    raise OSError(errno.EIO, 'private allocation made no progress')
+                written += count
+            offset += len(chunk)
+        os.ftruncate(destination_fd, before.st_size)
+    if os.fstat(destination_fd).st_size != before.st_size:
+        raise Error('private allocation size mismatch')
+    if not _same(before, os.fstat(source_fd)):
+        raise Error('private allocation source changed')
+
+
 def _clone(source, destination, manifest):
     rows = manifest["original"]
     seen, inodes = set(), {}
@@ -428,33 +465,7 @@ def _clone(source, destination, manifest):
                     raise Error('derived rootfs changed during cloning')
                 out = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 try:
-                    try:
-                        fcntl.ioctl(out, FICLONE, src)
-                    except OSError as exc:
-                        if exc.errno not in {errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY, errno.EINVAL, errno.ENOSYS}:
-                            raise
-                        # This is a newly created, exclusive, no-follow inode.
-                        # Reset it before copying in case the failed ioctl left
-                        # partial data. Never fall back for I/O, permission,
-                        # space or memory failures; those retain normal cleanup.
-                        os.ftruncate(out, 0)
-                        offset = 0
-                        while offset < before.st_size:
-                            chunk = os.pread(src, min(1024 * 1024, before.st_size - offset), offset)
-                            if not chunk:
-                                raise Error('derived rootfs changed during private copy')
-                            written = 0
-                            while written < len(chunk):
-                                count = os.pwrite(out, chunk[written:], offset + written)
-                                if count <= 0:
-                                    raise OSError(errno.EIO, 'private image copy made no progress')
-                                written += count
-                            offset += len(chunk)
-                        os.ftruncate(out, before.st_size)
-                    if os.fstat(out).st_size != before.st_size:
-                        raise Error('private image copy size mismatch')
-                    if not _same(before, os.fstat(src)):
-                        raise Error('derived rootfs changed during cloning')
+                    allocate_private_file(src, out, before)
                 finally:
                     os.close(out)
     if seen != set(rows):

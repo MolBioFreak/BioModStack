@@ -335,7 +335,7 @@ def copy_input(source, target, guest, direct_images, *, writable=False, excluded
                     continue
                 out = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 try:
-                    fcntl.ioctl(out, views.FICLONE, fd)
+                    views.allocate_private_file(fd, out, before)
                     os.fchmod(out, stat.S_IMODE(before.st_mode) | (0o200 if writable else 0))
                     cloned[key] = destination
                 finally:
@@ -356,7 +356,8 @@ def project_bindings(requested, inputs, direct_images, *, shared=None, writable_
     """Shadow protected descendants of broad binds, preserving writable siblings.
 
     PRoot cannot enforce a kernel read-only bind. One private reflink projection
-    is reused at every alias in this invocation; no full-copy fallback is used.
+    is reused at every alias in this invocation; unsupported reflinks allocate
+    independent private bytes through the shared image-view owner.
     Broad rw directories remain native and only protected descendants are shadowed.
     """
     requested = [(Path(source).resolve(strict=True), target, mode)

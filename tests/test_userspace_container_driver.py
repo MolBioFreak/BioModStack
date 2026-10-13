@@ -153,7 +153,7 @@ def test_input_projection_rejects_inflight_mutation(tmp_path, monkeypatch, mutat
         driver.copy_input(source, target, '/input', [])
 
 
-def test_input_projection_has_no_byte_copy_fallback(tmp_path, monkeypatch):
+def test_input_projection_unknown_fault_does_not_fallback(tmp_path, monkeypatch):
     source = tmp_path / 'input'
     source.write_bytes(b'unchanged')
     def fail(*args):
