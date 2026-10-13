@@ -392,6 +392,31 @@ def test_real_cow_preserves_modes_hardlinks_and_source(store):
     assert not lifecycle.load_state(root)['leases']
 
 
+def test_real_private_views_concurrent_independent(store):
+    root, digest, workspace, image = store
+    path, _ = derive(store)
+    before = views.snapshot_tree(path / 'rootfs')
+    canonical = shared.verify_image(image, digest)
+    barrier = Barrier(2)
+    def run(number):
+        with views.private_image_view(root, digest, workspace, extract) as view:
+            program = view['rootfs'] / 'bin/program'
+            assert program.read_bytes() == b'original bytes' * 8192
+            inode = program.stat().st_ino
+            program.write_bytes(str(number).encode())
+            barrier.wait(timeout=10)
+            assert program.read_bytes() == str(number).encode()
+            return inode, program.stat().st_blocks * 512
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        values = list(pool.map(run, range(2)))
+    assert len({inode for inode, _ in values}) == 2
+    assert all(allocated > 0 for _, allocated in values)
+    assert views.snapshot_tree(path / 'rootfs') == before
+    assert shared.verify_image(image, digest) == canonical
+    assert not list(workspace.iterdir())
+    assert not lifecycle.load_state(root)['leases']
+
+
 def test_reflink_source_changed_at_actual_operation_is_rejected(store, monkeypatch, clone_double):
     root, digest, workspace, _ = store
     path, _ = derive(store)
@@ -411,17 +436,72 @@ def test_reflink_source_changed_at_actual_operation_is_rejected(store, monkeypat
     assert not lifecycle.load_state(root)['leases']
 
 
-def test_no_full_copy_fallback(store, monkeypatch):
+@pytest.mark.parametrize('code', [errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY, errno.EINVAL, errno.ENOSYS])
+def test_private_copy_fallback_isolated_and_cleanup(store, monkeypatch, code):
     root, digest, workspace, image = store
+    path, _ = derive(store)
+    before = views.snapshot_tree(path / 'rootfs')
+    canonical = shared.verify_image(image, digest)
     def unsupported(*args):
-        raise OSError(errno.EOPNOTSUPP, 'fixture unsupported filesystem')
+        raise OSError(code, 'fixture unsupported filesystem')
     monkeypatch.setattr(views.fcntl, 'ioctl', unsupported)
-    with pytest.raises(views.CoWUnavailable):
+    with views.private_image_view(root, digest, workspace, extract) as first:
+        with pytest.raises(KeyboardInterrupt):
+            with views.private_image_view(root, digest, workspace, extract) as second:
+                a, b = (v['rootfs'] / 'bin/program' for v in (first, second))
+                assert len({a.stat().st_ino, b.stat().st_ino,
+                            (path / 'rootfs/bin/program').stat().st_ino}) == 3
+                a.write_bytes(b'private mutation')
+                assert b.read_bytes() == b'original bytes' * 8192
+                assert (first['rootfs'] / 'bin/alias').read_bytes() == b'private mutation'
+                assert a.stat().st_mode & 0o7777 == 0o755
+                assert (second['rootfs'] / 'sticky').stat().st_mode & 0o7777 == 0o1777
+                assert os.readlink(second['rootfs'] / 'link') == 'bin/program'
+                raise KeyboardInterrupt
+        assert len(list(workspace.iterdir())) == 1
+    assert views.snapshot_tree(path / 'rootfs') == before
+    assert shared.verify_image(image, digest) == canonical
+    assert not list(workspace.iterdir())
+    assert not lifecycle.load_state(root)['leases']
+
+
+@pytest.mark.parametrize('code', [errno.EACCES, errno.EPERM, errno.EIO, errno.ENOSPC, errno.ENOMEM])
+def test_private_copy_never_masks_other_clone_errors(store, monkeypatch, code):
+    root, digest, workspace, image = store
+    def failure(*args):
+        raise OSError(code, 'must remain a failure')
+    monkeypatch.setattr(views.fcntl, 'ioctl', failure)
+    with pytest.raises(OSError) as caught:
         with views.private_image_view(root, digest, workspace, extract):
-            pytest.fail('must not execute without real CoW')
+            pytest.fail('failed allocation reached execution')
+    assert caught.value.errno == code
     assert not list(workspace.iterdir())
     assert not lifecycle.load_state(root)['leases']
     shared.verify_image(image, digest)
+
+
+def test_private_copy_short_writes_and_source_mutation(store, monkeypatch):
+    root, digest, workspace, _ = store
+    path, _ = derive(store)
+    monkeypatch.setattr(views.fcntl, 'ioctl', lambda *a: (_ for _ in ()).throw(OSError(errno.EOPNOTSUPP, 'unsupported')))
+    write = os.pwrite
+    monkeypatch.setattr(os, 'pwrite', lambda fd, data, offset: write(fd, data[:17], offset))
+    with views.private_image_view(root, digest, workspace, extract) as view:
+        assert (view['rootfs'] / 'bin/program').read_bytes() == b'original bytes' * 8192
+    read = os.pread
+    def mutate(fd, size, offset):
+        data = read(fd, size, offset)
+        source = path / 'rootfs/bin/program'
+        source.chmod(0o755)
+        source.write_bytes(b'original bytes' * 8192)
+        source.chmod(0o555)
+        return data
+    monkeypatch.setattr(os, 'pread', mutate)
+    with pytest.raises(shared.SharedRuntimeImageError, match='changed'):
+        with views.private_image_view(root, digest, workspace, extract):
+            pytest.fail('mutated source reached execution')
+    assert not list(workspace.iterdir())
+    assert not lifecycle.load_state(root)['leases']
 
 
 def test_reuse_does_not_reextract_and_retains_source_lease(store):

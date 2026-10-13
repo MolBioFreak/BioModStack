@@ -1,7 +1,8 @@
-"""Derived rootfs and CoW-only execution views under the shared image authority.
+"""Derived rootfs and private execution views under the shared image authority.
 
 Trusted extractors/engines only: this is source preservation, not a sandbox.
-No SIF copies, writable shared hardlinks, byte-copy fallback or second ref store.
+Prefer reflinks; unsupported filesystems receive independent byte copies.
+No SIF copies, writable donor hardlinks or second reference store.
 """
 from __future__ import annotations
 
@@ -430,9 +431,30 @@ def _clone(source, destination, manifest):
                     try:
                         fcntl.ioctl(out, FICLONE, src)
                     except OSError as exc:
-                        if exc.errno in {errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY, errno.EINVAL, errno.ENOSYS}:
-                            raise CoWUnavailable("private image views require FICLONE; no byte-copy fallback") from exc
-                        raise
+                        if exc.errno not in {errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY, errno.EINVAL, errno.ENOSYS}:
+                            raise
+                        # This is a newly created, exclusive, no-follow inode.
+                        # Reset it before copying in case the failed ioctl left
+                        # partial data. Never fall back for I/O, permission,
+                        # space or memory failures; those retain normal cleanup.
+                        os.ftruncate(out, 0)
+                        offset = 0
+                        while offset < before.st_size:
+                            chunk = os.pread(src, min(1024 * 1024, before.st_size - offset), offset)
+                            if not chunk:
+                                raise Error('derived rootfs changed during private copy')
+                            written = 0
+                            while written < len(chunk):
+                                count = os.pwrite(out, chunk[written:], offset + written)
+                                if count <= 0:
+                                    raise OSError(errno.EIO, 'private image copy made no progress')
+                                written += count
+                            offset += len(chunk)
+                        os.ftruncate(out, before.st_size)
+                    if os.fstat(out).st_size != before.st_size:
+                        raise Error('private image copy size mismatch')
+                    if not _same(before, os.fstat(src)):
+                        raise Error('derived rootfs changed during cloning')
                 finally:
                     os.close(out)
     if seen != set(rows):
