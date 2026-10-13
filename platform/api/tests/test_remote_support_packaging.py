@@ -1,6 +1,7 @@
 """Physical support members, authenticated aliases and existing actor coverage."""
 import copy
 import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -28,6 +29,55 @@ def test_physical_members_do_not_expand_directory_or_binary_aliases(tmp_path):
     assert len(links) == 1 and links[0]['name'] == 'support-python/venv/lib64'
     assert links[0]['target'] == 'lib'
     assert (lib / '__pycache__/example.cpython-312.pyc').exists()
+
+
+@pytest.fixture
+def receipt_payload(tmp_path):
+    from biomodstack_python_prerequisites import support_members
+    root = tmp_path / 'support'
+    (root / 'python-runtime/bin').mkdir(parents=True)
+    (root / 'venv/bin').mkdir(parents=True)
+    python = root / 'python-runtime/bin/python'
+    python.write_bytes(b'inert interpreter')
+    python.chmod(0o555)
+    (root / 'venv/bin/python').symlink_to('../../python-runtime/bin/python')
+    # Actual installed receipt row: host-only self alias, target=".".
+    (root / 'venv/.venv').symlink_to('.')
+    members = support_members(root / 'venv', root / 'python-runtime', normalize=False)
+    receipt = dict(payload_root=str(root), members=members,
+                   published_member_manifest_sha256=hashlib.sha256(json.dumps(
+                       members, sort_keys=True, separators=(',', ':')).encode()).hexdigest())
+    (root / 'support-payload.json').write_text(json.dumps(receipt))
+    return root
+
+
+def test_receipt_relocation_omits_only_host_alias_and_preserves_donor(receipt_payload, tmp_path):
+    from services.remote_execution import bundle
+    source = receipt_payload
+    before = (source / 'support-payload.json').read_bytes()
+    original = cr.support_receipt(source)
+    assert next(r for r in original['members'] if r['path'] == 'venv/.venv') == dict(
+        path='venv/.venv', kind='symlink', mode=0o777, size=0, target='.')
+    destination = bundle._relocate_python_runtime(source, tmp_path / 'relocated', '/worker/support')
+    receipt = cr.support_receipt(destination)
+    assert receipt is not None
+    rows = {r['path']: r for r in receipt['members']}
+    assert set(rows) == {r['path'] for r in original['members']} - {'venv/.venv'}
+    assert not (destination / 'venv/.venv').is_symlink()
+    assert rows['venv/bin/python']['target'] == os.readlink(destination / 'venv/bin/python')
+    assert (destination / 'venv/bin/python').resolve() == destination / 'python-runtime/bin/python'
+    assert (destination / 'python-runtime/bin/python').stat().st_ino == (source / 'python-runtime/bin/python').stat().st_ino
+    assert (source / 'support-payload.json').read_bytes() == before
+    assert os.readlink(source / 'venv/.venv') == '.'
+    assert (source / 'python-runtime/bin/python').stat().st_mode & 0o777 == 0o555
+
+
+def test_receipt_relocation_still_fails_for_absent_genuine_member(receipt_payload, tmp_path):
+    from services.remote_execution import bundle
+    source = receipt_payload
+    (source / 'venv/bin/python').unlink()
+    with pytest.raises(FileNotFoundError, match='venv/bin/python'):
+        bundle._relocate_python_runtime(source, tmp_path / 'relocated', '/worker/support')
 
 
 @pytest.mark.parametrize('target', ['/etc', '.', 'absent'])

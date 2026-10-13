@@ -1384,6 +1384,10 @@ def _relocate_python_runtime(source: Path, destination: Path, remote_destination
     if receipt:
         members = []
         for row in receipt['members']:
+            # Match the host-only source-venv alias omitted by copytree and
+            # link projection above; every other declared link must still exist.
+            if row['path'] == 'venv/.venv':
+                continue
             row = dict(row)
             path = destination / row['path']
             if row['path'] in changed:
