@@ -2719,6 +2719,31 @@ async def _project_local_components(job, session, context_path):
                                       expected_context=expected)
 
 
+async def _observe_local_terminal_binder_results(session, job_id, output_dir):
+    """Observe partial output only while the caller owns terminal publication.
+
+    A savepoint keeps a parser failure from undoing the existing terminal CAS.
+    This is not successful finalization and cannot launch follow-up science.
+    """
+    from database import Job
+
+    job = await session.get(Job, job_id, populate_existing=True)
+    if job is None or job.status not in {'failed', 'cancelled'} or job.execution_target_id:
+        return
+    output = Path(job.child_output_dir or output_dir)
+    if not output.is_absolute():
+        output = get_data_root() / output
+    if not output.is_dir():
+        return
+    try:
+        async with session.begin_nested():
+            from services.binder_result_observation import observe_retained_binder_results
+
+            await observe_retained_binder_results(session, job, output, commit=False)
+    except Exception:
+        logger.exception('Retained binder observation failed for terminal job %s', job_id)
+
+
 async def _finalize_local_md_job(job, session, output_dir, *, projection_ingested=False):
     """One native completion transaction for launch and process-loss recovery."""
     from services.md.completion import validate_and_finalize_md_job
@@ -3857,6 +3882,8 @@ async def launch_nextflow_job(
                             job_id=job_id,
                             exit_code=exit_code,
                         )
+                    if published_rowcount:
+                        await _observe_local_terminal_binder_results(session, job_id, output_dir)
                     await session.commit()
                     if not published_rowcount:
                         logger.info("Skipped stale Nextflow terminal publication for job %s", job_id)
