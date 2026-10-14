@@ -6,6 +6,8 @@ import { metricKeys, numericMetricKeys, formatMetric, summarizeMetric, type Coho
 import { fetchNativeBinderGeneration, nativeCandidateRoute, nativeGenerationMetrics, nativeGenerationMetricDetail, nativeGenerationMetricUnit, type NativeGenerationPage, type NativeGenerationRecord, type NativeGenerationDocument } from '../lib/nativeBinderResults';
 
 import { readBinderSelection, writeBinderSelection, readBinderNativeSources, writeBinderNativeSources, type NativeCandidateSource } from '../lib/binderContinuation';
+import { BinderCandidateSets } from './BinderCandidateSets';
+import { candidateKey, readRoundStorage, writeRoundStorage, type CandidateRef } from '../lib/binderSelectedRound';
 import { continuationHref } from '../lib/deNovoContinuation';
 import type { CohortInitialMetrics } from './CohortAnalytics';
 import { CohortMetricPicker } from './CohortMetricPicker';
@@ -37,7 +39,7 @@ export interface Props {
     onInspectDocument?: (row: NativeGenerationRecord, document?: NativeGenerationDocument) => void;
     artifactId?: string | null; targetState?: string | null;
 }
-type View = 'dashboard' | 'analytics' | 'table' | 'structure';
+type View = 'candidates' | 'dashboard' | 'analytics' | 'table' | 'structure';
 type Filter = { key: string; kind: 'range' | 'missing' | 'null' | 'nonNumeric'; min: string; max: string };
 const control = 'rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)] disabled:opacity-50';
 const panel = 'min-w-0 rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)]';
@@ -70,14 +72,16 @@ export function NativeBinderGenerationResults(props: Props) {
     return <NativeGenerationWorkbench key={`${props.jobId}:${props.adapter?.key ?? "native"}`} {...props} />;
 }
 function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, selectedDesignId, selectedDesignIds = [], onSelectedDesignIdsChange, selectedRecordIds, onSelectedRecordIdsChange, selectedNativeSources, onSelectedNativeSourcesChange, onInspectDocument, artifactId, targetState }: Props) {
-    const [view, setView] = useState<View>(selectedDesignId || artifactId ? 'structure' : 'dashboard');
-    const [structureOpened, setStructureOpened] = useState(view === 'structure');
+    const [view, setView] = useState<View>(selectedDesignId || artifactId ? 'structure' : 'candidates');
+    const [structureOpened, setStructureOpened] = useState(view === 'structure' || view === 'candidates');
     const [analyticsOpened, setAnalyticsOpened] = useState(view === 'dashboard' || view === 'analytics');
     useEffect(() => {
-        if (view === 'structure') setStructureOpened(true);
+        if (view === 'structure' || view === 'candidates') setStructureOpened(true);
         if (view === 'dashboard' || view === 'analytics') setAnalyticsOpened(true);
     }, [view]);
     const [search, setSearch] = useState('');
+    const [population, setPopulation] = useState('all');
+    const [rankScope, setRankScope] = useState<'matching' | 'selected'>('matching');
     const [filters, setFilters] = useState<Filter[]>([]);
     const [selectedOnly, setSelectedOnly] = useState(false);
     const [sort, setSort] = useState({ key: '', descending: false });
@@ -86,7 +90,8 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const [columns, setColumns] = useState<string[] | null>(null);
     const [columnSearch, setColumnSearch] = useState('');
     const [exportScope, setExportScope] = useState<'filtered' | 'selected' | 'all'>('filtered');
-    const [local, setLocal] = useState<{ scope: string; key: string; document?: NativeGenerationDocument }>();
+    const [local, setLocal] = useState<{ scope: string; key: string; document?: NativeGenerationDocument } | undefined>(() => readRoundStorage(jobId, `inspection:${adapter?.key ?? 'native'}`, undefined));
+    useEffect(() => { if (local) writeRoundStorage(jobId, `inspection:${adapter?.key ?? 'native'}`, local); }, [local, jobId, adapter?.key]);
     const [viewerToolsOpen, setViewerToolsOpen] = useState(false);
     const inspector = useRef<HTMLDivElement>(null);
     const scope = JSON.stringify([selectedDesignId, artifactId, targetState]);
@@ -103,7 +108,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     }, [query.hasNextPage, query.isFetching, query.isFetchNextPageError, query.fetchNextPage, query.data?.pages.length]);
     const page = query.data?.pages[0];
     const rows = useMemo(() => query.data?.pages.flatMap(part => part.records) ?? [], [query.data]);
-    const cohort = useMemo<CohortRow[]>(() => rows.map((item, i) => ({ id: rowKey(item, i), label: adapter?.label(item) ?? item.candidate_key ?? item.design_id ?? `Native record ${i + 1}`, values: values(item) })), [rows]);
+    const cohort = useMemo<CohortRow[]>(() => rows.map((item, i) => ({ id: rowKey(item, i), label: `Candidate ${i + 1}`, values: values(item) })), [rows]);
     const keys = useMemo(() => metricKeys(cohort), [cohort]);
     const numericKeys = useMemo(() => numericMetricKeys(cohort), [cohort]);
     const label = (key: string) => { const unit = rows.map(item => nativeGenerationMetricUnit(item, key)).find(Boolean); return `${describeCohortMetric(key, keys).label}${unit ? ` (${unit})` : ''}`; };
@@ -111,13 +116,27 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const selectionScope = `${jobId}:records:${adapter?.key ?? 'native'}`;
     const [nativeSelected, setNativeSelected] = useState(() => readBinderSelection(selectionScope));
     const [savedSources, setSavedSources] = useState(() => readBinderNativeSources(jobId));
+    const [savedRefs, setSavedRefs] = useState<CandidateRef[]>(() => readRoundStorage(jobId, 'selection', []));
+    useEffect(() => {
+        const sync = (event: Event) => {
+            const detail = (event as CustomEvent).detail;
+            if (detail.jobId !== jobId) return;
+            setSavedRefs(detail.refs);
+            if (detail.replace) { setNativeSelected([]); writeBinderSelection(selectionScope, []); }
+        };
+        window.addEventListener('bms:binder-round-selection', sync);
+        return () => window.removeEventListener('bms:binder-round-selection', sync);
+    }, [jobId, selectionScope]);
     const nativeSources = selectedNativeSources ?? savedSources;
     const changeSources = (sources: NativeCandidateSource[]) => {
         const unique = [...new Map(sources.map(source => [JSON.stringify([source.job_id, source.artifact_id]), source])).values()];
         setSavedSources(unique); writeBinderNativeSources(jobId, unique); onSelectedNativeSourcesChange?.(unique);
     };
     const selectionId = (item: NativeGenerationRecord) => rowKey(item, rows.indexOf(item));
-    const selection = Array.from(new Set([...(selectedRecordIds ?? nativeSelected), ...rows.filter(item => item.design_id && selectedDesignIds.includes(item.design_id)).map(selectionId)]));
+    const matchesRef = (item: NativeGenerationRecord, ref: CandidateRef) => ref.job_id === jobId && (ref.kind === 'design' ? ref.design_id === item.design_id
+        : ref.kind === 'native_document' ? item.structures?.some(doc => doc.artifact_id === ref.artifact_id)
+        : item.candidate_ref ? candidateKey(item.candidate_ref as CandidateRef) === candidateKey(ref) : false);
+    const selection = Array.from(new Set([...(selectedRecordIds ?? nativeSelected), ...rows.filter(item => (item.design_id && selectedDesignIds.includes(item.design_id)) || savedRefs.some(ref => matchesRef(item, ref)) || nativeSources.some(source => source.job_id === jobId && item.structures?.some(doc => doc.artifact_id === source.artifact_id))).map(selectionId)]));
     const tableKeys = columns ?? (preferred.length ? preferred : keys.slice(0, 6));
     const byId = useMemo(() => new Map(cohort.map((entry, index) => [entry.id, rows[index]])), [cohort, rows]);
     const selectedSet = useMemo(() => new Set(selection), [selection]);
@@ -126,6 +145,10 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         const needle = search.trim().toLowerCase();
         const result = cohort.filter(entry => {
             const source = byId.get(entry.id)!;
+            const outcome = String(entry.values.outcome ?? source.outcome ?? '').toLowerCase();
+            if (population === 'passed' && !['pass', 'passed', 'accepted'].includes(outcome)) return false;
+            if (population === 'rejected' && !['reject', 'rejected', 'failed', 'filtered'].includes(outcome)) return false;
+            if (population === 'ranked' && entry.values.rank == null && source.rank == null) return false;
             if (selectedOnly && (!selectionId(source) || !selectedSet.has(selectionId(source)!))) return false;
             if (needle && ![entry.label, source.design_id, source.native_input_id, source.source_row_index, ...Object.values(entry.values)].some(value => nativeText(value).toLowerCase().includes(needle))) return false;
             return filters.every(filter => {
@@ -149,11 +172,11 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
             return sort.descending ? -order : order;
         });
         return result;
-    }, [cohort, byId, search, selectedOnly, selectedSet, filters, sort]);
+    }, [cohort, byId, search, selectedOnly, selectedSet, filters, sort, population]);
     const displayedPage = Math.min(pageIndex, Math.max(0, Math.ceil(matched.length / pageSize) - 1));
     const navigationRows = matched.map(entry => byId.get(entry.id)!);
     const pageRows = matched.slice(displayedPage * pageSize, (displayedPage + 1) * pageSize);
-    const localSelection = local?.scope === scope ? local : undefined;
+    const localSelection = local && (local.scope === scope || (!selectedDesignId && artifactId == null && targetState == null)) ? local : undefined;
     const returnCandidate = new URLSearchParams(window.location.search).get('native_candidate');
     const activeId = localSelection?.key ?? (selectedDesignId ? cohort.find(entry => byId.get(entry.id)?.design_id === selectedDesignId)?.id : returnCandidate ?? (artifactId ? cohort.find(entry => byId.get(entry.id)?.structures?.some(doc => doc.artifact_id === artifactId))?.id : cohort[0]?.id));
     const row = activeId ? byId.get(activeId) : undefined;
@@ -165,11 +188,24 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         ? documents.find(doc => (requestedArtifact == null || doc.artifact_id === requestedArtifact) && (requestedState == null || doc.target_state === requestedState))
         : documents.find(doc => doc.primary) ?? (row?.design_id || documents.length === 1 ? documents[0] : undefined);
     const inspect = (item: NativeGenerationRecord, doc?: NativeGenerationDocument) => {
-        if (onInspectDocument && item.design_id) { setLocal(undefined); onInspectDocument(item, doc); }
-        else setLocal({ scope, key: rowKey(item, rows.indexOf(item)), document: doc });
-        setView('structure');
+        const exact = doc ?? item.structures?.find(value => value.primary) ?? (item.structures?.length === 1 ? item.structures[0] : undefined);
+        setLocal({ scope, key: rowKey(item, rows.indexOf(item)), document: exact });
+        const url = new URL(window.location.href);
+        url.searchParams.set('native_candidate', rowKey(item, rows.indexOf(item)));
+        if (adapter) url.searchParams.set('native_scope', adapter.key);
+        if (item.design_id) url.searchParams.set('design_id', item.design_id); else url.searchParams.delete('design_id');
+        if (exact) url.searchParams.set('artifact_id', exact.artifact_id); else url.searchParams.delete('artifact_id');
+        if (exact?.target_state != null) url.searchParams.set('target_state', exact.target_state); else url.searchParams.delete('target_state');
+        window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+        onInspectDocument?.(item, exact);
+        if (view !== 'candidates') setView('structure');
     };
     const changeSelection = (ids: string[], checked: boolean) => {
+        if (!checked) {
+            const refs = savedRefs.filter(ref => !rows.some(item => ids.includes(selectionId(item)) && matchesRef(item, ref)));
+            setSavedRefs(refs); writeRoundStorage(jobId, 'selection', refs);
+            window.dispatchEvent(new CustomEvent('bms:binder-round-selection', { detail: { jobId, refs } }));
+        }
         const next = checked ? Array.from(new Set([...selection, ...ids])) : selection.filter(id => !ids.includes(id));
         onSelectedRecordIdsChange?.(next);
         const recordSelection = next.filter(id => !rows.some(item => selectionId(item) === id && item.design_id));
@@ -179,8 +215,21 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         const affected = rows.filter(item => ids.includes(selectionId(item)) && !item.design_id);
         const remaining = nativeSources.filter(source => !affected.some(item => item.structures?.some(doc => source.job_id === jobId && doc.artifact_id === source.artifact_id)));
         // A sole document is unambiguous. Multiple states require an explicit document choice.
-        const added = checked ? affected.flatMap(item => item.structures?.length === 1 && item.structures[0].artifact_id ? [{ job_id: jobId, artifact_id: item.structures[0].artifact_id, document: item.structures[0] }] : nativeSources.filter(source => item.structures?.some(doc => source.job_id === jobId && doc.artifact_id === source.artifact_id))) : [];
+        const added = checked ? affected.flatMap(item => {
+            const chosen = nativeSources.filter(source => item.structures?.some(doc => source.job_id === jobId && doc.artifact_id === source.artifact_id));
+            if (chosen.length) return chosen;
+            const primary = item.structures?.find(doc => doc.primary) ?? (item.structures?.length === 1 ? item.structures[0] : undefined);
+            return primary?.artifact_id ? [{ job_id: jobId, artifact_id: primary.artifact_id, document: primary }] : [];
+        }) : [];
         changeSources([...remaining, ...added]);
+        const suppliedRefs = affected.flatMap(item => { const ref = item.candidate_ref as CandidateRef | undefined; return ref?.kind && ref.job_id ? [ref] : []; });
+        if (suppliedRefs.length) {
+            const previous = readRoundStorage<CandidateRef[]>(jobId, 'selection', []);
+            const affectedKeys = new Set(suppliedRefs.map(ref => JSON.stringify(ref)));
+            const refs = [...previous.filter(ref => !affectedKeys.has(JSON.stringify(ref))), ...(checked ? suppliedRefs : [])];
+            writeRoundStorage(jobId, 'selection', refs);
+            window.dispatchEvent(new CustomEvent('bms:binder-round-selection', { detail: { jobId, refs } }));
+        }
     };
     const designIds = (entries: CohortRow[]) => entries.flatMap(entry => { const id = selectionId(byId.get(entry.id)!); return id ? [id] : []; });
     const pageIds = designIds(pageRows);
@@ -195,6 +244,15 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const initialMetrics = adapter?.initialMetrics?.(numericKeys);
     const headlineKeys = (initialMetrics?.headline?.length ? initialMetrics.headline : adapter ? ['duration_seconds', ...numericKeys] : ['seq_length', 'dsasa', ...numericKeys]).filter((key, i, all) => numericKeys.includes(key) && all.indexOf(key) === i).slice(0, 2);
     const headlineMetrics = headlineKeys.map(key => ({ key, ...summarizeMetric(matched, key) }));
+    const candidateRef = (item: NativeGenerationRecord): CandidateRef | undefined => {
+        if (item.design_id) return { kind: 'design', job_id: jobId, design_id: item.design_id };
+        const selected = nativeSources.find(source => source.job_id === jobId && item.structures?.some(doc => doc.artifact_id === source.artifact_id));
+        const exact = selected?.document ?? item.structures?.find(doc => doc.primary) ?? (item.structures?.length === 1 ? item.structures[0] : undefined);
+        if (exact?.artifact_id) return { kind: 'native_document', job_id: jobId, artifact_id: exact.artifact_id, ...(exact.target_state != null ? { target_state: exact.target_state } : {}) };
+        const ref = item.candidate_ref as CandidateRef | undefined;
+        return ref?.kind && ref.job_id ? ref : undefined;
+    };
+    const rankedMembers = (rankScope === 'selected' ? matched.filter(entry => selectedSet.has(entry.id)) : matched).flatMap(entry => { const ref = candidateRef(byId.get(entry.id)!); return ref ? [ref] : []; });
     const table = <section className={`${panel} overflow-hidden`} aria-label="Candidate data table">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-color)] p-4">
             <div><h4 className="font-semibold">{adapter?.recordLabel ?? 'Candidate data'}</h4><p className="text-xs text-[var(--text-secondary)]">{matched.length} matching · {rows.length} loaded · choose a row to inspect its measurements and any available structure</p></div>
@@ -224,7 +282,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         </nav>
     </section>;
     return <section aria-label="Native initial-generation results" className={`min-w-0 ${adapter?.compact ? "space-y-1" : "space-y-4"} text-[var(--text-primary)]`}>
-        <header style={view === 'analytics' ? { display: 'none' } : undefined} className="flex flex-wrap items-center justify-between gap-3"><h3 className={`${adapter?.compact ? "text-base" : "text-xl"} font-semibold`}>{adapter?.title ?? "Generation dashboard"}</h3><span className="rounded-full border border-[var(--border-color)] px-3 py-1 text-xs">{scopeText}</span></header>
+        <header style={view === 'analytics' ? { display: 'none' } : undefined} className="flex flex-wrap items-center justify-between gap-3"><h3 className={`${adapter?.compact ? "text-base" : "text-xl"} font-semibold`}>{adapter?.title ?? "Candidates"}</h3><span className="rounded-full border border-[var(--border-color)] px-3 py-1 text-xs">{scopeText}</span></header>
         {!adapter && <BinderPredictionEvidence jobId={jobId} sourceDesignId={row?.design_id} launchContextId={launchContextId} />}
         {query.isLoading && <p role="status">Reading published generation records…</p>}
         {query.isError && <p role="status" className={`${panel} p-4`}>Native publication {rows.length ? 'is partially loaded' : 'is not available'}: {String(query.error)} <button className={control} type="button" onClick={() => void (query.isFetchNextPageError ? query.fetchNextPage() : query.refetch())}>Retry native readback</button></p>}
@@ -239,7 +297,8 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                         ['Selected', selection.length, 'Records for export; saved molecules for operations'],
                     ].map(([label, count, detail]) => <div key={String(label)} className={`${panel} px-4 py-2 ${adapter?.compact ? "flex min-w-0 items-center justify-between gap-2" : ""}`}><div title={String(label)} className={`text-xs text-[var(--text-secondary)] ${adapter?.compact ? "truncate" : ""}`}>{label}</div><div title={String(detail)} className={`${adapter?.compact ? "text-lg" : "my-1 text-2xl"} font-semibold tabular-nums`}>{count}</div>{!adapter?.compact && <div className="text-xs text-[var(--text-secondary)]">{detail}</div>}</div>)}
                 </div>
-                <div role="tablist" aria-label="Native result review" className="flex flex-wrap gap-1 border-b border-[var(--border-color)]">{([['dashboard', 'Dashboard'], ['analytics', 'Custom charts'], ['table', 'Data table'], ['structure', 'Structure']] as const).map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={view === key} className={`border-b-2 px-4 py-2 text-sm font-medium ${view === key ? 'border-blue-500 bg-blue-500/10' : 'border-transparent hover:bg-blue-500/5'}`} onClick={event => { setView(key); const section = event?.currentTarget?.closest('section'); if (section && key === 'analytics') requestAnimationFrame(() => section.scrollIntoView({ block: 'start' })); }}>{adapter && key === 'structure' ? 'Inspect record' : label}</button>)}</div>
+                <nav aria-label="Native populations" className="flex flex-wrap gap-2">{[['all', 'All'], ['passed', 'Passed'], ['ranked', 'Ranked'], ['rejected', 'Rejected']].map(([key, title]) => <button type="button" className={control} aria-pressed={population === key} key={key} onClick={() => { setPopulation(key); setPageIndex(0); }}>{title}</button>)}<span>{selection.length} checked in this population · {selection.filter(id => !matched.some(entry => entry.id === id)).length} outside this view</span></nav>
+                <div role="tablist" aria-label="Native result review" className="flex flex-wrap gap-1 border-b border-[var(--border-color)]">{([['candidates', 'Candidates'], ['dashboard', 'Dashboard'], ['analytics', 'Custom charts'], ['table', 'Data table'], ['structure', 'Structure']] as const).map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={view === key} className={`border-b-2 px-4 py-2 text-sm font-medium ${view === key ? 'border-blue-500 bg-blue-500/10' : 'border-transparent hover:bg-blue-500/5'}`} onClick={event => { setView(key); const section = event?.currentTarget?.closest('section'); if (section && key === 'analytics') requestAnimationFrame(() => section.scrollIntoView({ block: 'start' })); }}>{adapter && key === 'structure' ? 'Inspect record' : label}</button>)}</div>
                 {view === 'dashboard' && matched.length !== rows.length && <p className="text-sm text-[var(--text-secondary)]">Showing {matched.length} of {rows.length} records after filtering. <button type="button" className="underline" onClick={() => setView('table')}>Adjust filters</button></p>}
                 <div hidden={view === 'dashboard' || view === 'structure'} className={`${panel} ${adapter?.compact ? "space-y-1 p-2" : "space-y-3 p-3"}`} aria-label="Cohort controls">
                     <div className="flex flex-wrap items-center gap-3"><input aria-label="Search candidates" className={`${control} min-w-0 flex-1`} type="search" placeholder="Search candidates, source IDs or metric values…" value={search} onChange={event => { setSearch(event.target.value); setPageIndex(0); }} />
@@ -254,13 +313,18 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                         {filter.kind === 'range' && <><input aria-label={`Filter ${index + 1} minimum`} className={`${control} w-28`} type="number" step="any" placeholder="Minimum" value={filter.min} onChange={event => filterChanged(filters.map((item, i) => i === index ? { ...item, min: event.target.value } : item))} /><span>to</span><input aria-label={`Filter ${index + 1} maximum`} className={`${control} w-28`} type="number" step="any" placeholder="Maximum" value={filter.max} onChange={event => filterChanged(filters.map((item, i) => i === index ? { ...item, max: event.target.value } : item))} /></>}
                         <button aria-label={`Remove filter ${index + 1}`} className={control} type="button" onClick={() => filterChanged(filters.filter((_, i) => i !== index))}>Remove</button>
                     </div>)}
+                    <label>Ranking scope<select aria-label="Ranking scope" value={rankScope} onChange={event => setRankScope(event.target.value as typeof rankScope)}><option value="matching">Matching population</option><option value="selected">Selected in this population</option></select></label>
+                    <CohortMetricPicker label="Rank by" keys={numericKeys} value={sort.key} onChange={key => setSort(previous => ({ ...previous, key }))} />
+                    <label>Direction<select aria-label="Ranking direction" value={sort.descending ? 'descending' : 'ascending'} onChange={event => setSort(previous => ({ ...previous, descending: event.target.value === 'descending' }))}><option value="ascending">Low first</option><option value="descending">High first</option></select></label><span>Missing values last. Native rank is unchanged.</span>
+                    <BinderCandidateSets jobId={jobId} candidates={rankedMembers} ranking={{ metric: sort.key, direction: sort.descending ? 'descending' : 'ascending', missing: 'last', scope: rankScope }} filterState={{ search, filters, population }} onLoad={refs => { writeRoundStorage(jobId, 'selection', refs); window.dispatchEvent(new CustomEvent('bms:binder-round-selection', { detail: { jobId, refs, replace: true } })); }} />
                     <p className="text-xs text-[var(--text-secondary)]">{matched.length} of {rows.length} loaded records in view · {numericKeys.length} numeric metrics{!adapter?.compact && " · Filters do not change acceptance or selection."}</p>
                 </div>
                 <div hidden={view !== 'dashboard' && view !== 'analytics'}>{(analyticsOpened || view === 'dashboard' || view === 'analytics') && <Suspense fallback={<p role="status">Loading cohort charts…</p>}><CohortAnalytics getMetricLabel={label} getMetricDescription={key => describeCohortMetric(key, keys).description} renderMetricPicker={props => <CohortMetricPicker {...props} />} initialMetrics={initialMetrics} rows={matched} selectedIds={selectedCohortIds} activeId={activeId} mode={view === 'analytics' ? 'analytics' : 'dashboard'} onInspect={id => { const item = byId.get(id); if (item) inspect(item); }} onSelect={ids => changeSelection(designIds(matched.filter(entry => ids.includes(entry.id))), true)} /></Suspense>}</div>
+                <div className={view === 'candidates' ? 'grid min-w-0 gap-3 xl:grid-cols-[minmax(300px,2fr)_minmax(0,3fr)]' : ''}>
                 {view !== 'structure' && table}
-                <div ref={inspector} hidden={view !== 'structure'} className={`${panel} p-4`} aria-label="Candidate structure inspector">
-                    {(structureOpened || view === 'structure') && <Suspense fallback={<p role="status">Loading native structure…</p>}>{!row ? <p role="status">{!complete ? 'Loading the requested candidate from the publication. ' : 'Requested candidate is unavailable in this publication. '}Another candidate is not substituted.</p> : <>
-                        <div className="flex flex-wrap items-center justify-between gap-3"><div><h4 className="text-lg font-semibold">{adapter?.label(row) ?? row.candidate_key ?? row.design_id ?? 'Native record'}</h4><p className="text-xs text-[var(--text-secondary)]">{adapter ? "Native record and phase observations" : "Exact published structure · native measurements are shown without an inferred confidence score"}</p></div><div className="flex gap-2"><button className={control} type="button" disabled={navigationRows.indexOf(row) <= 0} onClick={() => inspect(navigationRows[navigationRows.indexOf(row) - 1])}>Previous candidate</button><button className={control} type="button" disabled={navigationRows.indexOf(row) >= navigationRows.length - 1} onClick={() => inspect(navigationRows[navigationRows.indexOf(row) + 1])}>Next candidate</button></div></div>
+                <div ref={inspector} hidden={view !== 'structure' && view !== 'candidates'} className={`${panel} p-4`} aria-label="Candidate structure inspector">
+                    {(structureOpened || view === 'structure' || view === 'candidates') && <Suspense fallback={<p role="status">Loading native structure…</p>}>{!row ? <p role="status">{!complete ? 'Loading the requested candidate from the publication. ' : 'Requested candidate is unavailable in this publication. '}Another candidate is not substituted.</p> : <>
+                        <div className="flex flex-wrap items-center justify-between gap-3"><div><h4 className="text-lg font-semibold">{cohort.find(entry => entry.id === activeId)?.label ?? 'Candidate'}</h4><p className="text-xs text-[var(--text-secondary)]">{adapter ? "Native record and phase observations" : "Exact published structure · native measurements are shown without an inferred confidence score"}</p></div><div className="flex gap-2"><button className={control} type="button" disabled={navigationRows.indexOf(row) <= 0} onClick={() => inspect(navigationRows[navigationRows.indexOf(row) - 1])}>Previous candidate</button><button className={control} type="button" disabled={navigationRows.indexOf(row) >= navigationRows.length - 1} onClick={() => inspect(navigationRows[navigationRows.indexOf(row) + 1])}>Next candidate</button></div></div>
                         {document?.artifact_id && <nav aria-label="Continue exact native document">{(['redesign', 'sequence', 'prediction'] as const).map(destination => {
                             const href = new URL(continuationHref({ job_id: jobId, ...(row.design_id ? { design_id: row.design_id } : {}), document: { artifact_id: document.artifact_id, ...(document.target_state != null ? { target_state: document.target_state } : {}) } }, destination), window.location.origin);
                             const back = new URL(href.searchParams.get('return_to')!, window.location.origin);
@@ -287,6 +351,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                         </div><aside className="min-w-0"><h5 className="mb-2 text-sm font-semibold">Native measurements</h5><dl className="max-h-[600px] overflow-auto text-sm">{Object.entries(values(row)).map(([key, value]) => <div key={key} className="flex justify-between gap-3 border-b border-[var(--border-color)] py-2" title={[key, nativeGenerationMetricDetail(row, key)].filter(Boolean).join(' · ')}><dt className="break-words text-[var(--text-secondary)]">{label(key)}</dt><dd className="max-w-[55%] break-words text-right tabular-nums">{formatMetric(value)}</dd></div>)}</dl></aside></div>}
                         <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">{document?.download_url && <><button className={control} type="button" aria-expanded={viewerToolsOpen} onClick={() => setViewerToolsOpen(value => !value)}>{viewerToolsOpen ? 'Hide viewer tools' : 'Measurements and exports'}</button><a className="underline" href={document.download_url} download>Download exact native document</a></>}{row.design_id && <a className="underline" href={nativeCandidateRoute(jobId, row.design_id, document, launchContextId)}>Open candidate workbench</a>}</div>
                     </>}</Suspense>}
+                </div>
                 </div>
                 <p className="text-xs text-[var(--text-secondary)]">Model predictions are not experimental validation. {adapter && 'Phase plots show recorded optimization updates, not acceptance scores. '}{!complete && 'Only loaded records are included.'}</p>
             </>}

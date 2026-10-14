@@ -5368,6 +5368,8 @@ function ResultsViewerContent() {
             launchContextId={destinationLaunchContextId}
             candidateDocuments={{ ...readBinderCandidateDocuments(activeJob.id), ...(exactArtifactId && requestedDesignId ? { [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } } : {}) }}
             inspectDesignId={exactArtifactId ? requestedDesignId : undefined}
+            onLegacyFullLoop={() => openPipelineReorchestration()}
+            onClearSelection={() => { setSelectedDesignIds([]); setSelectedNativeSources([]); }}
             onOpenJob={handleSelectJob} />
         {selectedDesignIds.length > 0 && !((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
             || (activeJob.model_id === 'ligandmpnn' && activeJob.mode === 'interface_context')) && <BlindPoseSelectedControls
@@ -5610,8 +5612,13 @@ function ResultsViewerContent() {
                                 selectedDesignIds={selectedDesignIds} onSelectedDesignIdsChange={setSelectedDesignIds}
                                 selectedNativeSources={selectedNativeSources} onSelectedNativeSourcesChange={setSelectedNativeSources}
                                 artifactId={exactArtifactId} targetState={exactTargetState}
-                                onInspectDocument={(row, document) => { if (row.design_id) navigate(nativeCandidateRoute(selectedJobId, row.design_id, document, destinationLaunchContextId), { replace: true }); }} />
-                            {(selectedDesignIds.length + selectedNativeSources.length) > 0 && <SelectedCandidateOperations key={`operations-${activeJob.id}`} count={selectedDesignIds.length + selectedNativeSources.length}>{selectedCandidateControls}</SelectedCandidateOperations>}
+                                onInspectDocument={(row, document) => { const route = new URL(nativeCandidateRoute(selectedJobId, row.design_id ?? '', document, destinationLaunchContextId), window.location.origin);
+                                    if (!row.design_id) route.searchParams.delete('design_id');
+                                    if (row.candidate_key) route.searchParams.set('native_candidate', row.candidate_key);
+                                    const nativeScope = new URLSearchParams(window.location.search).get('native_scope');
+                                    if (nativeScope) route.searchParams.set('native_scope', nativeScope);
+                                    navigate(`${route.pathname}${route.search}`, { replace: true }); }} />
+                            {selectedCandidateControls}
                         </>
                     ) : isNativeBinderGeneration(activeJob) ? (
                         <>
@@ -5624,11 +5631,14 @@ function ResultsViewerContent() {
                                 selectedNativeSources={selectedNativeSources} onSelectedNativeSourcesChange={setSelectedNativeSources}
                                 artifactId={exactArtifactId} targetState={exactTargetState}
                                 onInspectDocument={(row, document) => {
-                                    if (row.design_id) navigate(nativeCandidateRoute(selectedJobId, row.design_id, document, destinationLaunchContextId), { replace: true });
+                                    const route = new URL(nativeCandidateRoute(selectedJobId, row.design_id ?? '', document, destinationLaunchContextId), window.location.origin);
+                                    if (!row.design_id) route.searchParams.delete('design_id');
+                                    if (row.candidate_key) route.searchParams.set('native_candidate', row.candidate_key);
+                                    const nativeScope = new URLSearchParams(window.location.search).get('native_scope');
+                                    if (nativeScope) route.searchParams.set('native_scope', nativeScope);
+                                    navigate(`${route.pathname}${route.search}`, { replace: true });
                                 }} />
-                            <SelectedCandidateOperations key={`operations-${activeJob.id}`} count={selectedDesignIds.length + selectedNativeSources.length}>
-                                {selectedCandidateControls}
-                            </SelectedCandidateOperations>
+                            {selectedCandidateControls}
                         </>
                     ) : isRFD3GenerationResultJob(activeJob) ? (
                         <RFD3GenerationResultsPane key={activeJob.id} jobId={activeJob.id} />

@@ -41,9 +41,13 @@ async function mount(ids = ['page-1-state-a', 'page-2-state-b'], launchContextId
         <BinderSelectedControls sourceJobId="round2" selectedDesignIds={ids} onOpenJob={open} launchContextId={launchContextId} />
     </QueryClientProvider>); });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+    // Legacy operations remain supported under their secondary disclosure.
+    const secondary = renderer!.root.findAllByType('details').find(node => node.findAllByType('summary')[0]?.children.join('') === 'Other model operations and source tools')!;
+    await act(async () => secondary.props.onToggle({ currentTarget: { open: true } }));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
 }
 const button = (text: string) => renderer!.root.findAllByType('button').find(node => node.children.join('') === text)!;
-afterEach(async () => { if (renderer) await act(async () => renderer!.unmount()); renderer = undefined; api.defaults.adapter = original; client.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); sessionStorage.clear(); document.body.innerHTML = ''; });
+afterEach(async () => { if (renderer) await act(async () => renderer!.unmount()); renderer = undefined; api.defaults.adapter = original; client.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); sessionStorage.clear(); localStorage.clear(); document.body.innerHTML = ''; });
 
 it('mounts model-owned typed controls and submits ALL selected page/state identities with independent false values', async () => {
     await mount();

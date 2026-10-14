@@ -112,7 +112,7 @@ export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchCon
       const saved = JSON.parse(new URLSearchParams(window.location.search).get('native_scope') ?? 'null');
       if (Array.isArray(saved) && saved[0] === 'bindcraft2' && ['trajectory', 'draw', 'retained', 'document', 'attempt'].includes(saved[2])) return { arm: saved[1], stage: saved[2], offset: 0, limit: 100 };
     } catch { /* ordinary results route */ }
-    return { arm: null, stage: workbench.selectedDesignId || workbench.artifactId ? 'retained' : 'trajectory', offset: 0, limit: 100 };
+    return { arm: null, stage: workbench.selectedDesignId || workbench.artifactId ? 'retained' : 'draw', offset: 0, limit: 100 };
   });
   const settings = useQuery<CampaignSettings>({
     queryKey: ['bindcraft2-campaign-settings', jobId], enabled: settingsOpen,

@@ -5,6 +5,11 @@ import type { CandidateDocuments } from './binderDiagnosticSelection';
 
 import type { NativeGenerationDocument } from './nativeBinderResults';
 
+function persistedSelection(key: string): string | null {
+    // Read old tab-scoped drafts once when no durable value exists.
+    return localStorage.getItem(key) ?? sessionStorage.getItem(key);
+}
+
 /** The document is display metadata only; requests contain registered identities. */
 export interface NativeCandidateSource {
     job_id: string;
@@ -14,15 +19,15 @@ export interface NativeCandidateSource {
 }
 export function readBinderNativeSources(jobId: string): NativeCandidateSource[] {
     try {
-        const value: unknown = JSON.parse(sessionStorage.getItem(`bms:selected-designs:${jobId}:native`) ?? '[]');
+        const value: unknown = JSON.parse(persistedSelection(`bms:selected-designs:${jobId}:native`) ?? '[]');
         return Array.isArray(value) ? value.filter((item): item is NativeCandidateSource => item && typeof item.job_id === 'string' && typeof item.artifact_id === 'string' && !!item.artifact_id) : [];
     } catch { return []; }
 }
 export function writeBinderNativeSources(jobId: string, sources: NativeCandidateSource[]) {
-    try { sessionStorage.setItem(`bms:selected-designs:${jobId}:native`, JSON.stringify(sources)); } catch { /* storage unavailable */ }
+    try { localStorage.setItem(`bms:selected-designs:${jobId}:native`, JSON.stringify(sources)); } catch { /* storage unavailable */ }
 }
 
-export type BinderOperation = 'refine' | 'caliby' | 'frustrampnn' | 'fampnn' | 'proteinmpnn' | 'protonpottsmpnn' | 'predict_boltz2' | 'predict_protenix';
+export type BinderOperation = 'refine' | 'caliby' | 'frustrampnn' | 'fampnn' | 'proteinmpnn' | 'protonpottsmpnn' | 'predict_boltz2' | 'predict_protenix' | 'predict_esmfold2';
 export interface BinderSelectedRequest {
     source_job_id: string;
     design_ids: string[];
@@ -58,7 +63,7 @@ export async function submitPreparedSelectedMutation<T extends { launched_jobs: 
         const launched: Job[] = [];
         try {
             // Shared review submits retained snapshots, not this endpoint again.
-            for (const prepared of requests) launched.push((await submitJob(prepared, { launchContext: false })).data);
+            for (const prepared of requests) launched.push((await submitJob(prepared, { launchContext: Boolean(prepared.launch_context_id) })).data);
         } catch (reason) {
             if (launched.length) throw new Error(`Already queued Jobs: ${launched.map(job => job.id).join(', ')}. Remaining submission stopped: ${String(reason)}`);
             throw reason;
@@ -69,23 +74,23 @@ export async function submitPreparedSelectedMutation<T extends { launched_jobs: 
 
 export function readBinderCandidateDocuments(jobId: string): CandidateDocuments {
     try {
-        const value: unknown = JSON.parse(sessionStorage.getItem(`bms:selected-designs:${jobId}:documents`) ?? '{}');
+        const value: unknown = JSON.parse(persistedSelection(`bms:selected-designs:${jobId}:documents`) ?? '{}');
         if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
         return Object.fromEntries(Object.entries(value).filter(([, item]) => item && typeof item === 'object' && !Array.isArray(item)
             && Object.entries(item).every(([key, val]) => (key === 'artifact_id' || key === 'target_state') && typeof val === 'string')));
     } catch { return {}; }
 }
 export function writeBinderCandidateDocuments(jobId: string, documents: CandidateDocuments) {
-    try { sessionStorage.setItem(`bms:selected-designs:${jobId}:documents`, JSON.stringify(documents)); } catch { /* storage unavailable */ }
+    try { localStorage.setItem(`bms:selected-designs:${jobId}:documents`, JSON.stringify(documents)); } catch { /* storage unavailable */ }
     window.dispatchEvent(new CustomEvent('bms:binder-documents', { detail: { jobId, documents } }));
 }
 
 export function readBinderSelection(jobId: string): string[] {
     try {
-        const value = JSON.parse(sessionStorage.getItem(`bms:selected-designs:${jobId}`) ?? '[]');
+        const value = JSON.parse(persistedSelection(`bms:selected-designs:${jobId}`) ?? '[]');
         return Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === 'string'))] : [];
     } catch { return []; }
 }
 export function writeBinderSelection(jobId: string, ids: string[]) {
-    try { sessionStorage.setItem(`bms:selected-designs:${jobId}`, JSON.stringify(ids)); } catch { /* storage unavailable */ }
+    try { localStorage.setItem(`bms:selected-designs:${jobId}`, JSON.stringify(ids)); } catch { /* storage unavailable */ }
 }
