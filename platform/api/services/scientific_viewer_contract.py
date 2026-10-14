@@ -92,7 +92,7 @@ class NativeMetricBase(IdentityWire):
     schema_name: Literal['core_protein_viewer_metric']
     schema_version: Literal[1]
     contract_revision: Literal[1]
-    design_id: str
+    design_id: str | None
     design_name: str
     status: Literal['ok']
     reason: None
@@ -105,7 +105,11 @@ class NativeMetricBase(IdentityWire):
     @model_validator(mode='after')
     def source_binding(self):
         import re
-        if (self.document.candidateId != self.design_id
+        if ((self.design_id is not None and self.document.candidateId != self.design_id)
+                or (self.design_id is None and (
+                    not self.document.documentId.startswith('artifact:')
+                    or not self.document.candidateId.startswith('native:')
+                    or not self.document.candidateId.endswith(':' + self.document.documentId.removeprefix('artifact:'))))
                 or self.axis.candidate_id != self.producer_binding.candidate_id
                 or self.axis.document_id != self.producer_binding.document_id
                 or self.axis.source_sha256 != self.document.contentSha256
@@ -189,7 +193,7 @@ class ScientificViewerMetric(IdentityWire):
     schema_name: Literal['core_protein_viewer_metric']
     schema_version: Literal[1]
     contract_revision: Literal[1]
-    design_id: str
+    design_id: str | None
     design_name: str
     metric: Literal['pae', 'residue_plddt', 'chain_metrics']
     status: Literal['ok', 'unavailable']
