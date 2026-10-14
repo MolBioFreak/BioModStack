@@ -20,24 +20,114 @@ MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
 
 def _contained(path, roots):
     candidate = Path(os.path.abspath(path))
-    if any(p.is_symlink() for p in (candidate, *candidate.parents)):
-        raise ValueError(f"Portable input traverses a symlink: {candidate}")
     resolved = candidate.resolve(strict=True)
     if not any(resolved == root or root in resolved.parents for root in roots):
         raise ValueError(f"Portable input outside approved roots: {candidate}")
     return resolved
 
 
+def file_stamp(path):
+    """Invocation-local change identity; access time is not a mutation."""
+    info = path.stat(follow_symlinks=False)
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
 def _identity(path):
     digest = hashlib.sha256()
     size = 0
     with path.open("rb") as stream:
-        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode) or os.fstat(stream.fileno()).st_nlink != 1:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise ValueError("Portable input must be a regular file")
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             size += len(block)
             digest.update(block)
     return digest.hexdigest(), size
+
+
+def selected_weight_member(root, relative, *, sha256):
+    """Resolve a native name within its selected layout or exact pinned object.
+
+    A pinned layout's only external authority is the selected digest's existing
+    acquisition object, not a configurable collection of allowed roots.
+    """
+    import re
+    if not re.fullmatch(r"[0-9a-f]{64}", str(sha256)):
+        raise ValueError("Invalid selected weight digest")
+    member = Path(relative)
+    if (not isinstance(relative, str) or '\\' in relative or member.is_absolute()
+            or any(p in {'', '.', '..'} for p in relative.split('/'))):
+        raise ValueError("Invalid selected weight member")
+    root = Path(root).resolve(strict=True)
+    target = (root / member).resolve(strict=True)
+    if not target.is_relative_to(root):
+        # layouts/<dependency>/<layout digest> is the publisher's existing
+        # namespace. Only its digest-selected CAS leaf may escape that layout.
+        if (root.parent.parent.name != "layouts" or
+                not re.fullmatch(r"[0-9a-f]{64}", root.name) or
+                target != root.parents[2] / "objects" / "sha256" / sha256 / "runtime.sif"):
+            raise ValueError("Selected weight escapes configured layout authority")
+    return target
+
+
+def cm_checkpoint_inventory(document, *, weights_root):
+    """Inventory the sealed selection, including retained versions, without copies.
+
+    The sealed digest selects the acquisition object. A legacy native name is
+    usable only when it still has those exact bytes; never substitute a default.
+    """
+    import re
+    digest = document["confornets"]["checkpoint"]["sha256"]
+    if not re.fullmatch(r"[0-9a-f]{64}", str(digest)):
+        raise ValueError("Invalid CM checkpoint digest")
+    root = Path(weights_root).resolve(strict=True)
+    object_path = root / "objects" / "sha256" / digest / "runtime.sif"
+    if object_path.exists():
+        # Keep generic CAS/image custody: no-follow regular single-link object.
+        from .shared_runtime_images import _file, _hash, _check_file
+        with _file(object_path) as (fd, parent, before):
+            if before.st_nlink != 1 or _hash(fd) != digest:
+                raise ValueError("CM selected object identity mismatch")
+            _check_file(object_path, fd, parent, before)
+            path, size = object_path, before.st_size
+    else:
+        layout = (root / 'openfold3').resolve(strict=True)
+        if not layout.is_relative_to(root):
+            raise ValueError('CM checkpoint layout escapes managed weights root')
+        path = selected_weight_member(layout, "of3-p2-155k.pt", sha256=digest)
+        from .shared_runtime_images import _file, _hash
+        with _file(path) as (fd, parent, before):
+            observed = _hash(fd)
+            after = os.fstat(fd)
+            visible = path.stat(follow_symlinks=False)
+            fields = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns')
+            if (observed != digest or any(getattr(before, key) != getattr(row, key)
+                    for key in fields for row in (after, visible))):
+                raise ValueError("CM selected checkpoint digest/identity mismatch")
+            size = before.st_size
+    return {str(path): dict(sha256=digest, size_bytes=size, format="pt", path=str(path))}
+
+
+def bind_cm_checkpoint(document, *, owner, runtime_references):
+    """Bind sealed logical identity to an exact inventoried installed member.
+
+    The caller owns inventory and placement; this does not select a default,
+    acquire bytes, rewrite a request or create another payload registry.
+    Returned shape is the existing portable envelope's binding entry.
+    """
+    checkpoint = document["confornets"]["checkpoint"]
+    source = os.path.abspath(Path(owner).parent / checkpoint["path"])
+    matches = [(path, item) for path, item in runtime_references.items()
+               if item.get("sha256") == checkpoint["sha256"]]
+    if not matches:
+        raise ValueError("CM checkpoint digest is not a selected dependency")
+    path, selected = sorted(matches, key=lambda pair: str(pair[0]))[0]
+    selector = ["confornets", "checkpoint", "path"]
+    reference = dict(selected, source_path=str(path), reference_path=source,
+                     owner=str(owner), selector=selector, role="runtime")
+    reference["logical_id"] = "native-runtime:" + hashlib.sha256(
+        json.dumps([source, str(owner), selector], separators=(",", ":")).encode()).hexdigest()
+    return {"reference": reference, "path": str(path)}
 
 
 def _bindings():
@@ -72,7 +162,7 @@ def resolve_input_path(value, *, owner=None):
                if key in (item["reference"]["source_path"], item["reference"].get("reference_path"), item["path"])]
     # Nextflow may stage an exact verified artifact through a task symlink.
     # Only its already-declared immutable target is accepted, never a new read.
-    if not matches and raw.is_symlink():
+    if not matches and raw.exists():
         target = str(raw.resolve(strict=True))
         matches = [item for item in payload.get("bindings", []) if item["path"] == target]
     if matches:
@@ -125,6 +215,13 @@ def native_reference_fields(document, format):
         inp = document.get("input", {})
         for key in ("structure", "coordinates", "topology"):
             yield from field(inp, key, ("input",), key)
+        if document.get("schema") == "bms.md.job.v3":
+            for key in ("tpr", "checkpoint", "index", "restraint_reference"):
+                yield from field(inp, key, ("input",), key)
+            for i, window in enumerate(document.get("windows") or []):
+                yield from field(window, "coordinates", ("windows", i), "coordinates")
+            for i, stage in enumerate(document.get("stages", [])):
+                yield from field(stage, "mdp_file", ("stages", i), "mdp")
         closure = inp.get("topology_closure", {})
         for i, item in enumerate(closure.get("files", [])):
             yield ("input", "topology_closure", "files", i, "path"), str(Path(closure["root"]) / item["path"]), "topology-include"
@@ -253,7 +350,35 @@ def prepared_generation_source_fields(model_id, mode, params):
     return set()
 
 
-def discover_native_input_references(model_id, mode, params, generated_inputs, *, output_dir, allowed_roots, yaml_loader=None, runtime_references=None, document_owners=None):
+NGS_OPTIONAL_INPUTS = frozenset({"pod5_dir", "sample_sheet", "duplex_pairs",
+    "wf_clone_primers", "wf_clone_insert_reference", "wf_clone_host_reference",
+    "wf_clone_regions_bedfile", "reference_set_manifest", "comparison_panel_snapshot"})
+
+
+def selected_ngs_input_fields(mode, params):
+    """Transport-only native selections; do not expand the approval roster."""
+    selected = set()
+    if params.get("pod5_dir"):
+        selected.update({"pod5_dir", "sample_sheet", "duplex_pairs"})
+    workflow = params.get("ont_workflow_id") or {
+        "clone_validation": "wf_clone_validation",
+        "construct_screening": "ont_construct_screening",
+        "pooled_reference_assignment": "ont_pooled_reference_assignment",
+    }.get(mode, mode)
+    if workflow == "wf_clone_validation" or (workflow == "ont_construct_screening"
+                                              and params.get("run_assembly") is True):
+        selected.update(key for key in NGS_OPTIONAL_INPUTS if key.startswith("wf_clone_"))
+    if workflow == "ont_pooled_reference_assignment":
+        selected.add("reference_set_manifest")
+    run_qc = params.get("run_fastq_qc", params.get("run_multimer_qc", True)) is not False
+    if workflow == "ont_construct_screening":
+        run_qc = params.get("run_fastq_qc") is not False
+    if workflow in {"ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening"} and run_qc and params.get("reference_fasta"):
+        selected.add("comparison_panel_snapshot")
+    return {key: params[key] for key in sorted(selected) if params.get(key)}
+
+
+def discover_native_input_references(model_id, mode, params, generated_inputs, *, output_dir, allowed_roots, yaml_loader=None, runtime_references=None, document_owners=None, input_inventory=None):
     """Discover declared native closure. YAML uses the caller's native safe loader.
 
     Generated inputs must already be materialized; their immutable payload is
@@ -292,13 +417,14 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
                 return
             scanned_directories.add(path)
             for child in sorted(path.rglob("*")):
-                if child.is_symlink():
-                    raise ValueError("Portable input directory contains a symlink")
+                _contained(child, roots)
                 if child.is_file():
                     visit(child, owner, selector + (child.relative_to(path).as_posix(),), role, lineage)
             return
         if path not in identities:
-            identities[path] = _identity(path)
+            observed = (input_inventory or {}).get(str(path))
+            identities[path] = (observed[:2] if observed is not None and
+                                observed[2] == file_stamp(path) else _identity(path))
         digest, size = identities[path]
         if role == "runtime-snapshot":
             if digest != snapshot_sha256:
@@ -313,6 +439,8 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         identity = json.dumps([model_id, mode, str(owner or "params"), selector, digest], separators=(",", ":"))
         logical_id = "native-input:" + hashlib.sha256(identity.encode()).hexdigest()
         record = dict(logical_id=logical_id, role=role, format=path.suffix.lstrip(".") or "binary", source_path=str(path), sha256=digest, size_bytes=size, owner=str(owner or "params"), lineage=list(lineage), selector=list(selector))
+        if os.path.abspath(raw) != str(path):
+            record["reference_path"] = os.path.abspath(raw)
         if source_owner and not Path(value).is_absolute():
             record["reference_path"] = os.path.abspath(Path(owner).parent / value)
         records.append(record)
@@ -342,6 +470,15 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         fmt = _format(document, path)
         record["format"] = fmt
         for child_selector, child, child_role in native_reference_fields(document, fmt):
+            if fmt == "cm-request" and child_role == "runtime-snapshot" and inventory_supplied:
+                binding = bind_cm_checkpoint(document, owner=document_owners.get(str(path), path),
+                                             runtime_references=runtime_references)
+                checkpoint_record = binding["reference"]
+                checkpoint_record["owner"] = str(path)
+                checkpoint_record["reference_path"] = os.path.abspath(path.parent / child)
+                checkpoint_record["lineage"] = [*lineage, logical_id]
+                records.append(checkpoint_record)
+                continue
             visit(child, path, child_selector, child_role, (*lineage, logical_id),
                   source_owner=document_owners.get(str(path)) if child_role != "msa" else None,
                   snapshot_sha256=document.get("confornets", {}).get("checkpoint", {}).get("sha256")

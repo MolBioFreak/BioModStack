@@ -5,7 +5,7 @@ process PrepareConformationalMappingFrustraMPNNV2 {
     label 'CPU'
     errorStrategy 'terminate'
     maxRetries 0
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
     input:
     tuple val(request_id), val(backend_dir), path(request_root), path(canonical_dir)
@@ -32,7 +32,7 @@ process CanonicalConformationalAnalysisPlaneV2 {
     label 'CPU'
     errorStrategy 'terminate'
     maxRetries 0
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
     publishDir "${params.out_dir}/final/conformational_mapping/${backend_dir}", \
         mode: 'copy', overwrite: true
@@ -65,7 +65,7 @@ process StageConformationalMappingFrustraMPNNResult {
     label 'CPU'
     errorStrategy 'terminate'
     maxRetries 0
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
     input:
     tuple val(component_result), path(candidate_bundle), path(result_manifest)
@@ -76,6 +76,6 @@ process StageConformationalMappingFrustraMPNNResult {
     script:
     """
     set -euo pipefail
-    cp -a '${candidate_bundle}' '${component_result.candidate_id}'
+    ln -s "\$(realpath '${candidate_bundle}')" '${component_result.candidate_id}'
     """
 }

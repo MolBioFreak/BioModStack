@@ -251,8 +251,7 @@ def _job_with_terminal_states(outputs_by_stage: dict[str, list[str]]) -> SimpleN
 def test_full_package_authority_is_order_invariant_and_count_closed() -> None:
     from services import ont_ngs_completion as service
 
-    summarize = cast(Any, getattr(service, "canonical_ngs_package_authority", None))
-    assert callable(summarize)
+    summarize = service.canonical_ngs_package_authority
     descriptors = [
         {
             "source": "sequence_qc",
@@ -277,22 +276,21 @@ def test_full_package_authority_is_order_invariant_and_count_closed() -> None:
     assert first["declared_artifact_count"] == 2
     assert first["present_artifact_count"] == 1
     assert first["unavailable_artifact_count"] == 1
-    assert len(first["artifact_set_sha256"]) == 64
-
-
-def test_package_authority_rejects_an_exact_duplicate_descriptor() -> None:
-    from services import ont_ngs_completion as service
-
-    descriptor = {
-        "source": "sequence_qc",
-        "kind": "summary",
-        "state": "present",
-        "sha256": "a" * 64,
-        "size_bytes": 12,
-    }
-
-    with pytest.raises(service.OntNgsCompletionError, match="duplicate"):
-        service.canonical_ngs_package_authority([descriptor, dict(descriptor)])
+    # Literal canonical bytes: independent of the owner's sorter/serializer.
+    canonical = (
+        b'{"records":[{"kind":"modified_bases","sha256":null,"size_bytes":null,'
+        b'"source":"input_mode","state":"not_applicable_to_input_mode"},'
+        b'{"kind":"summary","sha256":"' + b'a' * 64 +
+        b'","size_bytes":10,"source":"sequence_qc","state":"present"}],'
+        b'"schema":"bms.ngs.package-authority.v1"}'
+    )
+    assert first["artifact_set_sha256"] == hashlib.sha256(canonical).hexdigest()
+    for field, replacement in (("source", "other_source"), ("kind", "other_kind"),
+                               ("sha256", "b" * 64), ("size_bytes", 11)):
+        changed = [dict(descriptors[0], **{field: replacement}), descriptors[1]]
+        assert summarize(changed)["artifact_set_sha256"] != first["artifact_set_sha256"]
+    changed = [descriptors[0], dict(descriptors[1], state="missing_optional")]
+    assert summarize(changed)["artifact_set_sha256"] != first["artifact_set_sha256"]
 
 
 def test_fastq_manifest_authority_excludes_root_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -342,31 +340,12 @@ def test_fastq_normalization_and_resubmit_drop_all_accelerator_and_dorado_fields
         for key in normalized
     )
 
-    jobs_source = (Path(__file__).resolve().parents[1] / "routers" / "jobs.py").read_text(encoding="utf-8")
-    resubmit = jobs_source[jobs_source.index("async def resubmit_job(") : jobs_source.index("# RE-INGESTION ENDPOINT")]
-    call = "ont_ngs_contract.normalize_ont_launch_params("
-    assert call in resubmit
-    assert resubmit.index(call) < resubmit.index("estimate_vram(")
-
-
-def test_canonical_fastq_adapter_requires_cpu_resource_authority() -> None:
-    from routers import workflow_adapter
-
-    requires = cast(Any, getattr(workflow_adapter, "_requires_ont_fastq_resource_authority", None))
-    assert callable(requires)
-    assert requires(
-        SimpleNamespace(model_id="nanopore"),
-        {"ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"},
-    ) is True
-    assert requires(SimpleNamespace(model_id="nanopore"), {"ont_workflow_id": "ont_raw_signal"}) is False
-    source = Path(workflow_adapter.__file__).read_text(encoding="utf-8")
-    assert "canonical FASTQ-QC launch requires resource admission authority" in source
-
 
 @pytest.mark.asyncio
-async def test_stage_start_cas_cannot_resurrect_a_concurrently_terminal_stage(
+async def test_stage_start_rolls_back_lost_cas_and_rejects_terminal_reread(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Scripted rowcounts exercise retry handling, not competing SQL predicates.
     from routers import jobs
 
     publish = cast(Any, getattr(jobs, "_publish_generic_stage_start", None))
@@ -439,7 +418,7 @@ async def test_stage_start_cas_cannot_resurrect_a_concurrently_terminal_stage(
 
 
 @pytest.mark.asyncio
-async def test_stage_terminal_retry_preserves_a_concurrently_newer_current_stage(
+async def test_stage_terminal_retry_propagates_current_stage_from_reread(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from routers import jobs
@@ -502,29 +481,8 @@ async def test_stage_terminal_retry_preserves_a_concurrently_newer_current_stage
     assert session.update_current_stages[-1] == "fastq_qc"
 
 
-def test_terminal_stage_validation_accepts_canonical_result_relative_receipts(
-    tmp_path: Path,
-) -> None:
-    state_root = tmp_path / "state"
-    result_root = state_root / "bms_results" / "retry3"
-    output_by_stage: dict[str, list[str]] = {}
-    for stage in _REQUIRED_TERMINAL_STAGES:
-        output_by_stage[stage] = []
-        for suffix in _REQUIRED_STAGE_OUTPUT_SUFFIXES[stage]:
-            output = result_root / suffix
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(stage, encoding="utf-8")
-            output_by_stage[stage].append(f"bms_results/{result_root.name}/{suffix}")
-
-    job = _job_with_terminal_states(output_by_stage)
-    completed_stages, stage_outputs = _validate_terminal_stages(job, result_root, result_root)
-
-    assert completed_stages == list(_REQUIRED_TERMINAL_STAGES)
-    assert stage_outputs == output_by_stage
-
-
 @pytest.mark.parametrize("mutation", ["reorder", "extra", "cross_stage_duplicate"])
-def test_terminal_stage_receipts_reject_noncanonical_order_extras_and_cross_stage_reuse(
+def test_terminal_stage_receipts_preserve_order_and_reject_extras_or_cross_stage_reuse(
     tmp_path: Path, mutation: str,
 ) -> None:
     state_root = tmp_path / "state"
@@ -724,6 +682,7 @@ async def test_finalizer_persists_stage_mirrors_without_a_transient_all_stages_f
         resource_usage_receipt={"complete": True, "receipt_sha256": "9" * 64},
     )
 
+    # Receiving coverage for canonical result-relative receipts (formerly standalone).
     assert job.completed_stages == list(_REQUIRED_TERMINAL_STAGES)
     assert job.stage_outputs == outputs_by_stage
     assert not hasattr(job, "all_stages")
@@ -736,7 +695,6 @@ async def test_finalizer_persists_stage_mirrors_without_a_transient_all_stages_f
     assert materialization_calls == []
     assert attached_receipts == [{"complete": True, "receipt_sha256": "9" * 64}]
     assert job.params["resource_usage_receipts"] == attached_receipts
-
 
 
 def test_package_source_custody_and_published_reopen_are_distinct(tmp_path, monkeypatch):

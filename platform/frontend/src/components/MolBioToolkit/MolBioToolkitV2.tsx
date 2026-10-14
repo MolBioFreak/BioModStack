@@ -1364,15 +1364,6 @@ export function MolBioToolkitV2() {
     const loadSequence = useCallback(async (id: string, options?: { forceReload?: boolean }): Promise<boolean> => {
         const loadToken = sequenceLoadControllerRef.current.begin();
         invalidateGetSequence();
-        const shouldUpdateRequest = requestedMolecularRevisionId || requestedMolecularSequenceId !== id;
-        if (shouldUpdateRequest) {
-            localMolecularNavigationRef.current = JSON.stringify({ kind: 'current', sequenceId: id });
-            approveMolecularOpenRequest({ kind: 'current', sequenceId: id });
-            updateQueryParams({
-                molbio_sequence_id: id,
-                molbio_revision_id: null,
-            });
-        }
         const existing = workspaceTabs.find((tab) => tab.sequenceId === id && !tab.exactMolecularRevision);
         if (existing && !options?.forceReload) {
             if (!sequenceLoadControllerRef.current.isCurrent(loadToken)) return false;
@@ -1385,6 +1376,16 @@ export function MolBioToolkitV2() {
             return false;
         }
         const converted = sequenceDataFromApiRecord(seq);
+        // Publish only the successfully loaded, still-current selection.
+        const shouldUpdateRequest = requestedMolecularRevisionId || requestedMolecularSequenceId !== id;
+        if (shouldUpdateRequest) {
+            localMolecularNavigationRef.current = JSON.stringify({ kind: 'current', sequenceId: id });
+            approveMolecularOpenRequest({ kind: 'current', sequenceId: id });
+            updateQueryParams({
+                molbio_sequence_id: id,
+                molbio_revision_id: null,
+            });
+        }
         openWorkspace(converted, {
             sequenceId: id,
             dirty: false,

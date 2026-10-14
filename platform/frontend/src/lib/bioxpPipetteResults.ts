@@ -1,4 +1,6 @@
 export type PipetteResult = {
+    accounting_summary?: unknown;
+    events?: Record<string, unknown>[]; plld?: unknown; shared_head?: unknown; liquid_settings?: unknown; requested?: unknown; correction?: unknown; analysis?: unknown;
     action?: string; requested_pipette?: number; tip_location?: number; alignment_published?: boolean; already_matching_tip_type?: boolean;
     selected_channels?: number[]; lost_tip_channels?: number[]; cached_tip_channels?: number[]; ejected_channels?: number[];
     channels?: Record<string, unknown>[]; tests?: Record<string, unknown>[]; attempts?: unknown[];
@@ -32,7 +34,7 @@ export function pipetteResults(value: unknown): PipetteResult[] {
                 results.push({ finalization_error: record.finalization_error });
             return;
         }
-        if (['action', 'requested_pipette', 'tip_location', 'alignment_published', 'samples', 'scans', 'measurements', 'run_id', 'calibration_persisted', 'saved_revision_id', 'active_revision_id',
+        if (['events', 'plld', 'liquid_settings', 'shared_head', 'analysis', 'action', 'requested_pipette', 'tip_location', 'alignment_published', 'samples', 'scans', 'measurements', 'run_id', 'calibration_persisted', 'saved_revision_id', 'active_revision_id',
             'body_completed', 'source_return', 'comparison_choice', 'position_steps', 'lost_steps', 'error', 'detail', 'finalization_error']
             .some(key => record[key] !== undefined && record[key] !== null)) {
             results.push(record as PipetteResult);

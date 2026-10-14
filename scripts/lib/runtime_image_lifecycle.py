@@ -244,7 +244,7 @@ def _ensure_lease_locked(root, state, digests, owner, *, identities=None, expect
     return _acquire_lease_locked(root, state, digests, owner, identities=identities)
 
 
-def publish_leased_image(source, root, digest, *, owner):
+def publish_leased_image(source, root, digest, *, owner, adopt_owned=False):
     """Publish and durably pin before releasing the retirement fence.
 
     Reuse the publisher's streaming-copy/no-follow publication receipt under the
@@ -257,7 +257,7 @@ def publish_leased_image(source, root, digest, *, owner):
     with transaction(root) as root:
         state = load_state(root)
         receipts = {}
-        path = _publish_image_locked(source, root, digest, _receipts=receipts)
+        path = _publish_image_locked(source, root, digest, _receipts=receipts, adopt_owned=adopt_owned)
         token, identities = _ensure_lease_locked(root, state, [digest], owner, identities=receipts)
         return path, token, identities
 
@@ -400,6 +400,99 @@ def apply_retirement(root, plan, *, maintenance_authorization):
                           src_dir_fd=fd, dst_dir_fd=fd)
                 os.fsync(fd)
         return quarantine
+
+
+def rebuild_image_derivation(root, digest, *, operation_id, source_identity,
+                             retire_leases, expected_size, maintenance_authorization,
+                             extract=None):
+    """Explicit one-image maintenance; caller fences admissions/execution externally.
+
+    Exact old lease rows are the retirement allowlist, not a liveness inference.
+    Preserve the canonical object and quarantine the old derivative by rename.
+    A durable, operation-qualified receipt makes every interruption retryable with
+    the identical request. Nothing here runs during ordinary preparation.
+    """
+    from . import runtime_image_views as views
+    _authorization(maintenance_authorization)
+    digest = _digest(digest)
+    if str(uuid.UUID(operation_id)) != operation_id:
+        raise Error('invalid maintenance operation identity')
+    if source_identity.get('sha256') != digest or not isinstance(retire_leases, dict):
+        raise Error('invalid maintenance scope')
+    cache_owner = 'cache-artifact:' + digest
+    for token, row in retire_leases.items():
+        owner = row['owner']
+        if set(row['identities']) != {digest} or row['identities'][digest]['sha256'] != digest:
+            raise Error('maintenance lease scope mismatch')
+        if owner != cache_owner:
+            parts = owner.split(':')
+            if (len(parts) != 4 or parts[0] != 'attempt' or parts[2:] != ['image', digest]
+                    or str(uuid.UUID(parts[1])) != parts[1]):
+                raise Error('maintenance requires exact cache/attempt owners')
+    request = dict(digest=digest, operation_id=operation_id, source_identity=source_identity,
+                   retire_leases=retire_leases, expected_size=expected_size,
+                   maintenance_authorization=maintenance_authorization)
+    with transaction(root) as root, _lock(root, digest):
+        image = object_path(root, digest)
+        identity = verify_image(image, digest)  # explicit full byte audit, no exceptions
+        if identity['size'] != expected_size:
+            raise Error('runtime_image_size_mismatch')
+        receipt_path = root / 'quarantine' / ('rebuild-' + operation_id + '.json')
+        derived = views.derived_path(root, digest)
+        retired = derived.with_name('.rebuild-' + digest + '-' + operation_id)
+        state = load_state(root)
+        try:
+            receipt = json.loads(_read(receipt_path), object_pairs_hook=_unique_keys)
+        except FileNotFoundError:
+            if source_identity == identity:
+                raise Error('selected derivation source is not stale')
+            old_derivation = views.verify_derivation(derived, source_identity)[0]
+            if retired.exists() or retired.is_symlink():
+                raise Error('maintenance quarantine already exists')
+            for token, row in retire_leases.items():
+                if state['leases'].get(token) != row:
+                    raise Error('maintenance lease changed')
+            receipt = dict(request=request, identity=identity, derivation=old_derivation)
+            atomic_write(receipt_path, json.dumps(receipt, sort_keys=True) + '\n')
+        if receipt['request'] != request or receipt['identity'] != identity:
+            raise Error('maintenance request or canonical identity changed')
+        # An unlisted retained user must not lose its shared derivation. This is
+        # the existing lease authority, not a scan or a process-liveness heuristic.
+        for token, row in state['leases'].items():
+            if digest not in row['identities']:
+                continue
+            if token in retire_leases:
+                if row != retire_leases[token]:
+                    raise Error('maintenance lease changed')
+            elif row['owner'] != cache_owner or row['identities'] != {digest: identity}:
+                raise Error('image retained by an unselected lease')
+        with _directory(derived.parent) as parent:
+            if retired.name not in os.listdir(parent):
+                if views.verify_derivation(derived, source_identity)[0] != receipt['derivation']:
+                    raise Error('maintenance derivation changed')
+                os.rename(derived.name, retired.name, src_dir_fd=parent, dst_dir_fd=parent)
+                os.fsync(parent)
+            if views.verify_derivation(retired, source_identity)[0] != receipt['derivation']:
+                raise Error('maintenance quarantine changed')
+        # One native state publication retires the allowlist and pins the current
+        # canonical generation. A crash before publication leaves all old pins.
+        removed = any(token in state['leases'] for token in retire_leases)
+        generation = state['generation']
+        for token in retire_leases:
+            state['leases'].pop(token, None)
+        token, _ = _ensure_lease_locked(root, state, [digest], cache_owner,
+                                        identities={digest: identity})
+        if removed and state['generation'] == generation:
+            save_state(root, state)
+        with _file(image) as (fd, parent, before):
+            views._check_leased_source(image, fd, parent, before, identity)
+            path, _ = views._derive(root, digest, fd, identity,
+                                    extract if extract is not None else views.extract_sif)
+            views._check_leased_source(image, fd, parent, before, identity)
+            views.verify_derivation(path, identity)
+        return dict(state='ready', rootfs=str(path / 'rootfs'), image=str(image),
+                    identity=identity, cache_lease=token, retired_leases=sorted(retire_leases),
+                    quarantine=str(retired), operation_id=operation_id)
 
 
 def recover_image_derivations(root):

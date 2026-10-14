@@ -292,6 +292,7 @@ def test_shape_proteinmpnn_lane_discards_native_and_uses_nonzero_seed(tmp_path: 
     assert [record["sample_index"] for record in records] == [1, 2]
     assert json.loads(receipt.read_text())["effective_seed"] == effective_seed
     assert (output / "source_backbone.pdb").read_bytes() == backbone.read_bytes()
+    assert (output / "source_backbone.pdb").samefile(backbone)
     assert {record["source_backbone"] for record in records} == {"source_backbone.pdb"}
 
 
@@ -331,3 +332,4 @@ def test_shape_fampnn_lane_uses_seq_only_and_natural_sample_order(tmp_path: Path
     assert "fixed_pos_verbose=false" in args
     assert [record["sample_index"] for record in records] == [0, 1, 2]
     assert (output / "source_backbone.pdb").read_bytes() == backbone.read_bytes()
+    assert (output / "source_backbone.pdb").samefile(backbone)

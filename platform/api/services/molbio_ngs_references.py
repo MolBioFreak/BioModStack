@@ -16,7 +16,6 @@ from typing import Any, Mapping, Sequence
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from molbio_models import MolecularDocument, MolecularRevision
 from molbio_ngs_models import (
     MolBioNGSDomainState,
     MolBioNGSGlobalBinding,
@@ -46,7 +45,6 @@ from services.molbio_ngs_member_receipts import (
     ExternalMemberReceipt,
     build_external_member_receipt,
 )
-from services.molbio_ngs_receipts import _snapshot_sequence
 
 REFERENCE_SCHEMA = "bms.molbio-ngs.reference-revision.v1"
 REFERENCE_SCHEMA_NAME = "bms.molbio-ngs.reference-revision"
@@ -208,6 +206,9 @@ def _snapshot_managed_reference(
     source_parent_fd = _open_absolute_directory_nofollow(source.parent)
     source_fd = -1
     destination_fd = -1
+    snapshot_root = None
+    published = False
+    created_root = False
     try:
         source_fd = os.open(source.name, file_flags, dir_fd=source_parent_fd)
         source_stat = os.fstat(source_fd)
@@ -220,8 +221,36 @@ def _snapshot_managed_reference(
             / str(uuid.uuid4())
         )
         snapshot_root.mkdir(parents=True, exist_ok=False)
+        created_root = True
         destination_parent_fd = _open_absolute_directory_nofollow(snapshot_root)
         try:
+            # New reference revisions are completion-published read-only by this
+            # owner. Keep independent launch names (and cleanup ownership), but
+            # not another body. Historical writable revisions retain snapshots.
+            if (not source_stat.st_mode & 0o222
+                    and source.is_relative_to(get_molbio_ngs_reference_root().resolve())):
+                digest = hashlib.sha256()
+                copied = 0
+                while chunk := os.read(source_fd, 1024 * 1024):
+                    digest.update(chunk)
+                    copied += len(chunk)
+                if copied != expected_size_bytes or digest.hexdigest() != expected_sha256:
+                    raise StateIntegrityError("managed reference bytes drifted while creating launch snapshot")
+                try:
+                    os.link(source.name, "reference.fasta", src_dir_fd=source_parent_fd,
+                            dst_dir_fd=destination_parent_fd, follow_symlinks=False)
+                except OSError as exc:
+                    import errno
+                    if exc.errno != errno.EXDEV:
+                        raise
+                    os.lseek(source_fd, 0, os.SEEK_SET)
+                else:
+                    linked = os.stat("reference.fasta", dir_fd=destination_parent_fd, follow_symlinks=False)
+                    if (linked.st_dev, linked.st_ino) != (source_stat.st_dev, source_stat.st_ino):
+                        raise StateIntegrityError("managed reference source changed during publication")
+                    os.fsync(destination_parent_fd)
+                    published = True
+                    return snapshot_root / "reference.fasta", digest.hexdigest(), copied
             create_flags = (
                 os.O_WRONLY
                 | os.O_CREAT
@@ -260,6 +289,7 @@ def _snapshot_managed_reference(
             os.fsync(destination_fd)
         finally:
             os.close(destination_parent_fd)
+        published = True
         return snapshot_root / "reference.fasta", digest.hexdigest(), copied
     except (AttributeError, NotImplementedError) as exc:
         raise StateIntegrityError(
@@ -271,6 +301,9 @@ def _snapshot_managed_reference(
         if source_fd >= 0:
             os.close(source_fd)
         os.close(source_parent_fd)
+        if not published and created_root and snapshot_root is not None:
+            (snapshot_root / "reference.fasta").unlink(missing_ok=True)
+            snapshot_root.rmdir()
 
 
 def _write_managed_bytes(relative: str, content: bytes) -> None:
@@ -288,6 +321,7 @@ def _write_managed_bytes(relative: str, content: bytes) -> None:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(content)
             stream.flush()
+            os.fchmod(stream.fileno(), 0o400)
             os.fsync(stream.fileno())
         os.replace(temporary_name, destination)
         directory_descriptor = os.open(destination.parent, os.O_RDONLY)
@@ -700,6 +734,7 @@ async def resolve_managed_reference_for_launch(
     global_domain_experiment_id: str,
     molbio_ngs_state_revision_id: str,
     ngs_reference_revision_id: str,
+    launch_snapshot_id: str | None = None,
 ) -> ManagedReferenceLaunch:
     """Resolve one state-member reference to a verified server-managed FASTA path."""
 
@@ -775,13 +810,20 @@ async def resolve_managed_reference_for_launch(
 
     source_path = _managed_path(artifact.managed_relative_path)
     try:
-        snapshot_path, snapshot_sha256, snapshot_size_bytes = (
-            _snapshot_managed_reference(
+        if launch_snapshot_id is None:
+            snapshot_path, snapshot_sha256, snapshot_size_bytes = _snapshot_managed_reference(
                 source_path,
                 expected_sha256=revision.canonical_fasta_sha256,
                 expected_size_bytes=revision.canonical_fasta_size_bytes,
             )
-        )
+        else:
+            from services.ont_submission_trust import canonical_launch_snapshot_id, verify_managed_reference_bytes
+
+            snapshot_root = get_inputs_dir() / "molbio_ngs_managed_launch_snapshots"
+            snapshot_path = snapshot_root / canonical_launch_snapshot_id(launch_snapshot_id) / "reference.fasta"
+            snapshot_sha256 = revision.canonical_fasta_sha256
+            snapshot_size_bytes = revision.canonical_fasta_size_bytes
+            verify_managed_reference_bytes(snapshot_path, snapshot_root, snapshot_sha256, snapshot_size_bytes)
     except OSError as exc:
         raise StateIntegrityError(
             "managed reference launch snapshot could not be created"
@@ -854,53 +896,6 @@ async def archive_reference(
     )
     await session.flush()
     return await get_reference_resource(session, reference_id)
-
-
-async def create_reference_from_molbio_revision(
-    session: AsyncSession, molbio_session: AsyncSession, *,
-    global_domain_experiment_id: str, sequence_id: str, molecular_revision_id: str,
-    name: str, molecule_type: str, topology: str, coordinate_contract: str,
-    idempotency_key: str, created_by: str | None = None,
-) -> tuple[MolBioNGSReferenceResource, MolBioNGSReferenceRevision]:
-    document = await molbio_session.get(MolecularDocument, sequence_id)
-    revision = await molbio_session.get(MolecularRevision, molecular_revision_id)
-    if document is None or revision is None or revision.document_id != sequence_id:
-        raise DomainStateNotFound("exact MolBio molecular revision was not found")
-    sequence = _snapshot_sequence(revision)
-    record_name = re.sub(r"[^A-Za-z0-9_.:-]+", "_", name.strip()).strip("_") or "reference"
-    raw_fasta = f">{record_name}\n{sequence}\n".encode("ascii")
-    return await create_reference(
-        session, global_domain_experiment_id=global_domain_experiment_id, name=name,
-        raw_fasta=raw_fasta, molecule_type=molecule_type, topology=topology,
-        coordinate_contract=coordinate_contract,
-        source_provenance={"kind": "molbio_molecular_revision", "sequence_id": sequence_id,
-                           "molecular_revision_id": molecular_revision_id,
-                           "molecular_revision_sha256": revision.content_sha256},
-        idempotency_key=idempotency_key, created_by=SERVER_OWNED_ACTOR,
-    )
-
-
-async def import_browser_entry(
-    session: AsyncSession, *, global_domain_experiment_id: str,
-    entry: Mapping[str, Any], name: str, molecule_type: str, topology: str,
-    coordinate_contract: str, idempotency_key: str,
-    created_by: str | None = None,
-) -> tuple[MolBioNGSReferenceResource, MolBioNGSReferenceRevision]:
-    # Browser fields are hints only. Paths are never accepted as identities or persisted.
-    source = entry.get("source")
-    if source == "path" or entry.get("path"):
-        raise StateValidationError("browser path imports fail closed; upload inline FASTA bytes")
-    inline = entry.get("fasta")
-    if not isinstance(inline, str) or not inline:
-        raise StateValidationError("legacy browser entry must provide inline fasta")
-    return await create_reference(
-        session, global_domain_experiment_id=global_domain_experiment_id, name=name,
-        raw_fasta=inline.encode("utf-8"), molecule_type=molecule_type, topology=topology,
-        coordinate_contract=coordinate_contract,
-        source_provenance={"kind": "legacy_browser_entry", "hint_id": entry.get("id"),
-                           "hint_name": entry.get("name")},
-        idempotency_key=idempotency_key, created_by=SERVER_OWNED_ACTOR,
-    )
 
 
 async def resolve_ngs_reference_revision_receipt(

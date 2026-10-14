@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -11,7 +12,11 @@ def test_dorado_module_requires_preflight_and_exact_locked_paths() -> None:
     assert "biomodstack.dorado_preflight.v1" in text
     assert 'base_model="\\$PWD/sealed_models/\\${model_id}"' in text
     assert 'pod5_root="\\$PWD/sealed_pod5"' in text
-    assert "--net --network none" in (ROOT / "nextflow.config").read_text(encoding="utf-8")
+    # Backend-specific namespace flags no longer live in scientific labels.
+    # Check the current immutable scientific policy, not a retired CLI spelling.
+    lock = json.loads((ROOT / "config/ngs/dorado_v2.1.2.lock.json").read_text())
+    assert lock["policy"]["runtime_network"] == "forbidden"
+    assert lock["policy"]["model_download"] == "forbidden"
     assert '--batchsize "\\${batch_size}"' in text
     assert '--models-directory "\\$PWD/sealed_models"' in text
     assert "snapshot_model" in text
@@ -64,9 +69,13 @@ def test_all_pod5_routes_publish_canonical_basecall_provenance_and_fail_closed_r
         text = (ROOT / "workflows/ngs" / name).read_text(encoding="utf-8")
         assert '"${params.out_dir}/basecall/dorado_preflight.json"' in text, name
         assert '"${params.out_dir}/basecall/dorado_runtime_provenance.json"' in text, name
-        assert "Stage reporting failed" in text, name
+        assert "include { reportStage } from '../../modules/ngs/stage_reporting.nf'" in text, name
+        assert "reportStage(params," in text, name
         assert "Warning: Failed to report stage" not in text, name
 
+    shared_reporter = (ROOT / "modules/ngs/stage_reporting.nf").read_text(encoding="utf-8")
+    assert "if (rc != 0) throw new IllegalStateException" in shared_reporter
+    assert "Stage reporting failed" in shared_reporter
     reporter = (ROOT / "scripts/stage_reporter.py").read_text(encoding="utf-8")
     assert "sys.exit(1)" in reporter
     assert 'os.environ.get("API_BASE_URL", "").strip()' in reporter
@@ -103,24 +112,25 @@ def test_only_basecall_dna_can_emit_barcode_units() -> None:
 
 def test_authorized_bam_alignment_consumes_only_a_verified_task_local_snapshot() -> None:
     text = (ROOT / "modules/ngs/dorado_align.nf").read_text(encoding="utf-8")
-    assert 'cp --reflink=auto -- "${bam}" source.snapshot.bam' in text
+    assert 'ngs_input_snapshot "${bam}" source.snapshot.bam ${retainedBam}' in text
     assert text.count("sha256sum source.snapshot.bam") == 2
-    assert text.count("source.snapshot.bam") >= 7
+    # Both native Dorado alignment branches consume the sealed name.
+    assert text.count("            source.snapshot.bam ") == 2
     assert "task-local source BAM snapshot does not match authorized bam_source_sha256" in text
 
 
 def test_bam_prepare_and_reference_alignment_consume_authenticated_task_local_snapshots() -> None:
     prepare = (ROOT / "modules/ngs/bam_prepare.nf").read_text(encoding="utf-8").split("process ValidateMappedBam", 1)[0]
-    assert 'cp --reflink=auto -- "${bam}" source.snapshot.bam' in prepare
+    assert 'ngs_input_snapshot "${bam}" source.snapshot.bam ${retainedBam}' in prepare
     assert prepare.count("sha256sum source.snapshot.bam") == 2
     assert 'samtools sort -@ ${task.cpus} -o aligned.bam "${bam}"' not in prepare
     assert 'samtools view -c "${bam}"' not in prepare
     assert "task-local source BAM snapshot does not match authorized bam_source_sha256" in prepare
 
     align = (ROOT / "modules/ngs/dorado_align.nf").read_text(encoding="utf-8")
-    assert 'cp --reflink=auto -- "${reference}" reference.snapshot.fasta' in align
+    assert 'ngs_input_snapshot "${reference}" reference.snapshot.fasta ${retainedReference}' in align
     assert align.count("sha256sum reference.snapshot.fasta") == 2
-    assert align.count("reference.snapshot.fasta") >= 8
+    assert align.count("            reference.snapshot.fasta ") == 2
     assert "reference_sequence_sha256 must be exactly 64 hexadecimal characters" in align
     assert "task-local reference snapshot does not match authorized reference_sequence_sha256" in align
     assert 'cp "${reference}" reference.fasta' not in align

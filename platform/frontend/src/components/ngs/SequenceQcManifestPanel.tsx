@@ -126,7 +126,7 @@ export function SequenceQcManifestPanel({ status, manifest, message, onNavigateL
                         <p className="text-[var(--text-primary)]">{sequenceQcManifestUnavailableLabel(status)}</p>
                         {status === 'unavailable-old-run' && (
                             <p className="text-xs text-[var(--text-secondary)]">
-                                manifest unavailable for older run: this looks like a legacy/older Nanopore run without qc_manifest.json. Treat existing path-scraped artifacts as legacy evidence, not a workflow failure.
+                                This run has no QC manifest. Older runs may not include one; that alone does not mean the run failed.
                             </p>
                         )}
                         {message && <p className="text-xs text-[var(--text-secondary)] font-mono break-all">{message}</p>}

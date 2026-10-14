@@ -947,7 +947,7 @@ class ViewerSessionResponse(ClosedModel):
 
 def _error(exc: Exception) -> HTTPException:
     if isinstance(exc, KeyError):
-        return HTTPException(status_code=404, detail="governed signal-workbench authority not found")
+        return HTTPException(status_code=404, detail="Signal-workbench item not found.")
     return HTTPException(status_code=409, detail=str(exc))
 
 

@@ -1,0 +1,35 @@
+# wf-clone-validation's upstream medaka image contains 2.2.1, not 2.2.2.
+# Retain its native minimap2/samtools/bgzip dependencies; replace the exact wheel.
+Bootstrap: docker
+From: ontresearch/medaka@sha256:6794e1b293ffa125b4a57a042cbc7f85db2584f34a44ffd415e7eb501684c430
+
+%post
+    set -eu
+    export PATH=/opt/custflow/epi2meuser/conda/bin:$PATH
+    python -m venv --system-site-packages /opt/medaka-current
+    export PATH=/opt/medaka-current/bin:$PATH
+    python -m pip install --no-deps --no-cache-dir 'https://files.pythonhosted.org/packages/56/89/e65671bacc8a102a9c1e7017079f1137bc4093a1039298c33948e7daa443/medaka-2.2.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl#sha256=66a1e1d7202d8ca3d957ccaef4754b357c14d9660be86a22ba1e9ea0982ca91d'
+    # Download archived profiles at installation, never during a job. The current
+    # HAC6 and SUP5.2 profiles ship in the wheel; historical explicit values stay usable.
+    for model in dna_r10.4.1_e8.2_400bps_hac@v5.0.0 dna_r10.4.1_e8.2_400bps_hac@v5.2.0 dna_r10.4.1_e8.2_400bps_sup@v5.0.0; do
+        medaka tools resolve_model --model "${model}:consensus"
+    done
+
+%environment
+    export PATH=/opt/medaka-current/bin:$PATH
+
+%test
+    set -eu
+    export PATH=/opt/medaka-current/bin:$PATH
+    test "$(medaka --version)" = 'medaka 2.2.2'
+    medaka tools resolve_model --model dna_r10.4.1_e8.2_400bps_hac@v6.0.0:consensus
+    medaka tools resolve_model --model dna_r10.4.1_e8.2_400bps_sup@v5.2.0:consensus
+    medaka_consensus -h
+    # Native archived downloads are locked by their actual model bytes too.
+    cd /opt/medaka-current/lib/python3.12/site-packages/medaka/data
+    printf '%s\n' \
+      '27f545cfe5b6460716b8af1452c21bf6f2b4f58d81b6191fcb12d06e2a259f27  r1041_e82_400bps_hac_v6.0.0_model_pt.tar.gz' \
+      '143ba9c04f4026c6d49680af807b466c33a11208e367b8e9bc5b83e87c429e2d  r1041_e82_400bps_sup_v5.2.0_model_pt.tar.gz' \
+      '27103066aae241f9172e6d473caf8fe4489d354e2d2948e79d18e7336a728ca3  r1041_e82_400bps_hac_v5.2.0_model_pt.tar.gz' \
+      '8ca91baf9861f6a6270fefd3c7dc31efa9a55fa9e25c5e7e31a10e1bee8ded6f  r1041_e82_400bps_hac_v5.0.0_model_pt.tar.gz' \
+      '4e5769848bed7b4e490c111fd8ddf4dad674500db72771a7ec15d4df727afc85  r1041_e82_400bps_sup_v5.0.0_model_pt.tar.gz' | sha256sum -c -

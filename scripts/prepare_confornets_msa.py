@@ -68,6 +68,20 @@ def _publish(stage: Path, output: Path, benchmark: str) -> None:
         raise ValueError('Existing prepared ConforNets assets conflict with verified input identity')
 
 
+def _copy_asset(source, destination):
+    """Retain immutable input leaves; writable legacy assets remain private."""
+    source, destination = Path(source), Path(destination)
+    source = source.resolve(strict=True)
+    if not source.stat().st_mode & 0o222:
+        try:
+            os.link(source, destination)
+            return str(destination)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+    return shutil.copy2(source, destination)
+
+
 def prepare(request: dict, assets: Path, output: Path, *, source: Path | None = None,
             sha256: str | None = None) -> Path:
     query, payload = native_roster(request, assets)
@@ -99,7 +113,15 @@ def prepare(request: dict, assets: Path, output: Path, *, source: Path | None = 
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.' + output.name + '-', dir=output.parent) as temporary:
         stage = Path(temporary) / 'assets'
-        shutil.copytree(assets, stage)
+        shutil.copytree(assets, stage, copy_function=_copy_asset)
+        # These names are rewritten below, never truncate an immutable sibling.
+        bench = stage / request['benchmark']
+        for name in ('query.json', 'query_msa.json', 'prepared_msa_identity.json'):
+            (bench / name).unlink(missing_ok=True)
+        # Upstream batch generation is mutable output, not shared input custody.
+        if (bench / 'batch').exists():
+            shutil.rmtree(bench / 'batch')
+            shutil.copytree(assets / request['benchmark'] / 'batch', bench / 'batch')
         bench = stage / request['benchmark']
         # This is the exact ordinary upstream query.json, regenerated identically.
         (bench / 'query.json').write_text(json.dumps({'seeds': [42], 'queries': {request['query_id']: query}}, indent=2))
@@ -110,6 +132,7 @@ def prepare(request: dict, assets: Path, output: Path, *, source: Path | None = 
             relative = Path(request['benchmark']) / 'msa' / request['query_id'] / (role + '.a3m')
             target = stage / relative
             target.parent.mkdir(parents=True, exist_ok=True)
+            target.unlink(missing_ok=True)
             target.write_bytes(data)
             native_chain[native_key] = [str(output / relative)]
         (bench / 'query_msa.json').write_text(json.dumps({'seeds': [42], 'queries': {request['query_id']: query}}, indent=2))

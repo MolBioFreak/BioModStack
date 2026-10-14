@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -98,6 +100,18 @@ def _exact_binding(
         )
 
 
+def _retain_result_file(source, destination):
+    """Independent retained names for completed read-only result members."""
+    try:
+        os.link(Path(source).resolve(strict=True), destination)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        # A self-contained durable result on another filesystem needs custody.
+        shutil.copy2(source, destination)
+    return str(destination)
+
+
 def postprocess_canonical_bundles(
     *,
     request_path: Path,
@@ -170,6 +184,7 @@ def postprocess_canonical_bundles(
 
     loaded: dict[str, dict[str, Any]] = {}
     for bundle in bundle_dirs:
+        bundle = bundle.resolve(strict=True)
         manifest_name, manifest_bytes, manifest = load_result_manifest_bytes_and_document(bundle)
         generation = manifest.get("schema_version")
         expected_manifest_name = {
@@ -229,7 +244,13 @@ def postprocess_canonical_bundles(
         )
 
     try:
-        shutil.copytree(canonical_dir, output_dir)
+        def retain_canonical(source, destination):
+            relative = Path(source).relative_to(canonical_dir)
+            # Analysis/index writes are private, including retained prior values.
+            if relative.parts[0] == "derived" or relative.name == "cm_derived_index_v1.json":
+                return shutil.copyfile(source, destination)
+            return _retain_result_file(source, destination)
+        shutil.copytree(canonical_dir, output_dir, copy_function=retain_canonical)
         derived = output_dir / "derived"
         derived.mkdir(exist_ok=True)
         global_results = output_dir / "frustrampnn" / "results"
@@ -243,7 +264,7 @@ def postprocess_canonical_bundles(
             prepared = prepared_by_id[str(candidate_id)]
             execution_binding = item["execution_binding"]
             destination = global_results / str(candidate_id)
-            shutil.copytree(item["bundle"], destination)
+            shutil.copytree(item["bundle"], destination, copy_function=_retain_result_file)
             copied_payloads = validate_result_manifest(destination, item["manifest"])
             if copied_payloads != item["payloads"]:
                 raise CMFrustraMPNNPostprocessError(

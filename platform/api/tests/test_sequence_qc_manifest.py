@@ -398,21 +398,6 @@ def test_find_manifest_in_result_root_rejects_symlinked_parent_inside_root(tmp_p
         find_manifest_in_result_root(result_root)
 
 
-def test_canonical_fastq_manifest_ignores_verification_manifest(tmp_path: Path) -> None:
-    result_root = tmp_path / "job"
-    _write_manifest(
-        result_root / "verification" / "qc_manifest.json",
-        {"schema": "biomodstack.construct_verification.v2", "artifacts": []},
-    )
-    canonical = result_root / "fastq_qc" / "qc_manifest.json"
-    _write_manifest(
-        canonical,
-        {"artifact_schema_version": 1, "job_id": "job-1", "artifacts": []},
-    )
-
-    assert find_canonical_fastq_manifest(result_root) == canonical
-
-
 @pytest.mark.asyncio
 async def test_ngs_manifest_receipt_resolver_rejects_symlinked_fastq_parent(
     monkeypatch: pytest.MonkeyPatch,

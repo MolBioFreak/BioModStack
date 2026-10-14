@@ -2,7 +2,6 @@ import type { ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { MolViewSpec } from 'molstar/lib/extensions/mvs/behavior';
-import { PluginBehaviors } from 'molstar/lib/mol-plugin/behavior';
 import { PluginConfig } from 'molstar/lib/mol-plugin/config';
 import { createPluginUI } from 'molstar/lib/mol-plugin-ui';
 import type { PluginUIContext } from 'molstar/lib/mol-plugin-ui/context';
@@ -26,9 +25,6 @@ export function createBmsMolstarUiSpec({
     alphafoldView = false,
 }: BmsMolstarUiOptions = {}): PluginUISpec {
     const defaults = DefaultPluginUISpec();
-    const defaultBehaviors = (defaults.behaviors ?? []).filter(
-        ({ transformer }) => transformer !== PluginBehaviors.CustomProps.AccessibleSurfaceArea,
-    );
     const alphafoldConfig: NonNullable<PluginUISpec['config']> = alphafoldView ? [[
         PluginConfig.Structure.DefaultRepresentationPresetParams,
         { theme: { globalName: 'plddt-confidence' } },
@@ -36,7 +32,7 @@ export function createBmsMolstarUiSpec({
     return {
         ...defaults,
         behaviors: [
-            ...defaultBehaviors,
+            ...(defaults.behaviors ?? []),
             PluginSpec.Behavior(MolViewSpec),
             ...(alphafoldView ? [PluginSpec.Behavior(BmsPLDDTQualityAssessment, {
                 autoAttach: true,
@@ -49,29 +45,24 @@ export function createBmsMolstarUiSpec({
                 ...defaults.layout?.initial,
                 isExpanded: false,
                 showControls: !hideControls,
-                // Embedded viewers clip their own bounds; Mol*'s outside layout
-                // otherwise puts sequence and structure controls beyond them.
-                controlsDisplay: 'landscape',
-                regionState: { left: 'collapsed', top: 'full', right: 'hidden', bottom: 'hidden' },
+                // Keep stock panels inside the embedded viewer and responsive.
+                // Compact callers collapse chrome initially; they never remove tools.
+                controlsDisplay: 'reactive',
+                regionState: { left: 'collapsed', top: 'full', right: 'full', bottom: 'full' },
             },
         },
         components: {
             ...defaults.components,
             remoteState: 'none',
-            controls: {
-                left: hideControls ? 'none' as const : defaults.components?.controls?.left,
-                right: hideControls ? 'none' as const : defaults.components?.controls?.right,
-                top: hideControls ? 'none' as const : defaults.components?.controls?.top,
-                bottom: hideControls ? 'none' as const : defaults.components?.controls?.bottom,
-            },
+
         },
         config: [
             ...(defaults.config ?? []),
-            [PluginConfig.Viewport.ShowExpand, !hideControls],
-            [PluginConfig.Viewport.ShowControls, !hideControls],
-            [PluginConfig.Viewport.ShowSettings, !hideControls],
-            [PluginConfig.Viewport.ShowSelectionMode, !hideControls],
-            [PluginConfig.Viewport.ShowAnimation, !hideControls],
+            [PluginConfig.Viewport.ShowExpand, true],
+            [PluginConfig.Viewport.ShowControls, true],
+            [PluginConfig.Viewport.ShowSettings, true],
+            [PluginConfig.Viewport.ShowSelectionMode, true],
+            [PluginConfig.Viewport.ShowAnimation, true],
             ...alphafoldConfig,
         ],
     };

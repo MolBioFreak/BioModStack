@@ -130,16 +130,24 @@ def _stop_processes(processes: Sequence[Any], timeout: float = 10) -> bool:
 from scripts.lib.container_runtime import nextflow_container_config as task_container_config
 
 
-def wf_clone_container_config(lock_path: str | Path) -> str:
-    """Resolve the already validated EPI2ME offline image inventory."""
-    inventory = json.loads(Path(lock_path).read_text())['containers']
-    images = {}
-    for image in inventory['images']:
-        path = str(Path(inventory['cache_dir']) / image['cache_file'])
-        images[image['uri']] = path
-        images[image['uri'].removeprefix('docker://')] = path
-    # EPI2ME's pinned base.config uses -euo pipefail, unlike BMS's -ue.
-    return task_container_config(image_paths=images, shell_options=('-euo', 'pipefail'))
+def wf_clone_container_config(lock_path: str | Path, assembly_tool: str = "flye") -> str:
+    """Bind the selected native labels to their actual locked local images.
+
+    In particular the current Medaka pack is a reproducible BMS build, not the
+    older image named by upstream base.config. Both backends use these paths.
+    """
+    lock_path = Path(lock_path).resolve()
+    lock = json.loads(lock_path.read_text())
+    from scripts.validate_wf_clone_runtime import selected_images
+    cache = Path(lock['containers']['cache_dir'])
+    if not cache.is_absolute():
+        cache = lock_path.parent / cache
+    def groovy(value):
+        return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
+    lines = [task_container_config(shell_options=('-euo', 'pipefail')), 'process {']
+    for image in selected_images(lock, assembly_tool):
+        lines.append(f"    withLabel: {groovy(image['label'])} {{ container = {groovy(cache / image['cache_file'])} }}")
+    return '\n'.join([*lines, '}', ''])
 
 
 def native_resource_config(plan: dict, resources: dict, lock_path: str, source_root: Path,
@@ -192,7 +200,11 @@ def native_resource_config(plan: dict, resources: dict, lock_path: str, source_r
         if len(setup) > 1:
             raise ValueError('ambiguous compiled native setup authority')
         expression = setup[0] if setup else "''"
-        lines += [f'  withName: {groovy(name)} {{', '    beforeScript = {',
+        cpu = component['resources_json'].get('cpus', {})
+        lines += [f'  withName: {groovy(name)} {{']
+        if name == 'MD_GROMACS_REPLICA' and cpu.get('parameter') == 'md_config.execution.ntmpi * md_config.execution.ntomp':
+            lines += [f'    cpus = {int(cpu["value"])}']
+        lines += ['    beforeScript = {',
                   f'      def nativeSetup = {expression}',
                   f'      return {groovy(acquire)} + (nativeSetup instanceof Closure ? nativeSetup.call() : nativeSetup)',
                   '    }', '  }']
@@ -200,7 +212,13 @@ def native_resource_config(plan: dict, resources: dict, lock_path: str, source_r
 
 
 def resource_bound_command(command, invocation, context, run_dir) -> list[str]:
-    """Append only typed execution config to unchanged compiler-produced argv."""
+    """Place child source operands and append typed execution config.
+
+    The immutable compiler argv stays logical. Children own their launch/cache
+    directories, so source-relative workflow/config paths are placed here, not
+    by moving their cwd back into the shared checkout. Root argv is already
+    placed by its launch owner (including retained-source/resume launches).
+    """
     resources = context.get('resources', {})
     if not resources.get('required'):
         raise ValueError('component execution requires selected-plan resource reservation')
@@ -219,7 +237,22 @@ def resource_bound_command(command, invocation, context, run_dir) -> list[str]:
     config = Path(run_dir) / 'component-resources.config'
     config.write_text(native_resource_config(plan, resources, context['resource_lock_path'],
                                            Path(context['working_directory'])))
-    return [*command, '-c', str(config)]
+    placed = list(command)
+    if invocation is not None:
+        source = Path(context['working_directory'])
+        def source_path(value):
+            return value if Path(value).is_absolute() else str(source / value)
+        run = command.index('run') + 1
+        placed[run] = source_path(command[run])
+        for index, value in enumerate(command[:-1]):
+            if value in ('-c', '-C'):
+                placed[index + 1] = ','.join(source_path(path) for path in command[index + 1].split(','))
+        # Nextflow discovers config from project/launch directories, neither of
+        # which is the checkout root for a nested workflow in a child cwd.
+        # An explicit -C retains its native replacement-config semantics.
+        if '-C' not in command:
+            placed[1:1] = ['-c', str(source / 'nextflow.config')]
+    return [*placed, '-c', str(config)]
 
 
 def retry_component_workflow(context_path: Path, *, component_id: str,

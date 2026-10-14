@@ -365,6 +365,28 @@ def select_diverse_subset(
     return selected
 
 
+def _retain_closed_result(source, destination):
+    """Retain a completed native leaf; replace names, never shared bytes."""
+    import errno
+    import os
+    import tempfile
+    source, destination = Path(source), Path(destination)
+    fd, name = tempfile.mkstemp(prefix=".result-", dir=destination.parent)
+    os.close(fd)
+    temporary = Path(name)
+    temporary.unlink()
+    try:
+        try:
+            os.link(source.resolve(strict=True), temporary)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            shutil.copyfile(source, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def run_strict_filter(args):
     """Future-only path: all inputs retained in the disposition artifact."""
     import hashlib
@@ -448,7 +470,7 @@ def run_strict_filter(args):
     summary = {'core_protein_scientific_contract': 1, 'input_count': len(pdbs), 'passed_thresholds': len(passing), 'final_count': len(selected), 'effective_metrics': specs, 'dispositions': dispositions}
     (Path(args.out_dir) / 'filter_summary.json').write_text(json.dumps(summary, allow_nan=False, indent=2))
     for design in selected:
-        shutil.copy2(design['path'], Path(args.out_dir) / design['path'].name)
+        _retain_closed_result(design['path'], Path(args.out_dir) / design['path'].name)
         if design['json_path']:
             # Write a new versioned artifact; never mutate the input sidecar.
             raw = next(r for r in dispositions if r['candidate_id'] == design['design_id'])
@@ -466,7 +488,7 @@ def run_strict_filter(args):
                     raise ValueError('foreign_native_source')
                 if hashlib.sha256(native_path.read_bytes()).hexdigest() != declared['sha256']:
                     raise ValueError('native_source_bytes_changed')
-                shutil.copy2(native_path, Path(args.out_dir) / native_path.name)
+                _retain_closed_result(native_path, Path(args.out_dir) / native_path.name)
                 payload['native_scalar_source'] = native
             (Path(args.out_dir) / design['json_path'].name).write_text(json.dumps(payload, allow_nan=False, indent=2))
     # Only a fully copied set receives publication authority. The earlier report
@@ -660,7 +682,7 @@ def main():
 
     # Copy selected designs to output
     for design in selected:
-        shutil.copy(design['path'], Path(args.out_dir) / design['path'].name)
+        _retain_closed_result(design['path'], Path(args.out_dir) / design['path'].name)
         
         # Also copy JSON if it exists
         json_path = design.get('json_path')

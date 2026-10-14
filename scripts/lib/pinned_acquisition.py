@@ -165,6 +165,8 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
                 or not isinstance(state.get('partial_sha256'), str)
                 or not re.fullmatch(r'[0-9a-f]{64}', state['partial_sha256'])):
             raise AcquisitionError('invalid durable acquisition checkpoint')
+        from .shared_runtime_images import recover_publications
+        recover_publications(cache)
         result = cache / 'objects' / 'sha256' / artifact.sha256 / 'runtime.sif'
         if os.path.lexists(result.parent):
             with _lock(cache, 'lifecycle'):
@@ -243,7 +245,7 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
             digest, size = _observed(partial)
             if (digest, size) != (artifact.sha256, artifact.size_bytes):
                 raise AcquisitionError('downloaded bytes differ from pinned SHA-256/size')
-            result = publish_image(partial, cache, artifact.sha256)
+            result = publish_image(partial, cache, artifact.sha256, adopt_owned=True)
             receipt = verify_image(result, artifact.sha256)
         state.update(status='verified', receipt=receipt)
         _write_state(stage, state)

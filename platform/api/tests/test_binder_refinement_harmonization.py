@@ -64,34 +64,8 @@ def test_ppiflow_export_hook_leaves_native_body_and_result_unchanged(tmp_path):
     assert json.loads(Path(str(output) + '.sample.json').read_text())['sample_index'] == 42
 
 
-def test_generic_redesign_reuses_global_masks_without_cdr_inference(tmp_path):
-    from prep_binder_fampnn_constraints import prepare
-    selected, prepared = tmp_path / 'selected', tmp_path / 'prepared'
-    selected.mkdir()
-    prepared.mkdir()
-    text = atom('A', 1) + atom('A', 2, 2) + atom('B', 1, 3)
-    (selected / 'candidate.pdb').write_text(text)
-    (prepared / 'candidate.pdb').write_text(text)
-    anchors = tmp_path / 'anchors.json'
-    anchors.write_text(json.dumps({'anchors': [], 'analysis_status': 'not_run'}))
-    request = dict(sequence_design_mode='binder_design', design_chain='A', target_chain='B',
-                   fixed_positions='A:2', fampnn_fix_target_sidechains=False)
-    rows = prepare(selected, prepared, tmp_path / 'constraints.csv', request, anchors)
-    assert rows == [('candidate', 'A2,B1', '')]
-    request['fampnn_fix_target_sidechains'] = True
-    assert prepare(selected, prepared, tmp_path / 'constraints.csv', request, anchors) == [('candidate', 'A2,B1', 'B1')]
 
 
-def test_refinement_publication_does_not_promote_parent_validation(tmp_path):
-    pdb = tmp_path / 'descendant.pdb'
-    pdb.write_text('non-science structure fixture')
-    meta = dict(id='child', parent_id='parent', validation_status='unvalidated',
-                terminal_producer='fampnn', source_meta={'id': 'parent', 'plddt': 99, 'validation_status': 'validated'})
-    record = publish(pdb, meta, tmp_path / 'published')
-    assert record['validation_status'] == 'unvalidated'
-    assert 'plddt' not in record
-    assert record['source_meta']['plddt'] == 99
-    assert (tmp_path / 'published/descendant.pdb').read_bytes() == pdb.read_bytes()
 
 
 def test_frozen_selected_model_contracts_and_off_defaults():

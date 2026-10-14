@@ -148,6 +148,43 @@ async function render(options: { selectedReadId?: string; onViewerSessionChange?
 }
 
 describe('OntSignalIdealComparison', () => {
+    it('restores the saved comparison after its mapping artifact arrives later', async () => {
+        mocks.fetchJob.mockResolvedValue(comparisonJob({ state: 'ready' }));
+        const mount = async (mappingArtifactId: string | null) => {
+            await act(async () => root.render(<OntSignalIdealComparison datasetId="dataset-1"
+                viewerSession={{ ...viewer, signal_state: { comparison_job_id: 'comparison-1' } } as never}
+                selectedReadId="read-42" contig="chr7" start={500} end={560} mappingJobId="ref-map-1"
+                mappingArtifactId={mappingArtifactId} renderParams={renderParams as never} onViewerSessionChange={vi.fn()} />));
+            await settle();
+        };
+        await mount(null);
+        expect(container.textContent).toContain('Comparison comparison-1');
+        await mount('mapping-artifact-1');
+        expect(mocks.fetchJob).toHaveBeenCalledTimes(2);
+        expect(container.textContent).toContain('Comparison comparison-1');
+        expect((container.querySelector('[aria-label="Simulation seed"]') as HTMLInputElement).value).toBe('19');
+    });
+
+    it('keeps edited simulation settings after reopening a saved comparison', async () => {
+        mocks.fetchJob.mockResolvedValue(comparisonJob({ state: 'ready' }));
+        await act(async () => root.render(<OntSignalIdealComparison datasetId="dataset-1"
+            viewerSession={{ ...viewer, signal_state: { comparison_job_id: 'comparison-1' } } as never}
+            selectedReadId="read-42" contig="chr7" start={500} end={560} mappingJobId="ref-map-1"
+            mappingArtifactId="mapping-artifact-1" renderParams={renderParams as never} onViewerSessionChange={vi.fn()} />));
+        await settle();
+        const seed = container.querySelector<HTMLInputElement>('[aria-label="Simulation seed"]')!;
+        expect(seed.value).toBe('19');
+        await act(async () => {
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(seed, '23');
+            seed.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        await settle();
+        expect(seed.value).toBe('23');
+        expect(mocks.fetchJob).toHaveBeenCalledTimes(1);
+        await act(async () => findButton('Preview').click());
+        await settle();
+        expect(mocks.preview.mock.calls[0][0].simulation_settings.seed).toBe(23);
+    });
     it('requires a current preview digest and invalidates it after an operator edit', async () => {
         await render();
         expect(container.textContent).toContain('Ideal comparison');
@@ -292,22 +329,6 @@ describe('OntSignalIdealComparison', () => {
         }), expect.any(AbortSignal));
     });
 
-    it('exposes every supported profile and comparison render control', async () => {
-        await render();
-        expect(container.querySelector('option[value="rna004-prom"]')).not.toBeNull();
-        for (const label of ['Comparison scale', 'Comparison point size', 'Comparison fixed width',
-            'Comparison base width', 'Comparison base limit', 'Comparison signal sample limit',
-            'Comparison show samples', 'Comparison show base colours', 'Comparison remove outliers']) {
-            expect(container.querySelector(`[aria-label="${label}"]`)).not.toBeNull();
-        }
-        const pointSize = container.querySelector<HTMLSelectElement>('[aria-label="Comparison point size"]')!;
-        expect(pointSize.tagName).toBe('SELECT');
-        expect(Array.from(pointSize.options, (option) => Number(option.value))).toEqual([
-            0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
-        ]);
-        expect(pointSize.querySelector('option[value="1.5"]')).toBeNull();
-    });
-
     it('restores persisted immutable job settings and fixed profile disclosure on reopen', async () => {
         const persistedSettings = {
             ...preview.effective_request.effective_settings,
@@ -344,29 +365,6 @@ describe('OntSignalIdealComparison', () => {
         expect((container.querySelector('[aria-label="Simulation seed"]') as HTMLInputElement).value).toBe('19');
         expect(container.textContent).toContain('Persisted warning.');
         expect(container.textContent).toContain('PromethION');
-    });
-
-    it('accepts and renders the governed artifact with exact permanent runtime labels', async () => {
-        mocks.create.mockResolvedValueOnce(comparisonJob({
-            state: 'ready', reason_code: 'ideal_comparison_ready', generated_read_id: 'sim-1',
-            artifacts: [{ artifact_id: 'html-1', kind: 'comparison_html' }],
-            completed_at: '2026-08-27T00:01:00Z',
-        }));
-        mocks.artifact.mockResolvedValue(new Blob([
-            '<!doctype html><html><head></head><body>REAL · INSTRUMENT ACQUIRED · read-42 SIMULATED IDEAL · SQUIGULATOR 0.5.0 · reference</body></html>',
-        ], { type: 'text/html' }));
-        await render();
-        await act(async () => { findButton('Preview').click(); await Promise.resolve(); }); await settle();
-        await act(async () => { findButton('Generate and compare').click(); await Promise.resolve(); }); await settle();
-        expect(mocks.artifact).toHaveBeenCalledWith('comparison-1', 'html-1');
-        expect(container.querySelector('iframe')?.getAttribute('src')).toBe('blob:comparison');
-        expect(container.querySelector('[role="alert"]')).toBeNull();
-        const seed = container.querySelector<HTMLInputElement>('[aria-label="Simulation seed"]')!;
-        await act(async () => {
-            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(seed, '8');
-            seed.dispatchEvent(new Event('input', { bubbles: true })); seed.dispatchEvent(new Event('change', { bubbles: true }));
-        });
-        expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:comparison');
     });
 
     it('ignores a stale cancellation completion after comparison identity changes', async () => {

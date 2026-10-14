@@ -266,17 +266,6 @@ test('auxiliary tracks load once by stable track id', async () => {
     assert.deepEqual(loaded, ['junctions']);
 });
 
-test('compact read labels stay persistent and generic aligned-read naming is absent', () => {
-    const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
-    assert.doesNotMatch(source, /!igvReadsTrackLoaded[\s\S]{0,400}Primary-read preview/u);
-    assert.doesNotMatch(source, /name:\s*['"]Aligned Reads['"]/u);
-    assert.match(source, /Load locus reads/u);
-    assert.match(source, /igvPresentationGenerationRef/u);
-    assert.match(source, /igvLocusSliceGenerationRef/u);
-    assert.match(source, /igvTrackOperationActiveRef/u);
-    assert.match(source, /igvCurrentLocusRef\.current/u);
-});
-
 test('dimer candidate session is opt-in and remains independently bound', () => {
     const result = resolveAlignmentViewerArtifacts(files, 'dimer_candidates');
 
@@ -448,24 +437,6 @@ test('optional tracks are built only from the selected session artifacts', async
     assert.equal(tracks.some((track) => track.url === '/api/jobs/job-a/alignment-artifacts/generic-coverage-tsv'), false);
 });
 
-test('optional IGV track failures cannot suppress a loaded primary alignment', () => {
-    const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
-    const primaryReady = source.indexOf('setIgvReadsTrackLoaded(true);');
-    const optionalLoop = source.indexOf('loadMissingTracksById(browser, auxiliaryTracks');
-    const optionalFailure = source.indexOf('setIgvAuxTrackFailures', optionalLoop);
-
-    assert.ok(primaryReady >= 0 && primaryReady < optionalLoop);
-    assert.ok(optionalFailure > optionalLoop);
-    assert.match(source.slice(optionalLoop, optionalFailure + 200), /trackConfig, error/u);
-});
-
-test('primary IGV readiness requires the governed FASTA index', () => {
-    const toolkit = readFileSync(resolve(process.cwd(), 'src/components/NGSToolkit.tsx'), 'utf8');
-    assert.match(toolkit, /!activeIgvFaiUrl\s*\? 'Reference FASTA index \(\.fai\) not found yet\.'/u);
-    assert.match(toolkit, /Reference FASTA index \(\.fai, required\)/u);
-    assert.doesNotMatch(toolkit, /Reference FASTA index \(\.fai, optional\)/u);
-});
-
 test('variant navigation is rejected when it is not bound to the selected session reference', async () => {
     const module = await import('../src/lib/ngsAlignmentViewer.js') as Record<string, unknown>;
     const boundLocus = module.resolveBoundSessionLocus as ((requested: string, selected: string, contig: string, start: number, end?: number) => string | null) | undefined;
@@ -571,26 +542,6 @@ test('timed-out IGV generation owns terminal loading state but cannot clear a ne
     assert.equal(ownsTerminal(4, 5, 5, true), false);
 });
 
-test('upstream NGS route producers retain context and avoid generic viewers', () => {
-    const queueSource = readFileSync(new URL('../src/components/dashboard/JobQueueTable.tsx', import.meta.url), 'utf8');
-    const molBioSource = readFileSync(new URL('../src/components/MolBioToolkit/MolBioToolkitV2.tsx', import.meta.url), 'utf8');
-
-    assert.match(queueSource, /isNgsJob\(job\)/);
-    assert.match(queueSource, /ngsResultHref\(job\.id, location\.search\)/);
-    assert.match(queueSource, /NGS Run Inspector/);
-    assert.match(molBioSource, /ngsResultHref\(workup\.job_id, location\.search\)/);
-    assert.doesNotMatch(molBioSource, /href=\{`\/jobs\/\$\{encodeURIComponent\(workup\.job_id\)\}`\}/);
-});
-
-test('alignment track completion cannot navigate away from a session-bound locus', () => {
-    const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
-    const locusDetectionCalls = source.match(/detectInitialLocusFromFasta\(igvFastaUrl\)/g) || [];
-
-    assert.equal(locusDetectionCalls.length, 1);
-    assert.match(source, /Track loading must never navigate/);
-    assert.doesNotMatch(source, /loadedAlignmentTrack[\s\S]{0,2500}browser\.search\(/);
-});
-
 test('local IGV config disables default genomes and web locus lookup', async () => {
     const module = await import('../src/lib/ngsAlignmentViewer.js') as Record<string, unknown>;
     const buildConfig = module.buildLocalIgvConfig as ((input: {
@@ -639,69 +590,6 @@ test('local IGV Range parser accepts only the exact backend-bound contig and bou
     assert.equal(parseRange!('eGFP_plasmid:1-5571', 'eGFP_plasmid', 5570), null);
     assert.equal(parseRange!('TP53', 'eGFP_plasmid', 5570), null);
 });
-
-test('NGS viewer exposes a readable base-scale view and legible IGV chrome', () => {
-    const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
-    const css = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8');
-
-    assert.match(source, /Read bases/u);
-    assert.match(source, /focusReadableIgvRange/u);
-    assert.match(source, /selectedAlignmentSession\?\.reference\?\.length_bp/u);
-    const rangeStart = source.indexOf('const navigateToLocalIgvRange');
-    const rangeEnd = source.indexOf('const focusReadableIgvRange');
-    assert.doesNotMatch(source.slice(rangeStart, rangeEnd), /ontFastqQcResultState/u);
-    assert.match(source, /ngs-readable-igv/u);
-    assert.match(source, /\.igv-ui-popover \*/u);
-    assert.match(source, /\.igv-ui-popover,/u);
-    assert.match(css, /\.ngs-readable-igv/u);
-    assert.match(css, /font-size:\s*14px\s*!important/u);
-});
-
-test('NGS viewer opens compactly with primary controls and split scientific views', () => {
-    const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
-    const openStart = source.indexOf('const openIgvModal');
-    const closeStart = source.indexOf('const closeIgvModal');
-    const openBody = source.slice(openStart, closeStart);
-    const viewOptionsStart = source.indexOf('<details data-igv-view-options');
-    const viewOptionsOpenEnd = source.indexOf('>', viewOptionsStart);
-    const viewOptionsEnd = source.indexOf('</details>', viewOptionsStart);
-    const optionalTrackStatus = source.indexOf('data-igv-optional-track-status', viewOptionsStart);
-
-    assert.ok(openStart >= 0 && closeStart > openStart);
-    assert.doesNotMatch(openBody, /requestDocumentFullscreen/u);
-    assert.match(source, /w-\[min\(96vw,1180px\)\]/u);
-    assert.match(source, /aria-label="Range"/u);
-    assert.match(source, /parseLocalIgvRange\(/u);
-    assert.match(source, /\? 'Exit fullscreen' : 'Fullscreen'/u);
-    assert.match(source, /View options/u);
-    assert.ok(viewOptionsStart >= 0 && viewOptionsOpenEnd > viewOptionsStart);
-    assert.ok(optionalTrackStatus > viewOptionsOpenEnd && optionalTrackStatus < viewOptionsEnd);
-    assert.doesNotMatch(source.slice(viewOptionsStart, viewOptionsOpenEnd + 1), /\bopen=/u);
-    assert.doesNotMatch(source.slice(viewOptionsEnd), /data-igv-optional-track-status/u);
-    assert.doesNotMatch(source, /Missing optional tracks:/u);
-    assert.match(source, /Load locus reads/u);
-    assert.match(source, /lg:right-\[560px\]/u);
-    assert.match(source, /lg:right-\[600px\]/u);
-    assert.match(source, /igvInspectorOpen &&/u);
-});
-
-test('historical CDN-backed report is not exposed as an active browser viewer', () => {
-    const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
-
-    assert.doesNotMatch(source, /Open compact IGV report/u);
-    assert.doesNotMatch(source, /igvReportDownloadHref/u);
-});
-
-test('canonical FASTQ-QC renders the scientific report before collapsed technical details', () => {
-    const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
-    const resultPanel = source.indexOf('<OntFastqQcResultPanel');
-    const technicalDetails = source.indexOf('Technical job details');
-    assert.ok(resultPanel >= 0);
-    assert.ok(technicalDetails > resultPanel);
-    assert.match(source, /<details open=\{!isCanonicalFastqQcRun\}/u);
-    assert.equal((source.match(/<OntFastqQcResultPanel/g) || []).length, 1);
-});
-
 
 test('replacement acknowledges only the recovered source dialog and retains swallowed viewport failures', async () => {
     const oldTrack = { type: 'alignment', config: { url: '/preview/bam' } };

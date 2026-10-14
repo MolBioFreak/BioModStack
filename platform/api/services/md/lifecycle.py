@@ -37,12 +37,12 @@ def _read_aggregate(output_dir):
     return root, json.loads(path.read_text(encoding="utf-8"))
 
 
-def _collect(root, aggregate_path, status_payload):
+def _collect(root, aggregate_path, status_payload, gromacs_container=None):
     orchestration = root / "orchestration" / "analysis_reconciliation"
     orchestration.mkdir(parents=True, exist_ok=True)
     status_path = orchestration / "latest_child_outputs.json"
     status_path.write_text(json.dumps(status_payload, sort_keys=True) + "\n", encoding="utf-8")
-    return collect_analysis(status_path, aggregate_path, root)
+    return collect_analysis(status_path, aggregate_path, root, gromacs_container=gromacs_container)
 
 
 def _publish_barrier(root, job_id):
@@ -110,7 +110,9 @@ async def reconcile_md_analysis_parent(parent_job_id: str, session: AsyncSession
         "child_ids": [str(child.id) for child in selected],
         "child_output_dirs": [str(child.child_output_dir or child.output_dir) for child in completed],
     }
-    collection = await _joined_thread(_collect, parent_root, aggregate_path, status_payload)
+    from paths import get_container_dir
+    image = (parent.params or {}).get("md_gromacs_container") or str(get_container_dir() / "gromacs-md-2025.3.sif")
+    collection = await _joined_thread(_collect, parent_root, aggregate_path, status_payload, image)
     await session.refresh(parent)
     if parent.status == "cancelled" or parent.awaiting_input or parent.paused:
         return {"status": "cancelled" if parent.status == "cancelled" else "waiting"}
@@ -145,7 +147,7 @@ async def reconcile_md_analysis_parent(parent_job_id: str, session: AsyncSession
             else None,
         }
     )
-    if collection["status"] != "completed":
+    if collection["status"] != "completed" and not collection.get("optional"):
         claimed = await session.execute(update(Job).where(
             Job.id == parent.id, Job.status == status, Job.queue_status == queue_status,
             Job.status != "cancelled", Job.awaiting_input.is_(False), Job.paused.is_(False),

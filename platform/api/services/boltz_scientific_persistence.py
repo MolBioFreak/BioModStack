@@ -47,6 +47,34 @@ def _json(content):
     return json.loads(content, object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_json_constant)
 
 
+def _request_matches_launch(job, expected):
+    from services.boltz_launch_authority import digest
+    from services.execution_ownership import (
+        SCHEDULER_GPU_ASSIGNMENT_PARAM, attach_scheduler_gpu_assignment,
+    )
+
+    params = job.params or {}
+    if digest(canonical_json_bytes(params)) == expected:
+        return True
+    # Remote terminal observation releases the scheduler's temporary GPU
+    # assignment before collection. Reconstruct only that exact owner transform,
+    # using the retained assignment, and still compare the entire sealed request.
+    # Never rewrite authority, drop scientific fields, or restore Job.params.
+    provenance = job.provenance or {}
+    assignment = provenance.get('remote_execution_assignment') or {}
+    receipt = provenance.get('remote_execution_receipt') or {}
+    target = getattr(job, 'execution_target_id', None)
+    attempt = getattr(job, 'remote_attempt_id', None)
+    gpu = assignment.get('gpu_index')
+    if (SCHEDULER_GPU_ASSIGNMENT_PARAM in params or not target or not attempt
+        or assignment.get('execution_target_id') != target
+        or receipt.get('execution_target_id') != target
+        or receipt.get('attempt_id') != attempt
+        or type(gpu) is not int or gpu < 0):
+        return False
+    return digest(canonical_json_bytes(attach_scheduler_gpu_assignment(params, gpu))) == expected
+
+
 def _verified_publication(job, root, *, document=None):
     # A selected read retains the launch/task/manifest boundary but does not open
     # unrelated candidate payloads. Full publication admission uses document=None.
@@ -79,7 +107,7 @@ def _verified_publication(job, root, *, document=None):
         or authority['attempt'] != job.retry_count or authority['job_id'] != str(job.id)
         or authority['model_id'] != job.model_id or authority['mode'] != job.mode
         or authority['result_root'] != str(root)
-        or authority['request_sha256'] != digest(canonical_json_bytes(job.params or {}))):
+        or not _request_matches_launch(job, authority['request_sha256'])):
         raise ValueError('Boltz launch authority job/input binding changed')
     authority_bytes = canonical_json_bytes(authority)
     if len(authority_bytes) > MAX_BYTES:

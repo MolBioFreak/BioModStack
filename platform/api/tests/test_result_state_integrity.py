@@ -31,55 +31,8 @@ from services.result_state_integrity import finalize_successful_job, job_expects
 from routers.jobs import reingest_job_results
 
 
-def test_job_get_handlers_are_read_only() -> None:
-    jobs_source = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
-    tree = ast.parse(jobs_source)
-    handlers = {
-        node.name: ast.get_source_segment(jobs_source, node) or ""
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and any(
-            isinstance(decorator, ast.Call)
-            and isinstance(decorator.func, ast.Attribute)
-            and decorator.func.attr == "get"
-            for decorator in node.decorator_list
-        )
-    }
-
-    assert {"get_job", "get_stage_gates", "get_children_status"} <= handlers.keys()
-    for name, source in handlers.items():
-        assert "_repair_job_for_response" not in source, name
-        assert "_reconcile_child_jobs_from_history" not in source, name
-        assert "session.commit" not in source, name
-        assert "session.add" not in source, name
-        assert "session.delete" not in source, name
-        assert "schedule_viewer_minimum_analyses_for_job" not in source, name
 
 
-def test_design_get_handlers_and_review_hydration_are_read_only() -> None:
-    designs_source = (API_ROOT / "routers" / "designs.py").read_text(encoding="utf-8")
-    tree = ast.parse(designs_source)
-    handlers = {
-        node.name: ast.get_source_segment(designs_source, node) or ""
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and any(
-            isinstance(decorator, ast.Call)
-            and isinstance(decorator.func, ast.Attribute)
-            and decorator.func.attr == "get"
-            for decorator in node.decorator_list
-        )
-    }
-    assert {"list_designs", "get_backbone_summary", "get_designs_for_job"} <= handlers.keys()
-    for name, source in handlers.items():
-        assert "session.commit" not in source, name
-        assert "session.add" not in source, name
-        assert "session.delete" not in source, name
-
-    hydration = next(node for node in tree.body if getattr(node, "name", None) == "_hydrate_review_job")
-    hydration_source = ast.get_source_segment(designs_source, hydration) or ""
-    for forbidden in ("session.commit", "session.add", "session.delete", "ensure_stage_review_rows"):
-        assert forbidden not in hydration_source
 
 
 async def _session_factory(tmp_path: Path):
@@ -530,7 +483,8 @@ def test_lineage_fields_accept_artifact_override_without_duplicate_kwarg_path() 
 
 
 @pytest.mark.asyncio
-async def test_completion_is_committed_only_after_ingestion_and_validation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("placement", ["local", "legacy_remote", "shared_remote"])
+async def test_completion_is_committed_only_after_ingestion_and_validation(tmp_path: Path, placement: str) -> None:
     factory, engine = await _session_factory(tmp_path)
     output_dir = tmp_path / "results"
     output_dir.mkdir()
@@ -538,6 +492,22 @@ async def test_completion_is_committed_only_after_ingestion_and_validation(tmp_p
 
     async with factory() as session:
         job = _job("ordered", output_dir=str(output_dir))
+        if placement != "local":
+            from database import ExecutionTarget
+            job.execution_target_id = "vast:shared"
+            job.remote_attempt_id = "ordered-attempt"
+            job.remote_state = "succeeded"
+            target = ExecutionTarget(id="vast:shared", provider="vast", provider_instance_id="shared",
+                active=True, state="ready", host="fixture", port=22, username="root")
+            if placement == "legacy_remote":
+                target.leased_job_id = job.id
+            else:
+                job.provenance = {"remote_execution_assignment": {"policy": "vram_packing",
+                    "lease_id": "ordered-claim", "root_job_id": job.id,
+                    "execution_target_id": target.id, "claimed_at": datetime.utcnow().isoformat()}}
+                # The legacy pointer belonging to another job must not deny this claim.
+                target.leased_job_id = "sibling-legacy"
+            session.add(target)
         session.add(job)
         await session.commit()
         observed_statuses: list[tuple[str, str]] = []

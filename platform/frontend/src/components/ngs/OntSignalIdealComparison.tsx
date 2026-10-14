@@ -20,6 +20,7 @@ import {
     type OntSignalRenderParams,
     type OntSignalViewerSession,
 } from '../../lib/api';
+import { secureOntSignalHtml } from './ontSignalHtml';
 import { isOwnedFullscreen, toggleOwnedFullscreen } from './ngsFullscreenOwner';
 
 export interface OntSignalIdealComparisonProps {
@@ -69,13 +70,9 @@ function comparisonParams(value: OntSignalRenderParams): OntSignalComparisonRend
     };
 }
 
-const CSP = "default-src 'none'; base-uri 'none'; connect-src 'none'; font-src data:; form-action 'none'; frame-src 'none'; img-src data:; media-src 'none'; object-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; worker-src 'none'";
-function securedHtml(source: string): Blob {
-    const parsed = new DOMParser().parseFromString(source, 'text/html');
-    const meta = parsed.createElement('meta'); meta.httpEquiv = 'Content-Security-Policy'; meta.content = CSP;
-    parsed.head.insertBefore(meta, parsed.head.firstChild);
-    return new Blob([`<!doctype html>\n${parsed.documentElement.outerHTML}`], { type: 'text/html;charset=utf-8' });
-}
+// Bokeh CustomJS needs string compilation for native pan/zoom callbacks. This
+// policy applies only inside the opaque-origin, network-denied sandbox below.
+const CSP = "default-src 'none'; base-uri 'none'; connect-src 'none'; font-src data:; form-action 'none'; frame-src 'none'; img-src data:; media-src 'none'; object-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; worker-src 'none'";
 async function blobText(blob: Blob): Promise<string> {
     if (typeof blob.text === 'function') return blob.text();
     return new Promise((resolve, reject) => {
@@ -105,7 +102,7 @@ export function OntSignalIdealComparison({
     const pollSequenceRef = useRef(0);
     const viewerMutationRef = useRef<AbortController | null>(null);
     const urlRef = useRef<string | null>(null);
-    const restoringPersistedSettingsRef = useRef(false);
+    const restoringPersistedSettingsRef = useRef<string | null>(null);
     const comparisonFullscreenRef = useRef<HTMLDivElement | null>(null);
     const currentProfile = PROFILES.find((item) => item.id === profileId)!;
     const effectiveProfile = preview?.effective_request?.effective_settings?.profile || job?.simulation_settings?.profile;
@@ -139,7 +136,9 @@ export function OntSignalIdealComparison({
         setPreview(null); setJob(null); setReviews([]); replaceUrl(null); setError(null);
     }, [identity]);
     useEffect(() => {
-        if (restoringPersistedSettingsRef.current) { restoringPersistedSettingsRef.current = false; return; }
+        const restored = restoringPersistedSettingsRef.current;
+        restoringPersistedSettingsRef.current = null;
+        if (restored === settingsIdentity) return;
         generationRef.current += 1; abortViewerMutation(); setBusy(false);
         setPreview(null); setJob(null); setReviews([]); replaceUrl(null); setError(null);
     }, [settingsIdentity]);
@@ -231,24 +230,30 @@ export function OntSignalIdealComparison({
 
     useEffect(() => {
         const persisted = viewerSession.signal_state.comparison_job_id;
-        if (!persisted || job?.comparison_job_id === persisted) return;
+        // The identity reset effect above clears the job on this same commit.
+        // Do not skip restoration based on the previous render's job: a mapping
+        // artifact can arrive after the persisted comparison has already loaded.
+        if (!persisted) return;
         const generation = generationRef.current;
         void fetchOntSignalIdealComparison(persisted).then((next) => {
             if (generation !== generationRef.current) return;
             const operator = next.simulation_settings.operator_owned;
-            restoringPersistedSettingsRef.current = true;
-            setProfileId(next.simulation_settings.profile_id);
-            setSeed(operator.seed);
-            setComparisonRenderParams({
+            const restoredParams: OntSignalComparisonRenderParams = {
                 scale: operator.scale, point_size: operator.point_size,
                 fixed_width: operator.fixed_width, base_width: operator.base_width,
                 base_limit: operator.base_limit, signal_sample_limit: operator.signal_sample_limit,
                 show_samples: operator.show_samples, show_base_colours: operator.show_base_colours,
                 remove_signal_outliers: operator.remove_signal_outliers,
-            });
+            };
+            restoringPersistedSettingsRef.current = `${JSON.stringify(restoredParams)}:${next.simulation_settings.profile_id}:${operator.seed}`;
+            setProfileId(next.simulation_settings.profile_id);
+            setSeed(operator.seed);
+            setComparisonRenderParams(restoredParams);
             setJob(next);
         }).catch((reason) => { if (generation === generationRef.current) setError(errorText(reason)); });
-    }, [identity, job?.comparison_job_id, viewerSession.signal_state.comparison_job_id]);
+        // Restore only when the receiving session changes. Clearing a result after
+        // an operator edit must not reload the saved job and overwrite that edit.
+    }, [identity, viewerSession.signal_state.comparison_job_id]);
 
     useEffect(() => {
         if (!job || job.state !== 'ready') { setReviews([]); return; }
@@ -265,7 +270,7 @@ export function OntSignalIdealComparison({
         void fetchOntSignalComparisonArtifact(job.comparison_job_id, html.artifact_id).then(blobText).then((source) => {
             if (generation !== generationRef.current) return;
             if (!source.includes('REAL · INSTRUMENT ACQUIRED ·') || !source.includes('SIMULATED IDEAL · SQUIGULATOR 0.5.0 ·')) throw new Error('Comparison artifact is missing exact track labels.');
-            replaceUrl(URL.createObjectURL(securedHtml(source)));
+            replaceUrl(URL.createObjectURL(secureOntSignalHtml(source, CSP)));
         }).catch((reason) => { if (generation === generationRef.current) setError(errorText(reason)); });
     }, [job?.comparison_job_id, job?.state]);
 

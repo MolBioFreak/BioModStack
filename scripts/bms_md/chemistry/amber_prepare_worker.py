@@ -17,7 +17,23 @@ def _preprocess_pdb(source: Path, destination: Path) -> list[str]:
     records: list[str] = []
     residue_order: list[tuple[str, str, str]] = []
     sulfurs: dict[tuple[str, str, str], tuple[float, float, float]] = {}
-    for raw in source.read_text(encoding="utf-8", errors="strict").splitlines():
+    source_text = source.read_text(encoding="utf-8", errors="strict")
+    if any(line.lstrip().startswith("_atom_site.") for line in source_text.splitlines()):
+        # Managed source bytes remain unchanged in source.pdb and its manifest.
+        # Normalize CIF only for Amber's PDB reader, using the installed parser.
+        # Retain every model; choosing an ensemble member is not preparation's job.
+        import io
+        from openmm.app import PDBFile, PDBxFile
+
+        parsed = PDBxFile(io.StringIO(source_text))
+        normalized = io.StringIO()
+        PDBFile.writeHeader(parsed.topology, normalized)
+        for frame in range(parsed.getNumFrames()):
+            PDBFile.writeModel(parsed.topology, parsed.getPositions(frame=frame), normalized,
+                               modelIndex=frame + 1, keepIds=True)
+        PDBFile.writeFooter(parsed.topology, normalized)
+        source_text = normalized.getvalue()
+    for raw in source_text.splitlines():
         if raw.startswith("TER"):
             if records and not records[-1].startswith("TER"):
                 records.append(raw.ljust(80))

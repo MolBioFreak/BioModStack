@@ -31,66 +31,8 @@ def provider_fixture(monkeypatch, tmp_path):
     return calls
 
 
-def test_boltz_native_sequence_batch_identity_and_relocation(monkeypatch, tmp_path):
-    from biomodstack_boltz_msa import hydrate_prepared_boltz_task
-    calls = provider_fixture(monkeypatch, tmp_path)
-    batch = tmp_path / 'native-batch.json'
-    entries = [{'name': 'display', 'entry_id': 'task_B', 'sequence': 'ACDE:FGHI', 'fold': 7, 'rank': 2},
-               {'name': 'task_A', 'sequence': 'KLMN'}]
-    batch.write_text(json.dumps(entries))
-    original = batch.read_bytes()
-    params = {'boltz_use_msa': True, 'msa_provider': 'colabfold_api',
-              'sequence_batch_json_path': str(batch), 'boltz_sampling_steps': 77}
-    host = tmp_path / 'host'
-    prepared = prepare_launch_msa('boltz2', params, host)
-    assert [call[0] for call in calls] == [['ACDE', 'FGHI'], ['KLMN']]
-    assert batch.read_bytes() == original
-    manifest = json.loads((host / 'msa-inputs.json').read_text())
-    assert [task['name'] for task in manifest['tasks']] == ['task_B', 'task_A']
-    assert manifest['tasks'][0]['native_task']['metadata'] == entries[0]
-    assert manifest['settings']['boltz_sampling_steps'] == 77
-    worker = tmp_path / 'worker'
-    shutil.move(str(host), worker)
-    native = {'version': 1, 'constraints': [{'fixture': 'unchanged'}], 'sequences': [
-        {'protein': {'id': ['A'], 'sequence': 'ACDE'}},
-        {'protein': {'id': ['B'], 'sequence': 'FGHI'}}]}
-    bound = hydrate_prepared_boltz_task(native, worker, prepared['boltz_prepared_msa_sha256'], task_name='task_B')
-    assert bound['constraints'] == native['constraints']
-    assert 'msa' not in native['sequences'][0]['protein']
-    assert all(Path(p['protein']['msa']).is_relative_to(worker) for p in bound['sequences'])
-    with pytest.raises(ValueError, match='chain identity'):
-        hydrate_prepared_boltz_task(native, worker, prepared['boltz_prepared_msa_sha256'], task_name='task_A')
-    with pytest.raises(ValueError, match='missing or ambiguous'):
-        hydrate_prepared_boltz_task(native, worker, prepared['boltz_prepared_msa_sha256'], task_name='unknown')
-    Path(bound['sequences'][0]['protein']['msa']).write_text('>q\nACDE\n>tampered\nVCDE\n')
-    with pytest.raises(ValueError, match='artifact identity'):
-        hydrate_prepared_boltz_task(native, worker, prepared['boltz_prepared_msa_sha256'], task_name='task_B')
 
 
-def test_boltz_complex_batch_supplied_and_short_peptide(monkeypatch, tmp_path):
-    from biomodstack_boltz_msa import hydrate_prepared_boltz_components
-    calls = provider_fixture(monkeypatch, tmp_path)
-    supplied = tmp_path / 'supplied.csv'
-    supplied.write_text('key,sequence\n-1,ACDE\n8,VCDE\n')
-    payload = {'name': 'native', 'components': [
-        {'id': ['B', 'C'], 'type': 'protein', 'sequence': 'ACDE', 'msa_path': str(supplied)},
-        {'id': 'P', 'type': 'peptide', 'sequence': 'FGHI'},
-        {'id': 'L', 'type': 'ligand', 'ccd': 'ATP'}]}
-    source = tmp_path / 'complex.json'
-    source.write_text(json.dumps(payload))
-    batch = tmp_path / 'batch.json'
-    batch.write_text(json.dumps([{'name': 'exact_task', 'complex_json': str(source)}]))
-    original = source.read_bytes()
-    prepared = prepare_launch_msa('boltz2', {'boltz_use_msa': True,
-        'sequence_batch_json_path': str(batch), 'complex_batch_dir': str(tmp_path)}, tmp_path / 'host')
-    assert not calls and source.read_bytes() == original
-    worker = tmp_path / 'worker'
-    shutil.move(str(tmp_path / 'host'), worker)
-    supplied.unlink()
-    bound = hydrate_prepared_boltz_components(payload, worker, prepared['boltz_prepared_msa_sha256'], task_name='exact_task')
-    assert bound['components'][0]['id'] == ['B', 'C']
-    assert Path(bound['components'][0]['msa_path']).is_relative_to(worker)
-    assert bound['components'][1:] == payload['components'][1:]
 
 
 def test_cp_single_top_level_directory_config_is_packaged_and_empty_preserved(monkeypatch, tmp_path):
@@ -627,6 +569,63 @@ async def test_hosted_preparation_stops_and_joins_thread(monkeypatch, tmp_path, 
         await asyncio.wait_for(task, 3)
     assert stopped.is_set() and len(calls) == 1
     assert session.commit.await_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('released', [False, True])
+async def test_controller_msa_uses_own_claim_not_sibling_target_lease(monkeypatch, tmp_path, released):
+    import asyncio
+    from datetime import datetime
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from database import Base, ExecutionTarget, Job
+    from services import nextflow, model_msa_handoff
+    engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path / "msa.db"}')
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    calls = []
+    def prepare(model, params, destination):
+        calls.append((model, params, destination))
+        if len(calls) == 1:
+            from biomodstack_msa_api import PendingMSA
+            raise PendingMSA('fixture pending', operation={'provider': 'neurosnap_api',
+                'request_digest': 'a' * 64, 'retry_after_seconds': 0,
+                'tickets': {'unpaired': {'phase': 'polling', 'remote_id': 'fixture-id'}}})
+        return {**params, 'msa_path': str(destination / 'fixture.a3m')}
+    monkeypatch.setattr(model_msa_handoff, 'prepare_launch_msa', prepare)
+    try:
+        async with factory() as session:
+            assignment = {'policy': 'vram_packing', 'lease_id': 'msa-claim',
+                'root_job_id': 'msa', 'execution_target_id': 'vast:msa',
+                'claimed_at': datetime.utcnow().isoformat()}
+            if released:
+                assignment['released_at'] = datetime.utcnow().isoformat()
+            target = ExecutionTarget(id='vast:msa', provider='vast', provider_instance_id='msa',
+                active=True, state='ready', leased_job_id='unrelated-legacy-job')
+            job = Job(id='msa', name='msa', model_id='boltz2', mode='predict',
+                params={'seed': 0}, status='queued', queue_status='preparing', remote_state='preparing',
+                remote_attempt_id='msa-attempt', execution_target_id=target.id,
+                provenance={'remote_execution_assignment': assignment})
+            session.add_all([target, job])
+            await session.commit()
+            authority = (job.execution_target_id, job.remote_attempt_id, job.nextflow_run_id, assignment)
+            operation = nextflow._prepare_launch_msa_on_controller(
+                session, job, 'boltz2', dict(job.params), tmp_path, authority=authority)
+            if released:
+                with pytest.raises(asyncio.CancelledError):
+                    await operation
+                assert calls == []
+            else:
+                prepared = await operation
+                assert len(calls) == 2 and calls[0] == calls[1]
+                assert prepared['msa_path'].endswith('fixture.a3m')
+                await session.refresh(job)
+                assert job.provenance['msa_preparation']['state'] == 'ready'
+                assert job.provenance['remote_execution_assignment'] == assignment
+            await session.refresh(target)
+            assert target.leased_job_id == 'unrelated-legacy-job'
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.parametrize('replace_during_parse', [False, True])

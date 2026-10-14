@@ -121,6 +121,21 @@ def test_dilution_preparation_transfer_minimum_is_diagnostic_only(factor, flagge
 def test_terminal_boundaries_normalize_only_on_circular_source(sequence, enzymes, topology):
     from test_restriction_digest_persistence import _simulate
     result = _simulate(sequence, enzymes, topology)
+    # Recognition starts at base 2: EcoRI G|AATTC / CTTAA|G;
+    # PstI CTGCA|G / G|ACGTC. These boundaries are not read from the result.
+    expected = {
+        ("ACGTACGT", "linear"): [(0, 8, 0, 8, "ACGTACGT")],
+        ("ACGTACGT", "circular"): [(0, 8, 0, 8, "ACGTACGT")],
+        ("TTGAATTCAA", "linear"): [(0, 3, 0, 7, "TTG"), (3, 10, 7, 10, "AATTCAA")],
+        ("TTGAATTCAA", "circular"): [(3, 13, 7, 17, "AATTCAATTG")],
+        ("TTCTGCAGAA", "linear"): [(0, 7, 0, 3, "TTCTGCA"), (7, 10, 3, 10, "GAA")],
+        ("TTCTGCAGAA", "circular"): [(7, 17, 3, 13, "GAATTCTGCA")],
+    }[sequence, topology]
+    assert [(f.top_start_boundary, f.top_end_boundary,
+             f.bottom_start_boundary, f.bottom_end_boundary, f.top_strand_sequence)
+            for f in result.fragments] == expected
+    assert all(f.topology == (topology if sequence == "ACGTACGT" else "linear")
+               for f in result.fragments)
     for fragment in result.fragments:
         for strand in ("top", "bottom"):
             for side in ("start", "end"):

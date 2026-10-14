@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ArtifactDetails } from './ArtifactDetails';
 import { isAxiosError } from 'axios';
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { fetchExecutionTargetRuntimeInventorySummary, fetchExecutionTargetRuntimeInventoryArtifacts, refreshExecutionTargetRuntimeInventorySummary, provisionSelectionLabel, type ExecutionTarget } from '../../lib/api';
+import { fetchExecutionTargetRuntimeInventorySummary, fetchExecutionTargetRuntimeInventoryArtifacts, refreshExecutionTargetRuntimeInventorySummary, activeExecutionTargetJobIds, provisionSelectionLabel, type ExecutionTarget } from '../../lib/api';
 
 function InstalledArtifacts({ targetId, observationId, releaseSha256 }: { targetId: string; observationId: string; releaseSha256: string }) {
   const [offset, setOffset] = useState(0);
@@ -52,7 +52,7 @@ function InventoryObservation({ target, binding }: { target: ExecutionTarget; bi
     // Failure invalidates freshness on the server; reload that saved evidence, not another SSH request.
     onSettled: async () => { await client.invalidateQueries({ queryKey }); },
   });
-  const allowed = target.active && target.state === 'ready' && !target.progress && active === 0
+  const allowed = target.active && target.state === 'ready' && activeExecutionTargetJobIds(target).length === 0 && active === 0
     && !target.preload?.recovery_required
     && !ACTIVE_PHASES.includes(target.preload?.phase ?? '');
   async function observe() {

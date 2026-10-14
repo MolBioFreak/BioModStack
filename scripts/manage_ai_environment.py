@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -169,6 +170,10 @@ def command_create(args: argparse.Namespace) -> dict[str, object]:
         git(repo, "worktree", "add", "-b", branch, str(worktree), "origin/test")
         isolated_state = state_root() / "runtime" / environment_id
         isolated_state.mkdir(parents=True, exist_ok=True)
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from biomodstack_runtime_profile import resolve_runtime_paths
+
+        shared = resolve_runtime_paths(project_root=repo)
         receipt: dict[str, object] = {
             "id": environment_id,
             "status": "created",
@@ -177,6 +182,7 @@ def command_create(args: argparse.Namespace) -> dict[str, object]:
             "base_revision": base,
             "worktree": str(worktree),
             "state_root": str(isolated_state),
+            "shared_weights_root": str(shared["weights_root"]),
             "api_port": api_port,
             "web_port": web_port,
             "api_url": f"http://127.0.0.1:{api_port}",
@@ -185,6 +191,10 @@ def command_create(args: argparse.Namespace) -> dict[str, object]:
             "bioxp_mutations_enabled": False,
             "created_at": now(),
         }
+        scratch = isolated_state / ".disposable"
+        if not scratch.exists() and not scratch.is_symlink():
+            scratch.mkdir()
+            receipt["disposable_scratch"] = str(scratch)
         save_receipt(receipt)
         return receipt
 
@@ -237,6 +247,12 @@ def wait_http(url: str, timeout: float = 180.0) -> None:
 
 
 def command_start(args: argparse.Namespace) -> dict[str, object]:
+    # Serialize launches with close's stop/join and creator-owned scratch removal.
+    with lifecycle_lock():
+        return _start_owned(args)
+
+
+def _start_owned(args: argparse.Namespace) -> dict[str, object]:
     environment_id = validate_id(args.id)
     receipt = load_receipt(environment_id)
     worktree = Path(str(receipt["worktree"]))
@@ -249,7 +265,19 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
     api_port = api_port_value
     web_port = web_port_value
     isolated = Path(str(receipt["state_root"]))
-    for child in ("inputs", "work", "weights", "msa_cache", "sabdab_cache"):
+    # Older receipts retain their explicitly private weight selection. New
+    # environments borrow the existing installation dependency root.
+    weights = Path(str(receipt.get("shared_weights_root") or isolated / "weights"))
+    if not receipt.get("shared_weights_root"):
+        weights.mkdir(parents=True, exist_ok=True)
+    scratch = isolated / ".disposable"
+    if not scratch.exists() and not scratch.is_symlink():
+        scratch.mkdir(parents=True)
+        receipt["disposable_scratch"] = str(scratch)
+        # Persist custody before starting a writer, including failed starts.
+        save_receipt(receipt)
+    # A pre-existing unclaimed legacy directory is not ours to delete.
+    for child in ("inputs", "work", "msa_cache", "sabdab_cache", ".disposable/tmp", ".disposable/pycache"):
         (isolated / child).mkdir(parents=True, exist_ok=True)
     frontend = worktree / "platform/frontend"
     if not (frontend / "node_modules").exists():
@@ -265,7 +293,8 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         "--setenv=BMS_API_MODE=dev", f"--setenv=BMS_API_BIND_PORT={api_port}",
         f"--setenv=BMS_DATA={isolated}", f"--setenv=BMS_STATE_DIR={isolated}",
         f"--setenv=BMS_INPUTS={isolated / 'inputs'}", f"--setenv=BMS_DB_PATH={isolated / 'biomodstack.db'}",
-        f"--setenv=BMS_WORK={isolated / 'work'}", f"--setenv=BMS_WEIGHTS={isolated / 'weights'}",
+        f"--setenv=BMS_WORK={isolated / 'work'}", f"--setenv=BMS_WEIGHTS={weights}",
+        f"--setenv=TMPDIR={scratch / 'tmp'}", f"--setenv=PYTHONPYCACHEPREFIX={scratch / 'pycache'}",
         f"--setenv=BMS_MSA_CACHE={isolated / 'msa_cache'}", f"--setenv=BMS_SABDAB_CACHE={isolated / 'sabdab_cache'}",
         "--setenv=BMS_CPU_POWER_STRICT=0", "--setenv=BMS_BIOXP_MUTATIONS_ENABLED=0",
         str(worktree / "scripts/run_biomodstack_api.sh"),
@@ -338,6 +367,26 @@ def command_promote(args: argparse.Namespace) -> dict[str, object]:
         return receipt
 
 
+def cleanup_disposable_scratch(receipt: dict[str, object]) -> None:
+    """Called only after a successful stop/join, never by status or age.
+
+    Do not sweep work, inputs, caches, databases, results or backups. Legacy
+    receipts do not claim this directory, so their unknown state is retained.
+    """
+    isolated = Path(str(receipt["state_root"]))
+    expected = isolated / ".disposable"
+    if receipt.get("disposable_scratch") != str(expected):
+        return
+    if any(path.is_symlink() for path in (expected, *expected.parents)):
+        return
+    if expected.is_dir():
+        try:
+            shutil.rmtree(expected)
+        except OSError:
+            # Optional scratch reclamation must not change close/discard success.
+            pass
+
+
 def command_close(args: argparse.Namespace) -> dict[str, object]:
     environment_id = validate_id(args.id)
     repo = Path(args.repo).resolve()
@@ -354,8 +403,10 @@ def command_close(args: argparse.Namespace) -> dict[str, object]:
         if not promoted and not args.discard:
             raise EnvironmentError("AI environment is not promoted to origin/test; promote it or close with --discard")
         api_unit, web_unit = unit_names(environment_id)
-        systemctl("stop", api_unit, web_unit, check=False)
+        stopped = systemctl("stop", api_unit, web_unit, check=False)
         systemctl("reset-failed", api_unit, web_unit, check=False)
+        if stopped.returncode == 0:
+            cleanup_disposable_scratch(receipt)
         if worktree.exists():
             git(repo, "worktree", "remove", str(worktree))
         branch = str(receipt["branch"])

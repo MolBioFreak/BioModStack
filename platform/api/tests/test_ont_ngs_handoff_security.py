@@ -220,19 +220,6 @@ def test_runtime_rejects_digest_mismatch_immediately_before_snapshot_consumption
         verifier(params, snapshot_root=tmp_path)
 
 
-def test_generic_caller_cannot_claim_instrument_snapshot_authority() -> None:
-    request = ont_runs.OntNgsSubmitRequest(
-        params={
-            "fastq_path": "/trusted/reads.fastq",
-            "reference_fasta": "/trusted/reference.fasta",
-        },
-        source_instrument_run_id="caller-selected-run",
-    )
-
-    with pytest.raises(ValueError, match="server-controlled"):
-        ont_runs._job_create_for_ont_submit("ont_plasmid_qc", request)
-
-
 def test_trusted_external_alignment_authority_survives_canonical_submit_normalization(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:

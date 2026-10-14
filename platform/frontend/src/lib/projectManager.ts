@@ -1920,7 +1920,7 @@ export async function listProteinProjectCapabilities(signal?: AbortSignal): Prom
 }
 
 export async function createProjectWorkflowSetup(projectId: string, request: ProjectWorkflowSetupCreate): Promise<ProjectWorkflowSetupNavigation> {
-    const response = await api.post<unknown>(`/api/projects/${segment(projectId)}/workflow-setups`, request);
+    const response = await api.post<unknown>(`/api/projects/${segment(projectId)}/workflow-setups`, request, { headers: { 'Idempotency-Key': crypto.randomUUID() } });
     return parseProjectWorkflowSetupNavigation(response.data);
 }
 
@@ -1930,12 +1930,12 @@ export async function getProjectWorkflowSetup(projectId: string, setupContextId:
 }
 
 export async function saveProjectWorkflowSetupDraft(projectId: string, setupContextId: string, request: { expected_generation: number; draft: JsonObject }): Promise<ProjectWorkflowSetup> {
-    const response = await api.put<unknown>(`/api/projects/${segment(projectId)}/workflow-setups/${segment(setupContextId)}/draft`, request);
+    const response = await api.put<unknown>(`/api/projects/${segment(projectId)}/workflow-setups/${segment(setupContextId)}/draft`, request, { headers: { 'Idempotency-Key': crypto.randomUUID() } });
     return parseProjectWorkflowSetup(response.data);
 }
 
 export async function prepareProjectWorkflowSetup(projectId: string, setupContextId: string, expectedGeneration: number): Promise<ProjectWorkflowSetup> {
-    const response = await api.post<unknown>(`/api/projects/${segment(projectId)}/workflow-setups/${segment(setupContextId)}/prepare-launch`, { expected_generation: expectedGeneration });
+    const response = await api.post<unknown>(`/api/projects/${segment(projectId)}/workflow-setups/${segment(setupContextId)}/prepare-launch`, { expected_generation: expectedGeneration }, { headers: { 'Idempotency-Key': crypto.randomUUID() } });
     return parseProjectWorkflowSetup(response.data);
 }
 

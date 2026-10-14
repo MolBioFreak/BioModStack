@@ -13,7 +13,6 @@ import hashlib
 import mimetypes
 import os
 import shutil
-import stat
 import sys
 import tempfile
 from collections import defaultdict
@@ -113,13 +112,12 @@ def _safe_relative_path(value: object, *, label: str) -> str:
 
 def _contained_file(root: Path, relative_path: str, *, label: str) -> Path:
     safe = _safe_relative_path(relative_path, label=label)
-    candidate = root.joinpath(*PurePosixPath(safe).parts)
+    root = root.resolve(strict=True)
+    candidate = root.joinpath(*PurePosixPath(safe).parts).resolve(strict=True)
     try:
         candidate.relative_to(root)
     except ValueError as exc:
         raise FinalizationError(f"{label} escapes the native root: {safe!r}") from exc
-    if candidate.is_symlink():
-        raise FinalizationError(f"{label} may not be a symlink: {safe!r}")
     if not candidate.is_file():
         raise FinalizationError(f"missing {label}: {safe}")
     return candidate
@@ -131,41 +129,6 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def _request_owned_path(
-    request_root: Path,
-    relative_value: object,
-    *,
-    label: str,
-    expect_directory: bool = False,
-) -> Path:
-    relative = _safe_relative_path(relative_value, label=label)
-    root_metadata = request_root.lstat()
-    if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(root_metadata.st_mode):
-        raise FinalizationError("canonical request root must be a real directory")
-    candidate = request_root
-    metadata = root_metadata
-    for index, component in enumerate(PurePosixPath(relative).parts):
-        candidate = candidate / component
-        try:
-            metadata = candidate.lstat()
-        except OSError as exc:
-            raise FinalizationError(f"missing {label}: {relative}") from exc
-        if stat.S_ISLNK(metadata.st_mode):
-            raise FinalizationError(f"{label} may not contain a symlink: {relative}")
-        if metadata.st_uid != root_metadata.st_uid:
-            raise FinalizationError(f"{label} is not request-owned: {relative}")
-        if index < len(PurePosixPath(relative).parts) - 1 and not stat.S_ISDIR(
-            metadata.st_mode
-        ):
-            raise FinalizationError(f"{label} has a non-directory component: {relative}")
-    if expect_directory:
-        if not stat.S_ISDIR(metadata.st_mode):
-            raise FinalizationError(f"{label} is not a directory: {relative}")
-    elif not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-        raise FinalizationError(f"{label} is not an unaliased regular file: {relative}")
-    return candidate
 
 
 def _validate_execution_receipt(
@@ -414,24 +377,19 @@ def _validate_group_cardinality(coordinates: Sequence[Mapping[str, Any]]) -> Non
             )
 
 
-def _validate_native_tree(native_root: Path) -> list[str]:
+def _validate_native_tree(native_root: Path, *, require_ledger: bool = True) -> list[str]:
     if not native_root.is_dir():
         raise FinalizationError(f"native root does not exist: {native_root}")
     files: list[str] = []
-    inodes: dict[tuple[int, int], str] = {}
+    native_root = native_root.resolve(strict=True)
     for path in sorted(native_root.rglob("*")):
-        if path.is_symlink():
+        resolved = path.resolve(strict=True)
+        if not resolved.is_relative_to(native_root):
             raise FinalizationError(f"native tree contains a path escape symlink: {path}")
         if path.is_file():
-            relative = path.relative_to(native_root).as_posix()
-            inode = (path.stat().st_dev, path.stat().st_ino)
-            if inode in inodes:
-                raise FinalizationError(
-                    f"native tree contains hardlink alias paths: {inodes[inode]}, {relative}"
-                )
-            inodes[inode] = relative
-            files.append(relative)
-    missing = sorted(_LEGACY_REQUIRED - set(files))
+            files.append(path.relative_to(native_root).as_posix())
+    required = _LEGACY_REQUIRED if require_ledger else _LEGACY_REQUIRED - {"cm_output_coordinate_ledger_v1.json"}
+    missing = sorted(required - set(files))
     if missing:
         raise FinalizationError(f"missing required legacy artifacts: {missing}")
     by_basename: dict[str, list[str]] = defaultdict(list)
@@ -933,11 +891,12 @@ def _semantic_role(relative_path: str, coordinate_paths: set[str]) -> str:
     return "preprocess"
 
 
-def finalize(
+def _finalize(
     request_path: Path,
     native_root: Path,
     output: Path,
     snapshot_path: Path,
+    *, prepared_native: bool = False,
 ) -> None:
     request_path = request_path.resolve()
     native_root = native_root.resolve()
@@ -981,7 +940,11 @@ def finalize(
     )
     try:
         copied_native = temporary / "native"
-        shutil.copytree(native_root, copied_native)
+        if prepared_native:
+            os.replace(native_root, copied_native)
+            native_root = copied_native
+        else:
+            shutil.copytree(native_root, copied_native)
         sidecar_root = temporary / "canonical_sidecars"
         sidecar_root.mkdir()
 
@@ -1186,15 +1149,34 @@ def finalize(
         raise
 
 
+def finalize(request_path: Path, native_root: Path, output: Path,
+             snapshot_path: Path, ledger_root: Path | None = None) -> None:
+    """Publish one native closure; old already-bound native trees still work."""
+    if ledger_root is None:
+        return _finalize(request_path, native_root, output, snapshot_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # This independent closure is the durable final payload, not an additional
+    # ledger-attachment snapshot. Move it into publication after validation.
+    with tempfile.TemporaryDirectory(prefix=".cm-closure-", dir=output.parent) as stage:
+        combined = Path(stage) / "native"
+        _validate_native_tree(native_root, require_ledger=False)
+        shutil.copytree(native_root, combined)
+        for name in ("cm_output_coordinate_ledger_v1.json", "execution_receipt.json",
+                     "cm_native_file_ledger_v1.json"):
+            _copy_file_bytes(ledger_root / name, combined / name)
+        _finalize(request_path, combined, output, snapshot_path, prepared_native=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--native-root", type=Path, required=True)
+    parser.add_argument("--ledger-root", type=Path)
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     try:
-        finalize(args.request, args.native_root, args.out, args.snapshot)
+        finalize(args.request, args.native_root, args.out, args.snapshot, args.ledger_root)
     except (FinalizationError, ContractValidationError, OSError) as exc:
         parser.exit(2, f"ConforNets canonical finalization failed: {exc}\n")
     print(f"Wrote canonical ConforNets manifests to {args.out}")

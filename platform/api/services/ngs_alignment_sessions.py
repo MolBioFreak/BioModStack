@@ -297,11 +297,6 @@ def _cached_snapshot_locked(expected_sha256: str, expected_size: int) -> BinaryI
     return cast(BinaryIO, _SnapshotLease(snapshot, expected_sha256))
 
 
-def _cached_snapshot(expected_sha256: str, expected_size: int) -> BinaryIO | None:
-    with _snapshot_cache_condition:
-        return _cached_snapshot_locked(expected_sha256, expected_size)
-
-
 def _evict_for_reservation_locked(required_size: int) -> bool:
     while (
         _snapshot_cache_bytes + _snapshot_inflight_bytes + required_size > SNAPSHOT_CACHE_MAX_BYTES
@@ -423,44 +418,45 @@ def _uncached_artifact_snapshot(path: Path, expected_size: int, expected_sha256:
         source.close()
 
 
-def _uncached_artifact_snapshot(path: Path, expected_size: int, expected_sha256: str) -> BinaryIO:
-    """An oversized artifact uses bounded-memory disk staging, not cache admission."""
-    source = _open_regular_file_no_symlinks(path)
-    snapshot = tempfile.TemporaryFile(mode="w+b")
+def _borrow_retained_artifact(path: Path, expected_size: int, expected_sha256: str, *, retained: bool = False) -> BinaryIO | None:
+    """Borrow only existing NGS custody owners, not arbitrary read-only uploads.
+
+    The caller still authorizes the artifact and supplies its recorded identity.
+    The descriptor owns the read lifetime, even if the retained name is removed.
+    Legacy writable custody leaves continue through the snapshot implementation.
+    """
+    absolute = Path(os.path.abspath(path))
+    if not retained:
+        return None
+    # This is only an optimization hint: the opened descriptor is checked again
+    # below. Legacy writable artifacts use the original single-open snapshot
+    # path, including its resolver-to-open replacement protection.
+    try:
+        if absolute.stat().st_mode & 0o222:
+            return None
+    except OSError:
+        return None
+    source = _open_regular_file_no_symlinks(absolute)
     try:
         before = os.fstat(source.fileno())
+        if before.st_mode & 0o222:
+            source.close()
+            return None
         if before.st_size != expected_size:
             raise AlignmentSessionError("artifact integrity size mismatch")
-        # A reflink is an independent CoW snapshot and avoids copying large BAMs.
-        try:
-            fcntl.ioctl(snapshot.fileno(), 0x40049409, source.fileno())  # FICLONE
-        except OSError:
-            copied = 0
-            while copied <= expected_size:
-                chunk = source.read(min(SNAPSHOT_CHUNK_BYTES, expected_size + 1 - copied))
-                if not chunk:
-                    break
-                snapshot.write(chunk)
-                copied += len(chunk)
-        snapshot.seek(0)
-        if os.fstat(snapshot.fileno()).st_size != expected_size:
-            raise AlignmentSessionError("artifact integrity size mismatch")
         digest = hashlib.sha256()
-        size = 0
-        while chunk := snapshot.read(SNAPSHOT_CHUNK_BYTES):
+        while chunk := source.read(SNAPSHOT_CHUNK_BYTES):
             digest.update(chunk)
-            size += len(chunk)
-        if size != expected_size or digest.hexdigest() != expected_sha256:
+        after = os.fstat(source.fileno())
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+        ) or digest.hexdigest() != expected_sha256:
             raise AlignmentSessionError("artifact integrity digest mismatch")
-        snapshot.flush()
-        readonly = os.fdopen(os.open(f"/proc/self/fd/{snapshot.fileno()}", os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)), "rb")
-        snapshot.close()
-        return readonly
+        source.seek(0)
+        return source
     except BaseException:
-        snapshot.close()
-        raise
-    finally:
         source.close()
+        raise
 
 
 def open_verified_artifact_snapshot(
@@ -468,10 +464,18 @@ def open_verified_artifact_snapshot(
     *,
     expected_size: int,
     expected_sha256: str,
+    retained: bool = False,
 ) -> BinaryIO:
-    """Return a private exact-byte snapshot bound to the declared digest."""
+    """Borrow completed, authorized read-only artifacts; snapshot legacy mutable input.
+
+    ``retained`` is set by the existing governed artifact resolver, not clients.
+    It supplies publisher lifetime authority; mode alone is never sufficient.
+    """
     if expected_size < 0 or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
         raise AlignmentSessionError("artifact integrity metadata is invalid")
+    borrowed = _borrow_retained_artifact(path, expected_size, expected_sha256, retained=retained)
+    if borrowed is not None:
+        return borrowed
     if expected_size > SNAPSHOT_CACHE_MAX_BYTES:
         return _uncached_artifact_snapshot(path, expected_size, expected_sha256)
     try:
@@ -1160,6 +1164,7 @@ def _fasta_contigs(
         reference,
         expected_size=expected_size,
         expected_sha256=expected_sha256,
+        retained=True,
     )
     try:
         contigs, _normalized_reference = _fasta_contigs_from_handle(handle)
@@ -1192,14 +1197,15 @@ def _validate_alignment_bundle(
             index_sha256, index_size = _sha256_file_and_size(index)
         if reference_sha256 is None or reference_size is None:
             reference_sha256, reference_size = _sha256_file_and_size(reference)
-        bam_snapshot = open_verified_artifact_snapshot(bam, expected_size=bam_size, expected_sha256=bam_sha256)
+        bam_snapshot = open_verified_artifact_snapshot(bam, expected_size=bam_size, expected_sha256=bam_sha256, retained=True)
         snapshots.append(bam_snapshot)
-        index_snapshot = open_verified_artifact_snapshot(index, expected_size=index_size, expected_sha256=index_sha256)
+        index_snapshot = open_verified_artifact_snapshot(index, expected_size=index_size, expected_sha256=index_sha256, retained=True)
         snapshots.append(index_snapshot)
         reference_snapshot = open_verified_artifact_snapshot(
             reference,
             expected_size=reference_size,
             expected_sha256=reference_sha256,
+            retained=True,
         )
         snapshots.append(reference_snapshot)
         bam_path = _descriptor_path(bam_snapshot.fileno())
@@ -1906,20 +1912,104 @@ def _sequence_manifest_candidates(job_root: Path, input_mode: str) -> tuple[Path
     return (canonical, job_root / "qc_manifest.json")
 
 
+# These are the existing modules/ngs and pooled workflow publishDir owners,
+# not the job's work directory or an unrestricted recursive files endpoint.
+_NATIVE_OUTPUT_DIRECTORIES = (
+    "assembly", "align", "methylation", "multimer_qc",
+    "pooled_reference_assignment", "comparison_panel", "basecall", "demux",
+    "fastq_qc", "verification",
+)
+
+
+def _native_artifact_kind(path: Path) -> str:
+    if path.name == "wf-clone-validation-report.html":
+        return "clone_report"
+    if path.name.endswith(".final.fasta"):
+        return "consensus"
+    if path.name.endswith(".bam.bai"):
+        return "alignment_bai"
+    if path.suffix == ".bam":
+        return "alignment_bam"
+    return path.stem
+
+
+def _native_package_artifacts(job_id: str, job_root: Path, *, exclude: set[str] | None = None) -> list[dict[str, Any]]:
+    """Expose retained native publication, without claiming QC verification.
+
+    IDs bind Job, relative path and observed bytes. No generated manifest, new
+    database owner or success gate is needed to download a native result.
+    The existing no-follow digest/snapshot owners check every served leaf.
+    """
+    artifacts = []
+    for source in _NATIVE_OUTPUT_DIRECTORIES:
+        directory = job_root / source
+        if not directory.exists() or directory.is_symlink():
+            continue
+        for parent, directories, filenames in os.walk(directory, followlinks=False):
+            directories[:] = sorted(name for name in directories
+                                    if not name.startswith(".") and not (Path(parent) / name).is_symlink())
+            for filename in sorted(filenames):
+                path = Path(parent) / filename
+                # Published descriptors already own these identities. Do not
+                # rehash large BAMs merely to discard the duplicate descriptor.
+                if exclude and path.relative_to(job_root).as_posix() in exclude:
+                    continue
+                if filename.startswith(".") or path.is_symlink() or not path.is_file():
+                    continue
+                descriptor = _package_artifact_descriptor(
+                    job_id, job_root, path, kind=_native_artifact_kind(path), source=source,
+                )
+                descriptor.pop("_path")
+                descriptor["filename"] = filename
+                artifacts.append(descriptor)
+    return artifacts
+
+
+def native_igv_references(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project native co-published BAM/FASTA pairs to job-scoped IGV URLs.
+
+    This is a viewer configuration, not a sequence-QC verification session.
+    In particular a clone final assembly is not assumed to be its BAM reference.
+    """
+    by_path = {a.get("relative_path"): a for a in artifacts if a.get("state") == "present"}
+    configurations = []
+    for name, directory, bam, reference in (
+        ("primary", "align", "aligned.bam", "reference.fasta"),
+        ("dimer_candidates", "multimer_qc", "dimer_candidates.aligned.bam", "dimer_reference.fasta"),
+        ("intended_pool", "pooled_reference_assignment", "pooled_assignment.bam", "combined_intended_reference.fasta"),
+    ):
+        paths = [f"{directory}/{leaf}" for leaf in (bam, bam + ".bai", reference, reference + ".fai")]
+        if not all(path in by_path for path in paths):
+            continue
+        alignment, index, fasta, fai = [by_path[path] for path in paths]
+        tracks = [{"name": name, "type": "alignment", "format": "bam",
+                   "url": alignment["url"], "indexURL": index["url"]}]
+        methylation = by_path.get("methylation/methylation.bed")
+        if name == "primary" and methylation:
+            tracks.append({"name": "Methylation", "type": "annotation", "format": "bed",
+                           "url": methylation["url"]})
+        configurations.append({"name": name,
+                               "reference": {"fastaURL": fasta["url"], "indexURL": fai["url"]},
+                               "tracks": tracks})
+    return configurations
+
+
 def build_ngs_package_artifacts(
     job_id: str,
     *,
-    source_reference_sha256: str,
-    workflow_id: str,
-    input_mode: str,
-    source_input_path: str | Path,
+    source_reference_sha256: str = "",
+    workflow_id: str = "",
+    input_mode: str = "",
+    source_input_path: str | Path = "",
+    native_outputs: bool = False,
+    include_native_outputs: bool = False,
     results_dir: str | Path | None = None,
     job_output_dir: str | Path | None = None,
     pinned_root_descriptor: bool = False,
     published_artifacts: list[dict[str, Any]] | None = None,
     verify_source_input: bool = False,
 ) -> list[dict[str, Any]]:
-    """Build a digest-bound inventory from canonical persisted NGS manifests."""
+    """Build content-bound artifacts from canonical manifests or native publication."""
     from services.sequence_qc_manifest import SequenceQcManifestError, load_sequence_qc_manifest
 
     safe_job_id, job_root = _safe_job_root(
@@ -1928,6 +2018,19 @@ def build_ngs_package_artifacts(
         job_output_dir,
         pinned_root_descriptor=pinned_root_descriptor,
     )
+    if native_outputs or include_native_outputs:
+        if native_outputs:
+            canonical = [dict(artifact) for artifact in published_artifacts or []]
+        else:
+            canonical = build_ngs_package_artifacts(
+                job_id, source_reference_sha256=source_reference_sha256,
+                workflow_id=workflow_id, input_mode=input_mode, source_input_path=source_input_path,
+                results_dir=results_dir, job_output_dir=job_output_dir,
+                pinned_root_descriptor=pinned_root_descriptor, published_artifacts=published_artifacts,
+                verify_source_input=verify_source_input,
+            )
+        declared = {item["relative_path"] for item in canonical if item.get("relative_path")}
+        return canonical + _native_package_artifacts(safe_job_id, job_root, exclude=declared)
     if re.fullmatch(r"[0-9a-f]{64}", source_reference_sha256) is None:
         raise AlignmentSessionError("authorized source reference identity is required")
     if published_artifacts is not None:
@@ -2322,14 +2425,6 @@ def _derived_metadata(
 
 def _rank_read(source_sha256: str, read_id: str) -> str:
     return hashlib.sha256(f"{source_sha256}\0{read_id}".encode("utf-8")).hexdigest()
-
-
-def _record_sort_key(read: Any) -> tuple[int, int, str, int]:
-    return (
-        read.reference_id if read.reference_id >= 0 else 2**31,
-        read.reference_start if read.reference_start >= 0 else 2**31,
-        read.query_name or "", read.flag,
-    )
 
 
 _BOUNDED_BAM_WRITER = r"""
@@ -2964,14 +3059,6 @@ def _alignment_presentation_generation_slot() -> Iterator[None]:
             yield
         finally:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-
-
-def _serialize_alignment_presentation_generation(function: Any) -> Any:
-    @wraps(function)
-    def wrapped(*args: Any, **kwargs: Any) -> Any:
-        with _alignment_presentation_generation_slot():
-            return function(*args, **kwargs)
-    return wrapped
 
 
 def _load_trusted_presentation(
@@ -3719,7 +3806,7 @@ def _iter_sam_lines(
     try:
         if bam_sha256 is None or bam_size_bytes is None:
             bam_sha256, bam_size_bytes = _sha256_file_and_size(bam)
-        bam_snapshot = open_verified_artifact_snapshot(bam, expected_size=bam_size_bytes, expected_sha256=bam_sha256)
+        bam_snapshot = open_verified_artifact_snapshot(bam, expected_size=bam_size_bytes, expected_sha256=bam_sha256, retained=True)
         snapshots.append(bam_snapshot)
         command = [*samtools, "view"]
         if primary_only:
@@ -3731,6 +3818,7 @@ def _iter_sam_lines(
                 index,
                 expected_size=index_size_bytes,
                 expected_sha256=index_sha256,
+                retained=True,
             )
             snapshots.append(index_snapshot)
             command.extend(["-X", _descriptor_path(bam_snapshot.fileno()), _descriptor_path(index_snapshot.fileno())])

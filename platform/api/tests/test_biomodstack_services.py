@@ -391,19 +391,22 @@ def test_runtime_port_settings_preserve_profile_and_save_dev_and_prod_ports(tmp_
 
 def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "biomodstack"
-    policy_path = (
-        project_root
-        / "platform"
-        / "api"
-        / "config"
-        / "ont_signal_workbench"
-        / "runtime_policy_v1.json"
-    )
-    policy_path.parent.mkdir(parents=True)
-    policy_path.write_text(
-        '{"runtime_id":"sha256:' + ("a" * 64) + '","oci_digest":"sha256:' + ("a" * 64) + '"}',
-        encoding="utf-8",
-    )
+    policy_root = project_root / "platform/api/config/ont_signal_workbench"
+    policy_root.mkdir(parents=True)
+    policies = {
+        "SQUIGUALISER": ("runtime_policy_v1.json", "a" * 64),
+        "SLOW5TOOLS": ("raw_signal_runtime_policy_v1.json", "b" * 64),
+        "SQUIGULATOR": ("squigulator_runtime_policy_v1.json", "c" * 64),
+        "SQUIGUALISER_COMPARISON": ("comparison_render_runtime_policy_v1.json", "d" * 64),
+    }
+    for key, (filename, digest) in policies.items():
+        (policy_root / filename).write_text(
+            '{"runtime_id":"sha256:' + digest + '","oci_digest":"sha256:' + digest + '"}',
+            encoding="utf-8",
+        )
+        # A service refresh uses the release policy, not stale caller selectors.
+        monkeypatch.setenv(f"BMS_ONT_{key}_IMAGE", f"sha256:{'e' * 64}")
+        monkeypatch.setenv(f"BMS_ONT_{key}_IMAGE_DIGEST", "e" * 64)
     monkeypatch.setattr(
         services,
         "install_profile_snapshot",
@@ -434,10 +437,13 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
     assert "Environment=BMS_COLABFOLD_DB=/srv/biomodstack/colabfold_db" in units[services.API_SERVICE]
     assert "Environment=BMS_WEIGHTS=/srv/biomodstack-dev/weights" not in units[services.API_SERVICE]
     assert "Environment=BMS_COLABFOLD_DB=/srv/biomodstack-dev/colabfold_db" not in units[services.API_SERVICE]
+    assert "BMS_ONT_BLOW5_CONVERSION_QUALIFIED" not in units[services.API_SERVICE]
     assert "Environment=BMS_ONT_LIVE_CONVERSION_ENABLED=1" in units[services.API_SERVICE]
     assert "Environment=BMS_ONT_RAW_SIGNAL_RETENTION_POLICY=pod5_and_blow5" in units[services.API_SERVICE]
-    assert f"Environment=BMS_ONT_SQUIGUALISER_IMAGE=sha256:{'a' * 64}" in units[services.API_SERVICE]
-    assert f"Environment=BMS_ONT_SQUIGUALISER_IMAGE_DIGEST={'a' * 64}" in units[services.API_SERVICE]
+    for owner in (services.API_SERVICE, services.DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE):
+        for key, (_, digest) in policies.items():
+            assert f"Environment=BMS_ONT_{key}_IMAGE=sha256:{digest}" in units[owner]
+            assert f"Environment=BMS_ONT_{key}_IMAGE_DIGEST={digest}" in units[owner]
     assert "ExecStartPre=/usr/bin/mkdir -p /srv/biomodstack-dev" in units[services.API_SERVICE]
     assert "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18279" in units[services.FRONTEND_SERVICE]
     assert "Environment=BMS_DEV_WEB_HOST_PORT=18278" in units[services.FRONTEND_SERVICE]
@@ -938,6 +944,21 @@ def test_render_user_units_support_container_runtime_mode(tmp_path: Path) -> Non
     assert services.FRONTEND_SERVICE not in target_unit
 
 
+@pytest.mark.parametrize("runtime_mode", ["dev", "container"])
+def test_install_retains_candidate_settings_but_retires_dev_raw_image_pins(tmp_path: Path, monkeypatch, runtime_mode: str) -> None:
+    user_dir = tmp_path / "systemd"
+    dropin = user_dir / f"{services.API_SERVICE}.d" / "zzzzzzzz-ont-exact-candidate.conf"
+    dropin.parent.mkdir(parents=True)
+    retained = "[Service]\nEnvironment=BMS_ONT_EXTERNAL_MOVE_BAM_ROOT=/retained/bam\nEnvironment=BMS_ONT_RAW_SIGNAL_RETENTION_POLICY=pod5_and_blow5\n"
+    original = retained + "Environment=BMS_ONT_SLOW5TOOLS_IMAGE=sha256:old\nEnvironment=BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST=old\n"
+    dropin.write_text(original)
+    monkeypatch.setattr(services, "ensure_development_proxy_identity", lambda: None)
+    monkeypatch.setattr(services, "render_user_units", lambda *args, **kwargs: {services.API_SERVICE: "[Service]\n"})
+    for _ in range(2):
+        services.install_user_units(project_root=tmp_path, systemd_dir=user_dir, runtime_mode=runtime_mode)
+        assert dropin.read_text() == (retained if runtime_mode == "dev" else original)
+
+
 def test_install_user_units_writes_expected_files(tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     user_dir = tmp_path / "user-systemd"
@@ -992,12 +1013,16 @@ def test_install_dev_units_creates_and_preserves_project_proxy_identity(tmp_path
     assert len(values["BMS_CM_TRUSTED_PROXY_SECRET"]) >= 43
     assert values["BMS_DEV_API_PROXY_SECRET"] == values["BMS_CM_TRUSTED_PROXY_SECRET"]
 
-    services.install_user_units(
-        project_root=tmp_path / "repo",
-        systemd_dir=systemd_dir,
-        runtime_mode="dev",
-    )
-    assert identity_path.read_bytes() == first
+    retained = first + b"# Local input settings\nBMS_ONT_EXTERNAL_POD5_ROOT=/retained/pod5\nBMS_ONT_RAW_SIGNAL_STAGING_ROOT=/retained/staging\n"
+    identity_path.write_bytes(retained + b"BMS_ONT_SLOW5TOOLS_IMAGE=sha256:old\nBMS_ONT_SLOW5TOOLS_IMAGE_DIGEST=old\nBMS_ONT_BLOW5_CONVERSION_QUALIFIED=1\n")
+    for _ in range(2):
+        services.install_user_units(
+            project_root=tmp_path / "repo",
+            systemd_dir=systemd_dir,
+            runtime_mode="dev",
+        )
+        assert identity_path.read_bytes() == retained
+        assert identity_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_rotate_log_file_bounds_append_only_service_logs(tmp_path: Path) -> None:

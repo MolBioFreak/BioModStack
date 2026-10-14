@@ -136,7 +136,7 @@ async def test_download_completion_has_no_connection_and_preserves_existing_fenc
         await settle(controller)
         async with factory() as session:
             metadata = (await session.get(ExecutionTarget, 'vast:1')).provider_metadata
-            if change == 'none':
+            if change in {'none', 'lease'}:
                 assert metadata['preload']['phase'] == 'source_download_ready'
                 assert metadata['artifact_inventory']['artifacts']
             else:

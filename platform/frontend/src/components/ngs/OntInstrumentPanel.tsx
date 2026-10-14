@@ -28,6 +28,8 @@ import {
 import { jobPollingInterval } from '../../lib/queryPolling';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
 
+import { rawSignalWaveformPoints } from './RawReadInspector';
+
 const RAW_WAVEFORM_POLL_ATTEMPTS = 130;
 
 interface OntInstrumentPanelProps {
@@ -362,17 +364,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
         },
     });
 
-    const waveformPoints = useMemo(() => {
-        const samples = waveform?.state === 'ready' ? waveform.samples : null;
-        if (!samples?.length) return '';
-        const min = Math.min(...samples);
-        const max = Math.max(...samples);
-        return samples.map((value, index) => {
-            const x = samples.length > 1 ? (index * 600) / (samples.length - 1) : 0;
-            const y = max > min ? 118 - ((value - min) * 116) / (max - min) : 60;
-            return `${x},${y}`;
-        }).join(' ');
-    }, [waveform]);
+    const waveformPoints = useMemo(() => rawSignalWaveformPoints(waveform), [waveform]);
 
     const inspectWaveform = async (representationId: string) => {
         if (!effectiveSelectedRunGeneration || !waveformReadId.trim()) return;
@@ -557,12 +549,12 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
             </div>
 
             {domainIntentBlocker ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Run intent disabled: {domainIntentBlocker}</p> : null}
-            {instrumentEvidenceError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Current instrument evidence is unavailable after a refresh failure. Intent validation is disabled until a fresh device and protocol response succeeds.</p> : null}
+            {instrumentEvidenceError ? <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">Device or protocol status could not be refreshed. Run validation is unavailable until both reload successfully.</p> : null}
 
             {reconnectMk1d.isPending || reconnectMk1d.data || reconnectMk1d.isError ? (
                 <div className="rounded-xl border border-cyan-500/40 bg-cyan-500/10 p-4 text-sm text-cyan-50">
-                    <div className="font-semibold">Recovery receipt</div>
-                    {reconnectMk1d.isPending ? <p className="mt-1">Recovery request is in progress. Waiting for the bounded MinKNOW and host-agent stages.</p> : null}
+                    <div className="font-semibold">Reconnect result</div>
+                    {reconnectMk1d.isPending ? <p className="mt-1">Reconnecting MinKNOW and the host agent…</p> : null}
                     {reconnectMk1d.data ? (
                         <div className="mt-2 space-y-1 text-xs">
                             <div>Receipt: {reconnectMk1d.data.receipt.receipt_id} · {reconnectMk1d.data.receipt.status}</div>
@@ -574,7 +566,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                                 : <div>Mk1D is not confirmed connected until a post-recovery device status is observed with no connection error.</div>}
                         </div>
                     ) : null}
-                    {reconnectMk1d.isError ? <p className="mt-1 text-amber-100">Reconnect request did not produce a safe receipt. Review the local API status and helper installation.</p> : null}
+                    {reconnectMk1d.isError ? <p className="mt-1 text-amber-100">Reconnect failed. Check the local API and reconnect helper.</p> : null}
                 </div>
             ) : null}
 
@@ -606,7 +598,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                     {selectedSample ? (
                         <div className="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs text-[var(--text-secondary)]">
                             <div>Stable sample ID sent as existing <code>sample_id</code>: <span className="break-all font-mono text-[var(--text-primary)]">{selectedSample.id}</span></div>
-                            <div className="mt-1">Immutable current sample revision ID (context evidence only; not an invented request field): <span className="break-all font-mono text-[var(--text-primary)]">{selectedSample.current_revision_id}</span></div>
+                            <div className="mt-1">Sample revision (for reference): <span className="break-all font-mono text-[var(--text-primary)]">{selectedSample.current_revision_id}</span></div>
                         </div>
                     ) : null}
                     <label className="block text-xs font-semibold text-[var(--text-secondary)]">Experiment group (exact Domain Experiment ID)
@@ -621,7 +613,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
             <div className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
                 <div>
                     <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Register existing POD5</h3>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Select one server-governed POD5. BMS records its exact bytes and keeps the source unchanged.</p>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Select an existing POD5 to register. The source file stays unchanged.</p>
                 </div>
                 {externalPod5CandidatesQuery.isError ? <p role="alert" className="text-sm text-amber-100">Existing POD5 candidates are unavailable: {errorMessage(externalPod5CandidatesQuery.error, 'unknown candidate-list failure')}</p> : null}
                 <select

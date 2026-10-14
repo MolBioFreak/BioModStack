@@ -90,9 +90,13 @@ def test_source_archive_reuse_private_trees_and_rebuild_corruption(tmp_path, mon
     cached = data / 'remote-execution/source-archives' / (revision + '.tar.gz')
     cached.write_bytes(b'corrupt')
     third = tmp_path / 'attempt3'
-    assert bundle._staged_source_archive(repo, data, revision, third) == digest
+    with pytest.raises(bundle.RemoteBundleError, match='Cached source archive changed'):
+        bundle._staged_source_archive(repo, data, revision, third)
+    assert not third.joinpath('workflow.nf').exists()
+    recovered = tmp_path / 'attempt4'
+    assert bundle._staged_source_archive(repo, data, revision, recovered) == digest
     assert len(archives) == 2
-    assert third.joinpath('workflow.nf').read_text() != first.joinpath('workflow.nf').read_text()
+    assert recovered.joinpath('workflow.nf').read_text() != first.joinpath('workflow.nf').read_text()
 
 
 def test_source_extraction_does_not_hold_shared_revision_lock(tmp_path, monkeypatch):

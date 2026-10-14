@@ -570,13 +570,13 @@ async def test_actual_job_compiler_no_original_prewarm_provision_and_repeated_ex
                                                 native_invocation=job.native_invocation)
         attempts.append(prepared)
         assert len(archive_calls) == 1  # launch reused the verified warm archive
-        assert len(extract_calls) == len(attempts)  # private extraction at launch only
+        assert not extract_calls  # controller streams archived member inventory, no hash tree
         assert len(prepared.runtime_images) == 1
         image = prepared.runtime_images[0]
         assert len(image.aliases) == 1
         assert not any(record.relative_path.endswith('.sif') for record in prepared.envelope.files)
         await cache.stage_cached_bundle(connection=target, bundle=prepared)
-        for transfer in (*bundle.uncached_runtime_transfers(prepared), *prepared.input_transfers):
+        for transfer in prepared.input_transfers:
             destination = Path(transfer.remote_destination)
             destination.parent.mkdir(parents=True, exist_ok=True)
             if transfer.source.is_dir():
@@ -632,12 +632,13 @@ async def test_actual_job_compiler_no_original_prewarm_provision_and_repeated_ex
     assert not any(path == str(explicit) for path in uploads[count:])
     listing = next(record for record in retry.envelope.files
                    if record.relative_path == 'runtime/.bms-runtime-images.json')
-    # The only object this attempt stages before failing is its own authenticated
-    # runtime listing, which the helper verifies by digest; no cache object is
-    # ingested, materialized or replaced.
+    # Private relocation configs/listing never populate shared objects, including
+    # when a corrupt image interrupts staging before the existing execute boundary.
     staged = [row['artifacts'] for row in calls[call_count:] if row['action'] == 'ingest_many']
-    assert staged == [[{'sha256': listing.sha256, 'size_bytes': listing.size_bytes}]]
-    assert len(uploads) == count + 1
+    assert staged == []
+    assert uploads[count:] == [str(t.source) for t in bundle.uncached_runtime_transfers(retry)]
+    listing_path = Path(retry.remote_runtime_dir) / '.bms-runtime-images.json'
+    assert hashlib.sha256(listing_path.read_bytes()).hexdigest() == listing.sha256
 
 
 def _publish_process(root, item, source):

@@ -96,6 +96,17 @@ class ProtocolReviewRequest(ControlBinding):
     note: Annotated[str, Field(max_length=4000)] | None = None
     stage_id: Identity
     action_id: Identity | None = None
+    source_occurrence_id: Identity | None = None
+    measurements: dict[str, list[JsonValue]] | None = None
+
+    @field_validator("measurements")
+    @classmethod
+    def native_measurements(cls, value):
+        if value is not None:
+            from bioxp_method_calibration import CALIBRATION
+            from bioxp_method_native import validate
+            validate({"measurements": value}, CALIBRATION["measurement_response"])
+        return value
 
 
 class ProtocolObservedCommand(ProtocolWireModel):
@@ -227,6 +238,9 @@ class ProtocolRuntimeState(ProtocolWireModel):
     stage_states: dict[str, ProtocolStageState]
     events: list[ProtocolEvent]
     action_results: list[dict[str, JsonValue]]
+    pending_measurement: dict[str, JsonValue] | None = None
+    measurement_reviews: list[dict[str, JsonValue]] = Field(default_factory=list)
+    calibration_scopes: dict[str, str] = Field(default_factory=dict)
     workflow: ProtocolWorkflowState | None = None
     source_model: ProtocolSourceModel = Field(default_factory=ProtocolSourceModel)
 
@@ -251,6 +265,8 @@ class ProtocolPendingReview(ProtocolWireModel):
     stage_id: str | None
     action_id: str | None
     reason: str | None
+    source_occurrence_id: str | None = None
+    measurement_form: dict[str, JsonValue] | None = None
 
 
 class ProtocolOperator(ProtocolWireModel):

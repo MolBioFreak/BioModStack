@@ -20,7 +20,7 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 async function render(node: React.ReactNode) { await act(async () => root.render(node)); }
 async function click(button: HTMLElement) { await act(async () => button.click()); }
 
-it('exports all six formats through a viewport-bounded portal, with keyboard dismissal and focus return', async () => {
+it('shows six export options in a positioned portal, with keyboard dismissal and focus return', async () => {
     host.style.overflow = 'hidden';
     await render(<ExportDropdown sequenceData={sequence} />);
     const trigger = host.querySelector('button')!;

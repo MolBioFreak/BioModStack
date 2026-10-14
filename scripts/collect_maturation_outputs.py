@@ -7,7 +7,7 @@ import json
 import shutil
 from pathlib import Path
 
-from child_job_utils import component_runtime_enabled, complete_native_collection
+from child_job_utils import component_runtime_enabled, complete_native_collection, publish_collected_file
 
 
 def resolve_dest_name(path: Path, job_idx: int) -> Path:
@@ -79,7 +79,10 @@ def collect_files(output_dirs, patterns, subdirs, predicate=None, accepted=None)
                         continue
                     dest = resolve_dest_name(path, job_idx)
                     if not dest.exists():
-                        shutil.copy2(path, dest)
+                        if path.suffix.lower() == ".pdb":
+                            publish_collected_file(path, dest, published=True)
+                        else:
+                            shutil.copy2(path, dest)
                         collected.append(str(dest))
                         if accepted is not None:
                             accepted[str(output_dir)].append(path)

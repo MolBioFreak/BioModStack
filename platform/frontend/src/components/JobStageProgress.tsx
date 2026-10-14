@@ -6,6 +6,8 @@ const neutral = 'bg-[var(--bg-tertiary)] border-[var(--border-primary)] text-[va
 const styles: Record<ExecutionStage['state'], string> = {
     planned: neutral,
     unknown: neutral,
+    not_requested: neutral,
+    skipped: neutral,
     completed: 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400',
     running: 'bg-blue-500/20 border-blue-500/30 text-blue-400',
     awaiting_input: 'bg-amber-500/20 border-amber-500/30 text-amber-400',
@@ -23,12 +25,14 @@ export function JobStageProgress({ job, stagePayload, showState = false }: {
     return (
         <div className="mt-1 flex flex-wrap items-center gap-1 pb-1" role="list" aria-label="Job execution stages">
             {stages.map((stage, index) => {
-                const state = stage.state.replace('_', ' ');
+                const state = stage.state === 'not_requested' ? 'not run' : stage.state.replace('_', ' ');
                 // A native key is identity, not necessarily human-readable copy.
                 // Preserve an explicit server label and never change stage identity/state.
                 const label = stage.label !== stage.id ? stage.label
                     : stage.source === 'model' ? getModelDisplayName(stage.id) : getStageDisplayName(stage.id);
                 const detail = stage.state === 'unknown' ? 'Execution history unavailable; completion is unknown.'
+                    : stage.state === 'not_requested' ? 'This optional stage was not requested.'
+                    : stage.state === 'skipped' ? 'The recorded execution skipped this stage.'
                     : stage.state === 'planned' ? 'Planned stage; execution is not confirmed.'
                         : `Stage state: ${state}.`;
                 return (
@@ -37,7 +41,7 @@ export function JobStageProgress({ job, stagePayload, showState = false }: {
                         aria-label={`${label}: ${state}`}
                         title={`${label}: ${state}. ${detail} Source: ${stage.source}.`}
                         className={`rounded-[3px] border px-1.5 py-0.5 text-[10px] font-semibold ${styles[stage.state]}`}>
-                        {label}{showState ? ` · ${state}` : ''}
+                        {label}{showState || stage.state === 'not_requested' || stage.state === 'skipped' ? ` · ${state}` : ''}
                     </span>
                 );
             })}

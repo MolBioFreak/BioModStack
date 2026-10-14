@@ -57,7 +57,10 @@ def make_publication(tmp_path, monkeypatch, *, historical=True, count=2, job_id=
     root=tmp_path/'returned';root.mkdir()
     producer.write_publication(manifest_bytes=raw,native_candidates=native['candidates'],manifest=manifest,
         predictions_root=predictions,publication_dir=root/'run/protenix/producer',
-        published_structure_root='pdb_files/predictions')
+        published_structure_root='pdb_files/predictions', structure_publication_dir=task/'structure_publication')
+    shutil.copytree(task/'structure_publication', root/'pdb_files/predictions')
+    publication_path=next((root/'run/protenix/producer').glob('*/publication.json'))
+    bindings={item['producer_output_key']:item for item in json.loads(publication_path.read_bytes())['bindings']}
     settings=FrustraMPNNRequestedSettings.model_validate(dict(schema_name='frustrampnn_settings',
         schema_version=2,settings_value_origin='operator_request',batching_enabled=False,structures_per_job=25,
         protein_selection={'mode':'selected_residues','entities':[], 'regions':[], 'residues':[
@@ -69,8 +72,7 @@ def make_publication(tmp_path, monkeypatch, *, historical=True, count=2, job_id=
     outputs=[];requests=[]
     for i,(original,record) in enumerate(zip(native['candidates'],manifest['candidates'],strict=True)):
         source=predictions/original['producer_output_key']
-        published=root/'pdb_files/predictions'/source.name
-        published.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,published)
+        published=root/bindings[record['producer_output_key']]['published_relative_path']
         published.with_name(f'{sample}_summary_confidence_sample_{i}.json').write_text(
             json.dumps({'plddt':90.0,'ptm':0.9,'ranking_score':0.18,'has_clash':False}))
         identity={k:record[k] for k in ('producer_method','producer_sample','producer_rank','producer_output_key')}

@@ -16,11 +16,12 @@ vi.mock('../../src/structureViewer/runtime/createDirectMolstarEngineOwner', () =
                 return {
                     status: 'ok', generation: ownerStats.initialized,
                     plugin: {
+                        state: { data: { events: { changed: { subscribe: () => ({ unsubscribe: () => undefined }) } } } },
                         commands: { dispatch: async () => undefined },
                         canvas3d: { setProps: () => undefined, camera: { setState: () => undefined }, requestCameraReset: () => undefined },
                         managers: {
                             interactivity: { setProps: () => undefined },
-                            structure: { hierarchy: { current: { structures: [] } } },
+                            structure: { hierarchy: { current: { structures: [] } }, measurement: { state: { distances: [], angles: [], dihedrals: [] } } },
                         },
                         behaviors: { interaction: { click: { subscribe: () => ({ unsubscribe: () => undefined }) } } },
                         builders: {

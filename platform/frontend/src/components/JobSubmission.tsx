@@ -426,7 +426,13 @@ export function JobSubmission() {
 
     const handleTemplateCardSelect = (templateId: string) => {
         const retainedDeNovo = templateId === DE_NOVO_TEMPLATE ? deNovoDraftRef.current : undefined;
-        setClonedValues(retainedDeNovo ?? getDedicatedTemplateInitialValues(templateId));
+        const projectTemplate = projectSetup.setup
+            ? new URLSearchParams(projectSetup.setup.setup_destination.split('?')[1] ?? '').get('template')
+            : null;
+        const retainedProject = projectSetup.active && projectTemplate === templateId
+            ? projectDraftValues.editor_state ?? projectDraftValues
+            : undefined;
+        setClonedValues(retainedProject ?? retainedDeNovo ?? getDedicatedTemplateInitialValues(templateId));
         if (isDedicatedLauncherTemplate(templateId)) {
             setDedicatedTemplateVersion((prev) => prev + 1);
         }
@@ -495,10 +501,19 @@ export function JobSubmission() {
                     setSelectedTemplateId('antibody_denovo');
                     setClonedValues({ ...data.params, name: data.name, ...(data.mode !== undefined ? { mode: data.mode } : {}) });
                 }
-                else if (data.params?.mutagenesis_variants) {
+                else if ((data.params?.mutagenesis_variants || data.params?.mutation_variant)
+                    && ['boltz2', 'esmfold2', 'esmfold2_experimental'].includes(data.model_id)) {
                     setWizardMode('templates');
                     setSelectedTemplateId('mutagenesis');
-                    // Mutagenesis logic might need updates for pre-filling too, but focusing on Antibody first
+                    // Expanded child Jobs retain only their own sequence and components, not the library.
+                    const variants = data.params.mutation_variant && data.params.sequence
+                        ? [{ ...data.params.mutation_variant, name: data.params.sequence_name || data.params.mutation_variant.name,
+                            sequence: data.params.sequence, mutations: [], complex_components: data.params.complex_components }]
+                        : data.params.mutagenesis_variants;
+                    setClonedValues({ ...data.params, name: data.name, model_id: data.model_id,
+                        pred_method: ['esmfold2', 'esmfold2_experimental'].includes(data.model_id) ? 'esmfold2' : 'boltz',
+                        mutagenesis_variants: variants });
+                    setDedicatedTemplateVersion(version => version + 1);
                 }
                 // 3. Fold-CP reopens as a predictor inside Structure Prediction.
                 else if (data.model_id === 'boltz_cp_experimental') {
@@ -530,6 +545,8 @@ export function JobSubmission() {
                         name: data.name,
                         job_name: data.name,
                         source_job_id: data.source_job_id,
+                        execution_target_id: data.execution_target_id ?? null,
+                        execution_policy: data.execution_policy ?? { remote_result_policy: 'manual' },
                     });
                 }
                 else if (data.model_id === 'boltzgen' && data.mode === 'nanobody_binder' && !data.params?.native_generation_authoring) {
@@ -1682,6 +1699,10 @@ export function JobSubmission() {
                         <div className="space-y-4">
                             {selectedTemplateId === 'mutagenesis' ? (
                                 <MutagenesisTemplate
+                                    key={`mutagenesis:${dedicatedTemplateVersion}`}
+                                    initialValues={clonedValues}
+                                    onDraftChange={draft => { if (projectSetup.active) setProjectDraftValues(draft); }}
+                                    onOpenTemplateManager={openTemplateManager}
                                     onBack={handleDedicatedTemplateBack}
                                     onSubmit={async (jobNamePrefix, variants, predictorConfig) => {
                                         // MUTAGENESIS BATCH: Single API call with all variants
@@ -1807,6 +1828,7 @@ export function JobSubmission() {
                                     key={`molecular_dynamics:${dedicatedTemplateVersion}`}
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={molecularDynamicsInitialValues}
+                                    onDraftChange={projectSetup.active ? setProjectDraftValues : undefined}
                                     launchContextId={launchContextId}
                                     onOpenStructurePrediction={openMdStructurePrediction}
                                 />

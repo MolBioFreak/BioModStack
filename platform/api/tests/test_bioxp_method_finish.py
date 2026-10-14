@@ -87,7 +87,7 @@ def test_every_example_bound_without_hidden_defaults_and_export():
         assert len(r['provenance']) == len(entry['coverage'])
         assert emitted[-1]['kind'] == 'pause_review'
         documents.append(r['document'])
-    assert len(method_examples()) == 8
+    assert len(method_examples()) == 13
     for name, inputs in MECHANISMS.items():
         actions(compile_nodes(node(name, inputs)))
     actions(compile_nodes(node('liquid_recipe', {'recipe': recipe()})))

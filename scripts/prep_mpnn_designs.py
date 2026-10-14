@@ -204,6 +204,29 @@ def process_files(input_dir, out_dir, generic=False, request=None):
     
     logger.info(f"Processing complete. Added FIXED remarks for {total_fixed} residues across {len(pdb_files)} files.")
 
+def _retain_closed_result(source, destination):
+    """Retain a completed native leaf; replace names, never shared bytes."""
+    import errno
+    import os
+    import tempfile
+    import shutil
+    source, destination = Path(source), Path(destination)
+    fd, name = tempfile.mkstemp(prefix=".result-", dir=destination.parent)
+    os.close(fd)
+    temporary = Path(name)
+    temporary.unlink()
+    try:
+        try:
+            os.link(source.resolve(strict=True), temporary)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            shutil.copyfile(source, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def canonical_results(input_dir, out_dir):
     """Bind native metrics by exact payload.design, retaining their bytes.
 
@@ -232,7 +255,7 @@ def canonical_results(input_dir, out_dir):
         raise ValueError('native ProteinMPNN structure/metadata membership mismatch')
     output.mkdir(parents=True, exist_ok=True)
     for name, pdb in pdbs.items():
-        shutil.copyfile(pdb, output / pdb.name)
+        _retain_closed_result(pdb, output / pdb.name)
         shutil.copyfile(metadata[name], output / (name + '.json'))
 
 

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { PipetteValue } from './BioXpPipetteResults';
 
 import {
     bioXpErrorText,
@@ -7,6 +8,7 @@ import {
     type BioXpPipetteApplicationOperation,
     type BioXpPipetteApplicationPlanRequest,
     type BioXpPipetteChannel,
+    type BioXpPipetteReadbackChannel,
     type BioXpPipetteHardwareEvidence,
     useBioXpPipetteApplicationStatus,
     usePlanBioXpPipetteApplication,
@@ -44,7 +46,7 @@ const PHYSICAL_ACTION_IDS = [
 ] as const;
 
 const PHYSICAL_CONTROLS = [
-    'Load tip physically',
+    'Assign source tip type / location (host only)',
     'Move to waste physically',
     'Detect fluid physically',
     'Lift pipette head (Z)',
@@ -67,8 +69,8 @@ const validHardwarePressure = (evidence: BioXpPipetteHardwareEvidence | null | u
         : null
 );
 
-function ChannelCard({ channelId, channel }: { channelId: 0 | 1 | 2 | 3; channel?: BioXpPipetteChannel }) {
-    if (!channel) {
+function ChannelCard({ channelId, channel, readback }: { channelId: 0 | 1 | 2 | 3; channel?: BioXpPipetteChannel; readback?: BioXpPipetteReadbackChannel }) {
+    if (!channel && !readback) {
         return (
             <article data-pipette-channel={channelId} className="rounded border border-slate-700 bg-slate-950/60 p-3 text-xs">
                 <h4 className="font-semibold text-slate-200">Channel {channelId + 1}</h4>
@@ -79,20 +81,30 @@ function ChannelCard({ channelId, channel }: { channelId: 0 | 1 | 2 | 3; channel
         );
     }
 
-    const tip = validHardwareTip(channel.hardware_tip_status);
-    const pressure = validHardwarePressure(channel.hardware_pressure);
-    const diagnosis = channel.oem_diagnosis ?? (channel.oem_error_queue.length > 0 ? channel.oem_error_queue.join(', ') : 'none');
+    const tip = validHardwareTip(channel?.hardware_tip_status);
+    const pressure = validHardwarePressure(channel?.hardware_pressure);
+    const diagnosis = channel?.oem_diagnosis ?? (channel?.oem_error_queue.length ? channel.oem_error_queue.join(', ') : 'none');
     return (
         <article data-pipette-channel={channelId} className="rounded border border-slate-700 bg-slate-950/60 p-3 text-xs">
             <h4 className="font-semibold text-slate-200">Channel {channelId + 1}</h4>
-            <p className={channel.available ? 'text-cyan-200' : 'text-amber-300'}>{channel.available ? 'Transport available' : 'Transport unavailable'}</p>
-            <p className="mt-2 text-slate-300">Software record: {channel.software_initialized ? 'initialized' : 'not initialized'}; tip {channel.software_tip_loaded ? 'loaded' : 'not loaded'}</p>
-            <p className="text-slate-300">Hardware tip readback: {tip === null ? 'No valid hardware readback' : tip ? 'loaded' : 'not loaded'}</p>
-            <p className="text-slate-300">Hardware pressure: {pressure === null ? 'No valid hardware readback' : pressure}</p>
+            <p className={channel?.available ? 'text-cyan-200' : 'text-amber-300'}>{channel?.available ? 'Transport available' : 'Transport unavailable'}</p>
+            <p className="mt-2 text-slate-300">Software record: {!channel ? 'not reported' : `${channel.software_initialized ? 'initialized' : 'not initialized'}; tip ${channel.software_tip_loaded ? 'loaded' : 'not loaded'}`}</p>
+            {readback ? <div data-returned-hardware>
+                <p>Returned hardware query · semantic ok {String(readback.semantic_ok)}</p>
+                <p>Measured tip presence: {readback.tip.ok === true && typeof readback.tip.tip_loaded === 'boolean' ? readback.tip.tip_loaded ? 'loaded' : 'not loaded' : 'unknown / invalid'}</p>
+                <p>Pressure · raw: {readback.pressure?.ok === true && typeof readback.pressure.pressure === 'number' ? readback.pressure.pressure : 'unknown / invalid'}</p>
+                {(['firmware', 'status', 'tip', 'pressure', 'data'] as const).map(field => <details key={field}>
+                    <summary>{field === 'data' ? 'Optional data sweep' : field}</summary>
+                    <PipetteValue value={readback[field]} />
+                </details>)}
+            </div> : <>
+                <p className="text-slate-300">Hardware tip readback: {tip === null ? 'No valid hardware readback' : tip ? 'loaded' : 'not loaded'}</p>
+                <p className="text-slate-300">Hardware pressure: {pressure === null ? 'No valid hardware readback' : pressure}</p>
+            </>}
             <details className="mt-1 text-slate-300"><summary>Channel details</summary><p>Diagnosis/error queue: {diagnosis}</p>
-            <p className="text-slate-400">Liquid/front/rear air: {channel.liquid_level_ul} / {channel.front_air_level_ul} / {channel.rear_air_level_ul} µL</p>
-            <p className="text-slate-400">Last command: {channel.last_command ?? 'none'}</p>
-            <p className="text-slate-400">Report type: {channel.hardware_truth_level}</p></details>
+            <p className="text-slate-400">Liquid/front/rear air: {channel?.liquid_level_ul ?? 'unknown'} / {channel?.front_air_level_ul ?? 'unknown'} / {channel?.rear_air_level_ul ?? 'unknown'} µL</p>
+            <p className="text-slate-400">Last command: {channel?.last_command ?? 'none'}</p>
+            <p className="text-slate-400">Report type: {channel?.hardware_truth_level ?? 'unavailable'}</p></details>
         </article>
     );
 }
@@ -134,7 +146,7 @@ export function BioXpPipetteControlPanel({ visible = true, generation = 0, conne
     );
     const physicalInputsFor = (control: typeof PHYSICAL_CONTROLS[number]): Record<string, unknown> => {
         switch (control) {
-            case 'Load tip physically':
+            case 'Assign source tip type / location (host only)':
                 return { action: 'load' };
             case 'Move to waste physically':
                 return { location_id: 'WASTE_BIN' };
@@ -209,21 +221,21 @@ export function BioXpPipetteControlPanel({ visible = true, generation = 0, conne
                         key={channelId}
                         channelId={channelId}
                         channel={pipettes?.channels.find((channel) => channel.channel === channelId)}
+                        readback={!readback.detached && !readback.identityConflict ? readback.data?.channels.find(channel => channel.channel === channelId) : undefined}
                     />
                 ))}
             </div>
 
-            <details className="mt-3"><summary className="cursor-pointer font-semibold">Hardware checks & advanced controls</summary>
             <div className="mt-3 rounded border border-cyan-800/60 bg-cyan-950/20 p-3 text-xs" data-pipette-active-readback>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                         <h4 className="font-semibold text-cyan-100">Active hardware readback</h4>
-                        <p className="text-slate-400">Queries the hardware now; does not refresh the cached report above.</p>
+                        <p className="text-slate-400">Returned hardware fields appear above, separately from cached software records. No pressure units are inferred.</p>
                     </div>
                     <div className="flex items-center gap-3">
                         <label className="text-slate-300"><input type="checkbox" checked={includeData} onChange={(event) => setIncludeData(event.target.checked)} /> Include data sweep</label>
-                        <button type="button" disabled={!connected || readback.isPending || Boolean(readback.submission)} onClick={() => readback.mutate({ include_data: includeData })} className="rounded bg-cyan-700 px-3 py-1 text-white disabled:opacity-50">
-                            {readback.isPending ? 'Reading hardware…' : 'Read live hardware'}
+                        <button type="button" disabled={!connected || readback.isPending} onClick={() => readback.submission ? readback.newOperation({ include_data: includeData }) : readback.mutate({ include_data: includeData })} className="rounded bg-cyan-700 px-3 py-1 text-white disabled:opacity-50">
+                            {readback.isPending ? 'Reading hardware…' : readback.submission ? 'Read hardware again' : 'Read live hardware'}
                         </button>
                     </div>
                 </div>
@@ -238,16 +250,16 @@ export function BioXpPipetteControlPanel({ visible = true, generation = 0, conne
                 )}
                 {readback.error && <p className="mt-2 text-red-300">Readback failed: {bioXpErrorText(readback.error)}</p>}
                 <DirectLiquidEvidence owner={readback} />
-                {readback.submission && <button type="button" disabled={!connected || readback.isPending} onClick={() => readback.newOperation({ include_data: includeData })}>New operation — read hardware</button>}
             </div>
 
             <dl className="mt-3 grid gap-2 text-xs text-slate-300 sm:grid-cols-2 xl:grid-cols-3">
-                <div><dt className="text-slate-500">Allow to stop</dt><dd>{pipettes ? String(pipettes.allow_to_stop) : 'unavailable'}</dd></div>
+                <div><dt className="text-slate-500">Allow to stop</dt><dd>{pipettes?.allow_to_stop == null ? 'unavailable' : String(pipettes.allow_to_stop)}</dd></div>
                 <div><dt className="text-slate-500">Group error</dt><dd>{pipettes?.last_error ? `Group error: channel ${pipettes.last_error.channel + 1} · code ${pipettes.last_error.error_code}` : 'Group error: none reported'}</dd></div>
                 <div><dt className="text-slate-500">Group transaction</dt><dd>Last transaction: {transactionOutcome ?? 'unavailable'}</dd></div>
                 <div><dt className="text-slate-500">Receipt evidence</dt><dd>{pipettes?.latest_receipt ? `Latest receipt: ${pipettes.latest_receipt.operation} · ${pipettes.latest_receipt.receipt_id}` : 'Latest receipt: unavailable'}</dd></div>
             </dl>
 
+            <details className="mt-3"><summary className="cursor-pointer font-semibold">Other native tools & software tip selection</summary>
             <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
                 {PHYSICAL_CONTROLS.map((label) => {
                     const actionId = physicalActionIdFor(label);
@@ -259,7 +271,7 @@ export function BioXpPipetteControlPanel({ visible = true, generation = 0, conne
                             type="button"
                             data-physical-pipette-control
                             disabled={!connected || catalogLoading || invokePending || !enabled}
-                            title={enabled ? 'Robot-owned physical primitive; not the full pipette-panel workflow' : reason}
+                            title={enabled ? label === 'Assign source tip type / location (host only)' ? 'Host-only source type/location assignment; no physical pickup' : 'Robot-owned physical primitive; not the full pipette-panel workflow' : reason}
                             onClick={() => dispatchPhysical(label)}
                             className={enabled
                                 ? 'rounded border border-amber-600 bg-amber-800 px-2 py-2 text-xs text-amber-50 hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-35'
@@ -315,7 +327,6 @@ export function BioXpPipetteControlPanel({ visible = true, generation = 0, conne
                 <button type="button" disabled={!connected || planner.isPending || Boolean(planner.submission)} onClick={() => submitPlan()} className="mt-3 rounded bg-amber-700 px-3 py-1 text-xs text-white disabled:opacity-50">
                     {planner.isPending ? 'Building plan…' : 'Build no-motion plan'}
                 </button>
-                <DirectLiquidEvidence owner={planner} />
                 {planner.submission && <button type="button" disabled={!connected || planner.isPending} onClick={() => submitPlan(true)}>New operation — build plan</button>}
             </details>
 
@@ -337,6 +348,8 @@ export function BioXpPipetteControlPanel({ visible = true, generation = 0, conne
             </div>
 
             </details>
+            {planner.isPending && <p role="status">Building no-motion plan…</p>}
+            <DirectLiquidEvidence owner={planner} />
             {localError && <p className="mt-2 text-xs text-red-300">{localError}</p>}
             {status.error && <p className="mt-2 text-xs text-red-300">Status unavailable: {bioXpErrorText(status.error)}</p>}
             {planner.error && <p className="mt-2 text-xs text-red-300">Plan failed: {bioXpErrorText(planner.error)}</p>}

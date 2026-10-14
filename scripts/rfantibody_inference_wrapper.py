@@ -14,6 +14,70 @@ from certain target proteins crash scipy.Rotation.from_matrix.
 import os
 import sys
 
+
+def seed_resume_output(source, destination, *, prefix, num_designs, immutable=False):
+    """No-clobber seed; raw task output never supplies shared writable inodes.
+
+    `immutable` is for a publication owner, not a cautious-mode assertion. The
+    native attempted range still uses the historical PDB *count*, including
+    sparse names. All possible collisions in that range remain private.
+    """
+    import errno
+    import fcntl
+    import shutil
+    from pathlib import Path
+    source, destination = Path(source).resolve(), Path(destination).resolve()
+    if source == destination:
+        return
+    destination.mkdir(parents=True, exist_ok=True)
+    incoming = list(source.rglob('*'))
+    # Destination wins, exactly as cp -an; count the resulting top-level PDBs.
+    names = {p.name for p in destination.glob(prefix + '_*.pdb') if p.is_file()}
+    names.update(p.name for p in source.glob(prefix + '_*.pdb')
+                 if p.is_file() and not (destination / p.name).exists())
+    start = len(names)
+    collisions = set()
+    for index in range(start, num_designs):
+        base = f'{prefix}_{index}'
+        collisions.update((base + '.pdb', base + '.trb',
+                           f'traj/{base}_Xt-1_traj.pdb', f'traj/{base}_pX0_traj.pdb'))
+    for path in incoming:
+        relative = path.relative_to(source)
+        target = destination / relative
+        if target.exists() or target.is_symlink():
+            continue
+        if path.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Only completed published structure/evidence leaves qualify. Unknown
+        # cache/log/control files and orphan TRBs are execution-private.
+        name = path.name
+        base = name.removesuffix('_Xt-1_traj.pdb').removesuffix('_pX0_traj.pdb') if relative.parts[0] == 'traj' else path.stem
+        complete = (source / (base + '.pdb')).is_file()
+        share = (immutable and complete and path.suffix in ('.pdb', '.trb')
+                 and relative.as_posix() not in collisions and not path.is_symlink())
+        if share:
+            try:
+                os.link(path, target)
+                continue
+            except OSError as exc:
+                if exc.errno not in (errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.EMLINK):
+                    raise
+        with path.open('rb') as reader, target.open('xb') as writer:
+            try:
+                fcntl.ioctl(writer.fileno(), 0x40049409, reader.fileno())
+            except OSError:
+                shutil.copyfileobj(reader, writer)
+
+
+if '--bms-seed-output' in sys.argv:
+    # Existing module supplies a retained mutable task directory, not a
+    # published artifact. Never opt it into immutable hardlinks.
+    _, source, destination, prefix, count = sys.argv[1:]
+    seed_resume_output(source, destination, prefix=prefix, num_designs=int(count))
+    sys.exit(0)
+
 # Role-only export leaves all inference/rotation behavior exactly as the native
 # entrypoint. Unverified debug overlays run without inventing biological roles.
 if '--bms-role-export' in sys.argv:

@@ -293,7 +293,9 @@ async def run_workflow_job(job_id: str, lane: str) -> int:
         execution_params = strip_resource_execution_metadata(strip_execution_metadata(params))
         if authoritative_model_id == "nanopore":
             ngs_runtime_sif = str(os.getenv("BMS_NGS_RUNTIME_SIF") or "").strip()
-            if ngs_runtime_sif:
+            if ngs_runtime_sif and not (
+                execution_params.get("resume_work_dir") and execution_params.get("dorado_runtime_sif")
+            ):
                 execution_params["dorado_runtime_sif"] = ngs_runtime_sif
         await nextflow.launch_nextflow_job(
             job_id=job_id,

@@ -22,7 +22,7 @@ def _load_json(path: Path) -> dict:
 
 
 def _verify(path: Path, expected_hash: str, expected_size: int) -> str:
-    if path.is_symlink() or not path.is_file():
+    if not path.is_file():
         raise ValueError(f"{path.name} is not a regular input file")
     payload = path.read_bytes()
     if len(payload) != expected_size:

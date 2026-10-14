@@ -33,12 +33,45 @@ def _regenerable_bytecode(path):
     return source.is_file() and not source.is_symlink()
 
 
+def selected_support_root():
+    """Use the installer's concrete selection; retained current is legacy only."""
+    from .bundle import get_data_root
+    selected = os.environ.get('BMS_SUPPORT_PAYLOAD_RECEIPT')
+    if selected:
+        try:
+            receipt = json.loads(Path(selected).read_text())
+            path = Path(receipt['payload_root'])
+            if path.is_dir():
+                return path.resolve()
+        except (OSError, ValueError, KeyError, TypeError):
+            pass  # Optional representation does not create a new launch gate.
+    root = Path(os.environ.get('BMS_CM_API_RUNTIME_DIR') or get_data_root() / 'runtime/cm-api-python')
+    return (root if (root / 'support-payload.json').is_file() else root / 'current').resolve(strict=True)
+
+
+def support_receipt(root):
+    try:
+        receipt = json.loads((Path(root) / 'support-payload.json').read_text())
+        members = receipt['members']
+        digest = hashlib.sha256(json.dumps(members, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        if receipt.get('published_member_manifest_sha256') == digest:
+            return receipt
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return None
+
+
+def _member_identity(members, name, path):
+    row = members.get(name)
+    return (row['sha256'], row['size'], row['mode']) if row else (_digest(path), path.stat().st_size, path.stat().st_mode & 0o777)
+
+
 def _support_members(root):
     """Walk physical members once; authenticate internal aliases separately."""
     root = root.resolve()
     for path in sorted(root.rglob('*')):
         relative = path.relative_to(root).as_posix()
-        if relative == 'venv/.venv':
+        if relative in {'venv/.venv', 'support-payload.json', 'venv/.bms-support-payload.json'}:
             continue  # Existing host-only source-venv alias, never a worker member.
         if path.is_symlink():
             real = path.resolve(strict=True)
@@ -84,8 +117,7 @@ def project_runtime(remote_root, staging_root):
     jar = nxf_home / 'framework' / version / f'nextflow-{version}-one.jar'
     if not jar.is_file():
         raise CriticalRuntimeBlocked('Pinned Nextflow framework JAR is unavailable')
-    support = (Path(os.environ.get('BMS_CM_API_RUNTIME_DIR') or
-                    get_data_root() / 'runtime/cm-api-python') / 'current').resolve(strict=True)
+    support = selected_support_root()
     runner = Path(__file__).resolve().parents[2] / 'tools/bms_remote_worker.py'
     sources = [('runner/bms_remote_worker.py', runner), ('nextflow/nextflow', launcher), (jar_name, jar)]
     code_root = get_code_root().resolve()
@@ -93,6 +125,7 @@ def project_runtime(remote_root, staging_root):
     sources.append(('bin/bms-nextflow', code_root / 'platform/api/tools/bms_nextflow.sh'))
     sources.append(('nextflow/container-bin/singularity', code_root / 'platform/api/tools/bms_nextflow_singularity.py'))
     sources.append(('lib/bootstrap_worker.sh', Path(__file__).with_name('bootstrap_worker.sh')))
+    sources.append(('lib/proot-x86_64-4_8_0', code_root / 'containers/transport/proot/proot-x86_64-4_8_0'))
     for name in ('scripts/__init__.py', 'scripts/lib/__init__.py',
                  'scripts/lib/shared_runtime_images.py', 'scripts/lib/runtime_image_lifecycle.py',
                  'scripts/lib/runtime_image_views.py', 'scripts/lib/container_runtime.py'):
@@ -101,11 +134,13 @@ def project_runtime(remote_root, staging_root):
         sources.append(('lib/' + name, code_root / (
             'scripts/lib/__init__.py' if name == 'scripts/__init__.py' else name)))
     support_leaves = list(_leaves(support))
+    receipt = support_receipt(support)
+    members = {r['path']: r for r in receipt['members'] if r['kind'] == 'file'} if receipt else {}
     source = current_source_identity(get_code_root().resolve())
     identity = dict(source=source, remote_root=remote_root, requirements=requirements, version=version,
                     links=list(_links(support)),
-                    members=[(n, _digest(p), p.stat().st_size, p.stat().st_mode & 0o777)
-                             for n, p in sources + [('support-python/' + n, p) for n, p in support_leaves]])
+                    members=[(n, _digest(p), p.stat().st_size, p.stat().st_mode & 0o777) for n, p in sources]
+                        + [('support-python/' + n, *_member_identity(members, n, p)) for n, p in support_leaves])
     installation_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     generation = f'{remote_root}/managed-assets/v1/releases/{installation_id}'
     staging_root = Path(staging_root)
@@ -114,11 +149,16 @@ def project_runtime(remote_root, staging_root):
     # physical file enters the shared cache once, without another staging copy.
     for name, path in _leaves(relocated):
         sources.append(('support-python/' + name, path))
+    receipt = support_receipt(relocated)
+    members = {r['path']: r for r in receipt['members'] if r['kind'] == 'file'} if receipt else {}
     rows, transfers = [], []
     for name, path in sources:
-        row = dict(name=name, sha256=_digest(path), size_bytes=path.stat().st_size,
+        digest, size, mode = (_member_identity(members, name.removeprefix('support-python/'), path)
+                              if name.startswith('support-python/')
+                              else (_digest(path), path.stat().st_size, path.stat().st_mode & 0o777))
+        row = dict(name=name, sha256=digest, size_bytes=size,
                    mode=0o755 if name in {'bin/bms-container', 'bin/bms-nextflow',
-                                         'nextflow/container-bin/singularity'} else path.stat().st_mode & 0o777)
+                                         'nextflow/container-bin/singularity'} else mode)
         rows.append(row)
         transfers.append(CacheTransferArtifact(source=path, remote_destination=name,
                          sha256=str(row['sha256']), size_bytes=int(row['size_bytes']), mode=int(row['mode']), role='runtime'))

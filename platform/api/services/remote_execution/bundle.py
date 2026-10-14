@@ -99,17 +99,28 @@ def bind_resource_admission(bundle: PreparedRemoteBundle, admission: dict, *,
 
 
 def uncached_runtime_transfers(bundle: PreparedRemoteBundle) -> tuple[TransferPlan, ...]:
-    """Only destination-dependent support-python bypasses the shared cache."""
-    return tuple(transfer for transfer in bundle.runtime_transfers
-                 if transfer.remote_destination == bundle.remote_runtime_dir.rstrip('/') + '/support-python')
+    """Private generated metadata only; shared support bodies use the CAS path."""
+    private = []
+    for row in bundle.envelope.files:
+        if row.role != 'runtime' or row.link_target is not None or not row.mode & 0o222:
+            continue
+        destination = bundle.remote_runtime_dir.rstrip('/') + '/' + row.relative_path.removeprefix('runtime/')
+        matches = [t for t in bundle.runtime_transfers if destination == t.remote_destination
+                   or destination.startswith(t.remote_destination.rstrip('/') + '/')]
+        if len(matches) != 1:
+            raise RemoteBundleError('Private runtime file has ambiguous transport authority')
+        transfer = matches[0]
+        suffix = destination[len(transfer.remote_destination):].lstrip('/')
+        private.append(TransferPlan(transfer.source / suffix if suffix else transfer.source, destination))
+    return tuple(private)
 
 
 def cache_transfer_artifacts(bundle: PreparedRemoteBundle) -> tuple[CacheTransferArtifact, ...]:
     """Project the existing authoritative envelope, never a second model registry.
 
-    Relocated support-python contains destination-dependent bytes and symlinks;
-    it deliberately stays on the verified legacy transport path. Regular source,
-    workflow and model files share the ordinary byte-addressed cache protocol.
+    Relocated support-python bodies and internal links use the same cache path.
+    Small destination-dependent configs/listings travel privately; they do not
+    populate the shared payload cache. Source archives carry source members.
     Shared SIF identities/aliases come from the authenticated manifest and use the
     worker's shared-image store. Scientific readers pin canonical regular objects;
     semantic aliases exist only for compatible callers.
@@ -120,7 +131,7 @@ def cache_transfer_artifacts(bundle: PreparedRemoteBundle) -> tuple[CacheTransfe
         if (record.link_target is not None or relative.parts[0] not in {"source", "runtime"}
                 or record.role != relative.parts[0]):
             continue
-        if relative.parts[:2] == ("runtime", "support-python"):
+        if record.role == "runtime" and record.mode & 0o222:
             continue
         if relative.parts[0] == "source":
             # The archive carries every workflow/source leaf without thousands of SSH calls.
@@ -184,6 +195,10 @@ def current_source_identity(source_root: Path | None = None) -> tuple[str, str]:
 
 def resolve_job_result_contract(job: Any) -> dict[str, Any]:
     """Resolve the exact local ingestion contract bound into a remote attempt."""
+    if job.model_id == 'nanopore':
+        from services.ont_ngs_completion import ont_native_result_contract
+        params = job.params if isinstance(job.params, dict) else json.loads(job.params or '{}')
+        return ont_native_result_contract(job.model_id, job.mode, params)
     if job.model_id == 'caliby_experimental':
         from services.caliby_native import SUPPORTED_MODES, result_contract
         if job.mode in SUPPORTED_MODES:
@@ -220,6 +235,23 @@ def resolve_job_result_contract(job: Any) -> dict[str, Any]:
     ).model_dump(mode="json")
 
 
+def _source_archive_records(archive_path: Path, digest: str) -> list[RemoteFileRecord]:
+    """Inventory actual archived bytes without allocating an extracted hash tree."""
+    records = [_record_file(archive_path, 'source/' + archive_path.name, 'source',
+                            staged_sha256=digest)]
+    with tarfile.open(archive_path, 'r|*') as archive:
+        for member in archive:
+            path = PurePosixPath(member.name)
+            if path.is_absolute() or '..' in path.parts or not (member.isfile() or member.isdir()):
+                raise RemoteBundleError('Git archive contains an unsafe member')
+            if member.isfile():
+                with archive.extractfile(member) as stream:
+                    sha = hashlib.file_digest(stream, 'sha256').hexdigest()
+                records.append(RemoteFileRecord(relative_path='source/' + path.as_posix(),
+                    size_bytes=member.size, sha256=sha, role='source', mode=member.mode & 0o555))
+    return records
+
+
 def _safe_extract(archive_path: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     root = destination.resolve()
@@ -236,17 +268,35 @@ def _safe_extract(archive_path: Path, destination: Path) -> None:
         archive.extractall(destination, filter="fully_trusted")
 
 
+def _private_runtime_file(path: Path, relative: str) -> bool:
+    if relative in {'runtime/.bms-runtime-images.json',
+                    'runtime/data/ngs/wf-clone-validation/relocated.lock.json'}:
+        return True
+    if relative.startswith('runtime/support-python/'):
+        if path.name == 'pyvenv.cfg' or path.name in {'activate', 'activate.csh', 'activate.fish',
+                'activate.nu', 'activate.ps1', 'Activate.ps1', 'activate_this.py'}:
+            return True
+        if relative.startswith('runtime/support-python/venv/bin/'):
+            with path.open('rb') as stream:
+                header = stream.read(22)
+                return header.startswith(b"#!/bin/sh\n") and b"exec'" in header
+    return False
+
+
 def _record_file(
     path: Path,
     relative_path: str,
     role: Literal["source", "input", "runtime", "result", "log", "receipt"],
     *,
     staged_sha256: str | None = None,
+    input_inventory: dict | None = None,
 ) -> RemoteFileRecord:
+    from scripts.lib.portable_inputs import file_stamp
+    before = file_stamp(path) if input_inventory is not None else None
     if path.is_symlink() or not path.is_file():
         raise RemoteBundleError(f"Package input is not one regular file: {path}")
-    if role == "input" and path.stat().st_nlink != 1:
-        raise RemoteBundleError(f"Package input must be an unaliased regular file: {path}")
+    if role == "input" and path.stat().st_nlink != 1 and path.stat().st_mode & 0o222:
+        raise RemoteBundleError(f"Package writable input must be an unaliased regular file: {path}")
     if path.stat().st_mode & 0o7000:
         raise RemoteBundleError(f"Package file has an unapproved special mode: {path}")
     if role == 'runtime' and path.name == 'runtime.sif' and path.parent.parent.name == 'sha256':
@@ -256,12 +306,15 @@ def _record_file(
         digest = verify_image(path, path.parent.name)['sha256']
     else:
         digest = staged_sha256 if staged_sha256 is not None else _sha256_file(path)
+    if input_inventory is not None and before is not None and before == file_stamp(path):
+        input_inventory[str(path.resolve())] = (digest, before[4], before)
     return RemoteFileRecord(
         relative_path=relative_path,
         size_bytes=path.stat().st_size,
         sha256=digest,
         role=role,
-        mode=path.stat().st_mode & 0o777,
+        mode=(path.stat().st_mode & 0o777) if role != "runtime"
+             or _private_runtime_file(path, relative_path) else (path.stat().st_mode & 0o555),
     )
 
 
@@ -283,13 +336,38 @@ def _records_for_source(
     role: Literal["source", "input", "runtime", "result", "log", "receipt"],
     *,
     source_archive_sha256: str | None = None,
+    input_inventory: dict | None = None,
+    runtime_sources: dict | None = None,
 ) -> list[RemoteFileRecord]:
+    if role == 'runtime' and prefix.startswith(('runtime/weights/', 'weights/')):
+        # Native weight snapshots (including HF internal aliases) travel as
+        # concrete files. Only the manifest-bound path above may escape the
+        # selected tree into acquisition storage; never serialize host targets.
+        root = source.resolve(strict=True)
+        records = []
+        def visit(native, name, ancestry):
+            concrete = native.resolve(strict=True)
+            if concrete != root and not concrete.is_relative_to(root):
+                raise RemoteBundleError(f'Runtime package symlink escapes its release: {native}')
+            if concrete.is_dir():
+                if concrete in ancestry:
+                    raise RemoteBundleError(f'Runtime package symlink cycles: {native}')
+                for child in sorted(concrete.iterdir()):
+                    visit(child, name + '/' + child.name, ancestry | {concrete})
+            else:
+                records.append(_record_file(concrete, name, role))
+                if runtime_sources is not None:
+                    runtime_sources[("runtime-source", name)] = concrete
+        visit(source, prefix.rstrip('/'), set())
+        if not records:
+            raise RemoteBundleError(f'Required package directory is empty: {source}')
+        return records
     if source.is_symlink():
         if role != "runtime":
             raise RemoteBundleError(f"Package path cannot be a symlink: {source}")
         return [_record_runtime_symlink(source, prefix)]
     if source.is_file():
-        return [_record_file(source, prefix, role)]
+        return [_record_file(source, prefix, role, input_inventory=input_inventory)]
     if not source.is_dir():
         raise RemoteBundleError(f"Required package path is unavailable: {source}")
     records: list[RemoteFileRecord] = []
@@ -314,7 +392,7 @@ def _records_for_source(
                 if role == "source" and path == source / '.bms-source.tar.gz' else None)
             records.append(
                 _record_file(path, f"{prefix.rstrip('/')}/{path.relative_to(source).as_posix()}", role,
-                             staged_sha256=staged_sha256)
+                             staged_sha256=staged_sha256, input_inventory=input_inventory)
             )
     if not records:
         raise RemoteBundleError(f"Required package directory is empty: {source}")
@@ -342,6 +420,10 @@ def _under(path: Path, root: Path) -> bool:
 
 def _is_runtime_image(path: Path, relative: str) -> bool:
     """Only SIF runtime leaves use immutable references, never inputs/weights trees."""
+    # Nested clone .img files deliberately remain ordinary authenticated runtime
+    # leaves. Its native lock requires same-directory, non-symlink images; SIF CAS
+    # semantic aliases are symlinks. The regular artifact cache already dedupes
+    # and materializes these leaves without changing that native contract.
     return relative.lower().endswith(".sif") and path.is_file()
 
 
@@ -391,7 +473,7 @@ def verify_selected_preparation_inputs(plan, observed=None):
             descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             with os.fdopen(descriptor, 'rb') as stream:
                 before = os.fstat(stream.fileno())
-                if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > MAX_DOCUMENT_BYTES:
+                if not stat.S_ISREG(before.st_mode) or (before.st_nlink != 1 and before.st_mode & 0o222) or before.st_size > MAX_DOCUMENT_BYTES:
                     raise RemoteBundleError('Native preparation input is not a bounded regular file')
                 data = stream.read(MAX_DOCUMENT_BYTES + 1)
                 after = os.fstat(stream.fileno())
@@ -418,6 +500,8 @@ def _published_runtime_records(source: Path, prefix: str, *, publication=None, r
         rows = published_asset_rows(logical, index=publication, resolved=resolved)
     elif logical.startswith('containers/'):
         name = logical.removeprefix('containers/')
+        if not _is_runtime_image(source, name):
+            return None  # Nested regular .img leaves use their actual file records.
         path, digest = image_reference(name, get_container_dir().resolve())
         if source != path.resolve():
             if name not in IMAGE_SELECTORS:
@@ -446,9 +530,72 @@ def _published_runtime_records(source: Path, prefix: str, *, publication=None, r
         link_target=r.get('target')) for r in rows]
 
 
-def _runtime_records(source: Path, prefix: str, *, publication=None, resolved=None):
+def _selected_weight_members(source: Path, model_id: str, *, resolved=None):
+    """Resolve only exact registry-manifest layouts to their acquisition bodies.
+
+    Native names survive transport. A controller link target is never a worker
+    alias, and an arbitrary external symlink is not a selected acquisition.
+    """
+    if not source.exists():
+        return None  # Existing HF publication may supply bytes absent on this controller.
+    from model_registry import model_acquisition_plan
+    from services.runtime_acquisition import _layouts
+    from scripts.lib.pinned_weight_layout import _verify_tree
+    weights = get_weights_root().resolve()
+    # Resolve a selected directory alias, but keep a leaf's native name until
+    # the manifest authenticates its acquisition referent.
+    source = source.resolve(strict=True) if source.is_dir() else source.parent.resolve(strict=True) / source.name
+    for dependency, entries in _layouts(model_acquisition_plan(model_id)):
+        digest = hashlib.sha256(json.dumps({'dependency': dependency, 'members': sorted(
+            entries, key=lambda e: e['member_path'])}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        root = weights / 'layouts' / dependency['relative_path'] / digest
+        if source != root and not source.is_relative_to(root):
+            continue
+        key = ('pinned-weight-layout', str(root))
+        inventory = resolved.get(key) if resolved is not None else None
+        if inventory is None:
+            inventory = _verify_tree(root, entries, frozen=True, weights_root=weights)
+            inventory = {name: dict(row, source=(root / name).resolve(strict=True))
+                         for name, row in inventory.items()}
+            if resolved is not None:
+                resolved[key] = inventory
+        result = {}
+        for name, row in inventory.items():
+            native = root / name
+            if native == source or native.is_relative_to(source):
+                suffix = '' if native == source else native.relative_to(source).as_posix()
+                result[suffix] = (row['source'], row)
+        return result
+    return None
+
+
+def _runtime_records(source: Path, prefix: str, *, publication=None, resolved=None, model_id=None):
+    if prefix == 'runtime/support-python':
+        from .critical_runtime import support_receipt, _support_members
+        receipt = support_receipt(source)
+        members = {row['path']: row for row in receipt['members']} if receipt else {}
+        result = []
+        for name, path, target in _support_members(source):
+            relative = prefix + '/' + name
+            if target is not None:
+                result.append(_record_runtime_symlink(path, relative))
+            else:
+                result.append(_record_file(path, relative, 'runtime',
+                    staged_sha256=members.get(name, {}).get('sha256')))
+        return result
+    if prefix.startswith(('runtime/weights/', 'weights/')) and model_id is not None:
+        selected = _selected_weight_members(source, model_id, resolved=resolved)
+        if selected is not None:
+            records = []
+            for suffix, (concrete, row) in sorted(selected.items()):
+                name = prefix + ('/' + suffix if suffix else '')
+                records.append(RemoteFileRecord(relative_path=name, role='runtime',
+                    sha256=row['sha256'], size_bytes=row['size'], mode=0o400))
+                if resolved is not None:
+                    resolved[('runtime-source', name)] = concrete
+            return records
     rows = _published_runtime_records(source, prefix, publication=publication, resolved=resolved)
-    return rows if rows is not None else _records_for_source(source, prefix, 'runtime')
+    return rows if rows is not None else _records_for_source(source, prefix, 'runtime', runtime_sources=resolved)
 
 
 def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
@@ -484,7 +631,14 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
              'runtime_data': get_data_root().resolve()}
     prefixes = {'image': 'containers', 'weights': 'weights', 'database': 'data',
                 'reference_database': 'data', 'runtime_data': 'data'}
-    source_root = get_code_root().resolve()
+    source_root = (Path(params['code_root']).resolve()
+        if model_id == 'nanopore' and params.get('resume_work_dir') and params.get('code_root')
+        else get_code_root().resolve())
+    clone_paths = {}
+    if any(row.logical_id == 'runtime_data:ngs/wf-clone-validation/runtime.lock.json'
+           for row in plan.dependencies):
+        from native_components import ngs_clone_runtime_dependencies
+        _, clone_paths = ngs_clone_runtime_dependencies(params)
     assets = {}
     for dependency in plan.dependencies:
         if only_kinds is not None and dependency.kind not in only_kinds:
@@ -500,22 +654,31 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
             continue
         if dependency.kind == 'support_python':
             if include_support:
-                runtime = Path(os.getenv('BMS_CM_API_RUNTIME_DIR',
-                    str(get_data_root() / 'runtime/cm-api-python'))) / 'current'
-                assets['support-python'] = runtime.resolve()
+                from .critical_runtime import selected_support_root
+                assets['support-python'] = selected_support_root()
             continue
         if dependency.kind not in roots:
             raise RemoteBundleError('Unsupported declared runtime role: ' + dependency.kind)
         root = roots[dependency.kind]
         relative = dependency.relative_path
         selected = params.get(dependency.selector) if dependency.selector else None
-        if dependency.kind == 'image' and relative:
+        if dependency.logical_id in clone_paths:
+            path = clone_paths[dependency.logical_id]
+        elif dependency.kind == 'image' and relative:
             if relative in IMAGE_SELECTORS or not selected:
                 path, digest = image_reference(relative, root, params)
                 from .hf_assets import published_asset_rows
-                if digest is None and published_asset_rows('containers/' + relative, index=publication,
-                                                           resolved=resolved) is None:
-                    path = resolve_image(relative, root, params)
+                if digest is None:
+                    rows = published_asset_rows('containers/' + relative, index=publication,
+                                                resolved=resolved)
+                    if rows is None:
+                        path = resolve_image(relative, root, params)
+                    elif (len(rows) == 1 and rows[0]['name'] == 'containers/' + relative
+                          and rows[0].get('source') == str(path.resolve())):
+                        # Adoption records the physical source for legacy aliases.
+                        # Bind that owner-published path, not an arbitrary referent;
+                        # retain the no-follow/managed-storage checks below.
+                        path = Path(rows[0]['source'])
             else:
                 path = Path(str(selected)).expanduser()
         else:
@@ -530,16 +693,26 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
             if selected and path is not None:
                 selected_root = path
                 path = selected_root / member
-                if not path.resolve().is_relative_to(selected_root.resolve()):
+                if (not path.resolve().is_relative_to(selected_root.resolve())
+                        and not (dependency.kind == "weights" and _selected_weight_members(path, model_id, resolved=resolved))):
                     raise RemoteBundleError('Selected runtime dependency escapes selector root: ' + dependency.logical_id)
         if path is None or not path.is_absolute():
             raise RemoteBundleError('Selected runtime dependency has no managed binding: ' + dependency.logical_id)
         if dependency.kind == 'image' and (path.is_symlink() or any(parent.is_symlink() for parent in path.parents)):
             raise RemoteBundleError(f'Selected runtime image is not a no-follow path: {path}')
-        path = path.resolve()
+        # Preserve manifest-native weight names until their concrete inventory.
+        if dependency.kind != "weights":
+            path = path.resolve()
         allowed = (get_container_dir().resolve(), get_weights_root().resolve(), get_data_root().resolve(),
             Path(os.environ.get('BMS_RUNTIME_IMAGE_STORE') or get_container_dir() / '.image-store').resolve())
-        if not any(_under(path, allowed_root) for allowed_root in allowed):
+        # Lock/patch are source-owned; the selected framework JAR is supplied by
+        # the existing critical-runtime cache, which need not live under BMS_DATA.
+        clone_source_leaf = (dependency.logical_id in clone_paths and
+            (relative in {'ngs/wf-clone-validation/runtime.lock.json',
+                          'ngs/wf-clone-validation/compatibility.patch'}
+             and _under(path, source_root)
+             or (relative or '').startswith('ngs/wf-clone-validation/nxf-home/framework/')))
+        if not clone_source_leaf and not any(_under(path, allowed_root) for allowed_root in allowed):
             raise RemoteBundleError('Selected runtime dependency escapes managed storage: ' + dependency.logical_id)
         if not path.exists():
             raise RemoteBundleError('Required runtime asset is unavailable: ' + dependency.logical_id)
@@ -555,7 +728,8 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any], *,
 
 
 def verify_approved_native_inputs(job: Any, runtime_references: dict[str, dict[str, Any]],
-                                  input_hashes: dict[str, tuple[str, int]] | None = None) -> None:
+                                  input_hashes: dict[str, tuple[str, int]] | None = None,
+                                  input_inventory: dict | None = None) -> None:
     """Carry reviewed static byte/membership authority through shared dispatch.
 
     Prepared/generated additions retain their existing compiler/service authority;
@@ -574,7 +748,8 @@ def verify_approved_native_inputs(job: Any, runtime_references: dict[str, dict[s
         current = discover_native_input_references(request['model_id'], request['mode'],
             request['params'], (), output_dir=Path(request['output_dir']),
             allowed_roots=(get_data_root(), get_inputs_dir(), get_results_dir()),
-            yaml_loader=yaml.safe_load, runtime_references=runtime_references)
+            yaml_loader=yaml.safe_load, runtime_references=runtime_references,
+            input_inventory=input_inventory)
     except (KeyError, OSError, ValueError) as exc:
         raise RemoteBundleError('Approved native input closure is no longer available') from exc
     if _canonical_bytes(current) != _canonical_bytes(expected):
@@ -599,6 +774,11 @@ def _input_assets(
     selected_remote_attempt: str | None = None,
 ) -> list[tuple[Path, str]]:
     selected: dict[Path, str] = {}
+    if native_invocation.model_id == 'nanopore':
+        from scripts.lib.portable_inputs import NGS_OPTIONAL_INPUTS, selected_ngs_input_fields
+        active = selected_ngs_input_fields(native_invocation.mode, params)
+        params = {key: value for key, value in params.items()
+                  if key not in NGS_OPTIONAL_INPUTS or key in active}
     input_roots = (get_data_root().resolve(), get_inputs_dir().resolve(), get_results_dir().resolve())
     runtime_roots = [path for path in runtime_paths if path.is_dir()]
     system_roots = {get_weights_root().resolve(), get_container_dir().resolve()}
@@ -607,7 +787,8 @@ def _input_assets(
         system_roots.add(Path(params["runtime_image_store"]).resolve())
     destinations = {"work_dir", "out_dir", "out", "data_root", "code_root",
                     "weights_root", "container_dir", "msa_cache_dir", "cm_api_runtime_dir",
-                    "runtime_image_store", *(flag for flag, _ in IMAGE_SELECTORS.values())}
+                    "runtime_image_store", "wf_clone_nxf_home",
+                    *(flag for flag, _ in IMAGE_SELECTORS.values())}
     if native_invocation.model_id == 'bindcraft2':
         # The prepared tree is one native input. Its campaign destination is
         # writable output, never the read-only transported compilation folder.
@@ -736,6 +917,23 @@ def _input_assets(
         path = Path(reference["source_path"])
         digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
         selected.setdefault(path, f"{digest}/{path.name}")
+    if native_invocation.model_id == 'nanopore':
+        # Both native reference readers resolve declared FASTAs beside their
+        # manifest. Preserve that layout, not unrelated retained revisions.
+        from scripts.pooled_ont_reference_assignment import _safe_snapshot_relative_path
+        from scripts.lib.portable_inputs import _contained
+        for key in ('reference_set_manifest', 'comparison_panel_snapshot'):
+            if not params.get(key):
+                continue
+            manifest = _contained(params[key], input_roots)
+            document = json.loads(manifest.read_bytes())
+            snapshot = manifest.parent
+            prefix = hashlib.sha256(str(snapshot).encode()).hexdigest()[:16] + '/' + snapshot.name
+            selected[manifest] = prefix + '/' + manifest.name
+            for entry in document['entries']:
+                relative = _safe_snapshot_relative_path(entry['fasta_path'])
+                path = _contained(snapshot / relative, (snapshot,))
+                selected[path] = prefix + '/' + relative.as_posix()
     # CM owns sibling request/plan/registry and relative registered assets, not
     # a synthetic job-output alias. Preserve that layout below a trusted root.
     cm_roots = {Path(ref["source_path"]).parent for ref in discovered if ref["format"] == "cm-request"}
@@ -856,6 +1054,35 @@ def _rewrite_maturation_pdb_paths(value: str, path_map: dict[str, str]) -> str:
     return ','.join(_rewrite(part.strip(), path_map) for part in value.split(','))
 
 
+def _relocate_ngs_clone_lock(params, *, staging_root, remote_runtime, remote_source,
+                             nextflow_executable, expected_lock_sha256):
+    """Project only host-owned lock locations; retain every scientific identity."""
+    from native_components import ngs_clone_runtime_dependencies
+    from scripts.validate_wf_clone_runtime import resolve_lock_path, selected_images
+    _, paths = ngs_clone_runtime_dependencies(params)
+    original = paths['runtime_data:ngs/wf-clone-validation/runtime.lock.json']
+    lock_bytes = original.read_bytes()
+    if hashlib.sha256(lock_bytes).hexdigest() != expected_lock_sha256:
+        raise RemoteBundleError('Selected clone runtime lock changed during relocation')
+    lock = json.loads(lock_bytes)
+    prefix = remote_runtime + '/data/ngs/wf-clone-validation'
+    lock['patched_source']['path'] = prefix + '/source'
+    lock['compatibility_patch']['path'] = prefix + '/compatibility.patch'
+    lock['nextflow']['executable'] = nextflow_executable
+    lock['containers']['cache_dir'] = remote_runtime + '/containers/ngs/wf-clone-validation/images'
+    lock['containers']['images'] = selected_images(lock, params.get('wf_clone_assembly_tool') or 'flye')
+    for image in lock['containers']['images']:
+        if image.get('definition'):
+            definition = resolve_lock_path(original, image['definition'])
+            image['definition'] = _rewrite(str(definition), {str(get_code_root().resolve()): remote_source})
+    relocated = staging_root / 'wf-clone-relocated.lock.json'
+    relocated.write_bytes(_canonical_bytes(lock))
+    destination = prefix + '/relocated.lock.json'
+    return (TransferPlan(relocated, destination, origin=original),
+            _record_file(relocated, 'runtime/data/ngs/wf-clone-validation/relocated.lock.json', 'runtime'),
+            prefix + '/nxf-home', lock['nextflow']['version'])
+
+
 def compile_remote_dependencies(
     model_id: str, mode: str, command: list[str], *, native_invocation: NativeInvocation,
 ) -> tuple[list[str], dict[str, Any]]:
@@ -877,8 +1104,7 @@ def compile_remote_dependencies(
             'no local fallback or partial scientific execution was performed.'
         )
     params = native_invocation.native_parameters
-    from services.ont_ngs_contract import CANONICAL_ONT_WORKFLOWS, resolve_ont_workflow_alias
-    if resolve_ont_workflow_alias(model_id) in CANONICAL_ONT_WORKFLOWS:
+    if any(row.kind == 'image' and row.relative_path == 'dorado.sif' for row in plan.dependencies):
         # Dorado preflight rejects symlink runtime_sif. Pin the supported typed
         # selector explicitly rather than letting Nextflow choose our name alias.
         if not params.get("dorado_runtime_sif"):
@@ -888,6 +1114,20 @@ def compile_remote_dependencies(
         selected = params["dorado_runtime_sif"]
         if not isinstance(selected, str) or not Path(selected).is_absolute():
             raise RemoteBundleError("Dorado runtime SIF selector must be an absolute managed path")
+    if (any(row.logical_id == 'runtime_data:ngs/wf-clone-validation/runtime.lock.json'
+            for row in plan.dependencies) and not params.get('wf_clone_runtime_lock')):
+        selected = os.environ.get('BMS_WF_CLONE_RUNTIME_LOCK') or str(
+            get_code_root() / 'config/ngs/wf_clone_validation_v1.8.4.lock.json')
+        params['wf_clone_runtime_lock'] = selected
+        command.extend(['--wf_clone_runtime_lock', selected])
+    if any(row.selector == 'dorado_model_root' for row in plan.dependencies):
+        for key, value in {
+            'dorado_lock_manifest': str(get_code_root() / 'config/ngs/dorado_v2.1.2.lock.json'),
+            'dorado_model_root': str(get_weights_root() / 'dorado/2.1.2'),
+        }.items():
+            if not params.get(key):
+                params[key] = value
+                command.extend(['--' + key, value])
     # The compiler emits these shared system defaults even when their native
     # runtime role is not selected. Classify by the selected dependency closure,
     # never by top-level model or by containment in biological input storage.
@@ -945,14 +1185,14 @@ def compile_remote_dependencies(
 
 
 def _input_records(path: Path, prefix: str, *, native_invocation: NativeInvocation,
-                   output_dir: Path, generated_by_path=None) -> list[RemoteFileRecord]:
+                   output_dir: Path, generated_by_path=None, input_inventory=None) -> list[RemoteFileRecord]:
     """Check compiler bytes using the hashes already required for transfer."""
     if generated_by_path is None:
         generated_by_path = {bound: item.reference for item in native_invocation.generated_inputs
                              if (bound := (output_dir / item.relative_path).resolve()) == path
                              or path in bound.parents}
     unmatched = set(generated_by_path)
-    records = _records_for_source(path, prefix, "input")
+    records = _records_for_source(path, prefix, "input", input_inventory=input_inventory)
     for record in records:
         suffix = record.relative_path[len(prefix):].lstrip('/')
         bound = path / suffix if suffix else path
@@ -969,7 +1209,8 @@ def _input_records(path: Path, prefix: str, *, native_invocation: NativeInvocati
 def _write_portable_bindings(*, staging_root: Path, remote_attempt: str,
                             references: list[dict[str, Any]], input_transfers: list[TransferPlan],
                             input_records: list[RemoteFileRecord], remote_runtime: str,
-                            remote_results: str, shared_weights: str | None = None) -> tuple[TransferPlan, RemoteFileRecord]:
+                            remote_results: str, shared_weights: str | None = None,
+                            selected_inputs: dict[str, str] | None = None) -> tuple[TransferPlan, RemoteFileRecord]:
     """Seal placement separately, using the already-recorded transfer identities."""
     files = {}
     directories = {}
@@ -1027,6 +1268,15 @@ def _write_portable_bindings(*, staging_root: Path, remote_attempt: str,
                          source_path=source, sha256=record.sha256, size_bytes=record.size_bytes,
                          role="input", format=Path(source).suffix.lstrip(".") or "binary",
                          owner="native-invocation", lineage=[], selector=[])
+        for key, value in sorted((selected_inputs or {}).items(),
+                                 key=lambda item: len(item[1]), reverse=True):
+            selected = Path(value)
+            if key in {'reference_set_manifest', 'comparison_panel_snapshot'} and Path(source) != selected:
+                selected = selected.parent
+            if Path(source) == selected or selected in Path(source).parents:
+                suffix = Path(source).relative_to(selected).as_posix()
+                reference['selector'] = [key] + ([suffix] if suffix != '.' else [])
+                break
         bindings.append({"reference": reference, "path": destination})
     payload = {
         "schema": "bms.portable-input-bindings.v1",
@@ -1047,10 +1297,29 @@ def _write_portable_bindings(*, staging_root: Path, remote_attempt: str,
 
 
 def _relocate_python_runtime(source: Path, destination: Path, remote_destination: str) -> Path:
-    """Materialize a self-contained release and hash its final-path bytes later."""
+    """Project immutable bodies; only relocation-owned files get private bytes."""
     source = source.resolve()
-    shutil.copytree(source, destination, symlinks=True,
-                    ignore=lambda directory, names: [".venv"] if Path(directory) == source / "venv" and ".venv" in names else [])
+    from .critical_runtime import support_receipt
+    receipt = support_receipt(source)
+    changed = set()
+    def share(original, target):
+        original, target = Path(original), Path(target)
+        if original.stat().st_mode & 0o222:
+            # Legacy mutable installations require adoption by their installer.
+            # Never change their mode or expose a writable donor through links.
+            return shutil.copy2(original, target)
+        os.link(original, target)
+        return str(target)
+    shutil.copytree(source, destination, symlinks=True, copy_function=share,
+                    ignore=lambda directory, names: [n for n in names if n in {
+                        'support-payload.json', '.bms-support-payload.json'} or
+                        (n == '.venv' and Path(directory) == source / 'venv')])
+    # copytree preserves donor directory modes; these directories belong only
+    # to the projection and must permit private config replacement as non-root.
+    destination.chmod(0o700)
+    for directory in destination.rglob('*'):
+        if directory.is_dir() and not directory.is_symlink():
+            directory.chmod(0o700)
     mapping = {str(source): remote_destination}
     # Absolute internal links become relative so validation also works in staging.
     for original in sorted(source.rglob("*")):
@@ -1076,7 +1345,11 @@ def _relocate_python_runtime(source: Path, destination: Path, remote_destination
                     raise RemoteBundleError("Python base runtime is not contained in its managed release")
                 line = f"{key.strip()} = {translated}"
             lines.append(line)
+        changed.add(config.relative_to(destination).as_posix())
+        mode = config.stat().st_mode & 0o777
+        config.unlink()
         config.write_text("\n".join(lines) + "\n")
+        config.chmod(mode | 0o200)
     # A shell/Python prologue supports long or spaced remote interpreter paths.
     launcher = ("#!/bin/sh\n'''exec' " + shlex.quote(remote_destination + '/venv/bin/python')
                 + " \"$0\" \"$@\"\n' '''\n").encode()
@@ -1085,9 +1358,48 @@ def _relocate_python_runtime(source: Path, destination: Path, remote_destination
             continue
         with script.open("rb") as handle:
             first = handle.readline(4096)
-        if first.startswith(b"#!") and b"python" in first:
-            payload = script.read_bytes()
-            script.write_bytes(launcher + payload[len(first):])
+        activation = script.name in {'activate', 'activate.csh', 'activate.fish', 'activate.nu',
+                                     'activate.ps1', 'Activate.ps1', 'activate_this.py'}
+        if not first.startswith(b"#!") and not activation:
+            continue
+        payload = script.read_bytes()
+        if activation:
+            relocated = payload.replace(str(source / 'venv').encode(),
+                                        (remote_destination + '/venv').encode())
+        elif first.startswith(b"#!") and b"python" in first:
+            relocated = launcher + payload[len(first):]
+        else:
+            # Installer-owned /bin/sh trampoline may already contain the Python
+            # path on its second line. Never rewrite arbitrary module bodies.
+            lines = payload.splitlines(keepends=True)
+            for index in range(min(3, len(lines))):
+                lines[index] = lines[index].replace(str(source).encode(), remote_destination.encode())
+            relocated = b''.join(lines)
+        if relocated != payload:
+            changed.add(script.relative_to(destination).as_posix())
+            mode = script.stat().st_mode & 0o777
+            script.unlink()
+            script.write_bytes(relocated)
+            script.chmod(mode | 0o200)
+    if receipt:
+        members = []
+        for row in receipt['members']:
+            # Match the host-only source-venv alias omitted by copytree and
+            # link projection above; every other declared link must still exist.
+            if row['path'] == 'venv/.venv':
+                continue
+            row = dict(row)
+            path = destination / row['path']
+            if row['path'] in changed:
+                row.update(sha256=_sha256_file(path), size=path.stat().st_size,
+                           mode=path.stat().st_mode & 0o777)
+            elif row['kind'] == 'symlink':
+                row['target'] = os.readlink(path)
+            members.append(row)
+        receipt = dict(receipt, members=members, payload_root=str(destination))
+        receipt['published_member_manifest_sha256'] = hashlib.sha256(
+            json.dumps(members, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        (destination / 'support-payload.json').write_bytes(_canonical_bytes(receipt))
     return destination
 
 
@@ -1142,24 +1454,17 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
                     output.flush()
                     os.fsync(output.fileno())
                 expected = _sha256_file(temporary)
+                temporary.chmod(0o444)
                 os.replace(temporary, archive)
                 _SOURCE_ARCHIVE_DIGESTS[key] = expected
             finally:
                 temporary.unlink(missing_ok=True)
-        # Each attempt owns its archive as well as its writable extracted tree.
         staged = source_root / '.bms-source.tar.gz'
         source_root.mkdir(parents=True, exist_ok=False)
-        # Hash the bytes as they enter this private attempt; rereading the
-        # staged copy after copyfile adds a full archive pass to every warm run.
-        staged_digest = hashlib.sha256()
-        with archive.open('rb') as source, staged.open('xb') as destination:
-            for chunk in iter(lambda: source.read(1024 * 1024), b''):
-                destination.write(chunk)
-                staged_digest.update(chunk)
-        if staged_digest.hexdigest() != expected:
-            # Retry regenerates through Git; never extract mismatched private bytes.
+        if _sha256_file(archive) != expected:
             _SOURCE_ARCHIVE_DIGESTS.pop(key, None)
             raise RemoteBundleError('Cached source archive changed during staging')
+        os.link(archive, staged)
         os.utime(archive, None, follow_symlinks=False)
         _prune_source_archives(cache_root)
     # Only the shared archive/copy needs serialization. Extraction writes into
@@ -1170,6 +1475,53 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
     return expected
 
 
+def stage_retained_ont_source(source: SourceIdentity) -> Path:
+    """Recover a private ONT source tree through the existing archive owner."""
+    repo = get_code_root().resolve()
+    if _git(repo, 'rev-parse', f'{source.revision}^{{tree}}') != source.tree:
+        raise RemoteBundleError('Inherited source tree does not match the inherited revision')
+    data = get_data_root().resolve()
+    root = data / 'remote-execution' / 'staging' / str(uuid.uuid4()) / 'source'
+    _staged_source_archive(repo, data, source.revision, root)
+    return root
+
+
+def retained_ont_lock_bytes(source: SourceIdentity) -> bytes:
+    """Read the historical module's selected lock from the verified archive.
+
+    Only its path declaration is evaluated, not the module or another Python
+    interpreter. Completion needs two archive members, not a whole source tree.
+    """
+    import ast
+    import tempfile
+    repo = get_code_root().resolve()
+    if _git(repo, 'rev-parse', f'{source.revision}^{{tree}}') != source.tree:
+        raise RemoteBundleError('Inherited source tree does not match the inherited revision')
+    with tempfile.TemporaryDirectory(prefix='ont-lock-') as temporary:
+        root = Path(temporary) / 'source'
+        _staged_source_archive(repo, get_data_root().resolve(), source.revision, root, extract=False)
+        member = 'platform/api/services/ont_ngs_contract.py'
+        try:
+            with tarfile.open(root / '.bms-source.tar.gz', 'r:gz') as archive:
+                module_file = archive.extractfile(member)
+                if module_file is None:
+                    raise ValueError('Historical contract is not a file')
+                module = ast.parse(module_file.read())
+                declaration = next(node for node in module.body if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == 'DORADO_LOCK_PATH'
+                            for target in node.targets))
+                namespace = {'Path': Path, '__file__': str(root / member)}
+                exec(compile(ast.Module(body=[declaration], type_ignores=[]), member, 'exec'), namespace)
+                relative = namespace['DORADO_LOCK_PATH'].relative_to(root).as_posix()
+                lock_file = archive.extractfile(relative)
+                if lock_file is None:
+                    raise ValueError('Historical lock is not a file')
+                return lock_file.read()
+        except (KeyError, StopIteration, SyntaxError, NameError, AttributeError,
+                TypeError, ValueError, tarfile.TarError) as exc:
+            raise RemoteBundleError('Historical Dorado lock is unavailable or malformed') from exc
+
+
 def prepare_remote_bundle(
     *,
     job: Any,
@@ -1178,6 +1530,7 @@ def prepare_remote_bundle(
     native_invocation: NativeInvocation,
     environment: dict[str, str] | None = None,
     attempt_id: str | None = None,
+    cached_work_attempt_id: str | None = None,
 ) -> PreparedRemoteBundle:
     if not isinstance(native_invocation, NativeInvocation):
         raise RemoteBundleError("Remote bundling requires a NativeInvocation")
@@ -1209,6 +1562,13 @@ def prepare_remote_bundle(
         raise RemoteBundleError("Remote attempt identity is invalid")
     remote_root = str(target.remote_root).rstrip("/")
     remote_attempt = f"{remote_root}/attempts/{attempt_id}"
+    # Native cached resume shares only work + LevelDB/history, never the old
+    # attempt's launch/lease/PID state. Fresh computations keep private roots.
+    native_work_attempt = remote_attempt
+    if (cached_work_attempt_id and job.model_id == 'nanopore'
+            and (job.params or {}).get('resume_work_dir')):
+        uuid.UUID(cached_work_attempt_id)  # Existing attempt UUID, never a supplied path.
+        native_work_attempt = f"{remote_root}/attempts/{cached_work_attempt_id}"
     root_job_id = str(job.lineage_root_job_id or job.parent_job_id or job.id)
     safe_root_job_id = re.sub(r"[^A-Za-z0-9_.-]", "_", root_job_id)
     if not safe_root_job_id:
@@ -1226,15 +1586,39 @@ def prepare_remote_bundle(
     current_revision, current_tree = current_source_identity(repo_root)
     if native_invocation.source_identity != SourceIdentity(revision, inherited_tree):
         raise RemoteBundleError("Native invocation source identity does not match the Remote Job")
-    if current_revision != revision or current_tree != inherited_tree:
+    retained_ont = (job.model_id == 'nanopore' and
+                    bool((job.params or {}).get('resume_work_dir')))
+    if (current_revision != revision or current_tree != inherited_tree) and not retained_ont:
         raise RemoteBundleError(
             "Job source identity no longer matches the code compiling this remote command"
         )
     tree = _git(repo_root, "rev-parse", f"{revision}^{{tree}}")
     if inherited_tree != tree:
         raise RemoteBundleError("Inherited source tree does not match the inherited revision")
-    source_archive_sha256 = _staged_source_archive(repo_root, data_root, revision, source_root)
+    source_archive_sha256 = _staged_source_archive(repo_root, data_root, revision, source_root, extract=False)
     archive_copy = source_root / '.bms-source.tar.gz'
+    if current_revision != revision or current_tree != inherited_tree:
+        # Historical NGS was compiled in its private verified source tree. Check
+        # those exact executable bytes against this bundle's Git-owned archive;
+        # accepting an old identity on a current compiler is not sufficient.
+        compiled_root = Path(native_invocation.native_parameters['code_root'])
+        if compiled_root == repo_root:
+            raise RemoteBundleError('Retained ONT command was compiled from current source')
+        with tarfile.open(archive_copy, 'r:gz') as archive:
+            for member in archive:
+                if member.isdir():
+                    continue
+                compiled = compiled_root / member.name
+                if member.issym():
+                    matches = compiled.is_symlink() and os.readlink(compiled) == member.linkname
+                else:
+                    matches = (not any(p.is_symlink() for p in (compiled, *compiled.parents))
+                        and compiled.is_file() and
+                        (compiled.stat().st_mode & 0o111) == (member.mode & 0o111) and
+                        _sha256_file(compiled) == hashlib.file_digest(archive.extractfile(member), "sha256").hexdigest())
+                if not matches:
+                    raise RemoteBundleError('Retained ONT compiler source changed: ' + member.name)
+        repo_root = compiled_root
 
     # Byte-addressed cache objects are shared; runnable trees never are.
     remote_source = f"{remote_attempt}/materialized/source"
@@ -1284,7 +1668,8 @@ def prepare_remote_bundle(
     support_root = (str(PurePosixPath(binding["paths"]["python"]).parents[2])
                     if binding else f"{remote_runtime}/support-python")
     if binding:
-        host_support = Path(os.getenv("BMS_CM_API_RUNTIME_DIR", str(data_root / "runtime/cm-api-python"))) / "current"
+        from .critical_runtime import selected_support_root
+        host_support = selected_support_root()
         runtime_path_map[str(host_support)] = support_root
         runtime_path_map[str(host_support.resolve())] = support_root
         runtime_paths.add(host_support.resolve())
@@ -1311,7 +1696,8 @@ def prepare_remote_bundle(
             source = _relocate_python_runtime(path, staging_root / "support-python", destination)
             lexical_runtime = Path(os.getenv("BMS_CM_API_RUNTIME_DIR", str(data_root / "runtime" / "cm-api-python")))
             runtime_path_map[str(lexical_runtime / "current")] = destination
-        recorded = _runtime_records(source, f"runtime/{relative}", publication=publication, resolved=resolved)
+        recorded = _runtime_records(source, f"runtime/{relative}", publication=publication, resolved=resolved,
+                                    model_id=str(job.model_id))
         (weight_records if relative.startswith("weights/") else runtime_records).extend(recorded)
         runtime_hashes.update({record.relative_path.removeprefix("runtime/"): record.sha256
                                for record in recorded if record.link_target is None})
@@ -1320,7 +1706,7 @@ def prepare_remote_bundle(
             suffix = record.relative_path[len(f"runtime/{relative}"):].lstrip("/")
             original = path / suffix if suffix else path
             if relative.startswith("weights/"):
-                weight_sources[record.relative_path] = original
+                weight_sources[record.relative_path] = (resolved.get(('runtime-source', record.relative_path)) or original.resolve()) if record.link_target is None else original
             if record.link_target is None:
                 runtime_references[str(original)] = dict(
                     sha256=record.sha256, size_bytes=record.size_bytes,
@@ -1341,6 +1727,7 @@ def prepare_remote_bundle(
                     size_bytes=sum(r.size_bytes for r in members), format="runtime-directory",
                     path=destination if suffix == "." else destination + "/" + suffix)
         runtime_transfers.append(TransferPlan(source, destination, origin=path))
+        runtime_path_map[str(path)] = destination
         runtime_path_map[str(path.resolve())] = destination
     # Member selectors bind an installed root even when only selected files
     # belong to the dependency closure. Keep custom root relocation intact.
@@ -1399,9 +1786,24 @@ def prepare_remote_bundle(
         manifest_sha256 = manifest_record.sha256
         runtime_records.append(manifest_record)
         runtime_transfers.append(TransferPlan(manifest, manifest_destination, origin=manifest))
-    runtime_payload = [record.model_dump(mode="json") for record in runtime_records]
+    clone_placement = None
+    if any(row.logical_id == 'runtime_data:ngs/wf-clone-validation/runtime.lock.json'
+           for row in native_invocation.execution_plan.dependencies):
+        engine = binding['paths']['nextflow'] if binding else f'{remote_root}/runner/nextflow'
+        clone_transfer, clone_record, clone_home, clone_version = _relocate_ngs_clone_lock(
+            effective_params, staging_root=staging_root, remote_runtime=remote_runtime,
+            remote_source=remote_source, nextflow_executable=engine,
+            expected_lock_sha256=runtime_hashes['data/ngs/wf-clone-validation/runtime.lock.json'])
+        runtime_transfers.append(clone_transfer)
+        runtime_records.append(clone_record)
+        clone_placement = (clone_transfer.remote_destination, clone_home, engine, clone_version)
+    runtime_payload = [record.model_dump(mode="json") for record in runtime_records
+                       if record.link_target is not None or not record.mode & 0o222]
     runtime_identity = hashlib.sha256(_canonical_bytes(
-        {"files": runtime_payload, "critical_runtime": binding} if binding else runtime_payload
+        {"files": runtime_payload, "critical_runtime": binding,
+         "images": [{"sha256": image.sha256, "size_bytes": image.size_bytes}
+                    for image in sorted(images.values(), key=lambda value: value.sha256)],
+         "weights": weight_entries}
     )).hexdigest()
 
     if job.model_id == "nanopore":
@@ -1415,6 +1817,10 @@ def prepare_remote_bundle(
         # is provenance, not a second live acquisition/transfer of the FASTQ.
         input_discovery_params = dict(effective_params, ont_input_provenance={
             key: value for key, value in custody.items() if key != 'submitted_path'})
+    if native_work_attempt != remote_attempt:
+        # These locate retained worker state, not controller-side input trees.
+        input_discovery_params = {key: value for key, value in input_discovery_params.items()
+                                  if key not in {'resume_work_dir', 'resume_source_dir'}}
     verify_approved_native_inputs(job, runtime_references)
     input_assets = _input_assets(
         input_discovery_params,
@@ -1429,6 +1835,9 @@ def prepare_remote_bundle(
     input_transfers: list[TransferPlan] = []
     input_path_map: dict[str, str] = {}
     input_hashes: dict[str, tuple[str, int]] = {}
+    # Only this invocation may reuse these observations; missing/changed stamps
+    # take the existing body-read path, never a new refusal or persistent cache.
+    input_inventory: dict = {}
     generated_by_source = {path: {} for path, _ in input_assets}
     for item in native_invocation.generated_inputs:
         bound = (local_output / item.relative_path).resolve()
@@ -1440,7 +1849,8 @@ def prepare_remote_bundle(
     for path, relative in input_assets:
         prefix = f"inputs/{relative}"
         recorded = _input_records(path, prefix, native_invocation=native_invocation,
-                                  output_dir=local_output, generated_by_path=generated_by_source[path])
+                                  output_dir=local_output, generated_by_path=generated_by_source[path],
+                                  input_inventory=input_inventory)
         input_records.extend(recorded)
         for record in recorded:
             suffix = record.relative_path[len(prefix):].lstrip("/")
@@ -1454,16 +1864,18 @@ def prepare_remote_bundle(
             original_root = Path(effective_params['interface_context_manifest']).parent
             input_path_map[str(original_root)] = remote_destination
 
-    verify_approved_native_inputs(job, runtime_references, input_hashes)
+    verify_approved_native_inputs(job, runtime_references, input_hashes, input_inventory)
     verify_selected_preparation_inputs(native_invocation.execution_plan, input_hashes)
-    source_records = _records_for_source(source_root, "source", "source",
-                                         source_archive_sha256=source_archive_sha256)
+    source_records = _source_archive_records(archive_copy, source_archive_sha256)
     remote_results = f"{remote_attempt}/results"
+    from scripts.lib.portable_inputs import selected_ngs_input_fields
     bindings_transfer, bindings_record = _write_portable_bindings(
         staging_root=staging_root, remote_attempt=remote_attempt,
         references=native_references, input_transfers=input_transfers,
         input_records=input_records, remote_runtime=remote_runtime,
-        remote_results=remote_results, shared_weights=shared_weights if weight_entries else None)
+        remote_results=remote_results, shared_weights=shared_weights if weight_entries else None,
+        selected_inputs=selected_ngs_input_fields(job.mode, input_discovery_params)
+        if job.model_id == 'nanopore' else None)
     input_transfers.append(bindings_transfer)
     input_records.append(bindings_record)
     path_map: dict[str, str] = {
@@ -1475,7 +1887,7 @@ def prepare_remote_bundle(
         str(data_root): f"{remote_attempt}/data",
         str(local_output): remote_results,
     }
-    for flag, destination in {"-w": f"{remote_attempt}/work", "--work_dir": f"{remote_attempt}/work",
+    for flag, destination in {"-w": f"{native_work_attempt}/work", "--work_dir": f"{native_work_attempt}/work",
                               "--msa_cache_dir": f"{remote_attempt}/msa-cache",
                               "--cm_api_runtime_dir": support_root,
                               "--runtime_image_store": f"{remote_root}/cache/runtime-images"}.items():
@@ -1499,6 +1911,13 @@ def prepare_remote_bundle(
         translated_command[0] = binding["paths"]["nextflow"] if binding else f"{remote_root}/runner/nextflow"
     elif translated_command and Path(nextflow_executable).name in {"python", "python3"}:
         translated_command[0] = f"{support_root}/venv/bin/python"
+
+    if clone_placement:
+        for flag, value in zip(('--wf_clone_runtime_lock', '--wf_clone_nxf_home'), clone_placement[:2]):
+            if flag in translated_command:
+                translated_command[translated_command.index(flag) + 1] = value
+            else:
+                translated_command.extend([flag, value])
 
     if images or weight_entries:
         # The normal worker authenticates this small manifest as a regular bundle file.
@@ -1552,15 +1971,17 @@ def prepare_remote_bundle(
         "BMS_RUNTIME_IMAGE_STORE": f"{remote_root}/cache/runtime-images",
         "BMS_CM_API_RUNTIME_DIR": support_root,
         "BMS_API_PYTHON": f"{support_root}/venv/bin/python",
+        "BMS_POD5_PYTHON": f"{support_root}/venv/bin/python",
         "BMS_MSA_CACHE": f"{remote_attempt}/msa-cache",
         "BMS_REMOTE_EXECUTION": "1",
+        "PYTHONPYCACHEPREFIX": f"{remote_attempt}/pycache",
         "BMS_REMOTE_ATTEMPT_ID": attempt_id,
         "BMS_REMOTE_JOB_ID": str(job.id),
         "BMS_REMOTE_OUTPUT_ROOT": remote_results,
         "BMS_PORTABLE_INPUT_BINDINGS": bindings_transfer.remote_destination,
         "APPTAINERENV_BMS_PORTABLE_INPUT_BINDINGS": bindings_transfer.remote_destination,
-        "BMS_WORK": f"{remote_attempt}/work",
-        "NXF_CACHE_DIR": f"{remote_attempt}/.nextflow",
+        "BMS_WORK": f"{native_work_attempt}/work",
+        "NXF_CACHE_DIR": f"{native_work_attempt}/.nextflow",
         "NXF_HOME": f"{remote_root}/cache/nextflow",
         "NXF_APPTAINER_CACHEDIR": f"{remote_attempt}/apptainer-cache",
         "NXF_ANSI_LOG": "false",
@@ -1570,11 +1991,31 @@ def prepare_remote_bundle(
     if binding:
         effective_environment.update(binding["environment"])
 
+    if clone_placement:
+        # Keep the selected bridge (including udocker's CLI adapter), not the
+        # controller's lock executable. Validation and launch see the same path.
+        effective_environment['BMS_NEXTFLOW_EXECUTABLE'] = clone_placement[2]
+        effective_environment['NXF_HOME'] = clone_placement[1]
+        effective_environment['NXF_VER'] = clone_placement[3]
+        effective_environment['NXF_OFFLINE'] = 'true'
+
     for name, (_, selector) in IMAGE_SELECTORS.items():
         alias = f"{remote_runtime}/containers/{name}"
         for image in images.values():
             if alias in image.aliases:
                 effective_environment[selector] = image.remote_destination
+
+    # MD gates and analysis identities belong to the controller installation,
+    # not scientific params or the caller's per-job environment. Keep absent and
+    # explicit OFF values unchanged. Image paths remain relocation-owned above.
+    for key in (
+        "BMS_FEATURE_MOLECULAR_DYNAMICS",
+        "BMS_MD_ANALYSIS_ENABLED",
+        "BMS_MD_ANALYSIS_SIF_SHA256",
+        "BMS_MD_ANALYSIS_IMPLEMENTATION_SHA256",
+    ):
+        if key in os.environ:
+            effective_environment[key] = os.environ[key]
 
     for key, value in dict(environment or {}).items():
         if key in {

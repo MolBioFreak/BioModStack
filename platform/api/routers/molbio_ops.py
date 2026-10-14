@@ -47,6 +47,7 @@ from services.molbio_persistence import (
     record_primer_revision,
     revise_pcr_review_state,
     sequence_snapshot,
+    resolve_sequence_operation_params,
     tm_model_revision_identity,
 )
 from services.molbio_sequence_import import (
@@ -386,9 +387,14 @@ async def get_sequence_revision(
         revision,
         current_revision_id=document.current_revision_id if document is not None else None,
     )
+    snapshot = dict(revision.snapshot)
+    if "operation_params" in snapshot:
+        snapshot["operation_params"] = await resolve_sequence_operation_params(
+            molbio_session, snapshot["operation_params"],
+        )
     detail.update(
         {
-            "snapshot": revision.snapshot,
+            "snapshot": snapshot,
             "provenance": revision.provenance,
             "operation_id": revision.operation_id,
         }
@@ -1406,7 +1412,7 @@ def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductR
 def gibson_design_to_response(
     result: GibsonDesignResult,
     *,
-    saved_sequence: NucleotideSequence | SavedSequenceMetadata | None = None,
+    saved_sequence: NucleotideSequence | NucleotideSequenceResponse | SavedSequenceMetadata | None = None,
     message: str = "Designed Gibson assembly",
 ) -> GibsonDesignResponse:
     if not result.selected_candidate_checksum:
@@ -2556,7 +2562,7 @@ def _dnaweaver_plan_to_response(
     plan: DnaWeaverGibsonPlan,
     *,
     vendor_name: str,
-    saved_sequence: Optional[NucleotideSequence] = None,
+    saved_sequence: NucleotideSequence | NucleotideSequenceResponse | None = None,
     message: str = "Planned vendor Gibson fragments and validated the exact product with pydna",
 ) -> DnaWeaverPlanResponse:
     return DnaWeaverPlanResponse(
@@ -2737,7 +2743,9 @@ async def save_dnaweaver_gibson_assembly(
         response = _dnaweaver_plan_to_response(
             plan,
             vendor_name=request.vendor_name,
-            saved_sequence=saved,
+            saved_sequence=NucleotideSequenceResponse.model_validate(saved).model_copy(update={
+                "operation_params": await resolve_sequence_operation_params(session, saved.operation_params),
+            }),
             message="Saved the computed and pydna-validated DNA Weaver purchase plan without replanning",
         )
         response.computation_id = computation_id
@@ -2824,7 +2832,9 @@ async def save_designed_gibson_assembly(
         )
         response = gibson_design_to_response(
             result,
-            saved_sequence=(SavedSequenceMetadata.model_validate(saved) if response_view == "compact" else saved),
+            saved_sequence=(SavedSequenceMetadata.model_validate(saved) if response_view == "compact" else NucleotideSequenceResponse.model_validate(saved).model_copy(update={
+                "operation_params": await resolve_sequence_operation_params(session, saved.operation_params),
+            })),
             message="Saved the computed Gibson assembly without replanning",
         )
         response.computation_id = computation_id
@@ -2877,7 +2887,9 @@ async def save_gibson_assembly(
     )
     return AssemblyOperationResponse(
         product=assembly_product_to_response(product),
-        saved_sequence=(SavedSequenceMetadata.model_validate(saved) if response_view == "compact" else saved),
+        saved_sequence=(SavedSequenceMetadata.model_validate(saved) if response_view == "compact" else NucleotideSequenceResponse.model_validate(saved).model_copy(update={
+                "operation_params": await resolve_sequence_operation_params(session, saved.operation_params),
+            })),
         message=f"Saved Gibson product '{saved.name}'",
     )
 

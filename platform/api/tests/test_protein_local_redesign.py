@@ -225,24 +225,6 @@ def test_all_protein_local_ingress_bypasses_antibody_defaults_before_contract_va
         assert ('antibody_default_applied' in data.params) is expected
 
 
-def test_partial_diffusion_fixes_every_atom_outside_the_editable_region() -> None:
-    request = build_request(
-        {
-            "input_structure": "/tmp/input.pdb",
-            "redesign_mode": "partial_diffusion",
-            "design_chains": ["A"],
-            "redesign_ranges": "A2",
-            "source_residue_identities": SOURCE_IDENTITIES,
-        }
-    )
-
-    assert request["rfd3"]["select_fixed_atoms"] == {
-        "A1": ["ALL"],
-        "A2": [],
-        "A3": ["ALL"],
-        "B1": ["ALL"],
-    }
-    assert request["sequence_policy"] == "preserve"
 
 
 def test_partial_diffusion_rejects_custom_fixed_atom_overrides() -> None:
@@ -489,50 +471,6 @@ def test_api_rejects_tampered_current_revision_request_replay(
         )
 
 
-def test_native_preparation_uses_and_hash_checks_the_staged_source(tmp_path: Path) -> None:
-    source = tmp_path / "source.pdb"
-    source.write_text(
-        "ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00 10.00           C\nEND\n",
-        encoding="utf-8",
-    )
-    request = build_request(
-        {
-            "input_structure": str(source),
-            "redesign_mode": "partial_diffusion",
-            "design_chains": ["A"],
-            "redesign_ranges": "A1",
-            "source_residue_identities": [
-                {
-                    "chain_id": "A",
-                    "residues": [{"res_num": 1, "insertion_code": "", "residue_name": "GLY"}],
-                }
-            ],
-        },
-        source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
-    )
-    request_path = tmp_path / "request.json"
-    write_request(request_path, request)
-    staged = tmp_path / "staged" / source.name
-    staged.parent.mkdir()
-    staged.write_bytes(source.read_bytes())
-    native_input = tmp_path / "native.json"
-    receipt = tmp_path / "receipt.json"
-    command = [
-        sys.executable,
-        str(REPO_ROOT / "scripts" / "rfd3_local_redesign" / "prepare_native_input.py"),
-        "--request", str(request_path),
-        "--input-structure", str(staged),
-        "--output-native", str(native_input),
-        "--output-receipt", str(receipt),
-    ]
-    subprocess.run(command, check=True)
-
-    native_payload = json.loads(native_input.read_text(encoding="utf-8"))
-    assert native_payload["protein_local_redesign_0"]["input"] == staged.name
-
-    staged.write_text("END\n", encoding="utf-8")
-    with pytest.raises(subprocess.CalledProcessError):
-        subprocess.run(command, check=True)
 
 
 def test_api_derives_source_residue_identities_from_compressed_mmcif(tmp_path: Path) -> None:

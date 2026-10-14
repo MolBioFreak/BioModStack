@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 import hashlib
 import json
 import sqlite3
@@ -228,12 +229,16 @@ def test_blunt_and_three_prime_end_sequences_follow_end_specific_strands() -> No
     assert blunt.fragments[1].left_end.kind == "blunt"
     assert blunt.fragments[0].right_end.overhang_sequence_5to3 is None
 
-    three_prime = _simulate("AACTGAAG" + "A" * 14 + "GCAA", ("AcuI",))
+    three_prime = _simulate("AACTGAAG" + "A" * 14 + "GAAA", ("AcuI",))
     upstream, downstream = three_prime.fragments
     assert upstream.right_end.kind == downstream.left_end.kind == "three_prime_overhang"
     assert upstream.right_end.protruding_strand == "top"
     assert downstream.left_end.protruding_strand == "bottom"
-    assert upstream.right_end.overhang_sequence_5to3 is not None
+    # AcuI CTGAAG(16/14): motif starts at 2, cuts at top 24/bottom 22.
+    assert (upstream.top_end_boundary, upstream.bottom_end_boundary) == (24, 22)
+    assert (downstream.top_start_boundary, downstream.bottom_start_boundary) == (24, 22)
+    assert upstream.right_end.overhang_sequence_5to3 == "GA"
+    assert downstream.left_end.overhang_sequence_5to3 == "TC"
     assert downstream.left_end.overhang_sequence_5to3 == reverse_complement(
         upstream.right_end.overhang_sequence_5to3
     )
@@ -354,12 +359,22 @@ def test_circular_single_cut_rejects_self_spanning_stagger() -> None:
     assert self_spanning.value.code == "unsupported_crossing_cleavage_geometry"
 
 
-def test_request_and_simulation_hashes_change_for_every_scientific_authority() -> None:
+def test_request_and_simulation_hashes_bind_sequence_enzymes_topology_and_source() -> None:
     first = _simulate("TTGAATTCAA", ("EcoRI",))
     second = _simulate("TTGAATTCAAA", ("EcoRI",))
     third = _simulate("TTGAATTCAA", ("EcoRI", "MboI"))
-    assert len({first.request_sha256, second.request_sha256, third.request_sha256}) == 3
-    assert len({first.simulation_sha256, second.simulation_sha256, third.simulation_sha256}) == 3
+    circular = _simulate("TTGAATTCAA", ("EcoRI",), "circular")
+    receipt = first.source.model_dump(mode="json")
+    receipt["name"] = "another source"
+    renamed = _simulate("TTGAATTCAA", ("EcoRI",), source_receipt=receipt)
+    repeated = _simulate("TTGAATTCAA", ("EcoRI",))
+    assert repeated.request_sha256 == first.request_sha256
+    assert repeated.simulation_sha256 == first.simulation_sha256
+    results = (first, second, third, circular, renamed)
+    assert len({item.request_sha256 for item in results}) == 5
+    assert len({item.simulation_sha256 for item in results}) == 5
+    for item in results:
+        assert item.simulation_sha256 == hashlib.sha256(item.canonical_unsigned_bytes()).hexdigest()
 
 
 def test_simulation_authority_receipts_are_closed_against_fully_rehashed_extra_fields() -> None:
@@ -823,10 +838,9 @@ async def test_many_output_save_and_reload_have_bounded_database_boundaries(
     (
         ("ACGTACGT", "operation_only", 0),
         ("ACGTACGT", "operation_and_fragments", 1),
-        ("TTGAATTCAA", "operation_and_fragments", 2),
     ),
 )
-async def test_saved_digest_reload_supports_zero_one_and_many_outputs(
+async def test_saved_digest_reload_supports_zero_and_one_outputs(
     tmp_path: Path, sequence: str, persistence_mode: str, expected_outputs: int,
 ) -> None:
     engine, sessions, digest = await _store(tmp_path, sequence=sequence)
@@ -855,7 +869,7 @@ async def test_saved_digest_reload_supports_zero_one_and_many_outputs(
 
 
 @pytest.mark.asyncio
-async def test_saved_response_byte_limit_is_sanitized_and_rolls_back(
+async def test_saved_response_byte_limit_is_sanitized_before_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine, sessions, digest = await _store(tmp_path)
@@ -881,6 +895,13 @@ async def test_saved_response_byte_limit_is_sanitized_and_rolls_back(
         async with sessions() as session:
             assert await session.scalar(select(func.count()).select_from(MolecularOperation)) == 0
             assert await session.scalar(select(func.count()).select_from(RestrictionDigestResult)) == 0
+            assert await session.scalar(select(func.count()).select_from(MolecularOperationOutput)) == 0
+            assert await session.scalar(select(func.count()).select_from(MolecularRevision)) == 1
+        monkeypatch.undo()
+        async with await _client(sessions) as client:
+            accepted = await client.post("/api/molbio/restriction/digests", json=save)
+            assert accepted.status_code == 200, accepted.text
+            assert len(accepted.json()["outputs"]) == 2
     finally:
         await engine.dispose()
 
@@ -1173,178 +1194,189 @@ async def test_database_rejects_correct_count_fully_populated_forged_output_grap
 ) -> None:
     from services.restriction_digest_save_receipt import canonical_save_request_receipt
 
-    engine, _sessions, digest = await _store(tmp_path)
-    sequence = "TTGAATTCAA"
-    operation_id = "forged-graph-operation"
-    simulation = _simulate(
-        sequence, ("EcoRI",), source_receipt={
-            "kind": "molecular_revision", "name": "source",
-            "sequence_id": "source-document", "revision_id": "source-revision",
-            "revision_number": 1, "content_sha256": digest,
-            "content_length": len(sequence), "topology": "linear",
-        },
-    )
-    outputs = []
-    for fragment in simulation.fragments:
-        fragment_bytes = fragment.top_strand_sequence.encode("ascii")
-        outputs.append({
-            "fragment_index": fragment.fragment_index,
-            "document_id": f"forged-document-{fragment.fragment_index}",
-            "revision_id": f"forged-revision-{fragment.fragment_index}",
-            "output_edge_id": f"forged-edge-{fragment.fragment_index}",
-            "name": f"forged fragment {fragment.fragment_index + 1}",
-            "topology": fragment.topology,
-            "content_sha256": hashlib.sha256(fragment_bytes).hexdigest(),
-            "content_length": len(fragment_bytes),
+    for forged in (False, True):
+        store_path = tmp_path / ("forged" if forged else "valid")
+        store_path.mkdir()
+        engine, _sessions, digest = await _store(store_path)
+        sequence = "TTGAATTCAA"
+        operation_id = "forged-graph-operation"
+        simulation = _simulate(
+            sequence, ("EcoRI",), source_receipt={
+                "kind": "molecular_revision", "name": "source",
+                "sequence_id": "source-document", "revision_id": "source-revision",
+                "revision_number": 1, "content_sha256": digest,
+                "content_length": len(sequence), "topology": "linear",
+            },
+        )
+        outputs = []
+        for fragment in simulation.fragments:
+            fragment_bytes = fragment.top_strand_sequence.encode("ascii")
+            outputs.append({
+                "fragment_index": fragment.fragment_index,
+                "document_id": f"forged-document-{fragment.fragment_index}",
+                "revision_id": f"forged-revision-{fragment.fragment_index}",
+                "output_edge_id": f"forged-edge-{fragment.fragment_index}",
+                "name": f"forged fragment {fragment.fragment_index + 1}",
+                "topology": fragment.topology,
+                "content_sha256": hashlib.sha256(fragment_bytes).hexdigest(),
+                "content_length": len(fragment_bytes),
+            })
+        snapshot = {
+            "schema": "bms.molbio.restriction-digest-saved-result.v1",
+            "operation_id": operation_id,
+            "source_revision_id": "source-revision",
+            "catalog_id": CATALOG_ID,
+            "catalog_sha256": CATALOG_SHA,
+            "request_sha256": simulation.request_sha256,
+            "result_sha256": simulation.simulation_sha256,
+            "simulation": simulation.model_dump(mode="json", by_alias=True),
+            "outputs": outputs,
+        }
+        save_receipt = canonical_save_request_receipt({
+            "schema": "bms.molbio.restriction-digest-save-request.v1",
+            "source": {
+                "kind": "molecular_revision", "sequence_id": "source-document",
+                "revision_id": "source-revision", "expected_content_sha256": digest,
+                "topology": None,
+            },
+            "catalog": {
+                "catalog_id": CATALOG_ID, "expected_catalog_sha256": CATALOG_SHA,
+            },
+            "enzyme_ids": ["EcoRI"], "simulation_sha256": simulation.simulation_sha256,
+            "idempotency_key": "forged-graph-key",
+            "persistence_mode": "operation_and_fragments",
+            "fragment_name_prefix": "forged fragment",
         })
-    snapshot = {
-        "schema": "bms.molbio.restriction-digest-saved-result.v1",
-        "operation_id": operation_id,
-        "source_revision_id": "source-revision",
-        "catalog_id": CATALOG_ID,
-        "catalog_sha256": CATALOG_SHA,
-        "request_sha256": simulation.request_sha256,
-        "result_sha256": simulation.simulation_sha256,
-        "simulation": simulation.model_dump(mode="json", by_alias=True),
-        "outputs": outputs,
-    }
-    save_receipt = canonical_save_request_receipt({
-        "schema": "bms.molbio.restriction-digest-save-request.v1",
-        "source": {
-            "kind": "molecular_revision", "sequence_id": "source-document",
-            "revision_id": "source-revision", "expected_content_sha256": digest,
-            "topology": None,
-        },
-        "catalog": {
-            "catalog_id": CATALOG_ID, "expected_catalog_sha256": CATALOG_SHA,
-        },
-        "enzyme_ids": ["EcoRI"], "simulation_sha256": simulation.simulation_sha256,
-        "idempotency_key": "forged-graph-key",
-        "persistence_mode": "operation_and_fragments",
-        "fragment_name_prefix": "forged fragment",
-    })
-    try:
-        async with engine.begin() as connection:
-            await connection.execute(text(
-                "INSERT INTO molecular_operations("
-                "id,operation_kind,implementation,implementation_version,status,parameters,"
-                "warnings,provenance,idempotency_key,request_fingerprint,created_at"
-                ") VALUES ("
-                ":id,'restriction_digest','services.restriction_digest.simulate_digest',"
-                ":version,'completed',:parameters,:warnings,:provenance,:key,:fingerprint,"
-                "CURRENT_TIMESTAMP)"
-            ), {
-                "id": operation_id,
-                "version": simulation.digest_algorithm_version,
-                "parameters": rfc8785.dumps({
-                    "schema": "bms.molbio.restriction-digest-operation-parameters.v1",
-                    "selected_enzyme_ids": ["EcoRI"],
-                    "persistence_mode": "operation_and_fragments",
-                    "fragment_name_prefix": "forged fragment",
-                    "simulation_sha256": simulation.simulation_sha256,
-                    "save_request_receipt": save_receipt,
-                }).decode(),
-                "warnings": rfc8785.dumps(list(simulation.warnings)).decode(),
-                "provenance": rfc8785.dumps({
-                    "source_revision_id": "source-revision",
-                    "catalog_id": CATALOG_ID,
-                    "catalog_sha256": CATALOG_SHA,
-                    "request_sha256": simulation.request_sha256,
-                }).decode(),
-                "key": "forged-graph-key",
-                "fingerprint": "a" * 64,
-            })
-            await connection.execute(text(
-                "INSERT INTO molecular_operation_inputs("
-                "id,operation_id,revision_id,role,position,snapshot"
-                ") VALUES ('forged-input',:operation_id,'source-revision','digest_source',0,:snapshot)"
-            ), {
-                "operation_id": operation_id,
-                "snapshot": rfc8785.dumps({
-                    "content_sha256": digest,
-                    "name": "source",
-                    "sequence_id": "source-document",
-                }).decode(),
-            })
-            for ordinal, (fragment, identity) in enumerate(
-                zip(simulation.fragments, outputs, strict=True)
-            ):
+        try:
+            async with engine.begin() as connection:
                 await connection.execute(text(
-                    "INSERT INTO molecular_documents("
-                    "id,document_kind,name,current_revision_id,created_at"
-                    ") VALUES (:id,'dna',:name,NULL,CURRENT_TIMESTAMP)"
-                ), {"id": identity["document_id"], "name": identity["name"]})
-                await connection.execute(text(
-                    "INSERT INTO molecular_revisions("
-                    "id,document_id,revision_number,change_kind,content_sha256,"
-                    "content_length,snapshot,provenance,operation_id,created_by,created_at"
-                    ") VALUES (:id,:document_id,1,'restriction_digest_fragment',"
-                    ":content_sha,:content_length,:snapshot,:provenance,:operation_id,NULL,"
+                    "INSERT INTO molecular_operations("
+                    "id,operation_kind,implementation,implementation_version,status,parameters,"
+                    "warnings,provenance,idempotency_key,request_fingerprint,created_at"
+                    ") VALUES ("
+                    ":id,'restriction_digest','services.restriction_digest.simulate_digest',"
+                    ":version,'completed',:parameters,:warnings,:provenance,:key,:fingerprint,"
                     "CURRENT_TIMESTAMP)"
                 ), {
-                    "id": identity["revision_id"],
-                    "document_id": identity["document_id"],
-                    "content_sha": identity["content_sha256"],
-                    "content_length": identity["content_length"],
-                    "snapshot": rfc8785.dumps({
-                        "sequence_type": "dna",
-                        "sequence": fragment.top_strand_sequence,
-                        "is_circular": fragment.topology == "circular",
-                        "topology": fragment.topology,
-                        "name": identity["name"],
-                    }).decode(),
-                    "provenance": rfc8785.dumps({
-                        "schema": "bms.molbio.restriction-digest-fragment-provenance.v1",
-                        "source_revision_id": "source-revision",
-                        "operation_id": operation_id,
+                    "id": operation_id,
+                    "version": simulation.digest_algorithm_version,
+                    "parameters": rfc8785.dumps({
+                        "schema": "bms.molbio.restriction-digest-operation-parameters.v1",
+                        "selected_enzyme_ids": ["EcoRI"],
+                        "persistence_mode": "operation_and_fragments",
+                        "fragment_name_prefix": "forged fragment",
                         "simulation_sha256": simulation.simulation_sha256,
-                        "fragment_index": ordinal,
-                        "geometry": fragment.model_dump(mode="json", by_alias=True),
+                        "save_request_receipt": save_receipt,
                     }).decode(),
-                    "operation_id": operation_id,
+                    "warnings": rfc8785.dumps(list(simulation.warnings)).decode(),
+                    "provenance": rfc8785.dumps({
+                        "source_revision_id": "source-revision",
+                        "catalog_id": CATALOG_ID,
+                        "catalog_sha256": CATALOG_SHA,
+                        "request_sha256": simulation.request_sha256,
+                    }).decode(),
+                    "key": "forged-graph-key",
+                    "fingerprint": hashlib.sha256(save_receipt.encode("utf-8")).hexdigest(),
                 })
                 await connection.execute(text(
-                    "UPDATE molecular_documents SET current_revision_id=:revision_id "
-                    "WHERE id=:document_id"
-                ), {
-                    "revision_id": identity["revision_id"],
-                    "document_id": identity["document_id"],
-                })
-                await connection.execute(text(
-                    "INSERT INTO molecular_operation_outputs("
+                    "INSERT INTO molecular_operation_inputs("
                     "id,operation_id,revision_id,role,position,snapshot"
-                    ") VALUES (:id,:operation_id,:revision_id,'digest_fragment',"
-                    ":position,:snapshot)"
+                    ") VALUES ('forged-input',:operation_id,'source-revision','digest_source',0,:snapshot)"
                 ), {
-                    "id": identity["output_edge_id"],
                     "operation_id": operation_id,
-                    "revision_id": identity["revision_id"],
-                    "position": ordinal,
                     "snapshot": rfc8785.dumps({
-                        "fragment_index": ordinal,
-                        "name": identity["name"],
-                        "simulation_sha256": (
-                            "0" * 64 if ordinal == 0 else simulation.simulation_sha256
-                        ),
+                        "content_sha256": digest,
+                        "name": "source",
+                        "sequence_id": "source-document",
                     }).decode(),
                 })
-            with pytest.raises(IntegrityError, match="restriction digest result integrity"):
-                await connection.execute(text(
-                    "INSERT INTO restriction_digest_results("
-                    "id,operation_id,source_revision_id,catalog_id,catalog_sha256,"
-                    "request_sha256,result_sha256,result,created_at"
-                    ") VALUES ('forged-result',:operation_id,'source-revision',:catalog_id,"
-                    ":catalog_sha,:request_sha,:result_sha,:result,CURRENT_TIMESTAMP)"
-                ), {
-                    "operation_id": operation_id,
-                    "catalog_id": CATALOG_ID,
-                    "catalog_sha": CATALOG_SHA,
-                    "request_sha": simulation.request_sha256,
-                    "result_sha": simulation.simulation_sha256,
-                    "result": rfc8785.dumps(snapshot).decode(),
-                })
-    finally:
-        await engine.dispose()
+                for ordinal, (fragment, identity) in enumerate(
+                    zip(simulation.fragments, outputs, strict=True)
+                ):
+                    await connection.execute(text(
+                        "INSERT INTO molecular_documents("
+                        "id,document_kind,name,current_revision_id,created_at"
+                        ") VALUES (:id,'dna',:name,NULL,CURRENT_TIMESTAMP)"
+                    ), {"id": identity["document_id"], "name": identity["name"]})
+                    await connection.execute(text(
+                        "INSERT INTO molecular_revisions("
+                        "id,document_id,revision_number,change_kind,content_sha256,"
+                        "content_length,snapshot,provenance,operation_id,created_by,created_at"
+                        ") VALUES (:id,:document_id,1,'restriction_digest_fragment',"
+                        ":content_sha,:content_length,:snapshot,:provenance,:operation_id,NULL,"
+                        "CURRENT_TIMESTAMP)"
+                    ), {
+                        "id": identity["revision_id"],
+                        "document_id": identity["document_id"],
+                        "content_sha": identity["content_sha256"],
+                        "content_length": identity["content_length"],
+                        "snapshot": rfc8785.dumps({
+                            "sequence_type": "dna",
+                            "sequence": fragment.top_strand_sequence,
+                            "is_circular": fragment.topology == "circular",
+                            "topology": fragment.topology,
+                            "name": identity["name"],
+                        }).decode(),
+                        "provenance": rfc8785.dumps({
+                            "schema": "bms.molbio.restriction-digest-fragment-provenance.v1",
+                            "source_revision_id": "source-revision",
+                            "operation_id": operation_id,
+                            "simulation_sha256": simulation.simulation_sha256,
+                            "fragment_index": ordinal,
+                            "geometry": fragment.model_dump(mode="json", by_alias=True),
+                        }).decode(),
+                        "operation_id": operation_id,
+                    })
+                    await connection.execute(text(
+                        "UPDATE molecular_documents SET current_revision_id=:revision_id "
+                        "WHERE id=:document_id"
+                    ), {
+                        "revision_id": identity["revision_id"],
+                        "document_id": identity["document_id"],
+                    })
+                    await connection.execute(text(
+                        "INSERT INTO molecular_operation_outputs("
+                        "id,operation_id,revision_id,role,position,snapshot"
+                        ") VALUES (:id,:operation_id,:revision_id,'digest_fragment',"
+                        ":position,:snapshot)"
+                    ), {
+                        "id": identity["output_edge_id"],
+                        "operation_id": operation_id,
+                        "revision_id": identity["revision_id"],
+                        "position": ordinal,
+                        "snapshot": rfc8785.dumps({
+                            "fragment_index": ordinal,
+                            "name": identity["name"],
+                            "simulation_sha256": (
+                                "0" * 64 if forged and ordinal == 0 else simulation.simulation_sha256
+                            ),
+                        }).decode(),
+                    })
+                with (pytest.raises(IntegrityError, match="restriction digest result integrity")
+                      if forged else nullcontext()):
+                    await connection.execute(text(
+                        "INSERT INTO restriction_digest_results("
+                        "id,operation_id,source_revision_id,catalog_id,catalog_sha256,"
+                        "request_sha256,result_sha256,result,created_at"
+                        ") VALUES ('forged-result',:operation_id,'source-revision',:catalog_id,"
+                        ":catalog_sha,:request_sha,:result_sha,:result,CURRENT_TIMESTAMP)"
+                    ), {
+                        "operation_id": operation_id,
+                        "catalog_id": CATALOG_ID,
+                        "catalog_sha": CATALOG_SHA,
+                        "request_sha": simulation.request_sha256,
+                        "result_sha": simulation.simulation_sha256,
+                        "result": rfc8785.dumps(snapshot).decode(),
+                    })
+            async with _sessions() as session:
+                assert await session.scalar(
+                    select(func.count()).select_from(RestrictionDigestResult)
+                ) == (0 if forged else 1)
+                assert await session.scalar(
+                    select(func.count()).select_from(MolecularOperationOutput)
+                ) == 2
+        finally:
+            await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -1841,6 +1873,19 @@ async def test_migration_rejects_counterfeit_attested_physical_schema_before_reu
     tmp_path: Path, counterfeit: str,
 ) -> None:
     engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / f'{counterfeit}.db'}")
+    async def reconstruct(connection, objects, *, corrupt: bool) -> None:
+        await connection.execute(text("DROP TABLE restriction_digest_results"))
+        for kind, _name, ddl in objects:
+            if corrupt and kind == "table":
+                if counterfeit == "wrong_declared_type":
+                    assert "result TEXT" in ddl
+                    ddl = ddl.replace("result TEXT", "result BLOB")
+                else:
+                    assert "PRIMARY KEY (id)" in ddl
+                    ddl = ddl.replace("PRIMARY KEY (id)", "UNIQUE (id)")
+            await connection.execute(text(ddl))
+
+    objects = []
     try:
         await init_molbio_db(engine=engine)
         async with engine.begin() as connection:
@@ -1849,42 +1894,14 @@ async def test_migration_rejects_counterfeit_attested_physical_schema_before_reu
                 "WHERE version='0007_restriction_digest_results'"
             ))
             if counterfeit in {"wrong_declared_type", "wrong_primary_key"}:
-                for trigger in (
-                    "molbio_immutable_restriction_digest_results_delete",
-                    "molbio_immutable_restriction_digest_results_update",
-                    "molbio_restriction_digest_results_integrity_insert",
-                ):
-                    await connection.execute(text(f'DROP TRIGGER "{trigger}"'))
-                await connection.execute(text(
-                    "DROP INDEX ix_restriction_digest_results_source_created"
-                ))
-                await connection.execute(text("DROP TABLE restriction_digest_results"))
-                id_declaration = (
-                    "id VARCHAR(36) PRIMARY KEY NOT NULL"
-                    if counterfeit == "wrong_declared_type"
-                    else "id VARCHAR(36) NOT NULL UNIQUE"
-                )
-                result_type = "BLOB" if counterfeit == "wrong_declared_type" else "TEXT"
-                await connection.execute(text(
-                    "CREATE TABLE restriction_digest_results ("
-                    f"{id_declaration},"
-                    "operation_id VARCHAR(36) NOT NULL UNIQUE,"
-                    "source_revision_id VARCHAR(36) NOT NULL,"
-                    "catalog_id VARCHAR(128) NOT NULL,"
-                    "catalog_sha256 VARCHAR(64) NOT NULL,"
-                    "request_sha256 VARCHAR(64) NOT NULL,"
-                    "result_sha256 VARCHAR(64) NOT NULL,"
-                    f"result {result_type} NOT NULL,"
-                    "created_at DATETIME NOT NULL,"
-                    "FOREIGN KEY(operation_id) REFERENCES molecular_operations(id) "
-                    "ON DELETE RESTRICT ON UPDATE NO ACTION,"
-                    "FOREIGN KEY(source_revision_id) REFERENCES molecular_revisions(id) "
-                    "ON DELETE RESTRICT ON UPDATE NO ACTION)"
-                ))
-                await connection.execute(text(
-                    "CREATE INDEX ix_restriction_digest_results_source_created "
-                    "ON restriction_digest_results(source_revision_id, created_at)"
-                ))
+                objects = (await connection.execute(text(
+                    "SELECT type, name, sql FROM sqlite_master "
+                    "WHERE tbl_name='restriction_digest_results' AND sql IS NOT NULL "
+                    "ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END"
+                ))).all()
+
+                # First prove exact reconstruction preserves triggers, indexes and FKs.
+                await reconstruct(connection, objects, corrupt=False)
             elif counterfeit == "missing_immutable_trigger":
                 await connection.execute(text(
                     "DROP TRIGGER molbio_immutable_restriction_digest_results_update"
@@ -1902,6 +1919,23 @@ async def test_migration_rejects_counterfeit_attested_physical_schema_before_reu
                     "CREATE INDEX counterfeit_restriction_digest_catalog "
                     "ON restriction_digest_results(catalog_id)"
                 ))
+
+        if counterfeit in {"wrong_declared_type", "wrong_primary_key"}:
+            await init_molbio_db(engine=engine)
+            async with engine.begin() as connection:
+                await connection.execute(text(
+                    "DELETE FROM molbio_schema_migrations "
+                    "WHERE version='0007_restriction_digest_results'"
+                ))
+                await reconstruct(connection, objects, corrupt=True)
+                from molbio_migrations import restriction_digest_physical_schema_issues
+
+                issues = await connection.run_sync(restriction_digest_physical_schema_issues)
+                expected = ["attested columns, types, nullability, or primary-key ordinals differ"]
+                if counterfeit == "wrong_primary_key":
+                    # SQLite also changes the id autoindex origin from pk to u.
+                    expected.append("attested index identities, uniqueness, or origins differ")
+                assert issues == expected
 
         with pytest.raises(RuntimeError, match="counterfeit restriction digest"):
             await init_molbio_db(engine=engine)

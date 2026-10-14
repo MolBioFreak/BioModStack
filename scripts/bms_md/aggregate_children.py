@@ -64,6 +64,109 @@ def publish_tree_immutable(source: Path, destination: Path) -> None:
             shutil.rmtree(temporary)
 
 
+def publish_run_immutable(source_manifest: Path, destination: Path) -> None:
+    """Collect the declared native result, not its mutable execution workspace.
+
+    Native trajectory/checkpoint/log writers may reopen even a completed stage
+    on continuation. Keep an independent terminal snapshot of those declared
+    bytes; never infer immutability from XTC (or any other file extension).
+    Worker inputs, stage caches and private continuation seeds stay at their
+    original attempt. The run manifest and aggregate metadata remain private.
+    """
+    from .analysis import _open_contained_artifact
+
+    run = json.loads(source_manifest.read_text(encoding="utf-8"))
+    sources = {"manifest.json": source_manifest}
+    prepared = set()
+    config = run.get("config") or {}
+    prepared_run = (config.get("schema") == "bms.md.job.v2" or
+                    (config.get("schema") == "bms.md.job.v3" and config.get("input", {}).get("structure")))
+    for name, record in run.get("artifacts", {}).items():
+        descriptor, source = _open_contained_artifact(source_manifest.parent, record["path"])
+        os.close(descriptor)
+        sources[record["path"]] = source
+        # Only preparation leaves explicitly declared by the native consumers
+        # have this ownership. Stage outputs remain independent even read-only.
+        if (prepared_run and name.startswith("preparation_")
+                and Path(record["path"]).parts[0] in {"system", "preparation"}):
+            prepared.add(record["path"])
+    # Older writers record includes in config, not the artifact inventory.
+    # Worker preparation places topology.top at the closure root. Anchor its
+    # relative members to the retained topology, not stale controller/worker
+    # absolute paths. Also keep pdb2gmx's local chain/restraint companions.
+    topology_record = run.get("artifacts", {}).get("topology")
+    if topology_record:
+        topology = sources[topology_record["path"]]
+        candidates = set(topology.parent.glob("*.itp"))
+        closure = config.get("input", {}).get("topology_closure")
+        if isinstance(closure, dict) and isinstance(closure.get("files"), list):
+            for record in closure["files"]:
+                relative = record.get("path") if isinstance(record, dict) else None
+                if (isinstance(relative, str) and relative
+                        and not Path(relative).is_absolute() and "\\" not in relative
+                        and ".." not in Path(relative).parts
+                        and Path(relative).as_posix() == relative):
+                    candidates.add(topology.parent / relative)
+        for candidate in sorted(candidates):
+            relative = candidate.relative_to(source_manifest.parent.resolve()).as_posix()
+            # Preserve available historical companions without making missing
+            # optional evidence a new collection prerequisite.
+            if relative in sources or not candidate.is_file():
+                continue
+            descriptor, source = _open_contained_artifact(source_manifest.parent, relative)
+            os.close(descriptor)
+            sources[relative] = source
+    identity = [(name, source.stat().st_size, _sha256(source))
+                for name, source in sorted(sources.items())]
+
+    def matches() -> bool:
+        # Historical collections may also contain undeclared work files. Keep
+        # them on replay; do not backfill, delete or require a new layout.
+        retained = {name: (size, digest) for name, size, digest in _tree_identity(destination)}
+        return all(retained.get(name) == (size, digest) for name, size, digest in identity)
+
+    if destination.exists():
+        if matches():
+            return
+        raise ImmutableCollectionConflict(f"immutable collection destination conflicts: {destination}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.parent / f".{destination.name}.tmp-{uuid.uuid4().hex}"
+    temporary.mkdir()
+    try:
+        for name, size, digest in identity:
+            if name in prepared:
+                from .chemistry.prepare import retain_prepared_file
+                retain_prepared_file(sources[name], temporary / name)
+            else:
+                publish_file_immutable(sources[name], temporary / name,
+                                       expected_size=size, expected_sha256=digest)
+        try:
+            os.rename(temporary, destination)
+        except OSError:
+            if destination.exists() and matches():
+                return
+            raise ImmutableCollectionConflict(f"immutable collection destination conflicts: {destination}")
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+
+
+def durable_run_output(source: Path, output_dir: Path) -> Path:
+    """Keep new runs in their durable owner; retain legacy external continuations.
+
+    Historical pause receipts can still name a native tree in old task work.
+    Never move/delete that seed or link its appendable files into retained
+    results. Only its declared terminal closure needs independent custody.
+    """
+    source = source.resolve()
+    output_dir = output_dir.resolve()
+    if source.is_relative_to(output_dir):
+        return source
+    destination = output_dir / "native"
+    publish_run_immutable(source / "manifest.json", destination)
+    return destination
+
+
 def publish_file_immutable(
     source: Path,
     destination: Path,
@@ -206,6 +309,11 @@ def collect_children(
     source_manifests = [_find_run_manifest(child_dir) for child_dir in child_dirs]
     # Validate native identity before publishing any lane into the parent.
     aggregate = aggregate_manifests(source_manifests)
+    runs = [json.loads(path.read_text()) for path in source_manifests]
+    configs = {run["replica_index"]: run.get("config", {}) for run in runs}
+    for replica in aggregate["replicas"]:
+        config = configs[replica["replica_index"]]
+        replica.update({key: config[key] for key in ("window_id", "replicate_index") if key in config})
     from scripts.child_job_utils import component_runtime_enabled, seal_validated_child_files
     use_runtime = component_runtime_enabled()
     validated_files = {}
@@ -238,7 +346,8 @@ def collect_children(
             lane = expected.get(run["replica_index"])
             if (
                 lane is None or run.get("job_id") != receipt["parent_job_id"]
-                or run.get("replica_seed") != lane.get("replica_seed")
+                or (run.get("job_schema") != "bms.md.job.v3" and run.get("replica_seed") != lane.get("replica_seed"))
+                or (run.get("job_schema") == "bms.md.job.v3" and run.get("orchestration_seed") != run.get("config", {}).get("random_seed"))
                 or not isinstance(run.get("engine"), dict)
                 or run["engine"].get("name") != receipt["engine"]
             ):
@@ -248,9 +357,8 @@ def collect_children(
     for source_manifest in source_manifests:
         run_manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
         replica_index = int(run_manifest["replica_index"])
-        source_replica_dir = source_manifest.parent
         target_replica_dir = output_dir / "replicas" / f"replica_{replica_index}"
-        publish_tree_immutable(source_replica_dir, target_replica_dir)
+        publish_run_immutable(source_manifest, target_replica_dir)
     aggregate["lineage"] = {
         "total_children": int(status.get("total") or len(child_dirs)),
         "completed_children": int(status.get("completed") or len(child_dirs)),

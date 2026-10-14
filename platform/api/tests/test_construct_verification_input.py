@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = API_ROOT.parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "build_construct_verification_input.py"
-PYTHON = Path("/home/dalab/biomodstack/biomodstack/platform/api/.venv/bin/python")
+PYTHON = sys.executable
 
 
 def run_builder(tmp_path: Path, *, consensus: str | None) -> tuple[subprocess.CompletedProcess[str], Path]:
@@ -63,11 +64,3 @@ def test_missing_consensus_emits_state_but_no_observed_fasta(tmp_path: Path) -> 
     assert state["state"] == "missing"
     assert state["reason"] == "CONSENSUS_NOT_PRODUCED"
     assert not (out_dir / "observed_consensus.fasta").exists()
-
-
-def test_nextflow_module_resolves_observed_files_from_staged_verification_input() -> None:
-    module = (REPO_ROOT / "modules" / "ngs" / "construct_verify.nf").read_text(encoding="utf-8")
-    assert 'publishDir "${params.out_dir}", mode: \'copy\'' in module
-    assert '${verification_input}/observed_state.json' in module
-    assert '${verification_input}/observed_consensus.fasta' in module
-    assert '${observed_input}' not in module

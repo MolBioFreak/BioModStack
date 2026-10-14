@@ -115,7 +115,7 @@ def test_host_preflight_rejects_registry_digest_mismatch_without_outputs(tmp_pat
     image.write_bytes(b"unexpected")
     reference = tmp_path / "reference.json"
     receipt = tmp_path / "runtime-image-receipt.json"
-    with pytest.raises(preflight.RuntimeImageAttestationError, match="digest"):
+    with pytest.raises(preflight.RuntimeImageAttestationError, match="digest|SHA-256"):
         preflight.create_verified_image_reference(
             image=image, expected_sha256="0" * 64, store_root=tmp_path / "store",
             reference=reference, receipt=receipt,
@@ -178,7 +178,8 @@ def _attestation_fixture(tmp_path: Path):
         runtime_root=execution_root,
         receipt_path=execution_receipt,
     )
-    checkpoint = execution_root / "checkpoint" / "protenix-v2.pt"
+    checkpoint = checkpoint_source
+    assert not (execution_root / "checkpoint").exists()
     wrapper_snapshot = execution_root / "bms-wrapper" / "run_protenix_inference.py"
     direct_url = {"vcs_info": {"vcs": "git", "commit_id": commit}}
     global_artifacts = [

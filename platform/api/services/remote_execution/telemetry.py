@@ -120,6 +120,7 @@ class RemoteTelemetry:
             sample['gpus'] = [{**gpu, 'id': f'{target.id}:gpu:{gpu["index"]}',
                                'execution_target_id': target.id, 'controls': {'fan': False, 'power': False}}
                               for gpu in raw['gpus']]
+            sample['gpu_processes'] = raw.get('gpu_processes', [])
             sample['available'] = bool(sample['gpus'])
             if not sample['available']:
                 sample['error'] = 'Remote GPU readings unavailable'

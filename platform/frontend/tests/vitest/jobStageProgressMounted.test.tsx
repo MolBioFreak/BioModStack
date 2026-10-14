@@ -58,6 +58,20 @@ describe('authoritative stage presentation', () => {
             ['Boltz-2', 'boltz2', 'completed'], ['Caliby', 'caliby', 'unknown'],
         ]);
     });
+    it('shows an explicitly unrequested or skipped optional stage without changing job outcome', async () => {
+        const retained = job({ model_id: 'protenix', status: 'completed', execution_stages: [
+            { id: 'protenix', label: 'Protenix', state: 'completed', source: 'recorded' },
+            { id: 'frustrampnn', label: 'Frustration mapping', state: 'not_requested', source: 'recorded' },
+            { id: 'optional', label: 'Optional analysis', state: 'skipped', source: 'recorded' },
+        ] });
+        const before = JSON.stringify(retained);
+        await mount(<JobStageProgress job={retained} />);
+        expect(badges().map(b => b.textContent)).toEqual(['Protenix', 'Frustration mapping · not run', 'Optional analysis · skipped']);
+        expect(badges()[1].dataset.stageState).toBe('not_requested');
+        expect(badges()[1].title).toContain('not requested');
+        expect(badges()[1].className).not.toMatch(/emerald|red-500/);
+        expect(JSON.stringify(retained)).toBe(before);
+    });
     it('honors an empty projection instead of resurrecting legacy history', async () => {
         await mount(<JobStageProgress job={job({ execution_stages: [], all_stages: ['boltz2'], completed_stages: ['boltz2'] })} />);
         expect(badges()).toHaveLength(0);

@@ -225,7 +225,9 @@ export function describeNgsError(reason: unknown, fallback: string): string {
             && record.message.length > 0
             && record.message.length <= 512
         ) {
-            const category = record.code.includes('INTEGRITY')
+            const category = record.code === 'NGS_AUTHORITY_CONFLICT'
+                ? 'Result authority error'
+                : record.code.includes('INTEGRITY')
                 ? 'Integrity error'
                 : record.code.includes('CAPABILITY') || record.code.includes('AUTH') || record.code.includes('HIERARCHY')
                     ? 'Authorization error'

@@ -365,7 +365,7 @@ def emit_rows(rows):
         intent = row['intent']
         from bioxp_method_native import native_action
         try:
-            direct = native_action(intent.get('operation'), {k: v for k, v in intent.items() if k != 'operation'})
+            direct = ('calibration', deepcopy(intent['calibration'])) if intent.get('operation') == 'calibration' else native_action(intent.get('operation'), {k: v for k, v in intent.items() if k != 'operation'})
         except (ValueError, TypeError) as exc:
             issues.append({'step_id': row['step_id'], 'message': str(exc)})
             continue
@@ -379,6 +379,22 @@ def emit_rows(rows):
                     action = deepcopy(_NATIVE['document_template']['stages'][0]['actions'][0])
                     action.update(kind=kind, params=params, metadata={'pair_index': pair}, required_capability=row.get('required_capability'))
                     generated.append(action)
+                    if recipe.get('final_empty_speed_ul_s') is not None and (recipe.get('multi') is None or recipe['multi'].get('excess') is None):
+                        # Recipe ends with empty; use the existing ordinary lift
+                        # emitter after that action, never before the blowout.
+                        lift_row = {'step_id': row['step_id'], 'intent': {'operation': 'lift',
+                            'location_id': intent['destination']['location_id'],
+                            'height_steps': intent['destination_lift_height_steps']}}
+                        if 'required_capability' in row:
+                            lift_row['required_capability'] = row['required_capability']
+                        lifted = preview(WorkflowPreviewRequest.model_validate({'draft': {
+                            'schema': 'bms.bioxp-workflow-draft.v1', 'steps': [lift_row], 'editor_state': {}},
+                            'protocol_id': 'method-content'}))
+                        if lifted.document is None:
+                            raise ValueError('; '.join(i.message for i in lifted.issues))
+                        for lift_action in lifted.document['stages'][0]['actions']:
+                            lift_action['metadata']['pair_index'] = pair
+                            generated.append(lift_action)
             except (ValueError, TypeError, KeyError) as exc:
                 issues.append({'step_id': row['step_id'], 'message': str(exc)})
                 continue
@@ -387,7 +403,7 @@ def emit_rows(rows):
             action.update(kind=direct[0], params=direct[1], metadata={}, required_capability=row.get('required_capability'))
             generated = [action]
         elif intent.get('operation') in ('checkpoint', 'note'):
-            if set(intent) != {'operation', 'message'} or not isinstance(intent['message'], str):
+            if (set(intent) - ({'operation', 'message', 'measurement_form'} if intent['operation'] == 'checkpoint' else {'operation', 'message'}) or not isinstance(intent.get('message'), str)):
                 issues.append({'step_id': row['step_id'], 'message': 'checkpoint/note requires exactly one string message'})
                 continue
             action = deepcopy(_NATIVE['document_template']['stages'][0]['actions'][0])
@@ -395,6 +411,10 @@ def emit_rows(rows):
                           params={'message': intent['message']}, pause_message=intent['message'],
                           review_required=intent['operation'] == 'checkpoint', metadata={},
                           required_capability=row.get('required_capability'))
+            if 'measurement_form' in intent:
+                from bioxp_method_calibration import CALIBRATION
+                from bioxp_method_native import validate
+                action['params']['measurement_form'] = validate(intent['measurement_form'], CALIBRATION['measurement_form'])
             generated = [action]
         else:
             emitted = preview(WorkflowPreviewRequest.model_validate({'draft': {
@@ -492,6 +512,8 @@ def compile_method(request):
                 if not isinstance(inputs, dict):
                     fail('Action inputs must be an object', occurrence['path'])
                 intent = inputs if occurrence['action'] == 'native_intent' else {'operation': occurrence['action'], **inputs}
+                if occurrence['action'] == 'calibration':
+                    intent = {'operation': 'calibration', 'calibration': inputs}
                 if occurrence['action'] == 'plunger':
                     from bioxp_method_native import validate
                     diagnostic = validate(inputs, _NATIVE['request']['$defs']['DiagnosticPlunger'])
@@ -505,7 +527,7 @@ def compile_method(request):
                     if set(inputs) != {'channels'} or inputs.get('channels') != [0, 1, 2, 3] or any(type(c) is not int for c in inputs['channels']):
                         fail('Source eject requires exactly explicit channels [0,1,2,3]; other settings are not discarded', occurrence['path'])
                     intent = {'operation': 'tip_eject'}
-                if occurrence['action'] != 'native_intent' and inputs.get('operation', occurrence['action']) != occurrence['action']:
+                if occurrence['action'] not in {'native_intent', 'calibration'} and inputs.get('operation', occurrence['action']) != occurrence['action']:
                     fail('Action/operation mismatch', occurrence['path'])
                 # Bound compound expansion before the existing emitter allocates its children.
                 cost = native_cost(intent)
@@ -587,11 +609,28 @@ def compile_method(request):
                                     'commanded_displacement_ul': air['volume_ul']})
                         phases.append({'recipe_phase': 'aspirate', 'channel': channel,
                             'source': deepcopy(effect.get('source')), 'volume_ul': recipe['target_liquid_ul'],
-                            'commanded_displacement_ul': recipe['commanded_aspiration_ul'], 'air_ul': 0})
+                            'commanded_displacement_ul': recipe.get('commanded_aspiration_ul'), 'air_ul': 0})
                         for index, segment in enumerate(recipe['dispense_segments']):
                             phases.append({'recipe_phase': 'dispense_segments', 'segment_index': index, 'channel': channel,
                                 'destination': deepcopy(effect.get('destination')), 'volume_ul': None,
                                 'commanded_displacement_ul': segment['volume_ul'], 'air_ul': None})
+                        multi = recipe['multi']
+                        if multi is not None:
+                            for index in range(multi['conditioning_back_to_source_count']):
+                                phases.append({'recipe_phase': 'conditioning', 'conditioning_index': index, 'channel': channel,
+                                    'destination': deepcopy(effect.get('source')), 'volume_ul': multi['conditioning_volume_ul'],
+                                    'commanded_displacement_ul': multi['conditioning_volume_ul'], 'air_ul': None})
+                            for aliquot_index, aliquot in enumerate(multi['aliquots']):
+                                endpoint = next((e.get('destination') for e in effects
+                                    if e['channel'] == channel and e.get('aliquot_index') == aliquot_index), None)
+                                for segment_index, segment in enumerate(aliquot['segments']):
+                                    phases.append({'recipe_phase': 'aliquot', 'aliquot_index': aliquot_index,
+                                        'segment_index': segment_index, 'channel': channel, 'destination': deepcopy(endpoint),
+                                        'volume_ul': None, 'commanded_displacement_ul': segment['volume_ul'], 'air_ul': None})
+                                if multi['reaspiration'] is not None:
+                                    phases.append({'recipe_phase': 'reaspiration', 'aliquot_index': aliquot_index, 'channel': channel,
+                                        'kind': 'air', 'volume_ul': 0, 'air_ul': multi['reaspiration']['volume_ul'],
+                                        'commanded_displacement_ul': multi['reaspiration']['volume_ul']})
                         if recipe['final_empty_speed_ul_s'] is not None:
                             phases.append({'recipe_phase': 'final_empty', 'channel': channel,
                                 'volume_ul': None, 'air_ul': None, 'commanded_displacement_ul': None})
@@ -615,6 +654,11 @@ def compile_method(request):
                 action['stage_id'] = stages[-1]['stage_id']
                 stages[-1]['actions'].append(action)
             document['stages'] = stages
+            from bioxp_method_calibration import lower_references
+            for stage in stages:
+                for action in stage['actions']:
+                    if action['kind'] == 'calibration':
+                        action['params'] = lower_references(action['params'], by_id[action['source_occurrence_id']], occurrences, stages)
             from bioxp_method_native import EXPORT
             content = {'compiler': VERSION, 'native_source_commit': EXPORT['source_commit'],
                        'method': semantic(method), 'bindings': request.get('bindings', {}),
@@ -641,7 +685,7 @@ def compile_method(request):
                         for action in stage['actions']:
                             if action['params'].get('operation') == 'cavro_liquid_recipe':
                                 recipe = action['params']['recipe']
-                                recipes[action['source_occurrence_id']] = deepcopy(recipe)
+                                recipes.setdefault(action['source_occurrence_id'], []).append(deepcopy(recipe))
                                 motion = [part for phase in ('before_leading_air', 'before_liquid', 'after_liquid') for part in recipe[phase]]
                                 multi = recipe['multi']
                                 if multi is not None:
@@ -667,7 +711,7 @@ def compile_method(request):
                                 positions[action['source_occurrence_id']] = deepcopy(head)
                     for occurrence in simulation_rows:
                         if occurrence['occurrence_id'] in recipes:
-                            occurrence['_native_recipe'] = recipes[occurrence['occurrence_id']]
+                            occurrence['_native_recipes'] = recipes[occurrence['occurrence_id']]
                         if occurrence['occurrence_id'] in positions:
                             occurrence['_native_head_reference'] = positions[occurrence['occurrence_id']]
                     seed = initial_state(method, request.get('initial_state'))

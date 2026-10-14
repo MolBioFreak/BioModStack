@@ -334,17 +334,29 @@ describe('restriction API boundary', () => {
             other.nicks = [{ enzyme_id: 'Other', occurrence_id: 'occ:2', event_ordinal: 0, orientation: 'forward', strand: 'top', status: 'complete', boundary: 9, boundary_unwrapped: 9, winding: 0, contributor_group_id: 'nick:2', activity_assessment: 'not_evaluated' }];
             value.analysis.occurrences.push(other);
             value.analysis.counts.recognition_site_count_possible = 1;
-            value.analysis.counts.nick_count = 1;
+            // Possible occurrences do not contribute confirmed nick counts.
+            value.analysis.counts.nick_count = 0;
             value.analysis.enzyme_summaries[0].recognition_site_count_definite = 0;
             value.analysis.enzyme_summaries[0].recognition_site_count_possible = 1;
             value.analysis.enzyme_summaries[0].double_strand_break_count = 0;
-            value.analysis.enzyme_summaries[0].nick_count = 1;
+            value.analysis.enzyme_summaries[0].nick_count = 0;
             value.analysis.enzyme_summaries.push({ ...clone(value.analysis.enzyme_summaries[0]), enzyme_id: 'Other', canonical_name: 'Other', recognition_site_count_definite: 1, recognition_site_count_possible: 0, double_strand_break_count: 1, nick_count: 0 });
+            const valid = clone(value);
+            Object.assign(valid.analysis.enzyme_summaries[0], { recognition_site_count_definite: 1, recognition_site_count_possible: 0, double_strand_break_count: 1 });
+            Object.assign(valid.analysis.enzyme_summaries[1], { recognition_site_count_definite: 0, recognition_site_count_possible: 1, double_strand_break_count: 0 });
+            expect(() => parseRestrictionAnalysis(valid)).not.toThrow();
             return value;
         }],
         ['event orientation differs from owning occurrence', () => { const value = clone(ANALYSIS); value.analysis.occurrences[0].double_strand_events[0].orientation = 'reverse'; value.analysis.grouped_cleavages[0].contributors[0].orientation = 'reverse'; return value; }],
-        ['same occurrence repeats event ordinal under opposite orientations', () => { const value = clone(ANALYSIS); const event = clone(value.analysis.occurrences[0].double_strand_events[0]); event.orientation = 'reverse'; event.contributor_group_id = 'cut:opposite'; value.analysis.occurrences[0].double_strand_events.push(event); value.analysis.counts.double_strand_break_count = 2; value.analysis.enzyme_summaries[0].double_strand_break_count = 2; const group = clone(value.analysis.grouped_cleavages[0]); group.contributor_group_id = 'cut:opposite'; group.contributors[0].orientation = 'reverse'; value.analysis.grouped_cleavages.push(group); return value; }],
-    ])('rejects relational analysis contradiction: %s', (_label, mutate) => expect(() => parseRestrictionAnalysis(mutate())).toThrow());
+    ])('rejects relational analysis contradiction: %s', (label, mutate) => {
+        const expected = label === 'duplicate event ordinal'
+            ? '$.analysis.occurrences[0].events.event_ordinal: duplicate identity'
+            : label === 'event orientation differs from owning occurrence'
+                ? '$.analysis.occurrences[0]: event authority mismatch'
+                : label === 'per-enzyme counts swapped while global totals match'
+                    ? '$.analysis.counts: inconsistent counts' : undefined;
+        expect(() => parseRestrictionAnalysis(mutate())).toThrow(expected);
+    });
 
     it.each([
         ['unselected occurrence enzyme', () => { const value = clone(DIGEST); value.occurrences[0].enzyme_id = 'Other'; value.occurrences[0].double_strand_events[0].enzyme_id = 'Other'; return value; }],

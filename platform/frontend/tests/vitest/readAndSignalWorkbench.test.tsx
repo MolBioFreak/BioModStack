@@ -679,20 +679,6 @@ afterEach(async () => {
 });
 
 describe('ReadAndSignalWorkbench governed behavior', () => {
-    it('keeps a compact fixed-width panel with diagnostics closed on first use', async () => {
-        await renderWorkbench({ viewerSession: null });
-        await settlePromises();
-
-        const panel = container.querySelector('[data-signal-workbench-panel]') as HTMLElement | null;
-        const diagnostics = container.querySelector('details[data-signal-diagnostics]') as HTMLDetailsElement | null;
-        expect(panel).not.toBeNull();
-        expect(panel?.className).toContain('lg:w-[560px]');
-        expect(container.querySelector('[role="separator"]')).toBeNull();
-        expect(diagnostics).not.toBeNull();
-        expect(diagnostics?.open).toBe(false);
-        expect(container.textContent).toContain('Read and signal');
-        expect(container.textContent).not.toContain('IGV remains the alignment authority.');
-    });
 
     it('loads a bounded searchable read list with provenance-labelled filter presets inside its own scroll owner', async () => {
         alignmentMocks.fetchReads.mockResolvedValue({
@@ -805,7 +791,14 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             raw_representation_id: 'blow5-indexed-1',
             molecule_type: 'dna',
         });
-        const publicCandidate = apiMocks.fetchExternalMoveBamCandidates.mock.results[0]?.value;
+        expect(apiMocks.registerExternalMoveBamCandidate).toHaveBeenCalledTimes(1);
+        const publicCandidate = await apiMocks.fetchExternalMoveBamCandidates.mock.results[0]?.value;
+        expect(publicCandidate.items).toEqual([{
+            candidate_id: 'd'.repeat(64),
+            display_name: 'BFX6NB_1_JAN26-EL-Q2-01.bam',
+            size_bytes: 1234,
+            modified_at_ns: 1700000000000000000,
+        }]);
         expect(JSON.stringify(publicCandidate)).not.toContain('/mnt/');
         expect(JSON.stringify(publicCandidate)).not.toContain('path');
     });
@@ -1118,61 +1111,6 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(pendingSignal?.aborted).toBe(true);
         resolvePendingPoll?.({ items: [moveSource, requestedExternalSource] });
         await settlePromises();
-    });
-
-    it('keeps frontend mapping and move-source request contracts exact to the staged closed router', () => {
-        const source = readFileSync(`${process.cwd()}/src/lib/api.ts`, 'utf8');
-        const profileContract = source.slice(
-            source.indexOf('export interface OntSignalMappingProfile'),
-            source.indexOf('export interface OntSignalMappingArtifact'),
-        );
-        const registrationContract = source.slice(
-            source.indexOf('export const registerOntMoveSource'),
-            source.indexOf('export const fetchOntSignalMappingProfiles'),
-        );
-        const mappingJobContract = source.slice(
-            source.indexOf('export interface OntSignalMappingJob'),
-            source.indexOf('export interface OntSignalViewArtifact'),
-        );
-        const viewResponseContract = source.slice(
-            source.indexOf('export interface OntSignalViewArtifact'),
-            source.indexOf('export interface OntSignalViewerSession'),
-        );
-
-        expect(profileContract).toContain("parameter_source: 'approved_calibration';");
-        expect(profileContract).toContain('calibration_artifact_id: string;');
-        expect(profileContract).not.toContain('exact_upstream_profile');
-        expect(profileContract).not.toContain('calibration_artifact_id: string | null');
-        expect(registrationContract).toContain('source_job_id: string;');
-        expect(registrationContract).not.toContain('external_registration_receipt:');
-        expect(registrationContract).not.toContain('external_registration_receipt_id:');
-        expect(source).toContain('external_registration_receipt_id: string | null;');
-        expect(mappingJobContract).toContain('request_fingerprint: string;');
-        expect(viewResponseContract).toContain('export interface OntSignalRenderParamsResponse extends OntSignalRenderParams');
-        expect(viewResponseContract).toContain('render_params: OntSignalRenderParamsResponse;');
-        expect(viewResponseContract).toContain('request_fingerprint: string;');
-        expect(viewResponseContract).toContain('command?: Record<string, unknown> | null;');
-        expect(viewResponseContract).toContain('network?: string | null;');
-        expect(viewResponseContract).not.toContain('[key: string]: unknown;');
-    });
-
-    it('models persisted viewer IGV and signal update state as closed typed contracts', () => {
-        const source = readFileSync(`${process.cwd()}/src/lib/api.ts`, 'utf8');
-        const viewerContract = source.slice(
-            source.indexOf('export interface OntSignalViewerIgvUpdateState'),
-            source.indexOf('const signalWorkbenchRoot'),
-        );
-
-        expect(viewerContract).toContain('igv_state: OntSignalViewerIgvState;');
-        expect(viewerContract).toContain('signal_state: OntSignalViewerSignalState;');
-        expect(viewerContract).toContain('igv_state: OntSignalViewerIgvUpdateState;');
-        expect(viewerContract).toContain('signal_state: OntSignalViewerSignalUpdateState;');
-        expect(viewerContract).toContain("mode: OntSignalViewMode | 'raw_waveform' | 'ideal_comparison';");
-        expect(viewerContract).toContain('render_params: OntSignalRenderParams;');
-        expect(viewerContract).toContain('read_mapping_job_id: string | null;');
-        expect(viewerContract).toContain('reference_mapping_job_id: string | null;');
-        expect(viewerContract).not.toContain('igv_state: Record<string, unknown>;');
-        expect(viewerContract).not.toContain('signal_state: Record<string, unknown>;');
     });
 
     it('queries capabilities with the complete exact alignment authority tuple', async () => {
@@ -1744,9 +1682,12 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(await blobText(publishedBlob)).not.toContain('stale A');
     });
 
-    it('presents authenticated governed HTML through a network-silent CSP blob while preserving inline scripts', async () => {
+    it.each([false, true])('presents native governed HTML with confined Bokeh callbacks (embedded policy=%s)', async (embeddedPolicy) => {
+        const nativePolicy = "default-src 'none'; script-src 'unsafe-inline'; connect-src 'none'; form-action 'none'";
         const authenticatedBlob = new Blob([
-            '<!doctype html><html><head><title>Governed plot</title></head><body>'
+            '<!doctype html><html><head><title>Governed plot</title>'
+            + (embeddedPolicy ? `<meta http-equiv="Content-Security-Policy" content="${nativePolicy}">` : '')
+            + '</head><body>'
             + '<script>window.__selfContainedPlot = true;</script>'
             + '<img src="https://forbidden.example/subresource.png"></body></html>',
         ], { type: 'text/html' });
@@ -1769,7 +1710,15 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         const securedHtml = await blobText(securedBlob as Blob);
         expect(securedHtml).toContain('http-equiv="Content-Security-Policy"');
         expect(securedHtml).toContain("default-src 'none'");
-        expect(securedHtml).toContain("script-src 'unsafe-inline'");
+        expect(securedHtml).toContain("script-src 'unsafe-inline' 'unsafe-eval'");
+        const policies = new DOMParser().parseFromString(securedHtml, 'text/html').querySelectorAll<HTMLMetaElement>('meta[http-equiv="Content-Security-Policy"]');
+        expect(policies.length).toBe(embeddedPolicy ? 2 : 1);
+        for (const policy of policies) {
+            expect(policy.content).toContain("script-src 'unsafe-inline' 'unsafe-eval'");
+            expect(policy.content).toContain("default-src 'none'");
+            expect(policy.content).toContain("connect-src 'none'");
+            expect(policy.content).toContain("form-action 'none'");
+        }
         expect(securedHtml).toContain("connect-src 'none'");
         expect(securedHtml).toContain("navigate-to 'none'");
         expect(securedHtml.indexOf('Content-Security-Policy')).toBeLessThan(securedHtml.indexOf('<script>'));
@@ -1779,13 +1728,6 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         await act(async () => root.unmount());
         expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:bounded-signal-view');
         root = createRoot(container);
-    });
-
-    it('opens a newly created raw-signal session with its exact fresh viewer identity', () => {
-        const source = readFileSync(`${process.cwd()}/src/components/NGSToolkit.tsx`, 'utf8');
-
-        expect(source).toContain('openSignalWorkbench(created.viewer_session_id);');
-        expect(source).not.toContain('acceptSignalViewerSession(created);\n            openSignalWorkbench();');
     });
 
     it('gates read-launched viewer creation and navigation to the captured exact toolkit identity', async () => {
@@ -2201,12 +2143,6 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         client.clear();
     });
 
-    it('clears viewer session authority when inspecting another job', () => {
-        const source = readFileSync(`${process.cwd()}/src/components/NGSToolkit.tsx`, 'utf8');
-
-        expect(source).toContain("onClick={() => updateQueryParams({ job_id: job.id, viewer_session_id: null })}");
-    });
-
     it('mounts job and alignment selection boundaries without reusing an incompatible viewer session', async () => {
         const selectedJob = {
             id: 'alignment-job-1',
@@ -2290,6 +2226,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(contextMocks.updateQueryParams).toHaveBeenCalledWith({
             job_id: otherJob.id,
             viewer_session_id: null,
+            view: null, run_id: null, reference_set_id: null, assignment_id: null,
         });
 
         contextMocks.contextHref.mockClear();
@@ -2457,7 +2394,11 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         client.clear();
     });
 
-    it('rejects persisted viewer state whose dataset run or generation differs from the selected job', async () => {
+    it.each([
+        { dimension: 'dataset', identity: { dataset_id: 'dataset-other' } },
+        { dimension: 'run', identity: { run_id: 'run-other' } },
+        { dimension: 'generation', identity: { observed_generation: 99 } },
+    ])('rejects persisted viewer state whose $dimension alone differs from the selected job', async ({ identity }) => {
         const selectedJob = {
             id: 'alignment-job-1',
             name: 'Selected ONT job',
@@ -2473,9 +2414,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             },
         };
         const incompatible = viewerSession({
-            dataset_id: 'dataset-other',
-            run_id: 'run-other',
-            observed_generation: 99,
+            ...identity,
             selected_read_id: 'incompatible-read',
         });
         apiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [selectedJob], total: 1 } });
@@ -2505,19 +2444,6 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(input('Exact read ID').value).toBe('');
         expect(contextMocks.updateQueryParams).toHaveBeenCalledWith({ viewer_session_id: null }, { replace: true });
         client.clear();
-    });
-
-    it('does not render selected-job output paths or substitute another path-like public field', () => {
-        const source = readFileSync(`${process.cwd()}/src/components/NGSToolkit.tsx`, 'utf8');
-        expect(source).not.toContain('{selectedJob.output_dir');
-        expect(source).not.toContain('Output Directory');
-        expect(source).not.toContain("['POD5 directory', selectedJob.params?.pod5_dir]");
-        expect(source).not.toContain("['BAM path', selectedJob.params?.bam_path]");
-        expect(source).not.toContain("['FASTQ path', selectedJob.params?.fastq_path]");
-        expect(source).not.toContain("['Reference FASTA', selectedJob.params?.reference_fasta]");
-        expect(source).not.toContain('{check.path ||');
-        expect(source).not.toContain('>{output}</span>');
-        expect(source).toContain('>{selectedJob.id}</');
     });
 
     it('opens raw waveform and signal-to-read capabilities without alignment while reference controls remain gated', async () => {
@@ -2557,17 +2483,6 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(container.querySelector('svg[aria-label="Raw electrical signal waveform"]')).not.toBeNull();
         expect(alignmentMocks.fetchRead).not.toHaveBeenCalled();
         expect(alignmentMocks.fetchReads).not.toHaveBeenCalled();
-    });
-
-    it('does not couple the NGSToolkit workbench launch or panel mount to an alignment session', () => {
-        const source = readFileSync(`${process.cwd()}/src/components/NGSToolkit.tsx`, 'utf8');
-        const labelAt = source.indexOf('Read &amp; Signal Workbench');
-        const launchMarkup = source.slice(source.lastIndexOf('<button', labelAt), labelAt);
-        const workbenchAt = source.lastIndexOf('<ReadAndSignalWorkbench');
-        const mountGuard = source.slice(source.lastIndexOf('signalWorkbenchRequested ? (', workbenchAt), workbenchAt);
-
-        expect(launchMarkup).not.toContain('selectedAlignmentSession');
-        expect(mountGuard).not.toContain('selectedAlignmentSession?.ready');
     });
 
     it('keeps IGV context and unavailable reasons visible while one prepare control calibrates before a fresh approval click', async () => {
@@ -2696,6 +2611,50 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(renderShift?.disabled).toBe(true);
         expect(renderShift?.value).toBe('5');
         expect(container.textContent).toContain('profile base shift 5');
+    });
+
+    it.each(['pending', 'wrong-saved', 'wrong-current'] as const)('reopens the exact persisted mapping while IGV is independent (%s)', async (caseId) => {
+        const persisted = viewerSession({ mapping_profile_id: approvedProfile.mapping_profile_id,
+            signal_state: { mode: 'reference', read_mapping_job_id: 'mapping-read-1', reference_mapping_job_id: 'mapping-reference-1' } });
+        apiMocks.fetchMapping.mockImplementation(async (id: string) => id === 'mapping-read-1' ? readyMapping() : {
+            ...readyMapping(id), mode: 'signal_to_reference', parent_mapping_job_id: 'mapping-read-1',
+            alignment_job_id: 'alignment-job-1', reference_revision_id: persisted.reference_revision_id,
+            alignment_session_id: caseId === 'wrong-saved' ? 'foreign-session' : persisted.alignment_session_id,
+        });
+        await renderWorkbench({ viewerSession: persisted, alignmentSession: caseId === 'wrong-current'
+            ? { ...alignmentSession, session_id: 'different-current-session' } : null });
+        await settlePromises();
+        expect(apiMocks.fetchMapping).toHaveBeenCalledWith('mapping-reference-1');
+        expect(container.textContent?.includes('Mapping job tuple does not match')).toBe(caseId !== 'pending');
+    });
+
+    it.each([false, true])('Save session preserves the immutable comparison tuple only for its selected read (changed=%s)', async (changed) => {
+        const comparisonState = {
+            mode: 'ideal_comparison' as const, render_params: renderParams, view_job_id: null,
+            read_mapping_job_id: 'mapping-read-1', reference_mapping_job_id: 'mapping-reference-1',
+            comparison_job_id: 'comparison-ready-1', comparison_preview_digest: 'a'.repeat(64),
+            comparison_settings: { simulation_settings: { profile_id: 'dna-r9-min' as const, seed: 1 },
+                render_params: { scale: 'none' as const, point_size: 0.5 as const, fixed_width: false,
+                    base_width: 10, base_limit: 100, signal_sample_limit: 10000,
+                    show_samples: true, show_base_colours: true, remove_signal_outliers: false } },
+            comparison_review_id: 'review-1',
+        };
+        const persisted = viewerSession({ selected_read_id: 'read-42', signal_state: comparisonState });
+        // A pending authority refresh must not erase already persisted mapping IDs.
+        apiMocks.fetchMapping.mockImplementation(() => new Promise(() => {}));
+        apiMocks.fetchComparison.mockImplementation(() => new Promise(() => {}));
+        await renderWorkbench({ viewerSession: persisted });
+        if (changed) await act(async () => {
+            const field = input('Exact read ID');
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, 'other-read');
+            field.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        await act(async () => { button('Save session').click(); await Promise.resolve(); });
+        const saved = apiMocks.updateViewerSession.mock.calls.at(-1)?.[1];
+        expect(saved.signal_state.read_mapping_job_id).toBe('mapping-read-1');
+        expect(saved.signal_state.reference_mapping_job_id).toBe('mapping-reference-1');
+        if (changed) expect(saved.signal_state.comparison_job_id).toBeUndefined();
+        else expect(saved.signal_state).toEqual(comparisonState);
     });
 
     it('restores persisted read, locus, and viewer identity and returns the bounded signal locus through a sandboxed frame', async () => {

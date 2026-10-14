@@ -1,0 +1,390 @@
+{
+  "protein": {
+    "config": {
+      "chemistry": {
+        "assurance": "curated_profile",
+        "catalog_digest": "8f162c07602472bd333c39e690d0af480b96bac3745140a5e098dc58106a426d",
+        "family": "amber",
+        "profile_id": "amber_ff19sb_opc_protein_v1",
+        "profile_sha256": "7cd7ea88a835c081bc0f025ea8946c3ac1501a367c0683908fa13ab552f1b128",
+        "requested_scope": "modern_protein",
+        "resolved_preparation": {
+          "force_field": "ff19SB",
+          "water_model": "opc"
+        },
+        "runtime_identity": {
+          "runtime_id": "md-preparation-v1",
+          "runtime_version": "1",
+          "sif_sha256": "625d81608118af006295601b8275389e7681a1d98a6fb0622e6241c5d101df4b"
+        },
+        "version": "1.0.0"
+      },
+      "engine": "gromacs",
+      "engine_runtime": {
+        "image_name": "gromacs-md-2025.3.sif",
+        "sif_sha256": "97c117ea07496c0d1b13d80be84d33345b89063b47ccfb83f6cbff0145f1385b"
+      },
+      "execution": {
+        "gpu_id": "0",
+        "gpu_offload": "full_forces",
+        "ntmpi": 1,
+        "ntomp": 2,
+        "pin": "on"
+      },
+      "input": {
+        "structure": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1aki-smoke-retry1_20261010_195518/inputs/structure.pdb",
+        "structure_bytes": 116397,
+        "structure_sha256": "c75d7a689617248cdd92dc6633531d2506fb9bef1e6e21e26c8f579ae6955abb"
+      },
+      "job_id": "057acce1-371d-4f6b-a928-89c51380d6f2",
+      "preparation": {
+        "box_type": "dodecahedron",
+        "neutralize": true,
+        "padding_nm": 1.0,
+        "salt_molar": 0.15
+      },
+      "random_seed": 20260729,
+      "replicas": 1,
+      "schema": "bms.md.job.v3",
+      "stages": [
+        {
+          "mdp": {
+            "constraints": "none",
+            "coulombtype": "PME",
+            "cutoff-scheme": "Verlet",
+            "emtol": "1000",
+            "integrator": "steep",
+            "nsteps": "1000",
+            "nstlist": "20",
+            "pbc": "xyz",
+            "rcoulomb": "1.0",
+            "rlist": "1.0",
+            "rvdw": "1.0",
+            "vdwtype": "Cut-off"
+          },
+          "name": "relax"
+        },
+        {
+          "mdp": {
+            "constraint-algorithm": "lincs",
+            "constraints": "h-bonds",
+            "continuation": "no",
+            "coulombtype": "PME",
+            "cutoff-scheme": "Verlet",
+            "dt": "0.002",
+            "gen_seed": "20260729",
+            "gen_temp": "300",
+            "gen_vel": "yes",
+            "integrator": "md",
+            "nstenergy": "20",
+            "nsteps": "200",
+            "nstlist": "20",
+            "nstlog": "20",
+            "nstxout-compressed": "20",
+            "pbc": "xyz",
+            "pcoupl": "no",
+            "rcoulomb": "1.0",
+            "ref_t": "300",
+            "rlist": "1.0",
+            "rvdw": "1.0",
+            "tau_t": "1.0",
+            "tc-grps": "System",
+            "tcoupl": "v-rescale",
+            "vdwtype": "Cut-off"
+          },
+          "name": "sample"
+        }
+      ]
+    },
+    "bindings": {
+      "bindings": [
+        {
+          "path": "/opt/biomodstack/attempts/8512a51a-fe82-4659-a4f3-2731b9290955/bundle/inputs/fcacf7229718828c/inputs/md_execution_config.json",
+          "reference": {
+            "format": "md-job",
+            "lineage": [],
+            "logical_id": "native-input:9e30bb4d5c2aefab650abd9820363fd48117dc7945499a81f61a798d6f844a3a",
+            "owner": "params",
+            "role": "input",
+            "selector": [
+              "md_job_config"
+            ],
+            "sha256": "da9bd0a60c6c674ffbc81d895cb11b2fbdaf5482e4b80ddb2e8f4147179d2a0e",
+            "size_bytes": 2109,
+            "source_path": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1aki-smoke-retry1_20261010_195518/inputs/md_execution_config.json"
+          }
+        },
+        {
+          "path": "/opt/biomodstack/attempts/8512a51a-fe82-4659-a4f3-2731b9290955/bundle/inputs/fcacf7229718828c/inputs/structure.pdb",
+          "reference": {
+            "format": "pdb",
+            "lineage": [
+              "native-input:9e30bb4d5c2aefab650abd9820363fd48117dc7945499a81f61a798d6f844a3a"
+            ],
+            "logical_id": "native-input:86ace76e6a3aacf98d4bcb2c355cc9d4aa87c0c4a53dffe8d9fc37147e7c6afd",
+            "owner": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1aki-smoke-retry1_20261010_195518/inputs/md_execution_config.json",
+            "role": "structure",
+            "selector": [
+              "input",
+              "structure"
+            ],
+            "sha256": "c75d7a689617248cdd92dc6633531d2506fb9bef1e6e21e26c8f579ae6955abb",
+            "size_bytes": 116397,
+            "source_path": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1aki-smoke-retry1_20261010_195518/inputs/structure.pdb"
+          }
+        },
+        {
+          "path": "/opt/biomodstack/attempts/8512a51a-fe82-4659-a4f3-2731b9290955/bundle/inputs/fcacf7229718828c/inputs/md_execution_config.json",
+          "reference": {
+            "format": "json",
+            "lineage": [],
+            "logical_id": "native-input:393cd94eb0bd9dc132dd942d4c871ae66f25ee69391c0fc735512e4325c3ae0e",
+            "owner": "params",
+            "role": "input",
+            "selector": [
+              "generated_inputs",
+              "inputs/md_execution_config.json"
+            ],
+            "sha256": "da9bd0a60c6c674ffbc81d895cb11b2fbdaf5482e4b80ddb2e8f4147179d2a0e",
+            "size_bytes": 2109,
+            "source_path": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1aki-smoke-retry1_20261010_195518/inputs/md_execution_config.json"
+          }
+        },
+        {
+          "path": "/opt/biomodstack/attempts/8512a51a-fe82-4659-a4f3-2731b9290955/bundle/inputs/fcacf7229718828c/inputs/md_job_config.json",
+          "reference": {
+            "format": "json",
+            "lineage": [],
+            "logical_id": "native-input:74ec2d2a5165fe7c88e5fb654f018c1982922b0d71fc164a960e9febf88c47aa",
+            "owner": "native-invocation",
+            "role": "input",
+            "selector": [],
+            "sha256": "0535c0e4b94f8f19dac00211940f1abf2b041a18f22b436fd8845d841ce6726a",
+            "size_bytes": 2647,
+            "source_path": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1aki-smoke-retry1_20261010_195518/inputs/md_job_config.json"
+          }
+        }
+      ],
+      "directories": [
+        {
+          "path": "/opt/biomodstack/attempts/8512a51a-fe82-4659-a4f3-2731b9290955/bundle/inputs/fcacf7229718828c/inputs",
+          "reference": {
+            "format": "directory-manifest",
+            "lineage": [],
+            "logical_id": "native-directory:fcacf7229718828c307bc8e5b3d2b6cc69389bc186702c10577bfbfc2e437ab6",
+            "owner": "native-invocation",
+            "role": "input",
+            "selector": [],
+            "sha256": "399b0159e555086a915f1b0cbeab0b7e43e6da4b82f95f4ffdde082c5a9fccdf",
+            "size_bytes": 121153,
+            "source_path": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1aki-smoke-retry1_20261010_195518/inputs"
+          },
+          "source_path": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1aki-smoke-retry1_20261010_195518/inputs"
+        }
+      ],
+      "results_root": "/opt/biomodstack/attempts/8512a51a-fe82-4659-a4f3-2731b9290955/bundle/inputs/trusted-results",
+      "roots": [
+        "/opt/biomodstack/attempts/8512a51a-fe82-4659-a4f3-2731b9290955/bundle/inputs",
+        "/opt/biomodstack/attempts/8512a51a-fe82-4659-a4f3-2731b9290955/materialized/runtime",
+        "/opt/biomodstack/attempts/8512a51a-fe82-4659-a4f3-2731b9290955/results",
+        "/opt/biomodstack/attempts/8512a51a-fe82-4659-a4f3-2731b9290955/work",
+        "/opt/biomodstack/attempts/8512a51a-fe82-4659-a4f3-2731b9290955/msa-cache"
+      ],
+      "schema": "bms.portable-input-bindings.v1"
+    }
+  },
+  "protein_dna": {
+    "config": {
+      "chemistry": {
+        "assurance": "curated_profile",
+        "catalog_digest": "8f162c07602472bd333c39e690d0af480b96bac3745140a5e098dc58106a426d",
+        "family": "amber",
+        "profile_id": "amber_ff19sb_ol15_opc_protein_dna_v1",
+        "profile_sha256": "c3515dce026e1f845bd0369fcd22107661c69135b003d67ead25ee00316d4f10",
+        "requested_scope": "protein_dna",
+        "resolved_preparation": {
+          "force_field": "ff19SB+OL15",
+          "water_model": "opc"
+        },
+        "runtime_identity": {
+          "runtime_id": "md-preparation-v1",
+          "runtime_version": "1",
+          "sif_sha256": "625d81608118af006295601b8275389e7681a1d98a6fb0622e6241c5d101df4b"
+        },
+        "version": "1.0.0"
+      },
+      "engine": "gromacs",
+      "engine_runtime": {
+        "image_name": "gromacs-md-2025.3.sif",
+        "sif_sha256": "97c117ea07496c0d1b13d80be84d33345b89063b47ccfb83f6cbff0145f1385b"
+      },
+      "execution": {
+        "gpu_id": "0",
+        "gpu_offload": "full_forces",
+        "ntmpi": 1,
+        "ntomp": 2,
+        "pin": "on"
+      },
+      "input": {
+        "structure": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1lmb-smoke-retry1_20261010_195518/inputs/structure.pdb",
+        "structure_bytes": 225261,
+        "structure_sha256": "a61e5ae05fe2c588dc4c86943774f90b6610313cea8040e1b0189dc5c0548257"
+      },
+      "job_id": "3c4e5510-087f-4d37-91d2-085baef3e58b",
+      "preparation": {
+        "box_type": "dodecahedron",
+        "neutralize": true,
+        "padding_nm": 1.0,
+        "salt_molar": 0.15
+      },
+      "random_seed": 20260729,
+      "replicas": 1,
+      "schema": "bms.md.job.v3",
+      "stages": [
+        {
+          "mdp": {
+            "constraints": "none",
+            "coulombtype": "PME",
+            "cutoff-scheme": "Verlet",
+            "emtol": "1000",
+            "integrator": "steep",
+            "nsteps": "1000",
+            "nstlist": "20",
+            "pbc": "xyz",
+            "rcoulomb": "1.0",
+            "rlist": "1.0",
+            "rvdw": "1.0",
+            "vdwtype": "Cut-off"
+          },
+          "name": "relax"
+        },
+        {
+          "mdp": {
+            "constraint-algorithm": "lincs",
+            "constraints": "h-bonds",
+            "continuation": "no",
+            "coulombtype": "PME",
+            "cutoff-scheme": "Verlet",
+            "dt": "0.002",
+            "gen_seed": "20260729",
+            "gen_temp": "300",
+            "gen_vel": "yes",
+            "integrator": "md",
+            "nstenergy": "20",
+            "nsteps": "200",
+            "nstlist": "20",
+            "nstlog": "20",
+            "nstxout-compressed": "20",
+            "pbc": "xyz",
+            "pcoupl": "no",
+            "rcoulomb": "1.0",
+            "ref_t": "300",
+            "rlist": "1.0",
+            "rvdw": "1.0",
+            "tau_t": "1.0",
+            "tc-grps": "System",
+            "tcoupl": "v-rescale",
+            "vdwtype": "Cut-off"
+          },
+          "name": "sample"
+        }
+      ]
+    },
+    "bindings": {
+      "bindings": [
+        {
+          "path": "/opt/biomodstack/attempts/5b7bcff0-4674-4a70-8533-9b0c4be2c1bf/bundle/inputs/db52a19fa61a2b00/inputs/md_execution_config.json",
+          "reference": {
+            "format": "md-job",
+            "lineage": [],
+            "logical_id": "native-input:288ff876a0b69a95a88c723bf10f0d379591723d9e2577a9c71965131354c4d0",
+            "owner": "params",
+            "role": "input",
+            "selector": [
+              "md_job_config"
+            ],
+            "sha256": "0a7072cfe68f277ad799df4b2fa76133fdf9f16d1ecc4d2fa563695bc9d38216",
+            "size_bytes": 2120,
+            "source_path": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1lmb-smoke-retry1_20261010_195518/inputs/md_execution_config.json"
+          }
+        },
+        {
+          "path": "/opt/biomodstack/attempts/5b7bcff0-4674-4a70-8533-9b0c4be2c1bf/bundle/inputs/db52a19fa61a2b00/inputs/structure.pdb",
+          "reference": {
+            "format": "pdb",
+            "lineage": [
+              "native-input:288ff876a0b69a95a88c723bf10f0d379591723d9e2577a9c71965131354c4d0"
+            ],
+            "logical_id": "native-input:6e4f621fe6c2ed7c44ccb29eddded5966f560ff7460ab3561b604036991a6cce",
+            "owner": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1lmb-smoke-retry1_20261010_195518/inputs/md_execution_config.json",
+            "role": "structure",
+            "selector": [
+              "input",
+              "structure"
+            ],
+            "sha256": "a61e5ae05fe2c588dc4c86943774f90b6610313cea8040e1b0189dc5c0548257",
+            "size_bytes": 225261,
+            "source_path": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1lmb-smoke-retry1_20261010_195518/inputs/structure.pdb"
+          }
+        },
+        {
+          "path": "/opt/biomodstack/attempts/5b7bcff0-4674-4a70-8533-9b0c4be2c1bf/bundle/inputs/db52a19fa61a2b00/inputs/md_execution_config.json",
+          "reference": {
+            "format": "json",
+            "lineage": [],
+            "logical_id": "native-input:27ee7615029e3f6dbcd9fab6f9ab02dae3204ead50beea8cd0fe7f5d687b3506",
+            "owner": "params",
+            "role": "input",
+            "selector": [
+              "generated_inputs",
+              "inputs/md_execution_config.json"
+            ],
+            "sha256": "0a7072cfe68f277ad799df4b2fa76133fdf9f16d1ecc4d2fa563695bc9d38216",
+            "size_bytes": 2120,
+            "source_path": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1lmb-smoke-retry1_20261010_195518/inputs/md_execution_config.json"
+          }
+        },
+        {
+          "path": "/opt/biomodstack/attempts/5b7bcff0-4674-4a70-8533-9b0c4be2c1bf/bundle/inputs/db52a19fa61a2b00/inputs/md_job_config.json",
+          "reference": {
+            "format": "json",
+            "lineage": [],
+            "logical_id": "native-input:81a9da00e6aca446dc50b926ce7f33ca7d7f4711fc35343027e7d5dd77a9b678",
+            "owner": "native-invocation",
+            "role": "input",
+            "selector": [],
+            "sha256": "e3208a6c7fb75428e1d43c6cc9101c3f7ca0b9cd310c059b738301e938764749",
+            "size_bytes": 2658,
+            "source_path": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1lmb-smoke-retry1_20261010_195518/inputs/md_job_config.json"
+          }
+        }
+      ],
+      "directories": [
+        {
+          "path": "/opt/biomodstack/attempts/5b7bcff0-4674-4a70-8533-9b0c4be2c1bf/bundle/inputs/db52a19fa61a2b00/inputs",
+          "reference": {
+            "format": "directory-manifest",
+            "lineage": [],
+            "logical_id": "native-directory:db52a19fa61a2b00ade5702936deefbd9232b5af40e8d57a3d53130c6a3736ae",
+            "owner": "native-invocation",
+            "role": "input",
+            "selector": [],
+            "sha256": "3c876fad76103d6614821e445d64bad9c087b380e2714cb66ba86fe5870c9140",
+            "size_bytes": 230039,
+            "source_path": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1lmb-smoke-retry1_20261010_195518/inputs"
+          },
+          "source_path": "/home/dalab/.biomodstack-dev/bms_results/md-bc-4090-1lmb-smoke-retry1_20261010_195518/inputs"
+        }
+      ],
+      "results_root": "/opt/biomodstack/attempts/5b7bcff0-4674-4a70-8533-9b0c4be2c1bf/bundle/inputs/trusted-results",
+      "roots": [
+        "/opt/biomodstack/attempts/5b7bcff0-4674-4a70-8533-9b0c4be2c1bf/bundle/inputs",
+        "/opt/biomodstack/attempts/5b7bcff0-4674-4a70-8533-9b0c4be2c1bf/materialized/runtime",
+        "/opt/biomodstack/attempts/5b7bcff0-4674-4a70-8533-9b0c4be2c1bf/results",
+        "/opt/biomodstack/attempts/5b7bcff0-4674-4a70-8533-9b0c4be2c1bf/work",
+        "/opt/biomodstack/attempts/5b7bcff0-4674-4a70-8533-9b0c4be2c1bf/msa-cache"
+      ],
+      "schema": "bms.portable-input-bindings.v1"
+    }
+  }
+}

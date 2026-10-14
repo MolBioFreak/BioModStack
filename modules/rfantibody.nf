@@ -206,7 +206,8 @@ process RFANTIBODY {
 
     if [ -n "\$RESUME_STAGE_DIR" ] && [ "\$RESUME_STAGE_DIR" != "\$WORK_DIR" ] && [ -d "\$RESUME_STAGE_DIR/output" ]; then
         echo "Resume stage work dir: \$RESUME_STAGE_DIR" | tee -a "\${LOG_FILE}"
-        cp -an "\$RESUME_STAGE_DIR"/output/. output/ 2>/dev/null || true
+        python3 ${params.code_root}/scripts/rfantibody_inference_wrapper.py --bms-seed-output \\
+            "\$RESUME_STAGE_DIR/output" output "${meta.id}" "${num_designs}" 2>/dev/null || true
         EXISTING_DESIGNS=\$(find output -maxdepth 1 -type f -name "${meta.id}_*.pdb" | wc -l | tr -d '[:space:]')
         echo "Found \$EXISTING_DESIGNS existing RFantibody designs in prior task output" | tee -a "\${LOG_FILE}"
         if [ "\$EXISTING_DESIGNS" -ge "${num_designs}" ]; then

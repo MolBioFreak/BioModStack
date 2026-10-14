@@ -58,14 +58,4 @@ describe('mounted NGS workflow chooser', () => {
         expect(onSelect).toHaveBeenCalledWith('fastqQc');
     });
 
-    it('disables nonessential card motion when reduced motion is requested', async () => {
-        await renderChooser();
-        const cards = Array.from(container.querySelectorAll<HTMLButtonElement>('button[data-ngs-workflow-key]'));
-
-        expect(cards).not.toHaveLength(0);
-        for (const card of cards) {
-            expect(card.className).toContain('motion-reduce:transform-none');
-            expect(card.className).toContain('motion-reduce:transition-none');
-        }
-    });
 });

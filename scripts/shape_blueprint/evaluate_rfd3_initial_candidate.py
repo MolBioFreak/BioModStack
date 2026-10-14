@@ -70,8 +70,8 @@ def _sha256(path: Path) -> str:
 
 
 def _regular(path: Path, label: str) -> Path:
-    if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
-        raise ValueError(f"{label} is absent, linked, or not a regular single-link file")
+    if not path.is_file():
+        raise ValueError(f"{label} is absent or not a regular file")
     return path
 
 

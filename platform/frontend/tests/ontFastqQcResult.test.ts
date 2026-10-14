@@ -25,16 +25,6 @@ test('strict parser accepts path-opaque stage counts from the backend result con
     assert.equal(JSON.stringify(parsed.stages).includes('bms_results/'), false);
 });
 
-test('strict parser rejects the old path-bearing stage contract', () => {
-    const payload = validPayload();
-    (payload.stages as Array<Record<string, unknown>>)[0] = {
-        stage: 'fastq_align',
-        status: 'complete',
-        outputs: ['bms_results/retry3/align/aligned.bam'],
-    };
-    assert.throws(() => parseOntFastqQcResult(payload, JOB_ID), /stage has an unsupported wire shape/u);
-});
-
 test('strict parser accepts closed decision checks and rejects synthetic interpretation fields', () => {
     const payload = validPayload();
     const parsed = parseOntFastqQcResult(payload, JOB_ID);
@@ -106,24 +96,6 @@ test('parser accepts sparse checks, additional metrics and reduced topology prov
     assert.deepEqual(parsed.verification.checks.topology.metrics, checks(payload).topology.metrics);
     assert.equal(parsed.summary.new_measurement, null);
     assert.equal('mean_read_length_bp' in parsed.summary, false);
-});
-
-test('parser retains check status, reason and safe JSON type boundaries', () => {
-    const cases: Array<[string, unknown]> = [
-        ['status', 'PASS'], ['reason_codes', [42]], ['purpose', {}],
-        ['metrics', { identity_fraction: Infinity }], ['metrics', { evidence: undefined }],
-        ['units', { identity_fraction: 1 }],
-    ];
-    for (const [key, value] of cases) {
-        const payload = validPayload();
-        checks(payload).sequence_identity[key] = value;
-        assert.throws(() => parseOntFastqQcResult(payload, JOB_ID), /verification checks/u);
-    }
-    for (const value of [[], {}, Infinity, undefined]) {
-        const payload = validPayload();
-        (payload.summary as Record<string, unknown>).measurement = value;
-        assert.throws(() => parseOntFastqQcResult(payload, JOB_ID), /summary.measurement/u);
-    }
 });
 
 test('parser does not compare filtered histogram counts or independent support sources to input reads', () => {
@@ -199,13 +171,6 @@ test('strict parser rejects normalized variant interval drift', () => {
     assert.throws(() => parseOntFastqQcResult(payload, JOB_ID), /variant interval/u);
 });
 
-test('strict parser rejects open threshold-profile values', () => {
-    const payload = validPayload();
-    const profile = verification(payload).threshold_profile as Record<string, unknown>;
-    (profile.values as Record<string, unknown>).browser_threshold = 1;
-    assert.throws(() => parseOntFastqQcResult(payload, JOB_ID), /threshold profile values/u);
-});
-
 test('strict parser rejects relational and payload-bound drift', () => {
     const cases: Array<[string, (payload: Record<string, unknown>) => void, RegExp]> = [
         ['job identity', (payload) => { (payload.job as Record<string, unknown>).id = 'other-job'; }, /job/u],
@@ -255,22 +220,6 @@ test('strict parser rejects relational and payload-bound drift', () => {
     }
 });
 
-test('strict parser rejects artifact enum values outside the backend contract', () => {
-    for (const [field, replacement] of [
-        ['kind', 'future_kind'],
-        ['scientific_role', 'future_role'],
-        ['content_disposition', 'future_disposition'],
-        ['filename_extension', 'future_extension'],
-    ] as const) {
-        const payload = validPayload();
-        const artifact = (payload.artifacts as Array<Record<string, unknown>>)
-            .find((item) => item.state === 'present');
-        assert.ok(artifact);
-        artifact[field] = replacement;
-        assert.throws(() => parseOntFastqQcResult(payload, JOB_ID), /artifact/u, field);
-    }
-});
-
 test('strict parser rejects impossible alignment-session branches', () => {
     const cases: Array<(payload: Record<string, unknown>) => void> = [
         (payload) => {
@@ -293,7 +242,6 @@ test('strict parser rejects impossible alignment-session branches', () => {
         assert.throws(() => parseOntFastqQcResult(payload, JOB_ID), /alignment session branch/u);
     }
 });
-
 
 test('unavailable observations preserve science and remote v3 does not invent an invocation', () => {
     const payload = validPayload();

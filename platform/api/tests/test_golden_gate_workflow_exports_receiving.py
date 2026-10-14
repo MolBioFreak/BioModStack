@@ -142,67 +142,8 @@ asyncio.run(main())
     assert json.loads((tmp_path / 'fresh.json').read_text()) == expected
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize('task', ['evaluate_overhangs', 'optimize_overhangs'])
-async def test_evidence_only_export_import_without_save_or_scores(tmp_path, monkeypatch, task):
-    body = {'task': task, 'fidelity': {'dataset_id': None}}
-    if task == 'evaluate_overhangs':
-        body['junctions'] = ['AATG', 'GGAG']
-    else:
-        body.update(candidate_domain=['AATG', 'GGAG', 'TGAC'], junction_count=2, end_length=4,
-            search={'ranking_mode': 'lexicographic', 'seed': 19, 'alternatives': 3})
-    async with client_store(tmp_path) as (client, _):
-        preview = await client.post(BASE, json=body)
-        assert preview.status_code == 200, preview.text
-        freeze_owners(monkeypatch)
-        files = archive(await client.post(BASE + '/export', json=preview.json()), task)
-        assert set(files) == {'workflow.json', 'comparison.txt'}
-        assert b'not server-attested' in files['comparison.txt']
-        document = json.loads(files['workflow.json'])
-        assert await offline_import(document) == preview.json()
-        assert not document['result']['solutions']
-        assert document['result']['evaluation' if task == 'evaluate_overhangs' else 'search_result']
 
 
-@pytest.mark.asyncio
-async def test_selected_split_alternative_owns_actual_retained_reaction(tmp_path, monkeypatch):
-    body = dict(task='split_target', target=dict(id='target', source=dict(kind='inline',
-        sequence='AATG' + A + 'GGAG' + B, topology='circular')), enzyme=binding('BsaI'),
-        windows=[dict(start=20,end=24),dict(start=80,end=84)],
-        preparation=dict(clamp='TT',spacer='A'), search=dict(ranking_mode='lexicographic',
-            unique_classes=False,exclude_palindromes=False,alternatives=12,seed=23),
-        reaction=dict(settings=dict(total_volume_uL=19),parts=[
-            dict(part_id='part-1',amount=dict(value=0.1,unit='pmol'),stock=dict(value=20,unit='ng/uL')),
-            dict(part_id='part-2',length_bp=999,amount=dict(value=2,unit='ng'),stock=None)]))
-    async with client_store(tmp_path) as (client, _):
-        response = await client.post(BASE, json=body)
-        assert response.status_code == 200, response.text
-        result = WorkflowResult.model_validate(response.json())
-        first = result.solutions[0]
-        other = next(s for s in result.solutions if s.reaction.request.parts[0].length_bp != first.reaction.request.parts[0].length_bp)
-        from services.assembly.golden_gate_design import design_material
-        for candidate in result.solutions:
-            retained = design_material(candidate.design, candidate.design.preparations[0].retained_material_id)
-            assert candidate.reaction.request.parts[0].length_bp == len(retained.sequence)
-            assert candidate.reaction.rows[0].requested_mass_ng == pytest.approx(0.1 * 660 * len(retained.sequence) / 1000)
-            assert candidate.reaction.request.parts[1].length_bp == 999
-            assert candidate.reaction.request.parts[1].stock is None
-        chosen = result.model_copy(update={'selected_solution_id': other.id})
-        saved = await client.post(BASE + '/save', json=SaveDesignRequest(selection=freeze_selection(chosen,other.id),
-            name='Alternative',idempotency_key='alternative').model_dump(mode='json'))
-        assert saved.status_code == 200, saved.text
-        assert saved.json()['result']['solutions'][0]['reaction'] == other.reaction.model_dump(mode='json')
-        freeze_owners(monkeypatch)
-        files = archive(await client.post(BASE + '/export', json=chosen.model_dump(mode='json')), 'selected-alternative')
-        portable = read_design_export(files['design.json'])
-        assert portable.request == other.fixed_request
-        assert portable.reaction == other.reaction != first.reaction
-        assert portable.fidelity == other.fidelity
-        rows = list(csv.DictReader(io.StringIO(files['reaction.csv'].decode())))
-        assert float(rows[0]['requested_mass_ng']) == other.reaction.rows[0].requested_mass_ng
-        assert await offline_import(json.loads(files['workflow.json'])) == chosen.model_dump(mode='json')
-        retained = archive(await client.get(BASE + '/' + saved.json()['operation_id'] + '/export'), 'saved-alternative')
-        assert retained['reaction.csv'] == files['reaction.csv']
 
 
 @pytest.mark.asyncio

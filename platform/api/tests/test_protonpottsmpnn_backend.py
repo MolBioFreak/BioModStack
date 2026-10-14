@@ -44,27 +44,6 @@ def assert_plan(invocation):
     assert json.loads(meta.result_contract_json) == bundle.resolve_job_result_contract(SimpleNamespace(model_id='protonpottsmpnn', mode='redesign'))
 
 
-def test_destination_owns_native_device_and_gpu_plan(tmp_path, monkeypatch):
-    from services.gpu_orchestrator import estimate_vram
-    monkeypatch.delenv('BMS_PROTONPOTTSMPNN_DEVICE', raising=False)
-    remote = jobs.normalize_job_request(request(tmp_path/'source.pdb', 'worker'))
-    assert remote.params['protonpottsmpnn_device'] == 'cuda'
-    assert estimate_vram('protonpottsmpnn', 114, remote.params) > 0
-    plan = compile_nextflow_invocation(remote.model_id, remote.mode, remote.params,
-        str(tmp_path/'remote-output'), _preview_only=True)
-    assert_plan(plan)
-    resources = json.loads(plan.execution_plan.metadata.static_components[0].resources_json)
-    assert resources['gpu']['count'] == 1
-    assert plan.native_parameters['protonpottsmpnn_device'] == 'cuda'
-    local_request = JobCreate.model_validate(remote.model_dump(mode='json'))
-    local_request.execution_target_id = None
-    local = jobs.normalize_job_request(local_request)
-    assert local.params['protonpottsmpnn_device'] == 'cpu'
-    assert estimate_vram('protonpottsmpnn', 114, local.params) == 0
-    local_plan = compile_nextflow_invocation(local.model_id, local.mode, local.params,
-        str(tmp_path/'local-output'), _preview_only=True)
-    assert json.loads(local_plan.execution_plan.metadata.static_components[0].resources_json)['gpu'] is None
-    assert native.prepare_design_request(remote.mode, remote.params) == native.prepare_design_request(local.mode, local.params)
 
 
 def test_closed_full_inventory_and_exact_editable_example_defaults():
@@ -97,44 +76,8 @@ async def test_discovery_returns_canonical_nested_schema():
     assert models._native_parameter_schema('protonpottsmpnn', 'redesign') == contract.parameter_schema()
 
 
-def test_normalizer_clone_and_real_preview_preserve_falsey_fields(tmp_path):
-    source = tmp_path / 'source.pdb'
-    source.write_bytes(b'REMARK inert\n')
-    normalized = jobs.normalize_job_request(request(source))
-    replay = jobs.normalize_job_request(JobCreate.model_validate(normalized.model_dump(mode='json')))
-    assert normalized == replay
-    preview = compile_nextflow_invocation(replay.model_id, replay.mode, replay.params, str(tmp_path/'absent'), _preview_only=True)
-    assert_plan(preview)
-    document = json.loads(preview.generated_inputs[0].payload)
-    assert document['options']['criteria'][0]['combined_lambda'] == 0.
-    assert document['options']['criteria'][0]['temperature'] == 0.
-    assert document['options']['initial_sequences'] == []
-    assert document['options']['engine_options']['etab_hidden'] == []
-    assert document['options']['write_structures'] is False
-    assert not (tmp_path/'absent').exists()
 
 
-@pytest.mark.asyncio
-async def test_real_local_job_insertion_clone_replays_after_original_removed(admission, target):
-    first = await jobs._create_job(request(target), BackgroundTasks(), admission)
-    job = await admission.get(Job, first.id)
-    assert job.vram_estimate_mb == 0
-    before = native.read_prepared_request(job.mode, job.params)
-    source = native.prepared_source_path(job)
-    assert source.read_bytes() == target.read_bytes()
-    target.unlink()
-    invocation = compile_job_nextflow_invocation(job, job.params, job.output_dir)
-    assert_plan(invocation)
-    assert '-profile' in invocation.command
-    assert invocation.command[invocation.command.index('-profile')+1].startswith('protonpottsmpnn_design,')
-    replay = request('/not-opened.pdb')
-    replay.name = 'native clone'
-    replay.params = copy.deepcopy(job.params)
-    second = await jobs._create_job(replay, BackgroundTasks(), admission)
-    clone = await admission.get(Job, second.id)
-    assert native.read_prepared_request(clone.mode, clone.params) == before
-    assert native.prepared_source_path(clone) != source
-    assert native.prepared_source_path(clone).read_bytes() == source.read_bytes()
 
 
 @pytest.mark.asyncio

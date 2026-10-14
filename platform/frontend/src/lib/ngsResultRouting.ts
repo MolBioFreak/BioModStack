@@ -66,6 +66,8 @@ export function ngsResultHref(jobId: string, currentSearch = ''): string {
         return `/ngs?section=analyses&job_id=${encodeURIComponent(jobId)}`;
     }
     const params = new URLSearchParams(currentSearch);
+    // A new result keeps Experiment context, not another run's viewer/selection.
+    for (const key of ['view', 'viewer_session_id', 'run_id', 'reference_set_id', 'assignment_id']) params.delete(key);
     params.set('section', 'analyses');
     params.set('job_id', jobId);
     return `/ngs?${params.toString()}`;

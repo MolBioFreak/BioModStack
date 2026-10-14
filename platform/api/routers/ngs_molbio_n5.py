@@ -474,13 +474,14 @@ def _native_page(rows: list[Any], *, scope: str, limit: int, identity: str, docu
     return {"items": [document(row) for row in page], "next_cursor": next_cursor, "has_more": next_cursor is not None}
 
 
-async def _native_rows(session: AsyncSession, model: Any, *, domain_id: str, identity: str, cursor: str | None, limit: int, scope: str) -> list[Any]:
+async def _native_rows(session: AsyncSession, model: Any, *, domain_id: str, identity: str, cursor: str | None, limit: int, scope: str, columns: tuple[Any, ...] = ()) -> list[Any]:
     anchor = decode_cursor(cursor, scope=scope, limit=limit)
     id_column = getattr(model, identity)
-    statement = select(model).where(model.global_domain_experiment_id == domain_id).order_by(model.created_at.desc(), id_column.desc()).limit(limit + 1)
+    statement = select(*columns if columns else (model,)).where(model.global_domain_experiment_id == domain_id).order_by(model.created_at.desc(), id_column.desc()).limit(limit + 1)
     if anchor:
         statement = statement.where(or_(model.created_at < anchor[0], (model.created_at == anchor[0]) & (id_column < anchor[1])))
-    return list((await session.scalars(statement)).all())
+    result = await session.execute(statement)
+    return list(result.all() if columns else result.scalars().all())
 
 
 async def _hub_page(session: AsyncSession, statement: Any, *, scope: str,
@@ -1110,7 +1111,9 @@ async def state_revisions(project_id: str, experiment_id: str, domain_id: str, c
     try:
         await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
         scope = f"state-revisions:{project_id}:{domain_id}"
-        rows = await _native_rows(native, MolBioNGSDomainStateRevision, domain_id=domain_id, identity="id", cursor=cursor, limit=limit, scope=scope)
+        rows = await _native_rows(native, MolBioNGSDomainStateRevision, domain_id=domain_id, identity="id", cursor=cursor, limit=limit, scope=scope, columns=(
+            MolBioNGSDomainStateRevision.id, MolBioNGSDomainStateRevision.revision_number, MolBioNGSDomainStateRevision.binding_revision_id, MolBioNGSDomainStateRevision.payload_sha256, MolBioNGSDomainStateRevision.membership_graph_sha256, MolBioNGSDomainStateRevision.created_at,
+        ))
         return _bounded_response({"schema": "bms.ngs-molbio.state-revision-list.v1", **_native_page(rows, scope=scope, limit=limit, identity="id", document=lambda row: {"state_revision_id": row.id, "revision_number": row.revision_number, "binding_revision_id": row.binding_revision_id, "payload_sha256": row.payload_sha256, "membership_graph_sha256": row.membership_graph_sha256, "reopen_uri": f"/molbio-ngs/domain-experiments/{domain_id}?state_revision_id={row.id}", "created_at": row.created_at})})
     except ExperimentServiceError as exc:
         raise _error(exc) from exc
@@ -1143,7 +1146,9 @@ async def evidence(project_id: str, experiment_id: str, domain_id: str, cursor: 
     try:
         await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
         scope = f"evidence:{project_id}:{domain_id}"
-        rows = await _native_rows(native, MolBioNGSEvidenceAssessment, domain_id=domain_id, identity="evidence_id", cursor=cursor, limit=limit, scope=scope)
+        rows = await _native_rows(native, MolBioNGSEvidenceAssessment, domain_id=domain_id, identity="evidence_id", cursor=cursor, limit=limit, scope=scope, columns=(
+            MolBioNGSEvidenceAssessment.evidence_id, MolBioNGSEvidenceAssessment.state_revision_id, MolBioNGSEvidenceAssessment.sample_revision_id, MolBioNGSEvidenceAssessment.wrapper_sha256, MolBioNGSEvidenceAssessment.created_at,
+        ))
         return _bounded_response({"schema": "bms.ngs-molbio.evidence-list.v1", **_native_page(rows, scope=scope, limit=limit, identity="evidence_id", document=lambda row: {"evidence_id": row.evidence_id, "state_revision_id": row.state_revision_id, "sample_revision_id": row.sample_revision_id, "wrapper_sha256": row.wrapper_sha256, "reopen_uri": f"/molbio-ngs/domain-experiments/{domain_id}/evidence/{row.evidence_id}", "created_at": row.created_at})})
     except ExperimentServiceError as exc:
         raise _error(exc) from exc

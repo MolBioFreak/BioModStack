@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
+    data: undefined as any, submission: undefined as any,
     planCalls: [] as Array<Record<string, unknown>>,
     readbackCalls: [] as Array<Record<string, unknown>>,
 }));
@@ -33,7 +34,8 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         mutate: (payload: Record<string, unknown>) => state.planCalls.push(payload),
     }),
     useReadBioXpPipetteReadback: () => ({
-        data: undefined,
+        data: state.data, submission: state.submission,
+        newOperation: (payload: Record<string, unknown>) => state.readbackCalls.push({newOperation: true, ...payload}),
         error: null,
         isPending: false,
         mutate: (payload: Record<string, unknown>) => state.readbackCalls.push(payload),
@@ -67,6 +69,7 @@ const channel = (id: number, overrides: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => {
+    state.data = undefined; state.submission = undefined;
     state.planCalls = [];
     state.readbackCalls = [];
     container = document.createElement('div');
@@ -80,6 +83,28 @@ afterEach(async () => {
 });
 
 describe('mounted BioXP four-channel pipette panel', () => {
+    it.each([undefined, null, false, true])('keeps an absent stop observation unknown without erasing false (%s)', async allowToStop => {
+        const pipettes = { channels: [], allow_to_stop: allowToStop } as never;
+        await act(async () => root.render(<BioXpPipetteControlPanel connected generation={77} pipettes={pipettes} />));
+        const term = [...container.querySelectorAll('dt')].find(node => node.textContent === 'Allow to stop')!;
+        expect(term.nextElementSibling?.textContent).toBe(allowToStop == null ? 'unavailable' : String(allowToStop));
+        expect(state.readbackCalls).toEqual([]);
+        expect(state.planCalls).toEqual([]);
+    });
+    it('renders returned fields instead of only semantic success and reuses the deliberate newOperation owner', async () => {
+        state.data = {truth_source:'live_hardware_queries', receipt_id:'read-1', semantic_ok:false,
+            channels: [{channel:0, semantic_ok:true, firmware:{firmware:'fixture-fw'}, status:{ok:true}, tip:{tip_loaded:false, reply_received:true}, pressure:{pressure:0, hardware_truth_level:'hardware_query'}, data:{samples:[0,1]}}]};
+        state.submission = {idempotencyKey:'identity-1', expectedConnectionGeneration:77};
+        await act(async () => root.render(<BioXpPipetteControlPanel connected generation={77}/>));
+        const card = container.querySelector('[data-pipette-channel="0"]')!;
+        for (const value of ['fixture-fw', 'tip loaded', 'false', 'pressure', '0', 'samples']) expect(card.textContent).toContain(value);
+        expect(container.querySelectorAll('[data-pipette-channel]')).toHaveLength(4);
+        const read = [...container.querySelectorAll('button')].find(b => b.textContent === 'Read hardware again')!;
+        expect(read.closest('details')).toBeNull();
+        await act(async () => read.click());
+        expect(state.readbackCalls).toEqual([{newOperation:true, include_data:false}]);
+        expect(container.textContent).toContain('Request identity-1');
+    });
     it('renders four fixed truthful channel cards and robot-owned disabled physical controls', async () => {
         const pipettes = {
             ok: false,
@@ -170,7 +195,7 @@ describe('mounted BioXP four-channel pipette panel', () => {
         expect(physicalControls).toHaveLength(5);
         expect(physicalControls.every((button) => button.disabled)).toBe(true);
         expect(physicalControls.map((button) => button.textContent)).toEqual([
-            'Load tip physically',
+            'Assign source tip type / location (host only)',
             'Move to waste physically',
             'Detect fluid physically',
             'Lift pipette head (Z)',
@@ -241,7 +266,7 @@ describe('mounted BioXP four-channel pipette panel', () => {
         const buttons = [...container.querySelectorAll<HTMLButtonElement>('[data-physical-pipette-control]')];
         expect(buttons).toHaveLength(5);
         expect(buttons.map((button) => ({ label: button.textContent, disabled: button.disabled }))).toEqual([
-            { label: 'Load tip physically', disabled: false },
+            { label: 'Assign source tip type / location (host only)', disabled: false },
             { label: 'Move to waste physically', disabled: false },
             { label: 'Detect fluid physically', disabled: true },
             { label: 'Lift pipette head (Z)', disabled: false },

@@ -1,4 +1,6 @@
 import React, { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+let client: QueryClient;
 import { createRoot, type Root } from 'react-dom/client';
 import { spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, expect, it } from 'vitest';
@@ -21,12 +23,13 @@ function fixture(): CalibrationRun { return { run_id: 'fluid-run-1', before: sna
         { plate: 'MS', measured_raw_z: 81000, saved_revision_id: 'after-2' }] }; }
 async function tick() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); }
 async function mount(connected = true, runId: string | undefined = 'fluid-run-1') {
-    await act(async () => root.render(<BioXpCalibrationRun generation={77} connected={connected} runId={runId} />)); await tick();
+    await act(async () => root.render(<QueryClientProvider client={client}><BioXpCalibrationRun generation={77} connected={connected} runId={runId} /></QueryClientProvider>)); await tick();
 }
 function button(text: string) { return [...host.querySelectorAll('button')].find(el => el.textContent === text)!; }
 async function click(text: string) { await act(async () => button(text).click()); await tick(); }
 const restore = 'Reject / restore full pre-run calibration';
 beforeEach(() => {
+    client = new QueryClient({ defaultOptions: { queries: {retry:false, gcTime:Infinity} } });
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     run = fixture(); calls = []; deny = false; unavailable = false; wrongIdentity = false; delay = null;
     api.defaults.adapter = async config => {
@@ -44,7 +47,7 @@ beforeEach(() => {
         return { data: wrongIdentity ? { ...run, run_id: 'wrong-run' } : run, status: 200, statusText: 'fixture', headers: {}, config };
     };
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); api.defaults.adapter = original; });
+afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); api.defaults.adapter = original; });
 
 it.each(['accept', 'restore'] as const)('compares partial saves, submits %s, and reads the exact run back', async decision => {
     await mount();
@@ -150,7 +153,7 @@ it('does not apply a response belonging to another run', async () => {
 });
 
 it('recovers a durable comparison by literal run ID without submitting motion', async () => {
-    await act(async () => root.render(<BioXpCalibrationRun generation={77} connected />));
+    await act(async () => root.render(<QueryClientProvider client={client}><BioXpCalibrationRun generation={77} connected /></QueryClientProvider>));
     const input = host.querySelector('input')!;
     await act(async () => {
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'fluid-run-1');

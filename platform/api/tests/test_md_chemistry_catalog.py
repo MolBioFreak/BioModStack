@@ -932,7 +932,7 @@ def test_catalog_api_routes_are_registered_reachable_and_do_not_expose_host_path
     missing = client.get("/api/molecular-dynamics/chemistry-profiles/not_a_profile")
 
     assert capabilities.status_code == 200
-    assert capabilities.json()["contract_schemas"] == ["bms.md.job.v2", "bms.md.job.v1"]
+    assert capabilities.json()["contract_schemas"] == ["bms.md.job.v3", "bms.md.job.v2", "bms.md.job.v1"]
     assert inventory.status_code == 200
     assert inventory.json()["selectable_profile_ids"] == ["gmx_amber99sb_ildn_tip3p_smoke_v1"]
     assert detail.status_code == 200

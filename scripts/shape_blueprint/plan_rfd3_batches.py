@@ -26,7 +26,7 @@ def _sha256(value: object) -> str:
 
 
 def _load_registry() -> dict[str, Any]:
-    if POLICY_REGISTRY_PATH.is_symlink() or not POLICY_REGISTRY_PATH.is_file() or POLICY_REGISTRY_PATH.stat().st_nlink != 1:
+    if not POLICY_REGISTRY_PATH.is_file():
         raise ValueError("RFD3 batch policy registry is unavailable")
     registry = json.loads(POLICY_REGISTRY_PATH.read_text(encoding="utf-8"))
     if not isinstance(registry, dict) or registry.get("schema") != "bms_rfd3_batch_policy_registry_v1":

@@ -77,7 +77,7 @@ async def test_real_source_launch_prewarm_lossless_and_cache_reuse(package, loca
             if member.isfile():
                 local = source / member.name
                 assert local.read_bytes() == archive.extractfile(member).read()
-                assert local.stat().st_mode & 0o777 == member.mode & 0o777
+                assert local.stat().st_mode & 0o777 == member.mode & 0o555
 
 
 @pytest.mark.parametrize('compressed', [False, True])

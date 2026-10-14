@@ -283,6 +283,14 @@ class Cache:
                 [item['sha256']], owner, identities={item['sha256']: identity},
                 expected_sizes={item['sha256']: item['size_bytes']})
 
+    def rebuild_runtime_image(self, value, **maintenance):
+        """Operator-only recovery; external target maintenance fence is required."""
+        item = artifact(value)
+        if item.get('kind') != 'runtime_image':
+            raise ValueError('runtime_image_required')
+        return runtime_lifecycle().rebuild_image_derivation(
+            self.image_store, item['sha256'], expected_size=item['size_bytes'], **maintenance)
+
     def prepare_runtime_image(self, value, backend, operation_id):
         """Warm the backend's shared image representation, never execute it.
 
@@ -531,7 +539,7 @@ class Cache:
                                 else:
                                     # An executable permission projection cannot chmod
                                     # other aliases of an immutable content object.
-                                    self._publish_copy(source, out, destination.name, row, row['mode'])
+                                    self._publish_immutable(source, objects, out, destination.name, row, row['mode'])
                             finally:
                                 os.close(source)
                     for name in sorted(dirs, key=lambda n: len(PurePosixPath(n).parts), reverse=True):
@@ -886,12 +894,21 @@ class Cache:
         return {**item, 'state': state}
 
     def _publish_copy(self, source_fd, parent, name, item, mode):
-        temporary = '.partial-' + uuid.uuid4().hex
+        prefix = '.partial-' + item['sha256'] + '-'
+        for stale in os.listdir(parent):
+            if stale.startswith(prefix):
+                os.unlink(stale, dir_fd=parent)
+        temporary = prefix + uuid.uuid4().hex
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
         try:
-            os.lseek(source_fd, 0, os.SEEK_SET)
+            if isinstance(source_fd, int):
+                os.lseek(source_fd, 0, os.SEEK_SET)
+                read = lambda: os.read(source_fd, CHUNK)
+            else:
+                source_fd.seek(0)
+                read = lambda: source_fd.read(CHUNK)
             digest, done = hashlib.sha256(), 0
-            while data := os.read(source_fd, CHUNK):
+            while data := read():
                 done += len(data)
                 if done > item['size_bytes']:
                     raise ValueError('size_mismatch')
@@ -914,6 +931,54 @@ class Cache:
                 os.unlink(temporary, dir_fd=parent)
             except FileNotFoundError:
                 pass
+
+    def _publish_immutable(self, source_fd, objects, parent, name, item, mode):
+        """Caller holds the content lock; never change the donor inode's mode."""
+        if not verified(source_fd, item):
+            raise ValueError('corrupt_cache_object')
+        donor = item['sha256']
+        with directory(self.root / 'objects/modes' / donor[:2], create=True) as modes:
+            source_parent = objects
+            if mode != 0o444:
+                donor = item['sha256'] + '-' + format(mode, '03o')
+                try:
+                    fd = os.open(donor, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=modes)
+                except FileNotFoundError:
+                    fd = None
+                try:
+                    ready = (fd is not None and stat.S_IMODE(regular(fd).st_mode) == mode
+                             and verified(fd, item))
+                finally:
+                    if fd is not None:
+                        os.close(fd)
+                if not ready:
+                    self._publish_copy(source_fd, modes, donor, item, mode)
+                source_parent = modes
+            temporary = '.link-' + uuid.uuid4().hex
+            try:
+                os.link(donor, temporary, src_dir_fd=source_parent,
+                        dst_dir_fd=parent, follow_symlinks=False)
+                os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
+                os.fsync(parent)
+            finally:
+                try:
+                    os.unlink(temporary, dir_fd=parent)
+                except FileNotFoundError:
+                    pass
+
+    def projection_present(self, item, mode):
+        if mode == 0o444:
+            return True  # Generic CAS allocation is accounted separately.
+        with self.locked(item), directory(self.root / 'objects/modes' / item['sha256'][:2], create=True) as parent:
+            try:
+                fd = os.open(item['sha256'] + '-' + format(mode, '03o'),
+                             os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+            except FileNotFoundError:
+                return False
+            try:
+                return stat.S_IMODE(regular(fd).st_mode) == mode and verified(fd, item)
+            finally:
+                os.close(fd)
 
     def ingest(self, value, source):
         item = artifact(value)
@@ -1009,49 +1074,68 @@ class Cache:
             os.rmdir(path.name, dir_fd=parent)
         return {'state': 'ready'}
 
-    def extract_source(self, value, destination):
-        """Extract only a verified git archive; all members regular files/directories."""
+    def extract_source(self, value, destination, *, immutable=False):
+        """Install archive member bodies once; attempts receive private directory views.
+
+        The default retains old envelope modes. New producers request immutable
+        leaves and record those same modes in the existing envelope.
+        """
         import tarfile
         item = artifact(value)
         destination = PurePosixPath(destination)
         if not destination.is_absolute() or '..' in destination.parts or destination.is_relative_to(self.root):
             raise ValueError('unsafe_source_destination')
+        marker = Path(self.root) / 'archives' / ('source-' + item['sha256'] + '.json')
         with self.locked(item), self.objects(item) as parent:
-            fd = os.open(item['sha256'], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
-            with os.fdopen(fd, 'rb') as source:
-                if not verified(source.fileno(), item):
-                    raise ValueError('corrupt_source_archive')
-                source.seek(0)
-                # Autodetection also permits retained uncompressed attempts. The
-                # digest above authenticates transport bytes before decompression.
-                with tarfile.open(fileobj=source, mode='r:*') as archive:
-                    members = archive.getmembers()
-                    for member in members:
-                        path = PurePosixPath(member.name)
-                        if path.is_absolute() or '..' in path.parts or not (member.isfile() or member.isdir()):
-                            raise ValueError('unsafe_archive_member')
-                    for member in members:
-                        target = destination / member.name
-                        if member.isdir():
-                            with directory(target, create=True):
-                                pass
-                        else:
-                            stream = archive.extractfile(member)
-                            # Keep memory bounded, and publish each source leaf atomically.
-                            with directory(target.parent, create=True) as out:
-                                name = '.source-' + uuid.uuid4().hex
-                                output = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=out)
-                                try:
-                                    with os.fdopen(output, 'wb') as handle:
-                                        while data := stream.read(CHUNK):
-                                            handle.write(data)
-                                        handle.flush()
-                                        os.fchmod(handle.fileno(), member.mode & 0o777)
-                                        os.fsync(handle.fileno())
-                                    os.replace(name, target.name, src_dir_fd=out, dst_dir_fd=out)
-                                finally:
-                                    try: os.unlink(name, dir_fd=out)
-                                    except FileNotFoundError: pass
+            try:
+                rows = json.loads(read_document(marker))['members']
+            except FileNotFoundError:
+                rows = []
+                fd = os.open(item['sha256'], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+                with os.fdopen(fd, 'rb') as source:
+                    if not verified(source.fileno(), item):
+                        raise ValueError('corrupt_source_archive')
+                    source.seek(0)
+                    with tarfile.open(fileobj=source, mode='r:*') as archive:
+                        for member in archive:
+                            path = PurePosixPath(member.name)
+                            if path.is_absolute() or '..' in path.parts or not (member.isfile() or member.isdir()):
+                                raise ValueError('unsafe_archive_member')
+                            if member.isdir():
+                                rows.append(dict(name=member.name, directory=True))
+                                continue
+                            with archive.extractfile(member) as stream:
+                                digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+                            row = dict(name=member.name, sha256=digest,
+                                       size_bytes=member.size, mode=member.mode & 0o777)
+                            with self.locked(row), self.objects(row) as objects:
+                                if self.state(objects, row) != 'cache_hit':
+                                    with archive.extractfile(member) as stream:
+                                        self._publish_copy(stream, objects, digest, row, 0o444)
+                            rows.append(row)
+                payload = json.dumps(dict(members=rows), sort_keys=True).encode()
+                with directory(marker.parent) as out:
+                    name = '.source-' + uuid.uuid4().hex
+                    try:
+                        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=out)
+                        with os.fdopen(fd, 'wb') as stream:
+                            stream.write(payload)
+                            stream.flush()
+                            os.fchmod(stream.fileno(), 0o444)
+                            os.fsync(stream.fileno())
+                        os.replace(name, marker.name, src_dir_fd=out, dst_dir_fd=out)
+                        os.fsync(out)
+                    finally:
+                        try: os.unlink(name, dir_fd=out)
+                        except FileNotFoundError: pass
+        for row in rows:
+            target = destination / row['name']
+            if row.get('directory'):
+                with directory(target, create=True):
+                    pass
+            else:
+                mode = row['mode'] & 0o555 if immutable else row['mode']
+                self.materialize(row, target, destination, mode)
         return {**item, 'state': 'ready'}
 
     def materialize_link(self, value, destination, destination_root, target):
@@ -1105,7 +1189,10 @@ class Cache:
                 # twice and does not strengthen the use-boundary check.
                 self.emit(item, 'materializing')
                 with directory(destination.parent, create=True) as parent:
-                    self._publish_copy(fd, parent, destination.name, item, mode)
+                    if mode & 0o222:
+                        self._publish_copy(fd, parent, destination.name, item, mode)
+                    else:
+                        self._publish_immutable(fd, objects, parent, destination.name, item, mode)
             finally:
                 os.close(fd)
         self.emit(item, 'ready')
@@ -1177,6 +1264,11 @@ def main():
         result = {'state': 'ready', 'schema': 'bms.artifact-cache.v1'}
     elif action == 'probe':
         result = {'artifacts': [cache.probe(a) for a in request['artifacts']]}
+    elif action == 'rebuild_runtime_image':
+        result = cache.rebuild_runtime_image(request['artifact'],
+            operation_id=request['operation_id'], source_identity=request['source_identity'],
+            retire_leases=request['retire_leases'],
+            maintenance_authorization=request['maintenance_authorization'])
     elif action == 'prepare_runtime_image':
         result = cache.prepare_runtime_image(request['artifact'], request['backend'], request['operation_id'])
     elif action == 'prepare_incoming':
@@ -1190,7 +1282,7 @@ def main():
     elif action == 'ingest':
         result = cache.ingest(request['artifact'], request['source'])
     elif action == 'extract_source':
-        result = cache.extract_source(request['artifact'], request['destination'])
+        result = cache.extract_source(request['artifact'], request['destination'], immutable=request.get('immutable', False))
     elif action == 'materialize_links':
         result = {'artifacts': [cache.materialize_link(row['artifact'], row['destination'], request['destination_root'], row['target']) for row in request['entries']]}
     elif action in {'weights_probe', 'weights_install'}:

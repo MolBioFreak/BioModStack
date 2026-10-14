@@ -719,6 +719,7 @@ def _build_fampnn_payload(fam_payload: Optional[Dict[str, Any]], fam_metrics: Di
 def _extract_fampnn_metrics(
     fam_payload: Optional[Dict[str, Any]],
     structure_path: Optional[Path] = None,
+    *, allow_structure_psce: bool = False,
 ) -> Dict[str, Any]:
     metrics = _default_fampnn_metrics()
 
@@ -809,7 +810,9 @@ def _extract_fampnn_metrics(
     need_scores = any(v is None for v in (avg_psce, max_residue_psce, min_residue_psce))
     historical_scores = policy is None and any(v is not None for v in (avg_psce, max_residue_psce, min_residue_psce, chain_avg_psce))
     structure_metrics = _default_fampnn_metrics()
-    if need_scores and not historical_scores:
+    if need_scores and not historical_scores and allow_structure_psce:
+        # Only an explicit FAMPNN structure producer may interpret its B field
+        # as PSCE. Prediction/validation structures carry different quantities.
         structure_metrics = _compute_fampnn_metrics_from_structure(structure_path, policy)
         if structure_metrics.get("psce_policy"):
             metrics["psce_policy"] = structure_metrics["psce_policy"]
@@ -2660,19 +2663,15 @@ def _shape_contained_artifact(output_root: Path, descriptor: Dict[str, Any], lab
     if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
         raise RuntimeError(f"Shape {label} path must be a non-empty relative path")
     lexical = output_root / relative
-    current = output_root
     for part in Path(relative).parts:
         if part in {"", ".", ".."}:
             raise RuntimeError(f"Shape {label} path is unsafe")
-        current = current / part
-        if current.is_symlink():
-            raise RuntimeError(f"Shape {label} path contains a symlink")
+    # Closed read-side aliases are allowed, but their resolved bytes must stay
+    # inside this publication and match the existing descriptor authority.
     resolved = lexical.resolve()
     if not resolved.is_relative_to(output_root.resolve()) or not resolved.is_file():
         raise RuntimeError(f"Shape {label} is missing or outside the job output root")
     stat = resolved.stat()
-    if stat.st_nlink != 1:
-        raise RuntimeError(f"Shape {label} must not be hard-linked")
     expected_bytes = descriptor.get("bytes")
     if type(expected_bytes) is not int or expected_bytes != stat.st_size:
         raise RuntimeError(f"Shape {label} byte count mismatch")
@@ -2745,7 +2744,7 @@ def _validate_shape_terminal_closure(
                 suite = json.loads(suite_path.read_text(encoding="utf-8"))
                 records = suite.get("records")
                 validators = request_spec["validator_suite"]
-                if (suite.get("schema") != "bms_shape_validator_suite_v1"
+                if (suite.get("schema") not in {"bms_shape_validator_suite_v1", "bms_shape_validator_suite_v2"}
                         or suite.get("sequence_name") != provenance.get("sequence_name")
                         or suite.get("validators") != validators
                         or not isinstance(records, dict) or set(records) != set(validators)):
@@ -2780,16 +2779,10 @@ async def _ingest_shape_result_manifest(
     commit: bool,
 ) -> int:
     manifest_path = output_root / "results" / "shape_result_manifest.json"
-    current = output_root
-    for part in ("results", "shape_result_manifest.json"):
-        current = current / part
-        if current.is_symlink():
-            raise RuntimeError("Shape result manifest path contains a symlink")
     resolved_manifest = manifest_path.resolve()
     if (
         not resolved_manifest.is_relative_to(output_root.resolve())
         or not resolved_manifest.is_file()
-        or resolved_manifest.stat().st_nlink != 1
     ):
         raise RuntimeError("Shape result manifest is absent or unsafe")
     try:
@@ -5127,6 +5120,10 @@ async def _ingest_job_results(
     with session.no_autoflush:
         job_result = await session.execute(select(Job).where(Job.id == job_id))
         current_job = job_result.scalar_one_or_none()
+    if current_job is not None and current_job.model_id == "nanopore":
+        # NGS products are read by their native package/domain owners. A protein
+        # CSV/PDB scan can manufacture Designs from unrelated native sidecars.
+        return 0
     if current_job is not None:
         from services.result_state_integrity import _sequence_native_publication_owner
         native_owner = _sequence_native_publication_owner(current_job)
@@ -5567,7 +5564,8 @@ async def _ingest_job_results(
                     structure_cdr_lengths = _parse_hlt_cdr_lengths(structure_path)
                     fam_json_path = _find_fampnn_sidecar_path(structure_path, output_path) if structure_path else None
                     fam_payload = _load_json_payload(fam_json_path) if fam_json_path else None
-                    fam_metrics = _extract_fampnn_metrics(fam_payload, structure_path)
+                    fam_metrics = _extract_fampnn_metrics(fam_payload, structure_path,
+                        allow_structure_psce=job_context.get("stage_family") == "fampnn")
                     fampnn_record = _build_fampnn_payload(fam_payload, fam_metrics)
                     canonical_row = canonical_metadata.get(canonical_design_id)
                     strict_projection: dict[str, Any] = {}
@@ -7678,6 +7676,19 @@ async def ingest_loose_files(
                         candidate = json_file.with_name(f"{design_name}.pdb")
                     if candidate.exists():
                         structure_path = candidate
+                        # The publication transport retains the native task/seed
+                        # hierarchy. Rank alone is not a candidate identity. Keep
+                        # historical flat names unchanged; nested names retain the
+                        # full relative identity in a filesystem-safe projection.
+                        publication_root = output_path / "pdb_files" / "predictions"
+                        if candidate.is_relative_to(publication_root):
+                            relative = candidate.relative_to(publication_root)
+                            if relative.parent != Path('.'):
+                                import hashlib
+                                import re
+                                label = re.sub(r"[^A-Za-z0-9._-]", "_", relative.with_suffix('').as_posix())[:100]
+                                digest = hashlib.sha256(relative.as_posix().encode()).hexdigest()[:12]
+                                design_name = f"protenix_{label}_{digest}"
 
                 if design_name in ingested_names:
                     metric_results_found = True
@@ -8060,7 +8071,8 @@ async def ingest_loose_files(
                     structure_path=structure_path,
                     source_identity=fam_payload,
                 )
-                fam_metrics = _extract_fampnn_metrics(fam_payload, structure_path)
+                fam_metrics = _extract_fampnn_metrics(fam_payload, structure_path,
+                    allow_structure_psce=job_context.get("stage_family") == "fampnn" and not is_fold_cp)
                 fampnn_record = _build_fampnn_payload(fam_payload, fam_metrics)
                     
                 # For raw RFantibody outputs, the meaningful confidence lives in the

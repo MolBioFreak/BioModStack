@@ -85,6 +85,20 @@ class PrerequisitesTest(unittest.TestCase):
             report = p.prerequisite_report("python-bootstrap", project_root=self.source)
         self.assertEqual(report["status"], "already-installed")
 
+    def test_optional_support_publication_does_not_block_cold_or_warm_bootstrap(self):
+        for previous, expected in [("running", "installed"), ("complete", "already-installed")]:
+            with self.subTest(previous=previous):
+                self.receipt(previous)
+                with patch.object(p, "check_environment", return_value="inventory"), \
+                     patch.object(p.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)), \
+                     patch.object(p, "refresh_installed_support", return_value=None), \
+                     patch.object(p, "publish_installed_support", side_effect=OSError("inert publication failure")):
+                    report = p.prerequisite_report("python-bootstrap", project_root=self.source)
+                self.assertEqual(report["status"], expected)
+                self.assertTrue(report["dependencies_installed"])
+                self.assertEqual(report["errors"], [])
+                self.assertEqual(json.loads((self.external / "state.json").read_text())["status"], "complete")
+
     def test_consumer_contract(self):
         self.receipt()
         with patch.object(p, "check_environment", return_value="inventory"):

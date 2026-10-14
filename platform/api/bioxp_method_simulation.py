@@ -110,7 +110,8 @@ def native_recipe_accounting(recipe):
         sample = n(recipe['target_liquid_ul'])
         conditioning = excess = reaspiration = zero
         waste, retained = zero, None
-        displacement = n(recipe['commanded_aspiration_ul']) + air
+        # Selected corrections are evaluated once by native, never by BMS.
+        displacement = None if recipe.get('commanded_aspiration_ul') is None else n(recipe['commanded_aspiration_ul']) + air
         if multi is not None:
             sample = n(multi['sample_count']) * n(multi['sample_volume_ul'])
             conditioning = n(multi['conditioning_volume_ul']) * n(multi['conditioning_back_to_source_count'])
@@ -118,14 +119,17 @@ def native_recipe_accounting(recipe):
             reaspiration = (n(multi['reaspiration']['volume_ul']) * n(multi['sample_count'])
                            if multi['reaspiration'] is not None else zero)
             air += reaspiration
-            displacement += conditioning + reaspiration
+            if displacement is not None:
+                displacement += conditioning + reaspiration
             aliquots = multi['aliquots'] + ([multi['excess']] if multi['excess'] is not None else [])
-            displacement += sum((n(s['volume_ul']) for a in aliquots for s in a['segments']), zero)
+            if displacement is not None:
+                displacement += sum((n(s['volume_ul']) for a in aliquots for s in a['segments']), zero)
             # An authored excess stroke does not say it goes to waste. No endpoint is invented.
             waste = None if multi['excess'] is not None else zero
             retained = excess if multi['excess'] is None else None
         else:
-            displacement += sum((n(s['volume_ul']) for s in recipe['dispense_segments']), zero)
+            if displacement is not None:
+                displacement += sum((n(s['volume_ul']) for s in recipe['dispense_segments']), zero)
         if recipe['final_empty_speed_ul_s'] is not None:
             waste = retained = None  # Keep the known displacement subtotal; empty adds an unknown stroke.
         return {'liquid': sample, 'conditioning_return': conditioning, 'excess': excess,
@@ -225,34 +229,35 @@ def simulate_method(occurrences: list[dict], initial_state: dict | None = None) 
                     else:
                         tip.update(tip_loaded=False, volume_ul="0", air_ul="0", materials=[])
             rows = inputs.get("channel_transfers", [])
-            recipe = occurrence.get('_native_recipe')
-            recipe_accounted = recipe is not None and action == 'liquid_recipe'
+            recipes = occurrence.get('_native_recipes', [occurrence['_native_recipe']] if occurrence.get('_native_recipe') is not None else [])
+            recipe_accounted = bool(recipes)
             if recipe_accounted and occurrence.get('status') not in {'failed', 'partial', 'unknown'}:
-                quantities = native_recipe_accounting(recipe)
-                for channel in recipe['channels']:
-                    for key, amount in quantities.items():
-                        if amount is None:
-                            unknown_totals.add(key)
-                        else:
-                            totals[key] += amount
-                    strokes.append({'occurrence_id': oid, 'channel': channel,
-                        'recipe_quantities': {key: _text(amount) for key, amount in quantities.items()},
-                        'endpoint_status': 'unknown', 'basis': 'intended native recipe; not measured'})
-                if recipe['final_empty_speed_ul_s'] is not None:
-                    unknown_totals.add('commanded_displacement')
-                if not rows:
-                    issue('endpoint_unknown', occurrence, 'Recipe quantities known independently of unknown liquid endpoints.')
-                motions = [part for key in ('before_leading_air', 'before_liquid', 'after_liquid',
-                    'before_dispense', 'after_dispense', 'final_empty_before') for part in recipe[key]]
-                if recipe['multi'] is not None:
-                    multi = recipe['multi']
-                    motions += multi['conditioning_before'] + multi['conditioning_after']
-                    for aliquot in multi['aliquots'] + ([multi['excess']] if multi['excess'] is not None else []):
-                        motions += aliquot['before'] + aliquot['after']
-                if any(part.get('operation') not in {'position', 'delay', 'settings'} for part in motions):
-                    unknown_totals.update(totals)
-                    issue('recipe_additional_effects_unknown', occurrence,
-                          'Additional authored phase operations may change liquid quantities; core recipe totals are only a known subtotal.')
+                for recipe in recipes:
+                    quantities = native_recipe_accounting(recipe)
+                    for channel in recipe['channels']:
+                        for key, amount in quantities.items():
+                            if amount is None:
+                                unknown_totals.add(key)
+                            else:
+                                totals[key] += amount
+                        strokes.append({'occurrence_id': oid, 'channel': channel,
+                            'recipe_quantities': {key: _text(amount) for key, amount in quantities.items()},
+                            'endpoint_status': 'unknown', 'basis': 'intended native recipe; not measured'})
+                    if recipe['final_empty_speed_ul_s'] is not None:
+                        unknown_totals.add('commanded_displacement')
+                    if not rows:
+                        issue('endpoint_unknown', occurrence, 'Recipe quantities known independently of unknown liquid endpoints.')
+                    motions = [part for key in ('before_leading_air', 'before_liquid', 'after_liquid',
+                        'before_dispense', 'after_dispense', 'final_empty_before') for part in recipe[key]]
+                    if recipe['multi'] is not None:
+                        multi = recipe['multi']
+                        motions += multi['conditioning_before'] + multi['conditioning_after']
+                        for aliquot in multi['aliquots'] + ([multi['excess']] if multi['excess'] is not None else []):
+                            motions += aliquot['before'] + aliquot['after']
+                    if any(part.get('operation') not in {'position', 'delay', 'settings'} for part in motions):
+                        unknown_totals.update(totals)
+                        issue('recipe_additional_effects_unknown', occurrence,
+                              'Additional authored phase operations may change liquid quantities; core recipe totals are only a known subtotal.')
             elif recipe_accounted:
                 unknown_totals.update(totals)
             if not recipe_accounted and action in {'aspirate', 'dispense', 'transfer', 'distribute', 'consolidate', 'mix'}:

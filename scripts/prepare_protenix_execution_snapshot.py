@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Snapshot the exact Protenix checkpoint and wrapper bytes used by inference."""
+"""Measure the installed checkpoint and snapshot the private execution wrapper.
+
+The v1 receipt names are retained: checkpoint snapshot_path is a logical member
+of the selected installed weights root, not a copied task-local payload.
+"""
 
 from __future__ import annotations
 
@@ -66,16 +70,19 @@ def _open_pinned_file(path: Path) -> tuple[int, int, str, os.stat_result, os.sta
         raise
 
 
-def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
-    return all(
-        getattr(left, field) == getattr(right, field)
-        for field in ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")
-    )
+def _same_identity(left: os.stat_result, right: os.stat_result, *, immutable: bool = False) -> bool:
+    fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")
+    # Concurrent references may change ctime without changing installed bytes.
+    # Mutable wrapper/config reads retain that additional change detector.
+    if not immutable:
+        fields += ("st_ctime_ns",)
+    return all(getattr(left, field) == getattr(right, field) for field in fields)
 
 
 def _read_stable_bytes(path: Path) -> bytes:
     """Read a staged JSON input without allowing a path swap during the read."""
 
+    path = path.resolve(strict=True)
     file_fd, parent_fd, leaf, before, path_before = _open_pinned_file(path)
     try:
         chunks: list[bytes] = []
@@ -98,12 +105,20 @@ def _read_stable_bytes(path: Path) -> bytes:
 def snapshot_opened_file(
     *,
     source: Path,
-    destination: Path,
+    destination: Path | None,
     expected_sha256: str | None,
+    _resolved_source: bool = False,
 ) -> dict[str, Any]:
-    """Copy one regular file from a pinned descriptor and verify path stability."""
+    """Snapshot mutable input, or measure installed bytes when destination is None.
 
-    source = Path(os.path.abspath(source))
+    Only the installed read-only checkpoint may use measurement without copying.
+    Resolve once so descriptor and visible-path checks inspect the same referent.
+    """
+
+    # _checkpoint_source already resolved and checked the selected-root authority.
+    # Do not follow a second alias if that concrete member is swapped before open.
+    if not _resolved_source:
+        source = source.resolve(strict=True)
     try:
         source_fd, parent_fd, leaf, opened, path_before = _open_pinned_file(source)
     except OSError as exc:
@@ -112,11 +127,13 @@ def snapshot_opened_file(
     try:
         if not stat.S_ISREG(opened.st_mode):
             raise ProtenixExecutionSnapshotError(f"execution input is not a regular file: {source}")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination_fd, temporary_name = tempfile.mkstemp(
-            prefix=f".{destination.name}.", dir=destination.parent
-        )
-        temporary = Path(temporary_name)
+        destination_fd = None
+        if destination is not None:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination_fd, temporary_name = tempfile.mkstemp(
+                prefix=f".{destination.name}.", dir=destination.parent
+            )
+            temporary = Path(temporary_name)
         digest = hashlib.sha256()
         size = 0
         try:
@@ -127,14 +144,16 @@ def snapshot_opened_file(
                 digest.update(chunk)
                 size += len(chunk)
                 view = memoryview(chunk)
-                while view:
+                while view and destination_fd is not None:
                     written = os.write(destination_fd, view)
                     if written <= 0:
                         raise OSError("short write while snapshotting execution input")
                     view = view[written:]
-            os.fsync(destination_fd)
+            if destination_fd is not None:
+                os.fsync(destination_fd)
         finally:
-            os.close(destination_fd)
+            if destination_fd is not None:
+                os.close(destination_fd)
         observed_sha256 = digest.hexdigest()
         if expected_sha256 is not None and observed_sha256 != expected_sha256:
             raise ProtenixExecutionSnapshotError(
@@ -149,27 +168,29 @@ def snapshot_opened_file(
             raise ProtenixExecutionSnapshotError(
                 f"execution input path changed after open: {source}"
             ) from exc
-        identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
-        if not _same_identity(opened, after_read) or not _same_identity(path_before, path_after) or not _same_identity(opened, visible_path_after):
+        immutable = destination is None
+        if not _same_identity(opened, after_read, immutable=immutable) or not _same_identity(path_before, path_after, immutable=immutable) or not _same_identity(opened, visible_path_after, immutable=immutable):
             raise ProtenixExecutionSnapshotError(f"execution input path changed after open: {source}")
         if size != opened.st_size:
             raise ProtenixExecutionSnapshotError(f"execution input size changed while copying: {source}")
-        os.chmod(temporary, 0o444)
-        try:
-            os.link(temporary, destination)
-        except FileExistsError as exc:
-            raise ProtenixExecutionSnapshotError(f"execution snapshot already exists: {destination}") from exc
-        temporary.unlink()
-        temporary = None
+        if destination is not None:
+            assert temporary is not None
+            os.chmod(temporary, 0o444)
+            try:
+                os.link(temporary, destination)
+            except FileExistsError as exc:
+                raise ProtenixExecutionSnapshotError(f"execution snapshot already exists: {destination}") from exc
+            temporary.unlink()
+            temporary = None
         return {
             "source_path": str(source),
-            "snapshot_path": str(destination),
+            "snapshot_path": str(destination if destination is not None else source),
             "expected_sha256": expected_sha256,
             "observed_source": _identity(opened, observed_sha256, size),
             "verified_snapshot": {
                 "sha256": observed_sha256,
                 "bytes": size,
-                "mode": stat.S_IMODE(destination.stat().st_mode),
+                "mode": stat.S_IMODE(destination.stat().st_mode if destination is not None else opened.st_mode),
             },
         }
     finally:
@@ -179,17 +200,27 @@ def snapshot_opened_file(
             temporary.unlink(missing_ok=True)
 
 
-def _checkpoint_source(weights_root: Path, relative_value: object) -> tuple[Path, PurePosixPath]:
+def _checkpoint_source(weights_root: Path, relative_value: object, *, sha256: str | None = None) -> tuple[Path, PurePosixPath]:
     if not isinstance(relative_value, str):
         raise ProtenixExecutionSnapshotError("registry checkpoint_relative_path is missing")
     relative = PurePosixPath(relative_value)
     if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
         raise ProtenixExecutionSnapshotError("registry checkpoint_relative_path is unsafe")
-    root = Path(os.path.abspath(weights_root))
+    root = weights_root.resolve(strict=True)
     root_info = os.lstat(root)
     if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
         raise ProtenixExecutionSnapshotError("configured weights root is not a real directory")
-    source = root.joinpath(*relative.parts)
+    source = root.joinpath(*relative.parts).resolve(strict=True)
+    try:
+        source.relative_to(root)
+    except ValueError as exc:
+        if sha256 is None:
+            raise ProtenixExecutionSnapshotError("checkpoint escapes configured weights root") from exc
+        from lib.portable_inputs import selected_weight_member
+        try:
+            source = selected_weight_member(weights_root, relative_value, sha256=sha256)
+        except ValueError as authority_error:
+            raise ProtenixExecutionSnapshotError("checkpoint escapes configured weights root or selected object identity") from authority_error
     return source, relative
 
 
@@ -203,7 +234,7 @@ def prepare_execution_snapshot(
 ) -> dict[str, Any]:
     registry = json.loads(_read_stable_bytes(registry_path).decode("utf-8"))
     checkpoint_source, checkpoint_relative = _checkpoint_source(
-        weights_root, registry.get("checkpoint_relative_path")
+        weights_root, registry.get("checkpoint_relative_path"), sha256=registry.get("checkpoint_sha256")
     )
     expected_checkpoint = registry.get("checkpoint_sha256")
     if not isinstance(expected_checkpoint, str) or len(expected_checkpoint) != 64:
@@ -216,12 +247,12 @@ def prepare_execution_snapshot(
     except FileExistsError as exc:
         raise ProtenixExecutionSnapshotError("runtime snapshot root already exists") from exc
 
-    checkpoint_snapshot = root / Path(*checkpoint_relative.parts)
     wrapper_snapshot = root / "bms-wrapper" / "run_protenix_inference.py"
     checkpoint_receipt = snapshot_opened_file(
         source=checkpoint_source,
-        destination=checkpoint_snapshot,
+        destination=None,
         expected_sha256=expected_checkpoint,
+        _resolved_source=True,
     )
     wrapper_receipt = snapshot_opened_file(
         source=wrapper,

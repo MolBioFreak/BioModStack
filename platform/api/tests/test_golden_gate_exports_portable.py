@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 from Bio import SeqIO
+from Bio.Seq import Seq
 import pytest
 
 from services.assembly.golden_gate_design import design_golden_gate, design_material
@@ -96,15 +97,34 @@ def test_ordered_reverse_compound_circular_annotations():
     assert unstranded.qualifiers["bms_strand"] == ["0"]
     for group in ("product", "intermediates", "digest_fragments"):
         parsed = records(exports[group + ".gb"], "genbank")
-        native = sequence_records(result)[group]
-        for a, b in zip(parsed, native):
-            # INSDC has no strand=0 syntax. It remains explicit in the BMS
-            # qualifier (and losslessly in design.json), not inferred as +1.
-            for feature in a.features:
-                if feature.qualifiers.get("bms_strand") == ["0"]:
-                    feature.location.strand = None
-            assert [f.location for f in a.features] == [f.location for f in b.features]
-            assert [str(f.extract(a.seq)) for f in a.features] == [str(f.extract(b.seq)) for f in b.features]
+        assert parsed and any(record.features for record in parsed)
+        for record in parsed:
+            identity = json.loads(record.description.split("BMS identity=", 1)[1])
+            material = (next(s for s in result.solutions if s.id == identity)
+                        if group == "product" else design_material(result, identity))
+            assert str(record.seq) == material.sequence
+            assert len(record.features) == len(material.features)
+            for feature, native in zip(record.features, material.features):
+                # Independent native-coordinate/base oracle: never call the
+                # exporter to manufacture its own expected SeqFeatures.
+                spans = []
+                for segment in native.segments:
+                    spans.extend([(segment.start, len(material.sequence)), (0, segment.end)]
+                                 if segment.wraps_origin else [(segment.start, segment.end)])
+                spans = [(a, b) for a, b in spans if b > a]
+                assert [(int(p.start), int(p.end)) for p in feature.location.parts] == spans
+                assert feature.qualifiers["bms_strand"] == [str(native.strand)]
+                assert all(p.strand == (-1 if native.strand == -1 else 1)
+                           for p in feature.location.parts)
+                expected = "".join(
+                    str(Seq(material.sequence[a:b]).reverse_complement())
+                    if native.strand == -1 else material.sequence[a:b] for a, b in spans)
+                assert str(feature.extract(record.seq)) == expected
+                assert feature.type == native.type
+                assert feature.qualifiers["bms_feature_id"] == [native.id]
+                assert feature.qualifiers["bms_status"] == [native.status]
+                if native.codon_start is not None:
+                    assert feature.qualifiers["codon_start"] == [str(native.codon_start)]
     assert read_design_export(exports["design.json"]).request == req
 
 

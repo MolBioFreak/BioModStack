@@ -66,7 +66,8 @@ def authored_request(identifier, count=2):
 
 
 def test_existing_eight_entries_and_bound_companions_are_byte_semantically_preserved():
-    entries = [{k: v for k, v in e.items() if k != 'authoring_variants'} for e in method_examples()]
+    entries = [{k: v for k, v in e.items() if k != 'authoring_variants'} for e in method_examples() if e['id'] not in {
+        'pipette_height_calibration', 'pipette_volume_calibration', 'tc_calibration', 'rc_calibration', 'oc_calibration'}]
     assert len(entries) == 8
     # Canonical hash of original served discovery pinned at 7a1c4852 (including fixtures).
     assert sha256(json.dumps(entries, sort_keys=True, separators=(',', ':')).encode()).hexdigest() == '9ac1bb21e4d10afbea17b15b942c36f7bdac330866c58c3bcc4a85d685504ad3'

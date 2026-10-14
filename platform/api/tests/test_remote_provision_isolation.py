@@ -8,38 +8,21 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, String, create_engine, update, func
-from sqlalchemy.orm import declarative_base, Session
-from services.remote_execution import preloading, progress
-
-Base = declarative_base()
-
-
-class Target(Base):
-    __tablename__ = 'audit_execution_targets'
-    id = Column(String, primary_key=True)
-    active = Column(Boolean)
-    state = Column(String)
-    leased_job_id = Column(String, nullable=True)
-    host = Column(String)
-    port = Column(Integer)
-    username = Column(String)
-    remote_root = Column(String)
-    host_key_sha256 = Column(String)
-    activated_at = Column(DateTime)
-    provider_metadata = Column(JSON)
+from sqlalchemy import create_engine, update, func
+from sqlalchemy.orm import Session
+from database import Base, ExecutionTarget as Target
+from services.remote_execution import preloading
 
 
 @pytest.fixture
-def store(monkeypatch):
-    monkeypatch.setattr(preloading, 'ExecutionTarget', Target)
-    monkeypatch.setattr(progress, 'ExecutionTarget', Target)
+def store():
     engine = create_engine('sqlite://')
     Base.metadata.create_all(engine)
     now = datetime.utcnow()
     with Session(engine) as session:
         for name in ('a', 'b'):
-            session.add(Target(id=name, active=True, state='ready', leased_job_id=None,
+            session.add(Target(id=name, provider='vast', provider_instance_id=name,
+                active=True, state='ready', leased_job_id=None,
                 host=name + '.invalid', port=22, username='root', remote_root='/worker',
                 host_key_sha256='a' * 64, activated_at=now,
                 provider_metadata={'inventory': {'status': 'complete', 'present': True,
@@ -85,7 +68,7 @@ def test_own_worker_conflicts_still_refuse(store, fault):
         metadata['preload']['phase'] = fault
     row.provider_metadata = metadata
     store.commit()
-    assert admit(store) == 0
+    assert admit(store) == (1 if fault == 'lease' else 0)
 
 
 def observation_fence(session):

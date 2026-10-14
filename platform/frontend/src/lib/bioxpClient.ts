@@ -781,6 +781,8 @@ export interface BioXpOperatorJsonSchema {
     title?: string;
     description?: string;
     default?: unknown;
+    /** Documentary native value; applied only by an explicit operator edit. */
+    source_default?: unknown;
     enum?: unknown[];
     const?: unknown;
     properties?: Record<string, BioXpOperatorJsonSchema>;
@@ -1087,12 +1089,23 @@ export interface BioXpWorkflowSourceModel {
     tip_zone_index: number | null;
     old_tip_well: string | null;
 }
+// Mirrors native calibration_measurements.MeasurementForm (generated producer contract).
+export interface BioXpMeasurementForm {
+    fields: { field_id: string; label: string; unit: 'degC' | 'uL' | 'mg' | 'g' | 'steps';
+        module: 'rc' | 'oc' | 'tc' | 'pipette'; location?: string | null; zone?: string | null;
+        target?: string | number | null; commanded?: string | number | null;
+        controller_reported?: string | number | null; repetitions?: number; context?: Record<string, unknown> }[];
+}
+export interface BioXpPendingReview {
+    stage_id: string | null; action_id: string | null; reason: string | null;
+    source_occurrence_id?: string | null; measurement_form?: BioXpMeasurementForm | null;
+}
 export interface BioXpWorkflowJob {
     job_id: string;
     status: string;
     protocol?: { document?: Record<string, unknown> | null } | null;
     command?: BioXpWorkflowCommand | null;
-    operator?: { manual_review_required: boolean; pending_review: { stage_id: string | null; action_id: string | null; reason: string | null } | null };
+    operator?: { manual_review_required: boolean; pending_review: BioXpPendingReview | null };
     execution?: {
         dry_run: boolean;
         runtime_state: {
@@ -1111,7 +1124,7 @@ export interface BioXpWorkflowJobObservation {
     status: string;
     command: Omit<BioXpWorkflowCommand, 'idempotency_key' | 'status_path'>;
     execution: { dry_run: boolean; runtime_state: { workflow?: BioXpWorkflowState | null } };
-    operator: { pending_review?: { stage_id: string | null; action_id: string | null; reason: string | null } | null };
+    operator: { pending_review?: BioXpPendingReview | null };
 }
 // Discovery is intentionally not selected-job detail. Older robots may still
 // return full rows; consumers select by identity and fetch detail separately.
@@ -1123,7 +1136,7 @@ export interface BioXpWorkflowJobSummary {
     source_type: 'native' | 'oem_xml';
     created_at: string;
     updated_at: string;
-    pending_review: { stage_id: string | null; action_id: string | null; reason: string | null } | null;
+    pending_review: BioXpPendingReview | null;
     command?: BioXpWorkflowCommand | null;
 }
 export interface BioXpWorkflowInput {
@@ -1166,6 +1179,8 @@ export interface BioXpWorkflowControlResponse {
     status_path: string;
 }
 export type BioXpWorkflowReviewRequest = BioXpWorkflowBinding & {
+    source_occurrence_id?: string | null;
+    measurements?: Record<string, (string | number)[]>;
     reviewer: string;
     note?: string | null;
     stage_id: string;

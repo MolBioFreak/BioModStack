@@ -1,10 +1,26 @@
 nextflow.enable.dsl = 2
 
+// Native wrappers have exited before publication; downstream Shape owners only
+// read these completed outputs and write new/private metadata and transforms.
+// Keep Nextflow's publisher for cached republishing and independent retained names.
+// Across filesystems the self-contained publication still requires a copy.
+def shapeResultPublishMode(workDir, outputDir) {
+    def destination = file(outputDir).toAbsolutePath()
+    while (!java.nio.file.Files.exists(destination)) {
+        destination = destination.parent
+    }
+    try {
+        return java.nio.file.Files.getFileStore(workDir) == java.nio.file.Files.getFileStore(destination) ? 'link' : 'copy'
+    } catch (java.io.IOException | UnsupportedOperationException ignored) {
+        return 'copy' // Preserve independent publication on other providers.
+    }
+}
+
 process ValidateShapeBundle {
     label 'ShapeEvaluate'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
-    publishDir "${params.out_dir}/metadata", mode: 'copy', pattern: 'shape_input_receipt.json'
+    publishDir "${params.out_dir}/metadata", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/metadata")}", pattern: 'shape_input_receipt.json'
 
     input:
     path request_json
@@ -34,7 +50,7 @@ process PlanRFD3Batches {
     label 'ShapeEvaluate'
     stageInMode 'copy'
 
-    publishDir "${params.out_dir}/run/shape_batches", mode: 'copy', pattern: 'rfd3_batch_plan.json'
+    publishDir "${params.out_dir}/run/shape_batches", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_batches")}", pattern: 'rfd3_batch_plan.json'
 
     input:
     path request_json
@@ -56,13 +72,13 @@ process PlanRFD3Batches {
 process RunShapeRFD3 {
     label 'ShapeRFD3'
     label 'gpu'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
-    publishDir "${params.out_dir}/run/shape_rfd3", mode: 'copy', pattern: '*.json'
-    publishDir "${params.out_dir}/run/shape_rfd3", mode: 'copy', pattern: 'rfd3_results/shape_guidance_steps.jsonl', saveAs: { 'shape_guidance_steps.jsonl' }
-    publishDir "${params.out_dir}/run/shape_rfd3", mode: 'copy', pattern: '*.log'
-    publishDir "${params.out_dir}/run/shape_rfd3/native", mode: 'copy', pattern: 'rfd3_results/*.cif.gz'
-    publishDir "${params.out_dir}/run/shape_rfd3/native", mode: 'copy', pattern: 'rfd3_results/*.json'
+    publishDir "${params.out_dir}/run/shape_rfd3", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_rfd3")}", pattern: '*.json'
+    publishDir "${params.out_dir}/run/shape_rfd3", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_rfd3")}", pattern: 'rfd3_results/shape_guidance_steps.jsonl', saveAs: { 'shape_guidance_steps.jsonl' }
+    publishDir "${params.out_dir}/run/shape_rfd3", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_rfd3")}", pattern: '*.log'
+    publishDir "${params.out_dir}/run/shape_rfd3/native", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_rfd3/native")}", pattern: 'rfd3_results/*.cif.gz'
+    publishDir "${params.out_dir}/run/shape_rfd3/native", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_rfd3/native")}", pattern: 'rfd3_results/*.json'
 
     input:
     path request_json
@@ -96,9 +112,9 @@ process RunShapeRFD3 {
 process AdmitRFD3InitialCandidate {
     tag "${candidate.simpleName}"
     label 'ShapeEvaluate'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
-    publishDir "${params.out_dir}/run/shape_initial_admission", mode: 'copy'
+    publishDir "${params.out_dir}/run/shape_initial_admission", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_initial_admission")}"
 
     input:
     path candidate
@@ -126,7 +142,7 @@ process AdmitRFD3InitialCandidate {
 process PrepareShapeBackbone {
     tag "${candidate.simpleName}"
     label 'ShapeEvaluate'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
     input:
     tuple path(candidate), path(admission)
@@ -150,7 +166,7 @@ process BuildRFD3Aggregate {
     label 'ShapeEvaluate'
     stageInMode 'copy'
 
-    publishDir "${params.out_dir}/run/shape_batches", mode: 'copy', pattern: 'rfd3_aggregate_manifest.json'
+    publishDir "${params.out_dir}/run/shape_batches", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_batches")}", pattern: 'rfd3_aggregate_manifest.json'
 
     input:
     path batch_plan
@@ -179,9 +195,9 @@ process RunShapeProteinMPNN {
     tag "${candidate_id}"
     label 'MPNN'
     label 'gpu_light'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
-    publishDir "${params.out_dir}/run/shape_sequences/proteinmpnn", mode: 'copy'
+    publishDir "${params.out_dir}/run/shape_sequences/proteinmpnn", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_sequences/proteinmpnn")}"
 
     input:
     tuple val(candidate_id), path(backbone)
@@ -214,9 +230,9 @@ process RunShapeFAMPNN {
     tag "${candidate_id}"
     label 'FAMPNN'
     label 'gpu_light'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
-    publishDir "${params.out_dir}/run/shape_sequences/fampnn", mode: 'copy'
+    publishDir "${params.out_dir}/run/shape_sequences/fampnn", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_sequences/fampnn")}"
 
     input:
     tuple val(candidate_id), path(backbone)
@@ -247,9 +263,9 @@ process RunShapeCaliby {
     tag "${candidate_id}"
     label 'Caliby'
     label 'gpu_light'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
-    publishDir "${params.out_dir}/run/shape_sequences/caliby_experimental", mode: 'copy'
+    publishDir "${params.out_dir}/run/shape_sequences/caliby_experimental", mode: "${shapeResultPublishMode(workflow.workDir, "${params.out_dir}/run/shape_sequences/caliby_experimental")}"
 
     input:
     tuple val(candidate_id), path(backbone)
@@ -279,7 +295,7 @@ process RunShapeCaliby {
 process EvaluateShapeCandidate {
     tag "${sequence_name}"
     label 'ShapeEvaluate'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
     input:
     tuple val(sample_id), val(sequence_name), path(structure), path(esm_metrics), path(source_backbone)
@@ -375,7 +391,7 @@ process RunShapeProtenixValidator {
 process AggregateShapeValidatorEvidence {
     tag "${sequence_name}"
     label 'ShapeEvaluate'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
     input:
     tuple val(sequence_name), val(sample_id), path(esm_structure), path(esm_metrics), val(sequence), path(peer_evidence), path(esm_bundle)
@@ -408,7 +424,7 @@ process AggregateShapeValidatorEvidence {
 process AttachShapePostRefold {
     tag "${sequence_name}"
     label 'ShapeEvaluate'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
     input:
     tuple val(sequence_name), path(candidate_bundle), path(validator_records), path(sequence_bundle)
@@ -423,9 +439,9 @@ process AttachShapePostRefold {
     script:
     """
     set -euo pipefail
-    cp -a ${candidate_bundle} attached_shape_candidate_bundle_${sequence_name}
     python3 ${params.code_root}/scripts/shape_blueprint/attach_shape_post_refold.py \\
         --sequence-bundle ${sequence_bundle} \\
+        --source-bundle ${candidate_bundle} \\
         --bundle attached_shape_candidate_bundle_${sequence_name} \\
         --validator-records ${validator_records}/shape_validator_records.json \\
         --request ${request_json} \\
@@ -438,7 +454,7 @@ process AttachShapePostRefold {
 process BuildShapeSkipBundle {
     tag "${candidate_id}"
     label 'ShapeEvaluate'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
     input:
     tuple val(candidate_id), path(backbone_bundle)
@@ -459,9 +475,9 @@ process BuildShapeSkipBundle {
 
 process BuildShapeResult {
     label 'ShapeEvaluate'
-    stageInMode 'copy'
+    stageInMode 'rellink'
 
-    publishDir "${params.out_dir}", mode: 'copy', saveAs: { published ->
+    publishDir "${params.out_dir}", mode: "${shapeResultPublishMode(workflow.workDir, params.out_dir)}", saveAs: { published ->
         published.startsWith('final_shape_result/') ? published.substring('final_shape_result/'.length()) : published
     }
 

@@ -77,8 +77,9 @@ def adopt(preview: dict, manifests: list[dict]) -> Path:
     index.update(schema=hf_assets.NAMED_INDEX_SCHEMA, archive=dict(sha256=digest, size_bytes=size),
         dependencies=sorted(set(index.get('dependencies', []) if named else []) | set(expected_dependencies)),
         artifacts=[previous[name] for name in sorted(previous)])
-    index.setdefault('digest_sizes', {}).update({r['sha256']: r['size_bytes'] for r in rows
-                                              if r['name'].startswith('weights/') and 'target' not in r})
+    # Named publication scopes do not establish physical tar membership. Preserve
+    # the catalog generated from archive bytes; without one use ordinary objects.
+    index.setdefault('digest_sizes', {})
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     # Pin the publication directory through no-follow traversal. Atomic replacement
     # is only within this owner-controlled directory; no asset bytes are rewritten.

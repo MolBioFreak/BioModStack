@@ -167,7 +167,9 @@ def test_resume_rejects_corrupt_materialized_output(cli):
     code, report = run('resume', *args)
     assert code == 3 and report['models'][0]['status'] == 'blocked'
     assert len(handler.requests) == count
-    assert 'mismatch' in str(report)
+    # Native aliases now expose the same canonical object: artifact verification
+    # detects corruption before layout receipt verification, without redownload.
+    assert 'expected digest' in str(report)
 
 
 def test_mixed_models_report_partial_success_without_readiness(cli):

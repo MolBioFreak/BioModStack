@@ -789,6 +789,28 @@ def protein_capability_record(capability_id: str) -> dict[str, Any]:
     ))
 
 
+def protein_setup_parameter_schema(capability_id: str) -> dict[str, Any]:
+    """Project editor storage, distinct from the legacy Workflow Plan schema."""
+    if capability_id not in {
+        'protein.structure_prediction.esmfold2',
+        'protein.structure_prediction.boltz2',
+        'protein.structure_prediction.protenix_v2',
+        'protein.simulation.gromacs_md',
+    }:
+        return protein_parameter_schema(capability_id)
+    legacy = protein_parameter_schema(capability_id)
+    schema = _schema(capability_id, 'Native workflow editor draft', {
+        'native_job_request': {'type': 'object', 'description': 'JobCreate from the native editor; scientific validation remains with its model owner.'},
+        'editor_state': {'type': 'object', 'default': {
+            key: copy.deepcopy(field.get('const', field.get('default')))
+            for key, field in legacy['properties'].items()
+            if 'const' in field or 'default' in field
+        }, 'description': 'Reopenable editor state, never scientific parameters.'},
+    }, ['native_job_request'], authority='project_manager_typed_launcher_handoff')
+    schema['x-bms-native-editor-draft'] = True
+    return schema
+
+
 def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | None = None, setup_capability_id: str | None = None) -> dict[str, Any]:
     """Pin the native normalizer's exact request, not a second settings schema.
 
@@ -821,7 +843,16 @@ def normalized_job_plan_contract(job_request: Any, *, native_entrypoint: str | N
             if setup_capability_id == SHAPE_SETUP_CAPABILITY_ID
             else request.mode in _NATIVE_BINDER_SETUP_PAIRS.get(request.model_id, ())
         )
-        if (not _PARAMETER_SCHEMAS.get(setup_capability_id, {}).get("x-bms-native-editor-draft")
+        if setup_capability_id.startswith('protein.structure_prediction.') or setup_capability_id == 'protein.simulation.gromacs_md':
+            supported_pair = any(
+                pair == (allowed['model_id'], allowed['mode'])
+                or (setup_capability_id.startswith('protein.structure_prediction.')
+                    and allowed['model_id'] == request.model_id
+                    and allowed['mode'] == 'predict' and request.mode == 'complex'
+                    and pair in MODEL_MODE_WORKFLOW_ENTRYPOINTS)
+                for allowed in protein_capability_record(setup_capability_id)['allowed_model_modes']
+            )
+        if (not protein_setup_parameter_schema(setup_capability_id).get("x-bms-native-editor-draft")
                 or not supported_pair):
             raise ProteinProjectCapabilityError("native setup request must use its supported editor")
         capability_id = setup_capability_id

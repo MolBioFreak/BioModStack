@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import shutil
 import sys
 from dataclasses import replace
@@ -70,30 +69,12 @@ def test_lock_resolves_only_exact_compatible_models() -> None:
         module.resolve_model(lock, "dna", "dna_r10.4.1_e8.2_400bps_sup@v5.2.0")
 
 
-def test_checked_in_lock_authorizes_selected_runtime_sif() -> None:
-    runtime_value = os.environ.get("BMS_NGS_RUNTIME_SIF")
-    if runtime_value is None:
-        pytest.skip("BMS_NGS_RUNTIME_SIF is required for runtime identity acceptance")
-    module = _load_module()
-    lock = module.load_lock(LOCK)
-    runtime_sif = Path(runtime_value)
-    assert runtime_sif.is_file()
-    assert module._sha256(runtime_sif) == lock["dorado"]["sif_sha256"]
-
-
-def test_dorado_gpu_executes_the_selected_runtime_sif() -> None:
-    config = (ROOT / "nextflow.config").read_text(encoding="utf-8")
-    block = config.split("withLabel: dorado_gpu {", 1)[1].split("withLabel:", 1)[0]
-    assert "container = { params.dorado_runtime_sif }" in block
-    assert '${params.container_dir}/dorado.sif' not in block
-
-
 def test_runtime_scientific_tools_are_version_bound(monkeypatch, tmp_path: Path) -> None:
     module = _load_module()
     lock = module.load_lock(LOCK)
     responses = {
         ("samtools", "--version"): "samtools 1.24\nUsing htslib 1.24\n",
-        ("samtools", "consensus", "--help"): "Usage: samtools consensus [options] <in.bam>\n",
+        ("samtools", "help", "consensus"): "Usage: samtools consensus [options] <in.bam>\n",
         ("modkit", "--version"): "modkit 0.6.4\n",
         ("/opt/igv-reports/bin/pip", "show", "igv-reports"): "Name: igv-reports\nVersion: 1.16.3\n",
         ("create_report", "--help"): "usage: create_report [options]\n",

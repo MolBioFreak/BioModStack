@@ -36,16 +36,13 @@ const settingsRows = (value: unknown, prefix = ''): Array<[string, string]> => {
     return [[prefix, value === undefined ? '—' : value === null ? 'None' : String(value)]];
 };
 
-export function ExecutionPlanApproval({ preview, finish }: {
-    preview: ExecutionPlanPreview; finish: (approved: boolean) => void;
-}) {
+function ExecutionPlanDetails({ preview }: { preview: ExecutionPlanPreview }) {
     const [showAll, setShowAll] = useState(false);
     const requested = new Map(settingsRows(preview.plan.requested_json));
     const effective = new Map(settingsRows(preview.plan.effective_json));
     const keys = [...new Set([...requested.keys(), ...effective.keys()])].sort();
     const changed = keys.filter(key => requested.get(key) !== effective.get(key));
-    return <Dialog isOpen title="Review remote execution plan" onClose={() => finish(false)} style={{ width: 760 }}>
-        <DialogBody>
+    return <section>
             <p><strong>{preview.request.model_id} / {preview.request.mode}</strong> → {preview.request.execution_target_id}</p>
             <p>Selected components: {[...preview.plan.metadata.static_components, ...preview.plan.metadata.dynamic_templates]
                 .map(row => row.component_key).join(', ')}</p>
@@ -79,9 +76,22 @@ export function ExecutionPlanApproval({ preview, finish }: {
             </div>
             <p>Source: <code>{preview.plan.source_identity.revision}</code></p>
             <p>Approval: <code style={{ overflowWrap: 'anywhere' }}>{preview.approval_digest}</code></p>
-        </DialogBody>
+    </section>;
+}
+
+export function ExecutionPlanApproval({ preview, previews, finish }: {
+    preview?: ExecutionPlanPreview;
+    previews?: Record<string, ExecutionPlanPreview>;
+    finish: (approved: boolean) => void;
+}) {
+    const plans = previews ? Object.entries(previews) : preview ? [['', preview] as const] : [];
+    return <Dialog isOpen title="Review remote execution plan" onClose={() => finish(false)} style={{ width: 760 }}>
+        <DialogBody>{plans.map(([id, plan]) => <section key={id}>
+            {id && <h3>{id}</h3>}
+            <ExecutionPlanDetails preview={plan} />
+        </section>)}</DialogBody>
         <DialogFooter actions={<><Button onClick={() => finish(false)}>Cancel</Button>
-            <Button intent="primary" disabled={!preview.admissible} onClick={() => finish(true)}>Approve and submit</Button></>} />
+            <Button intent="primary" disabled={!plans.length || plans.some(([, plan]) => !plan.admissible)} onClick={() => finish(true)}>Approve and submit</Button></>} />
     </Dialog>;
 }
 

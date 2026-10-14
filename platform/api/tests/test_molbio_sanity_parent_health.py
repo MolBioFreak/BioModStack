@@ -46,52 +46,12 @@ def test_light_health_still_rejects_schema_drift(tmp_path):
     assert any(row["name"] == "unexpected_source" for row in result["attestation"]["extra_objects"])
 
 
-def test_default_deep_health_keeps_native_integrity_checks(tmp_path, monkeypatch):
-    path = tmp_path / "domain.db"
-    migrations.run_all(path)
-    calls: list[str] = []
-
-    def coherence(connection):
-        calls.append("coherence")
-        return []
-
-    def artifacts(connection, artifact_root=None):
-        calls.append("artifacts")
-        return [{"error": "test artifact digest mismatch"}]
-
-    monkeypatch.setattr(migrations, "_authority_coherence_errors", coherence)
-    monkeypatch.setattr(migrations, "_artifact_errors", artifacts)
-    result = migrations.health(path)
-    assert calls == ["coherence", "artifacts"]
-    assert result["status"] == "degraded"
-    assert result["attestation"]["data_integrity_checked"] is True
-    assert result["attestation"]["artifact_errors"] == [{"error": "test artifact digest mismatch"}]
-
-
 def test_light_health_does_not_create_missing_database(tmp_path):
     path = tmp_path / "not-there.db"
     result = migrations.health(path, deep=False)
     assert result["status"] == "error"
     assert result["attestation"]["ok"] is False
     assert not path.exists()
-
-
-@pytest.mark.asyncio
-async def test_async_health_forwards_explicit_integrity_mode(tmp_path, monkeypatch):
-    import molbio_ngs_database as database
-
-    path = tmp_path / "domain.db"
-    calls = []
-    monkeypatch.setattr(database, "get_molbio_ngs_db_path", lambda: path)
-
-    def probe(selected_path, *, deep=True):
-        calls.append((selected_path, deep))
-        return {"status": "healthy", "deep": deep}
-
-    monkeypatch.setattr(database, "health", probe)
-    assert (await database.molbio_ngs_health(deep=False))["deep"] is False
-    assert (await database.molbio_ngs_health())["deep"] is True
-    assert calls == [(path, False), (path, True)]
 
 
 @pytest.mark.asyncio

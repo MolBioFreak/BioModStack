@@ -1,9 +1,17 @@
-import { useMemo, useState } from 'react';
+import { ngsArtifactUrl, useNgsArtifacts, type NgsPackageArtifact } from '../../lib/ngsArtifacts';
+import { useEffect, useMemo, useState } from 'react';
+import { ExecutionTargetPicker } from '../ExecutionTargetPicker';
+import { ExecutionPolicyControl } from '../ExecutionPolicyControl';
+import { useOntDomainSubmission } from './useOntDomainSubmission';
+import type { ExecutionPolicy } from '../../lib/executionPolicy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     fetchPooledAssignmentManifest,
     fetchPooledAssignmentTargets,
     releasePooledAssignment,
+    preparePooledAssignmentRelease,
+    prepareExecutionPlacement,
+
     type Job,
     type PooledAssignmentManifest,
     type PooledAssignmentReleaseRequest,
@@ -157,12 +165,6 @@ function normalizeArtifactPath(value: string): string | null {
     return null;
 }
 
-function artifactHref(path: string, jobId: string): string | null {
-    if (path.startsWith('/api/') || /^https?:\/\//i.test(path)) return path;
-    const encoded = path.split('/').map((part) => encodeURIComponent(part)).join('/');
-    return `/api/files/download/${encoded}?v=${encodeURIComponent(jobId)}`;
-}
-
 function artifactMatches(key: ArtifactKey, path: string): boolean {
     const candidate = path.split('?')[0].replace(/\\/g, '/');
     if (key === 'assignment_summary') return /(?:^|\/)assignment_summary(?:\.[^/]+)?$/i.test(candidate);
@@ -170,7 +172,7 @@ function artifactMatches(key: ArtifactKey, path: string): boolean {
     return /(?:^|\/)intended_pool(?:\.igv_session)?(?:\.[^/]+)?$/i.test(candidate);
 }
 
-function resolveArtifactLinks(jobId: string, sources: unknown[]): ArtifactLink[] {
+function resolveArtifactLinks(jobId: string, sources: unknown[], artifacts: NgsPackageArtifact[]): ArtifactLink[] {
     const values: string[] = [];
     sources.forEach((source) => collectStrings(source, values));
     const deduped = [...new Set(values)];
@@ -181,8 +183,9 @@ function resolveArtifactLinks(jobId: string, sources: unknown[]): ArtifactLink[]
     ];
     return definitions.flatMap(({ key, label }) => {
         const rawPath = deduped.find((value) => artifactMatches(key, value));
-        const path = rawPath ? normalizeArtifactPath(rawPath) : null;
-        const href = path ? artifactHref(path, jobId) : null;
+        const catalogPath = artifacts.find(a => a.filename && artifactMatches(key, a.filename))?.filename;
+        const path = catalogPath || (rawPath ? normalizeArtifactPath(rawPath) : null);
+        const href = path ? ngsArtifactUrl(path, jobId, artifacts) : null;
         return path && href ? [{ key, label, path, href }] : [];
     });
 }
@@ -217,7 +220,6 @@ export function PooledAssignmentReviewPanel({
     const [namePrefix, setNamePrefix] = useState('');
     const [pinnedGpu, setPinnedGpu] = useState('');
     const [releaseResponse, setReleaseResponse] = useState<PooledAssignmentReleaseResponse | null>(null);
-    const [idempotencyKey] = useState(newIdempotencyKey);
 
     const manifestQuery = useQuery({
         queryKey: ['pooled-assignment-manifest', jobId],
@@ -237,39 +239,48 @@ export function PooledAssignmentReviewPanel({
         () => new Set(targets.filter(isSelectableTarget).map((target) => target.target_id)),
         [targets],
     );
+    const artifactQuery = useNgsArtifacts(jobId, pooledAssignmentJob && executionComplete);
     const artifactLinks = useMemo(
-        () => resolveArtifactLinks(jobId, [stageOutputs, files, results]),
-        [files, jobId, results, stageOutputs],
+        () => resolveArtifactLinks(jobId, [stageOutputs, files, results, artifactQuery.data?.artifacts.map(a => a.filename)], artifactQuery.data?.artifacts || []),
+        [files, jobId, results, stageOutputs, artifactQuery.data],
     );
     const executionStatus = manifestQuery.data?.execution_status
         || manifestQuery.data?.execution?.status
         || jobStatus;
     const scientificStatus = manifestQuery.data?.scientific_status || 'REVIEW';
 
+    const [executionTargetId, setExecutionTargetId] = useState<string | null>(null);
+    const [executionPolicy, setExecutionPolicy] = useState<ExecutionPolicy | undefined>();
+    const releaseKey = JSON.stringify([jobId, selectedTargetIds, targetWorkflow, namePrefix, pinnedGpu, executionTargetId, executionPolicy]);
+    const submission = useOntDomainSubmission<PooledAssignmentReleaseRequest>(releaseKey);
+    useEffect(() => { setReleaseResponse(null); }, [releaseKey]);
     const releaseMutation = useMutation({
-        mutationFn: async () => {
+        mutationFn: () => submission.submit(async () => {
             const targetIds = selectedTargetIds.filter((targetId) => selectableTargetIds.has(targetId));
             if (targetIds.length === 0) {
                 throw new Error('Select at least one target explicitly before release.');
             }
             const trimmedPinnedGpu = pinnedGpu.trim();
             let parsedPinnedGpu: number | undefined;
-            if (trimmedPinnedGpu) {
+            if (!executionTargetId && trimmedPinnedGpu) {
                 if (!/^\d+$/u.test(trimmedPinnedGpu)) {
                     throw new Error('Pinned GPU must be a non-negative integer.');
                 }
                 parsedPinnedGpu = Number.parseInt(trimmedPinnedGpu, 10);
             }
             const request: PooledAssignmentReleaseRequest = {
-                idempotency_key: idempotencyKey,
+                idempotency_key: newIdempotencyKey(),
                 target_workflow: targetWorkflow,
                 ...(namePrefix.trim() ? { name_prefix: namePrefix.trim() } : {}),
                 ...(parsedPinnedGpu === undefined ? {} : { pinned_gpu: parsedPinnedGpu }),
                 target_ids: targetIds,
+                ...prepareExecutionPlacement({ execution_target_id: executionTargetId, execution_policy: executionPolicy }),
             };
-            return releasePooledAssignment(jobId, request);
-        },
+            return request;
+        }, async request => (await preparePooledAssignmentRelease(jobId, request)).data,
+        (request, approvals) => releasePooledAssignment(jobId, { ...request, ...(request.execution_target_id ? { execution_plan_approvals: approvals } : {}) })),
         onSuccess: (response) => {
+            if (!response) return;
             setReleaseResponse(response.data);
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             queryClient.invalidateQueries({ queryKey: ['job-stages', jobId] });
@@ -283,6 +294,9 @@ export function PooledAssignmentReviewPanel({
             className="w-full min-w-0 space-y-4 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-4"
             data-testid="pooled-assignment-review-panel"
         >
+            {submission.review}
+            <ExecutionTargetPicker value={executionTargetId} onChange={setExecutionTargetId} />
+            <ExecutionPolicyControl onChange={setExecutionPolicy} />
             <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                     <h4 className="text-base font-semibold text-[var(--text-primary)]">Pooled assignment review</h4>
@@ -337,7 +351,7 @@ export function PooledAssignmentReviewPanel({
                     <div className="space-y-2">
                         <div className="flex flex-wrap items-baseline justify-between gap-2">
                             <div>
-                                <h5 className="text-sm font-semibold text-[var(--text-primary)]">Immutable target authority</h5>
+                                <h5 className="text-sm font-semibold text-[var(--text-primary)]">Targets</h5>
                                 <p className="mt-1 text-xs text-[var(--text-secondary)]">Check targets explicitly. The initial selection is empty.</p>
                             </div>
                             <span className="text-xs text-[var(--text-secondary)]" data-testid="pooled-assignment-selection-count">
@@ -446,6 +460,7 @@ export function PooledAssignmentReviewPanel({
                         <label className="space-y-1 text-xs text-[var(--text-secondary)]">
                             Optional pinned GPU
                             <input
+                                disabled={Boolean(executionTargetId)}
                                 value={pinnedGpu}
                                 onChange={(event) => setPinnedGpu(event.target.value)}
                                 inputMode="numeric"

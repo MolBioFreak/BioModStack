@@ -31,7 +31,7 @@ async def test_revision_cache_separates_legacy_without_changing_legacy_signature
     resolver.return_value = 1
     from contextlib import nullcontext
     session = SimpleNamespace(no_autoflush=nullcontext(), scalar=AsyncMock(return_value=
-        SimpleNamespace(model_id='esmfold2', provenance={'core_protein_scientific_contract': 1})))
+        SimpleNamespace(model_id='openmm', provenance={'core_protein_scientific_contract': 1})))
     assert await registry.build_analysis_input_signature(definition, design, {}, session) != 'legacy'
     session.scalar.assert_awaited_once()
 

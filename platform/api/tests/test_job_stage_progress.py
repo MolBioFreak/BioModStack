@@ -88,10 +88,30 @@ def test_review_is_not_failure_and_explicit_terminal_states_are_retained():
         'failed_child_stage': {'status': 'failed'}, 'skipped': {'status': 'skipped'}}
     actual = {row['id']: row['state'] for row in project_execution_stages(job)}
     assert actual == {'generated': 'completed', 'review': 'awaiting_input',
-                      'skipped': 'unknown', 'failed_child_stage': 'failed'}
+                      'skipped': 'skipped', 'failed_child_stage': 'failed'}
     # Explicit child-job metadata/round state cannot mark the parent complete.
     job['provenance']['binder_round'] = {'children': [{'status': 'completed', 'stage': 'prediction'}]}
     assert 'prediction' not in {row['id'] for row in project_execution_stages(job)}
+
+
+@pytest.mark.parametrize('terminal', ['not_requested', 'skipped'])
+def test_recorded_optional_skip_is_not_unknown_or_execution_failure(terminal):
+    job = fixture_job('protenix', 'predict')
+    job.update(completed_stages=['protenix'], provenance=plan('protenix', 'frustrampnn'))
+    job['provenance']['stage_terminal_states'] = {
+        'frustrampnn': {'status': terminal, 'output_files': []},
+        'unresolved': {'status': 'future_status'},
+    }
+    before = deepcopy(job)
+    actual = {row['id']: row for row in project_execution_stages(job)}
+    assert actual['frustrampnn']['state'] == terminal
+    assert actual['frustrampnn']['source'] == 'recorded'
+    assert actual['protenix']['state'] == 'completed'
+    assert actual['unresolved']['state'] == 'unknown'
+    assert job == before
+    response = JobResponse(id='skip', name='skip', **job).model_dump()
+    assert next(row for row in response['execution_stages'] if row['id'] == 'frustrampnn')['state'] == terminal
+    assert response['status'] == 'completed'
 
 
 def test_recorded_completion_supersedes_plan_source_without_completing_other_stages():
@@ -181,7 +201,8 @@ async def test_http_summary_full_detail_stages_agree_without_n_plus_one(tmp_path
                      status='completed', params={}, current_stage='Complete', completed_stages=[],
                      provenance={'remote_execution_assignment': {'resources': {
                          'components': [{'component_key': 'RunPPIFlowGeneration'}]}},
-                         'stage_terminal_states': {'separate_failure': {'status': 'failed'}}})
+                         'stage_terminal_states': {'separate_failure': {'status': 'failed'},
+                                                   'frustrampnn': {'status': 'not_requested'}}})
         session.add(remote)
         expected[remote.id] = project_execution_stages(remote)
         for status in ('running', 'awaiting_input', 'failed', 'cancelled'):

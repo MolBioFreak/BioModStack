@@ -175,6 +175,26 @@ def read_prepared_request(mode: str, params: dict, *, allowed_roots=None) -> dic
     return document
 
 
+def _retain_prepared_input(source, destination):
+    """A verified custody leaf; new owners have independent retained names."""
+    import errno
+    import os
+    import shutil
+    # New snapshots are frozen by their producer. Historical writable custody
+    # remains independent; never chmod or overwrite a shared donor inode.
+    source = Path(source).resolve(strict=True)
+    if not source.stat().st_mode & 0o222:
+        try:
+            os.link(source, destination)
+            return str(destination)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+    shutil.copyfile(source, destination)
+    Path(destination).chmod(0o444)  # This newly copied inode belongs only here.
+    return str(destination)
+
+
 def prepare_for_job(mode: str, params: dict, directory: str | Path, *, allowed_roots,
                     retain_prepared: bool = False) -> dict:
     """Use existing input custody and retain the reviewed native files unchanged."""
@@ -204,11 +224,12 @@ def prepare_for_job(mode: str, params: dict, directory: str | Path, *, allowed_r
     destination.mkdir(parents=True, exist_ok=False)
     owned = destination / ('source' + source.suffix.lower())
     if retained:
-        shutil.copyfile(source, owned)
+        _retain_prepared_input(source, owned)
         shutil.copyfile(params[fields[0]], destination / 'request.json')
     else:
         data = source.read_bytes()
         owned.write_bytes(data)
+        owned.chmod(0o444)
         document['source'] = {'requested_path': science['target_pdb'],
                               'sha256': hashlib.sha256(data).hexdigest()}
         (destination / 'request.json').write_text(json.dumps(document, sort_keys=True, allow_nan=False) + '\n')

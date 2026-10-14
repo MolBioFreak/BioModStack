@@ -82,7 +82,7 @@ it('loads 1205 records through native pages while bounding the table and chartin
     expect(cohortIds()).toEqual(rows.map(row => row.candidate_key));
     expect(scatter().props.data[0].customdata).toHaveLength(1205);
     expect(scatter().props.data[0].x).toEqual(rows.map(row => (row.metrics as any).seq_length));
-    await click('Plotly Lab');
+    await click('Custom charts');
     const stats = tree.root.findAllByType('table').find(table => table.findAllByType('caption').some(caption => text(caption) === 'Descriptive statistics for the full filtered cohort'))!;
     const seq = stats.findByType('tbody').findAllByType('tr').find(row => row.findByType('th').props.title === 'seq_length')!;
     expect(text(seq.findAllByType('td')[0])).toBe('1,205');

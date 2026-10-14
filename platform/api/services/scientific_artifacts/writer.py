@@ -46,6 +46,13 @@ def _descriptor_identity(metadata: os.stat_result) -> tuple[int, ...]:
             metadata.st_mtime_ns, metadata.st_ctime_ns)
 
 
+def _read_generation(metadata: os.stat_result) -> tuple[int, ...]:
+    if not metadata.st_mode & 0o222:
+        return (metadata.st_dev, metadata.st_ino, metadata.st_mode,
+                metadata.st_size, metadata.st_mtime_ns)
+    return (*_descriptor_identity(metadata), metadata.st_mode, metadata.st_nlink)
+
+
 def descriptor_content_digest(descriptor: int, *, scope: str) -> tuple[int, str]:
     """Digest an already-authorized no-follow descriptor, preserving its offset.
 
@@ -74,8 +81,20 @@ def descriptor_content_digest(descriptor: int, *, scope: str) -> tuple[int, str]
                 digest.update(block)
                 size += len(block)
             cached = (size, digest.hexdigest())
-        if _descriptor_identity(os.fstat(descriptor)) != identity or cached[0] != before.st_size:
+        if _read_generation(os.fstat(descriptor)) != _read_generation(before) or cached[0] != before.st_size:
             raise ScientificArtifactError("artifact changed during verification")
+        after = os.fstat(descriptor)
+        if _descriptor_identity(after) != identity:
+            check = hashlib.sha256()
+            offset = 0
+            while offset < after.st_size:
+                block = os.pread(descriptor, min(1024 * 1024, after.st_size - offset), offset)
+                if not block:
+                    break
+                check.update(block)
+                offset += len(block)
+            if (offset, check.hexdigest()) != cached or _read_generation(os.fstat(descriptor)) != _read_generation(after):
+                raise ScientificArtifactError("artifact changed during verification")
         with _digest_memo_lock:
             _digest_memo[key] = cached
             _digest_memo.move_to_end(key)
@@ -246,6 +265,7 @@ def install_parquet_rows(
         with staging.open("rb") as handle:
             os.fsync(handle.fileno())
         content_sha256, size_bytes = _content_digest(staging)
+        staging.chmod(0o444)
         publication_claim: str | None = None
         with _artifact_lock(destination):
             ownership = _read_ownership(destination)
@@ -404,11 +424,12 @@ def verified_artifact_snapshot(
         size, digest = descriptor_content_digest(leaf, scope=f"{base}:{expected_sha}")
         if (size, digest) != (expected_size, expected_sha):
             raise ScientificArtifactError("artifact bytes do not match its receipt")
-        verified_identity = _descriptor_identity(metadata)
-        if _descriptor_identity(os.fstat(leaf)) != verified_identity:
+        verified_identity = _read_generation(metadata)
+        if _read_generation(os.fstat(leaf)) != verified_identity:
             raise ScientificArtifactError("artifact changed during verification")
+        consumed_identity = _descriptor_identity(os.fstat(leaf))
         yield Path(f"/proc/self/fd/{leaf}")
-        if _descriptor_identity(os.fstat(leaf)) != verified_identity:
+        if _descriptor_identity(os.fstat(leaf)) != consumed_identity:
             # Unlink/rename changes ctime too. The pinned original remains valid
             # only if a fresh digest still agrees; never reopen the replacement.
             if descriptor_content_digest(leaf, scope=f"{base}:{expected_sha}") != (expected_size, expected_sha):

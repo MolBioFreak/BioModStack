@@ -271,6 +271,8 @@ def test_structure_fingerprint_rewrites_legacy_host_paths_to_active_runtime(
     legacy_path = legacy_root / "bms_results" / "job-legacy" / "model_0.pdb"
 
     monkeypatch.setattr(paths, "get_data_root", lambda: active_root)
+    # Exercise legacy-root rewriting independently of explicit container aliases.
+    monkeypatch.delenv("BMS_HOST_DATA", raising=False)
     monkeypatch.setattr(paths, "_candidate_data_roots", lambda: [legacy_root])
     monkeypatch.setattr(paths, "_runtime_paths", lambda: {"container_state_path": str(active_root)})
 
@@ -292,6 +294,8 @@ def test_aligned_error_fingerprint_rewrites_legacy_host_paths_to_active_runtime(
     legacy_artifact = legacy_root / "bms_results" / "job-legacy" / "confidence_model_0.json"
 
     monkeypatch.setattr(paths, "get_data_root", lambda: active_root)
+    # Exercise legacy-root rewriting independently of explicit container aliases.
+    monkeypatch.delenv("BMS_HOST_DATA", raising=False)
     monkeypatch.setattr(paths, "_candidate_data_roots", lambda: [legacy_root])
     monkeypatch.setattr(paths, "_runtime_paths", lambda: {"container_state_path": str(active_root)})
 

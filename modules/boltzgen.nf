@@ -1,3 +1,10 @@
+// Closed outputs retain independent names; cache hits republish too.
+def boltzgenPublishMode(workDir, outputDir) {
+    def destination = file(outputDir).toAbsolutePath()
+    while (!java.nio.file.Files.exists(destination)) destination = destination.parent
+    java.nio.file.Files.getFileStore(workDir) == java.nio.file.Files.getFileStore(destination) ? 'link' : 'copy'
+}
+
 process PrepBoltzGenInput {
     label 'pyrosetta_tools'
 
@@ -75,10 +82,10 @@ process RunBoltzGen {
     label 'gpu'
     publishDir "${params.out_dir}/run/boltzgen", mode: 'copy', pattern: "*.log"
     // Wrapper outputs converted PDBs + JSONs to output/designs/
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "output/designs/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "output/designs/*.{json,npz,csv}", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: 'copy', pattern: "output/designs/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: 'copy', pattern: "output/designs/*.{json,npz,csv}", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files", mode: "${boltzgenPublishMode(workflow.workDir, params.out_dir)}", pattern: "output/designs/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files", mode: "${boltzgenPublishMode(workflow.workDir, params.out_dir)}", pattern: "output/designs/*.{json,npz,csv}", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: "${boltzgenPublishMode(workflow.workDir, params.out_dir)}", pattern: "output/designs/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: "${boltzgenPublishMode(workflow.workDir, params.out_dir)}", pattern: "output/designs/*.{json,npz,csv}", saveAs: { filename -> filename.split('/')[-1] }
     // Also capture batch metadata if available
     publishDir "${params.out_dir}/run/boltzgen/metadata", mode: 'copy', pattern: "output/**/all_designs_metrics.csv", saveAs: { filename -> filename.split('/')[-1] }
 
@@ -139,13 +146,13 @@ process RunBoltzGen {
 }
 
 process FilterBoltzGen {
-    // Native byte evidence must be regular task-local snapshots, not symlinks.
-    stageInMode { params.get('core_protein_scientific_contract') == 1 ? 'copy' : 'symlink' }
+    // The filter reads a private directory of regular retained leaves below.
+    stageInMode 'symlink'
     label 'pyrosetta_tools'
     publishDir "${params.out_dir}/run/filter_boltzgen", mode: 'copy', pattern: "*.log"
     publishDir "${params.out_dir}/run/filter_boltzgen", mode: 'copy', pattern: "filtered/*.json"
-    publishDir "${params.out_dir}/collected/boltzgen_filtered", mode: 'copy', pattern: "filtered/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/collected/boltzgen_filtered", mode: 'copy', pattern: "filtered/*.{json,npz,csv}", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/collected/boltzgen_filtered", mode: "${boltzgenPublishMode(workflow.workDir, params.out_dir)}", pattern: "filtered/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/collected/boltzgen_filtered", mode: "${boltzgenPublishMode(workflow.workDir, params.out_dir)}", pattern: "filtered/*.{json,npz,csv}", saveAs: { filename -> filename.split('/')[-1] }
 
     input:
     path pdbs
@@ -181,10 +188,28 @@ process FilterBoltzGen {
         fi
     fi
 
+    python3 - ${pdbs} ${jsons} <<'PY'
+import errno
+import os
+import shutil
+import sys
+from pathlib import Path
+root = Path('filter_inputs')
+root.mkdir(exist_ok=True)
+for value in sys.argv[1:]:
+    source = Path(value).resolve(strict=True)
+    target = root / Path(value).name
+    try:
+        os.link(source, target)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        shutil.copyfile(source, target)
+PY
     python3 ${params.code_root}/scripts/filter_boltzgen.py \\
         ${params.get('core_protein_scientific_contract') == 1 ? "--core-protein-scientific-contract 1" : ''} \\
-        --pdbs ${pdbs} \\
-        --jsons ${jsons} \\
+        --pdbs ${(pdbs instanceof Collection ? pdbs : [pdbs]).collect { 'filter_inputs/' + it.name }.join(' ')} \\
+        --jsons ${(jsons instanceof Collection ? jsons : [jsons]).collect { 'filter_inputs/' + it.name }.join(' ')} \\
         ${minPlddt != null ? "--boltzgen-min-plddt ${minPlddt}" : ''} \\
         ${minConfScore != null ? "--boltzgen-min-conf-score ${minConfScore}" : ''} \\
         ${maxRmsd != null ? "--boltzgen-max-rmsd ${maxRmsd}" : ''} \\
@@ -289,10 +314,10 @@ process WaitForBoltzGenChildren {
 process CollectBoltzGenOutputs {
     label 'process_low'
 
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "collected/*.pdb"
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: "collected/*.{json,npz,csv}"
-    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: 'copy', pattern: "collected/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
-    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: 'copy', pattern: "collected/*.{json,npz,csv}", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/pdb_files", mode: "${boltzgenPublishMode(workflow.workDir, params.out_dir)}", pattern: "collected/*.pdb"
+    publishDir "${params.out_dir}/pdb_files", mode: "${boltzgenPublishMode(workflow.workDir, params.out_dir)}", pattern: "collected/*.{json,npz,csv}"
+    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: "${boltzgenPublishMode(workflow.workDir, params.out_dir)}", pattern: "collected/*.pdb", saveAs: { filename -> filename.split('/')[-1] }
+    publishDir "${params.out_dir}/collected/boltzgen_raw", mode: "${boltzgenPublishMode(workflow.workDir, params.out_dir)}", pattern: "collected/*.{json,npz,csv}", saveAs: { filename -> filename.split('/')[-1] }
     publishDir "${params.out_dir}/run/boltzgen_parallel", mode: 'copy', pattern: "collection_manifest.json"
 
     input:
@@ -322,6 +347,16 @@ process CollectBoltzGenOutputs {
 
     Path("collected").mkdir(exist_ok=True)
     
+    def retain_child(source, destination):
+        import errno
+        import os
+        try:
+            os.link(source.resolve(strict=True), destination)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            shutil.copyfile(source, destination)
+
     collected_pdbs = []
     collected_jsons = []
     
@@ -340,7 +375,7 @@ process CollectBoltzGenOutputs {
             for pdb in search_path.glob("*.pdb"):
                 dest = Path("collected") / f"job{job_idx}_{pdb.name}"
                 if not dest.exists():
-                    shutil.copy(pdb, dest)
+                    retain_child(pdb, dest)
                     collected_pdbs.append(str(dest))
                     accepted[child_dir].append(pdb)
                     print(f"Collected: {pdb} -> {dest}")
@@ -370,7 +405,7 @@ process CollectBoltzGenOutputs {
                         if source.is_symlink() or hashlib.sha256(source.read_bytes()).hexdigest() != artifact['sha256']:
                             raise ValueError('BoltzGen native scalar bytes changed')
                         native_name = f"job{job_idx}_{source.name}"
-                        shutil.copyfile(source, Path('collected') / native_name)
+                        retain_child(source, Path('collected') / native_name)
                         native['candidate_id'] = candidate_id
                         artifact['path'] = native_name
                         accepted[child_dir].append(source)

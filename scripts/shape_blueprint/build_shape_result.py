@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -14,8 +15,28 @@ from typing import Any, Iterable
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
-def _read_json(path: Path, label: str) -> dict[str, Any]:
-    if path.is_symlink() or not path.is_file():
+def retain_file(source: Path, destination: Path) -> None:
+    """Retain an unchanged closed leaf without another same-filesystem body.
+
+    Resolve staging aliases before linking. Across filesystems an independent
+    retained result still needs its own bytes (it must survive work deletion).
+    Never chmod or overwrite an existing shared inode in place.
+    """
+    temporary = destination.with_name(f".{destination.name}.{os.getpid()}.retain")
+    try:
+        try:
+            os.link(source.resolve(strict=True), temporary)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            shutil.copyfile(source, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _read_json(path: Path, label: str, root: Path | None = None) -> dict[str, Any]:
+    if not path.is_file() or (root is not None and not path.resolve().is_relative_to(root.resolve())):
         raise ValueError(f"{label} is absent or unsafe")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -39,8 +60,8 @@ def _closed_file(bundle: Path, descriptor: dict[str, Any], label: str) -> Path:
     if not isinstance(filename, str) or Path(filename).name != filename or not filename:
         raise ValueError(f"{label} filename is unsafe")
     path = bundle / filename
-    if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
-        raise ValueError(f"{label} is absent, linked, or unsafe")
+    if not path.is_file() or not path.resolve().is_relative_to(bundle.resolve()):
+        raise ValueError(f"{label} is absent or outside its bundle")
     if descriptor.get("bytes") != path.stat().st_size:
         raise ValueError(f"{label} byte count mismatch")
     if descriptor.get("sha256") != _sha256(path):
@@ -108,7 +129,7 @@ def build_result(
         if aggregate.get("status") not in {"complete", "no_yield"}:
             raise ValueError("incomplete RFD3 aggregate cannot be published as a terminal result")
         aggregate_destination = output_dir / "results" / "rfd3_aggregate_manifest.json"
-        shutil.copyfile(aggregate_path, aggregate_destination)
+        retain_file(aggregate_path, aggregate_destination)
         aggregate_descriptor = _artifact(aggregate_destination, output_dir)
 
     accepted: list[dict[str, Any]] = []
@@ -116,9 +137,9 @@ def build_result(
     seen: set[str] = set()
     for raw_bundle in candidate_bundles:
         bundle = Path(raw_bundle)
-        if bundle.is_symlink() or not bundle.is_dir():
+        if not bundle.is_dir():
             raise ValueError("Shape candidate bundle is absent or unsafe")
-        metadata = _read_json(bundle / "candidate_bundle.json", "Shape candidate bundle manifest")
+        metadata = _read_json(bundle / "candidate_bundle.json", "Shape candidate bundle manifest", bundle)
         if metadata.get("schema") != "bms_shape_candidate_bundle_v1":
             raise ValueError("Shape candidate bundle schema is invalid")
         candidate_id = metadata.get("candidate_id")
@@ -148,13 +169,13 @@ def build_result(
                     or set(expected_artifacts) != set(bound_artifacts)):
                 raise ValueError("validator native artifact inventory mismatch")
             destination = candidate_root / f"{candidate_id}.validators.json"
-            shutil.copyfile(suite, destination)
+            retain_file(suite, destination)
             native_evidence["validator_evidence"] = _artifact(destination, output_dir, "json")
             native_evidence["validator_artifacts"] = []
             for index, descriptor in enumerate(metadata.get("validator_artifacts", [])):
                 source = _closed_file(bundle, descriptor, "validator artifact")
                 destination = candidate_root / f"{candidate_id}.validator_{index:04d}{source.suffix}"
-                shutil.copyfile(source, destination)
+                retain_file(source, destination)
                 native_evidence["validator_artifacts"].append({
                     **_artifact(destination, output_dir, source.suffix.lstrip(".")),
                     "validator": descriptor["validator"], "native_path": descriptor["native_path"],
@@ -164,7 +185,7 @@ def build_result(
             if descriptor is not None:
                 source = _closed_file(bundle, descriptor, key)
                 destination = candidate_root / f"{candidate_id}.{key}{source.suffix}"
-                shutil.copyfile(source, destination)
+                retain_file(source, destination)
                 native_evidence[key] = _artifact(destination, output_dir, source.suffix.lstrip("."))
         status = metadata.get("status")
         if status == "rejected":
@@ -196,8 +217,9 @@ def build_result(
         destination_structure = candidate_root / f"{candidate_id}{structure.suffix}"
         destination_source = candidate_root / f"{candidate_id}.source{source_backbone.suffix}"
         destination_metrics = candidate_root / f"{candidate_id}.metrics.json"
-        shutil.copyfile(structure, destination_structure)
-        shutil.copyfile(source_backbone, destination_source)
+        retain_file(structure, destination_structure)
+        retain_file(source_backbone, destination_source)
+        # Candidate metadata is private; native evidence above is immutable.
         shutil.copyfile(metrics, destination_metrics)
         (accepted if status == "accepted" else rejected).append(
             {

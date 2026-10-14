@@ -32,7 +32,7 @@ process MD_SPAWN_REPLICAS {
     script:
     """
     export PYTHONPATH="${params.code_root}:\${PYTHONPATH:-}"
-    python3 -m scripts.bms_md.spawn_replicas \
+    '${params.api_python}' -m scripts.bms_md.spawn_replicas \
       --parent-job-id "${parent_job_id}" \
       --parent-name "${parent_name}" \
       --normalized-config ${normalized_config} \
@@ -59,7 +59,7 @@ process MD_WAIT_FOR_REPLICAS {
 
     script:
     """
-    python3 ${params.code_root}/scripts/wait_for_children.py \
+    '${params.api_python}' ${params.code_root}/scripts/wait_for_children.py \
       --parent_job_id "${parent_job_id}" \
       --stage md_replica \
       --poll_interval ${poll_seconds} \
@@ -83,7 +83,7 @@ process MD_COLLECT_REPLICAS {
     script:
     """
     export PYTHONPATH="${params.code_root}:\${PYTHONPATH:-}"
-    python3 -m scripts.bms_md.aggregate_children \
+    '${params.api_python}' -m scripts.bms_md.aggregate_children \
       --child-status ${child_status} \
       --spawn-receipt ${spawn_receipt} \
       --output-dir "${params.out_dir}"
@@ -104,7 +104,7 @@ process MD_ASSERT_REPLICA_OUTCOME {
 
     script:
     """
-    python3 - <<'PY'
+    '${params.api_python}' - <<'PY'
 import json
 from pathlib import Path
 manifest = json.loads(Path('${aggregate_manifest}').read_text())
@@ -135,7 +135,7 @@ process MD_SPAWN_ANALYSIS {
     script:
     """
     export PYTHONPATH="${params.code_root}:\${PYTHONPATH:-}"
-    python3 -m scripts.bms_md.spawn_analysis \
+    '${params.api_python}' -m scripts.bms_md.spawn_analysis \
       --parent-job-id "${parent_job_id}" \
       --parent-name "${parent_name}" \
       --aggregate-manifest "${aggregate_manifest}" \
@@ -162,7 +162,7 @@ process MD_WAIT_FOR_ANALYSIS {
 
     script:
     """
-    python3 ${params.code_root}/scripts/wait_for_children.py \
+    '${params.api_python}' ${params.code_root}/scripts/wait_for_children.py \
       --parent_job_id "${parent_job_id}" \
       --stage md_analysis \
       --poll_interval ${poll_seconds} \
@@ -187,10 +187,11 @@ process MD_COLLECT_ANALYSIS {
     script:
     """
     export PYTHONPATH="${params.code_root}:\${PYTHONPATH:-}"
-    python3 -m scripts.bms_md.collect_analysis \
+    '${params.api_python}' -m scripts.bms_md.collect_analysis \
       --child-status ${child_status} \
       --spawn-receipt ${spawn_receipt} \
       --aggregate-manifest "${aggregate_manifest}" \
+      --gromacs-container "${params.md_gromacs_container}" \
       --output-dir "${params.out_dir}"
     printf 'completed\n' > analysis_collection.done
     """
@@ -209,13 +210,13 @@ process MD_ASSERT_ANALYSIS_OUTCOME {
 
     script:
     """
-    python3 - <<'PY'
+    '${params.api_python}' - <<'PY'
 import json
 from pathlib import Path
 manifest = json.loads(Path('${analysis_manifest}').read_text())
-if manifest.get('status') != 'completed':
+if not manifest.get('optional') and manifest.get('status') != 'completed':
     raise SystemExit('one or more durable MD analysis children failed, were cancelled, or remain uncollected')
-if manifest.get('completed_analysis_children') != manifest.get('required_analysis_children'):
+if not manifest.get('optional') and manifest.get('completed_analysis_children') != manifest.get('required_analysis_children'):
     raise SystemExit('required durable MD analysis results are not all collected')
 Path('md_analysis_outcome_verified.txt').write_text('completed' + chr(10))
 PY
@@ -238,7 +239,7 @@ process MD_COMPLETION_BARRIER {
 
     script:
     """
-    python3 - <<'PY'
+    '${params.api_python}' - <<'PY'
 import hashlib
 import json
 from pathlib import Path
@@ -247,15 +248,15 @@ analysis_path = Path('${analysis_manifest}')
 replica = json.loads(replica_path.read_text())
 analysis = json.loads(analysis_path.read_text())
 replica_sha = hashlib.sha256(replica_path.read_bytes()).hexdigest()
-if replica.get('status') != 'completed' or analysis.get('status') != 'completed':
+if replica.get('status') != 'completed' or (not analysis.get('optional') and analysis.get('status') != 'completed'):
     raise SystemExit('MD completion barrier reached before durable collection completed')
 if analysis.get('aggregate_manifest_sha256') != replica_sha:
     raise SystemExit('MD analysis was not collected against the immutable replica aggregate')
 if analysis.get('job_id') != replica.get('job_id'):
     raise SystemExit('MD completion barrier requires matching native parent identity')
-if analysis.get('completed_analysis_children') != analysis.get('required_analysis_children'):
+if not analysis.get('optional') and analysis.get('completed_analysis_children') != analysis.get('required_analysis_children'):
     raise SystemExit('MD completion barrier requires every mandatory analysis')
-if len(replica.get('replicas') or []) != analysis.get('completed_analysis_children'):
+if not analysis.get('optional') and len(replica.get('replicas') or []) != analysis.get('completed_analysis_children'):
     raise SystemExit('MD completion barrier requires one collected analysis per replica')
 Path('md_completion_barrier.json').write_text(json.dumps({
     'schema': 'bms.md.completion-barrier.v1',

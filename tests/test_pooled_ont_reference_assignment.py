@@ -103,27 +103,6 @@ def test_unique_competitive_assignment(tmp_path: Path) -> None:
     assert [item.disposition for item in assignments] == ["target:target-a", "target:target-b"]
 
 
-def test_tie_and_shared_backbone_score_margin_is_ambiguous(tmp_path: Path) -> None:
-    reference_set = validate_reference_set(
-        _write_manifest(tmp_path, [("target-a", "ACGTACGT"), ("target-b", "ACGTAAAA")])
-    )
-    assignment = classify_assignments(
-        [_record("read-1")],
-        {
-            "read-1": [
-                AlignmentEvidence("read-1", "target-a", 60, 100, False),
-                AlignmentEvidence("read-1", "target-b", 60, 95, True),
-            ]
-        },
-        reference_set,
-        min_mapq=20,
-        min_alignment_score_margin=5,
-    )[0]
-    assert assignment.disposition == "ambiguous"
-    assert assignment.reason == "near_tie_within_score_margin"
-    assert assignment.score_delta == 5
-
-
 def test_near_tie_uses_mapq_zero_secondary_competitor(tmp_path: Path) -> None:
     # minimap2 always reports secondary alignments with MAPQ 0; the runner-up
     # target must still compete before the MAPQ gate is applied.

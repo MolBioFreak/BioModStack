@@ -191,10 +191,13 @@ def test_boltz_incomplete_or_corrupt_handoff_rejected(placement, mutation):
         nextflow._bind_protenix_msa_transport(original, prepared)
 
 
-def test_cached_boltz_roster_discharges_generate_stage(placement, monkeypatch):
+@pytest.mark.parametrize('method', ['', 'md'])
+@pytest.mark.parametrize('lane', ['local', 'remote'])
+def test_cached_boltz_roster_discharges_generate_stage(placement, monkeypatch, method, lane):
     from services import msa_preparation
     roots, job, _ = placement
-    job.params.update(boltz_use_msa=True, msa_provider='colabfold_api', num_parallel_jobs=2)
+    job.params.update(boltz_use_msa=True, msa_provider='colabfold_api', num_parallel_jobs=2,
+                      boltz_method=method, boltz_sampling_steps=77, boltz_use_potentials=False)
     calls = []
     def cached(*, sequences, params):
         # Explicit cache/provider-boundary double; no provider request is made.
@@ -210,11 +213,38 @@ def test_cached_boltz_roster_discharges_generate_stage(placement, monkeypatch):
     assert 'GenerateLocalMSA' in {r.component_or_dependency_id for r in original.execution_plan.blockers}
     prepared = prepare_launch_msa('boltz2', dict(job.params), Path(job.output_dir) / 'prepared-msa',
                                   native_invocation=original)
-    invocation = nextflow._bind_protenix_msa_transport(original, prepared)
+    invocation = asyncio.run(nextflow._compile_launch_nextflow_invocation(
+        AsyncMock(), job, prepared, job.output_dir, prepared_invocation=original))
     assert invocation.execution_plan.complete
     assert calls == [(['ACDE'], 'colabfold_api'), (['ACDE'], 'colabfold_api')]
-    pack(placement, invocation)
+    assert job.params['boltz_method'] == prepared['boltz_method'] == method
+    assert json.loads(original.requested_json)['boltz_method'] == method
     assert (invocation.requested_json, invocation.effective_json) == (original.requested_json, original.effective_json)
+    path = Path(prepared['boltz_prepared_msa_dir']) / 'msa-inputs.json'
+    manifest = json.loads(path.read_text())
+    assert manifest['settings']['boltz_sampling_steps'] == 77
+    assert manifest['settings']['boltz_use_potentials'] is False
+    assert ('boltz_method' in manifest['settings']) == bool(method)
+    assert ('--boltz_method' in invocation.command) == bool(method)
+    if method:
+        assert manifest['settings']['boltz_method'] == method
+        assert invocation.command[invocation.command.index('--boltz_method') + 1] == method
+    assert manifest['tasks'][0]['provenance']['request_digest'] == 'fixture-request'
+    if lane == 'remote':
+        result = pack(placement, invocation)
+        assert '--boltz_prepared_msa_dir' in result.envelope.command
+        assert ('--boltz_method' in result.envelope.command) == bool(method)
+    # Re-preparing with transport bindings must not seal them as science.
+    rebound = prepare_launch_msa('boltz2', prepared, path.parent, native_invocation=invocation)
+    assert json.loads(path.read_text())['settings'] == manifest['settings']
+    assert nextflow._bind_protenix_msa_transport(invocation, rebound) == invocation
+    # Re-hash a scientifically changed manifest: equality, not merely digest,
+    # must still refuse genuine tampering before either launch placement.
+    manifest['settings']['boltz_method'] = 'solution nmr'
+    path.write_text(json.dumps(manifest))
+    tampered = {**prepared, 'boltz_prepared_msa_sha256': digest(path.read_bytes())}
+    with pytest.raises(ValueError, match='schema/scientific settings mismatch'):
+        nextflow._bind_protenix_msa_transport(original, tampered)
 
 
 @pytest.mark.parametrize('mode', ['predict', 'complex'])

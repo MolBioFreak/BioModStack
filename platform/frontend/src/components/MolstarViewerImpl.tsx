@@ -200,7 +200,7 @@ export default function MolstarViewer({
                     ? 'pdb'
                     : document.format === 'sdf' ? 'sdf' : 'mmcif',
                 sourceUrl: document.url,
-                contentSha256: document.expectedSha256,
+                contentSha256: document.expectedSha256 ?? controllerRef.current?.currentScene?.documents.find(known => known.documentId === document.id && known.sourceUrl === document.url)?.contentSha256,
             })),
             ...(documents.length > 1 ? {
                 collection: {

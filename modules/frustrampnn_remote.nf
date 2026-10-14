@@ -6,7 +6,7 @@ include { CanonicalFrustraMPNNV2 } from './frustrampnn.nf'
 // No scheduler child jobs, API callbacks, or alternate model implementation.
 process PackRemoteFrustraMPNNRequest {
     label 'CPU'
-    stageInMode 'copy'
+    stageInMode 'symlink'
     errorStrategy 'terminate'
     maxRetries 0
     input:
@@ -19,14 +19,19 @@ process PackRemoteFrustraMPNNRequest {
     set -euo pipefail
     mkdir 'candidate_${identity}'
     cp -L '${request}' 'candidate_${identity}/workflow_component_request_v3.json'
-    cp -L '${source}' 'candidate_${identity}/canonical_source.pdb'
-    cp -L '${structure_map}' 'candidate_${identity}/frustrampnn_structure_map_v1.json'
+    '${params.api_python}' - '${params.code_root}' '${source}' '${structure_map}' 'candidate_${identity}' <<'PY'
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / 'scripts'))
+from stage_frustrampnn_parent_candidate import stage_source
+stage_source(pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[4]) / 'canonical_source.pdb')
+stage_source(pathlib.Path(sys.argv[3]), pathlib.Path(sys.argv[4]) / 'frustrampnn_structure_map_v1.json')
+PY
     """
 }
 
 process RemoteFrustraMPNNGroupedTask {
     label 'frustrampnn_gpu'
-    stageInMode 'copy'
+    stageInMode 'symlink'
     errorStrategy 'terminate'
     maxRetries 0
     publishDir "${params.out_dir}/frustrampnn/remote_batches", mode: 'copy', pattern: 'batch_receipts/*', saveAs: { name -> new File(name).name }
@@ -52,7 +57,7 @@ process RemoteFrustraMPNNGroupedTask {
 
 process PlanRemoteFrustraMPNNGroups {
     label 'CPU'
-    stageInMode 'copy'
+    stageInMode 'symlink'
     errorStrategy 'terminate'
     maxRetries 0
     publishDir "${params.out_dir}/frustrampnn/component_groups", mode: 'copy', pattern: 'groups/grouping_plan_v1.json'

@@ -14,20 +14,7 @@ include { PrepareBamForAnalysis as BamPrepareBamForAnalysis; ValidateMappedBam; 
 include { ValidateModifiedBaseBam as Pod5ValidateModifiedBaseBam; ValidateModifiedBaseBam as BamValidateModifiedBaseBam; ModkitPileup as Pod5ModkitPileup; ModkitPileup as BamModkitPileup } from '../../modules/ngs/modkit_pileup.nf'
 include { ModkitSummary as Pod5ModkitSummary; ModkitSummary as BamModkitSummary } from '../../modules/ngs/modkit_summary.nf'
 
-def reportStage(params, stageName, files) {
-    def jobId = params.containsKey('job_id') ? params.job_id : null
-    if (!jobId) return
-    try {
-        def reportFiles = files.findAll { it != null && it.toString().trim() }
-        if (reportFiles.isEmpty()) return
-        def args = [jobId.toString(), stageName, "complete"] + reportFiles.collect { it.toString() }
-        def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-        def rc = proc.waitFor()
-        if (rc != 0) throw new IllegalStateException("Stage reporting failed for ${stageName} (exit ${rc})")
-    } catch (Exception e) {
-        throw new IllegalStateException("Stage reporting failed for ${stageName}", e)
-    }
-}
+include { reportStage } from '../../modules/ngs/stage_reporting.nf'
 
 workflow ONT_METHYLATION_ANALYSIS {
     main:
@@ -66,6 +53,10 @@ workflow ONT_METHYLATION_ANALYSIS {
         error("Modkit methylation analysis requires --reference_fasta")
     }
 
+    // Retain input-specific process aliases for selectors and resume identity.
+    def pileupLog = null
+    def summaryLog = null
+
     // --- POD5 input: Dorado basecalling ---
     if (has_pod5) {
         def pod5_input = file(params.pod5_dir)
@@ -99,23 +90,10 @@ workflow ONT_METHYLATION_ANALYSIS {
             Pod5DoradoAlign(DoradoBasecall.out.bam, Channel.of(reference_file))
             Pod5ValidateModifiedBaseBam(Pod5DoradoAlign.out.aligned)
             Pod5ModkitPileup(Pod5ValidateModifiedBaseBam.out.bam, Channel.of(reference_file))
-            Pod5ModkitPileup.out.log.subscribe { _ignored ->
-                reportStage(params, "modkit_pileup", [
-                    "${params.out_dir}/methylation/modified_base_input.bam",
-                    "${params.out_dir}/methylation/modified_base_input.bam.bai",
-                    "${params.out_dir}/methylation/modified_base_tag_check.log",
-                    "${params.out_dir}/methylation/methylation.bed",
-                    "${params.out_dir}/methylation/pileup.log",
-                ])
-            }
+            pileupLog = Pod5ModkitPileup.out.log
 
             Pod5ModkitSummary(Pod5ValidateModifiedBaseBam.out.bam)
-            Pod5ModkitSummary.out.log.subscribe { _ignored ->
-                reportStage(params, "modkit_summary", [
-                    "${params.out_dir}/methylation/modkit_summary.tsv",
-                    "${params.out_dir}/methylation/summary.log",
-                ])
-            }
+            summaryLog = Pod5ModkitSummary.out.log
         }
     }
 
@@ -153,23 +131,29 @@ workflow ONT_METHYLATION_ANALYSIS {
         if (runModkit) {
             BamValidateModifiedBaseBam(prepared_bam)
             BamModkitPileup(BamValidateModifiedBaseBam.out.bam, Channel.of(reference_file))
-            BamModkitPileup.out.log.subscribe { _ignored ->
-                reportStage(params, "modkit_pileup", [
-                    "${params.out_dir}/methylation/modified_base_input.bam",
-                    "${params.out_dir}/methylation/modified_base_input.bam.bai",
-                    "${params.out_dir}/methylation/modified_base_tag_check.log",
-                    "${params.out_dir}/methylation/methylation.bed",
-                    "${params.out_dir}/methylation/pileup.log",
-                ])
-            }
+            pileupLog = BamModkitPileup.out.log
 
             BamModkitSummary(BamValidateModifiedBaseBam.out.bam)
-            BamModkitSummary.out.log.subscribe { _ignored ->
-                reportStage(params, "modkit_summary", [
-                    "${params.out_dir}/methylation/modkit_summary.tsv",
-                    "${params.out_dir}/methylation/summary.log",
-                ])
-            }
+            summaryLog = BamModkitSummary.out.log
+        }
+    }
+    if (pileupLog != null) {
+        pileupLog.subscribe { _ignored ->
+            reportStage(params, "modkit_pileup", [
+                "${params.out_dir}/methylation/modified_base_input.bam",
+                "${params.out_dir}/methylation/modified_base_input.bam.bai",
+                "${params.out_dir}/methylation/modified_base_tag_check.log",
+                "${params.out_dir}/methylation/methylation.bed",
+                "${params.out_dir}/methylation/pileup.log",
+            ])
+        }
+    }
+    if (summaryLog != null) {
+        summaryLog.subscribe { _ignored ->
+            reportStage(params, "modkit_summary", [
+                "${params.out_dir}/methylation/modkit_summary.tsv",
+                "${params.out_dir}/methylation/summary.log",
+            ])
         }
     }
 }

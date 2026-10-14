@@ -110,11 +110,6 @@ def _read_fastq_records(path: Path) -> list[dict[str, str]]:
     return records
 
 
-def _fastq_read_ids(path: Path) -> list[str]:
-    """Return original QNAMEs without imposing uniqueness."""
-    return [record["read_id"] for record in _read_fastq_records(path)]
-
-
 def _is_sha256(value: object) -> bool:
     return isinstance(value, str) and bool(_SHA256.fullmatch(value))
 
@@ -240,6 +235,9 @@ def _load_occurrence_map(
 
 def load_panel_snapshot(path: Path) -> dict[str, Any]:
     """Validate a self-contained snapshot; paths may never escape its directory."""
+    # Nextflow stages this manifest as a symlink. Its declared FASTA siblings
+    # belong beside the manifest target, not beside that task-local symlink.
+    path = path.resolve()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:

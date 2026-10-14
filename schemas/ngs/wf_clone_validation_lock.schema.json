@@ -59,12 +59,15 @@
     },
     "image": {
       "type": "object", "additionalProperties": false, "required": ["uri", "cache_file", "sha256"],
-      "properties": {"uri": {"type": "string"}, "cache_file": {"type": "string", "pattern": "^[^/]+$"}, "sha256": {"$ref": "#/$defs/sha256"}}
+      "properties": {"uri": {"type": "string"}, "cache_file": {"type": "string", "pattern": "^[^/]+$"}, "sha256": {"$ref": "#/$defs/sha256"}, "label": {"enum": ["wfplasmid", "canu", "medaka", "wf_common", "plannotate"]}, "assembly_tool": {"enum": ["canu", "flye"]}, "definition": {"type": "string"}}
     },
     "models": {
-      "type": "object", "additionalProperties": false, "required": ["store", "accepted_upstream_ids", "default"],
+      "type": "object", "additionalProperties": false, "required": ["accepted_upstream_ids", "default"],
       "properties": {
-        "store": {"type": "string"}, "accepted_upstream_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}}, "default": {"type": "string"}
+        "store": {"type": "string"}, "accepted_upstream_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}}, "default": {"type": "string"},
+        "selection_basis": {"type": "string"},
+        "medaka_version": {"type": "string"},
+        "consensus_models": {"type": "object", "additionalProperties": {"type": "object", "additionalProperties": false, "required": ["model", "path", "sha256", "bytes"], "properties": {"model": {"type": "string"}, "path": {"type": "string"}, "sha256": {"$ref": "#/$defs/sha256"}, "bytes": {"type": "integer", "minimum": 1}}}}
       }
     }
   }

@@ -1,3 +1,4 @@
+import { ngsArtifactUrl, useNgsArtifacts, type NgsPackageArtifact } from '../lib/ngsArtifacts';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { JobStageProgress } from './JobStageProgress';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -63,6 +64,7 @@ import { NanoporeTemplate } from './NanoporeTemplate';
 import { OntInstrumentPanel } from './ngs/OntInstrumentPanel';
 import { RawReadInspector } from './ngs/RawReadInspector';
 import { ReadAndSignalWorkbench } from './ngs/ReadAndSignalWorkbench';
+import { NgsArtifactDownloads } from './ngs/NgsArtifactDownloads';
 import { isOwnedFullscreen, toggleOwnedFullscreen } from './ngs/ngsFullscreenOwner';
 import { BarcodeUnitsPanel } from './ngs/BarcodeUnitsPanel';
 import { PooledAssignmentReviewPanel } from './ngs/PooledAssignmentReviewPanel';
@@ -211,6 +213,20 @@ interface MultimerArtifacts {
     dimerReferenceIndexPath: string | null;
     dimerReferenceIndexUrl: string | null;
     missingReason: string | null;
+}
+
+function summaryTableLookup(table: SummaryTable | null | undefined): Map<string, string> {
+    if (!table || table.header.length === 0) return new Map<string, string>();
+    const metricIdx = table.header.findIndex((h) => h.trim().toLowerCase() === 'metric');
+    const valueIdx = table.header.findIndex((h) => h.trim().toLowerCase() === 'value');
+    if (metricIdx < 0 || valueIdx < 0) return new Map<string, string>();
+    const lookup = new Map<string, string>();
+    for (const row of table.rows) {
+        const key = String(row[metricIdx] ?? '').trim().toLowerCase();
+        if (!key) continue;
+        lookup.set(key, String(row[valueIdx] ?? '').trim());
+    }
+    return lookup;
 }
 
 interface SummaryTable {
@@ -450,24 +466,6 @@ function isAllowedRelativePath(path: string): boolean {
     return ALLOWED_ROOT_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
-function toDownloadHref(path: string, cacheKey?: string): string | null {
-    if (!isAllowedRelativePath(path)) return null;
-    const encoded = path.split('/').map((part) => encodeURIComponent(part)).join('/');
-    if (cacheKey) {
-        return `/api/files/download/${encoded}?v=${encodeURIComponent(cacheKey)}`;
-    }
-    return `/api/files/download/${encoded}`;
-}
-
-function toStreamHref(path: string, cacheKey?: string): string | null {
-    if (!isAllowedRelativePath(path)) return null;
-    const encoded = path.split('/').map((part) => encodeURIComponent(part)).join('/');
-    if (cacheKey) {
-        return `/api/files/stream/${encoded}?v=${encodeURIComponent(cacheKey)}`;
-    }
-    return `/api/files/stream/${encoded}`;
-}
-
 function normalizeAllowedRelativePath(path: string | null | undefined): string | null {
     if (!path) return null;
     const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -534,11 +532,10 @@ function filterPathsByRunPrefix(paths: string[], runPrefix: string | null): stri
 }
 
 function findFirstMatchingPath(paths: string[], patterns: RegExp[]): string | null {
-    for (const p of paths) {
-        const normalized = p.toLowerCase();
-        if (patterns.some((re) => re.test(normalized))) {
-            return p;
-        }
+    // Patterns are ordered from the preferred native output to legacy fallbacks.
+    for (const pattern of patterns) {
+        const match = paths.find(path => pattern.test(path.toLowerCase()));
+        if (match) return match;
     }
     return null;
 }
@@ -614,7 +611,10 @@ function formatIgvSourceLabel(path: string): string {
     return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
 }
 
-function resolveIgvArtifacts(job: Job | null, stageOutputs: StageOutputsMap): IgvArtifacts {
+function resolveIgvArtifacts(job: Job | null, stageOutputs: StageOutputsMap, artifacts: NgsPackageArtifact[]): IgvArtifacts {
+    const toStreamHref = (path: string, jobId?: string) => ngsArtifactUrl(path, jobId, artifacts);
+    const toDownloadHref = toStreamHref;
+
     if (!job) {
         return {
             bamPath: null,
@@ -750,7 +750,9 @@ function resolveIgvArtifacts(job: Job | null, stageOutputs: StageOutputsMap): Ig
     };
 }
 
-function resolveMethylationArtifacts(job: Job | null, stageOutputs: StageOutputsMap): MethylationArtifacts {
+function resolveMethylationArtifacts(job: Job | null, stageOutputs: StageOutputsMap, artifacts: NgsPackageArtifact[]): MethylationArtifacts {
+    const toStreamHref = (path: string, jobId?: string) => ngsArtifactUrl(path, jobId, artifacts);
+
     if (!job) {
         return {
             summaryPath: null,
@@ -771,7 +773,7 @@ function resolveMethylationArtifacts(job: Job | null, stageOutputs: StageOutputs
     const candidateBase = runPrefix
         ? (scopedModkitPaths.length > 0 ? scopedModkitPaths : scopedPaths)
         : (modkitPaths.length > 0 ? modkitPaths : paths);
-    const candidates = dedupePaths(candidateBase);
+    const candidates = dedupePaths([...candidateBase, ...artifacts.filter(a => a.state === 'present' && a.filename).map(a => `/${a.source}/${a.filename}`)]);
 
     const summaryPath = findFirstMatchingPath(candidates, [/\/methylation\/modkit_summary\.tsv$/i, /(^|\/)modkit_summary\.tsv$/i]);
     const bedPath = findFirstMatchingPath(candidates, [/\/methylation\/methylation\.bed$/i, /\/methylation\/.*\.bed$/i]);
@@ -795,7 +797,9 @@ function resolveMethylationArtifacts(job: Job | null, stageOutputs: StageOutputs
     };
 }
 
-function resolveMultimerArtifacts(job: Job | null, stageOutputs: StageOutputsMap): MultimerArtifacts {
+function resolveMultimerArtifacts(job: Job | null, stageOutputs: StageOutputsMap, artifacts: NgsPackageArtifact[]): MultimerArtifacts {
+    const toStreamHref = (path: string, jobId?: string) => ngsArtifactUrl(path, jobId, artifacts);
+
     if (!job) {
         return {
             summaryPath: null,
@@ -877,7 +881,7 @@ function resolveMultimerArtifacts(job: Job | null, stageOutputs: StageOutputsMap
     const candidateBase = runPrefix
         ? (scopedStagePaths.length > 0 ? scopedStagePaths : scopedPaths)
         : (stagePaths.length > 0 ? stagePaths : paths);
-    const candidates = dedupePaths(candidateBase);
+    const candidates = dedupePaths([...candidateBase, ...artifacts.filter(a => a.state === 'present' && a.filename).map(a => `/${a.source}/${a.filename}`)]);
 
     const summaryPath = findFirstMatchingPath(candidates, [/\/fastq_qc\/fastq_qc_summary\.tsv$/i, /(^|\/)fastq_qc_summary\.tsv$/i, /\/multimer_qc\/multimer_summary\.tsv$/i, /(^|\/)multimer_summary\.tsv$/i]);
     const lengthsPath = findFirstMatchingPath(candidates, [/\/fastq_qc\/read_lengths\.tsv$/i, /(^|\/)read_lengths\.tsv$/i]);
@@ -1123,12 +1127,15 @@ function parseNumericMetricsFromSummaryTable(table: SummaryTable | null): Record
 
 function parseReadLengths(text: string, maxRows = 250000): number[] {
     const values: number[] = [];
-    const lines = text.split(/\r?\n/);
-    for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line || line.startsWith('#')) continue;
-        const value = Number.parseInt(line, 10);
-        if (!Number.isFinite(value) || value <= 0) continue;
+    const lines = text.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+    const header = lines[0]?.split('\t') || [];
+    const nativeLengthColumn = header.indexOf('length_bp');
+    for (const line of nativeLengthColumn >= 0 ? lines.slice(1) : lines) {
+        // Native QC emits read_id/length_bp; legacy exports contain one length.
+        // Do not parse a numeric read-ID prefix as the read length.
+        const raw = nativeLengthColumn >= 0 ? line.split('\t')[nativeLengthColumn] : line;
+        const value = Number(raw);
+        if (!Number.isInteger(value) || value <= 0) continue;
         values.push(value);
         if (values.length >= maxRows) break;
     }
@@ -2212,7 +2219,7 @@ export function NGSToolkit() {
         queryFn: () => fetchPooledAssignmentManifest(requestedJobId as string),
         enabled: Boolean(requestedJobId && requestedAssignmentId),
     });
-    const [view, setView] = useState<ToolkitView>(() => ngsToolkitViewFromSearch(location.search));
+    const view = ngsToolkitViewFromSearch(location.search);
     const [initialValues, setInitialValues] = useState<Record<string, unknown> | undefined>(undefined);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
@@ -2234,9 +2241,6 @@ export function NGSToolkit() {
         selectedJobIdRef.current = selectedJobId;
         alignmentAccessRecoveryGenerationRef.current += 1;
     }, [selectedJobId]);
-    useEffect(() => {
-        setView(ngsToolkitViewFromSearch(location.search));
-    }, [location.search]);
     const selectView = useCallback((nextView: ToolkitView) => {
         navigate({
             pathname: location.pathname,
@@ -2255,7 +2259,6 @@ export function NGSToolkit() {
     const [igvRangeError, setIgvRangeError] = useState<string | null>(null);
     const [igvInspectorOpen, setIgvInspectorOpen] = useState(false);
     const [igvAuxTrackFailures, setIgvAuxTrackFailures] = useState<string[]>([]);
-    const [, setIgvVersion] = useState<string | null>(null);
     const [igvAutoLoadAttempted, setIgvAutoLoadAttempted] = useState(false);
     const [igvAlignmentDisplayMode, setIgvAlignmentDisplayMode] = useState<OntSignalViewerAlignmentDisplayMode>('EXPANDED');
     const [igvAlignmentColorBy, setIgvAlignmentColorBy] = useState<OntSignalViewerAlignmentColorBy>('strand');
@@ -2518,7 +2521,7 @@ export function NGSToolkit() {
     const rawSignalCapabilitiesQuery = useQuery({
         queryKey: ['ont-raw-signal-for-job', rawSignalRunId, rawSignalObservedGeneration],
         queryFn: () => fetchOntRawSignalCapabilities(rawSignalRunId, rawSignalObservedGeneration as number, 'blow5'),
-        enabled: Boolean(rawSignalRunId && rawSignalObservedGeneration),
+        enabled: Boolean(igvModalOpen && igvInspectorOpen && rawSignalRunId && rawSignalObservedGeneration),
         staleTime: 30_000,
     });
     const rawSignalRepresentationId = rawSignalCapabilitiesQuery.data?.modes.raw_waveform.state === 'ready'
@@ -2575,17 +2578,21 @@ export function NGSToolkit() {
     const alignmentSessionsError = alignmentSessionsQueryError ?? alignmentAuthorityBinding.error;
     const shouldShowMethylationInspector = !isFastqOnlyRun;
     const shouldShowMultimerInspector = hasFastqInput;
+    const artifactQuery = useNgsArtifacts(selectedJob?.id || null);
+    const packageArtifacts = artifactQuery.data?.artifacts;
+    const toStreamHref = useCallback((path: string, jobId?: string) => ngsArtifactUrl(path, jobId, packageArtifacts), [packageArtifacts]);
+    const toDownloadHref = toStreamHref;
     const igvArtifacts = useMemo(
-        () => resolveIgvArtifacts(selectedJob, stageOutputs),
-        [selectedJob, stageOutputs]
+        () => resolveIgvArtifacts(selectedJob, stageOutputs, packageArtifacts || []),
+        [selectedJob, stageOutputs, packageArtifacts]
     );
     const multimerArtifacts = useMemo(
-        () => resolveMultimerArtifacts(selectedJob, stageOutputs),
-        [selectedJob, stageOutputs]
+        () => resolveMultimerArtifacts(selectedJob, stageOutputs, packageArtifacts || []),
+        [selectedJob, stageOutputs, packageArtifacts]
     );
     const methylationArtifacts = useMemo(
-        () => resolveMethylationArtifacts(selectedJob, stageOutputs),
-        [selectedJob, stageOutputs]
+        () => resolveMethylationArtifacts(selectedJob, stageOutputs, packageArtifacts || []),
+        [selectedJob, stageOutputs, packageArtifacts]
     );
     const igvSourcePaths = useMemo(() => {
         const allPaths = dedupePaths(collectStageOutputPaths(stageOutputs));
@@ -2613,7 +2620,7 @@ export function NGSToolkit() {
                 baiUrl: baiPath ? toStreamHref(baiPath, cacheKey) : null,
             };
         }).filter((source) => Boolean(source.bamUrl));
-    }, [igvSourcePaths, igvArtifacts.bamPath, selectedJob?.id]);
+    }, [igvSourcePaths, igvArtifacts.bamPath, selectedJob?.id, toStreamHref]);
     const igvReferenceSources = useMemo<IgvReferenceSource[]>(() => {
         const sourcePaths = dedupePaths([
             ...igvSourcePaths,
@@ -2635,7 +2642,7 @@ export function NGSToolkit() {
                 faiUrl: faiPath ? toStreamHref(faiPath, cacheKey) : null,
             };
         }).filter((source) => Boolean(source.fastaUrl));
-    }, [igvSourcePaths, igvArtifacts.fastaPath, selectedReferenceFastaPath, selectedJob?.id]);
+    }, [igvSourcePaths, igvArtifacts.fastaPath, selectedReferenceFastaPath, selectedJob?.id, toStreamHref]);
     const persistedAlignmentSessionId = signalViewerSession?.alignment_session_id
         || requestedViewerSessionQuery.data?.alignment_session_id
         || '';
@@ -2797,6 +2804,12 @@ export function NGSToolkit() {
         igvTrackOperationGenerationRef.current += 1;
         igvTrackOperationActiveRef.current = false;
     }, [selectedAlignmentSession?.session_id]);
+    // Native publishDir configurations are not verified alignment sessions.
+    // Reuse the browser without granting session-only read/signal operations.
+    const [nativeIgvName, setNativeIgvName] = useState('');
+    const nativeIgv = !selectedAlignmentSession && !isCanonicalFastqQcRun
+        ? artifactQuery.data?.igv?.find(config => config.name === nativeIgvName) || artifactQuery.data?.igv?.[0] : undefined;
+    const nativeAlignment = nativeIgv?.tracks.find(track => track.type === 'alignment');
     const activeIgvBamPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment` : null;
     const igvAlignmentLoadDisposition = alignmentTrackAutoLoadDisposition(selectedAlignmentSession?.artifacts.alignment?.size_bytes);
     const browserAlignmentTrack: BrowserAlignmentTrackSource | null = selectedJob
@@ -2812,15 +2825,15 @@ export function NGSToolkit() {
             locusSlice: igvLocusSlice,
         })
         : null;
-    const activeIgvBamUrl = selectedAlignmentSession?.artifacts.alignment?.url || null;
+    const activeIgvBamUrl = selectedAlignmentSession?.artifacts.alignment?.url || nativeAlignment?.url || null;
     const activeIgvBaiPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment-index` : null;
-    const activeIgvBaiUrl = selectedAlignmentSession?.artifacts.alignment_index?.url || null;
+    const activeIgvBaiUrl = selectedAlignmentSession?.artifacts.alignment_index?.url || nativeAlignment?.indexURL || null;
     const activeIgvFastaPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:reference` : null;
-    const activeIgvFastaUrl = selectedAlignmentSession?.artifacts.reference?.url || null;
+    const activeIgvFastaUrl = selectedAlignmentSession?.artifacts.reference?.url || nativeIgv?.reference.fastaURL || null;
     const activeIgvFaiPath = selectedAlignmentSession?.artifacts.reference_index
         ? `${selectedAlignmentSession.mode}:reference-index`
         : null;
-    const activeIgvFaiUrl = selectedAlignmentSession?.artifacts.reference_index?.url || null;
+    const activeIgvFaiUrl = selectedAlignmentSession?.artifacts.reference_index?.url || nativeIgv?.reference.indexURL || null;
     const activeIgvSourceKey = selectedAlignmentSession?.session_id || '';
     const searchOwnedIgvNavigation = useCallback(async (
         browser: UntypedApiValue,
@@ -2939,7 +2952,7 @@ export function NGSToolkit() {
         navigateToLocalIgvRange(`${reference.contig}:${start}-${end}`, 'Read bases');
     }, [igvCurrentLocus, navigateToLocalIgvRange, selectedAlignmentSession]);
     const selectedReferenceFastaUrl = activeIgvFastaUrl;
-    const igvMissingReason = alignmentSessionsError
+    const igvMissingReason = nativeIgv ? null : alignmentSessionsError
         ? describeNgsError(alignmentSessionsError, 'Authoritative alignment session is unavailable.')
         : !selectedAlignmentSession
             ? 'No job-scoped alignment session was published.'
@@ -2954,7 +2967,7 @@ export function NGSToolkit() {
                             : !activeIgvFaiUrl
                                 ? 'Reference FASTA index (.fai) not found yet.'
                                 : null;
-    const igvReady = selectedAlignmentSession?.ready === true && !igvMissingReason;
+    const igvReady = (selectedAlignmentSession?.ready === true || Boolean(nativeIgv)) && !igvMissingReason;
     useEffect(() => {
         if (signalWorkbenchRequested && selectedJob && signalDatasetId && rawSignalRunId && rawSignalObservedGeneration) {
             setIgvModalOpen(true);
@@ -3315,20 +3328,7 @@ export function NGSToolkit() {
     const expectedPlasmidSize = Number.isFinite(multimerMetrics.expected_plasmid_size)
         ? multimerMetrics.expected_plasmid_size
         : Number.parseFloat(String(selectedJobParams.expected_plasmid_size ?? ''));
-    const multimerSummaryLookup = useMemo(() => {
-        const table = multimerReport?.summary;
-        if (!table || table.header.length === 0) return new Map<string, string>();
-        const metricIdx = table.header.findIndex((h) => h.trim().toLowerCase() === 'metric');
-        const valueIdx = table.header.findIndex((h) => h.trim().toLowerCase() === 'value');
-        if (metricIdx < 0 || valueIdx < 0) return new Map<string, string>();
-        const lookup = new Map<string, string>();
-        for (const row of table.rows) {
-            const key = String(row[metricIdx] ?? '').trim().toLowerCase();
-            if (!key) continue;
-            lookup.set(key, String(row[valueIdx] ?? '').trim());
-        }
-        return lookup;
-    }, [multimerReport?.summary]);
+    const multimerSummaryLookup = useMemo(() => summaryTableLookup(multimerReport?.summary), [multimerReport?.summary]);
     const readMultimerMetric = useCallback((keys: string[]): number => {
         for (const key of keys) {
             const fromMetrics = multimerMetrics[key];
@@ -3350,20 +3350,7 @@ export function NGSToolkit() {
         () => multimerClassCounts.monomer + multimerClassCounts.dimer + multimerClassCounts.trimer + multimerClassCounts.highOrder,
         [multimerClassCounts]
     );
-    const alignmentSummaryLookup = useMemo(() => {
-        const table = multimerReport?.dimerSummary;
-        if (!table || table.header.length === 0) return new Map<string, string>();
-        const metricIdx = table.header.findIndex((h) => h.trim().toLowerCase() === 'metric');
-        const valueIdx = table.header.findIndex((h) => h.trim().toLowerCase() === 'value');
-        if (metricIdx < 0 || valueIdx < 0) return new Map<string, string>();
-        const lookup = new Map<string, string>();
-        for (const row of table.rows) {
-            const key = String(row[metricIdx] ?? '').trim().toLowerCase();
-            if (!key) continue;
-            lookup.set(key, String(row[valueIdx] ?? '').trim());
-        }
-        return lookup;
-    }, [multimerReport?.dimerSummary]);
+    const alignmentSummaryLookup = useMemo(() => summaryTableLookup(multimerReport?.dimerSummary), [multimerReport?.dimerSummary]);
     const readAlignmentMetric = useCallback((keys: string[]): number | null => {
         for (const key of keys) {
             const raw = alignmentSummaryLookup.get(key.toLowerCase());
@@ -3420,9 +3407,7 @@ export function NGSToolkit() {
             themeColors.accentPrimary,
         ]
     );
-    const multimerHistogramPlotData = useMemo<Data[]>(() => {
-        const lengths = multimerReport?.readLengths || [];
-        if (lengths.length === 0) return [];
+    const multimerHistogramCutoffs = useMemo(() => {
         const readMetric = (keys: string[]): number | null => {
             for (const key of keys) {
                 const value = multimerMetrics[key];
@@ -3434,6 +3419,12 @@ export function NGSToolkit() {
         const dimerCutoff = readMetric(['dimer_cutoff']) ?? (expected ? expected * 1.5 : null);
         const trimerCutoff = readMetric(['trimer_cutoff', 'multimer_cutoff']) ?? (expected ? expected * 2.5 : null);
         const tetramerCutoff = readMetric(['tetramer_cutoff']) ?? (expected ? expected * 3.5 : null);
+        return { dimerCutoff, trimerCutoff, tetramerCutoff };
+    }, [multimerMetrics, expectedPlasmidSize]);
+    const multimerHistogramPlotData = useMemo<Data[]>(() => {
+        const lengths = multimerReport?.readLengths || [];
+        if (lengths.length === 0) return [];
+        const { dimerCutoff, trimerCutoff, tetramerCutoff } = multimerHistogramCutoffs;
         const minLen = Math.min(...lengths);
         const maxLen = Math.max(...lengths);
         const span = Math.max(1, maxLen - minLen);
@@ -3475,8 +3466,7 @@ export function NGSToolkit() {
         }];
     }, [
         multimerReport?.readLengths,
-        multimerMetrics,
-        expectedPlasmidSize,
+        multimerHistogramCutoffs,
         themeColors.success,
         themeColors.warning,
         themeColors.error,
@@ -3486,17 +3476,7 @@ export function NGSToolkit() {
     ]);
     const multimerHistogramLayout = useMemo<Partial<Layout>>(() => {
         const shapes: NonNullable<Layout['shapes']> = [];
-        const readMetric = (keys: string[]): number | null => {
-            for (const key of keys) {
-                const value = multimerMetrics[key];
-                if (Number.isFinite(value)) return Number(value);
-            }
-            return null;
-        };
-        const expected = Number.isFinite(expectedPlasmidSize) && expectedPlasmidSize > 0 ? expectedPlasmidSize : null;
-        const dimerCutoff = readMetric(['dimer_cutoff']) ?? (expected ? expected * 1.5 : null);
-        const trimerCutoff = readMetric(['trimer_cutoff', 'multimer_cutoff']) ?? (expected ? expected * 2.5 : null);
-        const tetramerCutoff = readMetric(['tetramer_cutoff']) ?? (expected ? expected * 3.5 : null);
+        const { dimerCutoff, trimerCutoff, tetramerCutoff } = multimerHistogramCutoffs;
 
         const addCutoff = (x: number | null, color: string, dash: 'dot' | 'dash' | 'solid', label: string) => {
             if (!Number.isFinite(x as number)) return;
@@ -3532,7 +3512,7 @@ export function NGSToolkit() {
                 rangemode: 'tozero',
             },
         };
-    }, [basePlotlyLayout, multimerMetrics, expectedPlasmidSize, themeColors]);
+    }, [basePlotlyLayout, multimerHistogramCutoffs, themeColors]);
     const multimerPlotConfig = useMemo(
         () => ({ responsive: true, displaylogo: false, scrollZoom: true }),
         []
@@ -3924,22 +3904,18 @@ export function NGSToolkit() {
             setIgvLoading(true);
             igvPresentationRequestedRef.current = false;
             setIgvError(null);
-            setIgvVersion(null);
             setIgvReadsTrackLoaded(false);
             setIgvReadsTrackLoading(false);
             setIgvAutoLoadAttempted(false);
             igvLoadedSourceKeyRef.current = '';
 
             try {
-                const { igv, version } = await withTimeout(
+                const { igv } = await withTimeout(
                     loadIgvLibrary(),
                     IGV_INIT_TIMEOUT_MS,
                     `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s while loading IGV library`
                 );
                 if (cancelled || !igvMount.isConnected) return;
-                if (isCurrentLoad() && !cancelled) {
-                    setIgvVersion(version);
-                }
                 const igvAny = igv as UntypedApiValue;
                 if (typeof igvAny.setDefaults === 'function') {
                     igvAny.setDefaults({
@@ -3976,7 +3952,7 @@ export function NGSToolkit() {
                     fastaUrl: igvFastaUrl,
                     faiUrl: activeIgvFaiUrl,
                     initialLocus: requestedLocus,
-                    auxiliaryTracks: [],
+                    auxiliaryTracks: nativeIgv?.tracks.map(track => ({ ...track, withCredentials: true })) || [],
                 });
                 igvBrowser = await createGenerationBoundResourceWithTimeout({
                     create: () => igvAny.createBrowser(igvMount, localIgvConfig),
@@ -3997,6 +3973,7 @@ export function NGSToolkit() {
                 ensureIgvThemeStyles(igvMount);
                 patchIgvRulerContrast(igvBrowser);
                 igvBrowserRef.current = igvBrowser;
+                if (nativeIgv) setIgvReadsTrackLoaded(Boolean(findIgvAlignmentTrack(igvBrowser)));
                 if (typeof igvBrowser.on === 'function') {
                     const locusHandler = (loci: unknown) => {
                         if (!isCurrentLoad() || cancelled || igvBrowserRef.current !== igvBrowser) return;
@@ -4092,7 +4069,6 @@ export function NGSToolkit() {
                         ? ` Ensure \`igv@${IGV_REQUIRED_VERSION}\` is installed and the frontend bundle is rebuilt.`
                         : '';
                     setIgvError(`Failed to initialize IGV viewer: ${msg}.${suffix}`);
-                    setIgvVersion(null);
                 }
                 try {
                     if (igvBrowser) removeIgvBrowser(igvLibraryRef.current, igvBrowser);
@@ -4137,6 +4113,7 @@ export function NGSToolkit() {
         igvMissingReason,
         searchOwnedIgvNavigation,
         selectedAlignmentSession?.session_id,
+        nativeIgv,
     ]);
 
     useEffect(() => {
@@ -4625,7 +4602,7 @@ export function NGSToolkit() {
                                                 <td className="px-4 py-2">
                                                     <div className="flex gap-2">
                                                         <button
-                                                            onClick={() => updateQueryParams({ job_id: job.id, viewer_session_id: null })}
+                                                            onClick={() => updateQueryParams({ job_id: job.id, viewer_session_id: null, view: null, run_id: null, reference_set_id: null, assignment_id: null })}
                                                             className="px-2 py-1 text-xs rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] text-[var(--text-primary)]"
                                                         >
                                                             Inspect
@@ -4840,6 +4817,7 @@ export function NGSToolkit() {
                                 />
 
                                 <BarcodeUnitsPanel
+                                    key={`barcode-units-${selectedJob.id}`}
                                     jobId={selectedJob.id}
                                     enabled={selectedJob.status === 'completed' && selectedJob.model_id === 'nanopore' && selectedJob.mode === 'basecall_dna' && Boolean(selectedJob.params?.barcode_kit)}
                                 />
@@ -4861,9 +4839,6 @@ export function NGSToolkit() {
                                                         {check.ok ? 'ready' : 'missing'}
                                                     </div>
                                                 </div>
-                                                <div className="mt-1 text-xs text-[var(--text-secondary)]">
-                                                    {check.ok ? 'Resolved by the governed job artifact contract.' : 'No governed artifact is available.'}
-                                                </div>
                                             </div>
                                         ))}
                                     </div>
@@ -4883,9 +4858,6 @@ export function NGSToolkit() {
                                                             }`}>
                                                             {check.ok ? 'found' : 'missing'}
                                                         </div>
-                                                    </div>
-                                                    <div className="mt-1 text-[10px] text-[var(--text-secondary)]">
-                                                        {check.ok ? 'Resolved by the governed optional-artifact contract.' : 'No governed optional artifact is available.'}
                                                     </div>
                                                 </div>
                                             ))}
@@ -5514,6 +5486,7 @@ export function NGSToolkit() {
                                 {!isCanonicalFastqQcRun && (
                                 <div className="space-y-2">
                                     <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Stage Artifacts</h4>
+                                    {selectedJob.status === 'completed' && <NgsArtifactDownloads jobId={selectedJob.id} />}
                                     {Object.keys(stageOutputs).length === 0 ? (
                                         <p className="text-sm text-[var(--text-secondary)]">No stage outputs recorded yet.</p>
                                     ) : (
@@ -5526,20 +5499,10 @@ export function NGSToolkit() {
                                                     ) : (
                                                         <ul className="space-y-1">
                                                             {outputs.map((output) => {
-                                                                const href = toDownloadHref(output, selectedJob?.id || undefined);
                                                                 const name = output.split('/').pop() || output;
                                                                 return (
                                                                     <li key={`${stage}:${output}`} className="text-xs">
-                                                                        {href ? (
-                                                                            <a
-                                                                                href={href}
-                                                                                className="text-sky-300 hover:text-sky-200 underline break-all"
-                                                                            >
-                                                                                {name}
-                                                                            </a>
-                                                                        ) : (
-                                                                            <span className="text-[var(--text-secondary)] break-all">{name}</span>
-                                                                        )}
+                                                                        <span className="text-[var(--text-secondary)] break-all">{name}</span>
                                                                     </li>
                                                                 );
                                                             })}
@@ -5572,15 +5535,16 @@ export function NGSToolkit() {
                             </div>
                             <div className="flex flex-wrap items-center gap-1">
                                 <select
-                                    value={selectedAlignmentSession?.session_id || ''}
-                                    onChange={(event) => setSelectedAlignmentSessionId(event.target.value)}
-                                    disabled={igvLoading || igvReadsTrackLoading || alignmentSessions.length === 0}
+                                    value={selectedAlignmentSession?.session_id || nativeIgv?.name || ''}
+                                    onChange={(event) => nativeIgv ? setNativeIgvName(event.target.value) : setSelectedAlignmentSessionId(event.target.value)}
+                                    disabled={igvLoading || igvReadsTrackLoading || (alignmentSessions.length === 0 && !nativeIgv)}
                                     title="Choose alignment"
                                     className="max-w-[250px] bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
                                 >
-                                    {alignmentSessions.length === 0 && (
+                                    {alignmentSessions.length === 0 && !nativeIgv && (
                                         <option value="">No validated sessions</option>
                                     )}
+                                    {nativeIgv && artifactQuery.data?.igv?.map(config => <option key={config.name} value={config.name}>{config.name} · native published alignment</option>)}
                                     {alignmentSessions.map((session) => (
                                         <option key={session.session_id} value={session.session_id}>
                                             {session.mode === 'primary' ? 'Primary alignment' : 'Dimer candidates'} · {session.ready ? 'ready' : 'unavailable'}
@@ -5723,6 +5687,7 @@ export function NGSToolkit() {
                                 {igvInspectorOpen ? 'Hide reads' : 'Reads'}
                             </button>
                             <button
+                                aria-label="Close IGV"
                                 onClick={() => void closeIgvModal()}
                                 className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-lg leading-none px-1.5 py-0.5 transition-colors"
                             >
@@ -5764,7 +5729,7 @@ export function NGSToolkit() {
                                 )}
                                 {!igvLoading && !igvError && !browserAlignmentTrack && (
                                     <div className="absolute bottom-2 left-2 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)]/85 text-[var(--text-secondary)] text-xs px-2 py-1.5">
-                                        {igvAlignmentLoadDisposition.reason || 'Reference loaded; tracks autoload or use Load tracks.'}
+                                        {nativeIgv ? 'Native published reference and alignment tracks.' : igvAlignmentLoadDisposition.reason || 'Reference loaded; tracks autoload or use Load tracks.'}
                                     </div>
                                 )}
 

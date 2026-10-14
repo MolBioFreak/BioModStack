@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 import base64
 import codecs
 import hashlib
@@ -22,7 +24,7 @@ import httpx
 import rfc8785
 from Bio.PDB import MMCIFIO, MMCIFParser, PDBParser
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, StrictInt, StrictFloat, model_validator
 from sqlalchemy import select
 
 from database import Design, Job, MdRun
@@ -219,14 +221,85 @@ class MdLaunchIntent(_ClosedModel):
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
 
 
+class MdNativeStage(_ClosedModel):
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    mdp: dict[str, StrictStr | StrictInt | StrictFloat] | None = None
+    mdp_file: str | None = None
+    checkpoint_interval_minutes: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def one_document(self) -> "MdNativeStage":
+        if (self.mdp is None) == (self.mdp_file is None):
+            raise ValueError("supply exactly one mdp document or mdp_file")
+        return self
+
+
+class MdNativeExecution(_ClosedModel):
+    ntmpi: Literal[1] = 1
+    ntomp: int = Field(default=8, ge=1, le=128)
+    gpu_offload: Literal["full", "full_forces", "auto", "none"] = "auto"
+    pin: Literal["on", "off", "auto"] = "on"
+
+
+class MdGuidedNativeInput(_ClosedModel):
+    kind: Literal["guided"]
+    index: str | None = None
+    restraint_reference: str | None = None
+    source_ref: StartingStructureSourceRef
+    expected_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    chemistry_profile_id: str
+    chemistry_profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    catalog_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    box_type: Literal["cubic", "triclinic", "dodecahedron", "octahedron"] = "dodecahedron"
+    padding_nm: float = Field(default=1.0, gt=0)
+    salt_molar: float = Field(default=0.15, ge=0)
+    neutralize: bool = True
+
+
+class MdPreparedNativeInput(_ClosedModel):
+    kind: Literal["prepared"]
+    coordinates: str = Field(min_length=1)
+    topology: str = Field(min_length=1)
+    index: str | None = None
+    restraint_reference: str | None = None
+    checkpoint: str | None = None
+
+
+class MdCompiledNativeInput(_ClosedModel):
+    kind: Literal["compiled"]
+    tpr: str = Field(min_length=1)
+    checkpoint: str | None = None
+
+
+class MdNativeWindow(_ClosedModel):
+    id: str = Field(min_length=1)
+    coordinates: str | None = None
+    mdp: dict[str, dict[str, StrictStr | StrictInt | StrictFloat]] | None = None
+
+
+class MdNativeLaunchIntent(_ClosedModel):
+    schema_version: Literal["bms.md.launch-intent.v2"]
+    launch_context_id: str | None = None
+    name: str = Field(min_length=1, max_length=255)
+    input: MdGuidedNativeInput | MdPreparedNativeInput | MdCompiledNativeInput = Field(discriminator="kind")
+    replicas: int = Field(default=1, ge=1)
+    random_seed: int = Field(default=20260717, ge=1, le=2147483647)
+    stages: list[MdNativeStage]
+    windows: list[MdNativeWindow] | None = None
+    execution: MdNativeExecution = Field(default_factory=MdNativeExecution)
+    analysis: dict[str, Any] | None = None
+    execution_target_id: str | None = Field(default=None, min_length=1, max_length=160)
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
+
+
 class MdLaunchPreviewRequest(_ClosedModel):
     schema_version: Literal["bms.md.launch-preview-request.v1"]
-    intent: MdLaunchIntent
+    intent: MdLaunchIntent | MdNativeLaunchIntent = Field(discriminator="schema_version")
 
 
 class MdLaunchRequest(_ClosedModel):
     schema_version: Literal["bms.md.launch-request.v1"]
-    intent: MdLaunchIntent
+    intent: MdLaunchIntent | MdNativeLaunchIntent = Field(discriminator="schema_version")
     preview_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
@@ -328,6 +401,53 @@ class MdLaunchPreview(_ClosedModel):
     preview_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class MdNativeLaunchPreview(_ClosedModel):
+    schema_version: Literal["bms.md.launch-preview.v2"] = "bms.md.launch-preview.v2"
+    effective_request: dict[str, Any]
+    input_identity: dict[str, Any]
+    source: MdLaunchSourceIdentity | None = None
+    warnings: list[MdLaunchNotice] = Field(default_factory=list)
+    blockers: list[MdLaunchNotice] = Field(default_factory=list)
+    preview_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    execution_plan: dict[str, Any] | None = None
+    execution_target_id: str | None = None
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
+
+
+def compile_native_job_intent(
+    intent: MdNativeLaunchIntent, *, profile: Mapping[str, Any] | None = None,
+    source_token: str = "bms-md-starting-structure:selected",
+) -> dict[str, Any]:
+    """Project typed controls directly into the native job document."""
+    config: dict[str, Any] = {
+        "schema": "bms.md.job.v3", "job_id": "assigned-by-server", "engine": "gromacs",
+        "replicas": intent.replicas, "random_seed": intent.random_seed,
+        "stages": [stage.model_dump(mode="json", exclude_none=True) for stage in intent.stages],
+        "execution": {**intent.execution.model_dump(mode="json"), "gpu_id": "0"},
+    }
+    if intent.windows is not None:
+        config["windows"] = [window.model_dump(mode="json", exclude_none=True) for window in intent.windows]
+    source = intent.input
+    if isinstance(source, MdGuidedNativeInput):
+        if profile is None:
+            raise _error("MD_CHEMISTRY_PROFILE_UNAVAILABLE", "The guided preparation profile is unavailable.", 409)
+        config["input"] = {"structure": source_token}
+        for field in ("index", "restraint_reference"):
+            if getattr(source, field) is not None:
+                config["input"][field] = getattr(source, field)
+        config["chemistry"] = {
+            "profile_id": source.chemistry_profile_id, "profile_sha256": source.chemistry_profile_sha256,
+            "catalog_digest": source.catalog_digest,
+            "requested_scope": profile["scientific_validation"]["scope"]["launch_scope"],
+        }
+        config["preparation"] = {field: getattr(source, field) for field in ("box_type", "padding_nm", "salt_molar", "neutralize")}
+    else:
+        config["input"] = source.model_dump(mode="json", exclude={"kind"}, exclude_none=True)
+    if intent.analysis is not None:
+        config["analysis"] = copy.deepcopy(intent.analysis)
+    return config
+
+
 @dataclass(frozen=True)
 class StructureFile:
     data: bytes
@@ -395,6 +515,20 @@ def _error(code: str, message: str, status_code: int = 422) -> StartingStructure
     return StartingStructureError(code, message, status_code=status_code)
 
 
+def _is_pdb_atom_record(line: str) -> bool:
+    # mmCIF atom-site rows also start with ATOM/HETATM (including Fold-CP
+    # ligands). Those whitespace-delimited rows are not a second PDB document.
+    # Recognize PDB's fixed-width identity columns, then leave coordinate
+    # validation (including malformed/truncated records) to the existing reader.
+    if not line.startswith(("ATOM  ", "HETATM")) or len(line) < 27 or line[11] != " " or line[20] != " ":
+        return False
+    try:
+        int(line[22:26])
+    except ValueError:
+        return False
+    return True
+
+
 def _detect_structure_format(data: bytes) -> PUBLIC_STRUCTURE_FORMAT:
     if not data:
         raise _error("MD_STARTING_STRUCTURE_EMPTY", "The starting structure is empty.")
@@ -416,7 +550,7 @@ def _detect_structure_format(data: bytes) -> PUBLIC_STRUCTURE_FORMAT:
             "The starting structure is not valid supported text content.",
         ) from exc
     lines = text.splitlines()
-    pdb_content = any(line.startswith(("ATOM  ", "HETATM")) for line in lines)
+    pdb_content = any(_is_pdb_atom_record(line) for line in lines)
     non_comment = next((line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")), "")
     cif_content = non_comment.lower().startswith("data_") and any(
         line.lstrip().lower().startswith("_atom_site.") for line in lines
@@ -474,7 +608,7 @@ def _read_structure_metadata_descriptor(
     def observe_line(line: str) -> None:
         nonlocal first_non_comment, pdb_content, cif_atom_content
         logical = line.rstrip("\r\n")
-        if logical.startswith(("ATOM  ", "HETATM")):
+        if _is_pdb_atom_record(logical):
             pdb_content = True
         stripped = logical.strip()
         if not first_non_comment and stripped and not logical.lstrip().startswith("#"):
@@ -692,7 +826,7 @@ def open_verified_structure_snapshot(
     def observe_line(line: str) -> None:
         nonlocal pdb_content, cif_atom_content, first_non_comment
         logical = line.rstrip("\r\n")
-        if logical.startswith(("ATOM  ", "HETATM")):
+        if _is_pdb_atom_record(logical):
             pdb_content = True
         stripped = logical.strip()
         if not first_non_comment and stripped and not logical.lstrip().startswith("#"):
@@ -1472,6 +1606,9 @@ async def resolve_source(
 _ACCEPTED_PREDICTION_PRODUCERS = frozenset(
     {
         ("esmfold2", "predict"),
+        ("esmfold2_experimental", "predict"),
+        # Fold-CP's retained prediction transport uses mode="design".
+        ("boltz_cp_experimental", "design"),
         ("boltz2", "predict"),
         ("boltz2", "complex"),
         ("rf3", "predict"),

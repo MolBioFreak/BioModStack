@@ -6,7 +6,6 @@ import sys
 import threading
 from pathlib import Path
 
-import pytest
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -20,73 +19,8 @@ if str(API_ROOT) not in sys.path:
 
 from routers import ont_devices  # noqa: E402
 from services import ont_device_control  # noqa: E402
-from services.ont_device_control import (  # noqa: E402
-    DEVICE_CONTROL_STATUS_NOT_CONFIGURED,
-    ONT_DEVICE_CONTROL_CAPABILITIES,
-    build_analysis_handoff,
-    get_device_control_status,
-)
-from services.ont_ngs_contract import DEVICE_CONTROL_OWNER  # noqa: E402
+from services.ont_device_control import get_device_control_status
 from services.mk1d_reconnect import request_mk1d_reconnect  # noqa: E402
-
-
-def test_ont_device_control_contract_supports_live_mk1d_without_fake_devices() -> None:
-    status = get_device_control_status()
-
-    assert status["owner"] == DEVICE_CONTROL_OWNER
-    assert status["implementation_status"] == DEVICE_CONTROL_STATUS_NOT_CONFIGURED
-    assert status["live_devices"] == []
-    assert {device["id"] for device in status["supported_device_types"]} == {"mk1d"}
-    assert status["fake_or_demo_devices"] is False
-
-
-def test_ont_device_control_capabilities_are_hardware_side_not_nextflow_side() -> None:
-    assert ONT_DEVICE_CONTROL_CAPABILITIES["owner"] == "bms_service_api"
-    assert ONT_DEVICE_CONTROL_CAPABILITIES["not_owned_by"] == "nextflow_analysis"
-    assert ONT_DEVICE_CONTROL_CAPABILITIES["controls"] == [
-        "discover_devices",
-        "inspect_flowcell",
-        "issue_opaque_run_intent",
-        "monitor_run",
-        "handoff_verified_outputs_to_analysis",
-    ]
-
-
-def test_analysis_handoff_requires_existing_run_outputs_not_live_device_handle(tmp_path: Path) -> None:
-    run_dir = tmp_path / "ont_run_001"
-    run_dir.mkdir()
-
-    handoff = build_analysis_handoff(
-        workflow_id="ont_methylation_analysis",
-        run_output_dir=run_dir,
-        primary_input_kind="pod5",
-    )
-
-    assert handoff["workflow_id"] == "ont_methylation_analysis"
-    assert handoff["analysis_owner"] == "nextflow_analysis"
-    assert handoff["device_control_owner"] == "bms_service_api"
-    assert handoff["requires_live_device"] is False
-    assert handoff["primary_input_kind"] == "pod5"
-    assert handoff["run_output_dir"] == str(run_dir)
-
-
-def test_analysis_handoff_rejects_fast5_and_workflow_incompatible_inputs(tmp_path: Path) -> None:
-    run_dir = tmp_path / "ont_run_legacy"
-    run_dir.mkdir()
-
-    assert "fast5" not in ONT_DEVICE_CONTROL_CAPABILITIES["analysis_handoff_inputs"]
-    with pytest.raises(ValueError, match="does not accept ONT input kind"):
-        build_analysis_handoff(
-            workflow_id="ont_basecall_dna",
-            run_output_dir=run_dir,
-            primary_input_kind="fast5",
-        )
-    with pytest.raises(ValueError, match="does not accept ONT input kind"):
-        build_analysis_handoff(
-            workflow_id="ont_basecall_dna",
-            run_output_dir=run_dir,
-            primary_input_kind="bam",
-        )
 
 
 def test_public_mk1d_device_requires_literal_host_booleans() -> None:
@@ -119,37 +53,6 @@ def test_ont_device_router_exposes_truthful_not_configured_status() -> None:
     assert payload["live_devices"] == []
     assert payload["fake_or_demo_devices"] is False
     assert payload["owner"] == "bms_service_api"
-
-
-def test_ont_device_status_can_delegate_to_minknow_adapter_when_enabled(monkeypatch) -> None:
-    monkeypatch.setenv("BMS_ONT_MINKNOW_ENABLED", "1")
-    monkeypatch.setattr(
-        ont_device_control,
-        "discover_minknow_devices",
-        lambda: {
-            "implementation_status": "configured",
-            "minknow": {"host": "localhost", "manager_port": 9502},
-            "live_devices": [{"position": "X1", "device_type": "mk1d", "available_for_run": True}],
-            "fake_or_demo_devices": False,
-            "message": "fake adapter payload for unit test",
-        },
-    )
-
-    payload = get_device_control_status()
-
-    assert payload["owner"] == "bms_service_api"
-    assert payload["analysis_owner"] == "nextflow_analysis"
-    assert payload["implementation_status"] == "configured"
-    assert payload["live_devices"] == [{
-        "position": "X1",
-        "device_type": "mk1d",
-        "state": None,
-        "running": False,
-        "available_for_run": True,
-        "flow_cell": {"present": False},
-        "fake_or_demo_device": False,
-    }]
-    assert payload["fake_or_demo_devices"] is False
 
 
 def test_device_status_filters_non_mk1d_and_redacts_raw_minknow_details(monkeypatch) -> None:
@@ -193,7 +96,6 @@ def test_device_status_filters_non_mk1d_and_redacts_raw_minknow_details(monkeypa
         assert secret not in rendered
 
 
-
 def test_manual_mk1d_reconnect_local_proxy_accepts_only_strict_confirmation(monkeypatch) -> None:
     from routers import ont_devices
 
@@ -230,8 +132,11 @@ def test_manual_mk1d_reconnect_local_proxy_denies_direct_and_forged_forwarding_h
     assert remote.post("/api/ont/devices/reconnect", json={"confirm_reconnect": True}).status_code == 401
 
 
-def test_reconnect_socket_uses_native_primary_group_permission_shape(monkeypatch, tmp_path: Path) -> None:
-    path = tmp_path / "mk1d-reconnect.sock"
+def test_reconnect_socket_uses_native_primary_group_permission_shape(monkeypatch, tmp_path: Path, request) -> None:
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    request.addfinalizer(lambda: os.close(directory_fd))
+    # Keep the actual scratch directory without exceeding AF_UNIX's path limit.
+    path = Path(f"/proc/self/fd/{directory_fd}/mk1d-reconnect.sock")
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(str(path))
     os.chown(path, os.geteuid(), os.getegid())

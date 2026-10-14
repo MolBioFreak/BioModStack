@@ -183,6 +183,9 @@ def _clone_behavior(document: dict) -> dict:
     for stage in result["stages"]:
         for action in stage["actions"]:
             action.pop("action_id", None)
+            # Legacy documents predate the explicit native stop policy. Missing
+            # is the producer's stop default, not a different execution effect.
+            action.setdefault("on_error", _NATIVE["document_template"]["stages"][0]["actions"][0]["on_error"])
             metadata = action.get("metadata")
             if isinstance(metadata, dict):
                 metadata.pop("manual_step", None)
@@ -262,7 +265,27 @@ def clone_job(request: WorkflowJobCloneRequest) -> WorkflowJobClone:
             step_id=None, message=f"Clone unavailable: {exc}")])
 
 
+def explicit_authoring_schema(schema: Any) -> Any:
+    """Describe the existing explicit-field converter, not Pydantic defaults.
+
+    Source defaults are retained as documentary, opt-in values. Discovery and
+    Save never materialize them (notably source scan's physical prefill).
+    """
+    value = deepcopy(schema)
+    if isinstance(value, dict):
+        if value.get('type') == 'object' and 'properties' in value:
+            value['required'] = list(value['properties'])
+        if 'default' in value:
+            value['source_default'] = value.pop('default')
+        return {key: explicit_authoring_schema(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [explicit_authoring_schema(child) for child in value]
+    return value
+
+
 def discovery() -> dict[str, Any]:
+    authoring_request = deepcopy(_SCHEMA)
+    authoring_request['$defs'] = explicit_authoring_schema(_SCHEMA['$defs'])
     return {
         "draft": DRAFT_ADAPTER.json_schema(),
         "transfer": WorkflowTransferIntent.model_json_schema(),
@@ -271,6 +294,7 @@ def discovery() -> dict[str, Any]:
         "clone_request": WorkflowJobCloneRequest.model_json_schema(),
         "clone_response": WorkflowJobClone.model_json_schema(),
         "native_request": deepcopy(_SCHEMA),
+        "authoring_request": authoring_request,
         "native_source_commit": _NATIVE["source_commit"],
         "native_locations": deepcopy(_NATIVE["locations"]),
         "authoring_policy": "All native fields must be explicit; numeric text converts only for preview. No scientific defaults are inserted.",
@@ -287,7 +311,12 @@ def _convert(value: Any, schema: dict, field: str = "intent") -> Any:
         if ref is None:
             raise ValueError(f"{field}: unknown native operation")
         schema = _SCHEMA["$defs"][ref.rsplit("/", 1)[-1]]
-    if schema.get("type") == "object":
+    if "$ref" in schema:
+        # Nested producer models have optional fields and their own exact-number
+        # unions. Use the shared native normalizer, not the flat intent boundary.
+        from bioxp_method_native import coerce
+        result = coerce(value, schema, _SCHEMA)
+    elif schema.get("type") == "object":
         if not isinstance(value, dict):
             raise ValueError(f"{field}: expected object")
         props = schema["properties"]

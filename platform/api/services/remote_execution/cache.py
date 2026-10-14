@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import uuid
 
 from paths import get_code_root, get_data_root
-from .bundle import (CacheTransferArtifact, cache_transfer_artifacts, current_source_identity,
+from .bundle import (CacheTransferArtifact, cache_transfer_artifacts, uncached_runtime_transfers, current_source_identity,
                      compile_remote_dependencies, _runtime_assets, _records_for_source, _published_runtime_records,
                      _staged_source_archive, _is_runtime_image, verify_selected_runtime_hashes, verify_selected_preparation_inputs)
 from .transport import run_remote, rsync_to_remote
@@ -319,7 +319,12 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
         if states[key(entry)] == 'cache_hit':
             continue
         use_hf = hf_enabled and key(entry) in bulk
-        direct = use_hf or entry.role == 'image' or entry.size_bytes > BATCH_BYTES
+        # Acquisition objects retain their single-link identity while another
+        # controller may verify the selected layout. Relay them directly, not
+        # through temporary hardlinks (or duplicate staging copies).
+        acquisition_object = (entry.source.name == 'runtime.sif'
+                              and entry.source.parent.parent.name == 'sha256')
+        direct = use_hf or entry.role == 'image' or acquisition_object or entry.size_bytes > BATCH_BYTES
         if batch and (direct or len(batch) >= BATCH_COUNT or size + entry.size_bytes > BATCH_BYTES):
             staged_plans.append((batch, False, False))
             batch, size = [], 0
@@ -383,7 +388,8 @@ async def _cache_artifacts(*, connection, artifacts, operation_id, progress, che
             async with materialize_limit:
                 await call({'action': 'extract_source',
                             'artifact': {'sha256': entry.sha256, 'size_bytes': entry.size_bytes},
-                            'destination': str(Path(entry.remote_destination).parent)})
+                            'destination': str(Path(entry.remote_destination).parent),
+                            'immutable': not bool(entry.mode & 0o222)})
 
         await _bounded_group(source_entries, extract_source_entry)
     await check_fence()
@@ -480,10 +486,10 @@ async def _install_weight_archive(*, connection, helper, layout, operation_id, p
 
 
 async def stage_cached_bundle(*, connection, bundle, progress=_noop, check_fence=_noop):
-    """Stage eligible source/runtime leaves; executor retains inputs/support-python.
+    """Stage shared source/runtime bodies and private generated runtime metadata.
 
-    Do NOT run the old full source/runtime rsync after this call. Preserve the
-    existing support-python transfer, attempt staging, symlinks and final verify.
+    Do NOT run the old full source/runtime/support rsync after this call. Preserve
+    executor-owned scientific input transfer, attempt symlinks and final verify.
     """
     # Claim one fresh generation before any upload/materialization. A failed or
     # replayed stage must use a new attempt, never merge into an existing tree.
@@ -512,28 +518,26 @@ p.mkdir(mode=0o700,exist_ok=False)
               'target': record.link_target}
              for record in bundle.envelope.files
              if record.role == 'runtime' and record.link_target is not None
-             and record.relative_path.startswith('runtime/')
-             and record.relative_path != 'runtime/support-python'
-             and not record.relative_path.startswith('runtime/support-python/')]
+             and record.relative_path.startswith('runtime/')]
     helper = await _install_helper(connection, check_fence)
     transferable = cache_transfer_artifacts(bundle)
     receipts = []
+    for transfer in uncached_runtime_transfers(bundle):
+        await check_fence()
+        await run_remote(connection, ['mkdir', '-p', str(Path(transfer.remote_destination).parent)])
+        await rsync_to_remote(connection, transfer.source, transfer.remote_destination)
+        await check_fence()
     if bundle.weight_layout:
         # The layout travels by reference to the runtime listing this bundle
         # already carries and the envelope already authenticates; its production
-        # row count exceeds the helper's declared request budget. Stage and
-        # materialize that one document first, then let the helper re-verify its
+        # row count exceeds the helper's declared request budget. The private
+        # document was transferred above; let the helper re-verify its
         # digest, schema and placement before it is used.
         listing_destination = bundle.remote_runtime_dir.rstrip('/') + '/.bms-runtime-images.json'
-        listing = next((entry for entry in transferable
-                        if entry.remote_destination == listing_destination), None)
+        listing = next((row for row in bundle.envelope.files
+                        if row.relative_path == 'runtime/.bms-runtime-images.json'), None)
         if listing is None:
             raise ValueError('Weight layout listing is unavailable for this bundle')
-        receipts = await _cache_artifacts(connection=connection, artifacts=(listing,),
-            operation_id=bundle.attempt_id, progress=progress, check_fence=check_fence,
-            materialize=True, helper=helper, runtime_root=bundle.remote_runtime_dir)
-        transferable = tuple(entry for entry in transferable
-                             if entry.remote_destination != listing_destination)
         layout = {'path': listing_destination, 'sha256': listing.sha256}
         async def weights(action):
             await check_fence()
@@ -599,9 +603,12 @@ def _prewarm_plan(job, command, source_revision, source_tree, directory, *, nati
     for path, prefix in assets:
         if prefix.startswith('runtime/') and _is_runtime_image(path, prefix):
             path = path.resolve()
-        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved):
+        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved,
+                                                model_id=native_invocation.model_id):
             suffix = record.relative_path[len(prefix):].lstrip('/')
-            local = path / suffix if suffix else path
+            local = resolved.get(('runtime-source', record.relative_path)) or (path / suffix if suffix else path)
+            if record.link_target is None and local.is_symlink():
+                local = local.resolve(strict=True)
             entries.append(CacheTransferArtifact(local, record.relative_path, record.sha256,
                                                   record.size_bytes, record.mode,
                                                   'image' if _is_runtime_image(local, record.relative_path) else 'runtime',
@@ -636,15 +643,16 @@ def workflow_pack_weight_layouts(selection, entries):
         for member in members)) for name, members in groups.items()}
 
 
-def _declared_runtime_records(path, prefix, publication, *, resolved=None):
-    rows = _published_runtime_records(path, prefix, publication=publication, resolved=resolved)
-    return rows if rows is not None else _records_for_source(path, prefix, 'runtime')
+def _declared_runtime_records(path, prefix, publication, *, resolved=None, model_id=None):
+    from .bundle import _runtime_records
+    return _runtime_records(path, prefix, publication=publication, resolved=resolved, model_id=model_id)
 
 
 def independent_plan(selection, *, dependencies=None, publication=None):
     """Resolve only reviewed registry dependencies; no Job or biological inputs."""
     from paths import get_container_dir, get_weights_root
     entries = []
+    resolved = {}
     refs = _independent_dependencies(selection) if dependencies is None else dependencies
     publication = hf_assets.publication_index() or {} if publication is None else publication
     for ref in {(r.kind, r.relative_path): r for r in refs}.values():
@@ -654,12 +662,17 @@ def independent_plan(selection, *, dependencies=None, publication=None):
         # Preserve installation selection authority before resolving legacy aliases.
         path = (image_reference(ref.relative_path, root)[0].resolve() if ref.kind == 'image'
                 else root / ref.relative_path)
-        if (path.is_symlink() or (ref.kind != 'image' and not path.resolve().is_relative_to(root))):
+        from .bundle import _selected_weight_members
+        selected = (_selected_weight_members(path, selection.model_id, resolved=resolved) if ref.kind == 'weights' and path.exists() else None)
+        if ((path.is_symlink() and selected is None) or (ref.kind != 'image' and not path.resolve().is_relative_to(root))):
             raise ValueError('Independent runtime asset is not a contained regular asset')
         prefix = ('containers/' if ref.kind == 'image' else 'weights/') + ref.relative_path
-        for record in _declared_runtime_records(path, prefix, publication):
+        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved, model_id=selection.model_id):
             suffix = record.relative_path[len(prefix):].lstrip('/')
-            entries.append(CacheTransferArtifact(path / suffix if suffix else path,
+            local = resolved.get(('runtime-source', record.relative_path)) or (path / suffix if suffix else path)
+            if record.link_target is None and local.is_symlink():
+                local = local.resolve(strict=True)
+            entries.append(CacheTransferArtifact(local,
                 record.relative_path, record.sha256, record.size_bytes, record.mode,
                 'image' if ref.kind == 'image' else 'runtime', link_target=record.link_target))
     return entries
@@ -721,9 +734,11 @@ def workflow_plan(selection, *, compiled_plan=None, publication=None):
     for path, prefix in _runtime_assets(plan.model_id, plan.mode,
             json.loads(plan.native_parameters_json), include_support=False, selected_plan=plan,
             publication=publication, resolved=resolved):
-        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved):
+        for record in _declared_runtime_records(path, prefix, publication, resolved=resolved, model_id=plan.model_id):
             suffix = record.relative_path[len(prefix):].lstrip('/')
-            local = path / suffix if suffix else path
+            local = resolved.get(('runtime-source', record.relative_path)) or (path / suffix if suffix else path)
+            if record.link_target is None and local.is_symlink():
+                local = local.resolve(strict=True)
             entries.append(CacheTransferArtifact(local, record.relative_path, record.sha256,
                 record.size_bytes, record.mode, 'image' if _is_runtime_image(local, record.relative_path) else 'runtime',
                 link_target=record.link_target))

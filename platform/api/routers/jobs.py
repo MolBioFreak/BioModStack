@@ -76,7 +76,6 @@ from runtime_policy import (
 from schemas import ExecutionPolicy, JobCreate, JobResponse, JobList, JobSummaryResponse, JobSummaryList, JobStatus
 from services.job_control import cancel_job_lineage, reject_generic_md_lifecycle_control
 from services import alignment_access, ont_submission_trust, stage_reporting, ont_ngs_contract
-from services.ont_barcode_units import load_barcode_units
 from services.md.chemistry_catalog import ChemistryCatalogError, ChemistryProfileSelectionError
 from services.md.feature_gate import require_molecular_dynamics_feature
 from services.md.launch_contract import MDLaunchError, materialize_md_job_spec, normalize_md_job_spec
@@ -759,6 +758,33 @@ def _reconcile_child_jobs_from_history(children: List[Job]) -> int:
     return updated
 
 
+def _retain_ont_replay_lineage(source: Job, replay: Job) -> None:
+    """Copy data ancestry, never historical approval, leases or attempt state."""
+    params = dict(replay.params or {})
+    params["reorchestrated_from_job_id"] = source.id
+    for key in (
+        "lineage_root_job_id", "stage_family", "stage_mode", "source_stage_job_id",
+        "source_stage_family", "source_stage_mode", "selection_source_type",
+        "selection_source_job_id", "source_selection_count",
+    ):
+        value = params.get(key, (source.params or {}).get(key, getattr(source, key, None)))
+        if key == "lineage_root_job_id":
+            value = value or source.id
+        if value is not None:
+            setattr(replay, key, value)
+            params[key] = value
+    independent = bool(params.get("barcode_mapping_binding") or params.get("pooled_assignment_release_binding"))
+    replay.parent_job_id = None if independent else source.parent_job_id
+    replay.child_stage = None if independent else source.child_stage
+    replay.params = params
+
+
+class ResubmitJobRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+    execution_target_id: str | None = Field(default=None, min_length=1, max_length=128)
+    execution_policy: ExecutionPolicy | None = None
+
+
 class ResumeJobRequest(BaseModel):
     """Resume overrides; omitted placement inherits, explicit null selects Local."""
     checkpoint_id: Optional[str] = None
@@ -1331,6 +1357,12 @@ def _should_normalize_antibody_job_params(
     # In particular these distinct model routes must not acquire implicit
     # validator, chain, gate, or PPIFlow defaults during shared job admission.
     if normalized_model_id in {"bindcraft2", "ligandmpnn"}:
+        return False
+    if (
+        normalized_model_id in {"boltz2", "protenix", "esmfold2", "esmfold2_experimental", "rf3", "template_structure_prediction"}
+        and normalized_mode in {"predict", "complex", "structure_prediction"}
+        and not _is_antibody_launch(model_id, params)
+    ):
         return False
     if (
         normalized_model_id == "protein_local_redesign"
@@ -4407,7 +4439,9 @@ def _candidate_sidecar_paths(design: Design, source_path: Path) -> List[Path]:
     if pae_candidate.exists():
         candidates.append(pae_candidate.resolve())
     unique_paths: List[Path] = []
-    seen: set[str] = set()
+    # A selected CIF is the primary payload, not also its own .cif sidecar.
+    # Compare concrete paths so staging aliases do not duplicate it either.
+    seen: set[str] = {str(source_path.resolve())}
     for candidate in candidates:
         normalized = str(candidate.resolve())
         if normalized in seen or not candidate.exists():
@@ -6296,7 +6330,7 @@ def _execution_plan_preview(job_data: JobCreate, declared_expansions=None) -> di
     """
     from dataclasses import replace
     from component_runtime import digest
-    from services.nextflow import compile_workflow_provision_request
+    from services.nextflow import compile_workflow_provision_request, cm_runtime_references
     from paths import get_data_root, get_inputs_dir, get_results_dir
     from scripts.lib.portable_inputs import discover_native_input_references
     import yaml
@@ -6336,7 +6370,9 @@ def _execution_plan_preview(job_data: JobCreate, declared_expansions=None) -> di
         request.model_id, request.mode, request.params, (),
         output_dir=Path(invocation.native_parameters['out_dir']),
         allowed_roots=(get_data_root(), get_inputs_dir(), get_results_dir()),
-        yaml_loader=yaml.safe_load)
+        yaml_loader=yaml.safe_load,
+        runtime_references=cm_runtime_references(request.params)
+        if request.model_id == 'conformational_mapping' else None)
     authority = {
         'schema': 'bms.job.execution-preview.v1',
         'request': request.model_dump(mode='json', exclude={'execution_plan_approval'}),
@@ -6669,6 +6705,7 @@ async def _create_job(
                 # The response contains a receipt reference, not a writable output
                 # override. Approval must bind these exact already-prepared bytes.
                 from services.bindcraft2_launch import materialize_native_action
+                from services.bindcraft2_publication import published_campaign_immutable
                 if not isinstance(_preallocated_job_id, str):
                     _preallocated_job_id = str(uuid.uuid5(uuid.NAMESPACE_URL, 'bms-bc2-action:' + str(uuid.uuid4())))
                 output = _standard_job_output_dir(job_data.name, '', _preallocated_job_id).resolve()
@@ -6676,7 +6713,8 @@ async def _create_job(
                     job_data.params.update(await asyncio.to_thread(
                         materialize_native_action, Path(bc2_action_source.output_dir), output,
                         operation=normalized_mode, options=job_data.params.get('bc2_action_options', {}),
-                        source_job_id=bc2_action_source.id))
+                        source_job_id=bc2_action_source.id,
+                        source_campaign_immutable=published_campaign_immutable(bc2_action_source)))
                 except (OSError, ValueError) as exc:
                     raise HTTPException(status_code=422, detail=str(exc)) from exc
                 job_data.execution_plan_approval = None
@@ -7066,12 +7104,14 @@ async def _create_job(
 
     from services.msa_policy import requires_msa_search
     if msa_provider in {"colabfold_api", "neurosnap_api"} and requires_msa_search(job_data.model_id, job_data.params):
-        if not _supports_colabfold_api_single_job(job_data.model_id, job_data.mode):
+        if not (_supports_colabfold_api_single_job(job_data.model_id, job_data.mode)
+                or (job_data.model_id in {"esmfold2", "esmfold2_experimental"}
+                    and job_data.mode in {"predict", "complex"})):
             raise HTTPException(
                 status_code=422,
                 detail=(
                     "API MSA preparation is supported for "
-                    "structure launches (boltz2/rf3/protenix predict|complex, "
+                    "structure launches (boltz2/rf3/protenix/esmfold2/esmfold2_experimental predict|complex, "
                     "boltz_cp_experimental design)."
                 ),
             )
@@ -7364,11 +7404,13 @@ async def _create_job(
 
         if bc2_action_source is not None and not bc2_action_prepared:
             from services.bindcraft2_launch import materialize_native_action
+            from services.bindcraft2_publication import published_campaign_immutable
             try:
                 job_params = {**job_params, **await asyncio.to_thread(
                     materialize_native_action, Path(bc2_action_source.output_dir), Path(output_dir),
                     operation=normalized_mode, options=job_params.get('bc2_action_options', {}),
                     source_job_id=bc2_action_source.id,
+                    source_campaign_immutable=published_campaign_immutable(bc2_action_source),
                 )}
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -7869,7 +7911,7 @@ async def _validated_typed_md_project_params(
     adapter: Any,
     md_input_resolver: Any,
 ) -> dict[str, Any]:
-    """Bind one current prepared Design authority to one server-compiled MD v2 spec."""
+    """Bind current prepared MD authority to its server-compiled effective request."""
 
     if not isinstance(adapter, TypedMdProjectLaunch):
         raise _typed_md_adapter_error("Typed MD launch requires its sealed internal adapter.")
@@ -7889,9 +7931,17 @@ async def _validated_typed_md_project_params(
     md_job_spec = deepcopy(dict(adapter.md_job_spec))
     source_params = deepcopy(dict(adapter.source_params or {}))
     supplied_params = dict(job_data.params or {})
-    if set(intent) != _TYPED_MD_INTENT_AUTHORITY_FIELDS | {
+    native = intent.get("schema_version") == "bms.md.launch-intent.v2"
+    if native:
+        from services.md.starting_structures import MdNativeLaunchIntent
+        authority_fields = set(MdNativeLaunchIntent.model_fields) - {
+            "name", "launch_context_id", "execution_target_id", "execution_policy",
+        }
+    else:
+        authority_fields = _TYPED_MD_INTENT_AUTHORITY_FIELDS
+    if set(intent) != authority_fields | {
             "name", "launch_context_id", "execution_target_id", "execution_policy"}:
-        raise _typed_md_adapter_error("Typed MD intent authority is not the sealed v1 schema.")
+        raise _typed_md_adapter_error("Typed MD intent authority is not the sealed schema.")
     if (
         intent.get("execution_target_id") != job_data.execution_target_id
         or intent.get("execution_policy") != job_data.execution_policy.model_dump(mode='json')
@@ -7900,7 +7950,7 @@ async def _validated_typed_md_project_params(
     ):
         raise _typed_md_adapter_error('Typed MD placement or execution policy changed after preview.')
     if (
-        intent.get("schema_version") != "bms.md.launch-intent.v1"
+        intent.get("schema_version") != ("bms.md.launch-intent.v2" if native else "bms.md.launch-intent.v1")
         or intent.get("launch_context_id") != context.launch_context_id
         or _canonical_typed_md_document(supplied_params)
         != _canonical_typed_md_document({**source_params, "md_job_spec": md_job_spec})
@@ -7910,13 +7960,13 @@ async def _validated_typed_md_project_params(
         )
 
     intent_authority = {
-        key: intent[key] for key in _TYPED_MD_INTENT_AUTHORITY_FIELDS
+        key: intent[key] for key in authority_fields
     }
     source_ref = intent_authority.get("source_ref")
     preview_source = preview.get("source")
     preview_chemistry = preview.get("chemistry")
     effective_request = preview.get("effective_request")
-    if (
+    if not native and (
         not isinstance(source_ref, dict)
         or source_ref.get("kind") != "design"
         or not isinstance(source_ref.get("id"), str)
@@ -7947,7 +7997,7 @@ async def _validated_typed_md_project_params(
     expected_execution["gpu_id"] = "0"
     spec_input = md_job_spec.get("input")
     spec_chemistry = md_job_spec.get("chemistry")
-    if (
+    if not native and (
         set(md_job_spec)
         != {
             "schema",
@@ -7987,6 +8037,20 @@ async def _validated_typed_md_project_params(
         raise _typed_md_adapter_error(
             "Server-compiled MD v2 authority does not match the current typed preview."
         )
+
+    if native:
+        if (
+            preview.get("schema_version") != "bms.md.launch-preview.v2"
+            or preview.get("preview_digest") != adapter.preview_digest
+            or preview.get("blockers") != []
+            or md_job_spec.get("schema") != "bms.md.job.v3"
+            or _canonical_typed_md_document(md_job_spec)
+            != _canonical_typed_md_document(preview.get("effective_request"))
+            or source_params.get("md_source_provenance", {}).get("native_input_identity")
+            != preview.get("input_identity")
+            or source_params.get("intent") != intent
+        ):
+            raise _typed_md_adapter_error("Native MD effective request or input identity changed after preview.")
 
     from experiment_models import (
         ExperimentAggregateHead,
@@ -8092,15 +8156,17 @@ async def _validated_typed_md_project_params(
         or scheduler.get("model_id") != "molecular_dynamics"
         or scheduler.get("mode") != "simulate"
         or not isinstance(expected_params, dict)
-        or set(expected_params) != _TYPED_MD_INTENT_AUTHORITY_FIELDS
+        or set(expected_params) != authority_fields
         or _canonical_typed_md_document(expected_params)
         != _canonical_typed_md_document(intent_authority)
-        or len(bound_refs) != 1
-        or bound_refs[0].kind != "design"
-        or bound_refs[0].id != source_ref["id"]
+        or (not native and (
+            len(bound_refs) != 1
+            or bound_refs[0].kind != "design"
+            or bound_refs[0].id != source_ref["id"]
+        ))
     ):
         raise _typed_md_adapter_error(
-            "Typed MD intent does not match the one prepared Project Design authority."
+            "Typed MD intent does not match the prepared Project authority."
         )
 
     canonical_params = await validate_bound_job_request(
@@ -9514,7 +9580,8 @@ async def resubmit_job(
     job_id: str,
     request: Request,
     response: Response,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    placement: ResubmitJobRequest | None = Body(default=None),
 ):
 
     """
@@ -9573,6 +9640,7 @@ async def resubmit_job(
 
     resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
     if original_job.model_id == "nanopore":
+        resubmit_params = ont_submission_trust.fresh_computation_params(resubmit_params)
         resubmit_params = ont_ngs_contract.replay_expected_plasmid_size(
             resubmit_params, original_job.provenance, mode=original_job.mode,
         )
@@ -9678,6 +9746,20 @@ async def resubmit_job(
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    resubmit_target = original_job.execution_target_id
+    resubmit_source_revision = original_job.execution_source_revision
+    resubmit_source_tree = original_job.execution_source_tree
+    if original_job.model_id == "nanopore":
+        resubmit_target = placement.execution_target_id if isinstance(placement, ResubmitJobRequest) else None
+        resubmit_source_revision = resubmit_source_tree = None
+        if resubmit_target:
+            from services.remote_execution.targets import target_eligible
+            target = await session.get(ExecutionTarget, resubmit_target, populate_existing=True)
+            if target is None or not target_eligible(target):
+                raise HTTPException(status_code=422, detail="execution_target_id is not an active ready execution target")
+            from services.remote_execution.bundle import current_source_identity
+            resubmit_source_revision, resubmit_source_tree = current_source_identity()
+
     new_job = Job(
         id=str(uuid.uuid4()),
         name=new_name,
@@ -9694,9 +9776,9 @@ async def resubmit_job(
         batch_name=original_job.batch_name,
         selected_input_artifact_class=resubmit_selected_input_artifact_class,
         selected_input_schema_version=resubmit_selected_input_schema_version,
-        execution_target_id=original_job.execution_target_id,
-        execution_source_revision=original_job.execution_source_revision,
-        execution_source_tree=original_job.execution_source_tree,
+        execution_target_id=resubmit_target,
+        execution_source_revision=resubmit_source_revision,
+        execution_source_tree=resubmit_source_tree,
         # GPU Orchestrator fields - let orchestrator pick it up
         queue_status='queued',
         vram_estimate_mb=resubmit_vram_estimate,
@@ -9709,6 +9791,11 @@ async def resubmit_job(
     )
 
     if new_job.model_id == "nanopore":
+        _retain_ont_replay_lineage(original_job, new_job)
+        output_dir = str(get_results_dir() / new_job.id)
+        new_job.output_dir = output_dir
+        if isinstance(placement, ResubmitJobRequest) and placement.execution_policy is not None:
+            new_job.params = {**new_job.params, "remote_result_policy": placement.execution_policy.remote_result_policy}
         new_job.provenance = alignment_access.grant_alignment_access(
             new_job.id,
             new_job.provenance,
@@ -9898,183 +9985,9 @@ async def annotate_cdr_regions(
 
 
 def _anchor_dorado_demux_products(job: Job) -> dict[str, Any]:
-    """Build the immutable server-side anchor for one terminal Dorado demux stage."""
-    if job.model_id != "nanopore" or job.mode != "basecall_dna" or str((job.params or {}).get("barcode_kit") or "") != "SQK-RBK114-96":
-        raise HTTPException(status_code=422, detail="dorado_demux is valid only for locked barcoded DNA jobs")
+    from services.ont_ngs_completion import prepare_dorado_demux_products
     root = Path(str(job.output_dir or "")).expanduser()
-    if root.is_symlink():
-        raise HTTPException(status_code=409, detail="Dorado result root symlink is forbidden")
-    try:
-        root = root.resolve(strict=True)
-    except OSError as exc:
-        raise HTTPException(status_code=409, detail="Dorado result root is unavailable") from exc
-    expected = {
-        "demux_manifest": root / "demux" / "demux_manifest.json",
-        "barcode_units_manifest": root / "demux" / "per_barcode_units.json",
-        "dorado_preflight": root / "basecall" / "dorado_preflight.json",
-        "dorado_runtime_provenance": root / "basecall" / "dorado_runtime_provenance.json",
-    }
-    for label, path in expected.items():
-        if path.is_symlink() or not path.is_file():
-            raise HTTPException(status_code=409, detail=f"terminal Dorado product is unavailable or unsafe: {label}")
-        try:
-            resolved_product = path.resolve(strict=True)
-            relative_product = resolved_product.relative_to(root)
-            cursor = root
-            for part in relative_product.parts:
-                cursor = cursor / part
-                if cursor.is_symlink():
-                    raise ValueError(f"terminal Dorado product contains a symlink: {label}")
-        except (OSError, ValueError) as exc:
-            raise HTTPException(status_code=409, detail=f"terminal Dorado product escapes result root: {label}") from exc
-    try:
-        product_bytes = {label: path.read_bytes() for label, path in expected.items()}
-        product_digests = {
-            label: hashlib.sha256(payload).hexdigest() for label, payload in product_bytes.items()
-        }
-        demux = json.loads(product_bytes["demux_manifest"].decode("utf-8"))
-        preflight = json.loads(product_bytes["dorado_preflight"].decode("utf-8"))
-        runtime = json.loads(product_bytes["dorado_runtime_provenance"].decode("utf-8"))
-        unit_catalog = json.loads(product_bytes["barcode_units_manifest"].decode("utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=409, detail="terminal Dorado product is unreadable or malformed") from exc
-    if not all(isinstance(payload, dict) for payload in (demux, preflight, runtime, unit_catalog)):
-        raise HTTPException(status_code=409, detail="terminal Dorado product documents must be JSON objects")
-    # Narrow JSON values for both runtime safety and static analysis.
-    demux = dict(demux)
-    preflight = dict(preflight)
-    runtime = dict(runtime)
-    unit_catalog = dict(unit_catalog)
-    preflight_sha256 = product_digests["dorado_preflight"]
-    params = dict(job.params or {})
-    expected_lock_sha256 = str(params.get("dorado_lock_sha256") or "").strip().lower()
-    expected_model_id = str(params.get("dorado_resolved_model_id") or "").strip()
-    expected_mode = str(params.get("dorado_basecall_mode") or "").strip().lower()
-    try:
-        approved_lock_bytes = ont_ngs_contract.DORADO_LOCK_PATH.read_bytes()
-        approved_lock = json.loads(approved_lock_bytes.decode("utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=409, detail="approved Dorado lock is unavailable or malformed") from exc
-    if not isinstance(approved_lock, dict) or hashlib.sha256(approved_lock_bytes).hexdigest() != expected_lock_sha256:
-        raise HTTPException(status_code=409, detail="terminal Dorado job lock is not the approved lock")
-    approved_dorado = approved_lock.get("dorado")
-    approved_models = approved_lock.get("models")
-    if not isinstance(approved_dorado, dict) or not isinstance(approved_models, dict):
-        raise HTTPException(status_code=409, detail="approved Dorado lock has invalid runtime/model sections")
-    approved_dna_models = approved_models.get("dna")
-    if not isinstance(approved_dna_models, dict):
-        raise HTTPException(status_code=409, detail="approved Dorado lock has no DNA model section")
-    approved_model = next(
-        (entry for entry in approved_dna_models.values() if isinstance(entry, dict) and entry.get("id") == expected_model_id),
-        None,
-    )
-    if not isinstance(approved_model, dict):
-        raise HTTPException(status_code=409, detail="terminal Dorado model is not retained by the approved lock")
-    preflight_lock = preflight.get("lock")
-    if not isinstance(preflight_lock, dict):
-        preflight_lock = {}
-    preflight_lock_sha256 = str(preflight_lock.get("sha256") or "").lower()
-    preflight_selection = preflight.get("selection")
-    if not isinstance(preflight_selection, dict):
-        preflight_selection = {}
-    preflight_runtime = preflight.get("runtime")
-    if not isinstance(preflight_runtime, dict):
-        preflight_runtime = {}
-    runtime_assets = preflight_runtime.get("assets")
-    if not isinstance(runtime_assets, dict):
-        runtime_assets = {}
-    runtime_sif = runtime_assets.get("runtime_sif")
-    if not isinstance(runtime_sif, dict):
-        runtime_sif = {}
-    runtime_calls = runtime.get("calls_bam")
-    if not isinstance(runtime_calls, dict):
-        runtime_calls = {}
-    demux_source = demux.get("source_calls")
-    if not isinstance(demux_source, dict):
-        demux_source = {}
-    anchored_read_count = runtime_calls.get("read_count")
-    if isinstance(anchored_read_count, bool) or not isinstance(anchored_read_count, int) or anchored_read_count < 0:
-        raise HTTPException(status_code=409, detail="terminal Dorado calls read count is invalid")
-    preflight_barcoding = preflight.get("barcoding")
-    if not isinstance(preflight_barcoding, dict):
-        preflight_barcoding = {}
-    demux_units = demux.get("units")
-    catalog_units = unit_catalog.get("units")
-    if (
-        demux.get("schema") != "biomodstack.dorado_demux.v1"
-        or preflight.get("schema") != "biomodstack.dorado_preflight.v1"
-        or runtime.get("schema") != "biomodstack.dorado_runtime_provenance.v1"
-        or unit_catalog.get("schema") != "biomodstack.dorado_barcode_units.v1"
-        or demux.get("preflight_sha256") != preflight_sha256
-        or runtime.get("preflight_sha256") != preflight_sha256
-        or not re.fullmatch(r"[0-9a-f]{64}", expected_lock_sha256)
-        or preflight_lock_sha256 != expected_lock_sha256
-        or not expected_model_id
-        or preflight_selection.get("model_id") != expected_model_id
-        or preflight_selection.get("molecule") != "dna"
-        or preflight_selection.get("model_aggregate_sha256") != approved_model.get("aggregate_sha256")
-        or preflight_selection.get("quality") != params.get("dorado_quality_mode")
-        or preflight_selection.get("modified_bases") != "none"
-        or preflight_selection.get("modified_bases_model_id") is not None
-        or preflight_selection.get("stereo_model_id") is not None
-        or runtime.get("model_id") != expected_model_id
-        or expected_mode != "simplex"
-        or preflight_selection.get("mode") != expected_mode
-        or runtime.get("mode") != expected_mode
-        or preflight_barcoding.get("kit") != params.get("barcode_kit")
-        or preflight_runtime.get("version") != approved_dorado.get("version")
-        or runtime.get("runtime_sha256") != approved_dorado.get("sif_sha256")
-        or runtime_sif.get("sha256") != runtime.get("runtime_sha256")
-        or preflight_runtime.get("sif_sha256") != runtime.get("runtime_sha256")
-        or runtime_calls.get("sha256") != demux_source.get("sha256")
-        or runtime_calls.get("read_count") != demux_source.get("read_count")
-        or runtime_calls.get("read_count") != demux.get("total_reads")
-        or not isinstance(demux_units, list)
-        or demux_units != catalog_units
-    ):
-        raise HTTPException(status_code=409, detail="terminal Dorado product identities are inconsistent")
-    try:
-        anchored_units = load_barcode_units(
-            expected["demux_manifest"],
-            root,
-            expected_manifest_sha256=product_digests["demux_manifest"],
-            expected_source_calls_sha256=str(runtime_calls.get("sha256") or ""),
-            expected_preflight_sha256=preflight_sha256,
-        )
-        catalog_verified_units = load_barcode_units(
-            expected["barcode_units_manifest"],
-            root,
-            expected_manifest_sha256=product_digests["barcode_units_manifest"],
-            expected_source_calls_sha256=str(runtime_calls.get("sha256") or ""),
-            expected_preflight_sha256=preflight_sha256,
-        )
-    except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail="terminal Dorado barcode units are inconsistent") from exc
-    identity_fields = (
-        "unit_id", "bam_sha256", "read_count", "unit_manifest_sha256",
-        "source_calls_sha256", "preflight_sha256",
-    )
-    if [tuple(unit[field] for field in identity_fields) for unit in anchored_units] != [
-        tuple(unit[field] for field in identity_fields) for unit in catalog_verified_units
-    ]:
-        raise HTTPException(status_code=409, detail="terminal Dorado unit catalog does not match demux products")
-    return {
-        "schema": "biomodstack.ont_dorado_terminal_products.v1",
-        "stage": "dorado_demux",
-        "identities": {
-            "lock_sha256": expected_lock_sha256,
-            "model_id": expected_model_id,
-            "mode": expected_mode,
-            "runtime_sha256": str(runtime.get("runtime_sha256")),
-            "calls_bam_sha256": str(runtime_calls.get("sha256")),
-            "read_count": anchored_read_count,
-            "unit_count": len(anchored_units),
-        },
-        "products": {
-            label: {"path": path.relative_to(root).as_posix(), "sha256": product_digests[label]}
-            for label, path in expected.items()
-        },
-    }
+    return prepare_dorado_demux_products(job, read_root=root, persisted_root=root.absolute())
 
 
 def _stage_callback_has_authority(job: Job) -> bool:
@@ -10941,30 +10854,35 @@ async def resume_job(
     # Mirrors StructurePredictionUiState's GPU launcher model/mode mapping.
     placement_supported = (
         job.model_id in {"boltz2", "protenix", "esmfold2"} and job.mode in {"predict", "complex"}
-    ) or (job.model_id == "boltz_cp_experimental" and job.mode == "design")
+    ) or (job.model_id == "boltz_cp_experimental" and job.mode == "design") or job.model_id == "nanopore"
     fresh_execution_supported = (
         placement_supported
         and job.status in {"failed", "cancelled"}
-        and not (job.parent_job_id or job.child_stage or job.awaiting_input)
+        and not job.awaiting_input
+        and (not (job.parent_job_id or job.child_stage) or (
+            job.model_id == "nanopore" and bool((job.params or {}).get("barcode_mapping_binding")
+                                              or (job.params or {}).get("pooled_assignment_release_binding"))))
     )
     if target_changed and not fresh_execution_supported:
         raise HTTPException(
             status_code=422,
             detail="Execution placement changes require a terminal structure root; child and interactive continuations must retain their target",
         )
-    execution_source_revision = None
-    execution_source_tree = None
+    cached_ont = job.model_id == "nanopore" and not target_changed
+    execution_source_revision = job.execution_source_revision if cached_ont else None
+    execution_source_tree = job.execution_source_tree if cached_ont else None
     source_changed = False
     if execution_target_id:
         from services.remote_execution.targets import target_eligible
         target = await session.get(ExecutionTarget, execution_target_id, populate_existing=True)
         if target is None or not target_eligible(target):
             raise HTTPException(status_code=422, detail="execution_target_id is not an active ready execution target")
-        if not target_changed and (not job.execution_source_revision or not job.execution_source_tree):
+        if not cached_ont and not target_changed and (not job.execution_source_revision or not job.execution_source_tree):
             raise HTTPException(status_code=409, detail="Remote source Job is missing its immutable source identity")
         try:
             from services.remote_execution.bundle import current_source_identity
-            execution_source_revision, execution_source_tree = current_source_identity()
+            if not cached_ont:
+                execution_source_revision, execution_source_tree = current_source_identity()
         except Exception as exc:
             logger.exception("Unable to capture the re-orchestrated Job source identity")
             raise HTTPException(status_code=503, detail="Committed BMS source identity is unavailable") from exc
@@ -11140,14 +11058,24 @@ async def resume_job(
     # reuse cached task hashes that depend on params.out_dir/publishDir paths.
     output_dir = str(get_results_dir() / new_job_id) if fresh_execution else job.output_dir
 
-    merged_params = {
-        **_normalize_antibody_job_params(_normalize_structure_geometry_params(job.params or {})),
-        **param_overrides,
-    }
+    source_params = _normalize_structure_geometry_params(job.params or {})
+    if _should_normalize_antibody_job_params(job.model_id, job.mode, source_params):
+        source_params = _normalize_antibody_job_params(source_params)
+    merged_params = {**source_params, **param_overrides}
+    # Use the existing prospective complex interpretation, as fresh admission does.
+    # The source Job (linked by resume_job_id) retains the original selector token.
+    if (
+        str(job.mode or "").strip().lower() == "complex"
+        and not _should_normalize_antibody_job_params(job.model_id, job.mode, merged_params)
+        and str(merged_params.get("pred_method") or "").strip().lower() in {"both", "all", "boltz_protenix"}
+    ):
+        merged_params = _normalize_structure_prediction_pred_method(job.model_id, job.mode, merged_params)
     if job.model_id == "nanopore":
         merged_params = ont_ngs_contract.replay_expected_plasmid_size(
             merged_params, job.provenance, mode=job.mode,
         )
+        if fresh_execution:
+            merged_params = ont_submission_trust.fresh_computation_params(merged_params)
     from services.msa_policy import apply_msa_policy
     try:
         merged_params = apply_msa_policy(job.model_id, merged_params)
@@ -11192,7 +11120,8 @@ async def resume_job(
     merged_params = _normalize_antibody_runtime_paths(job.model_id, merged_params)
     merged_params = _normalize_structure_runtime_paths(job.model_id, merged_params)
     merged_params = _normalize_structure_geometry_params(merged_params)
-    merged_params = _normalize_antibody_job_params(merged_params)
+    if _should_normalize_antibody_job_params(job.model_id, job.mode, merged_params):
+        merged_params = _normalize_antibody_job_params(merged_params)
     if job.model_id == "boltz_cp_experimental":
         # An explicit workflow override must replace the parent's public value.
         for public_key, workflow_key in (("cp_topology", "bcp_cp_topology"), ("size_cp", "bcp_size_cp")):
@@ -11312,6 +11241,7 @@ async def resume_job(
         job.decision_history = history
     
     if new_job.model_id == "nanopore":
+        _retain_ont_replay_lineage(job, new_job)
         new_job.provenance = alignment_access.grant_alignment_access(
             new_job.id,
             new_job.provenance,

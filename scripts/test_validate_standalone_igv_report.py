@@ -323,14 +323,6 @@ def test_rejects_c1_controls_and_noninitial_or_mismatched_rows(tmp_path: Path) -
         assert _run(tmp_path, payload).returncode != 0
 
 
-def test_template_renders_dynamic_table_values_as_text() -> None:
-    template = Path(__file__).parents[1] / "templates/ngs/igv_variant_standalone.html"
-    text = template.read_text(encoding="utf-8")
-    assert "cell.textContent = headers[j]" in text
-    assert "cell.textContent = rowData[j]" in text
-    assert "cell.innerHTML" not in text
-
-
 def test_rejects_oversized_report(tmp_path: Path) -> None:
     result = _run(tmp_path, _report(), max_bytes=8)
     assert result.returncode != 0

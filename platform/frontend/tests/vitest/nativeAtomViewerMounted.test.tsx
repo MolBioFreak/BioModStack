@@ -44,7 +44,7 @@ it('mixed atom confidence reaches actual shared atom palette and exact tooltip/s
     expect(q.filter((q:any)=>q.authAsymId==='E').map((q:any)=>q.authAtomIds)).toEqual([['C1'],['C2']]);
     expect(q[3].color).toEqual({r:249,g:115,b:22});
     expect(q[4].color).toEqual({r:59,g:130,b:246});
-    expect(state.gpu.scenePresentation.tooltipQueries[3].tooltip).toContain('0.25 fraction');
+    expect(state.gpu.scenePresentation.tooltipQueries[3].tooltip).toBe('E · GTP1 · C1 — Native atom pLDDT: 25.0 /100');
     expect(mounted!.root.findAllByProps({'aria-label':'Structure metric workbench'})).toHaveLength(0);
     expect(mounted!.root.findAllByProps({'aria-label':'Native atom confidence'})).toHaveLength(0);
     const show=mounted!.root.findAllByType('button').find(el=>text(el)==='Show metrics')!;

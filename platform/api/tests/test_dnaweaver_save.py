@@ -121,6 +121,7 @@ def test_dnaweaver_save_rejects_forged_plan_and_persists_regenerated_evidence(
         assert valid_response.status_code == 200, valid_response.text
         saved = valid_response.json()["saved_sequence"]
         params = saved["operation_params"]
+        assert saved["sequence"] == _target()
         assert saved["is_circular"] is False
         assert params["engine"] == "dnaweaver"
         assert params["validator_engine"] == "pydna"
@@ -131,12 +132,38 @@ def test_dnaweaver_save_rejects_forged_plan_and_persists_regenerated_evidence(
         assert params["ordered_fragments"]
         assert all(item["sequence"] for item in params["ordered_fragments"])
         assert all(
-            len(item["sequence_sha256"]) == 64 for item in params["ordered_fragments"]
+            item["sequence_sha256"] == hashlib.sha256(item["sequence"].encode("ascii")).hexdigest()
+            for item in params["ordered_fragments"]
         )
         assert workups_response.status_code == 200
         workups = workups_response.json()
         saved_listing = next(item for item in workups if item["id"] == saved["id"])
         assert saved_listing["engine"] == "dnaweaver"
         assert saved_listing["fragment_count"] == len(params["ordered_fragments"])
+
+        # Reopen the on-disk store, not an identity-map copy of the save result.
+        asyncio.run(engine.dispose())
+        engine = create_molbio_engine(
+            f"sqlite+aiosqlite:///{tmp_path / 'dnaweaver-save.db'}"
+        )
+        sessions = make_molbio_session_factory(engine)
+        with TestClient(app) as client:
+            detail = client.get(f"/api/sequences/{saved['id']}")
+            assert detail.status_code == 200, detail.text
+            assert detail.json()["sequence"] == _target()
+            assert detail.json()["operation_params"] == params
+            history = client.get(f"/api/sequences/{saved['id']}/revisions")
+            assert history.status_code == 200, history.text
+            assert len(history.json()) == 1
+            for revision in history.json():
+                assert revision["snapshot"]["sequence"] == _target()
+                assert revision["snapshot"]["operation_params"] == params
+                for namespace in ("/api/sequences", "/api/molbio/sequences"):
+                    exact = client.get(
+                        f"{namespace}/{saved['id']}/revisions/{revision['revision_id']}"
+                    )
+                    assert exact.status_code == 200, exact.text
+                    assert exact.json()["snapshot"]["sequence"] == _target()
+                    assert exact.json()["snapshot"]["operation_params"] == params
     finally:
         asyncio.run(engine.dispose())

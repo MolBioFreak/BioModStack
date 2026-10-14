@@ -13,10 +13,12 @@ if _SCRIPT_DIRECTORY not in sys.path:
     sys.path.insert(0, _SCRIPT_DIRECTORY)
 
 from verify_construct import read_single_fasta, exact_circular_equivalence, sha256_file
+from build_construct_verification_input import _publish_input
 
 
 def prepare_comparison(bundle: Path, read_consensus: Path, output: Path) -> dict:
-    if not bundle.is_dir() or bundle.is_symlink() or any(p.is_symlink() for p in bundle.rglob('*')):
+    bundle = bundle.resolve(strict=True)
+    if not bundle.is_dir() or any(p.is_symlink() for p in bundle.rglob('*')):
         raise ValueError('comparison source bundle must contain regular retained artifacts')
     if output.exists():
         raise ValueError('comparison output already exists; refusing to overwrite evidence')
@@ -25,9 +27,16 @@ def prepare_comparison(bundle: Path, read_consensus: Path, output: Path) -> dict
     state=json.loads((bundle/'observed_state.json').read_text())
     if state.get('observed_sha256')!=sha256_file(bundle/'observed_consensus.fasta'):
         raise ValueError('assembly identity does not match its bundle')
-    shutil.copytree(bundle,output)
+    def copy_leaf(source, destination):
+        source, destination = Path(source), Path(destination)
+        if source.name in {'observed_consensus.fasta', 'source_reads.fastq', 'source_reads.fastq.gz'}:
+            _publish_input(source, destination, retained=True)
+        else:
+            shutil.copyfile(source, destination)
+        return str(destination)
+    shutil.copytree(bundle, output, copy_function=copy_leaf)
     retained=output/'read_guided_consensus.fasta'
-    shutil.copyfile(read_consensus,retained)
+    _publish_input(read_consensus, retained, retained=True)
     comparison={
         'path':retained.name,'sha256':sha256_file(retained),
         'method':'samtools_bayesian_reference_guided',

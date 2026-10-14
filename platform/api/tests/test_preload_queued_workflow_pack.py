@@ -126,8 +126,23 @@ async def claim(lane):
         return await _claim_remote_job(s, await s.get(Job, JOB), gpu_id=None, gpu_ids=[], vram_estimate_mb=0)
 
 
+async def assert_shared_claim(lane):
+    from services.remote_execution.claims import job_has_claim
+    async with lane.factory() as s:
+        target, job = await s.get(ExecutionTarget, TARGET), await s.get(Job, JOB)
+        assert target.leased_job_id is None
+        assert job_has_claim(target, job)
+        assignment = job.provenance['remote_execution_assignment']
+        assert assignment['policy'] == 'vram_packing'
+        assert assignment['root_job_id'] == JOB
+        assert assignment['execution_target_id'] == TARGET
+        assert assignment['lease_id'] and not assignment.get('released_at')
+        assert job.queue_status == 'preparing'
+        return p.recipe_snapshot(job).__dict__
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize('paused', [False, True])
+@pytest.mark.parametrize('paused' , [False, True])
 @pytest.mark.parametrize('remote_state', [None, 'queued', 'waiting_target', 'waiting_remote_worker',
     'waiting_remote_capacity', 'waiting_remote_gpu', 'waiting_remote_telemetry'])
 async def test_queued_pack_prepares_without_job_mutation_or_third_preview(lane, paused, remote_state):
@@ -160,29 +175,33 @@ async def test_queued_pack_prepares_without_job_mutation_or_third_preview(lane, 
     {'nextflow_run_id': 'run'}, {'remote_attempt_id': 'attempt'}, {'assigned_gpu': 0},
     {'remote_state': 'preparing'}, {'provenance': {'remote_execution_assignment': {'lease_id': 'owned'}}},
 ])
-async def test_active_attempts_refuse_start_and_inventory_refresh(lane, change):
+async def test_active_attempts_allow_download_but_not_inventory_refresh(lane, change):
     async with lane.factory() as s:
         job = await s.get(Job, JOB)
         for key, value in change.items():
             setattr(job, key, value)
         await s.commit()
         assert await targets._has_preparation_conflicts(s, TARGET)
-        with pytest.raises(targets.ExecutionTargetError, match='idle attached worker'):
-            await lane.controller.start(s, TARGET, object())
+        before = p.recipe_snapshot(job).__dict__
         with pytest.raises(targets.ExecutionTargetError, match='idle attached worker'):
             await lane.controller.refresh_inventory(s, TARGET)
-    assert lane.previews == 0
+    await start(lane)
+    assert (await settle(lane))['phase'] == 'source_download_ready'
+    async with lane.factory() as s:
+        assert p.recipe_snapshot(await s.get(Job, JOB)).__dict__ == before
 
 
 @pytest.mark.asyncio
-async def test_lease_refuses_even_when_job_is_pristine(lane):
+async def test_legacy_lease_allows_download_but_not_inventory_refresh(lane):
     async with lane.factory() as s:
         (await s.get(ExecutionTarget, TARGET)).leased_job_id = JOB
         await s.commit()
         with pytest.raises(targets.ExecutionTargetError, match='idle attached worker'):
-            await lane.controller.start(s, TARGET, object())
-        with pytest.raises(targets.ExecutionTargetError, match='idle attached worker'):
             await lane.controller.refresh_inventory(s, TARGET)
+    await start(lane)
+    assert (await settle(lane))['phase'] == 'source_download_ready'
+    async with lane.factory() as s:
+        assert (await s.get(ExecutionTarget, TARGET)).leased_job_id == JOB
 
 
 @pytest.mark.asyncio
@@ -196,7 +215,7 @@ async def test_pending_inventory_refresh_does_not_change_job(lane):
 
 
 @pytest.mark.asyncio
-async def test_scheduler_wins_during_start_preview_then_preload_cas_refuses(lane, monkeypatch):
+async def test_scheduler_claim_during_preview_preserves_download_admission(lane, monkeypatch):
     request = await approved(lane)
     original = lane.controller._preview
     async def racing_preview(*args, **kwargs):
@@ -204,26 +223,22 @@ async def test_scheduler_wins_during_start_preview_then_preload_cas_refuses(lane
         assert await claim(lane) == {'unchanged': 17}
         return result
     monkeypatch.setattr(lane.controller, '_preview', racing_preview)
-    with pytest.raises(targets.ExecutionTargetError, match='activity changed'):
-        await start(lane, request)
-    async with lane.factory() as s:
-        assert (await s.get(ExecutionTarget, TARGET)).leased_job_id == JOB
-        assert (await s.get(Job, JOB)).queue_status == 'preparing'
-    assert lane.transfers == 0
+    await start(lane, request)
+    assert (await settle(lane))['phase'] == 'source_download_ready'
+    await assert_shared_claim(lane)
+    assert lane.transfers == 1
 
 
 @pytest.mark.asyncio
-async def test_preload_wins_claim_then_terminal_handoff(lane):
+async def test_scheduler_claims_during_download_and_keeps_claim_on_completion(lane):
     lane.transfer_release.clear()
     await start(lane)
     await asyncio.wait_for(lane.transfer_entered.wait(), 5)
-    assert await claim(lane) is None
+    assert await claim(lane) == {'unchanged': 17}
+    before = await assert_shared_claim(lane)
     lane.transfer_release.set()
     assert (await settle(lane))['phase'] == 'source_download_ready'
-    assert await claim(lane) == {'unchanged': 17}
-    async with lane.factory() as s:
-        assert (await s.get(ExecutionTarget, TARGET)).leased_job_id == JOB
-        assert (await s.get(Job, JOB)).queue_status == 'preparing'
+    assert await assert_shared_claim(lane) == before
 
 
 @pytest.mark.asyncio
@@ -243,7 +258,8 @@ async def test_cancel_retains_pending_job_and_existing_quiescence_rule(lane, qui
     async with lane.factory() as s:
         job = await s.get(Job, JOB)
         assert (job.status, job.queue_status, job.remote_attempt_id, job.paused) == ('queued', 'queued', None, False)
-    assert await claim(lane) == ({'unchanged': 17} if quiet else None)
+    assert await claim(lane) == {'unchanged': 17}
+    await assert_shared_claim(lane)
 
 
 @pytest.mark.asyncio
@@ -327,7 +343,8 @@ async def test_existing_scheduler_phase_handoff_is_not_success_only(lane, phase)
         target = await s.get(ExecutionTarget, TARGET)
         target.provider_metadata = dict(target.provider_metadata, preload={'phase': phase})
         await s.commit()
-    assert await claim(lane) == (None if phase in p.PRELOAD_ACTIVE_PHASES else {'unchanged': 17})
+    assert await claim(lane) == {'unchanged': 17}
+    await assert_shared_claim(lane)
 
 
 @pytest.mark.asyncio
@@ -378,7 +395,9 @@ async def test_inventory_refresh_loses_racing_claim_without_releasing_lease(lane
             await lane.controller.refresh_inventory(s, TARGET)
     async with lane.factory() as s:
         target = await s.get(ExecutionTarget, TARGET)
-        assert target.leased_job_id == JOB
+        from services.remote_execution.claims import job_has_claim
+        assert job_has_claim(target, await s.get(Job, JOB))
+        assert target.leased_job_id is None
         assert target.provider_metadata['managed_inventory']['refresh_failed'] is True
 
 

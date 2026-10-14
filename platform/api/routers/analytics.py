@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional
 import numpy as np
 from pydantic import BaseModel
 
-from services.scientific_analytics import MetricState, MetricDescriptor, MetricSource, ScientificCohort, owning_jobs, projection, persisted_projection, revision_for_job, partition
+from services.scientific_analytics import MetricState, MetricDescriptor, MetricSource, ScientificCohort, owning_jobs, projection, persisted_projection, revision_for_job, partition, native_scalar_owner
 from database import get_session, Job, Design
 from services.analysis_runs import get_matching_job_analysis_run, load_analysis_result, validate_job_analysis_request
 from services.result_contracts import resolve_result_contract
@@ -244,9 +244,11 @@ async def get_job_design_metrics(
     designs = await _load_designs_for_job(session, job_id, include_children=include_children)
     
     owners = await owning_jobs(session, designs)
+    from services.scientific_analytics import bulk_scalar_projections
+    projections = await bulk_scalar_projections(designs, owners, session)
     return [
-        DesignMetricPoint(id=d.id, name=d.name, **(await persisted_projection(d, session)))
-        if revision_for_job(owners.get(d.job_id)) == 1 else DesignMetricPoint(
+        DesignMetricPoint(id=d.id, name=d.name, **projections[d.id])
+        if native_scalar_owner(owners.get(d.job_id)) else DesignMetricPoint(
             id=d.id,
             name=d.name,
             metrics={

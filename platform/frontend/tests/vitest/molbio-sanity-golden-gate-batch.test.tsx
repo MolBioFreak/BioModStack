@@ -12,6 +12,7 @@ import type { AssembleTask, SaveDesignRequest } from '../../src/lib/goldenGateWo
 import { expandGoldenGateWire, projectGoldenGateWire } from '../../src/lib/goldenGateWorkflowWire';
 import type { RestrictionRecord, RestrictionCatalogSummary } from '../../src/lib/restrictionAnalysis';
 import native from '../fixtures/golden-gate/batch-receiving.json';
+import { domestication, reaction } from '../fixtures/golden-gate/nativeDraft';
 import workflow from '../fixtures/golden-gate/workflow-receiving.json';
 import traffic from '../fixtures/molBioTrafficPairing.json';
 
@@ -160,9 +161,40 @@ describe('Golden Gate native batch receiving at actual Assembly entry',()=>{
  });
  it('preserves all alternative control objects without forking native science fields',()=>{
   const base=structuredClone(native.request.base) as unknown as AssembleTask;
-  const a=captureAlternative(base,'insert','exact');const restored=editAlternative(base,a);
-  expect(captureAlternative(restored,'insert','exact')).toEqual(a);
+  const part=base.parts.find(p=>p.id==='insert')!;
+  const source=base.sources.find(s=>s.id===part.source_id)!;
+  const automatic: AssembleTask['automatic_primers'][number]={part_id:'insert',pair_rank:1,settings:{
+   primer_min_length:20,primer_max_length:24,product_min_length:60,product_max_length:120,
+   flank_search_span:20,gc_min_percent:30,gc_max_percent:70,tm_target_c:62,tm_max_delta_c:4,
+   gc_clamp_min:1,max_poly_x:4,max_pairs:8,
+  }};
+  const edit: AssembleTask['domestication'][number]={source_id:source.id,
+   settings:{...structuredClone(domestication),enabled:true},accepted_sequence:'ACGTACGT'};
+  const reactionPart: NonNullable<AssembleTask['reaction']>['parts'][number]={
+   ...structuredClone(reaction.parts[0]),part_id:'insert',length_bp:60,
+   amount:{value:0.04,unit:'pmol'},stock:{value:15,unit:'ng/uL'},in_mastermix:true,
+  };
+  base.automatic_primers=[automatic];base.domestication=[edit];
+  base.reaction={...structuredClone(reaction),parts:[...structuredClone(reaction.parts),reactionPart]};
+  const expected=structuredClone({id:'exact',source,part,automatic_primer:automatic,
+   domestication:edit,reaction_part:reactionPart});
+  const a=captureAlternative(base,'insert','exact');
+  expect(a).toEqual(expected); // Independent populated children, not capture→edit→capture alone.
+  const changed=structuredClone(base);
+  changed.parts=changed.parts.map(p=>p.id==='insert'?{...p,name:'changed'}:p);
+  changed.automatic_primers=[];changed.domestication=[];
+  changed.reaction!.parts=changed.reaction!.parts.filter(p=>p.part_id!=='insert');
+  const restored=editAlternative(changed,a);
+  expect(restored).toEqual(base);
+  expect(captureAlternative(restored,'insert','exact')).toEqual(expected);
   expect(restored.primer_settings).toEqual(base.primer_settings);expect(restored.enzyme).toEqual(base.enzyme);
+  // Neither helper aliases its caller's mutable alternative children.
+  a.automatic_primer!.pair_rank=7;a.domestication!.accepted_sequence='TTTT';
+  a.reaction_part!.stock!.value=99;
+  expect(base.automatic_primers).toEqual([expected.automatic_primer]);
+  expect(restored.automatic_primers).toEqual([expected.automatic_primer]);
+  expect(restored.domestication).toEqual([expected.domestication]);
+  expect(restored.reaction!.parts[1]).toEqual(expected.reaction_part);
  });
  it('delivers results before EOF and reports a cut stream as incomplete without discarding them',async()=>{
   calls=[];template={};hold=true;sampled=false;transport();const delivered:BatchEvent[]=[];

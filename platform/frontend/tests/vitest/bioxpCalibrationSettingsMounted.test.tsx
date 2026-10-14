@@ -1,4 +1,6 @@
 import React, { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+let client: QueryClient;
 import { createRoot, type Root } from 'react-dom/client';
 import { spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, expect, it } from 'vitest';
@@ -9,7 +11,7 @@ import fixture from '../../../api/tests/fixtures/bioxp_calibration_settings.json
 let host: HTMLDivElement, root: Root, saved: boolean, calls: any[], fail: boolean, failRead: boolean;
 const original = api.defaults.adapter;
 async function tick() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); }); }
-async function mount(generation = 77) { await act(async () => root.render(<BioXpCalibrationSettings generation={generation} connected />)); await tick(); }
+async function mount(generation = 77) { await act(async () => root.render(<QueryClientProvider client={client}><BioXpCalibrationSettings generation={generation} connected /></QueryClientProvider>)); await tick(); }
 async function change(label: string, value: string) {
     const el = host.querySelector(`[aria-label="${label}"]`) as HTMLInputElement;
     await act(async () => {
@@ -24,6 +26,7 @@ async function editBatch() {
     await change('Calibration station', 'CAMERA_OFFSET'); await change('Saved x', '-4');
 }
 beforeEach(() => {
+    client = new QueryClient({ defaultOptions: { queries: {retry:false, gcTime:Infinity} } });
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     calls = []; saved = false; fail = false; failRead = false;
     api.defaults.adapter = async config => {
@@ -35,7 +38,7 @@ beforeEach(() => {
         return { data: saved ? fixture.after : fixture.before, status: 200, statusText: 'fixture', config, headers: {} };
     };
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); api.defaults.adapter = original; });
+afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); api.defaults.adapter = original; });
 
 it('edits every saved station and five native fields without raw JSON, preserving a multi-row batch', async () => {
     await mount();
@@ -49,25 +52,25 @@ it('edits every saved station and five native fields without raw JSON, preservin
     expect(host.querySelector('[aria-label="Saved zHigh"]')).toBeNull();
     await editBatch(); await change('Calibration station', 'TECANRACK1');
     expect((host.querySelector('[aria-label="Saved y"]') as HTMLInputElement).value).toBe('-17');
-    await click('Save for next startup');
+    await click('Save & apply now');
     expect(calls.map(c => c.method)).toEqual(['get', 'patch', 'get']);
     expect(calls[1].request).toEqual({ expected_connection_generation: 77, positions: [
         { name: 'TECANRACK1', x: 0, y: -17, zLow: 34000, zDelta: 1000, inc_factor: 0 }, { name: 'CAMERA_OFFSET', x: -4 },
     ] });
     expect(host.textContent).toContain('pending next ordinary startup');
-    expect(host.textContent).toContain('read back. No live application or motion');
+    expect(host.textContent).toContain('read back. Saved and applied in-process; no motion');
     expect(host.textContent).toContain('53000');
 });
 
 it.each(['', '1.5', '2147483648'])('invalid integer %s does not save', async value => {
-    await mount(); await change('Saved x', value); await click('Save for next startup');
+    await mount(); await change('Saved x', value); await click('Save & apply now');
     expect(calls).toHaveLength(1); expect(host.textContent).toContain('signed 32-bit integer');
 });
 it('does not claim applied or discard edits after failure; failed readback is distinct from failed save', async () => {
-    await mount(); await editBatch(); fail = true; await click('Save for next startup');
+    await mount(); await editBatch(); fail = true; await click('Save & apply now');
     expect(host.textContent).toContain('settings storage failed'); expect(host.textContent).toContain('2 station(s) edited');
     expect(host.textContent).not.toContain('read back.');
-    fail = false; failRead = true; await click('Save for next startup');
+    fail = false; failRead = true; await click('Save & apply now');
     expect(host.textContent).toContain('but readback failed');
     expect(host.textContent).not.toContain('read back.');
 });
@@ -79,7 +82,7 @@ it('reserves only its own save request and reads active startup configuration ho
         if (config.method === 'patch') await new Promise<void>(resolve => { release = resolve; });
         return adapter(config);
     };
-    const save = [...host.querySelectorAll('button')].find(el => el.textContent === 'Save for next startup')!;
+    const save = [...host.querySelectorAll('button')].find(el => el.textContent === 'Save & apply now')!;
     await act(async () => { save.click(); save.click(); }); await tick();
     expect(save.disabled).toBe(true);
     await act(async () => release()); await tick();
@@ -89,7 +92,7 @@ it('reserves only its own save request and reads active startup configuration ho
         active_revision_id: fixture.after.saved_revision_id, pending_restart: false, application_status: 'bound_configuration' };
     api.defaults.adapter = async config => ({ data: bound, status: 200, statusText: 'offline startup fixture', config, headers: {} });
     await mount(78);
-    expect(host.textContent).toContain('Configuration bound at startup; physical calibration not verified');
+    expect(host.textContent).toContain('Applies in-process; no home, reconnect or restart. Physical calibration not verified');
     expect(host.textContent).not.toContain('pending next ordinary startup');
 });
 
@@ -111,11 +114,11 @@ it('mounted read/save/readback traverses the actual BMS routes and robot HTTP tr
         expect(relay.status).toBe(200); if (config.method === 'patch') saved = true;
         return { data: relay.data, status: relay.status, statusText: 'fixture', config, headers: {} };
     };
-    await mount(); await editBatch(); await click('Save for next startup');
+    await mount(); await editBatch(); await click('Save & apply now');
     expect(relays.map(r => r.robot_requests[0].method)).toEqual(['GET', 'PATCH', 'GET']);
     expect(relays.every(r => r.robot_requests[0].path === '/motion/oem/calibration_settings')).toBe(true);
     expect(relays[1].robot_requests[0].body.positions[0]).toEqual({ name: 'TECANRACK1', x: 0, y: -17, zLow: 34000, zDelta: 1000, inc_factor: 0 });
     expect(relays[2].data.active_positions).toEqual(relays[0].data.active_positions);
     expect(host.textContent).toContain('pending next ordinary startup');
-    expect(host.textContent).toContain('read back. No live application or motion');
+    expect(host.textContent).toContain('read back. Saved and applied in-process; no motion');
 }, 30000);

@@ -500,3 +500,40 @@ async def test_inventory_attachment_initial_mutation_is_fenced(store, monkeypatc
         if change == 'lease':
             assert current.leased_job_id == 'racing-owner'
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_shared_owners_pin_endpoint_until_last_claim_releases(store, monkeypatch):
+    from services.remote_execution.executor import _release_remote_target_lease
+    session, _ = store
+    target = await session.get(ExecutionTarget, 'vast:49684651')
+    target.leased_job_id = None
+    jobs = []
+    for identifier in ('shared-a', 'shared-b'):
+        job = Job(id=identifier, name=identifier, model_id='boltz2', mode='predict', params={},
+            status='cancelled', queue_status='cancelled', remote_state='cancelling',
+            execution_target_id=target.id, remote_attempt_id=f'{identifier}-attempt',
+            provenance={'remote_execution_assignment': {'policy': 'vram_packing',
+                'lease_id': f'{identifier}-lease', 'execution_target_id': target.id, 'root_job_id': identifier,
+                'claimed_at': datetime.utcnow().isoformat(), 'gpu_indices': [0]}})
+        jobs.append(job)
+        session.add(job)
+    await session.commit()
+    inventory(monkeypatch, ['49684651'], host='203.0.113.99')
+    await targets.refresh_vast_targets(session)
+    assert (await targets.get_target(session, target.id)).host == '203.0.113.10'
+    # Absence from provider inventory does not hide outstanding terminal writers.
+    inventory(monkeypatch)
+    await targets.refresh_vast_targets(session)
+    rows = await targets.list_targets(session)
+    assert [row.id for row in rows] == [target.id]
+    assert set(rows[0].active_job_ids) == {'shared-a', 'shared-b'}
+    await _release_remote_target_lease(session, jobs[0])
+    await session.commit()
+    inventory(monkeypatch, ['49684651'], host='203.0.113.99')
+    await targets.refresh_vast_targets(session)
+    assert (await targets.get_target(session, target.id)).host == '203.0.113.10'
+    await _release_remote_target_lease(session, jobs[1])
+    await session.commit()
+    await targets.refresh_vast_targets(session)
+    assert (await targets.get_target(session, target.id)).host == '203.0.113.99'

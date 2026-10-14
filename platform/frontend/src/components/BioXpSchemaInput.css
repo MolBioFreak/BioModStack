@@ -1,0 +1,13 @@
+/* Nested producer field paths must wrap on the compact phone surface. */
+.bioxp-schema-field { min-width: 0; max-width: 100%; }
+.bioxp-schema-field legend,
+.bioxp-schema-field button,
+.bioxp-schema-field label,
+.bioxp-schema-field p {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+.bioxp-schema-field input,
+.bioxp-schema-field select,
+.bioxp-schema-field fieldset { min-width: 0; max-width: 100%; }

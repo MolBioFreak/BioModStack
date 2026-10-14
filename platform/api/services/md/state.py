@@ -22,6 +22,7 @@ TERMINAL_REPLICA_STATES = frozenset({"completed", "failed", "cancelled", "orphan
 ACTIVE_REPLICA_STATES = frozenset({"queued", "launching", "running", "checkpointing", "paused", "cancelling"})
 TERMINAL_PHASES = frozenset({"completed", "partial", "failed", "cancelled"})
 from scripts.bms_md.contract import RETRYABLE_INFRASTRUCTURE_FAILURES
+from scripts.bms_md.native_config import lane_count
 
 
 class MdStateError(RuntimeError):
@@ -58,7 +59,10 @@ async def create_md_run(session: AsyncSession, *, job: Job, normalized_request: 
         # retained non-null columns without inventing v2 assurance or a digest.
         chemistry = {"profile_id": "legacy_unavailable", "profile_sha256": "unavailable"}
         assurance = "legacy_unavailable"
-    elif schema == "bms.md.job.v2":
+    elif schema == "bms.md.job.v3" and "chemistry" not in normalized_request:
+        chemistry = {"profile_id": "external", "profile_sha256": "unavailable"}
+        assurance = "external_unreviewed"
+    elif schema in {"bms.md.job.v2", "bms.md.job.v3"}:
         chemistry = normalized_request["chemistry"]
         assurance = chemistry.get("assurance")
         if not isinstance(assurance, str) or not assurance:
@@ -510,7 +514,7 @@ async def reconcile_component_projection(session: AsyncSession, parent: Job,
         if (child.parent_job_id != parent.id or child.execution_target_id != parent.execution_target_id
                 or not (child.provenance or {}).get('component_projection')
                 or type(index) is not int or type(attempt) is not int or attempt < 0
-                or not 0 <= index < int(run.normalized_request['replicas'])
+                or not 0 <= index < lane_count(run.normalized_request)
                 or params.get('md_replica_seed') != int(run.normalized_request['random_seed']) + index
                 or params.get('md_engine') != run.normalized_request['engine']):
             raise MdStateError('MD_STATE_CORRUPT', 'projected MD request changed native replica identity')

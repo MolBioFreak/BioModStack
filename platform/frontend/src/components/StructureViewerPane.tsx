@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react';
+import './StructurePredictionResults.css';
 import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
@@ -31,6 +32,8 @@ import {
 import { inferDesignAnalysisLens, inferDesignOutputSource, getValidationOutputLabel } from './designOutputSource';
 import { buildMetricLayerFromExplicitMaps } from '../lib/molstar-metrics';
 import type { MolstarResidueMetricLayer } from '../lib/molstar-metrics';
+import type { AtomRef } from '../structureViewer/contracts/structureIdentity';
+import type { MetricSelection } from '../structureViewer/metrics/metricContracts';
 import type { MetricLayer } from '../structureViewer/metrics/metricContracts.js';
 import type { DerivedStructureComponent } from '../structureViewer/contracts/complexAnalysis.js';
 import { resolveGovernedStructureWorkbenchContext } from '../structureViewer/contracts/governedStructureWorkbenchContext.js';
@@ -92,6 +95,10 @@ interface ViewerAnalysisBundle {
 }
 
 interface Props {
+    confidenceCompanion?: boolean;
+    confidenceCharts?: React.ReactNode;
+    confidenceSelection?: readonly AtomRef[];
+    onConfidenceSelection?: (selection: MetricSelection) => void;
     selectedDesignId: string | null;
     setSelectedDesignId: (id: string) => void;
     designs: Design[];
@@ -323,6 +330,10 @@ export function ShapeDocumentInspector({ design, document }: { design: Design; d
 }
 
 export default function StructureViewerPane({
+    confidenceCompanion = false,
+    confidenceCharts,
+    confidenceSelection,
+    onConfidenceSelection,
     selectedDesignId,
     setSelectedDesignId,
     designs,
@@ -345,7 +356,8 @@ export default function StructureViewerPane({
     const [viewportHeight, setViewportHeight] = useState(() => (
         typeof window === 'undefined' ? 720 : window.innerHeight
     ));
-    const [analyticsPanelOpen, setAnalyticsPanelOpen] = useState(true);
+    const [companionOpen, setCompanionOpen] = useState(false);
+    const [analyticsPanelOpen, setAnalyticsPanelOpen] = useState(!confidenceCompanion);
     // The molecular structure is the primary scientific result. Keep auxiliary
     // metric/export controls collapsed until the operator asks for them.
     const [metricWorkbenchOpen, setMetricWorkbenchOpen] = useState(false);
@@ -580,17 +592,23 @@ export default function StructureViewerPane({
     const nativeResidue = useMemo(()=>parseScientificNativeMetric(residueQuery.data,nativeDocument,'residue_plddt',selectedDesignId ?? undefined),[residueQuery.data,nativeDocument,selectedDesignId]);
     const nativeChains = useMemo(()=>parseScientificNativeMetric(chainQuery.data,nativeDocument,'chain_metrics',selectedDesignId ?? undefined),[chainQuery.data,nativeDocument,selectedDesignId]);
     const nativeResidueLayer = useMemo<MetricLayer | null>(()=>nativeResidue.status !== 'ok' ? null : ({
-        descriptor:{id:'native-plddt',label:nativeResidue.metric === 'atom_plddt' ? 'Native atom pLDDT' : 'Native residue pLDDT',dimension:nativeResidue.metric === 'atom_plddt' ? 'atom-scalar' : 'residue-scalar',units:'fraction',direction:'higher_is_better',valueRange:[0,1],projectionPolicy:'direct',normalization:'none',
+        descriptor:{id:'native-plddt',label:nativeResidue.metric === 'atom_plddt' ? 'Native atom pLDDT' : nativeResidue.metric === 'token_plddt' ? 'Native polymer-residue pLDDT' : 'Native residue pLDDT',dimension:nativeResidue.metric === 'atom_plddt' ? 'atom-scalar' : 'residue-scalar',units:'fraction',direction:'higher_is_better',valueRange:[0,1],projectionPolicy:'direct',normalization:'none',
             categories: {
-                veryHigh: {label: '≥90%', color: '#3b82f6'},
-                confident: {label: '70–<90%', color: '#22d3ee'},
-                low: {label: '50–<70%', color: '#facc15'},
-                veryLow: {label: '<50%', color: '#f97316'},
+                veryHigh: {label: '≥90', color: '#3b82f6'},
+                confident: {label: '70–<90', color: '#22d3ee'},
+                low: {label: '50–<70', color: '#facc15'},
+                veryLow: {label: '<50', color: '#f97316'},
             },
             provenance:{source:'Verified native confidence vector',artifactSha256:nativeResidue.artifactSha256}},
         // Reuse the established confidence bands for display only; retain native fractions.
-        values:nativeResidue.residues.map((identity,index)=>({identity,value:nativeResidue.values[index],displayColor:plddtColor(nativeResidue.values[index]! * 100)})),
+        values:nativeResidue.residues.map((identity,index)=>({identity,value:nativeResidue.values[index],displayColor:plddtColor(nativeResidue.values[index]! * 100)})).filter(entry => nativeResidue.metric !== 'token_plddt' || !(entry.identity.labelAtomId || entry.identity.authAtomId)),
     } as MetricLayer),[nativeResidue]);
+    const nativeTokenAtomLayer = useMemo<MetricLayer | null>(() => {
+        if (nativeResidue.status !== 'ok' || nativeResidue.metric !== 'token_plddt' || !nativeResidueLayer) return null;
+        return { descriptor: { ...nativeResidueLayer.descriptor, id: 'native-plddt-atoms', label: 'Native atom-token pLDDT', dimension: 'atom-scalar' },
+            values: nativeResidue.residues.flatMap((identity, index) => identity.labelAtomId || identity.authAtomId
+                ? [{ identity, value: nativeResidue.values[index], displayColor: plddtColor(nativeResidue.values[index]! * 100) }] : []) };
+    }, [nativeResidue, nativeResidueLayer]);
     const chainMetrics = useMemo(() => requiresBoundMetrics ? {} : viewerAnalyses?.chainMetrics ?? {}, [requiresBoundMetrics, viewerAnalyses?.chainMetrics]);
     const chainMetricsBusy = viewerAnalyses?.chainMetricsBusy ?? false;
     const onRunChainMetrics = viewerAnalyses?.onRunChainMetrics;
@@ -622,6 +640,7 @@ export default function StructureViewerPane({
     const scientificPae = useMemo(() => paeRaw != null && (requiresBoundMetrics || nativeMetrics || asRecord(paeRaw)?.schema_name === 'core_protein_viewer_metric')
         ? parseScientificPae(paeRaw,nativeDocument,selectedDesignId ?? undefined) : null,
     [paeRaw,requiresBoundMetrics,nativeMetrics,nativeDocument,selectedDesignId]);
+    const tokenPae = scientificPae?.status === 'ok' && scientificPae.axisKind === 'model_token' ? scientificPae : null;
     const paeMatrix = requiresBoundMetrics || nativeMetrics || scientificPae ? (scientificPae?.status === 'ok' ? scientificPae.matrix : null) : paeData?.pae_matrix ?? null;
     const paeBusy = viewerAnalyses?.paeMatrixBusy ?? false;
     const onRunPaeMatrix = nativeDocument ? undefined : viewerAnalyses?.onRunPaeMatrix;
@@ -1456,12 +1475,13 @@ export default function StructureViewerPane({
     const allMetricLayers = useMemo<readonly MetricLayer[]>(
         () => [
             ...(nativeResidueLayer ? [nativeResidueLayer] : []),
+            ...(nativeTokenAtomLayer ? [nativeTokenAtomLayer] : []),
             ...structureScalarMetricLayers,
             ...(subunitMeanPlddtLayer ? [subunitMeanPlddtLayer] : []),
             ...pairMetricLayers,
             ...interfaceMetricLayers,
         ],
-        [nativeResidueLayer, interfaceMetricLayers, pairMetricLayers, structureScalarMetricLayers, subunitMeanPlddtLayer],
+        [nativeResidueLayer, nativeTokenAtomLayer, interfaceMetricLayers, pairMetricLayers, structureScalarMetricLayers, subunitMeanPlddtLayer],
     );
 
 
@@ -1586,7 +1606,7 @@ export default function StructureViewerPane({
     // Listen to fullscreen changes
     useEffect(() => {
         const handleFullscreenChange = () => {
-            const fullscreen = !!document.fullscreenElement;
+            const fullscreen = document.fullscreenElement === containerRef.current;
             setIsFullscreen(fullscreen);
             setMetricWorkbenchOpen(!fullscreen);
         };
@@ -2195,6 +2215,7 @@ export default function StructureViewerPane({
                 {overlayView === 'pae' && (
                     <div>
                         <div className="text-xs text-slate-400 mb-2">Predicted Aligned Error Matrix</div>
+                        {tokenPae && <p className="text-xs">Native model-token indices; structure mapping unavailable. {tokenPae.rowAxis.orientation} · {tokenPae.rowAxis.mapping_reason}</p>}
                         {paeMatrix ? (
                             <div className="flex flex-col items-center">
                                 {/* Canvas container with chain labels */}
@@ -2207,7 +2228,7 @@ export default function StructureViewerPane({
 
                                     {/* Chain boundary labels on X-axis (bottom) */}
                                     <div className="absolute -bottom-4 left-0 right-0 flex" style={{ height: '16px' }}>
-                                        {chainBoundaries.map((chain, idx) => {
+                                        {(tokenPae ? [] : chainBoundaries).map((chain, idx) => {
                                             const totalResidues = paeMatrix.length;
                                             const leftPct = (chain.start / totalResidues) * 100;
                                             const widthPct = ((chain.end - chain.start) / totalResidues) * 100;
@@ -2230,7 +2251,7 @@ export default function StructureViewerPane({
 
                                     {/* Chain boundary labels on Y-axis (left) */}
                                     <div className="absolute -left-3 top-0 bottom-0 flex flex-col" style={{ width: '12px' }}>
-                                        {chainBoundaries.map((chain, idx) => {
+                                        {(tokenPae ? [] : chainBoundaries).map((chain, idx) => {
                                             const totalResidues = paeMatrix.length;
                                             const topPct = (chain.start / totalResidues) * 100;
                                             const heightPct = ((chain.end - chain.start) / totalResidues) * 100;
@@ -2826,8 +2847,8 @@ export default function StructureViewerPane({
     // Shared toolbar for design/color selection
     const renderViewerToolbar = (isCompact = false) => (
         <div className={`flex items-center gap-2 ${isCompact ? 'flex-wrap' : 'mb-3 flex-wrap'}`}>
-            {/* Design Selector */}
-            <div className="relative">
+            {/* The companion owns sample selection; retain the picker in fullscreen. */}
+            {(!confidenceCompanion || isFullscreen) && <div className="relative min-w-0 max-w-full">
                 <select
                     value={selectedDesignId ?? ''}
                     onChange={(e) => setSelectedDesignId(e.target.value)}
@@ -2840,7 +2861,7 @@ export default function StructureViewerPane({
                     ))}
                 </select>
                 <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">▾</div>
-            </div>
+            </div>}
 
             {conforNetsNavigation && conforNetsConformerSet && conforNetsNavigation.totalCount > 1 && (
                 <div
@@ -2947,11 +2968,10 @@ export default function StructureViewerPane({
             </button>
             <button
                 onClick={toggleFullscreen}
-                className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${isCompact
-                    ? 'bg-red-500/80 hover:bg-red-500 text-white backdrop-blur-sm'
-                    : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+                aria-pressed={isFullscreen}
+                className="px-3 py-1.5 text-xs rounded-lg transition-colors border border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]"
             >
-                {isCompact ? '✕ Exit Fullscreen' : '⛶ Fullscreen'}
+                {isFullscreen ? '✕ Exit Fullscreen' : '⛶ Fullscreen'}
             </button>
         </div>
     );
@@ -2964,21 +2984,30 @@ export default function StructureViewerPane({
         return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '—';
     };
 
+    const metricStatus = (nativeMetrics || scientificPae || requiresBoundMetrics) && (nativeResidue.status !== 'ok' || nativeChains.status !== 'ok' || scientificPae?.status === 'unavailable') && (
+                            <div role="status" className={confidenceCompanion || isFullscreen ? "mt-2 rounded-lg border border-[var(--border-primary)] p-2 text-xs text-[var(--text-secondary)]" : "absolute bottom-2 left-2 right-2 bg-slate-950/90 p-2 text-xs text-amber-200"}>
+                                {scientificPae?.status === 'unavailable' ? `${scientificPae.reason}. ` : ''}Structure viewing remains available.
+                                {residueQuery.isPending ? ' Loading confidence…' : residueQuery.isError ? ' Confidence request failed.' : nativeResidue.status === 'unavailable' ? ` Confidence unavailable: ${nativeResidue.reason}` : ''}
+                                {!nativeMetrics ? '' : chainQuery.isPending ? ' Loading chain metrics…' : chainQuery.isError ? ' Chain metric request failed.' : nativeChains.status === 'unavailable' ? ` Chain metrics unavailable: ${nativeChains.reason}` : ''}
+                            </div>
+                        );
+
     return (
         <div
             ref={containerRef}
             data-structure-viewer-analytics-open={analyticsPanelOpen ? 'true' : 'false'}
-            className={`${isFullscreen ? 'fixed inset-0 z-50 bg-slate-950' : 'p-4'}`}
+            className={`prediction-viewer-pane ${isFullscreen ? 'prediction-viewer-fullscreen bg-slate-950' : confidenceCompanion ? 'min-w-0' : 'p-4'}`}
         >
             {/* Main layout container - always present */}
             <div
                 data-structure-viewer-layout={viewerLayout.isStacked ? 'stacked' : 'split'}
-                className={isFullscreen ? 'h-full w-full relative' : viewerLayout.isStacked ? 'flex flex-col gap-4' : 'flex gap-4'}
+                className={isFullscreen ? 'prediction-fullscreen-flow' : confidenceCompanion || viewerLayout.isStacked ? 'flex flex-col gap-4' : 'flex gap-4'}
             >
                 {/* Left Column / Fullscreen: Viewer Area */}
-                <div ref={viewerAreaRef} className={isFullscreen ? 'absolute inset-0' : viewerLayout.isStacked ? 'min-w-0' : 'flex-[2] min-w-0'}>
+                <div ref={viewerAreaRef} className={isFullscreen ? 'prediction-fullscreen-molecule' : viewerLayout.isStacked ? 'min-w-0' : 'flex-[2] min-w-0'}
+                    style={isFullscreen && viewportWidth < 700 ? {flex: '0 0 auto'} : undefined}>
                     {/* Toolbar - positioned differently based on mode */}
-                    <div className={isFullscreen ? 'absolute top-3 left-3 z-40' : ''}>
+                    <div className="prediction-viewer-toolbar">
                         {renderViewerToolbar(isFullscreen || viewerLayout.isStacked)}
                         {fampnnPsceProfile && <div className="text-[10px] text-slate-400">
                             {fampnnPsceProfile.policy
@@ -3029,10 +3058,12 @@ export default function StructureViewerPane({
                     {/* Main Viewer - ALWAYS at this exact tree position */}
                     <div
                         className={isFullscreen
-                            ? 'absolute inset-0'
-                            : 'relative rounded-lg overflow-hidden border border-slate-700'
+                            ? 'prediction-fullscreen-canvas relative'
+                            : 'relative rounded-lg border border-slate-700'
                         }
-                        style={isFullscreen ? undefined : { height: viewerLayout.viewerHeight }}
+                        style={isFullscreen
+                            ? viewportWidth < 700 ? {height: metricWorkbenchOpen ? '1320px' : '820px', flex: '0 0 auto'} : undefined
+                            : { height: confidenceCompanion ? (viewportWidth < 700 ? (metricWorkbenchOpen ? '1320px' : '820px') : 'clamp(560px, 72vh, 800px)') : viewerLayout.viewerHeight }}
                     >
                         {awaitingGovernedWorkbenchIdentity ? (
                             <div className="flex h-full items-center justify-center text-sm text-slate-400">Preparing governed structure resources…</div>
@@ -3047,6 +3078,9 @@ export default function StructureViewerPane({
                                 overlayStructures={viewerOverlayStructures}
                                 residueMetricLayer={residueMetricLayer}
                                 metricLayers={allMetricLayers}
+                                residueSelections={confidenceCompanion ? confidenceSelection : undefined}
+                                onMetricSelection={confidenceCompanion ? onConfidenceSelection : undefined}
+                                controlledResidueSelection={confidenceCompanion && confidenceSelection !== undefined}
                                 showComplexWorkbench={false}
                                 showM6Workbench={!shapeMetrics && metricWorkbenchOpen}
                                 showMeasurements={!shapeMetrics && metricWorkbenchOpen}
@@ -3055,7 +3089,7 @@ export default function StructureViewerPane({
                                 structureDocumentId={nativeDocument?.documentId ?? governedWorkbenchContext?.structureDocumentId}
                                 structureContentSha256={nativeDocument?.contentSha256}
                                 derivedComponents={derivedComponents}
-                                activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
+                                activeMetricId={overlayView === 'pae' ? 'pae' : nativeResidueLayer?.descriptor.id ?? residueMetricLayer?.descriptor.id}
                                 showMetricWorkbench={!shapeMetrics && metricWorkbenchOpen}
                                 metricDetails={selectedDesign && nativeChains.status === 'ok' ? (
                                     <details className="rounded border border-slate-700 bg-slate-900/95 p-2 text-xs">
@@ -3070,13 +3104,7 @@ export default function StructureViewerPane({
                             />
                         )}
 
-                        {(nativeMetrics || scientificPae || requiresBoundMetrics) && (nativeResidue.status !== 'ok' || nativeChains.status !== 'ok' || scientificPae?.status === 'unavailable') && (
-                            <div role="status" className="absolute bottom-2 left-2 right-2 bg-slate-950/90 p-2 text-xs text-amber-200">
-                                {scientificPae?.status === 'unavailable' ? `${scientificPae.reason}. ` : ''}Structure viewing remains available.
-                                {residueQuery.isPending ? ' Loading confidence…' : residueQuery.isError ? ' Confidence request failed.' : nativeResidue.status === 'unavailable' ? ` Confidence unavailable: ${nativeResidue.reason}` : ''}
-                                {!nativeMetrics ? '' : chainQuery.isPending ? ' Loading chain metrics…' : chainQuery.isError ? ' Chain metric request failed.' : nativeChains.status === 'unavailable' ? ` Chain metrics unavailable: ${nativeChains.reason}` : ''}
-                            </div>
-                        )}
+                        {!confidenceCompanion && !isFullscreen && metricStatus}
                         {showReferenceDock && (
                             <div
                                 className="absolute z-30 rounded-xl border border-slate-700/70 bg-slate-950/92 shadow-2xl backdrop-blur-sm overflow-hidden"
@@ -3155,8 +3183,15 @@ export default function StructureViewerPane({
                             </div>
                         )}
                     </div>
+                    {(confidenceCompanion || isFullscreen) && metricStatus}
                 </div>
 
+                {confidenceCharts && <section className={`prediction-companion ${isFullscreen ? 'prediction-companion-fullscreen' : ''}`} aria-label="Optional confidence charts">
+                    <button type="button" aria-expanded={companionOpen} onClick={() => setCompanionOpen(open => !open)} className="rounded border border-[var(--border-primary)] px-3 py-2 text-sm">
+                        {companionOpen ? 'Hide companion charts' : 'Show companion charts · PAE & pLDDT'}
+                    </button>
+                    {companionOpen && confidenceCharts}
+                </section>}
                 {/* Right Column: Analytics Sidebar - hidden in fullscreen */}
                 {LEGACY_ANALYTICS_ENABLED && !isFullscreen && analyticsPanelOpen && renderAnalyticsSidebar()}
             </div>

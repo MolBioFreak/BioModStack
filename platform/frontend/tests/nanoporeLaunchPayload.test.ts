@@ -16,6 +16,14 @@ test('NGS operator stage payload preserves independent Construct Screening assem
         runFastqQc: true,
         runAssembly: true,
     }), { run_fastq_qc: true, run_assembly: true });
+    assert.deepEqual(buildNanoporeOperatorStageParams({
+        selectedWorkflow: 'constructScreening', inputSource: 'fastq',
+        runFastqQc: true, runAssembly: false,
+    }), { run_fastq_qc: true, run_assembly: false });
+    assert.deepEqual(buildNanoporeOperatorStageParams({
+        selectedWorkflow: 'constructScreening', inputSource: 'fastq',
+        runFastqQc: false, runAssembly: true,
+    }), { run_fastq_qc: false, run_assembly: true });
 });
 
 test('NGS operator stage payload keeps workflow-owned rules explicit and omits inapplicable settings', () => {

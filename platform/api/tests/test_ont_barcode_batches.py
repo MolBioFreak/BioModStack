@@ -340,7 +340,7 @@ async def test_ten_child_atomic_success_preserves_bindings_and_aliases(batch_con
     assert len(manifests) == 1
     assert len(mappings) == 10
     assert len(children) == 10
-    assert all(child.parent_job_id == context.source_id for child in children)
+    assert all(child.parent_job_id is None for child in children)
     assert all(child.params["bam_force_realign"] is True for child in children)
     assert all(child.params["reference_fasta"].endswith("expected_reference.fasta") for child in children)
     assert all(child.params["reference_set_binding"]["manifest_sha256"] == result["manifest_sha256"] for child in children)
@@ -420,8 +420,11 @@ async def test_receipt_digest_failure_is_rejected_before_writes(batch_context, c
     context = batch_context
     receipt_path = context.inputs_root / "molbio_ngs_receipts" / "receipt-01" / "expected_reference.fasta"
     receipt_path.write_text(">tampered\nTTTT\n", encoding="ascii")
-    with pytest.raises(batches.BarcodeBatchError, match="digest"):
+    with pytest.raises(batches.BarcodeBatchError) as rejected:
         await _create(context, _request(context))
+    assert rejected.value.status_code == 409
+    assert rejected.value.code == "RECEIPT_INVALID"
+    assert canonical_job_spy[0] == []
     assert (await context.session.execute(select(NgsReferenceSetManifest))).scalars().all() == []
     receipts = (await context.session.execute(select(MolBioNgsReceipt))).scalars().all()
     assert all(receipt.consumed_at is None for receipt in receipts)

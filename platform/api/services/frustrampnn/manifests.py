@@ -175,7 +175,17 @@ def _lexical_path(path: Path | str) -> tuple[int, list[str]]:
     return os.open(anchor, os.O_RDONLY | os.O_DIRECTORY), parts
 
 
-def _open_root(root: Path | str) -> int:
+def _incoming_path(path: Path | str, input_root: Path | str) -> Path:
+    from .runtime import resolve_read_input, RuntimeValidationError
+    try:
+        return resolve_read_input(path, allowed_root=input_root, label="manifest input")
+    except RuntimeValidationError as exc:
+        raise ManifestValidationError(str(exc)) from exc
+
+
+def _open_root(root: Path | str, *, input_root: Path | str | None = None) -> int:
+    if input_root is not None:
+        root = _incoming_path(root, input_root)
     fd, parts = _lexical_path(root)
     try:
         for part in parts:
@@ -214,17 +224,25 @@ def _read_regular(
     relative: str,
     *,
     max_bytes: int | None = None,
+    immutable_input: bool = False,
+    input_root: Path | str | None = None,
 ) -> bytes:
     try:
         validate_relative_path(relative)
     except ContractValidationError as exc:
         raise ManifestValidationError(f"unsafe manifest path: {relative!r}") from exc
     owns_root = not isinstance(root, int)
-    root_fd = _open_root(root) if owns_root else root
+    root_fd = _open_root(root, input_root=input_root) if owns_root else root
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(relative, flags, dir_fd=root_fd)
-    except OSError as exc:
+        if input_root is not None:
+            physical_root = Path(os.readlink(f"/proc/self/fd/{root_fd}"))
+            physical = _incoming_path(physical_root / relative, input_root)
+            from .runtime import open_regular_no_follow
+            descriptor = open_regular_no_follow(physical, label="manifest artifact")
+        else:
+            descriptor = os.open(relative, flags, dir_fd=root_fd)
+    except (OSError, ValueError, RuntimeError) as exc:
         if owns_root:
             os.close(root_fd)
         raise ManifestValidationError(
@@ -241,7 +259,13 @@ def _read_regular(
             raise ManifestValidationError(
                 f"artifact size exceeds the {limit}-byte read limit: {relative}"
             )
-        generation_before = _file_generation(metadata)
+        # Link publication changes nlink/ctime without changing immutable
+        # input bytes. Mutable sources and destination rereads keep all stamps.
+        generation = _file_generation
+        if immutable_input and not metadata.st_mode & 0o222:
+            generation = lambda item: (item.st_dev, item.st_ino, item.st_mode,
+                                       item.st_size, item.st_mtime_ns)
+        generation_before = generation(metadata)
         with os.fdopen(descriptor, "rb", closefd=True) as handle:
             descriptor = -1
             payload = handle.read(limit + 1)
@@ -250,9 +274,13 @@ def _read_regular(
             raise ManifestValidationError(f"artifact grew beyond its read limit: {relative}")
         if (
             len(payload) != metadata.st_size
-            or _file_generation(metadata_after) != generation_before
+            or generation(metadata_after) != generation_before
         ):
             raise ManifestValidationError(f"artifact changed size or identity during read: {relative}")
+        if input_root is not None:
+            current = _incoming_path(Path(os.readlink(f"/proc/self/fd/{root_fd}")) / relative, input_root).stat()
+            if generation(current) != generation_before:
+                raise ManifestValidationError(f"artifact alias changed during read: {relative}")
         return payload
     finally:
         if descriptor >= 0:
@@ -328,9 +356,10 @@ def _enforce_actual_bundle_size(payloads: Mapping[str, bytes]) -> None:
 def _load_manifest_bytes(
     root: Path | str | int,
     manifest_name: str,
+    *, input_root: Path | str | None = None,
 ) -> tuple[dict[str, Any], bytes]:
     try:
-        payload = _read_regular(root, manifest_name, max_bytes=MAX_MANIFEST_BYTES)
+        payload = _read_regular(root, manifest_name, max_bytes=MAX_MANIFEST_BYTES, immutable_input=input_root is not None, input_root=input_root)
     except ManifestValidationError as exc:
         raise ManifestValidationError(f"manifest bounded read/size limit failed: {exc}") from exc
     try:
@@ -351,18 +380,25 @@ def _load_manifest_bytes(
     return manifest, payload
 
 
-def _scan_bundle_paths(root_fd: int) -> tuple[set[str], bool]:
+def _incoming_regular(entry, root_fd: int, input_root) -> bool:
+    if input_root is None:
+        return not entry.is_symlink() and entry.is_file(follow_symlinks=False)
+    physical = _incoming_path(Path(os.readlink(f"/proc/self/fd/{root_fd}")) / entry.name, input_root)
+    return physical.is_file()
+
+
+def _scan_bundle_paths(root_fd: int, input_root=None) -> tuple[set[str], bool]:
     observed: set[str] = set()
     saw_manifest = False
     for entry in os.scandir(root_fd):
         if entry.name == MANIFEST_PATH:
-            if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+            if not _incoming_regular(entry, root_fd, input_root):
                 raise ManifestValidationError("result manifest path must be regular")
             saw_manifest = True
             continue
-        if entry.is_symlink():
+        if input_root is None and entry.is_symlink():
             raise ManifestValidationError(f"bundle contains symlink: {entry.name}")
-        if not entry.is_file(follow_symlinks=False):
+        if not _incoming_regular(entry, root_fd, input_root):
             raise ManifestValidationError(f"bundle contains nonregular entry: {entry.name}")
         observed.add(entry.name)
     return observed, saw_manifest
@@ -374,13 +410,15 @@ def _snapshot_bundle(
     require_manifest: bool,
     expected: set[str] | tuple[set[str], ...],
     manifest: Mapping[str, Any] | None = None,
+    immutable_input: bool = False,
+    input_root: Path | str | None = None,
 ) -> dict[str, bytes]:
     """Read one exact bundle generation through one retained root descriptor."""
 
-    root_fd = _open_root(root)
+    root_fd = _open_root(root, input_root=input_root)
     try:
         generation_before = _root_generation(root_fd)
-        observed, saw_manifest = _scan_bundle_paths(root_fd)
+        observed, saw_manifest = (_scan_bundle_paths(root_fd) if input_root is None else _scan_bundle_paths(root_fd, input_root))
         if require_manifest and not saw_manifest:
             raise ManifestValidationError("physical result manifest is missing")
         if not require_manifest and saw_manifest:
@@ -400,7 +438,7 @@ def _snapshot_bundle(
         )
         payloads: dict[str, bytes] = {}
         if require_manifest:
-            physical, physical_bytes = _load_manifest_bytes(root_fd, MANIFEST_PATH)
+            physical, physical_bytes = _load_manifest_bytes(root_fd, MANIFEST_PATH, input_root=input_root)
             if manifest is None or physical != dict(manifest):
                 raise ManifestValidationError(
                     "physical result manifest is not exactly equal to supplied manifest"
@@ -418,10 +456,16 @@ def _snapshot_bundle(
                 root_fd,
                 relative,
                 max_bytes=limits[relative],
+                immutable_input=immutable_input, input_root=input_root,
             )
         _enforce_actual_bundle_size(payloads)
+        if input_root is not None:
+            current_root = _incoming_path(root, input_root).stat()
+            pinned_root = os.fstat(root_fd)
+            if (current_root.st_dev, current_root.st_ino) != (pinned_root.st_dev, pinned_root.st_ino):
+                raise ManifestValidationError("bundle input root alias changed during validation")
         generation_after = _root_generation(root_fd)
-        final_observed, final_saw_manifest = _scan_bundle_paths(root_fd)
+        final_observed, final_saw_manifest = (_scan_bundle_paths(root_fd) if input_root is None else _scan_bundle_paths(root_fd, input_root))
         generation_final = _root_generation(root_fd)
         if (
             generation_after != generation_before
@@ -1221,6 +1265,7 @@ def _validate_physical_semantics(pdb: bytes, raw: bytes, structure: Mapping[str,
 
 def _validate_result_manifest_v1(
     root: Path | str, manifest: Mapping[str, Any],
+    *, immutable_input: bool = False, input_root: Path | str | None = None,
 ) -> dict[str, bytes]:
     """Rehash and close every manifest field against no-follow filesystem reads."""
 
@@ -1236,6 +1281,7 @@ def _validate_result_manifest_v1(
     payloads = _snapshot_bundle(
         bundle,
         require_manifest=True,
+        immutable_input=immutable_input, input_root=input_root,
         expected=expected_options,
         manifest=manifest,
     )
@@ -1283,21 +1329,23 @@ def _snapshot_v2(
     *,
     require_manifest: bool,
     manifest: Mapping[str, Any] | None = None,
+    immutable_input: bool = False,
+    input_root: Path | str | None = None,
 ) -> dict[str, bytes]:
-    root_fd = _open_root(root)
+    root_fd = _open_root(root, input_root=input_root)
     try:
         generation_before = _root_generation(root_fd)
         observed: set[str] = set()
         saw_manifest = False
         for entry in os.scandir(root_fd):
             if entry.name == V2_MANIFEST_PATH:
-                if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                if not _incoming_regular(entry, root_fd, input_root):
                     raise ManifestValidationError("v2 result manifest path must be regular")
                 saw_manifest = True
                 continue
-            if entry.is_symlink():
+            if input_root is None and entry.is_symlink():
                 raise ManifestValidationError(f"bundle contains symlink: {entry.name}")
-            if not entry.is_file(follow_symlinks=False):
+            if not _incoming_regular(entry, root_fd, input_root):
                 raise ManifestValidationError(f"bundle contains nonregular entry: {entry.name}")
             observed.add(entry.name)
         path_options = (
@@ -1317,7 +1365,7 @@ def _snapshot_v2(
         manifest_artifact_paths = paths[:-1] if require_manifest else paths
         payloads: dict[str, bytes] = {}
         if require_manifest:
-            physical, physical_bytes = _load_manifest_bytes(root_fd, V2_MANIFEST_PATH)
+            physical, physical_bytes = _load_manifest_bytes(root_fd, V2_MANIFEST_PATH, input_root=input_root)
             if manifest is None or physical != dict(manifest):
                 raise ManifestValidationError(
                     "physical v2 result manifest is not exact canonical supplied bytes"
@@ -1338,8 +1386,14 @@ def _snapshot_v2(
                 root_fd,
                 relative,
                 max_bytes=limits[relative],
+                immutable_input=immutable_input, input_root=input_root,
             )
         _enforce_actual_bundle_size(payloads)
+        if input_root is not None:
+            current_root = _incoming_path(root, input_root).stat()
+            pinned_root = os.fstat(root_fd)
+            if (current_root.st_dev, current_root.st_ino) != (pinned_root.st_dev, pinned_root.st_ino):
+                raise ManifestValidationError("bundle input root alias changed during validation")
         generation_after = _root_generation(root_fd)
         final_names = {entry.name for entry in os.scandir(root_fd)}
         expected_names = set(paths) | ({V2_MANIFEST_PATH} if require_manifest else set())
@@ -1357,21 +1411,23 @@ def _snapshot_v3(
     *,
     require_manifest: bool,
     manifest: Mapping[str, Any] | None = None,
+    immutable_input: bool = False,
+    input_root: Path | str | None = None,
 ) -> dict[str, bytes]:
-    root_fd = _open_root(root)
+    root_fd = _open_root(root, input_root=input_root)
     try:
         generation_before = _root_generation(root_fd)
         observed: set[str] = set()
         saw_manifest = False
         for entry in os.scandir(root_fd):
             if entry.name == V3_MANIFEST_PATH:
-                if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                if not _incoming_regular(entry, root_fd, input_root):
                     raise ManifestValidationError("v3 result manifest path must be regular")
                 saw_manifest = True
                 continue
-            if entry.is_symlink():
+            if input_root is None and entry.is_symlink():
                 raise ManifestValidationError(f"bundle contains symlink: {entry.name}")
-            if not entry.is_file(follow_symlinks=False):
+            if not _incoming_regular(entry, root_fd, input_root):
                 raise ManifestValidationError(f"bundle contains nonregular entry: {entry.name}")
             observed.add(entry.name)
         path_options = (
@@ -1391,7 +1447,7 @@ def _snapshot_v3(
         manifest_artifact_paths = paths[:-1] if require_manifest else paths
         payloads: dict[str, bytes] = {}
         if require_manifest:
-            physical, physical_bytes = _load_manifest_bytes(root_fd, V3_MANIFEST_PATH)
+            physical, physical_bytes = _load_manifest_bytes(root_fd, V3_MANIFEST_PATH, input_root=input_root)
             if manifest is None or physical != dict(manifest):
                 raise ManifestValidationError(
                     "physical v3 result manifest is not exact canonical supplied bytes"
@@ -1412,8 +1468,14 @@ def _snapshot_v3(
                 root_fd,
                 relative,
                 max_bytes=limits[relative],
+                immutable_input=immutable_input, input_root=input_root,
             )
         _enforce_actual_bundle_size(payloads)
+        if input_root is not None:
+            current_root = _incoming_path(root, input_root).stat()
+            pinned_root = os.fstat(root_fd)
+            if (current_root.st_dev, current_root.st_ino) != (pinned_root.st_dev, pinned_root.st_ino):
+                raise ManifestValidationError("bundle input root alias changed during validation")
         generation_after = _root_generation(root_fd)
         final_names = {entry.name for entry in os.scandir(root_fd)}
         expected_names = set(paths) | ({V3_MANIFEST_PATH} if require_manifest else set())
@@ -2418,12 +2480,14 @@ def _validate_result_manifest_v2(
     manifest: Mapping[str, Any],
     *,
     allow_legacy_external_authority: bool = False,
+    immutable_input: bool = False,
+    input_root: Path | str | None = None,
 ) -> dict[str, bytes]:
     try:
         validate_schema("frustrampnn_result_manifest_v2", manifest)
     except Exception as exc:
         raise ManifestValidationError(f"v2 manifest schema failed: {exc}") from exc
-    payloads = _snapshot_v2(root, require_manifest=True, manifest=manifest)
+    payloads = _snapshot_v2(root, require_manifest=True, manifest=manifest, immutable_input=immutable_input, input_root=input_root)
     physical = _json_identity(payloads[V2_MANIFEST_PATH], V2_MANIFEST_PATH)[2]
     if physical != dict(manifest) or payloads[V2_MANIFEST_PATH] != canonical_json_bytes(physical):
         raise ManifestValidationError("physical v2 result manifest is not exact canonical supplied bytes")
@@ -2521,12 +2585,14 @@ def _validate_result_manifest_v3(
     manifest: Mapping[str, Any],
     *,
     allow_legacy_external_authority: bool = False,
+    immutable_input: bool = False,
+    input_root: Path | str | None = None,
 ) -> dict[str, bytes]:
     try:
         validate_schema("frustrampnn_result_manifest_v3", manifest)
     except Exception as exc:
         raise ManifestValidationError(f"v3 manifest schema failed: {exc}") from exc
-    payloads = _snapshot_v3(root, require_manifest=True, manifest=manifest)
+    payloads = _snapshot_v3(root, require_manifest=True, manifest=manifest, immutable_input=immutable_input, input_root=input_root)
     physical = _json_identity(payloads[V3_MANIFEST_PATH], V3_MANIFEST_PATH)[2]
     if physical != dict(manifest) or payloads[V3_MANIFEST_PATH] != canonical_json_bytes(physical):
         raise ManifestValidationError("physical v3 result manifest is not exact canonical supplied bytes")
@@ -2576,23 +2642,29 @@ def validate_result_manifest(
     manifest: Mapping[str, Any],
     *,
     allow_legacy_v2_external_authority: bool = False,
+    immutable_input: bool = True,
+    input_root: Path | str | None = None,
 ) -> dict[str, bytes]:
+    # Publication/destination rereads always retain the no-alias boundary.
+    if not immutable_input:
+        input_root = None
     version = manifest.get("schema_version") if isinstance(manifest, Mapping) else None
     if version == 3:
-        return _validate_result_manifest_v3(root, manifest)
+        return _validate_result_manifest_v3(root, manifest, immutable_input=immutable_input, input_root=input_root)
     if version == 2:
         return _validate_result_manifest_v2(
             root,
             manifest,
+            immutable_input=immutable_input, input_root=input_root,
             allow_legacy_external_authority=allow_legacy_v2_external_authority,
         )
     if version == 1:
-        return _validate_result_manifest_v1(root, manifest)
+        return _validate_result_manifest_v1(root, manifest, immutable_input=immutable_input, input_root=input_root)
     raise ManifestValidationError("result manifest schema generation is unsupported")
 
 
-def result_manifest_path(root: Path | str) -> str:
-    root_fd = _open_root(root)
+def result_manifest_path(root: Path | str, *, input_root: Path | str | None = None) -> str:
+    root_fd = _open_root(root, input_root=input_root)
     try:
         names = {entry.name for entry in os.scandir(root_fd)}
     finally:
@@ -2606,15 +2678,16 @@ def result_manifest_path(root: Path | str) -> str:
     return present[0]
 
 
-def load_result_manifest(root: Path | str) -> dict[str, Any]:
+def load_result_manifest(root: Path | str, *, input_root: Path | str | None = None) -> dict[str, Any]:
     """Load one canonical recognized manifest through the bounded no-follow reader."""
 
-    _, _, manifest = load_result_manifest_bytes_and_document(root)
+    _, _, manifest = load_result_manifest_bytes_and_document(root, input_root=input_root)
     return manifest
 
 
 def load_result_manifest_bytes_and_document(
     root: Path | str,
+    *, input_root: Path | str | None = None,
 ) -> tuple[str, bytes, dict[str, Any]]:
     """Return one recognized manifest's name, exact bytes, and document.
 
@@ -2625,8 +2698,8 @@ def load_result_manifest_bytes_and_document(
     generation and requires exact physical equality.
     """
 
-    manifest_name = result_manifest_path(root)
-    manifest, payload = _load_manifest_bytes(root, manifest_name)
+    manifest_name = result_manifest_path(root, input_root=input_root)
+    manifest, payload = _load_manifest_bytes(root, manifest_name, input_root=input_root)
     return manifest_name, payload, manifest
 
 

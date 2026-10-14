@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
     createViewerSnapshot,
@@ -18,6 +18,7 @@ import {
     type ViewerSnapshotBindingV2,
     type ViewerSnapshotV2,
 } from '../../contracts/m6Reproducibility';
+import { measurementResultRows } from '../../contracts/measurements';
 import type { SpatialVolumeDescriptorV1, VolumePresentationStateV1 } from '../../contracts/spatialVolumes';
 import type { StructureSceneController } from '../../runtime/StructureSceneController';
 import { supportsGovernedWebMExport, type AuthoritativeFrameStepper } from '../../runtime/browserMovieExport';
@@ -62,6 +63,8 @@ const defaultPresentation = (volume: SpatialVolumeDescriptorV1): VolumePresentat
 });
 
 export function M6WorkbenchPanel({ controller, jobId, tableRows = [], movieFrameStepper }: M6WorkbenchPanelProps) {
+    const currentJob = useRef(jobId);
+    currentJob.current = jobId;
     const [inventory, setInventory] = useState<ViewerVolumeInventoryV1 | null>(null);
     const [snapshots, setSnapshots] = useState<readonly ViewerSnapshotRecordV2[]>([]);
     const [presentations, setPresentations] = useState<Readonly<Record<string, VolumePresentationStateV1>>>({});
@@ -72,12 +75,16 @@ export function M6WorkbenchPanel({ controller, jobId, tableRows = [], movieFrame
     const refreshSnapshots = useCallback(async () => {
         if (!jobId) return;
         const response = await fetchViewerSnapshots(jobId);
-        setSnapshots(response.data.snapshots);
+        if (currentJob.current === jobId) setSnapshots(response.data.snapshots);
     }, [jobId]);
 
     useEffect(() => {
         let active = true;
         setInventory(null);
+        setSnapshots([]);
+        setPresentations({});
+        setBusy(null);
+        setMessage('Native Mol* exports and state tools are independent of these BMS snapshots and tables.');
         if (!jobId) return undefined;
         void Promise.allSettled([fetchViewerVolumes(jobId), fetchViewerSnapshots(jobId)]).then(([volumeResult, snapshotResult]) => {
             if (!active) return;
@@ -145,6 +152,7 @@ export function M6WorkbenchPanel({ controller, jobId, tableRows = [], movieFrame
     const restoreSnapshot = (record: ViewerSnapshotRecordV2) => void execute(`snapshot:${record.snapshotId}`, async () => {
         if (!controller || !jobId) throw new Error('Viewer controller and job context are required');
         const response = await fetchViewerSnapshot(jobId, record.snapshotId);
+        if (currentJob.current !== jobId) return;
         const snapshot = response.data.snapshot;
         if (!snapshot) throw new Error('Snapshot payload is absent');
         const documentBindings = await bindDocuments();
@@ -157,13 +165,21 @@ export function M6WorkbenchPanel({ controller, jobId, tableRows = [], movieFrame
         const registrationBindings: ViewerSnapshotBindingV2[] = (inventory?.registrations ?? []).map((value) => ({
             kind: 'analysis', resourceId: value.registrationId, sha256: value.artifactSha256, required: true,
         }));
+        if (currentJob.current !== jobId) return;
         const restored = await controller.restoreSnapshotV2(snapshot, [...documentBindings, ...volumeBindings, ...segmentationBindings, ...registrationBindings], {
             volumes: inventory?.volumes ?? [], segmentations: inventory?.segmentations ?? [], registrations: inventory?.registrations ?? [],
         });
         if (restored.status !== 'ok') throw new Error(messageFor(restored));
+        if (currentJob.current !== jobId) return;
         setPresentations(Object.fromEntries(snapshot.volumeStates.map((state) => [state.volumeId, state])));
         setMessage(`Restored snapshot ${record.snapshotId}`);
     });
+
+    const exportMeasurements = (format: 'csv' | 'json') => {
+        const rows = measurementResultRows(controller?.getMeasurementResults() ?? []);
+        const content = format === 'json' ? JSON.stringify(rows, null, 2) : rowsToCsv(rows, ['kind', 'measurementId', 'type', 'label', 'points', 'status', 'value', 'units', 'reason', 'provenanceRef']);
+        download(new Blob([content], { type: format === 'json' ? 'application/json' : 'text/csv' }), `bms-exact-measurements.${format}`);
+    };
 
     const exportArtifact = (kind: ExportKindV1) => void execute(`export:${kind}`, async () => {
         if (!controller || !jobId) throw new Error('A ready job-owned viewer is required for governed export');
@@ -280,10 +296,15 @@ export function M6WorkbenchPanel({ controller, jobId, tableRows = [], movieFrame
             {snapshots.length > 0 && <div className="max-h-24 space-y-1 overflow-auto">{snapshots.map((snapshot) => <button key={snapshot.snapshotId} onClick={() => restoreSnapshot(snapshot)} disabled={Boolean(busy)} className="block w-full rounded bg-slate-800 px-2 py-1 text-left disabled:opacity-40">Restore {snapshot.label} · {snapshot.snapshotSha256.slice(0, 10)}</button>)}</div>}
             <div className="flex flex-wrap gap-1">
                 <button onClick={() => exportArtifact('figure_png')} disabled={!controller || !jobId || Boolean(busy)} className="rounded bg-emerald-700 px-2 py-1">PNG</button>
-                <button onClick={() => exportArtifact('table_csv')} disabled={!controller || !jobId || !tableRows.length || Boolean(busy)} className="rounded bg-emerald-700 px-2 py-1">CSV</button>
-                <button onClick={() => exportArtifact('table_json')} disabled={!controller || !jobId || !tableRows.length || Boolean(busy)} className="rounded bg-emerald-700 px-2 py-1">JSON</button>
+                <button onClick={() => exportArtifact('table_csv')} disabled={!controller || !jobId || !tableRows.length || Boolean(busy)} className="rounded bg-emerald-700 px-2 py-1">Metrics + measurements CSV</button>
+                <button onClick={() => exportArtifact('table_json')} disabled={!controller || !jobId || !tableRows.length || Boolean(busy)} className="rounded bg-emerald-700 px-2 py-1">Metrics + measurements JSON</button>
                 <button onClick={() => exportArtifact('selection_mmcif')} disabled={!controller || !jobId || Boolean(busy)} className="rounded bg-emerald-700 px-2 py-1">Selected mmCIF</button>
                 <button onClick={() => exportArtifact('snapshot_json')} disabled={!controller || !jobId || Boolean(busy)} className="rounded bg-emerald-700 px-2 py-1">Snapshot JSON</button>
+            </div>
+            <p className="text-slate-400">BMS snapshots restore supported camera, representation styles and inspection drafts. Stock Mol* state, Measurements and exports are separate tools; native-authored measurements are not imported into this report.</p>
+            <div className="flex flex-wrap gap-1">
+                <button type="button" onClick={() => exportMeasurements('csv')} disabled={!controller} className="rounded bg-emerald-700 px-2 py-1">Measurement results CSV</button>
+                <button type="button" onClick={() => exportMeasurements('json')} disabled={!controller} className="rounded bg-emerald-700 px-2 py-1">Measurement results JSON</button>
             </div>
             {volumeRows.length > 0 ? <div className="space-y-1">{volumeRows.map((volume) => <div key={volume.volumeId} className="rounded border border-slate-800 px-2 py-1 text-[11px]"><div>{volume.semanticKind} · {volume.dimensions.join('×')} · {volume.valueUnits ?? 'units unspecified'} · {volume.artifactSha256.slice(0, 10)}</div>{volume.semanticKind !== 'segmentation' ? <div className="mt-1 flex gap-1"><button onClick={() => loadVolume(volume)} disabled={Boolean(busy)} className="rounded bg-cyan-800 px-2 py-0.5">Load</button><button onClick={() => setRepresentation(volume, 'isosurface')} disabled={Boolean(busy)} className="rounded bg-slate-700 px-2 py-0.5">Isosurface</button><button onClick={() => setRepresentation(volume, 'slice')} disabled={Boolean(busy)} className="rounded bg-slate-700 px-2 py-0.5">Z slice</button><button onClick={() => void execute(`remove:${volume.volumeId}`, async () => { const result = await controller!.removeVolume(volume.volumeId); if (result.status !== 'ok') throw new Error(messageFor(result)); setPresentations((state) => Object.fromEntries(Object.entries(state).filter(([id]) => id !== volume.volumeId))); })} disabled={!presentations[volume.volumeId] || Boolean(busy)} className="rounded bg-red-900 px-2 py-0.5">Remove</button></div> : <div className="mt-1 flex items-center gap-1"><button onClick={() => loadVolume(volume)} disabled={Boolean(busy)} className="rounded bg-cyan-800 px-2 py-0.5">Load supplied segments</button><button onClick={() => void execute(`remove:${volume.volumeId}`, async () => { const result = await controller!.removeVolume(volume.volumeId); if (result.status !== 'ok') throw new Error(messageFor(result)); setPresentations((state) => Object.fromEntries(Object.entries(state).filter(([id]) => id !== volume.volumeId))); })} disabled={!presentations[volume.volumeId] || Boolean(busy)} className="rounded bg-red-900 px-2 py-0.5">Remove</button><span className="text-amber-300">Exact integer voxel labels only; no browser-derived segmentation.</span></div>}</div>)}</div> : <div className="text-[11px] text-slate-500">No supplied CCP4/MRC volume manifest for this job.</div>}
             {(inventory?.segmentations.length ?? 0) > 0 && <details><summary>Supplied segment labels</summary>{inventory!.segmentations.map((segmentation) => <div key={segmentation.segmentationId} className="mt-1 rounded border border-slate-800 p-1"><div>{segmentation.segmentationId} · {segmentation.artifactSha256.slice(0, 10)}</div>{segmentation.labels.map((entry) => <div key={entry.segmentId} className="pl-2">#{entry.segmentId} {entry.label ?? 'unknown'}{entry.parentSegmentId === null ? '' : ` · parent ${entry.parentSegmentId}`}</div>)}</div>)}</details>}

@@ -252,7 +252,7 @@ def _prepare_system(
 def _consume_preparation_bundle(
     config: Mapping[str, Any], bundle: Path, output_dir: Path, ledger: StageLedger,
 ) -> tuple[Path, Path, list[Path]]:
-    from .chemistry.prepare import verify_preparation_bundle
+    from .chemistry.prepare import retain_prepared_file, verify_preparation_bundle
 
     chemistry = config.get("chemistry") or {}
     manifest = verify_preparation_bundle(
@@ -275,10 +275,10 @@ def _consume_preparation_bundle(
     required = [coordinates, topology, *position_restraints]
     if not ledger.is_complete("preparation", required):
         ledger.mark_running("preparation", ["consume-immutable-bundle", manifest["bundle_sha256"]])
-        shutil.copy2(Path(bundle) / "system.gro", coordinates)
-        shutil.copy2(Path(bundle) / "system.top", topology)
+        retain_prepared_file(Path(bundle) / "system.gro", coordinates)
+        retain_prepared_file(Path(bundle) / "system.top", topology)
         for source_name, destination_path in zip(restraint_names, position_restraints, strict=True):
-            shutil.copy2(Path(bundle) / source_name, destination_path)
+            retain_prepared_file(Path(bundle) / source_name, destination_path)
         ledger.mark_completed(
             "preparation", required,
             performance={"bundle_sha256": manifest["bundle_sha256"]},
@@ -465,13 +465,19 @@ def run_gromacs_job(
     config_path = Path(config_path).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    config = dict(_prepared_config) if _prepared_config is not None else prepare_verified_worker_inputs(
+        config_path, output_dir / ".worker_inputs",
+    )
+    native = config.get("schema") == "bms.md.job.v3"
+    native_names = [stage["name"] for stage in config["stages"]] if native else []
+    final_stage = native_names[-1] if native_names else "production"
     if resume_checkpoint is not None:
         resume_checkpoint = Path(resume_checkpoint).expanduser().resolve(strict=True)
         try:
             resume_relative = resume_checkpoint.relative_to(output_dir)
         except ValueError as exc:
             raise ValueError("resume checkpoint must belong to the resumed replica output") from exc
-        allowed_stages = {"minimization", "nvt", "npt", "production"}
+        allowed_stages = set(native_names or ["production"]) if native else {"minimization", "nvt", "npt", "production"}
         canonical_stage_checkpoint = (
             len(resume_relative.parts) == 2
             and resume_relative.parts[0] in allowed_stages
@@ -492,17 +498,13 @@ def run_gromacs_job(
             )
         if immutable_snapshot:
             assert snapshot_bytes is not None
-            canonical_resume = output_dir / "production" / "production.cpt"
+            canonical_resume = output_dir / final_stage / f"{final_stage}.cpt"
             canonical_resume.parent.mkdir(parents=True, exist_ok=True)
             previous_mode = canonical_resume.stat().st_mode & 0o777 if canonical_resume.exists() else 0o664
             temporary_resume = canonical_resume.with_suffix(".cpt.resume.tmp")
             temporary_resume.write_bytes(snapshot_bytes)
             os.chmod(temporary_resume, previous_mode)
             os.replace(temporary_resume, canonical_resume)
-    config = dict(_prepared_config) if _prepared_config is not None else prepare_verified_worker_inputs(
-        config_path,
-        output_dir / ".worker_inputs",
-    )
     if config["engine"] != "gromacs":
         raise ValueError("run_gromacs_job requires engine=gromacs")
     if replica_index < 0 or replica_index >= config["replicas"]:
@@ -518,10 +520,18 @@ def run_gromacs_job(
     _atomic_json(normalized_config, config)
     ledger = StageLedger(output_dir / "stage_state.json")
 
+    if native:
+        from .native_pipeline import run_native_stages
+        return run_native_stages(
+            config, config_path=config_path, output_dir=output_dir,
+            replica_index=replica_index, gmx_binary=gmx_binary,
+            version_output=version_output, preparation_bundle=preparation_bundle, ledger=ledger,
+        )
+    prepared_inputs: list[Path] = []
     if config.get("schema") == "bms.md.job.v2":
         if preparation_bundle is None:
             raise ValueError("bms.md.job.v2 requires an immutable preparation bundle")
-        coordinates, topology, _ = _consume_preparation_bundle(
+        coordinates, topology, prepared_inputs = _consume_preparation_bundle(
             config, preparation_bundle, output_dir, ledger,
         )
     else:
@@ -604,6 +614,7 @@ def run_gromacs_job(
         engine_version=_version_summary(version_output),
         platform="CUDA" if config["execution"]["gpu_offload"] != "none" else "CPU",
         artifacts={
+            **{f"preparation_{index}": path for index, path in enumerate(prepared_inputs)},
             "normalized_config": normalized_config,
             "topology": topology,
             "coordinates": coordinates,

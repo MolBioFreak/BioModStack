@@ -1938,7 +1938,18 @@ async def build_project_manager_read_model(
     )
     if len(setup_rows) > MAX_TREE_NODES:
         raise ValidationFailure("Project workflow setup task list exceeds the supported bound")
-    workflow_heads_by_id = {head.aggregate_id: head for head in workflows}
+    task_workflows = list(
+        (
+            await session.scalars(
+                select(ExperimentAggregateHead).where(
+                    ExperimentAggregateHead.workspace_id == project_id,
+                    ExperimentAggregateHead.aggregate_kind == "workflow",
+                    ExperimentAggregateHead.aggregate_id.in_([setup.workflow_id for setup in setup_rows]),
+                )
+            )
+        ).all()
+    )
+    workflow_heads_by_id = {head.aggregate_id: head for head in task_workflows}
     latest_run_by_workflow: dict[str, dict[str, Any]] = {}
     for run_item in run_items:
         latest_run_by_workflow.setdefault(str(run_item["workflow_id"]), run_item)

@@ -1,5 +1,9 @@
 /* Shared viewer layout: the workbench never sits on top of the molecular scene. */
 .bms-structure-workspace { container-type: inline-size; }
+/* Native expansion must own hit-testing above sibling charts, not just grow. */
+.bms-structure-workspace:has(.msp-layout-expanded),
+[data-bms-molstar-adapter]:has(.msp-layout-expanded),
+[data-bms-molstar-adapter] .msp-layout-expanded { z-index: 1000; }
 .bms-structure-workspace-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

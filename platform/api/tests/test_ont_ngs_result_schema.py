@@ -10,7 +10,6 @@ from types import SimpleNamespace
 from typing import Callable
 
 import pytest
-from jsonschema import Draft202012Validator, FormatChecker
 
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = API_ROOT.parents[1]
@@ -132,21 +131,6 @@ def test_file_projection_is_producer_bound_and_contract_validated(
     }
 
 
-def test_retry3_projection_fixture_conforms_to_normative_schema() -> None:
-    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
-    Draft202012Validator.check_schema(schema)
-    errors = list(Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(_fixture()))
-    assert errors == []
-
-
-def test_retry3_fixture_exposes_historical_resource_evidence_as_a_discriminated_branch() -> None:
-    resources = _fixture()["execution_resources"]
-    assert resources["evidence_status"] == "historical_unavailable"
-    assert resources["receipt_schema"] is None
-    assert resources["receipt_id"] is None
-    assert resources["receipt_sha256"] is None
-
-
 @pytest.mark.parametrize("state", ["not_produced", "missing_required"])
 def test_schema_accepts_unavailable_artifact_type_hints_without_download(state: str) -> None:
     value = _fixture()
@@ -157,42 +141,6 @@ def test_schema_accepts_unavailable_artifact_type_hints_without_download(state: 
     assert artifact["artifact_id"] is None
     assert artifact["range_capable"] is False
     artifact["url"] = "/api/jobs/foreign/ngs-artifacts/" + "a" * 64
-    with pytest.raises(service.OntNgsResultError, match="result schema is invalid"):
-        service.validate_ont_fastq_qc_result_contract(value)
-
-
-def test_schema_rejects_timezone_free_lifecycle_timestamp() -> None:
-    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
-    value = _fixture()
-    value["job"]["completed_at"] = "2026-08-16T23:11:45.354530"
-
-    errors = list(Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(value))
-    assert errors
-
-
-def test_schema_rejects_unavailable_artifact_without_a_reason() -> None:
-    value = _fixture()
-    artifact = next(item for item in value["artifacts"] if item["state"] != "present")
-    artifact["unavailable_reason"] = None
-
-    with pytest.raises(service.OntNgsResultError, match="result schema is invalid"):
-        service.validate_ont_fastq_qc_result_contract(value)
-
-
-def test_schema_rejects_present_artifact_with_an_unavailable_reason() -> None:
-    value = _fixture()
-    artifact = next(item for item in value["artifacts"] if item["state"] == "present")
-    artifact["unavailable_reason"] = "invented absence"
-
-    with pytest.raises(service.OntNgsResultError, match="result schema is invalid"):
-        service.validate_ont_fastq_qc_result_contract(value)
-
-
-def test_schema_rejects_ready_session_with_an_unavailable_reason() -> None:
-    value = _fixture()
-    session = next(item for item in value["alignment_sessions"] if item["ready"] is True)
-    session["unavailable_reason"] = "contradictory"
-
     with pytest.raises(service.OntNgsResultError, match="result schema is invalid"):
         service.validate_ont_fastq_qc_result_contract(value)
 

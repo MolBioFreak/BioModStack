@@ -11,8 +11,8 @@ from sqlalchemy import select, update
 
 from database import Job, JobArtifact, MdAttemptSegment, MdReplicaRun, MdRun
 from services.md.results import (
-    MDJobRecord, MDResultError, _load_inventory, _open_verified_descriptor,
-    apply_completion_barrier, completion_barrier, result_record,
+    MDJobRecord, MDResultError, _load_inventory, _open_verified_descriptor, _analysis_inventory, _load_json,
+    apply_completion_barrier, completion_barrier, result_record, optional_analysis,
 )
 
 
@@ -49,8 +49,20 @@ def _read_frame_endpoints(root, inventory):
 
 def _prepare_completion(job):
     digests = {}
-    inventory = _load_inventory(job, _digests=digests)
+    inventory = _load_inventory(job, include_analysis=not optional_analysis((job.params or {}).get("md_job_spec")), _digests=digests)
     snapshot = completion_barrier(job, _inventory=inventory, _digests=digests)
+    if optional_analysis((job.params or {}).get("md_job_spec")):
+        try:
+            analyses = _analysis_inventory(inventory[0], inventory[1], job, _digests=digests)
+            for artifact in analyses:
+                if artifact.bytes <= 0:
+                    raise MDResultError('MD_ANALYSIS_ARTIFACT_MANIFEST_INVALID', 'MD analysis artifact is empty', 409)
+                _artifact, handle = _open_verified_descriptor(inventory[0], artifact)
+                handle.close()
+            inventory[2].extend(analyses)
+        except MDResultError as exc:
+            snapshot['analysis_state'] = 'failed'
+            snapshot['analysis_error'] = {'code': exc.code, 'message': str(exc)}
     return snapshot, inventory, _read_frame_endpoints(inventory[0], inventory[2])
 
 
@@ -100,7 +112,20 @@ async def _ingest_durable_artifacts(job: MDJobRecord, session: Any, *, _inventor
     existing = {(row.owner_job_id, row.attempt, row.logical_path): row for row in existing_rows}
     frame_endpoints = (_frame_endpoints if _frame_endpoints is not None
         else await _joined_thread(_read_frame_endpoints, root, inventory))
-    for replica_index, endpoint in frame_endpoints.items():
+    native = job.params["md_job_spec"].get("schema") == "bms.md.job.v3"
+    if native:
+        # Native checkpoint observations, not authored durations or saved frames,
+        # describe actual endpoints (including compiled TPR and nonzero tinit).
+        for index, replica in replicas_by_index.items():
+            manifest = await _joined_thread(_load_json, root / "replicas" / f"replica_{index}" / "manifest.json", "MD_REPLICA_MANIFEST_INVALID")
+            endpoint = manifest.get("native_endpoints", {}).get(manifest.get("final_stage"), {})
+            segment = latest_segment.get(replica.id)
+            if segment is not None:
+                if type(endpoint.get("step")) is int:
+                    segment.end_step = endpoint["step"]
+                if isinstance(endpoint.get("time_ps"), (int, float)):
+                    segment.end_time_ps = endpoint["time_ps"]
+    for replica_index, endpoint in (() if native else frame_endpoints.items()):
         replica = replicas_by_index.get(replica_index)
         segment = latest_segment.get(replica.id) if replica is not None else None
         if segment is None:
@@ -239,6 +264,20 @@ async def validate_and_finalize_md_job(job: Job, session: Any) -> dict[str, Any]
                         or control.get('state') != 'completed'
                         or not (control.get('result') or {}).get('references')):
                     raise MDResultError('MD_COMPLETION_CONFLICT', 'Native completion lacks validated component evidence', 409)
+    if optional_analysis((job.params or {}).get("md_job_spec")):
+        latest_analysis = {}
+        children = (await session.scalars(select(Job).where(
+            Job.parent_job_id == job.id, Job.child_stage == 'md_analysis',
+        ).order_by(Job.created_at.desc(), Job.id.desc()))).all()
+        for child in children:
+            index = (child.params or {}).get('md_replica_index')
+            if type(index) is int:
+                latest_analysis.setdefault(index, child)
+        failures = [child for child in latest_analysis.values() if child.status in {'failed', 'cancelled'}]
+        if failures:
+            snapshot['analysis_state'] = 'partial' if any(child.status == 'completed' for child in latest_analysis.values()) else 'failed'
+            snapshot['analysis_error'] = {'code': 'MD_ANALYSIS_EXECUTION_FAILED',
+                'message': '; '.join(child.error_message or f'{child.id}: {child.status}' for child in failures)}
     # Close the exact accepted replicas and their latest segments now, not on a
     # later background reconciliation. Historical failed attempts stay untouched.
     replicas = list((await session.scalars(select(MdReplicaRun).where(

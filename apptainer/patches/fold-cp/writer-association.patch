@@ -1,0 +1,65 @@
+--- a/src/boltz/data/write/writer.py
++++ b/src/boltz/data/write/writer.py
+@@ -132,6 +132,7 @@
+                 idx_to_rank = {i: i for i in range(record_coords.shape[0])}
+ 
+             for model_idx in range(record_coords.shape[0]):
++                sample_idx = start_idx + model_idx
+                 # Get model coord
+                 model_coord = record_coords[model_idx]
+                 # Unpad
+@@ -188,7 +189,7 @@
+                 # Get plddt's
+                 plddts = None
+                 if "plddt" in prediction:
+-                    plddts = prediction["plddt"][model_idx]
++                    plddts = prediction["plddt"][sample_idx]
+ 
+                 # Create path name
+                 outname = f"{record.id}_model_{idx_to_rank[model_idx]}"
+@@ -233,15 +234,15 @@
+                         "complex_pde",
+                         "complex_ipde",
+                     ]:
+-                        confidence_summary_dict[key] = prediction[key][model_idx].item()
++                        confidence_summary_dict[key] = prediction[key][sample_idx].item()
+                     confidence_summary_dict["chains_ptm"] = {
+-                        idx: prediction["pair_chains_iptm"][idx][idx][model_idx].item()
++                        idx: prediction["pair_chains_iptm"][idx][idx][sample_idx].item()
+                         for idx in prediction["pair_chains_iptm"]
+                     }
+                     confidence_summary_dict["pair_chains_iptm"] = {
+                         idx1: {
+                             idx2: prediction["pair_chains_iptm"][idx1][idx2][
+-                                model_idx
++                                sample_idx
+                             ].item()
+                             for idx2 in prediction["pair_chains_iptm"][idx1]
+                         }
+@@ -256,7 +257,7 @@
+                         )
+ 
+                     # Save plddt
+-                    plddt = prediction["plddt"][model_idx]
++                    plddt = prediction["plddt"][sample_idx]
+                     path = (
+                         struct_dir
+                         / f"plddt_{record.id}_model_{idx_to_rank[model_idx]}.npz"
+@@ -265,7 +266,7 @@
+ 
+                 # Save pae
+                 if "pae" in prediction:
+-                    pae = prediction["pae"][model_idx]
++                    pae = prediction["pae"][sample_idx]
+                     path = (
+                         struct_dir
+                         / f"pae_{record.id}_model_{idx_to_rank[model_idx]}.npz"
+@@ -274,7 +275,7 @@
+ 
+                 # Save pde
+                 if "pde" in prediction:
+-                    pde = prediction["pde"][model_idx]
++                    pde = prediction["pde"][sample_idx]
+                     path = (
+                         struct_dir
+                         / f"pde_{record.id}_model_{idx_to_rank[model_idx]}.npz"

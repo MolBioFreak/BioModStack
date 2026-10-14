@@ -1,5 +1,6 @@
 """Small selected-operation boundary; no antibody modality or workflow fallback."""
 from typing import Any, Literal
+import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -123,7 +124,8 @@ async def _launch_selected(request: SelectedOperationRequest, background_tasks: 
         launched = await submit_selected_child_jobs(
             requests, background_tasks, session, experiment_session,
             destination_launch_context_id=request.launch_context_id,
-            idempotency_key=request.idempotency_key or str(directory), response_context=response_context)
+            # Reusable input custody is not a fresh Job submission identity.
+            idempotency_key=request.idempotency_key or str(uuid.uuid4()), response_context=response_context)
     return {'source_job_id': source.id, 'root_job_id': root.id,
             'operation': request.operation, 'selected_design_count': len(designs), 'selected_native_count': len(native),
             'launched_jobs': launched}

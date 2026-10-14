@@ -1,7 +1,9 @@
+import { BioXpMeasurementReview } from './BioXpMeasurementReview';
+import { definiteMethodRefusal } from '../lib/bioxpMethods';
 import { useBioXpDocumentVisible } from './BioXpObservationVisibility';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { bioXpErrorText, useBioXpWorkflowJobObservation, useControlBioXpWorkflow, useReviewBioXpWorkflow,
-    type BioXpWorkflowAction, type BioXpWorkflowJob } from '../lib/bioxpClient';
+    type BioXpWorkflowAction, type BioXpWorkflowJob, type BioXpWorkflowReviewRequest } from '../lib/bioxpClient';
 const buttonClass = 'rounded bg-cyan-700 px-3 py-2 text-sm disabled:opacity-35';
 
 /** One native readback/control owner for both prepared and saved submissions. */
@@ -14,7 +16,9 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
     const [abortConfirmed, setAbortConfirmed] = useState(false);
     const [reviewer, setReviewer] = useState('');
     const [note, setNote] = useState('');
+    const [measurementDrafts, setMeasurementDrafts] = useState<Record<string, Record<string, string[]>>>({});
     const [localError, setLocalError] = useState<string | null>(null);
+    const reviewAttempts = useRef<Record<string, BioXpWorkflowReviewRequest>>({});
     const identity = useRef({ jobId, generation });
     identity.current = { jobId, generation };
     // Selection resets presentation, never the shared in-flight operation.
@@ -41,6 +45,9 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
     const command = job?.command;
     const runtime = job?.execution?.runtime_state;
     const workflow = runtime?.workflow;
+    const pendingReview = job?.operator?.pending_review;
+    const reviewIdentity = JSON.stringify([generation, jobId, pendingReview?.stage_id, pendingReview?.action_id, pendingReview?.source_occurrence_id]);
+    const measurements = measurementDrafts[reviewIdentity] ?? {};
     const canonical = !!command && !!workflow && command.command_id === jobId && workflow.command_id === jobId && job?.execution?.dry_run === false;
     const busy = submitting || control.isPending || review.isPending;
     const mutable = connected && controlsEnabled && !busy && canonical && !command.terminal
@@ -74,13 +81,38 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
         busyRef.current = true; onBusyChange(true);
         setLocalError(null);
         try {
-            await review.mutateAsync({ jobId, request: { command_id: command.command_id,
+            const request = reviewAttempts.current[reviewIdentity] ?? { command_id: command.command_id,
                 expected_ownership_generation: command.ownership_generation,
                 expected_connection_generation: generation, idempotency_key: crypto.randomUUID(),
-                stage_id: stageId, action_id: actionId, reviewer: reviewer.trim(), note: note || null } });
+                stage_id: stageId, action_id: actionId, reviewer: reviewer.trim(), note: note || null,
+                ...(pendingReview?.measurement_form ? { source_occurrence_id: pendingReview.source_occurrence_id,
+                    measurements: Object.fromEntries(pendingReview.measurement_form.fields.map(field => [field.field_id,
+                        Array.from({ length: field.repetitions ?? 1 }, (_, index) => measurements[field.field_id]?.[index] ?? '')])) } : {}) };
+            reviewAttempts.current[reviewIdentity] = request;
+            await review.mutateAsync({ jobId, request });
+            delete reviewAttempts.current[reviewIdentity];
             void query.refetch();
         } catch (error) {
-            if (identity.current.jobId === jobId && identity.current.generation === generation) setLocalError(bioXpErrorText(error));
+            const detail = (error as { response?: { data?: { detail?: { error?: string; control?: { accepted?: boolean; command_id?: string; ownership_generation?: number; idempotency_key?: string } } } } })?.response?.data?.detail;
+            const attempted = reviewAttempts.current[reviewIdentity];
+            const rejected = detail?.error === 'workflow_review_rejected' && detail.control?.accepted === false
+                && detail.control.command_id === attempted?.command_id
+                && detail.control.ownership_generation === attempted?.expected_ownership_generation
+                && detail.control.idempotency_key === attempted?.idempotency_key;
+            // ProtocolReviewRequest.native_measurements rejects this exact body
+            // before the review route runs. Status alone (including 422) is not proof.
+            const validation = (error as { response?: { status?: number; data?: { detail?: unknown } } })?.response;
+            const issues = validation?.data?.detail;
+            const invalidMeasurements = validation?.status === 422 && attempted?.measurements != null
+                && Array.isArray(issues) && issues.length > 0 && issues.every(issue => issue?.type === 'value_error'
+                    && Array.isArray(issue.loc) && issue.loc.length === 2
+                    && issue.loc[0] === 'body' && issue.loc[1] === 'measurements'
+                    && JSON.stringify(issue.input) === JSON.stringify(attempted.measurements));
+            const notSubmitted = invalidMeasurements || definiteMethodRefusal(error);
+            // Only explicit nondelivery/validation or matched canonical rejection
+            // settles this attempt. Uncertainty retains both frozen response and key.
+            if (rejected || notSubmitted) delete reviewAttempts.current[reviewIdentity];
+            if (identity.current.jobId === jobId && identity.current.generation === generation) setLocalError(`${bioXpErrorText(error)} ${notSubmitted ? 'Response not submitted. A deliberate resubmission will use the edited response and a fresh host-response key for this same occurrence.' : rejected ? 'Response rejected. A deliberate resubmission will use a fresh host-response key for this same occurrence.' : 'Response outcome uncertain. A deliberate retry retains the original response and key; it does not replay the job.'}`);
         }
         finally { busyRef.current = false; onBusyChange(false); }
     }
@@ -109,6 +141,8 @@ export function BioXpWorkflowJobMonitor({ jobId, generation, connected, controls
             <label className="block text-sm"><input type="checkbox" checked={abortConfirmed} onChange={event => setAbortConfirmed(event.target.checked)} /> Confirm cooperative job Abort</label>
             <button className={buttonClass} disabled={!mutable || !abortConfirmed} onClick={() => void send({ action: 'abort' })}>Abort workflow</button>
             {gate === 'review' && <div className="space-y-2">
+                <p>{pendingReview?.reason}</p>
+                {pendingReview?.measurement_form && <BioXpMeasurementReview form={pendingReview.measurement_form} values={measurements} onChange={values => setMeasurementDrafts(previous => ({ ...previous, [reviewIdentity]: values }))} />}
                 <label className="block">Reviewer <input value={reviewer} maxLength={120} onChange={event => setReviewer(event.target.value)} /></label>
                 <label className="block">Review note <input value={note} maxLength={4000} onChange={event => setNote(event.target.value)} /></label>
                 <button className={buttonClass} disabled={!mutable || !reviewer.trim() || !job?.operator?.pending_review?.stage_id} onClick={() => void acknowledgeReview()}>Acknowledge protocol review</button>

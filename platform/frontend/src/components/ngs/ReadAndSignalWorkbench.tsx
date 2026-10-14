@@ -43,7 +43,8 @@ import {
     type AlignmentReadFilterPreset,
     type AlignmentSession,
 } from '../../lib/ngsAlignmentSession';
-import type { AlignmentReadLocus } from '../../lib/ngsAlignmentViewer';
+import { type AlignmentReadLocus } from '../../lib/ngsAlignmentViewer';
+import { secureOntSignalHtml } from './ontSignalHtml';
 import { GovernedRawSignalWaveform } from './RawReadInspector';
 import { OntSignalIdealComparison } from './OntSignalIdealComparison';
 
@@ -88,6 +89,9 @@ function isRenderParams(value: unknown): value is OntSignalRenderParams {
         && ['none', 'medmad', 'znorm', 'scaledpA'].includes(String(candidate.scale));
 }
 
+// Native Bokeh CustomJS compiles callbacks on the first pan/zoom. Evaluation is
+// confined to the opaque-origin, network-denied allow-scripts-only iframe; never
+// add allow-same-origin or apply this policy to the application document.
 const GOVERNED_HTML_CSP = [
     "default-src 'none'",
     "base-uri 'none'",
@@ -98,23 +102,11 @@ const GOVERNED_HTML_CSP = [
     "img-src data:",
     "media-src 'none'",
     "object-src 'none'",
-    "script-src 'unsafe-inline'",
+    "script-src 'unsafe-inline' 'unsafe-eval'",
     "style-src 'unsafe-inline'",
     "worker-src 'none'",
     "navigate-to 'none'",
 ].join('; ');
-
-function secureGovernedHtml(source: string): Blob {
-    const documentNode = new DOMParser().parseFromString(source, 'text/html');
-    const policy = documentNode.createElement('meta');
-    policy.httpEquiv = 'Content-Security-Policy';
-    policy.content = GOVERNED_HTML_CSP;
-    documentNode.head.insertBefore(policy, documentNode.head.firstChild);
-    return new Blob([
-        '<!doctype html>\n',
-        documentNode.documentElement.outerHTML,
-    ], { type: 'text/html;charset=utf-8' });
-}
 
 function readHtmlBlob(blob: Blob): Promise<string> {
     if (typeof blob.text === 'function') return blob.text();
@@ -318,8 +310,11 @@ export function ReadAndSignalWorkbench({
                     && mapping.alignment_session_id === null
                     && mapping.parent_mapping_job_id === null;
             }
-            return mapping.alignment_job_id === alignmentJobId
-                && mapping.alignment_session_id === alignmentSession?.session_id
+            // A retained signal view can reopen before its independent IGV
+            // session has loaded. Use the saved session's exact tuple then;
+            // a supplied current alignment still takes precedence.
+            return mapping.alignment_job_id === (alignmentJobId || viewerSession?.alignment_job_id || null)
+                && mapping.alignment_session_id === (alignmentSession?.session_id ?? viewerSession?.alignment_session_id ?? null)
                 && mapping.reference_revision_id === referenceRevisionId;
         };
         if (
@@ -614,7 +609,7 @@ export function ReadAndSignalWorkbench({
                 identityGeneration !== identityRef.current
                 || requestGeneration !== artifactRequestGenerationRef.current
             ) return;
-            const next = URL.createObjectURL(secureGovernedHtml(source));
+            const next = URL.createObjectURL(secureOntSignalHtml(source, GOVERNED_HTML_CSP));
             replaceArtifactUrl(next);
         }).catch((reason) => {
             if (
@@ -649,7 +644,7 @@ export function ReadAndSignalWorkbench({
 
     const registerExternalMoveBam = async () => {
         if (!activeRawRepresentationId || !externalMoveBamCandidateId) {
-            setError('Select one path-opaque external move BAM and an exact ready indexed BLOW5 authority.');
+            setError('Select an external move-tagged BAM and a ready, indexed BLOW5 dataset.');
             return;
         }
         const generation = identityRef.current;
@@ -700,7 +695,7 @@ export function ReadAndSignalWorkbench({
     const prepareMapping = async (mappingMode: OntSignalMappingMode) => {
         const rawRepresentationId = activeRawRepresentationId;
         if (!rawRepresentationId || !compatibleSource) {
-            setError('No exact ready indexed BLOW5 and move-source authority is available.');
+            setError('No compatible indexed BLOW5 and move source are ready.');
             return;
         }
         if (mappingMode === 'signal_to_reference' && (!referenceRevisionId || !alignmentSession?.ready || readMapping?.state !== 'ready')) {
@@ -733,7 +728,7 @@ export function ReadAndSignalWorkbench({
                 if (evidence.raw_representation_id !== rawRepresentationId
                     || evidence.move_source_id !== compatibleSource.move_source_id
                     || evidence.basecall_model_id !== compatibleSource.basecall_model_id) {
-                    throw new Error('Ready calibration evidence is not exact for the selected governed parents.');
+                    throw new Error('Calibration does not match the selected raw signal, move source, or basecaller.');
                 }
                 profile = await createOntSignalMappingProfile({
                     name: `Calibrated ${evidence.basecall_model_id}`.slice(0, 255),
@@ -913,8 +908,21 @@ export function ReadAndSignalWorkbench({
                     mode,
                     render_params: renderParams,
                     view_job_id: viewJob?.view_job_id || null,
-                    read_mapping_job_id: readMapping?.mapping_job_id || null,
-                    reference_mapping_job_id: referenceMapping?.mapping_job_id || null,
+                    read_mapping_job_id: readMapping?.mapping_job_id || persistedReadMappingJobId,
+                    reference_mapping_job_id: referenceMapping?.mapping_job_id || persistedReferenceMappingJobId,
+                    // Save the receiving view, not a new comparison request. The
+                    // child owns the immutable job/settings/review tuple; dropping
+                    // it here makes a successful Save erase the reopened result.
+                    ...(mode === 'ideal_comparison'
+                        && viewerSession.selected_read_id === (readId.trim() || null)
+                        && viewerSession.contig === (contig.trim() || null)
+                        && viewerSession.locus_start === integer(start)
+                        && viewerSession.locus_end === integer(end) ? {
+                            comparison_job_id: viewerSession.signal_state.comparison_job_id,
+                            comparison_preview_digest: viewerSession.signal_state.comparison_preview_digest,
+                            comparison_settings: viewerSession.signal_state.comparison_settings,
+                            comparison_review_id: viewerSession.signal_state.comparison_review_id,
+                        } : {}),
                 },
             });
             if (generation !== identityRef.current) return;
@@ -1135,7 +1143,7 @@ export function ReadAndSignalWorkbench({
 
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">
                     <div className="flex items-center justify-between gap-2">
-                        <h3 className="text-xs font-semibold">Governed mappings</h3>
+                        <h3 className="text-xs font-semibold">Signal mappings</h3>
                         <span className="text-[10px] text-[var(--text-secondary)]">Reusable across bounded views</span>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[10px]">

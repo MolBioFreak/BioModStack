@@ -1,6 +1,7 @@
 """Publication metadata drives all download selections and warm runtime rows."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -101,6 +102,64 @@ def test_image_authority_change_does_not_reuse_old_named_identity(publication, m
     assert [(r.sha256, r.size_bytes) for r in rows] == [('d' * 64, 3)]
 
 
+@pytest.mark.parametrize('binding', ['published', 'absent', 'mismatch', 'leaf', 'ancestor', 'managed'])
+def test_published_legacy_image_binding_preserves_path_authority(publication, monkeypatch, binding):
+    """Inert Boltz bytes exercise the same local/remote selected-runtime owner."""
+    import hashlib
+    from component_runtime import SourceIdentity, canonical_bytes
+    from services.nextflow import build_selected_execution_plan
+    from lib.shared_runtime_images import publish_image
+    from lib.runtime_image_lifecycle import transaction, commit_release
+
+    p = publication
+    monkeypatch.setattr(bundle, 'get_data_root', lambda: p.weights.parent)
+    monkeypatch.setenv('BMS_RUNTIME_IMAGE_LANE', 'production')
+    source = p.containers / 'boltz2-version.sif'
+    source.write_bytes(b'INERT IMAGE BINDING FIXTURE, NOT SCIENCE')
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    alias = p.containers / 'boltz2.sif'
+    alias.symlink_to(source.name)
+    row = dict(name='containers/boltz2.sif', kind='runtime_image', source=str(source),
+               sha256=digest, size_bytes=source.stat().st_size, mode=0o644)
+    index = dict(dependencies=['containers/boltz2.sif'], artifacts=[row])
+    if binding == 'absent':
+        index = {}
+    elif binding == 'mismatch':
+        row['source'] = str(p.containers / 'other.sif')
+    elif binding in {'leaf', 'ancestor'}:
+        link = p.containers / 'published-link'
+        link.symlink_to(source if binding == 'leaf' else p.containers,
+                        target_is_directory=binding == 'ancestor')
+        row['source'] = str(link if binding == 'leaf' else link / source.name)
+    elif binding == 'managed':
+        store = Path(os.environ['BMS_RUNTIME_IMAGE_STORE'])
+        newer = p.containers / 'approved.sif'
+        newer.write_bytes(b'ANOTHER APPROVED INERT GENERATION')
+        digest = hashlib.sha256(newer.read_bytes()).hexdigest()
+        source = publish_image(newer, store, digest)
+        with transaction(store):
+            commit_release(store, 'production', {'BMS_RUNTIME_IMAGE_BOLTZ2_SIF':
+                dict(path=str(source), sha256=digest)})
+    params = dict(sequence='AAAA', boltz_use_msa=False, run_frustrampnn=False)
+    plan = build_selected_execution_plan(model_id='boltz2', mode='predict',
+        entrypoint='structure_prediction.nf', requested=canonical_bytes(params),
+        effective=canonical_bytes(params), native_parameters=params,
+        source_identity=SourceIdentity('a' * 40, 'b' * 40))
+    def selected():
+        return bundle._runtime_assets('boltz2', 'predict', params, selected_plan=plan,
+            only_kinds=frozenset({'image'}), publication=index)
+    if binding not in {'published', 'managed'}:
+        with pytest.raises(bundle.RemoteBundleError, match='no-follow'):
+            selected()
+        return
+    assets = selected()
+    assert (source, 'containers/boltz2.sif') in assets
+    records = bundle._runtime_records(source, 'containers/boltz2.sif', publication=index)
+    assert [(r.relative_path, r.sha256, r.size_bytes) for r in records] == [
+        ('containers/boltz2.sif', digest, source.stat().st_size)]
+    assert alias.is_symlink() and alias.readlink() == Path('boltz2-version.sif')
+
+
 def test_preview_digest_binds_named_modes_and_endpoint(publication, monkeypatch):
     monkeypatch.setattr(cache, 'current_source_identity', lambda: ('a' * 40, 'b' * 40))
     selection = ProvisionSelection(kind='model', model_id='fixture')
@@ -144,7 +203,61 @@ def test_adoption_uses_retained_manifest_modes_and_not_asset_files(publication, 
     assert index['artifacts'][0]['mode'] == 0o555
     assert len(cache.independent_plan(SimpleNamespace(kind='model'))) == 2
     assert adopted.stat().st_mode & 0o777 == 0o444
+    assert index['digest_sizes'] == {}
     wrong = json.loads(json.dumps(preview))
     wrong['artifacts'][0]['sha256'] = 'd' * 64
     with pytest.raises(ValueError, match='exactly match'):
         owner.adopt(wrong, [manifest])
+
+
+@pytest.mark.parametrize('membership', ['verified', 'empty', 'missing', 'no_sidecar'])
+def test_independent_adoption_preserves_physical_membership_and_named_scopes(
+        publication, monkeypatch, membership):
+    p = publication
+    monkeypatch.setattr(cache, 'get_data_root', paths.get_data_root)
+    script = Path(__file__).resolve().parents[3] / 'scripts/adopt_hf_archive_index.py'
+    spec = importlib.util.spec_from_file_location('adopt_index', script)
+    owner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(owner)
+    # Both exceed the archive's size: cost heuristics must not hide false membership.
+    boltz = dict(name='weights/boltz/boltz/model', sha256='d' * 64,
+                 size_bytes=2000, mode=0o444)
+    esmfold = dict(name='weights/esmfold2/model', sha256='e' * 64,
+                   size_bytes=3000, mode=0o444)
+    physical = {boltz['sha256']: boltz['size_bytes']} if membership == 'verified' else {}
+    initial = dict(archive=p.index['archive'], publication_note='retain advisory metadata')
+    if membership in {'verified', 'empty'}:
+        initial['digest_sizes'] = physical
+    p.path.chmod(0o600)
+    p.path.write_text(json.dumps(initial))
+    if membership == 'no_sidecar':
+        p.path.unlink()
+    monkeypatch.setattr(bundle, '_sha256_file', fail)
+    expected_rows = {}
+    for scientific_row in (boltz, esmfold, esmfold, boltz):
+        root = '/'.join(scientific_row['name'].split('/')[:2])
+        monkeypatch.setattr(cache, '_independent_dependencies', lambda _, root=root: (
+            SimpleNamespace(kind='weights', relative_path=root.removeprefix('weights/')),))
+        selection = dict(kind='model', model_id=root.removeprefix('weights/'))
+        manifest = dict(selection=selection, source_revision='a' * 40, source_tree='b' * 40,
+                        artifacts=[scientific_row])
+        preview = dict(selection=selection, dependencies=[dict(name=root)], artifacts=[
+            {k: scientific_row[k] for k in ('name', 'sha256', 'size_bytes')}])
+        owner.adopt(preview, [manifest])
+        expected_rows[scientific_row['name']] = scientific_row
+        adopted = json.loads(p.path.read_bytes())
+        assert adopted['digest_sizes'] == physical
+        assert adopted['artifacts'] == [expected_rows[name] for name in sorted(expected_rows)]
+        assert adopted['dependencies'] == sorted({
+            '/'.join(name.split('/')[:2]) for name in expected_rows})
+        assert adopted['archive'] == initial['archive']
+        if membership != 'no_sidecar':
+            assert adopted['publication_note'] == initial['publication_note']
+        # Exercise the actual controller owner, not a replica of its selection logic.
+        assert cache._weights_archive_artifact([SimpleNamespace(**esmfold)]) is None
+        selected = cache._weights_archive_artifact([SimpleNamespace(**boltz)])
+        if physical:
+            assert selected.sha256 == initial['archive']['sha256']
+        else:
+            assert selected is None
+        assert cache.independent_plan(ProvisionSelection.model_validate(selection))[0].sha256 == scientific_row['sha256']

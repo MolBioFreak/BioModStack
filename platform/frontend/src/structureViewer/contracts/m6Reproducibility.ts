@@ -120,6 +120,8 @@ export const validateSnapshotBindings = (bindings: readonly ViewerSnapshotBindin
 
 const durableScene = (scene: StructureSceneState): StructureSceneState => ({
     ...scene,
+    // JSON encodes an omitted optional bound in a tuple as null (still unbounded).
+    ...(scene.presentation ? { presentation: JSON.parse(JSON.stringify(scene.presentation)) } : {}),
     documents: scene.documents.map(({ sourceUrl: _transport, ...document }) => document),
 });
 

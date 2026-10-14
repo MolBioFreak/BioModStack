@@ -92,6 +92,19 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('canonical prepared workflow controls', () => {
+    it.each(['rc','oc','tc','pipette'] as const)('submits exact external %s measurements through the existing same-job review owner', async module => {
+        job = jobFixture({ phase: 'waiting', gate: 'review', gate_id: 'review-action' });
+        job.operator!.pending_review = { stage_id:'stage-1', action_id:'review-action', reason:'External probe reading', source_occurrence_id:'point:repeat:2', measurement_form:{fields:[{field_id:'probe',label:'Probe',unit:module === 'pipette' ? 'uL' : 'degC',module,target:'37.00',repetitions:2}]}};
+        rows=[job]; await render();
+        const unit = module === 'pipette' ? 'uL' : 'degC';
+        await act(async () => inputText('Reviewer','Operator fixture'));
+        await act(async () => inputText(`Probe reading 1 (${unit})`,'36.9000'));
+        await act(async () => inputText(`Probe reading 2 (${unit})`,'0'));
+        await click('Acknowledge protocol review');
+        expect(api.post).toHaveBeenCalledTimes(1);
+        expect(api.post).toHaveBeenCalledWith('/api/bioxp/protocols/jobs/job-one/review',expect.objectContaining({stage_id:'stage-1',action_id:'review-action',source_occurrence_id:'point:repeat:2',measurements:{probe:['36.9000','0']},reviewer:'Operator fixture'}));
+        expect(vi.mocked(api.post).mock.calls.some(([path]) => String(path).includes('/submit'))).toBe(false);
+    });
     it('discovers compact rows and observes current selected review state', async () => {
         job = jobFixture({ phase: 'waiting', gate: 'review', gate_id: 'review-action' });
         rows = [{ job_id: job.job_id, status: job.status, command: job.command,

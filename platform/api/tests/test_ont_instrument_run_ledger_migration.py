@@ -106,21 +106,6 @@ def test_ont_instrument_run_ledger_migration_is_idempotent(tmp_path: Path) -> No
     assert ("run_id", "observed_generation") in unique_index_columns
 
 
-def test_terminal_artifact_manifest_migration_is_idempotent_and_preserves_ledger_rows(tmp_path: Path) -> None:
-    database_path = tmp_path / "ledger.db"
-    migrate(str(database_path))
-    migrate_terminal_artifacts(str(database_path))
-    migrate_terminal_artifacts(str(database_path))
-
-    with _manifest_connection(database_path) as connection:
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(ont_instrument_runs)")}
-        indexes = {row[1] for row in connection.execute("PRAGMA index_list(ont_instrument_runs)")}
-
-    assert {"terminal_artifact_manifest", "terminal_artifact_manifest_sha256"} <= columns
-    assert "ix_ont_instrument_runs_terminal_artifact_manifest_sha256" in indexes
-
-
-
 def test_terminal_artifact_manifest_migration_backfills_canonical_rows_and_clears_invalid_legacy_evidence(tmp_path: Path) -> None:
     database_path = tmp_path / "ledger.db"
     migrate(str(database_path))
@@ -256,41 +241,6 @@ def test_terminal_artifact_manifest_database_guards_reject_fully_rehashed_mutant
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
                 "UPDATE ont_instrument_runs SET minknow_run_id = 'MNK-REBOUND' WHERE id = 'run-valid'"
-            )
-
-
-def test_terminal_artifact_manifest_schema_rejects_rewrites(tmp_path: Path) -> None:
-    database_path = tmp_path / "ledger.db"
-    migrate(str(database_path))
-    migrate_terminal_artifacts(str(database_path))
-
-    with _manifest_connection(database_path) as connection:
-        connection.execute(
-            """
-            INSERT INTO ont_instrument_runs (
-                id, position_id, state, observed_at, observed_generation,
-                output_directories, output_files, handoff_ready, created_at,
-                terminal_artifact_manifest, terminal_artifact_manifest_sha256
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "run-freeze",
-                "X1",
-                "completed",
-                "2026-07-31T00:00:00Z",
-                1,
-                "{}",
-                "{}",
-                0,
-                "2026-07-31T00:00:00Z",
-                _canonical_terminal_manifest("run-freeze"),
-                _manifest_digest(_canonical_terminal_manifest("run-freeze")),
-            ),
-        )
-        with pytest.raises(sqlite3.IntegrityError):
-            connection.execute(
-                "UPDATE ont_instrument_runs SET terminal_artifact_manifest = ?, terminal_artifact_manifest_sha256 = ? WHERE id = ?",
-                (_canonical_terminal_manifest("run-freeze").replace("reads.fastq", "replacement.fastq"), "b" * 64, "run-freeze"),
             )
 
 

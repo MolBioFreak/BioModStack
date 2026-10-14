@@ -66,6 +66,7 @@ def _atomic_write(path: Path, data: bytes) -> None:
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(data)
             handle.flush()
+            os.fchmod(handle.fileno(), 0o400)
             os.fsync(handle.fileno())
         os.replace(temporary, path)
     except BaseException:
@@ -125,7 +126,7 @@ async def validate_molbio_ngs_receipt(
             raise ValueError
     except (OSError, ValueError) as exc:
         raise ValueError(
-            "MolBio NGS receipt reference snapshot is unavailable or digest-mismatched"
+            "The saved reference file is missing, unreadable, or does not match the selected reference."
         ) from exc
     return receipt
 

@@ -94,7 +94,12 @@ def main() -> None:
             if args.gpu_offload is not None:
                 execution["gpu_offload"] = args.gpu_offload
             config["execution"] = execution
-        normalized = json.dumps(normalize_job_config(config), indent=2, sort_keys=True) + "\n"
+        # Relocate declared input slots through the shared portable owner before
+        # publishing the execution document consumed by chemistry preparation.
+        # Keep the archived request and the existing --base-dir semantics intact.
+        from scripts.lib.portable_inputs import bind_native_document
+        execution_config = bind_native_document(normalize_job_config(config), "md-job")
+        normalized = json.dumps(execution_config, indent=2, sort_keys=True) + "\n"
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(normalized, encoding="utf-8")

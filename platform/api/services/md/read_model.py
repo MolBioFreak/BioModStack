@@ -43,14 +43,20 @@ def _worker_pause_ready(child: Job | None) -> bool:
         roots = _checkpoint_roots(child)
     except (OSError, TypeError, ValueError):
         return False
+    from scripts.bms_md.native_config import final_stage_name
+    config = (child.params or {}).get("md_job_spec") or (child.params or {}).get("md_config") or {}
+    stage = (child.params or {}).get("md_final_stage") or final_stage_name(config)
     return any(
-        (root / "production" / "production.cpt").is_file()
-        and not (root / "production" / "production.cpt").is_symlink()
+        (root / stage / f"{stage}.cpt").is_file()
+        and not (root / stage / f"{stage}.cpt").is_symlink()
         for root in roots
     )
 
 
 def _replica_count(request: dict, fallback: int) -> int:
+    if request.get("schema") == "bms.md.job.v3":
+        from scripts.bms_md.native_config import lane_count
+        return lane_count(request)
     replicas = request.get("replicas")
     if isinstance(replicas, dict):
         value = replicas.get("count")
@@ -64,6 +70,16 @@ def _requested_time_ps(request: dict) -> float:
     if isinstance(durations, dict) and durations:
         return sum(float(value) for value in durations.values() if isinstance(value, (int, float)))
     stages = request.get("stages")
+    if request.get("schema") == "bms.md.job.v3" and isinstance(stages, list):
+        total = 0.0
+        for stage in stages:
+            mdp = stage.get("mdp", {})
+            try:
+                if mdp.get("integrator") in {"md", "md-vv", "md-vv-avek", "sd", "bd"}:
+                    total += max(0, int(mdp["nsteps"])) * float(mdp["dt"])
+            except (KeyError, TypeError, ValueError):
+                pass
+        return total
     if not isinstance(stages, dict):
         return 0.0
     production = stages.get("production")

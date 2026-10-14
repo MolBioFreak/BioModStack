@@ -140,6 +140,7 @@ def bounded_real_reference_mapping(
     contig: str,
     start: int,
     end: int,
+    molecule_type: str = "dna",
 ) -> tuple[Path, dict[str, Any]]:
     """Materialize the one governed real-read PAF record used by this render."""
     try:
@@ -161,8 +162,9 @@ def bounded_real_reference_mapping(
         raise ValueError("real reference mapping must resolve the selected read exactly once")
     compressed = work_dir / "real_selected.paf.gz"
     pysam.tabix_compress(str(plain), str(compressed), force=True)
+    start_col, end_col = (8, 7) if molecule_type == "rna" else (7, 8)
     pysam.tabix_index(
-        str(compressed), seq_col=5, start_col=7, end_col=8,
+        str(compressed), seq_col=5, start_col=start_col, end_col=end_col,
         zerobased=True, force=True,
     )
     index = Path(f"{compressed}.tbi")
@@ -178,7 +180,7 @@ def bounded_real_reference_mapping(
 
 
 def indexed_simulated_reference_mapping(
-    parent: Path, work_dir: Path
+    parent: Path, work_dir: Path, molecule_type: str = "dna",
 ) -> tuple[Path, dict[str, Any]]:
     """Create the renderer-required indexed working form of simulator truth PAF."""
     try:
@@ -192,8 +194,9 @@ def indexed_simulated_reference_mapping(
     plain.write_text(f"{lines[0]}\n", encoding="ascii")
     compressed = work_dir / "simulated_selected.paf.gz"
     pysam.tabix_compress(str(plain), str(compressed), force=True)
+    start_col, end_col = (8, 7) if molecule_type == "rna" else (7, 8)
     pysam.tabix_index(
-        str(compressed), seq_col=5, start_col=7, end_col=8,
+        str(compressed), seq_col=5, start_col=start_col, end_col=end_col,
         zerobased=True, force=True,
     )
     index = Path(f"{compressed}.tbi")
@@ -397,11 +400,11 @@ def render_comparison(*, output: Path, real_blow5: Path, real_mapping: Path, rea
         real_sequence = work / "real_read.fasta"
         selected_read_fasta(real_moves, real_read_id, real_sequence)
         bounded_real_mapping, bounded_mapping_receipt = bounded_real_reference_mapping(
-            real_mapping, real_read_id, work, contig, start, end
+            real_mapping, real_read_id, work, contig, start, end, molecule_type
         )
         receipts["real_mapping_subset"] = bounded_mapping_receipt
         indexed_simulated_mapping, simulated_mapping_receipt = indexed_simulated_reference_mapping(
-            simulated_mapping, work
+            simulated_mapping, work, molecule_type
         )
         receipts["simulated_mapping_index"] = simulated_mapping_receipt
         real_command = ["squigualiser", "plot_pileup", "--file", str(reference_fasta),

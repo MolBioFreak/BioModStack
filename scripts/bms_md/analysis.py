@@ -372,9 +372,23 @@ def _analyze_manifest_from_snapshots(
                 "MD_ANALYSIS_ATOM_ORDER_MISMATCH",
                 "topology atom count does not match the atom-order manifest",
             )
-        backbone = universe.select_atoms(SELECTION)
+        options = manifest.get("config", {}).get("analysis") or {}
+        selection = options.get("selection", SELECTION)
+        backbone = universe.select_atoms(selection) if selection else universe.atoms[:0]
         if backbone.n_atoms == 0:
-            raise MDAnalysisContractError("MD_ANALYSIS_EMPTY_SELECTION", f"selection is empty: {SELECTION}")
+            report = _base_report(manifest_path, version=str(mda.__version__), runtime_sha256=resolved_runtime_sha256)
+            report.update(status="not_applicable", job_id=str(manifest["job_id"]),
+                          replica=int(manifest["replica_index"]), selection=selection,
+                          reason="structural analysis disabled" if selection is None else f"selection is empty: {selection}")
+            specialized, states = prepare_specialized_analyzers(universe, manifest)
+            if specialized:
+                contact_stride = max(stride, math.ceil(len(universe.trajectory) / max_points))
+                for ts in universe.trajectory[::contact_stride]:
+                    for analyzer in specialized:
+                        analyzer.sample(int(ts.frame), float(ts.time))
+            report["specialized_analyzers"] = states + [analyzer.result() for analyzer in specialized]
+            report["analysis_identity_sha256"] = analysis_identity_sha256(report)
+            return report
         universe.trajectory.add_transformations(NoJump(check_continuity=True), center_in_box(backbone, wrap=True))
         frame_count = len(universe.trajectory)
         effective_stride = max(stride, math.ceil(frame_count / max_points))
@@ -398,7 +412,7 @@ def _analyze_manifest_from_snapshots(
                 continue
             if reference is None:
                 reference = mda.Merge(backbone).load_new(backbone.positions.copy()[None, :, :])
-            align.alignto(universe, reference, select=SELECTION, weights="mass")
+            align.alignto(universe, reference, select=selection, weights="mass")
             value = float(rms.rmsd(backbone.positions, reference.atoms.positions, weights=backbone.masses, center=False, superposition=False))
             if not math.isfinite(value):
                 raise MDAnalysisContractError("MD_ANALYSIS_CORRUPT_TRAJECTORY", "RMSD produced a non-finite value")
@@ -446,8 +460,8 @@ def _analyze_manifest_from_snapshots(
             "segid": str(residue.segid or ""),
             "resid": int(residue.resid),
             "resname": str(residue.resname),
-            "backbone_rmsf_angstrom": float(np.sqrt(np.mean(np.square(atom_rmsf[local_indices])))),
-            "backbone_atom_count": len(local_indices),
+            ("backbone_rmsf_angstrom" if selection == SELECTION else "rmsf_angstrom"): float(np.sqrt(np.mean(np.square(atom_rmsf[local_indices])))),
+            ("backbone_atom_count" if selection == SELECTION else "atom_count"): len(local_indices),
         })
     block_count = min(5, len(values))
     block_statistics: list[dict[str, Any]] = []
@@ -467,9 +481,9 @@ def _analyze_manifest_from_snapshots(
                 "mean_radius_of_gyration_angstrom": statistics.fmean(point["radius_of_gyration_angstrom"] for point in block),
             })
     policy = {
-        "pbc": "nojump_then_center_protein",
-        "alignment": "mass_weighted_backbone_fit",
-        "exclusions": "non_protein_and_non_backbone",
+        "pbc": "nojump_then_center_protein" if selection == SELECTION else "nojump_then_center_selection",
+        "alignment": "mass_weighted_backbone_fit" if selection == SELECTION else "mass_weighted_selection_fit",
+        "exclusions": "non_protein_and_non_backbone" if selection == SELECTION else "outside_selection",
         "requested_stride": stride,
         "effective_stride": effective_stride,
         "max_points": max_points,
@@ -483,7 +497,7 @@ def _analyze_manifest_from_snapshots(
         "status": "completed",
         "job_id": str(manifest["job_id"]),
         "replica": int(manifest["replica_index"]),
-        "selection": SELECTION,
+        "selection": selection,
         "reference": "first_admitted_frame",
         "policy": policy,
         "policy_sha256": _canonical_json_sha256(policy),
@@ -510,13 +524,14 @@ def _analyze_manifest_from_snapshots(
             "frames_are_independent_replicates": False,
         },
         "observables": {
-            "backbone_rmsd": "completed",
-            "backbone_rmsf": "completed",
+            ("backbone_rmsd" if selection == SELECTION else "selection_rmsd"): "completed",
+            ("backbone_rmsf" if selection == SELECTION else "selection_rmsf"): "completed",
             "radius_of_gyration": "completed",
             "sasa": "unavailable_validated_backend",
         },
         "specialized_analyzers": specialized_states + [analyzer.result() for analyzer in specialized],
     })
+    report["method"] = METHOD if selection == SELECTION else "md_selection_rmsd_v1"
     report["inputs"].update({
         "topology_sha256": topology_hash,
         "trajectory_sha256": trajectory_hash,
@@ -601,11 +616,30 @@ def write_analysis_report(
         report["failure"] = {"code": exc.code, "message": str(exc)}
         report["analysis_identity_sha256"] = analysis_identity_sha256(report)
         success = False
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (OSError, ValueError):
+        manifest = {}
+    if manifest.get("job_id") and type(manifest.get("replica_index")) is int:
+        report.update(job_id=manifest["job_id"], replica=manifest["replica_index"])
+    coordinates = (manifest.get("config", {}).get("analysis") or {}).get("pull_coordinates", [])
+    if coordinates:
+        from .analyzers import pull_coordinate_reports
+        try:
+            record = _role_record(manifest, "pull_coordinates")
+            with tempfile.TemporaryDirectory(prefix="bms-md-pull-") as temporary:
+                path, digest = _verify_artifact(manifest_path.parent, record, snapshot_root=Path(temporary))
+                report["pull_coordinates"] = pull_coordinate_reports(
+                    path, coordinates, replica=manifest["replica_index"], max_points=max_points)
+            report["pull_source"] = {"sha256": digest, "path": record["path"]}
+        except Exception as exc:
+            report["pull_error"] = {"code": getattr(exc, "code", "MD_PULL_ANALYSIS_FAILED"), "message": str(exc)}
+    report["analysis_identity_sha256"] = analysis_identity_sha256(report)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     transaction = f"{os.getpid()}-{os.urandom(8).hex()}"
     staged_tables: list[tuple[Path, Path]] = []
-    if success:
+    if success and report["status"] == "completed":
         try:
             import pyarrow as pa  # pyright: ignore[reportMissingImports]
             import pyarrow.parquet as parquet  # pyright: ignore[reportMissingImports]
@@ -652,7 +686,7 @@ def write_analysis_report(
         }
     }
     if success:
-        for name, record in report["derived_artifacts"].items():
+        for name, record in report.get("derived_artifacts", {}).items():
             artifact_records[name] = {**record, "semantic_role": f"md_analysis_{name}"}
     artifact_manifest = {
         "schema": "bms.md.analysis-artifacts.v1",

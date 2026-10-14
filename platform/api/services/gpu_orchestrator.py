@@ -590,48 +590,10 @@ def _recover_rfantibody_parent_after_child_wait(job: Any, child_wait_success: Di
     for directory in (collected_dir, raw_dir, traj_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
-    collected_pdbs: list[str] = []
-    collected_trbs: list[str] = []
-    collected_trajs: list[str] = []
+    from scripts.child_job_utils import collect_rfantibody_outputs
 
     output_dirs = child_wait_success.get("output_dirs") or []
-    for job_idx, child_output_dir in enumerate(output_dirs):
-        dir_path = Path(str(child_output_dir))
-        if not dir_path.exists():
-            continue
-
-        for subdir in ("pdb_files", "run/rfantibody/output", "run/rfantibody", "run/fampnn/results", ""):
-            search_path = dir_path / subdir if subdir else dir_path
-            if not search_path.exists():
-                continue
-
-            for pdb in search_path.glob("*.pdb"):
-                dest_name = f"job{job_idx}_{pdb.name}"
-                collected_dest = collected_dir / dest_name
-                raw_dest = raw_dir / dest_name
-                if not collected_dest.exists():
-                    shutil.copy2(pdb, collected_dest)
-                if not raw_dest.exists():
-                    shutil.copy2(pdb, raw_dest)
-                collected_pdbs.append(str(collected_dest))
-
-                trb = pdb.with_suffix(".trb")
-                if trb.exists():
-                    collected_trb_dest = collected_dir / f"job{job_idx}_{trb.name}"
-                    raw_trb_dest = raw_dir / f"job{job_idx}_{trb.name}"
-                    if not collected_trb_dest.exists():
-                        shutil.copy2(trb, collected_trb_dest)
-                    if not raw_trb_dest.exists():
-                        shutil.copy2(trb, raw_trb_dest)
-                    collected_trbs.append(str(collected_trb_dest))
-
-            traj_search = search_path / "traj"
-            if traj_search.exists():
-                for traj in traj_search.glob("*.pdb"):
-                    traj_dest = traj_dir / f"job{job_idx}_{traj.name}"
-                    if not traj_dest.exists():
-                        shutil.copy2(traj, traj_dest)
-                    collected_trajs.append(str(traj_dest))
+    collect_rfantibody_outputs(output_dirs, collected_dir, raw_destination=raw_dir)
 
     # Make the recovery idempotent by re-listing final files from disk.
     collected_pdbs = sorted(str(path) for path in collected_dir.glob("*.pdb"))
@@ -1447,6 +1409,178 @@ async def _claim_job_for_gpu(
     return scheduler_params
 
 
+def _reservation_shortfall_mb(job: Any, live_vram_mb: Optional[int]) -> int:
+    """Measured device use already includes only *attributed* live bytes."""
+    reservation = _running_job_reservation_mb(job, live_vram_mb)
+    return max(0, reservation - (live_vram_mb or 0))
+
+
+def _remote_attributed_vram_mb(job, target, telemetry, index):
+    """Credit only same-sample process bytes bound to this target/attempt generation."""
+    receipt = (job.provenance or {}).get('remote_execution_receipt') or {}
+    if job.queue_status == 'preparing' or not job.remote_attempt_id or not receipt.get('boot_id'):
+        return None
+    gpu = next((row for row in telemetry.get('gpus', []) if row.get('index') == index), {})
+    rows = [row for row in telemetry.get('gpu_processes', []) if row.get('gpu_uuid') == gpu.get('uuid')]
+    # Inconsistent device/process samples receive no credit, never aggregate subtraction.
+    if any(type(row.get('memory_used_mb')) not in (int, float) or not 0 <= row['memory_used_mb'] < float('inf') for row in rows):
+        return None
+    if sum(row['memory_used_mb'] for row in rows) > (gpu.get('memory_used_mb') or 0):
+        return None
+    matching = [row for row in rows if row.get('job_id') == str(job.id)
+        and row.get('attempt_id') == job.remote_attempt_id and row.get('execution_target_id') == str(target.id)
+        and row.get('boot_id') == receipt['boot_id'] and row.get('generation') == receipt.get('generation', 0)
+        and row.get('continuation_lease_id') == receipt.get('continuation_lease_id')]
+    return int(sum(row['memory_used_mb'] for row in matching)) if matching else None
+
+
+async def _reserve_remote_capacity(
+    session: Any, job: Any, target: Any, *, vram_estimate_mb: int,
+    gpu_ids: List[int], admission_snapshot: Dict[str, Any] | None = None,
+) -> Dict[str, Any] | None:
+    """Revalidate the existing packer under the target-row writer lock.
+
+    Caller owns the savepoint/Job CAS and commit. The target is only a mutex:
+    neither its legacy lease pointer nor epoch is changed. Continuations use
+    this same admission owner before their existing complete Job transition.
+    """
+    import uuid
+    from sqlalchemy import select, update, or_
+    from database import ExecutionTarget, Job
+    from services.remote_execution.claims import POLICY, IDENTITY_FIELDS, outstanding_claim_clause
+    from services.remote_execution.targets import INVENTORY_MAX_AGE_SECONDS, remote_target_telemetry
+    from native_components import job_gpu_capacity_requirements
+
+    snapshot = dict(admission_snapshot or {})
+    identity = {key: getattr(target, key) for key in IDENTITY_FIELDS}
+    if snapshot.get("target_identity", identity) != identity:
+        return None
+    # Obtain telemetry before the write lock, never hold SQLite across SSH.
+    telemetry = snapshot.pop("telemetry", None)
+    if vram_estimate_mb and telemetry is None:
+        telemetry = await remote_target_telemetry(target)
+    now = datetime.utcnow()
+    locked = await session.execute(update(ExecutionTarget).where(
+        ExecutionTarget.id == str(target.id),
+        *(getattr(ExecutionTarget, key) == value for key, value in identity.items()),
+        ExecutionTarget.active.is_(True), ExecutionTarget.state == "ready",
+        ExecutionTarget.provider_metadata["inventory"]["status"].as_string() == "complete",
+        ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True),
+        ExecutionTarget.provider_metadata["inventory"]["running"].as_boolean().is_(True),
+        ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() >=
+            (now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
+        ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() <= now.isoformat(),
+    ).values(updated_at=now).execution_options(synchronize_session=False))
+    if locked.rowcount != 1:
+        return None
+
+    selected = list(gpu_ids)
+    if vram_estimate_mb:
+        if not telemetry or not telemetry.get("available"):
+            return None
+        claims = (await session.execute(select(Job).where(
+            Job.execution_target_id == str(target.id), Job.id != str(job.id),
+            outstanding_claim_clause(),
+        ).execution_options(populate_existing=True))).scalars().all()
+        shortfall: Dict[int, int] = {}
+        counts: Dict[int, int] = {}
+        for owner in claims:
+            assignment = (owner.provenance or {}).get("remote_execution_assignment") or {}
+            indices = assignment.get("gpu_indices")
+            if indices is None:
+                indices = _normalize_pinned_gpus((owner.params or {}).get("pinned_gpus")
+                    or (owner.params or {}).get("bcp_gpu_ids")) or (
+                    [owner.assigned_gpu] if owner.assigned_gpu is not None else [])
+            if owner.vram_estimate_mb == 0:
+                continue
+            for index in set(indices):
+                counts[index] = counts.get(index, 0) + 1
+                live = _remote_attributed_vram_mb(owner, target, telemetry, index)
+                floor = int((assignment.get("admission_snapshot") or {}).get("required_per_gpu_mb") or 0)
+                reserve = max(_reservation_shortfall_mb(owner, live), max(0, floor - (live or 0)))
+                shortfall[index] = shortfall.get(index, 0) + reserve
+        requirements = job_gpu_capacity_requirements(job.model_id, _normalize_job_params(job.params))
+        info = JobInfo(id=str(job.id), name=job.name or str(job.id),
+            model_type=_effective_job_model_type(job), vram_estimate_mb=int(vram_estimate_mb),
+            sequence_length=job.sequence_length or 300, priority=job.priority or 0,
+            pinned_gpu=None, created_at=job.created_at or now,
+            minimum_gpu_memory_mb=requirements["minimum_gpu_memory_mb"],
+            gpu_memory_mb=requirements.get("gpu_memory_mb", 0))
+        info.scheduler_reservation_mb = _pending_job_reservation_mb(info, {})
+        # Only target-qualified device overrides apply here; numeric keys,
+        # workflow pins and batch locks still belong to the controller GPUs.
+        policy = read_scheduler_config()
+        global_policy = policy.get("global", {})
+        config = {"global": {key: global_policy[key] for key in (
+            "target_vram_fill", "vram_safety_margin_mb", "capacity_weight", "emptiness_weight",
+            "busy_threshold", "cooldown_ms") if key in global_policy}}
+        config["global"].setdefault("target_vram_fill", 0.75)
+        gpu_count = int((target.capabilities or {}).get("gpu_count") or 0)
+        rows = [row for row in telemetry.get("gpus", []) if isinstance(row, dict)
+                and isinstance(row.get("index"), int) and 0 <= row["index"] < gpu_count and row.get("uuid")]
+        config["overrides"] = {str(row["index"]): dict(
+            policy.get("overrides", {}).get(f'{target.id}:gpu:{row["index"]}', {}),
+            **policy.get("overrides", {}).get(f'{target.id}:gpu:{row["uuid"]}', {})) for row in rows}
+        # Released claims still contribute their last launch during cooldown.
+        cooldown_ms = max(0, int(global_policy.get("cooldown_ms", 0) or 0))
+        cutoff = now - timedelta(milliseconds=cooldown_ms)
+        recent = (await session.execute(select(Job).where(
+            Job.execution_target_id == str(target.id), Job.id != str(job.id),
+            or_(Job.started_at >= cutoff,
+                Job.provenance["remote_execution_assignment"]["claimed_at"].as_string() >= cutoff.isoformat()),
+        ).execution_options(populate_existing=True))).scalars().all() if cooldown_ms else []
+        last_launch = {}
+        for owner in {str(owner.id): owner for owner in [*recent, *claims]}.values():
+            assignment = (owner.provenance or {}).get("remote_execution_assignment") or {}
+            stamp = assignment.get("claimed_at")
+            try:
+                stamp = datetime.fromisoformat(stamp.replace('Z', '+00:00')).replace(tzinfo=None) if stamp else owner.started_at
+            except (ValueError, TypeError):
+                stamp = owner.started_at
+            devices = (assignment.get("admission_snapshot") or {}).get("devices", [])
+            for row in rows:
+                matches = any(device.get("gpu_uuid") == row["uuid"] for device in devices) if devices else (
+                    row["index"] in (assignment.get("gpu_indices") or [owner.assigned_gpu]))
+                if matches and stamp is not None:
+                    last_launch[row["index"]] = max(last_launch.get(row["index"], stamp), stamp)
+        states = [GPUState(index=row["index"], name=str(row.get("name") or "remote"),
+            memory_used_mb=int(row.get("memory_used_mb") or 0) + shortfall.get(row["index"], 0),
+            memory_total_mb=int(row.get("memory_total_mb") or 0), memory_free_mb=0,
+            utilization=int(row.get("utilization") or 0), temperature=0) for row in rows]
+        limit = policy.get("concurrency_limits", {}).get(info.model_type)
+        if isinstance(limit, str) and limit.lower() == "auto":
+            limit = _compute_auto_limit(info.model_type, [info], states, config,
+                running_jobs_per_gpu=counts, gpu_capabilities={})
+        if limit is not None and not isinstance(limit, str):
+            if sum(_effective_job_model_type(owner) == info.model_type for owner in claims) >= limit:
+                return None
+        fill = config["global"]["target_vram_fill"]
+        if selected:
+            # Remote requested sets (not local allowlists) reserve every member.
+            if any(not pack_jobs_to_gpus([replace(info, pinned_gpu=index)], states, fill,
+                                        config, running_jobs_per_gpu=counts, gpu_last_launch_at=last_launch,
+                                        gpu_capabilities={}) for index in selected):
+                return None
+        else:
+            packed = pack_jobs_to_gpus([info], states, fill, config,
+                running_jobs_per_gpu=counts, gpu_last_launch_at=last_launch, gpu_capabilities={})
+            if not packed:
+                return None
+            selected = [packed[0][1]]
+        snapshot.update(schema="bms.remote-gpu-admission.v1", observed_at=telemetry.get("observed_at"),
+            required_per_gpu_mb=info.scheduler_reservation_mb,
+            minimum_gpu_memory_mb=info.minimum_gpu_memory_mb,
+            devices=[dict(gpu_index=row["index"], gpu_uuid=row["uuid"],
+                          memory_total_mb=row.get("memory_total_mb"), memory_used_mb=row.get("memory_used_mb"))
+                     for row in rows if row["index"] in selected])
+    snapshot["target_identity"] = identity
+    return dict(schema="bms.remote-execution-assignment.v1", execution_target_id=str(target.id),
+        root_job_id=str(job.id), lease_id=uuid.uuid4().hex, target_identity=identity,
+        boot_id=(target.provider_metadata or {}).get("managed_boot_id"), policy=POLICY,
+        gpu_index=selected[0] if selected else None, gpu_indices=selected,
+        admission_snapshot=snapshot, claimed_at=now.isoformat() + "Z")
+
+
 async def _claim_remote_job(
     session: Any,
     job: Any,
@@ -1460,6 +1594,7 @@ async def _claim_remote_job(
     from sqlalchemy import update
     from database import ExecutionTarget, Job
     from services.execution_ownership import attach_scheduler_gpu_assignment
+    from services.remote_execution.claims import outstanding_claim_clause
 
     target_id = str(getattr(job, "execution_target_id", "") or "").strip()
     if not target_id:
@@ -1469,45 +1604,21 @@ async def _claim_remote_job(
         target = await get_ready_target(session, target_id)
     except ExecutionTargetError:
         return None
-    from datetime import timedelta
-    from services.remote_execution.targets import INVENTORY_MAX_AGE_SECONDS
-    from services.remote_execution.progress import preload_idle_clause
-    import uuid
-    identity_fields = ("host", "port", "username", "remote_root", "host_key_sha256")
-    target_identity = {key: getattr(target, key) for key in identity_fields}
-    observed_identity = (admission_snapshot or {}).get("target_identity")
-    if observed_identity is not None and observed_identity != target_identity:
-        return None
-    claim_now = datetime.utcnow()
-    # A losing claim must not expire other workers' pending ORM rows. Keep
-    # target + job ownership atomic inside a savepoint, not a session rollback.
+    snapshot = dict(admission_snapshot or {})
+    if vram_estimate_mb and "telemetry" not in snapshot:
+        from services.remote_execution.targets import remote_target_telemetry
+        snapshot["telemetry"] = await remote_target_telemetry(target)
     async with session.begin_nested() as claim:
-        lease_transition = await session.execute(
-            update(ExecutionTarget)
-            .where(
-                ExecutionTarget.id == target_id,
-                *(getattr(ExecutionTarget, key) == value for key, value in target_identity.items()),
-                ExecutionTarget.active.is_(True),
-                ExecutionTarget.state == "ready",
-                ExecutionTarget.provider_metadata["inventory"]["status"].as_string() == "complete",
-                ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True),
-                ExecutionTarget.provider_metadata["inventory"]["running"].as_boolean().is_(True),
-                ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() >=
-                    (claim_now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
-                ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() <= claim_now.isoformat(),
-                preload_idle_clause(),
-                ExecutionTarget.leased_job_id.is_(None),
-            )
-            .values(
-                leased_job_id=str(job.id),
-                lease_acquired_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
-            )
-            .execution_options(synchronize_session=False)
+        assignment = await _reserve_remote_capacity(
+            session, job, target, vram_estimate_mb=vram_estimate_mb,
+            gpu_ids=list(gpu_ids or ([] if gpu_id is None else [gpu_id])),
+            admission_snapshot=snapshot,
         )
-        if int(lease_transition.rowcount or 0) != 1:
+        if assignment is None:
             await claim.rollback()
             return None
+        gpu_ids = assignment["gpu_indices"]
+        gpu_id = gpu_ids[0] if gpu_ids else None
         original = _normalize_job_params(getattr(job, "params", None))
         scheduler_params = (
             attach_scheduler_gpu_assignment(original, int(gpu_id))
@@ -1515,19 +1626,7 @@ async def _claim_remote_job(
             else original
         )
         provenance = dict(getattr(job, "provenance", None) or {})
-        provenance["remote_execution_assignment"] = {
-            "schema": "bms.remote-execution-assignment.v1",
-            "execution_target_id": target_id,
-            "root_job_id": str(job.id),
-            "lease_id": uuid.uuid4().hex,
-            "target_identity": target_identity,
-            "boot_id": (target.provider_metadata or {}).get("managed_boot_id"),
-            "policy": "exclusive_target",
-            "gpu_index": gpu_id,
-            "gpu_indices": list(gpu_ids or ([] if gpu_id is None else [gpu_id])),
-            "admission_snapshot": dict(admission_snapshot or {}),
-            "claimed_at": datetime.utcnow().isoformat() + "Z",
-        }
+        provenance["remote_execution_assignment"] = assignment
         transition = await session.execute(
             update(Job)
             .where(
@@ -1537,6 +1636,7 @@ async def _claim_remote_job(
                 Job.paused.is_(False),
                 Job.assigned_gpu.is_(None),
                 Job.execution_target_id == target_id,
+                ~outstanding_claim_clause(),
                 Job.params == original,
                 Job.started_at.is_(None),
                 Job.nextflow_run_id.is_(None),
@@ -1804,8 +1904,10 @@ def _compute_auto_limit(
     gpu_stats: List[Any],
     config: Dict[str, Any],
     running_jobs_per_gpu: Optional[Dict[int, int]] = None,
+    *, gpu_capabilities: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> int:
     """Compute a VRAM-based concurrency cap for a model."""
+    capabilities = GPU_CAPABILITIES if gpu_capabilities is None else gpu_capabilities
     reservations = [
         (j.scheduler_reservation_mb if j.scheduler_reservation_mb is not None else j.vram_estimate_mb)
         for j in job_infos if j.model_type == model_id
@@ -1833,7 +1935,7 @@ def _compute_auto_limit(
         if is_gpu_disabled(gpu.index, config) and not _gpu_force_available(gpu.index, config):
             continue
         if model_id in HEAVY_MODELS:
-            gpu_caps = GPU_CAPABILITIES.get(gpu.index, {'supports_heavy': True})
+            gpu_caps = capabilities.get(gpu.index, {'supports_heavy': True})
             if not gpu_caps.get('supports_heavy', True):
                 continue
 
@@ -1963,6 +2065,8 @@ def pack_jobs_to_gpus(
     config: Dict[str, Any],
     running_jobs_per_gpu: Optional[Dict[int, int]] = None,
     gpu_last_launch_at: Optional[Dict[int, datetime]] = None,
+    *,
+    gpu_capabilities: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> List[Tuple[JobInfo, int]]:
     """
     First Fit Decreasing bin-packing for GPU job assignment.
@@ -1975,6 +2079,7 @@ def pack_jobs_to_gpus(
     # ═══════════════════════════════════════════════════════════════════════
     # 1. FILTER GPUS - Exclude disabled GPUs
     # ═══════════════════════════════════════════════════════════════════════
+    capabilities = GPU_CAPABILITIES if gpu_capabilities is None else gpu_capabilities
     active_gpus = [
         g for g in gpus
         if (not is_gpu_disabled(g.index, config)) or _gpu_force_available(g.index, config) or _gpu_quick_enable(g.index, config)
@@ -1995,7 +2100,7 @@ def pack_jobs_to_gpus(
     }
     non_heavy_active_ids = {
         g.index for g in active_gpus
-        if not GPU_CAPABILITIES.get(g.index, {'supports_heavy': True}).get('supports_heavy', True)
+        if not capabilities.get(g.index, {'supports_heavy': True}).get('supports_heavy', True)
     }
     
     if not active_gpus:
@@ -2035,7 +2140,7 @@ def pack_jobs_to_gpus(
 
         if job.model_type in PROTENIX_MODELS:
             has_protenix_gpu = any(
-                GPU_CAPABILITIES.get(g.index, {'supports_protenix': True}).get('supports_protenix', True)
+                capabilities.get(g.index, {'supports_protenix': True}).get('supports_protenix', True)
                 for g in active_gpus
             )
             if not has_protenix_gpu:
@@ -2091,7 +2196,7 @@ def pack_jobs_to_gpus(
         for gpu in active_gpus:
             if gpu.memory_total_mb < job.minimum_gpu_memory_mb:
                 continue
-            gpu_caps = GPU_CAPABILITIES.get(gpu.index, {'supports_heavy': True})
+            gpu_caps = capabilities.get(gpu.index, {'supports_heavy': True})
             force_available = _gpu_force_available(gpu.index, config)
             quick_available = quick_enable_tokens.get(gpu.index, 0) > 0
             availability_override = force_available or quick_available
@@ -2792,13 +2897,6 @@ class GPUOrchestrator:
             # consume only the GPU namespace of their persisted execution target.
             remote_jobs = [job for job in pending_jobs if job.execution_target_id]
             if remote_jobs:
-                running_remote_result = await session.execute(
-                    select(Job).where(
-                        Job.queue_status == "running",
-                        Job.execution_target_id.isnot(None),
-                    )
-                )
-                active_remote_jobs = list(running_remote_result.scalars().all())
                 from services.remote_execution.targets import (
                     get_ready_target,
                     remote_target_telemetry,
@@ -2812,16 +2910,6 @@ class GPUOrchestrator:
                     except Exception as exc:
                         job.remote_state = "waiting_target"
                         job.error_message = str(exc)[:1500]
-                        continue
-                    target_active = [
-                        active
-                        for active in active_remote_jobs
-                        if active.execution_target_id == job.execution_target_id
-                        and active.remote_state != "returning"
-                    ]
-                    if target_active or target.leased_job_id:
-                        job.remote_state = "waiting_remote_worker"
-                        job.error_message = "Target exclusively reserved by an existing attempt; descendants share its worker runtime"
                         continue
                     from native_components import job_gpu_capacity_requirements
                     try:
@@ -2879,78 +2967,7 @@ class GPUOrchestrator:
                                 telemetry.get("error") or "Remote GPU telemetry is unavailable"
                             )[:1500]
                             continue
-                        telemetry_by_index = {
-                            int(row["index"]): row
-                            for row in telemetry.get("gpus", [])
-                            if isinstance(row, dict) and isinstance(row.get("index"), int)
-                        }
-                        try:
-                            fill = max(
-                                0.05,
-                                min(0.99, float(config.get("global", {}).get("target_vram_fill", 0.75))),
-                            )
-                        except (TypeError, ValueError):
-                            fill = 0.75
-                        try:
-                            margin_mb = max(
-                                0,
-                                int(config.get("global", {}).get("vram_safety_margin_mb", 2048)),
-                            )
-                        except (TypeError, ValueError):
-                            margin_mb = 2048
-                        if not requested_remote_gpus:
-                            eligible = [index for index, row in telemetry_by_index.items()
-                                if 0 <= index < gpu_count and row.get("uuid")
-                                and int(row.get("memory_total_mb") or 0) >= minimum_gpu_memory_mb
-                                and max(0, int(int(row.get("memory_total_mb") or 0) * fill)
-                                        - int(row.get("memory_used_mb") or 0) - margin_mb) >= int(vram)]
-                            if not eligible:
-                                job.remote_state = "waiting_remote_capacity"
-                                job.error_message = f"No target GPU satisfies {minimum_gpu_memory_mb} MB physical capacity and {int(vram)} MB reservation"
-                                continue
-                            # Deterministic fit within this target's physical namespace.
-                            requested_remote_gpus = [min(eligible, key=lambda index: (
-                                int(telemetry_by_index[index]["memory_total_mb"]), index))]
-                            remote_gpu = requested_remote_gpus[0]
-                        insufficient = []
-                        admitted_devices = []
-                        for gpu_id in requested_remote_gpus:
-                            row = telemetry_by_index.get(gpu_id)
-                            if row is None:
-                                insufficient.append(f"GPU {gpu_id} is absent from live telemetry")
-                                continue
-                            total_mb = int(row.get("memory_total_mb") or 0)
-                            used_mb = int(row.get("memory_used_mb") or 0)
-                            available_mb = max(0, int(total_mb * fill) - used_mb - margin_mb)
-                            admitted_devices.append(
-                                {
-                                    "gpu_index": gpu_id,
-                                    "gpu_uuid": row.get("uuid"),
-                                    "memory_total_mb": total_mb,
-                                    "memory_used_mb": used_mb,
-                                    "target_fill": fill,
-                                    "safety_margin_mb": margin_mb,
-                                    "available_mb": available_mb,
-                                }
-                            )
-                            if total_mb < minimum_gpu_memory_mb:
-                                insufficient.append(f"GPU {gpu_id} has {total_mb} MB physical capacity; {minimum_gpu_memory_mb} MB is required")
-                            if available_mb < int(vram):
-                                insufficient.append(
-                                    f"GPU {gpu_id} has {available_mb} MB admissible; "
-                                    f"{int(vram)} MB is required"
-                                )
-                        if insufficient:
-                            job.remote_state = "waiting_remote_capacity"
-                            job.error_message = "; ".join(insufficient)[:1500]
-                            continue
-                        admission_snapshot = {
-                            "schema": "bms.remote-gpu-admission.v1",
-                            "observed_at": telemetry.get("observed_at"),
-                            "required_per_gpu_mb": int(vram),
-                            "minimum_gpu_memory_mb": minimum_gpu_memory_mb,
-                            "devices": admitted_devices,
-                        }
+                        admission_snapshot = {"telemetry": telemetry}
                     admission_snapshot["target_identity"] = {
                         key: getattr(target, key)
                         for key in ("host", "port", "username", "remote_root", "host_key_sha256")
@@ -2964,7 +2981,23 @@ class GPUOrchestrator:
                         admission_snapshot=admission_snapshot,
                     )
                     if claimed_params is None:
+                        # Losing a claim can mean another controller won or the
+                        # Job was cancelled, not only insufficient capacity.
+                        from sqlalchemy import update
+                        from services.remote_execution.claims import outstanding_claim_clause
+                        with session.no_autoflush:
+                            await session.execute(update(Job).where(
+                                Job.id == str(job.id), Job.execution_target_id == job.execution_target_id,
+                                Job.status == "queued", Job.queue_status == "queued",
+                                Job.paused.is_(False), Job.assigned_gpu.is_(None),
+                                Job.started_at.is_(None), Job.nextflow_run_id.is_(None),
+                                Job.params == _normalize_job_params(job.params), ~outstanding_claim_clause(),
+                            ).values(remote_state="waiting_remote_capacity",
+                                error_message="Waiting for available target placement and VRAM capacity"
+                            ).execution_options(synchronize_session=False))
+                            await session.refresh(job)
                         continue
+                    remote_gpu = job.assigned_gpu
                     await session.commit()
                     remote_launch = self.launch_nextflow_job(
                         job_id=job.id,
@@ -2975,7 +3008,6 @@ class GPUOrchestrator:
                     )
                     if not isinstance(remote_launch, asyncio.Task):
                         await remote_launch
-                    active_remote_jobs.append(job)
                     logger.info(
                         "[LAUNCH REMOTE] %s on %s GPU %s",
                         job.name,
@@ -3131,8 +3163,7 @@ class GPUOrchestrator:
                 if gpu_idx is None or not job_uses_assigned_gpu(rj):
                     continue
                 live_vram = live_vram_by_job.get(rj.id)
-                reservation = _running_job_reservation_mb(rj, live_vram)
-                shortfall = reservation if not live_vram else max(0, reservation - live_vram)
+                shortfall = _reservation_shortfall_mb(rj, live_vram)
                 if shortfall > 0:
                     reservation_shortfall_by_gpu[gpu_idx] = reservation_shortfall_by_gpu.get(gpu_idx, 0) + shortfall
 
@@ -3322,18 +3353,17 @@ class GPUOrchestrator:
             
             await session.commit()
     
-    async def _reconcile_remote_target(self, remote_ids: list[str]) -> None:
-        """One control task per target; a slow SSH/pull cannot block the fleet."""
+    async def _reconcile_remote_job(self, remote_id: str) -> None:
+        """One control task per Job; a slow sibling cannot block its target."""
         from services.remote_execution.executor import reconcile_remote_job
         from database import Job
-        for remote_id in remote_ids:
-            try:
-                async with self.db_session_factory() as session:
-                    job = await session.get(Job, remote_id)
-                    if job is not None:
-                        await reconcile_remote_job(session, job)
-            except Exception as exc:
-                logger.warning("[REMOTE COMPLETION] Job %s remains pending reconciliation: %s", remote_id, exc)
+        try:
+            async with self.db_session_factory() as session:
+                job = await session.get(Job, remote_id)
+                if job is not None:
+                    await reconcile_remote_job(session, job)
+        except Exception as exc:
+            logger.warning("[REMOTE COMPLETION] Job %s remains pending reconciliation: %s", remote_id, exc)
 
     async def check_job_completions(self):
         """
@@ -3380,10 +3410,8 @@ class GPUOrchestrator:
                 # Terminal host rows are not proof that remote writers stopped.
                 # Existing-attempt reconciliation alone may release these leases.
                 from database import ExecutionTarget
-                leased_owner = select(ExecutionTarget.id).where(
-                    ExecutionTarget.leased_job_id == Job.id,
-                    ExecutionTarget.id == Job.execution_target_id,
-                ).exists()
+                from services.remote_execution.claims import outstanding_claim_clause
+                leased_owner = outstanding_claim_clause()
                 # Preparing claims are durable work, not scheduler-claimable jobs.
                 result = await session.execute(
                     select(Job).where(
@@ -3403,19 +3431,16 @@ class GPUOrchestrator:
                 )
                 running_jobs = result.scalars().all()
 
-                remote_by_target: dict[str, list[str]] = {}
-                for job in running_jobs:
-                    if job.execution_target_id:
-                        remote_by_target.setdefault(str(job.execution_target_id), []).append(str(job.id))
+                remote_ids = [str(job.id) for job in running_jobs if job.execution_target_id]
                 running_jobs = [job for job in running_jobs if not job.execution_target_id]
-                for target_id, remote_ids in remote_by_target.items():
-                    task = self._remote_reconciliation_tasks.get(target_id)
+                for remote_id in remote_ids:
+                    task = self._remote_reconciliation_tasks.get(remote_id)
                     if task is None or task.done():
-                        self._remote_reconciliation_tasks[target_id] = asyncio.create_task(
-                            self._reconcile_remote_target(remote_ids))
-                for target_id, task in list(self._remote_reconciliation_tasks.items()):
+                        self._remote_reconciliation_tasks[remote_id] = asyncio.create_task(
+                            self._reconcile_remote_job(remote_id))
+                for remote_id, task in list(self._remote_reconciliation_tasks.items()):
                     if task.done():
-                        del self._remote_reconciliation_tasks[target_id]
+                        del self._remote_reconciliation_tasks[remote_id]
 
                 if not running_jobs:
                     return

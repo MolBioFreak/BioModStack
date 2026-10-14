@@ -43,6 +43,8 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "manual_tip_set": ("POST", "/motion/oem/pipette/tip_tray_set", 120.0),
     "operation_parameters": ("GET", "/liquid/pipette/settings", 10.0),
     "save_operation_parameters": ("PATCH", "/liquid/pipette/settings", 10.0),
+    "protocol_calibration_analyze": ("POST", "/protocol/calibration/analyze", 30.0),
+    "pipette_pressure_capture": ("GET", "/pipettes/pressure-captures/{stream_session_id}", 10.0),
     "protocol_execute": ("POST", "/protocol/execute", 30.0),
     "protocol_jobs": ("GET", "/protocol/jobs", 10.0),
     "protocol_job": ("GET", "/protocol/jobs/{job_id}", 10.0),

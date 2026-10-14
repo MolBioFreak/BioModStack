@@ -907,6 +907,11 @@ def main() -> None:
 
     relocated_request = dict(request)
     relocated_request["assets_dir"] = str(assets_dir)
+    if request.get("canonical_binding"):
+        from lib.portable_inputs import resolve_input_path
+        relocated_request["params"] = dict(request["params"])
+        relocated_request["params"]["checkpoint_path"] = str(resolve_input_path(
+            request["params"]["checkpoint_path"], owner=request_path))
     (output_dir / "request.json").write_text(json.dumps(relocated_request, indent=2), encoding="utf-8")
 
     canonical_binding = relocated_request.get("canonical_binding")

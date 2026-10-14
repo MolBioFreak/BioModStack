@@ -55,10 +55,11 @@ async def _seed(maker, root, spec, *, phase='finalizing', status='running'):
             params={'md_replica_index': 0})
         session.add_all([parent, replica_child, analysis_child])
         await session.flush()
-        run = await create_md_run(session, job=parent, normalized_request={
-            **spec, 'schema': 'bms.md.job.v2', 'chemistry': {
-                'profile_id': 'amber_ff19sb_opc_protein_v1', 'profile_sha256': 'a' * 64,
-                'assurance': 'curated_profile'}})
+        run = await create_md_run(session, job=parent, normalized_request=(spec
+            if spec.get('schema') == 'bms.md.job.v3' else {
+                **spec, 'schema': 'bms.md.job.v2', 'chemistry': {
+                    'profile_id': 'amber_ff19sb_opc_protein_v1', 'profile_sha256': 'a' * 64,
+                    'assurance': 'curated_profile'}}))
         replica, segment = await create_replica_attempt(session, job_id=parent.id,
             replica_index=0, attempt=0, engine='gromacs', child_job_id=replica_child.id,
             execution_plan_sha256='b' * 64, compatibility_key='c' * 64)

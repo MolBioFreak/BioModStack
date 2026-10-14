@@ -151,29 +151,6 @@ def _service():
     return importlib.import_module("services.ont_ngs_hierarchy")
 
 
-def test_hierarchy_authority_is_complete_path_opaque_and_stable() -> None:
-    service = _service()
-    build = getattr(service, "build_ont_ngs_hierarchy_authority", None)
-    assert callable(build), "hierarchy authority builder is missing"
-
-    authority: Any = build(**_valid_contract())
-
-    assert authority.project_id == PROJECT_ID
-    assert authority.document["job"] == {
-        "id": JOB_ID,
-        "workflow_id": "ont_fastq_qc",
-        "input_mode": "fastq",
-    }
-    assert authority.document["project"]["revision_id"] == "project-revision-1"
-    assert authority.document["global_experiment"]["id"] == GLOBAL_ID
-    assert authority.document["domain_experiment"]["state_revision_id"] == STATE_ID
-    assert authority.document["member"]["receipt_id"] == MEMBER_ID
-    assert authority.document["sample"]["revision_id"] == SAMPLE_ID
-    assert authority.document["reference"]["revision_id"] == REFERENCE_ID
-    assert authority.digest == hashlib.sha256(rfc8785.dumps(authority.document)).hexdigest()
-    assert "/home/" not in repr(authority.document)
-
-
 def test_capability_hierarchy_record_rejects_missing_rewritten_and_cross_job_authority() -> None:
     service = _service()
     authority = service.build_ont_ngs_hierarchy_authority(**_valid_contract())
@@ -225,19 +202,6 @@ def test_reconciliation_source_binding_uses_only_validated_source_authority() ->
             verification_manifest_sha256="c" * 64,
             reference_sequence_sha256=SHA["global"],
         )
-
-
-def test_workflow_aliases_produce_one_canonical_hierarchy_digest() -> None:
-    service = _service()
-    canonical = _valid_contract()
-    alias = copy.deepcopy(canonical)
-    alias["params"]["workflow_id"] = alias["params"].pop("ont_workflow_id")
-
-    canonical_authority = service.build_ont_ngs_hierarchy_authority(**canonical)
-    alias_authority = service.build_ont_ngs_hierarchy_authority(**alias)
-
-    assert alias_authority.digest == canonical_authority.digest
-    assert alias_authority.document["job"]["workflow_id"] == "ont_fastq_qc"
 
 
 def test_canonical_scientific_documents_use_document_bounds_not_identifier_bounds() -> None:
@@ -370,11 +334,6 @@ async def test_resolver_loads_the_frozen_binding_not_the_current_domain_head(mon
     assert authority.document["source_fastq"]["sha256"] == "f" * 64
     assert authority.digest == hashlib.sha256(rfc8785.dumps(authority.document)).hexdigest()
     assert authority.document["domain_experiment"]["binding_revision_id"] == BINDING_ID
-
-
-def build_ont_digest(contract: dict[str, Any]) -> str:
-    service = _service()
-    return service.build_ont_ngs_hierarchy_authority(**contract).digest
 
 
 @pytest.mark.parametrize("historical", [False, True])

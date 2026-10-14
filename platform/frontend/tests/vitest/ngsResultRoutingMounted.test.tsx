@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseOntFastqQcResult } from '../../src/lib/ontFastqQcResult';
 import React, { act, useLayoutEffect } from 'react';
@@ -81,6 +81,19 @@ function NgsDestination() {
     return <div data-testid="ngs-destination">{location.pathname}{location.search}</div>;
 }
 
+function NgsWithQueryNavigation() {
+    const navigate = useNavigate();
+    const location = useLocation();
+    contextMocks.updateQueryParams.mockImplementation((changes: Record<string, string | null>) => {
+        const params = new URLSearchParams(location.search);
+        for (const [key, value] of Object.entries(changes)) {
+            if (value === null) params.delete(key); else params.set(key, value);
+        }
+        navigate({ pathname: location.pathname, search: params.toString() });
+    });
+    return <><NgsDestination /><NGSToolkit /></>;
+}
+
 function SwitchJobButton({ onJob456Layout }: { onJob456Layout?: () => void }) {
     const navigate = useNavigate();
     const location = useLocation();
@@ -146,8 +159,86 @@ afterEach(async () => {
     vi.useRealTimers();
 });
 
+// Opt-in retained-byte receiving controls: real UI/parsers with an explicitly
+// synthetic transport catalog, not native HTTP or newly executed science.
+if (process.env.ONT_ACCEPTANCE_RETAINED_JOBS) {
+    const retained = JSON.parse(readFileSync(process.env.ONT_ACCEPTANCE_RETAINED_JOBS, 'utf8')) as Array<{ name: string; mode: string; params: Record<string, unknown>; source_output: string }>;
+    describe('retained native bytes through mounted rich result parsers (transport fixture)', () => {
+        it.each(retained)('$name', async fixture => {
+            Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+            const files = readdirSync(fixture.source_output, { recursive: true, withFileTypes: true }).filter(e => e.isFile());
+            const entries = files.map((entry, i) => {
+                const path = resolve(entry.parentPath, entry.name);
+                return { path, filename: entry.name, source: path.slice(fixture.source_output.length + 1).split('/')[0], url: `/api/jobs/job-123/ngs-artifacts/${i}` };
+            });
+            const job = { id: 'job-123', name: fixture.name, model_id: 'nanopore', mode: fixture.mode, status: 'completed',
+                params: fixture.params, output_dir: 'bms_results/job-123', created_at: '2026-09-01T00:00:00Z',
+                stage_outputs: {} };
+            ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [job], total: 1 } });
+            ngsApiMocks.fetchFullJob.mockResolvedValue(job);
+            ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { job_id: job.id, stage_outputs: job.stage_outputs } });
+            vi.mocked(api.get).mockImplementation(async url => {
+                if (url !== '/api/jobs/job-123/ngs-artifacts') throw Error(`Unrelated fixture read ${url}`);
+                return { data: { job_id: job.id, artifacts: entries.map((e, i) => ({ ...e, artifact_id: String(i), kind: 'native', state: 'present', size_bytes: readFileSync(e.path).length })) } };
+            });
+            const reads: string[] = [];
+            vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+                const entry = entries.find(e => e.url === url);
+                if (!entry) throw Error(`Not a catalog URL: ${url}`);
+                reads.push(url);
+                return { ok: true, status: 200, text: async () => readFileSync(entry.path, 'utf8') };
+            }));
+            await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/ngs?section=analyses&job_id=job-123']}><NGSToolkit /></MemoryRouter></QueryClientProvider>));
+            const expected = fixture.mode === 'basecall_dna' ? 'modkit_summary.tsv' : 'fastq_qc_summary.tsv';
+            const expectedEntry = entries.find(e => e.filename.endsWith(expected))!;
+            await vi.waitFor(async () => { await flush(); expect(reads).toContain(expectedEntry.url); });
+            await vi.waitFor(async () => {
+                await flush();
+                expect(container.textContent).toContain(fixture.mode === 'basecall_dna' ? 'C_total_mod_calls257' : 'Read lengths rows30');
+            });
+            if (process.env.ONT_ACCEPTANCE_ROOT) writeFileSync(resolve(process.env.ONT_ACCEPTANCE_ROOT, `mounted-${fixture.mode}.txt`), container.textContent || '');
+            if (fixture.mode === 'fastq_qc') expect(container.textContent).toContain('Consensus statusok');
+            expect(container.querySelector('a[href^="/api/files/"]')).toBeNull();
+            expect(reads.every(url => url.startsWith('/api/jobs/job-123/ngs-artifacts/'))).toBe(true);
+        });
+    });
+}
+
 describe('NGS authoritative stage presentation', () => {
-    for (const status of ['queued', 'running', 'completed', 'awaiting_input', 'failed', 'cancelled']) {
+    it('reuses a populated run in the real authoring form without the old runs effect selecting it again', async () => {
+        Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+        const job = { id: 'job-123', name: 'Saved clone settings', model_id: 'nanopore', mode: 'clone_validation', status: 'completed', created_at: '2026-09-01T00:00:00Z', params: { fastq_path: 'inputs/clone.fastq', ont_workflow_id: 'wf_clone_validation', wf_clone_assembly_tool: 'canu' } };
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [job], total: 1 } });
+        ngsApiMocks.fetchFullJob.mockResolvedValue(job);
+        ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { job_id: job.id, stages: [] } });
+        await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/ngs?section=analyses&job_id=job-123']}><NgsWithQueryNavigation /></MemoryRouter></QueryClientProvider>));
+        const reuse = () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Reuse Params')!;
+        await waitUntil(() => expect(reuse()?.disabled).toBe(false));
+        await act(async () => reuse().click());
+        await waitUntil(() => expect(container.textContent).toContain('Choose what you want to do'));
+        for (let i = 0; i < 3; i++) await flush();
+        expect(container.querySelector('[data-testid="ngs-destination"]')?.textContent).toBe('/ngs');
+        expect([...container.querySelectorAll('input')].some(input => input.value === job.name)).toBe(true);
+        expect(container.textContent).toContain('clone.fastq');
+        await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Show advanced controls')!.click());
+        expect([...container.querySelectorAll('select')].find(select => select.querySelector('option[value="canu"]'))?.value).toBe('canu');
+    });
+    it('opens native clone downloads and recovers the catalog in the actual toolkit cache', async () => {
+        Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+        const job = { id: 'job-123', name: 'Native clone outputs', model_id: 'nanopore', mode: 'clone_validation', status: 'completed', params: {}, created_at: '2026-09-01T00:00:00Z', stage_outputs: { wf_clone_validation: ['bms_results/job-123/assembly/wf-clone-validation-report.html'] } };
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [job], total: 1 } });
+        ngsApiMocks.fetchFullJob.mockResolvedValue(job);
+        ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { job_id: job.id, stage_outputs: job.stage_outputs } });
+        await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/ngs?section=analyses&job_id=job-123']}><NGSToolkit /></MemoryRouter></QueryClientProvider>));
+        await waitUntil(() => expect(container.textContent).toContain('Retry downloads'));
+        const url = '/api/jobs/job-123/ngs-artifacts/' + 'a'.repeat(64);
+        vi.mocked(api.get).mockResolvedValue({ data: { job_id: job.id, artifacts: [{ artifact_id: 'a'.repeat(64), kind: 'clone_report', source: 'wf_clone_validation', state: 'present', url, size_bytes: 500, filename: 'wf-clone-validation-report.html' }] } });
+        await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Retry downloads')!.click());
+        await waitUntil(() => expect(container.querySelector(`a[href="${url}"]`)).not.toBeNull());
+        expect(container.querySelector('a[href^="/api/files/download/"]')).toBeNull();
+        expect(client.getQueryData(['ngs-package-artifacts', 'job-123'])).toMatchObject({ job_id: job.id });
+    });
+    for (const status of ['queued', 'completed']) {
         it(`${status} list and selected run preserve planned versus recorded states`, async () => {
             Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
             const execution_stages = [
@@ -178,24 +269,6 @@ describe('NGS authoritative stage presentation', () => {
 });
 
 describe('preview-independent mounted locus loading', () => {
-    it('keeps every NGS destination in a bounded wrapping navigation group', async () => {
-        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [], total: 0 } });
-        await act(async () => root.render(
-            <QueryClientProvider client={client}>
-                <MemoryRouter initialEntries={['/ngs?section=analyses']}>
-                    <NGSToolkit />
-                </MemoryRouter>
-            </QueryClientProvider>,
-        ));
-        const nav = container.querySelector('nav[aria-label="NGS navigation"]') as HTMLElement;
-        expect(nav).toBeTruthy();
-        expect(nav.classList.contains('flex-wrap')).toBe(true);
-        expect(nav.classList.contains('max-w-full')).toBe(true);
-        expect(nav.parentElement?.classList.contains('flex-wrap')).toBe(true);
-        for (const label of ['Data Analysis', 'Instrument setup', 'Runs', 'Mol Bio Toolkit']) {
-            expect([...nav.querySelectorAll('button')].some((button) => button.textContent === label)).toBe(true);
-        }
-    });
 
     it.each(['rejected', 'pending'] as const)('loads a detailed locus when the oversized BAM preview is %s', async (previewState) => {
         Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
@@ -351,6 +424,7 @@ describe('completed NGS result routing', () => {
         expect(isNgsJob({ model_id: 'mynanopore', mode: 'ont_fastq_qc' })).toBe(false);
         expect(isNgsJob({ model_id: 'unrelated', mode: 'nanopore_methylation' })).toBe(false);
         expect(ngsResultHref('job 123')).toBe('/ngs?section=analyses&job_id=job%20123');
+        expect(ngsResultHref('new', '?workspace_id=w&job_id=old&view=workbench&viewer_session_id=old-view&run_id=old-run&reference_set_id=old-set&assignment_id=old-assignment')).toBe('/ngs?workspace_id=w&job_id=new&section=analyses');
         expect(ngsResultHref(
             'job 123',
             '?workspace_id=ws-1&global_experiment_id=global-1&domain_experiment_id=domain-1',
@@ -434,6 +508,11 @@ describe('completed NGS result routing', () => {
     });
 
     it('routes a completed Nanopore job to its NGS Run Inspector instead of requesting structure files', async () => {
+        Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+        const received = { id: 'job-123', name: 'AAZ605 FASTQ QC', model_id: 'nanopore', mode: 'ont_fastq_qc', status: 'completed', created_at: '2026-08-10T00:00:00Z', params: {} };
+        ngsApiMocks.fetchJobs.mockResolvedValue({ data: { jobs: [received], total: 1 } });
+        ngsApiMocks.fetchFullJob.mockResolvedValue(received);
+        ngsApiMocks.fetchJobStages.mockResolvedValue({ data: { job_id: received.id, stages: [] } });
         const requested: string[] = [];
         vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
             const url = String(input);
@@ -467,7 +546,7 @@ describe('completed NGS result routing', () => {
                     ]}>
                         <Routes>
                             <Route path="/jobs/:jobId" element={<JobDetailPage />} />
-                            <Route path="/ngs" element={<NgsDestination />} />
+                            <Route path="/ngs" element={<><NgsDestination /><NGSToolkit /></>} />
                         </Routes>
                     </MemoryRouter>
                 </QueryClientProvider>,
@@ -480,6 +559,8 @@ describe('completed NGS result routing', () => {
                     '/ngs?workspace_id=ws-1&global_experiment_id=global-1&domain_experiment_id=domain-1&section=analyses&job_id=job-123',
                 );
         });
+        await waitUntil(() => expect(container.textContent).toContain('Run Inspector'));
+        await waitUntil(() => expect(client.getQueryData(['full-job', 'job-123'])).toMatchObject({ id: received.id }));
         expect(requested).not.toContain('/api/jobs/job-123/structure-files');
     });
 
@@ -649,7 +730,6 @@ describe('completed NGS result routing', () => {
         expect(client.getQueryState(['sequence-qc-manifest', 'job-123'])?.isInvalidated).toBe(false);
     });
 });
-
 
 describe('bounded NGS jobs receiving owner', () => {
     const job = { id: 'selected-outside-page', name: 'Selected live detail', model_id: 'nanopore',

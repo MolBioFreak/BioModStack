@@ -3,9 +3,12 @@
  * Process names are preserved to avoid behavior-changing call-site churn.
  */
 
+include { ngsResultPublishMode } from './publication'
+
 process FastqAlign {
     label 'dorado_cpu'
-    publishDir "${params.out_dir}/align", mode: 'copy'
+    publishDir "${params.out_dir}/align", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", pattern: '*.{bam,bai,fasta,fai}'
+    publishDir "${params.out_dir}/align", mode: 'copy', saveAs: { name -> name ==~ /.*\.(bam|bai|fasta|fai)$/ ? null : name }
     tag "fastq_align"
 
     input:
@@ -19,6 +22,8 @@ process FastqAlign {
     path "fastq_align.log", emit: log
 
     script:
+
+    def retainedReference = (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source in ['server_consumed_receipt', 'pooled_reference_set_receipt'] || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false'
     def minimapPreset = ((params.fastq_minimap2_preset ?: 'map-ont') as String).trim()
     def allowSecondary = (params.fastq_minimap2_allow_secondary == true) ? 'true' : 'false'
     def declaredReferenceSha256 = params.reference_sequence_sha256?.toString()?.trim()?.toLowerCase() ?: ''
@@ -27,10 +32,10 @@ process FastqAlign {
     }
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_input_snapshot.sh"
 
     # Snapshot and authenticate the reference before alignment.
-    cp --reflink=auto -- "${reference}" reference.snapshot.fasta
-    chmod 0444 reference.snapshot.fasta
+    ngs_input_snapshot "${reference}" reference.snapshot.fasta ${retainedReference}
     reference_raw_sha256_before="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
     normalized_reference="\$(awk '
       BEGIN { records=0; sequence="" }
@@ -65,14 +70,19 @@ process FastqAlign {
 
     samtools quickcheck -v aligned.bam 2>>fastq_align.log
     samtools index aligned.bam
+    chmod 0444 aligned.bam aligned.bam.bai
     samtools idxstats aligned.bam > /dev/null 2>>fastq_align.log
     reference_raw_sha256_after="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
     if [[ "\${reference_raw_sha256_before}" != "\${reference_raw_sha256_after}" ]]; then
         echo "ERROR: task-local reference snapshot changed during alignment." >&2
         exit 94
     fi
+    ngs_reference_index "${reference}" reference.fasta ${retainedReference} true || samtools faidx reference.snapshot.fasta
     rm -f -- "${reference}"
-    cp --reflink=auto -- reference.snapshot.fasta reference.fasta
-    samtools faidx reference.fasta
+    ngs_input_snapshot reference.snapshot.fasta reference.fasta true true
+    if [[ ! -f reference.fasta.fai ]]; then
+        mv reference.snapshot.fasta.fai reference.fasta.fai
+        chmod 0444 reference.fasta.fai
+    fi
     """
 }

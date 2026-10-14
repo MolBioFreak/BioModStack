@@ -122,8 +122,8 @@ process RunConforNets {
 
 process FinalizeConforNetsOutputs {
     label 'local_cpu'
+    stageInMode 'rellink'
 
-    publishDir "${params.out_dir}/final/confornets", mode: 'copy', pattern: 'final_confornets_results/**/*', saveAs: { filename -> filename.replace('final_confornets_results/', '') }
     publishDir "${params.out_dir}/run/confornets", mode: 'copy', pattern: '*.log'
 
     input:
@@ -166,9 +166,7 @@ for sample in samples:
     sample_path = source / sample['relative_path']
     if not sample_path.exists():
         raise SystemExit(f'Missing normalized sample listed in manifest: {sample_path}')
-if dest.exists():
-    shutil.rmtree(dest)
-shutil.copytree(source, dest)
+dest.symlink_to(source.resolve(), target_is_directory=True)
 publish_dest.parent.mkdir(parents=True, exist_ok=True)
 if publish_dest.exists():
     shutil.rmtree(publish_dest)

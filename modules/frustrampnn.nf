@@ -5,7 +5,7 @@ process CanonicalFrustraMPNNTask {
     label 'frustrampnn_gpu'
     errorStrategy 'terminate'
     maxRetries 0
-    stageInMode 'copy'
+    stageInMode 'symlink'
 
 
     input:
@@ -97,7 +97,7 @@ process CanonicalFrustraMPNNV2Task {
     label 'frustrampnn_gpu'
     errorStrategy 'terminate'
     maxRetries 0
-    stageInMode 'copy'
+    stageInMode 'symlink'
 
     input:
     tuple path(component_request), path(source_structure), path(structure_map)

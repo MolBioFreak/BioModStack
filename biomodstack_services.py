@@ -365,7 +365,8 @@ def ensure_development_proxy_identity() -> Path:
 
     if path.exists():
         values = {}
-        for line in path.read_text(encoding="utf-8").splitlines():
+        original = path.read_text(encoding="utf-8")
+        for line in original.splitlines():
             if line and not line.startswith("#") and "=" in line:
                 key, value = line.split("=", 1)
                 values[key] = value
@@ -375,6 +376,14 @@ def ensure_development_proxy_identity() -> Path:
             raise ServiceManagerError(
                 f"Development Project proxy identity is invalid: {path}"
             )
+        # EnvironmentFile wins over generated unit Environment directives.
+        # Retire only the former candidate pins; retain proxy identity and inputs.
+        retired = ("BMS_ONT_SLOW5TOOLS_IMAGE=", "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST=",
+                   "BMS_ONT_BLOW5_CONVERSION_QUALIFIED=")
+        retained = "".join(line for line in original.splitlines(keepends=True)
+                           if not line.startswith(retired))
+        if retained != original:
+            path.write_text(retained, encoding="utf-8")
         path.chmod(0o600)
         return path
 
@@ -1265,34 +1274,7 @@ def render_workflow_slice(lane: str) -> str:
     )
 
 
-def _ont_squigualiser_runtime_identity(project_root: Path) -> tuple[str, str]:
-    policy_path = (
-        project_root
-        / "platform"
-        / "api"
-        / "config"
-        / "ont_signal_workbench"
-        / "runtime_policy_v1.json"
-    )
-    if not policy_path.is_file():
-        return "", ""
-    try:
-        policy = json.loads(policy_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ServiceManagerError("ONT Squigualiser runtime policy is unreadable") from exc
-    if not isinstance(policy, Mapping):
-        raise ServiceManagerError("ONT Squigualiser runtime policy must be an object")
-    runtime_id = str(policy.get("runtime_id", "")).strip().lower()
-    oci_digest = str(policy.get("oci_digest", "")).strip().lower()
-    if (
-        runtime_id != oci_digest
-        or not re.fullmatch(r"sha256:[0-9a-f]{64}", runtime_id)
-    ):
-        raise ServiceManagerError("ONT Squigualiser runtime policy identity is invalid")
-    return runtime_id, runtime_id.removeprefix("sha256:")
-
-
-def _ont_comparison_runtime_identity(
+def _ont_runtime_identity(
     project_root: Path, policy_name: str, label: str
 ) -> tuple[str, str]:
     policy_path = (
@@ -1387,6 +1369,10 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     from biomodstack_local_resources import configured_local_policy
     local_policy = configured_local_policy()
     shared_data_root = Path(str(resolved.get("data_root", Path("/mnt/BioModStack")))).expanduser().resolve()
+    # Host support bodies are independent of lane-local BMS_DATA/job state.
+    support_payload_root = Path(os.environ.get("BMS_CM_API_RUNTIME_DIR", "").strip() or
+        str(Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) /
+            "biomodstack/runtime/cm-api-python")).expanduser().resolve()
     # All lanes share bytes, but consume only their own published references.
     runtime_image_store = Path(
         os.environ.get("BMS_RUNTIME_IMAGE_STORE", "").strip()
@@ -1466,6 +1452,8 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             Environment={systemd_value(f"BMS_HOME={root}")}
             Environment={systemd_value(f"BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}")}
             Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={PRODUCTION_LANE}")}
+            Environment={systemd_value(f"BMS_CM_API_RUNTIME_DIR={support_payload_root}")}
+            {python_root_directive}
             Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
             Environment={systemd_value(f"BMS_STATE_DIR={production_state_root}")}
             Environment={systemd_value(f"BMS_DATA={production_state_root}")}
@@ -1516,6 +1504,8 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
             Environment={systemd_value(f"BMS_HOME={root}")}
             Environment={systemd_value(f"BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}")}
             Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={PRODUCTION_LANE}")}
+            Environment={systemd_value(f"BMS_CM_API_RUNTIME_DIR={support_payload_root}")}
+            {python_root_directive}
             Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
             Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_URL={workflow_adapter_url_for_lane(PRODUCTION_LANE)}")}
             Environment={systemd_value(f"BMS_STATE_DIR={production_state_root}")}
@@ -1600,23 +1590,39 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         )
     )
     ont_container_runtime = os.environ.get("BMS_ONT_CONTAINER_RUNTIME", "docker").strip() or "docker"
-    ont_runtime_image = os.environ.get("BMS_ONT_SLOW5TOOLS_IMAGE", "").strip()
-    ont_runtime_digest = os.environ.get("BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST", "").strip()
-    ont_squigualiser_image, ont_squigualiser_digest = _ont_squigualiser_runtime_identity(root)
-    ont_squigulator_image, ont_squigulator_digest = _ont_comparison_runtime_identity(
+    ont_runtime_image, ont_runtime_digest = _ont_runtime_identity(
+        root, "raw_signal_runtime_policy_v1.json", "raw signal"
+    )
+    ont_squigualiser_image, ont_squigualiser_digest = _ont_runtime_identity(
+        root, "runtime_policy_v1.json", "Squigualiser"
+    )
+    ont_squigulator_image, ont_squigulator_digest = _ont_runtime_identity(
         root, "squigulator_runtime_policy_v1.json", "Squigulator producer"
     )
-    ont_comparison_image, ont_comparison_digest = _ont_comparison_runtime_identity(
+    ont_comparison_image, ont_comparison_digest = _ont_runtime_identity(
         root,
         "comparison_render_runtime_policy_v1.json",
         "Squigualiser comparison renderer",
+    )
+    ont_runtime_environment = "\n        ".join(
+        "Environment=" + systemd_value(f"{key}={value}")
+        for key, value in {
+            "BMS_ONT_CONTAINER_RUNTIME": ont_container_runtime,
+            "BMS_ONT_SLOW5TOOLS_IMAGE": ont_runtime_image,
+            "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST": ont_runtime_digest,
+            "BMS_ONT_SQUIGUALISER_IMAGE": ont_squigualiser_image,
+            "BMS_ONT_SQUIGUALISER_IMAGE_DIGEST": ont_squigualiser_digest,
+            "BMS_ONT_SQUIGULATOR_IMAGE": ont_squigulator_image,
+            "BMS_ONT_SQUIGULATOR_IMAGE_DIGEST": ont_squigulator_digest,
+            "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE": ont_comparison_image,
+            "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST": ont_comparison_digest,
+        }.items()
     )
     ont_staging_root = os.environ.get(
         "BMS_ONT_RAW_SIGNAL_STAGING_ROOT",
         str(shared_data_root / "ont-raw-signal-staging"),
     ).strip()
     ont_acquisition_pressure = os.environ.get("BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE", "unknown").strip() or "unknown"
-    ont_conversion_qualified = os.environ.get("BMS_ONT_BLOW5_CONVERSION_QUALIFIED", "0").strip() or "0"
     ont_live_conversion_enabled = "1" if os.environ.get("BMS_ONT_LIVE_CONVERSION_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"} else "0"
     ont_retention_policy = os.environ.get("BMS_ONT_RAW_SIGNAL_RETENTION_POLICY", "pod5_and_blow5").strip().lower()
     if ont_retention_policy not in {"pod5_and_blow5", "blow5_only"}:
@@ -1719,6 +1725,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_HOME={root}")}
         Environment={systemd_value(f"BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}")}
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}")}
+        Environment={systemd_value(f"BMS_CM_API_RUNTIME_DIR={support_payload_root}")}
         {python_root_directive}
         Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
         Environment={systemd_value(f"BMS_STATE_DIR={dev_data_root}")}
@@ -1737,6 +1744,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_RUNTIME_IMAGE_STORE={runtime_image_store}")}
         Environment=BMS_RUNTIME_IMAGE_LANE=development
         {_runtime_reference_directive(runtime_image_store, 'development')}
+        {ont_runtime_environment}
         Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_PORT={DEVELOPMENT_WORKFLOW_ADAPTER_PORT}")}
         Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
@@ -1776,6 +1784,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_HOME={root}")}
         Environment={systemd_value(f"BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}")}
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}")}
+        Environment={systemd_value(f"BMS_CM_API_RUNTIME_DIR={support_payload_root}")}
         {python_root_directive}
         Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_URL={workflow_adapter_url_for_lane(DEVELOPMENT_LANE)}")}
@@ -1805,18 +1814,9 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_MSA_CACHE={dev_msa_cache_dir}")}
         Environment={systemd_value(f"BMS_SABDAB_CACHE={dev_sabdab_cache_dir}")}
         Environment=BMS_CPU_POWER_STRICT=0
-        Environment={systemd_value(f"BMS_ONT_CONTAINER_RUNTIME={ont_container_runtime}")}
-        Environment={systemd_value(f"BMS_ONT_SLOW5TOOLS_IMAGE={ont_runtime_image}")}
-        Environment={systemd_value(f"BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST={ont_runtime_digest}")}
-        Environment={systemd_value(f"BMS_ONT_SQUIGUALISER_IMAGE={ont_squigualiser_image}")}
-        Environment={systemd_value(f"BMS_ONT_SQUIGUALISER_IMAGE_DIGEST={ont_squigualiser_digest}")}
-        Environment={systemd_value(f"BMS_ONT_SQUIGULATOR_IMAGE={ont_squigulator_image}")}
-        Environment={systemd_value(f"BMS_ONT_SQUIGULATOR_IMAGE_DIGEST={ont_squigulator_digest}")}
-        Environment={systemd_value(f"BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE={ont_comparison_image}")}
-        Environment={systemd_value(f"BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST={ont_comparison_digest}")}
+        {ont_runtime_environment}
         Environment={systemd_value(f"BMS_ONT_RAW_SIGNAL_STAGING_ROOT={ont_staging_root}")}
         Environment={systemd_value(f"BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE={ont_acquisition_pressure}")}
-        Environment={systemd_value(f"BMS_ONT_BLOW5_CONVERSION_QUALIFIED={ont_conversion_qualified}")}
         Environment={systemd_value(f"BMS_ONT_LIVE_CONVERSION_ENABLED={ont_live_conversion_enabled}")}
         Environment={systemd_value(f"BMS_ONT_RAW_SIGNAL_RETENTION_POLICY={ont_retention_policy}")}
         Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
@@ -1912,6 +1912,31 @@ def install_user_units(
     target_dir.mkdir(parents=True, exist_ok=True)
     if resolve_runtime_mode(runtime_mode) == DEV_RUNTIME_MODE:
         ensure_development_proxy_identity()
+        # Retire only the old candidate's raw-image pins. The generated release
+        # policy owns these; unrelated external-BAM and retention settings stay.
+        legacy = target_dir / f"{API_SERVICE}.d" / "zzzzzzzz-ont-exact-candidate.conf"
+        if legacy.is_file():
+            original = legacy.read_text(encoding="utf-8")
+            retained = "".join(line for line in original.splitlines(keepends=True)
+                               if not line.startswith(("Environment=BMS_ONT_SLOW5TOOLS_IMAGE=",
+                                                       "Environment=BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST=")))
+            if retained != original:
+                legacy.write_text(retained, encoding="utf-8")
+
+    # Retire the known operator override, not arbitrary user service settings.
+    # Leave retention/environment/RestartPreventExitStatus intact. The wrapper
+    # is no longer invoked, and no destructive wrapper is saved for rollback.
+    legacy_guard = target_dir / f"{DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE}.d" / "zzzz-runtime-retention-guard.conf"
+    if legacy_guard.is_file():
+        original = legacy_guard.read_text(encoding="utf-8")
+        lines = original.splitlines(keepends=True)
+        if any(line.strip().startswith("ExecStart=") and
+               "development_workflow_adapter_guard.sh" in line for line in lines):
+            retained = "".join(line for line in lines if not (
+                line.strip() == "ExecStart=" or
+                (line.strip().startswith("ExecStart=") and
+                 "development_workflow_adapter_guard.sh" in line)))
+            legacy_guard.write_text(retained, encoding="utf-8")
 
     written_paths: list[Path] = []
     for unit_name, content in render_user_units(root, runtime_mode=runtime_mode).items():

@@ -24,7 +24,8 @@ class ProtenixRuntimeAttestationError(RuntimeError):
     """Observed execution identity does not satisfy the registered contract."""
 
 
-def _sha256_file(path: Path) -> tuple[str, int]:
+def _sha256_file(path: Path, *, immutable: bool = False) -> tuple[str, int]:
+    path = path.resolve(strict=True)
     file_fd, parent_fd, leaf, before, path_before = _open_pinned_file(path)
     try:
         if not stat.S_ISREG(before.st_mode):
@@ -40,7 +41,7 @@ def _sha256_file(path: Path) -> tuple[str, int]:
         after = os.fstat(file_fd)
         path_after = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
         visible_after = os.lstat(path)
-        if not _same_identity(before, after) or not _same_identity(path_before, path_after) or not _same_identity(before, visible_after):
+        if not _same_identity(before, after, immutable=immutable) or not _same_identity(path_before, path_after, immutable=immutable) or not _same_identity(before, visible_after, immutable=immutable):
             raise ProtenixRuntimeAttestationError(f"file path or bytes changed during measurement: {path}")
         if size != before.st_size:
             raise ProtenixRuntimeAttestationError(f"file size changed during measurement: {path}")
@@ -88,14 +89,16 @@ def _open_pinned_file(path: Path) -> tuple[int, int, str, os.stat_result, os.sta
         raise
 
 
-def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
-    return all(
-        getattr(left, field) == getattr(right, field)
-        for field in ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")
-    )
+def _same_identity(left: os.stat_result, right: os.stat_result, *, immutable: bool = False) -> bool:
+    fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")
+    # Only installed checkpoint measurements ignore reference-count-only ctime.
+    if not immutable:
+        fields += ("st_ctime_ns",)
+    return all(getattr(left, field) == getattr(right, field) for field in fields)
 
 
 def _read_stable_bytes(path: Path) -> bytes:
+    path = path.resolve(strict=True)
     file_fd, parent_fd, leaf, before, path_before = _open_pinned_file(path)
     try:
         chunks: list[bytes] = []
@@ -116,6 +119,7 @@ def _read_stable_bytes(path: Path) -> bytes:
 
 
 def _safe_regular(path: Path, label: str) -> os.stat_result:
+    path = path.resolve(strict=True)
     file_fd: int | None = None
     parent_fd: int | None = None
     try:
@@ -217,7 +221,7 @@ def _validate_execution_receipt(
         snapshot = record.get("verified_snapshot") if isinstance(record, Mapping) else None
         if not isinstance(snapshot, Mapping):
             raise ProtenixRuntimeAttestationError(f"execution {label} receipt is malformed")
-        digest, size = _sha256_file(path)
+        digest, size = _sha256_file(path, immutable=label == "checkpoint")
         if snapshot.get("sha256") != digest or snapshot.get("bytes") != size:
             raise ProtenixRuntimeAttestationError(
                 f"executed {label} bytes differ from the pre-execution snapshot receipt"
@@ -304,7 +308,7 @@ def build_runtime_attestation(
         registry, image_receipt_path, runtime_image
     )
     _safe_regular(checkpoint, "Protenix checkpoint")
-    checkpoint_sha256, checkpoint_bytes = _sha256_file(checkpoint)
+    checkpoint_sha256, checkpoint_bytes = _sha256_file(checkpoint, immutable=True)
     expected_checkpoint = str(registry.get("checkpoint_sha256") or "")
     if checkpoint_sha256 != expected_checkpoint or not SHA256_RE.fullmatch(checkpoint_sha256):
         raise ProtenixRuntimeAttestationError(

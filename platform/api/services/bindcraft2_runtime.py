@@ -110,6 +110,130 @@ def native_command(compiled: dict, campaign: Path, settings_path: Path) -> list[
     return command
 
 
+def _private_leaf(source: Path, destination: Path) -> None:
+    """Private native writer input; CoW is optional, never assumed."""
+    import fcntl
+    import shutil
+    with source.open('rb') as reader, destination.open('xb') as writer:
+        try:
+            fcntl.ioctl(writer.fileno(), 0x40049409, reader.fileno())  # FICLONE
+        except OSError:
+            shutil.copyfileobj(reader, writer)
+
+
+def materialize_action_tree(source_root: Path, destination: Path, action: dict, *,
+                            campaign_immutable: bool = True) -> None:
+    """Private directories with retained immutable bodies and isolated writers.
+
+    A live campaign donor requires independent custody. Preparation/publication
+    donors may share read-only bodies; resume shares only completed hash-named
+    leaves protected by native attempted state plus retained source snapshots.
+    """
+    import errno
+    import zipfile
+    operation = action.get('operation', 'resume')
+    options = action.get('options', {})
+    campaign = source_root / 'campaign'
+    selected = campaign / options.get('campaign_relative_path', '.')
+    collisions = set()
+    completed = set()
+    if operation == 'resume' and campaign_immutable:
+        import csv
+        # Native claim_recipe skips an attempted hash BEFORE opening any design
+        # output. Share only recorded hash-named completed bodies protected by
+        # that exact state; everything else remains a private continuation seed.
+        tables = list(campaign.rglob('!_Trajectories.csv')) + list(campaign.rglob('trajectories.csv'))
+        for table in tables:
+            arm = table.parent.parent if table.name == '!_Trajectories.csv' else table.parent
+            try:
+                with table.open(newline='') as stream:
+                    rows = list(csv.DictReader(stream))
+                attempted = {row['hash'] for row in rows if row.get('hash')}
+                state = arm / '.campaign_state.json'
+                if state.exists():
+                    attempted = set(json.loads(state.read_text()).get('attempted', attempted))
+                names = [row['design'] for row in rows if row.get('hash') in attempted
+                         and row.get('design', '').endswith('_' + row['hash'])]
+                for path in arm.rglob('*'):
+                    relative = path.relative_to(arm)
+                    if path.is_file() and any(
+                        (len(relative.parts) > 2 and relative.parts[0] in ('1_Trajectories', 'trajectories')
+                         and relative.parts[1] == name)
+                        or (relative.parts[0] in ('1_Trajectories', 'trajectories', '2_Refolded', 'refolded', '3_Ranked', 'accepted')
+                            and (path.name == name + '.zip' or path.name.startswith(name + '_seq')))
+                        for name in names):
+                        completed.add(path)
+            except (OSError, ValueError, KeyError, TypeError):
+                # Incomplete native state remains private; native owns recovery.
+                continue
+    if operation == 'unarchive' and selected.resolve().is_relative_to(campaign.resolve()):
+        # Match native stage_folder/trajectory_archives, not every ZIP beneath
+        # the selected arm (unrelated archives are not native action inputs).
+        stages = ('1_Trajectories', '2_Refolded', '3_Ranked')
+        legacy = (not any((selected / name).is_dir() for name in stages)
+                  and (any((selected / name).exists() for name in ('trajectories.csv', 'candidates.csv', 'ranked.csv'))
+                       or any((selected / name).is_dir() for name in ('trajectories', 'refolded', 'accepted'))))
+        trajectories = selected / ('trajectories' if legacy else '1_Trajectories')
+        for archive in trajectories.glob('*.zip'):
+            try:
+                with zipfile.ZipFile(archive) as handle:
+                    for member in handle.namelist():
+                        parts = [p for p in member.split('/') if p not in ('', '.', '..')]
+                        collisions.add(archive.parent.joinpath(*parts))
+            except (OSError, zipfile.BadZipFile):
+                # Leave corrupt-archive handling to native execution, not a new
+                # launch gate. No collision destination can be safely shared.
+                collisions.update(p for p in trajectories.rglob('*') if p.is_file())
+
+    def writable(path: Path) -> bool:
+        if path.is_relative_to(source_root / 'sources'):
+            return False
+        if not campaign_immutable:
+            return True  # live donor requires independent native state
+        name = path.name
+        if name.startswith('.') or name.endswith(('.partial', '.lock', '.log')):
+            return True  # native controls/locks and interrupted writer temporaries
+        if operation == 'resume':
+            return path not in completed
+        if operation == 'score':
+            return name == 'native_score.txt'
+        if operation in ('rank', 'filter'):
+            return (name in ('scored.csv', 'filtered.csv', 'rejected.csv')
+                    or name.startswith('ranked_by_') and name.endswith('.csv'))
+        if operation == 'campaign_output':
+            return name in ('!_Ranked.csv', 'ranked.csv', 'summary.csv')
+        if operation == 'unarchive':
+            return path in collisions
+        return False  # archive writes .partial, replaces ZIP, unlinks child names
+
+    for name in ('sources', 'campaign'):
+        folder = source_root / name
+        if not folder.exists():
+            continue
+        if not folder.resolve().is_relative_to(source_root):
+            raise CampaignContractError('BC2 transported folder escapes preparation root')
+        (destination / name).mkdir(parents=True, exist_ok=True)
+        for path in sorted(folder.rglob('*')):
+            if not path.resolve().is_relative_to(source_root):
+                raise CampaignContractError('BC2 transported source escapes preparation root')
+            target = destination / path.relative_to(source_root)
+            if path.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+            elif not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if writable(path):
+                    _private_leaf(path, target)
+                else:
+                    try:
+                        os.link(path.resolve(), target)
+                    except OSError as exc:
+                        if exc.errno not in (errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.EMLINK):
+                            raise
+                        # Independent custody across filesystems: not a claim of
+                        # deduplication. A symlink would dangle after parent removal.
+                        _private_leaf(path, target)
+
+
 def materialize_runtime_compilation(compiled: dict, source_root: Path, destination: Path) -> dict:
     """Relocate a transported tree to writable output, without mutating input.
 
@@ -126,15 +250,7 @@ def materialize_runtime_compilation(compiled: dict, source_root: Path, destinati
         if _canonical(json.loads(receipt.read_text())) != _canonical(rebound):
             raise CampaignContractError('existing BC2 compilation differs from transported request')
         return rebound
-    for name in ('sources', 'campaign'):
-        folder = source_root / name
-        if folder.exists():
-            if not folder.resolve().is_relative_to(source_root):
-                raise CampaignContractError('BC2 transported folder escapes preparation root')
-            for path in folder.rglob('*'):
-                if path.is_symlink() and not path.resolve().is_relative_to(source_root):
-                    raise CampaignContractError('BC2 transported source escapes preparation root')
-            shutil.copytree(folder, destination / name, dirs_exist_ok=True)
+    materialize_action_tree(source_root, destination, compiled.get('native_action', {}))
     return rebound
 
 

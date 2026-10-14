@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -103,6 +102,7 @@ def _canonicalize_mse_run_coordinate(
 
 
 def bind(request_path: Path, plan_path: Path, native_root: Path, output: Path) -> None:
+    native_root = native_root.resolve(strict=True)
     request = json.loads(request_path.read_text(encoding="utf-8"))
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     samples = json.loads((native_root / "samples.json").read_text(encoding="utf-8"))
@@ -214,12 +214,12 @@ def bind(request_path: Path, plan_path: Path, native_root: Path, output: Path) -
             raise LedgerError("shared normalized output path")
         normalized_paths.add(relative_path)
         artifact = native_root / relative_path
-        if not artifact.is_file() or artifact.is_symlink():
+        if not artifact.is_file() or not artifact.resolve(strict=True).is_relative_to(native_root):
             raise LedgerError(f"normalized output is missing or unsafe: {relative_path}")
         if sample.get("sha256") != _sha256(artifact) or sample.get("bytes") != artifact.stat().st_size:
             raise LedgerError(f"normalized sample byte identity mismatch: {relative_path}")
         source_artifact = native_root / "raw" / source_path
-        if not source_artifact.is_file() or source_artifact.is_symlink():
+        if not source_artifact.is_file() or not source_artifact.resolve(strict=True).is_relative_to(native_root):
             raise LedgerError(f"explicit upstream coordinate output is missing: {source_path}")
         upstream = by_source[source_path]
         if upstream["sha256"] != _sha256(source_artifact) or upstream["bytes"] != source_artifact.stat().st_size:
@@ -245,8 +245,8 @@ def bind(request_path: Path, plan_path: Path, native_root: Path, output: Path) -
 
     if output.exists():
         raise LedgerError(f"output already exists: {output}")
-    shutil.copytree(native_root, output)
-    native_request = output / "request.json"
+    output.mkdir(parents=True)
+    native_request = native_root / "request.json"
     ledger = {
         "schema_name": "cm_output_coordinate_ledger",
         "schema_version": 1,
@@ -256,14 +256,14 @@ def bind(request_path: Path, plan_path: Path, native_root: Path, output: Path) -
         "entries": normalized_entries,
     }
     (output / "cm_output_coordinate_ledger_v1.json").write_bytes(_canonical_bytes(ledger))
-    output_attestation = output / "raw" / "cm_confornets_runtime_attestation_v1.json"
+    output_attestation = native_root / "raw" / "cm_confornets_runtime_attestation_v1.json"
     receipt = {
         "schema_name": "cm_confornets_execution_receipt", "schema_version": 1,
         "status": "container_executed", "request_sha256": request["request_sha256"],
         "request_file_sha256": _sha256(request_path),
         "coordinate_plan_sha256": plan["coordinate_plan_sha256"],
         "coordinate_plan_file_sha256": _sha256(plan_path),
-        "native_request_sha256": _sha256(output / "request.json"),
+        "native_request_sha256": _sha256(native_request),
         "output_ledger_sha256": _sha256(output / "cm_output_coordinate_ledger_v1.json"),
         "runtime_attestation_path": "raw/cm_confornets_runtime_attestation_v1.json",
         "runtime_attestation_sha256": _sha256(output_attestation),
@@ -275,11 +275,15 @@ def bind(request_path: Path, plan_path: Path, native_root: Path, output: Path) -
     }
     (output / "execution_receipt.json").write_bytes(_canonical_bytes(receipt))
     native_files = []
-    for path in sorted(output.rglob("*")):
+    members = {path.relative_to(native_root).as_posix(): path
+               for path in native_root.rglob("*") if path.is_file()}
+    members.update({path.relative_to(output).as_posix(): path
+                    for path in output.rglob("*") if path.is_file()})
+    for relative, path in sorted(members.items()):
         if path.is_file():
             native_files.append(
                 {
-                    "relative_path": path.relative_to(output).as_posix(),
+                    "relative_path": relative,
                     "bytes": path.stat().st_size,
                     "sha256": _sha256(path),
                 }

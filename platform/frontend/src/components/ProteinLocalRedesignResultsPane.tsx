@@ -41,7 +41,9 @@ export default function ProteinLocalRedesignResultsPane({ job }: ProteinLocalRed
                 {surface.tabs.map((tab) => <section key={tab.id}>
                     <h3 className="font-semibold text-slate-200">{tab.label} · {tab.count} outputs</h3>
                     {tab.items.map((item) => <div key={item.item_id} className="mt-2 border-t border-slate-800 pt-2">
-                        <div>{item.candidate_label}{item.sample_index == null ? '' : ` · sample ${item.sample_index}`}</div>
+                        <div>{item.candidate_label}{item.producer_sample_id ? ` · ${item.producer_sample_id}` : item.sample_index == null ? '' : ` · producer suffix ${item.sample_index}`}</div>
+                        {item.confidence_status === 'unavailable' && <p className="mt-1">Optional confidence metadata is unavailable for this exact sample. Structure remains accessible.</p>}
+                        {item.metric_interpretations?.disorder === 'producer_placeholder_not_estimated' && <p className="mt-1">Disorder was not estimated by this producer; the retained zero is a placeholder.</p>}
                         <div className="mt-1 flex flex-wrap gap-3">{[item.structure.artifact_id, item.metrics_artifact, item.confidence_artifact, item.msa_artifact, item.native_metadata_artifact]
                             .filter((id, index, ids) => typeof id === 'string' && ids.indexOf(id) === index)
                             .map((id) => surface.artifacts.find((artifact) => artifact.artifact_id === id))

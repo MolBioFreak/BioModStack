@@ -28,14 +28,17 @@ def test_canonical_selected_service_and_native_features(placement, tmp_path, mon
     controls['confornets']['backend_identity']['backend_commit'] = '4df561a1fbd0fd2b9c7a230fa62957a837d9f72d'
     controls['feature_policy']['msa_settings'] = dict(msa_provider='colabfold_api', colabfold_use_env=False)
     root = roots['results']/'canonical'; root.mkdir()
-    checkpoint = root/'checkpoint.pt'; checkpoint.write_bytes(b'explicit offline checkpoint transport double')
+    checkpoint = roots['weights']/'openfold3/of3-p2-155k.pt'
+    checkpoint.parent.mkdir()
+    checkpoint.write_bytes(b'explicit offline checkpoint transport double')
     controls['confornets']['checkpoint'] = dict(path='checkpoint.pt', sha256=hashlib.sha256(checkpoint.read_bytes()).hexdigest())
     monkeypatch.setenv('BMS_RESULTS_ROOT', str(roots['results']))
     materialized = materialize_trusted_internal_request(controls, output_dir=root,
         request_id='9d0a1104-01bf-4a12-8e2e-5d9a2baec3cb', principal_id='offline-operator')
     original = materialized.request_path.read_bytes()
     job.params = dict(materialized.launch_params, gpu_id=0, run_frustrampnn=True)
-    invocation = compile_installed(placement, 'conformational_mapping', 'map')
+    job.model_id, job.mode = 'conformational_mapping', 'map'
+    invocation = nextflow.compile_job_nextflow_invocation(job, job.params, job.output_dir)
     plan = invocation.execution_plan
     service = next(s for s in plan.metadata.external_services if s.logical_id == 'protenix:generated_msa')
     assert handoff.generated_msa_service_supported(service)
@@ -52,6 +55,8 @@ def test_canonical_selected_service_and_native_features(placement, tmp_path, mon
     # coordinate-plan and runtime-registry checks remain real.
     monkeypatch.setattr(prep, '_instrumented_confornets_runtime_available', lambda: True)
     (root/'cm_runtime_registry_v1.json').write_text(json.dumps(controls['confornets']['backend_identity']))
+    invocation.materialize_inputs(Path(job.output_dir))
+    monkeypatch.setenv('BMS_PORTABLE_INPUT_BINDINGS', invocation.native_parameters['cm_portable_input_bindings'])
     prep.prepare(materialized.request_path, materialized.coordinate_plan_path, assets, native_request)
     request = json.loads(native_request.read_text())
     assert request['canonical_binding'] and request['params']['skip_msa'] is False

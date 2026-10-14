@@ -12,9 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
+from .native_config import INPUT_FILE_FIELDS, NATIVE_JOB_SCHEMA, normalize_native_config
+
 MD_JOB_SCHEMA = "bms.md.job.v1"
 MD_JOB_SCHEMA_V2 = "bms.md.job.v2"
-SUPPORTED_MD_JOB_SCHEMAS = {MD_JOB_SCHEMA, MD_JOB_SCHEMA_V2}
+SUPPORTED_MD_JOB_SCHEMAS = {MD_JOB_SCHEMA, MD_JOB_SCHEMA_V2, NATIVE_JOB_SCHEMA}
 MD_RUN_SCHEMA = "bms.md.run.v1"
 RETRYABLE_INFRASTRUCTURE_FAILURES = frozenset({
     "spawn_rejected", "worker_lost", "scheduler_transient", "runtime_transient",
@@ -111,6 +113,8 @@ def normalize_job_config(raw: Mapping[str, Any]) -> dict[str, Any]:
 
     if not isinstance(raw, Mapping):
         raise ValueError("MD job config must be an object")
+    if raw.get("schema") == NATIVE_JOB_SCHEMA:
+        return normalize_native_config(raw)
     requested_schema = str(raw.get("schema") or "").strip()
     defaults = copy.deepcopy(_DEFAULT_CONFIG)
     if requested_schema == MD_JOB_SCHEMA_V2:
@@ -195,7 +199,7 @@ def _expected_snapshot_metadata(input_config: Mapping[str, Any], field: str) -> 
 
 
 def _verify_open_snapshot(source: Path, expected_digest: str, expected_bytes: int) -> None:
-    from lib.portable_inputs import resolve_input_path
+    from scripts.lib.portable_inputs import resolve_input_path
     source = resolve_input_path(source)
     digest = hashlib.sha256()
     consumed = 0
@@ -257,12 +261,16 @@ def verify_input_snapshots(job_config: Mapping[str, Any]) -> None:
     input_config = job_config.get("input")
     if not isinstance(input_config, Mapping):
         raise _snapshot_mismatch("input snapshot contract is missing")
-    for field in ("structure", "coordinates", "topology"):
+    for field in INPUT_FILE_FIELDS:
         value = input_config.get(field)
         if not value:
             continue
         expected_digest, expected_bytes = _expected_snapshot_metadata(input_config, field)
         _verify_open_snapshot(Path(str(value)), expected_digest, expected_bytes)
+    for window in job_config.get("windows") or []:
+        if window.get("coordinates"):
+            digest, size = _expected_snapshot_metadata(window, "coordinates")
+            _verify_open_snapshot(Path(window["coordinates"]), digest, size)
     if input_config.get("topology"):
         closure_root, closure_files = _topology_closure(job_config)
         for record in closure_files:
@@ -288,7 +296,7 @@ def _copy_verified_snapshot(
     expected_digest: str,
     expected_bytes: int,
 ) -> None:
-    from lib.portable_inputs import resolve_input_path
+    from scripts.lib.portable_inputs import resolve_input_path
     source = resolve_input_path(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=".verified.", suffix=".tmp", dir=destination.parent)
@@ -339,7 +347,14 @@ def prepare_verified_worker_inputs(config_path: Path, worker_root: Path) -> dict
     worker_root.mkdir(parents=True, exist_ok=True)
     private_root = Path(tempfile.mkdtemp(prefix="verified-inputs-", dir=worker_root))
     try:
-        for field in ("structure", "coordinates"):
+        for index, window in enumerate(config.get("windows") or []):
+            if window.get("coordinates"):
+                digest, size = _expected_snapshot_metadata(window, "coordinates")
+                source = Path(window["coordinates"])
+                destination = private_root / "windows" / str(index) / source.name
+                _copy_verified_snapshot(source, destination, expected_digest=digest, expected_bytes=size)
+                window["coordinates"] = str(destination.resolve())
+        for field in (field for field in INPUT_FILE_FIELDS if field != "topology"):
             source_value = input_config.get(field)
             if not source_value:
                 continue
@@ -542,6 +557,22 @@ def build_run_manifest(
     config = normalize_job_config(job_config)
     if replica_index < 0 or replica_index >= config["replicas"]:
         raise ValueError("replica_index is outside configured replica range")
+    artifacts = dict(artifacts)
+    # Collection retains declared terminal files rather than the execution tree.
+    # Keep topology includes beside the topology for physical-path consumers.
+    # External native inputs already have an explicit, verified include closure;
+    # legacy pdb2gmx emits its local chain/restraint ITPs next to topol.top.
+    topology = artifacts.get("topology")
+    if topology is not None:
+        candidates = set(Path(topology).parent.glob("*.itp"))
+        closure = config.get("input", {}).get("topology_closure")
+        if isinstance(closure, Mapping):
+            closure_root = Path(str(closure.get("root") or ""))
+            candidates.update(closure_root / record["path"] for record in closure.get("files", []))
+        declared = {Path(path).resolve() for path in artifacts.values()}
+        for path in sorted(candidates):
+            if path.resolve().is_relative_to(output_dir.resolve()) and path.resolve() not in declared:
+                artifacts[f"topology_include_{len(artifacts)}"] = path
     return {
         "schema": MD_RUN_SCHEMA,
         "job_schema": config["schema"],

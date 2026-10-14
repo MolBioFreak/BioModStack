@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+
+try:
+    from build_shape_result import retain_file
+except ModuleNotFoundError:  # Package import by API-side callers.
+    from scripts.shape_blueprint.build_shape_result import retain_file
 import json
 import math
 import os
 import re
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -30,8 +34,8 @@ def _sha256(path: Path) -> str:
 
 
 def _json(path: Path, label: str) -> dict[str, Any]:
-    if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
-        raise ValueError(f"{label} is absent or linked")
+    if not path.is_file():
+        raise ValueError(f"{label} is absent or not a regular file")
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"{label} must be an object")
@@ -45,8 +49,8 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _regular(path: Path, label: str) -> Path:
-    if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
-        raise ValueError(f"{label} is absent or linked")
+    if not path.is_file():
+        raise ValueError(f"{label} is absent or not a regular file")
     return path
 
 
@@ -175,7 +179,7 @@ def evaluate_candidate(
     output_structure = output_dir / f"{candidate_id}.cif"
     output_source = output_dir / f"{candidate_id}.source{source_backbone.suffix.lower()}"
     save_structure(str(output_structure), candidate)
-    shutil.copyfile(source_backbone, output_source)
+    retain_file(source_backbone, output_source)
     engine = "proteinmpnn" if "__proteinmpnn__" in sequence_name else "fampnn" if "__fampnn__" in sequence_name else "unknown"
     transform = {
         "convention": "aligned_candidate_row = candidate_row @ rotation_row + translation_row",

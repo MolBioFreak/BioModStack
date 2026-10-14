@@ -1,4 +1,6 @@
-import type { ResidueRef } from '../contracts/structureIdentity.js';
+import type { MeasurementResult } from '../contracts/measurements';
+import type { StructureComponentType } from '../contracts/scenePresentation';
+import type { AtomRef, ResidueRef } from '../contracts/structureIdentity.js';
 import type { StructureSceneState } from '../contracts/sceneState.js';
 import type { StructureScenePresentation } from '../contracts/scenePresentation.js';
 import type { MDPlaybackState, MDSourceFrameRef } from '../contracts/mdTrajectory.js';
@@ -27,6 +29,10 @@ export interface MolstarEngineAdapter {
     reconcileScene(previous: StructureSceneState | undefined, next: StructureSceneState, signal: AbortSignal): Promise<ViewerResult<void>>;
     subscribeResidueClicks(handler: (click: EngineResidueClick) => void): () => void;
     diagnostics(): MolstarEngineDiagnostics;
+    getMeasurementResults?(): readonly MeasurementResult[];
+    subscribeMeasurementResults?(handler: () => void): () => void;
+    getExactAtomSelections?(): ViewerResult<readonly AtomRef[]>;
+    getEntityType?(residue: ResidueRef): StructureComponentType | undefined;
     selectMDSourceFrame?(frame: MDSourceFrameRef, signal: AbortSignal): Promise<ViewerResult<void>>;
     setMDPlayback?(playback: MDPlaybackState, signal: AbortSignal): Promise<ViewerResult<void>>;
     loadVolume?(descriptor: SpatialVolumeDescriptorV1, signal: AbortSignal): Promise<ViewerResult<void>>;

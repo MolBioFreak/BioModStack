@@ -19,6 +19,7 @@ from .bundle import current_source_identity
 from .contracts import (PreloadProgress, ProvisionRequest, ProvisionSelection, CachedArtifactReceipt,
     WorkflowProvisionRequest, WorkflowProvisionSelection, WorkflowPackRequest, WorkflowPackSelection)
 from .progress import PRELOAD_ACTIVE_PHASES, preload_idle_clause
+from .claims import has_target_claims, target_idle_clause
 from .targets import (ExecutionTargetError, INVENTORY_MAX_AGE_SECONDS, get_target,
     inventory_fresh, _target_response, target_status, artifact_summary, _has_preparation_conflicts)
 from .transport import RemoteConnection, RemoteHelperError
@@ -56,6 +57,11 @@ def recipe_digest(job):
     values = {key: getattr(job, key, None) for key in (
         "id", "model_id", "mode", "params", "provenance", "output_dir", "child_output_dir",
         "execution_source_revision", "execution_source_tree")}
+    # The executor refreshes these observations while the same recipe runs.
+    # Neither is consumed by compile_recipe; retain all other provenance,
+    # including requested parameters, scientific revisions and MSA authority.
+    values["provenance"] = {key: value for key, value in (values["provenance"] or {}).items()
+        if key not in {"remote_execution_assignment", "remote_execution_receipt"}}
     return hashlib.sha256(json.dumps(values, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
 
 
@@ -97,7 +103,7 @@ def admission_clause(target):
     now = datetime.utcnow()
     return (
         (ExecutionTarget.id == target.id) & ExecutionTarget.active.is_(True)
-        & (ExecutionTarget.state == "ready") & ExecutionTarget.leased_job_id.is_(None)
+        & (ExecutionTarget.state == "ready")
         & preload_idle_clause()
         & (ExecutionTarget.host == target.host) & (ExecutionTarget.port == target.port)
         & (ExecutionTarget.username == target.username) & (ExecutionTarget.remote_root == target.remote_root)
@@ -208,9 +214,8 @@ class PreloadController:
                         or previous.get("phase") not in {"failed", "cancelled"}
                         or previous.get("recovery_required")):
                     raise ExecutionTargetError("Provision recovery requires confirmed remote quiescence before retry")
-            if (not target.active or target.state != "ready" or not inventory_fresh(target)
-                    or target.leased_job_id or await _has_preparation_conflicts(session, target_id)):
-                raise ExecutionTargetError("Preload requires an idle attached worker with current inventory")
+            if not target.active or target.state != "ready" or not inventory_fresh(target):
+                raise ExecutionTargetError("Preload requires an attached ready worker with current inventory")
             target = TargetSnapshot.capture(target)
             independent = isinstance(request, (ProvisionRequest, WorkflowProvisionRequest, WorkflowPackRequest))
             selection = (WorkflowPackSelection(kind="workflow_pack", workflow_id=request.workflow_id)
@@ -335,7 +340,7 @@ class PreloadController:
             fence = [ExecutionTarget.host == host, ExecutionTarget.port == port,
                 ExecutionTarget.username == username, ExecutionTarget.remote_root == root,
                 ExecutionTarget.host_key_sha256 == key, ExecutionTarget.active.is_(True),
-                ExecutionTarget.state == "ready", ExecutionTarget.leased_job_id.is_(None)]
+                ExecutionTarget.state == "ready"]
         if not progress.cancel_requested:
             fence.append(func.coalesce(ExecutionTarget.provider_metadata["preload"]["cancel_requested"].as_boolean(), False).is_(False))
         changed = await session.execute(update(ExecutionTarget).where(
@@ -362,7 +367,7 @@ class PreloadController:
                     # Do not load inventories, capabilities or artifact rosters
                     # at the repeated transport fence.
                     columns = ('id', 'host', 'port', 'username', 'remote_root',
-                               'host_key_sha256', 'active', 'state', 'leased_job_id')
+                               'host_key_sha256', 'active', 'state')
                     row = (await session.execute(select(
                         *(getattr(ExecutionTarget, key) for key in columns),
                         func.json_extract(ExecutionTarget.provider_metadata, '$.inventory'),
@@ -380,7 +385,7 @@ class PreloadController:
                         raise asyncio.CancelledError()
                     if (not target.active or target.state != "ready" or not inventory_fresh(target)
                             or inventory.get("present") is not True or inventory.get("running") is not True
-                            or target.leased_job_id or endpoint(target) != expected_endpoint
+                            or endpoint(target) != expected_endpoint
                             or current.get("operation_id") != progress.operation_id
                             or current.get("phase") not in PRELOAD_ACTIVE_PHASES):
                         raise ExecutionTargetError("Worker identity or activity changed during preload")
@@ -603,7 +608,7 @@ class PreloadController:
             manifests = deepcopy(saved_manifests(target))
             operation = (target.provider_metadata or {}).get('preload', {}).get('operation_id')
             if (not target.active or target.state != 'ready' or not inventory_fresh(target)
-                    or target.leased_job_id or await _has_preparation_conflicts(session, target_id)
+                    or await has_target_claims(session, target_id) or await _has_preparation_conflicts(session, target_id)
                     or (target.provider_metadata or {}).get('preload', {}).get('phase') in PRELOAD_ACTIVE_PHASES):
                 raise ExecutionTargetError('Inventory refresh requires an idle attached worker with current provider inventory')
             target = TargetSnapshot.capture(target)
@@ -621,7 +626,7 @@ class PreloadController:
                     if (endpoint(row) != endpoint(target) or not inventory_fresh(row)
                             or row.activated_at != activated_at
                             or (row.provider_metadata or {}).get('managed_inventory', {}) != previous
-                            or not row.active or row.state != 'ready' or row.leased_job_id
+                            or not row.active or row.state != 'ready' or await has_target_claims(check, target_id)
                             or (row.provider_metadata or {}).get('preload', {}).get('operation_id') != operation
                             or (row.provider_metadata or {}).get('preload', {}).get('phase') in PRELOAD_ACTIVE_PHASES):
                         raise ExecutionTargetError('Worker identity or activity changed during inventory observation')
@@ -632,7 +637,7 @@ class PreloadController:
                 value = func.json_set(ExecutionTarget.provider_metadata,
                     '$.managed_inventory', func.json(json.dumps(payload)), '$.managed_boot_id', str(observed.boot_id))
                 changed = await session.execute(update(ExecutionTarget).where(
-                    admission_clause(target), observation_fence)
+                    admission_clause(target), target_idle_clause(), observation_fence)
                     .values(provider_metadata=value).execution_options(synchronize_session=False))
                 if changed.rowcount != 1:
                     await session.rollback()

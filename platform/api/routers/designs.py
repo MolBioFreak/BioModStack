@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, case, inspect as sa_inspect
 from sqlalchemy.exc import NoInspectionAvailable
 from sqlalchemy.orm import load_only
+from starlette.concurrency import run_in_threadpool
 from typing import Optional, List, Dict, Any, Union, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
@@ -19,7 +20,7 @@ from types import SimpleNamespace
 import math
 import re
 
-from services.scientific_analytics import MetricState, MetricDescriptor, MetricSource, ScientificCohort, owning_jobs, projection, persisted_projection, revision_for_job, partition
+from services.scientific_analytics import MetricState, MetricDescriptor, MetricSource, ScientificCohort, owning_jobs, projection, persisted_projection, revision_for_job, partition, native_scalar_owner
 from database import get_session, Design, Job
 from services.analysis_registry import scientific_contract_revision, unavailable_scientific_identity
 from services.scientific_viewer_contract import ScientificViewerMetric, ScientificResidueMetric, ScientificAtomMetric, ScientificChainMetric, ViewerDocument
@@ -183,6 +184,7 @@ class DesignFrustraMPNNProjection(BaseModel):
 class DesignResponse(BaseModel):
     core_protein_scientific_contract: Optional[int] = None
     scientific_structure_document: Optional[ViewerDocument] = None
+    native_sample: Optional[Dict[str, Any]] = None
     id: str
     job_id: str
     name: str
@@ -424,14 +426,29 @@ class DesignAggregateSummary(BaseModel):
     screen_failed: int
 
 
+class NativeScalarQuery(BaseModel):
+    """One descriptor cohort and metric; bounds use the descriptor's raw unit."""
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+    cohort_key: str | None = None
+    metric_id: str | None = None
+    unit: str | None = None
+    minimum: float | None = Field(default=None, strict=True)
+    maximum: float | None = Field(default=None, strict=True)
+    include_missing: bool = False
+    order: Literal['asc', 'desc'] | None = None
+
+
 class DesignList(BaseModel):
     designs: List[DesignResponse]
     total: int
     summary: Optional[DesignAggregateSummary] = None
     model_counts: Dict[str, int] = Field(default_factory=dict)
+    scientific: Optional[Dict[str, Any]] = None
 
 
 class DesignQueryRequest(BaseModel):
+    native: NativeScalarQuery | None = None
+    native_output: Literal["page", "ids", "json", "csv"] = "page"
     job_id: Optional[str] = None
     model_id: Optional[str] = None
     include_children: Optional[bool] = True
@@ -539,6 +556,7 @@ ANALYTICS_LOAD_ONLY_COLUMNS = (
     Design.id,
     Design.name,
     Design.created_at,
+    Design.pdb_path,
     Design.review_profile_id,
     Design.plddt_overall,
     Design.plddt_binder,
@@ -883,6 +901,9 @@ def _inject_metric(metrics: Dict[str, float], key: str, value: Any) -> None:
 
 def _review_metric_allowed(design: Design, key: str) -> bool:
     normalized = key.strip().lower()
+    # Native interchain confidence has no binder/target-role prerequisite.
+    if normalized in {"iptm", "protein_iptm", "ligand_iptm", "pair_chains_iptm"}:
+        return True
     if normalized in {
         "ipsae",
         "ipsae_binder_to_target",
@@ -1858,6 +1879,7 @@ def _design_to_response(
     *,
     include_fampnn_structure_fallback: bool = False,
     job: Optional[Job] = None,
+    scalar_only: bool = False,
 ) -> DesignResponse:
     state = sa_inspect(design)
     unloaded = set(state.unloaded)
@@ -1936,7 +1958,8 @@ def _design_to_response(
         data["frustrampnn"] = None
     fampnn_metrics = _compute_fampnn_response_metrics(
         design,
-        include_structure_fallback=include_fampnn_structure_fallback,
+        include_structure_fallback=(include_fampnn_structure_fallback and
+            not (job and job.model_id in ("boltz", "boltz2", "boltz_cp_experimental"))),
     )
     data.update(fampnn_metrics)
     confidence_metrics = data.get("confidence_metrics") if isinstance(data.get("confidence_metrics"), dict) else {}
@@ -2064,6 +2087,33 @@ def _design_to_response(
         data["binder_length"] = None
 
     capabilities = set(contract.viewer_capabilities)
+    if job is not None and job.model_id in ('boltz', 'boltz2', 'boltz_cp_experimental'):
+        # A prediction is not a FAMPNN coordinate product. Preserve persisted
+        # upstream sequence/mutation evidence; a missing sidecar says nothing
+        # about its validity. Filename matches cannot establish producer identity.
+        confidence = dict(data.get('confidence_metrics') or {})
+        provenance = dict(data.get('provenance') or {})
+        for container in (confidence, provenance):
+            payload = container.get('fampnn')
+            if isinstance(payload, dict) and payload.get('producer_model_id') != 'fampnn':
+                # Historical ingestion synthesized PSCE from prediction B factors.
+                # Remove only that unsupported score, not other upstream evidence.
+                container['fampnn'] = {k: v for k, v in payload.items()
+                    if 'psce' not in k.lower()}
+        for key in ('fampnn_psce', 'fampnn_max_residue_psce', 'fampnn_min_residue_psce'):
+            data[key] = None
+        if provenance.get('source') == 'fampnn':
+            provenance['source'] = job.model_id
+        data['confidence_metrics'], data['provenance'] = confidence, provenance
+    if not scalar_only and job is not None and job.model_id == 'boltz_cp_experimental':
+        from services.boltz_scientific_consumer import retained_cp_snapshot
+        try:
+            retained = retained_cp_snapshot(design, job, roles=('structure',))
+            data['scientific_structure_document'] = dict(documentId='primary', candidateId=design.id,
+                contentSha256=retained['artifacts']['structure']['sha256'], sourceKind='mmcif')
+            data['native_sample'] = retained['producer']
+        except (ValueError, TypeError, KeyError, OSError):
+            pass
 
     def clear_review_fields(*, prefixes: tuple[str, ...] = (), names: tuple[str, ...] = ()) -> None:
         for field_name in tuple(data):
@@ -2075,7 +2125,7 @@ def _design_to_response(
             prefixes=("binder_", "epitope_", "target_", "ipsae"),
             names=(
                 "plddt_binder", "plddt_target", "pae_interaction", "rmsd_binder", "rmsd_target",
-                "iptm", "protein_iptm", "ligand_iptm", "pair_chains_iptm", "affinity_score",
+                "affinity_score",
                 "binder_probability", "detected_target_chain",
             ),
         )
@@ -2258,7 +2308,7 @@ async def _collect_plotly_metrics(
     points: List[PlotlyMetricPoint] = []
     metric_keys: set[str] = set()
     for design in designs:
-        scientific = await persisted_projection(design, session) if revision_for_job(owners.get(design.job_id)) == 1 else None
+        scientific = await persisted_projection(design, session) if native_scalar_owner(owners.get(design.job_id)) else None
         metrics = scientific["metrics"] if scientific else _build_plotly_metrics(design)
         metric_keys.update(metrics.keys())
         points.append(
@@ -2345,8 +2395,127 @@ async def list_reusable_structures(
     return {"structures": structures, "limit": limit}
 
 
+async def _native_design_list(query, native, output, limit, offset, model_counts, session, scope):
+    """Evaluate one resolved population before pagination; reuse its scalar points."""
+    import csv
+    import json
+    import hashlib
+    import io
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.responses import JSONResponse, Response
+    from services.scientific_analytics import bulk_scalar_projections, summarize
+
+    compact = query.with_only_columns(Design.id, Design.job_id, Design.name, Design.confidence_metrics,
+        Design.provenance, Design.pdb_path, Design.json_path, Design.source_stage, Design.producer_model_id)
+    from types import SimpleNamespace
+    designs = [SimpleNamespace(**row) for row in (await session.execute(compact)).mappings()]
+    owners = await owning_jobs(session, designs)
+    projections = await bulk_scalar_projections(designs, owners, session)
+    for design in designs:
+        if design.id not in projections:
+            projections[design.id] = projection(design, invalid_reason='missing_native_scalar_authority',
+                model_id=getattr(owners.get(design.job_id), 'model_id', None))
+    grouped = {}
+    for design in designs:
+        point = projections.get(design.id)
+        if point is not None:
+            grouped.setdefault(point['cohort_key'], []).append((design.id, point))
+    # Available descriptors describe the population, summaries the matching set.
+    cohorts = {key: {'count': len(rows), 'metric_descriptors': rows[0][1]['metric_descriptors']}
+               for key, rows in grouped.items()}
+    numeric = native.minimum is not None or native.maximum is not None or native.order is not None
+    if numeric and not (native.cohort_key and native.metric_id and native.unit):
+        raise HTTPException(422, 'Native bounds/order require one cohort, metric and raw unit')
+    if native.minimum is not None and native.maximum is not None and native.minimum > native.maximum:
+        raise HTTPException(422, 'Minimum exceeds maximum')
+    if native.cohort_key in cohorts and native.metric_id:
+        descriptor = cohorts[native.cohort_key]['metric_descriptors'].get(native.metric_id)
+        if descriptor is None or descriptor.unit != native.unit:
+            raise HTTPException(422, 'Native metric/unit does not match the selected cohort')
+    matching = []
+    for design in designs:
+        point = projections.get(design.id)
+        if native.cohort_key and (point is None or point['cohort_key'] != native.cohort_key):
+            continue
+        if native.minimum is not None or native.maximum is not None:
+            state = point['metric_states'].get(native.metric_id) if point else None
+            if state is None or state.state != 'ok':
+                if not native.include_missing:
+                    continue
+            elif ((native.minimum is not None and state.value < native.minimum)
+                  or (native.maximum is not None and state.value > native.maximum)):
+                continue
+        matching.append(design)
+    if native.order:
+        def key(design):
+            state = projections[design.id]['metric_states'].get(native.metric_id)
+            value = state.value if state is not None and state.state == 'ok' else None
+            return (value is None, 0 if value is None else value * (-1 if native.order == 'desc' else 1), design.id)
+        matching.sort(key=key)
+    unread_ids = [id for id, p in projections.items() if p['publication_state'] is not None and p['publication_state'].reason_code == 'scalar_read_failed']
+    matched_ids = {d.id for d in matching} - set(unread_ids)
+    summaries = {key: summarize([(id, p) for id, p in rows if id in matched_ids], include_pairs=False)['metrics']
+                 for key, rows in grouped.items() if any(id in matched_ids for id, _ in rows)}
+    identity = hashlib.sha256(json.dumps(jsonable_encoder([
+        (d.id, projections.get(d.id)) for d in designs]), sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    unresolved_ids = sorted(set(scope.get('design_ids') or []) - {d.id for d in designs})
+    scientific = dict(query=native.model_dump(), scope=scope, unresolved_ids=unresolved_ids, population_count=len(designs), evaluated_count=len(projections) - len(unread_ids),
+        unread_ids=unread_ids, count_exact=not unread_ids,
+        matching_count=len(matching), read_identity=identity, cohorts=cohorts, summaries=summaries,
+        verification='scalar_bytes_and_persisted_document_binding; coordinates_not_rehashed',
+        ids=[d.id for d in matching])
+    page = matching[offset:offset + limit] if output == 'page' else matching
+    scientific['points'] = [dict(id=d.id, name=d.name, **projections[d.id]) for d in page if d.id in projections]
+    if output in ('json', 'csv'):
+        payload = jsonable_encoder(scientific)
+        filename = 'native-results-partial' if unread_ids or unresolved_ids else 'native-results'
+        if output == 'json':
+            return JSONResponse(payload, headers={'Content-Disposition': f'attachment; filename="{filename}.json"'})
+        stream = io.StringIO(newline='')
+        writer = csv.writer(stream)
+        writer.writerow(['record_type', 'read_identity', 'count_exact', 'query_scope', 'design_id', 'name', 'job_id', 'cohort_key', 'metric', 'raw_value', 'unit', 'scope',
+                         'state', 'reason', 'artifact_sha256', 'candidate_id', 'document_id'])
+        writer.writerow(['metadata', identity, not unread_ids,
+                         json.dumps({'scope': scope, 'native': native.model_dump()}, sort_keys=True),
+                         *([''] * 13)])
+        for point in payload['points']:
+            if not point['metric_states']:
+                writer.writerow(['value', identity, not unread_ids, '',
+                    point['id'], point['name'], point['source_job_id'], point['cohort_key'], '', '', '', '',
+                    'unavailable', (point['publication_state'] or {}).get('reason_code', 'no_native_metrics'), '', '', ''])
+            for metric, state in point['metric_states'].items():
+                descriptor, source = point['metric_descriptors'][metric], point['metric_sources'][metric] or {}
+                writer.writerow(['value', identity, not unread_ids, '', point['id'], point['name'], point['source_job_id'], point['cohort_key'], metric,
+                    state['value'], descriptor['unit'], descriptor['scope'], state['state'], state['reason_code'],
+                    source.get('artifact_sha256'), source.get('candidate_id'), source.get('document_id')])
+        return Response(stream.getvalue(), media_type='text/csv',
+                        headers={'Content-Disposition': f'attachment; filename="{filename}.csv"'})
+    if output == 'ids':
+        scientific['points'] = []
+        responses = []
+    else:
+        hydrated = {d.id: d for d in (await session.execute(select(Design).where(Design.id.in_([d.id for d in page]))
+            .options(load_only(*DESIGN_LIST_LOAD_ONLY_COLUMNS, Design.json_path)))).scalars()}
+        page = [hydrated[d.id] for d in page if d.id in hydrated]
+        responses = await run_in_threadpool(lambda: [
+            _design_to_response(d, job=owners.get(d.job_id), scalar_only=True) for d in page])
+        for design, response in zip(page, responses):
+            if native_scalar_owner(owners.get(design.job_id)):
+                response.core_protein_scientific_contract = 1
+                # Coordinates remain verified by the selected spatial endpoint.
+                artifacts = (design.confidence_metrics or {}).get('core_protein_candidate_artifacts') or {}
+                structure = artifacts.get('structure')
+                if structure and projections[design.id]['publication_state'] is None:
+                    response.scientific_structure_document = ViewerDocument(documentId='primary', candidateId=design.id,
+                        contentSha256=structure['sha256'], sourceKind='mmcif' if structure['path'].endswith(('.cif', '.mmcif')) else 'pdb')
+        _enrich_design_responses_from_sources(responses)
+    return DesignList(designs=responses, total=len(matching), model_counts=model_counts, scientific=scientific)
+
+
 @router.get("", response_model=DesignList)
 async def list_designs(
+    native: Optional[str] = None,
+    native_output: Literal["page", "ids", "json", "csv"] = "page",
     job_id: Optional[str] = None,
     model_id: Optional[str] = None,
     include_children: bool = Query(True, description="Include designs from child jobs (for parent jobs)"),
@@ -2399,6 +2568,12 @@ async def list_designs(
     - favorites_only: Show only favorited designs
     - sort_by: Sort by specific field
     """
+    native_query = None
+    if native is not None:
+        try:
+            native_query = NativeScalarQuery.model_validate_json(native)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     selected_job: Optional[Job] = None
     review_stage: Optional[str] = None
     if job_id:
@@ -2506,7 +2681,7 @@ async def list_designs(
                 conditions.append(Design.source_stage.is_(None))
     elif not include_children:
         conditions.append(Design.source_stage.is_(None))
-    elif not job_id:
+    elif not job_id and not (native_query is not None and design_ids is not None):
         conditions.append(Design.source_stage.is_(None))
     # Lineage-wide model summary deliberately precedes display filters/pagination.
     model_identity = Design.producer_model_id
@@ -2520,7 +2695,7 @@ async def list_designs(
     if model_id:
         conditions.append(model_identity == model_id.strip().lower())
     clean_design_ids = [design_id.strip() for design_id in (design_ids or []) if design_id and design_id.strip()]
-    if clean_design_ids:
+    if clean_design_ids or (native_query is not None and design_ids is not None):
         conditions.append(Design.id.in_(clean_design_ids))
     if q and q.strip():
         conditions.append(Design.name.ilike(f"%{q.strip()}%"))
@@ -2580,6 +2755,14 @@ async def list_designs(
     if conditions:
         query = query.where(and_(*conditions))
     
+    if native_query is not None:
+        if not 1 <= limit <= 500 or offset < 0:
+            raise HTTPException(422, 'Native pages require limit 1–500 and a nonnegative offset')
+        values = locals()
+        scope = {key: values[key] for key in DesignQueryRequest.model_fields if key in values
+                 and key not in {'native', 'native_output', 'limit', 'offset', 'include_summary'}}
+        return await _native_design_list(query, native_query, native_output, limit, offset, model_counts, session, scope)
+
     # Get total count
     count_query = select(func.count(Design.id))
     if conditions:
@@ -2639,10 +2822,12 @@ async def list_designs(
     query = query.limit(limit).offset(offset)
     designs = list((await session.execute(query)).scalars())
     owners = await owning_jobs(session, designs)
-    responses = [_design_to_response(d, job=owners.get(d.job_id)) for d in designs]
+    responses = await run_in_threadpool(
+        lambda: [_design_to_response(d, job=owners.get(d.job_id)) for d in designs])
     for design, response in zip(designs, responses):
-        response.core_protein_scientific_contract = await scientific_contract_revision(design, session)
-        if response.core_protein_scientific_contract == 1:
+        response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
+            or (1 if response.native_sample and response.scientific_structure_document else None))
+        if response.core_protein_scientific_contract == 1 and not response.native_sample:
             from services.core_protein_scientific_contract import scientific_document
             response.scientific_structure_document = await scientific_document(design, session)
     _enrich_design_responses_from_sources(responses)
@@ -2662,6 +2847,8 @@ async def query_designs(
 ):
     """List designs via POST for large explicit design-id subsets."""
     return await list_designs(
+        native=request.native.model_dump_json() if request.native is not None else None,
+        native_output=request.native_output,
         job_id=request.job_id,
         model_id=request.model_id,
         include_children=True if request.include_children is None else request.include_children,
@@ -2868,10 +3055,11 @@ async def get_design(
         if design.job_id not in lineage_job_ids:
             raise HTTPException(status_code=404, detail="Design not found in requested Job lineage")
     owners = await owning_jobs(session, [design])
-    response = _design_to_response(design, include_fampnn_structure_fallback=True,
+    response = await run_in_threadpool(_design_to_response, design, include_fampnn_structure_fallback=True,
                                    job=owners.get(design.job_id))
-    response.core_protein_scientific_contract = await scientific_contract_revision(design, session)
-    if response.core_protein_scientific_contract == 1:
+    response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
+            or (1 if response.native_sample and response.scientific_structure_document else None))
+    if response.core_protein_scientific_contract == 1 and not response.native_sample:
         from services.core_protein_scientific_contract import scientific_document
         response.scientific_structure_document = await scientific_document(design, session)
     return response
@@ -2964,6 +3152,11 @@ async def get_residue_metrics(
         from services.core_protein_scientific_contract import compute_persisted_native_metric
         return await compute_persisted_native_metric(design, "residue_plddt", session)
 
+    owner = await session.get(Job, design.job_id)
+    if owner and owner.model_id == 'boltz_cp_experimental':
+        from services.boltz_scientific_consumer import retained_cp_metric
+        return retained_cp_metric(design, owner, 'residue_plddt')
+
     if not design.residue_plddt:
         raise HTTPException(status_code=404, detail="No per-residue data available for this design")
     
@@ -2991,6 +3184,11 @@ async def get_chain_metrics(design_id: str, session: AsyncSession = Depends(get_
     if await scientific_contract_revision(design, session) == 1:
         from services.core_protein_scientific_contract import compute_persisted_native_metric
         return await compute_persisted_native_metric(design, "chain_metrics", session)
+
+    owner = await session.get(Job, design.job_id)
+    if owner and owner.model_id == 'boltz_cp_experimental':
+        from services.boltz_scientific_consumer import retained_cp_metric
+        return retained_cp_metric(design, owner, 'chain_metrics')
 
     payload = await _get_cached_design_analysis_payload(
         session,
@@ -3107,10 +3305,12 @@ async def get_designs_for_job(
     # Count total
     total = (await session.execute(count_query)).scalar()
     owners = await owning_jobs(session, designs)
-    responses = [_design_to_response(d, job=owners.get(d.job_id)) for d in designs]
+    responses = await run_in_threadpool(
+        lambda: [_design_to_response(d, job=owners.get(d.job_id)) for d in designs])
     for design, response in zip(designs, responses):
-        response.core_protein_scientific_contract = await scientific_contract_revision(design, session)
-        if response.core_protein_scientific_contract == 1:
+        response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
+            or (1 if response.native_sample and response.scientific_structure_document else None))
+        if response.core_protein_scientific_contract == 1 and not response.native_sample:
             from services.core_protein_scientific_contract import scientific_document
             response.scientific_structure_document = await scientific_document(design, session)
     _enrich_design_responses_from_sources(responses)
@@ -3267,6 +3467,51 @@ class PAEData(BaseModel):
     size: int  # Matrix dimension
 
 
+@router.get("/{design_id}/confidence-artifacts")
+async def get_confidence_artifacts(design_id: str, session: AsyncSession = Depends(get_session)):
+    """Original retained evidence inventory; downloads use the existing file owner."""
+    from urllib.parse import quote
+    from services.boltz_scientific_consumer import retained_cp_paths, verified_boltz_design
+    from services.boltz_scientific_persistence import _snapshot
+    design = await session.get(Design, design_id)
+    if design is None:
+        raise HTTPException(status_code=404, detail='Design not found')
+    job = await session.get(Job, design.job_id)
+    entries, producer = [], None
+    try:
+        if job and revision_for_job(job) == 1 and job.model_id in ('boltz', 'boltz2'):
+            selected = await verified_boltz_design(design, session)
+            producer = selected['block']['producer']
+            root = selected['publication_root']
+            keys = {role: Path(a['path']).relative_to(root).as_posix() for role,a in selected['artifacts'].items()}
+            # Optional native PDE is a same-sample sibling, never substituted
+            # for PAE and never inferred from a launch/save flag.
+            structure_key = Path(keys['structure'])
+            keys['pde'] = (structure_key.parent / f'pde_{structure_key.stem}.npz').as_posix()
+        else:
+            found = retained_cp_paths(design, job)
+            if found is None:
+                return dict(design_id=design_id, status='unavailable', reason='native_inventory_unavailable', artifacts=[])
+            root, keys, producer = found
+        for role, key in keys.items():
+            try:
+                artifact, content = _snapshot(root, key)
+                relative = _safe_allowed_relative(artifact['path'])
+                entries.append(dict(role=role, filename=Path(key).name, retained=True,
+                    artifact_sha256=artifact['sha256'], size_bytes=len(content),
+                    scope='original_native_artifact',
+                    download_url='/api/files/download/' + quote(relative, safe='/') if relative else None,
+                    download_reason=None if relative else 'outside_existing_download_owner'))
+            except (ValueError, OSError):
+                entries.append(dict(role=role, filename=Path(key).name, retained=False,
+                    scope='original_native_artifact', download_url=None, download_reason='not_retained'))
+        return dict(design_id=design_id, status='ok', reason=None, producer=producer,
+            artifacts=entries, mapping_endpoint=f'/api/designs/{design_id}/pae',
+            saved_write_full_pae=(job.params or {}).get('write_full_pae'))
+    except (ValueError, TypeError, KeyError, OSError):
+        return dict(design_id=design_id, status='unavailable', reason='native_inventory_unverified', artifacts=[])
+
+
 @router.get("/{design_id}/pae", response_model=Union[PAEData, ScientificViewerMetric])
 async def get_pae_data(
     design_id: str,
@@ -3290,6 +3535,11 @@ async def get_pae_data(
         from services.analysis_registry import normalize_pae_matrix_params
         payload, _, _ = await compute_persisted_pae(design, normalize_pae_matrix_params({'max_size':max_size}), session)
         return ScientificViewerMetric.model_validate(payload)
+
+    owner = await session.get(Job, design.job_id)
+    if owner and owner.model_id == 'boltz_cp_experimental':
+        from services.boltz_scientific_consumer import retained_cp_metric
+        return retained_cp_metric(design, owner, 'pae', {'max_size': max_size})
 
     payload = await _get_cached_design_analysis_payload(
         session,
@@ -3510,6 +3760,16 @@ async def get_chain_pair_iptm(
     
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
+    owner = await session.get(Job, design.job_id)
+    if owner and owner.model_id in ('boltz', 'boltz2', 'boltz_cp_experimental') and (
+            revision_for_job(owner) == 1 or owner.model_id == 'boltz_cp_experimental'):
+        native = await get_chain_metrics(design_id, session)
+        if isinstance(native, ScientificChainMetric):
+            native_keys = [str(c.native_asym_id) for c in native.chain_index_map]
+            return ChainPairIptmData(design_id=design.id, design_name=design.name,
+                chain_ids=[c.chain_id for c in native.chain_index_map], size=len(native_keys),
+                iptm_matrix=[[native.pair_chains_iptm[r][c] for c in native_keys] for r in native_keys])
+        raise HTTPException(status_code=409, detail='native chain identity mapping unavailable')
     contract = resolve_result_contract(review_profile_id=design.review_profile_id)
     if "complex_interface_metrics" not in contract.viewer_capabilities:
         raise HTTPException(

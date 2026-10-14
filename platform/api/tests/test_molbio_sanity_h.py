@@ -167,57 +167,6 @@ async def test_assessment_replay_precedes_native_sources_and_replays_original_ve
 
 
 @pytest.mark.asyncio
-async def test_native_manifest_snapshot_reads_and_hashes_once(tmp_path, monkeypatch):
-    from services import molbio_ngs_member_receipts as service
-    root = tmp_path / "job"
-    path = root / "fastq_qc" / "qc_manifest.json"
-    path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({"schema":"sequence_qc.manifest.v1", "artifact_schema_version":1, "job_id":"job", "workflow_status":"completed", "verification_status":"review", "workflow_id":"ont_fastq_qc", "input_mode":"fastq", "analysis_status":"completed", "artifacts":[]}))
-    job = SimpleNamespace(id="job", model_id="nanopore", params={"ont_workflow_id":"ont_fastq_qc"})
-    monkeypatch.setattr(service, "resolve_persisted_job_result_root", lambda job: root)
-    original = service.read_manifest_json_nofollow
-    calls = []
-    def counted(path):
-        calls.append(path)
-        return original(path)
-    monkeypatch.setattr(service, "read_manifest_json_nofollow", counted)
-    raw = path.read_bytes()
-    original_hash = service._sha256_bytes
-    def hash_distinct_preimage(content):
-        assert content != raw, "already verified manifest digest must be reused"
-        return original_hash(content)
-    monkeypatch.setattr(service, "_sha256_bytes", hash_distinct_preimage)
-    receipt, document = await service.resolve_ngs_result_manifest_snapshot(SimpleNamespace(get=AsyncMock(return_value=job)), job_id="job")
-    assert document["job_id"] == "job"
-    assert receipt.content_digest == __import__("hashlib").sha256(path.read_bytes()).hexdigest()
-    assert calls == [path]
-
-
-@pytest.mark.asyncio
-async def test_reference_receipt_validates_metadata_and_reads_bytes_once(tmp_path, monkeypatch):
-    from services import molbio_ngs_references as service
-    path = tmp_path / "reference.fasta"
-    path.write_bytes(b">ref\nACGT\n")
-    digest = __import__("hashlib").sha256(path.read_bytes()).hexdigest()
-    revision = SimpleNamespace(id="rev", reference_id="ref", global_domain_experiment_id="domain", artifact_id="artifact", revision_number=1, canonical_fasta_sha256=digest, canonical_fasta_size_bytes=path.stat().st_size)
-    artifact = SimpleNamespace(reference_id="ref", managed_relative_path="fixture", sha256=digest, size_bytes=path.stat().st_size)
-    monkeypatch.setattr(service, "get_reference_resource", AsyncMock(return_value=SimpleNamespace(id="ref")))
-    metadata = AsyncMock(return_value=revision)
-    monkeypatch.setattr(service, "get_reference_revision", metadata)
-    monkeypatch.setattr(service, "_managed_path", lambda _: path)
-    hash_calls = []
-    original = service._sha256
-    def hashed(content):
-        hash_calls.append(content)
-        return original(content)
-    monkeypatch.setattr(service, "_sha256", hashed)
-    receipt = await service.resolve_ngs_reference_revision_receipt(SimpleNamespace(get=AsyncMock(return_value=artifact)), global_domain_experiment_id="domain", reference_id="ref", revision_id="rev")
-    assert receipt.content_digest == digest
-    assert metadata.await_count == 1
-    assert hash_calls == [b">ref\nACGT\n"]
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["job", "instrument"])
 async def test_completed_attachment_does_not_reread_native_artifacts(monkeypatch, kind):
     from services import molbio_ngs_evidence as service

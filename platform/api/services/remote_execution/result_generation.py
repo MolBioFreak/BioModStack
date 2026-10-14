@@ -10,6 +10,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
+import stat
+import errno
 import fcntl
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -203,6 +206,119 @@ def _checkpoint(name: str) -> None:
     """Test fault-injection seam; deliberately no environment-controlled crash hook."""
 
 
+# Body formats consumed read-only at the controller return boundary, NOT a
+# general promise that these extensions are immutable in native workspaces.
+# Native geometry/CIF/sequence/trajectory writers run before worker sealing;
+# controller ingest registers those bytes rather than rerunning the producers.
+# The legacy tar extractor skips when pdb_files already contains a PDB.
+# Metadata, tables, checkpoints, logs and unknown leaves remain private.
+# Keep this boundary coupled to the actual-ingester regression, not suffix-only
+# tests; a new in-place receiving writer must privatize its exact destination.
+_IMMUTABLE_PAYLOAD_SUFFIXES = {
+    ".pdb", ".cif", ".mmcif", ".a3m", ".fasta", ".fa", ".fna",
+    ".fastq", ".fq", ".bam", ".bai", ".cram", ".crai", ".dcd", ".xtc",
+}
+
+
+def immutable_payload(relative: str) -> bool:
+    path = Path(relative)
+    if any(part.startswith(".") for part in path.parts):
+        return False
+    suffix = path.suffix.lower()
+    if suffix == ".gz":
+        suffix = Path(path.stem).suffix.lower()
+    return suffix in _IMMUTABLE_PAYLOAD_SUFFIXES
+
+
+def committed_payloads(job) -> dict:
+    """An optional reuse source, never a new admission requirement."""
+    marker = (job.provenance or {}).get("remote_result_generation")
+    if not isinstance(marker, dict):
+        return {}
+    try:
+        output = output_path(job)
+        if marker.get("job_id") != str(job.id) or marker.get("output_dir") != str(output):
+            return {}
+        raw = checked(output / "result-manifest.json").read_bytes()
+        if hashlib.sha256(raw).hexdigest() != marker.get("manifest_sha256"):
+            return {}
+        from .contracts import RemoteResultManifest
+        manifest = RemoteResultManifest.model_validate_json(raw)
+        if (manifest.job_id != marker["job_id"] or manifest.attempt_id != marker["attempt_id"]
+                or manifest.source_revision != marker["source_revision"]
+                or manifest.source_tree != marker["source_tree"]
+                or manifest.execution_envelope_sha256 != marker["envelope_sha256"]):
+            return {}
+        return {item.relative_path: item for item in manifest.artifacts}
+    except (OSError, ValueError, KeyError):
+        return {}
+
+
+def reuse_payload(job, artifact, previous: dict, destination: Path) -> bool:
+    prior = previous.get(artifact.relative_path)
+    if prior is None or (prior.sha256, prior.size_bytes) != (artifact.sha256, artifact.size_bytes):
+        return False
+    try:
+        source = checked(output_path(job) / artifact.relative_path)
+        info = source.stat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size != artifact.size_bytes:
+            return False
+        with source.open("rb") as handle:
+            if hashlib.file_digest(handle, "sha256").hexdigest() != artifact.sha256:
+                return False
+        destination = checked(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if immutable_payload(artifact.relative_path):
+            try:
+                os.link(source, destination)
+                return True
+            except OSError as exc:
+                if exc.errno not in (errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.EMLINK):
+                    raise
+        # Unchanged import-mutated leaves still avoid transport, but their inode
+        # must be private. Cross-filesystem regular-file projection is likewise
+        # an explicit compatibility copy, not claimed hardlink savings.
+        shutil.copy2(source, destination)
+        return True
+    except (OSError, ValueError):
+        if destination.is_file() and not destination.is_symlink():
+            destination.unlink()
+        return False
+
+
+def _retire_redundant_previous(backup: Path, output: Path) -> None:
+    """Retire only a completely redundant private rollback tree after commit.
+
+    Changed/removed historical science and undeclared importer outputs retain
+    their complete old namespace. Never prune individual old reader paths.
+    """
+    if not backup.exists():
+        return
+    for path in backup.rglob("*"):
+        if path.is_symlink():
+            return
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            return
+        relative = path.relative_to(backup)
+        if relative.as_posix() == "result-manifest.json":
+            continue  # old envelope, not unique scientific payload
+        current = output / relative
+        if any(parent.is_symlink() for parent in current.parents):
+            return
+        if current.is_symlink() or not current.is_file() or path.stat().st_size != current.stat().st_size:
+            return
+        with path.open("rb") as old, current.open("rb") as new:
+            if hashlib.file_digest(old, "sha256").digest() != hashlib.file_digest(new, "sha256").digest():
+                return
+    # The committed journal remains until removal finishes. A crash during
+    # rmtree can repeat this decision: only exact redundant payloads qualify.
+    shutil.rmtree(backup)
+    sync_dir(backup.parent)
+    _checkpoint("previous_retired")
+
+
 def recover(job) -> bool:
     """Idempotent local repair under controller lock, using freshly loaded DB state."""
     journal = journal_path(job)
@@ -223,6 +339,16 @@ def recover(job) -> bool:
     if committed:
         if not output.is_dir() or incoming.exists():
             raise GenerationError("Committed result generation is missing or ambiguous")
+        try:
+            _retire_redundant_previous(backup, output)
+        except OSError:
+            # Cleanup is not a new scientific-success condition. Keep the
+            # existing journal for the next recovery owner to finish.
+            return False
+        receipt = dict((job.provenance or {}).get("remote_execution_receipt") or {})
+        if not backup.exists() and receipt.get("previous_generation_quarantine") == str(backup):
+            receipt["previous_generation_quarantine"] = None
+            job.provenance = dict(job.provenance or {}, remote_execution_receipt=receipt)
     else:
         # Each move is itself recoverable; repeated recovery after either move
         # observes incoming present and will never move prior output into it.

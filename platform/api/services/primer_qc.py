@@ -81,6 +81,8 @@ def _three_prime_dimer_length(left: str, right: str) -> int:
 
 def _find_hairpin(sequence: str, *, min_stem: int = 3, min_loop: int = 3, max_loop: int = 12) -> tuple[int, int | None]:
     cleaned = _dna_alphabet(sequence)
+    complemented = reverse_complement(cleaned)
+    length = len(cleaned)
     for stem_length in range(len(cleaned) // 2, min_stem - 1, -1):
         for left_start in range(0, len(cleaned) - stem_length):
             left_end = left_start + stem_length
@@ -89,7 +91,7 @@ def _find_hairpin(sequence: str, *, min_stem: int = 3, min_loop: int = 3, max_lo
                 right_end = right_start + stem_length
                 if right_end > len(cleaned):
                     continue
-                if cleaned[left_start:left_end] == reverse_complement(cleaned[right_start:right_end]):
+                if cleaned[left_start:left_end] == complemented[length - right_end:length - right_start]:
                     return stem_length, loop_size
     return 0, None
 

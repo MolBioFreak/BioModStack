@@ -25,7 +25,7 @@ ONT_NGS_FAMILY_ID = "ont_ngs"
 ANALYSIS_OWNER = "nextflow_analysis"
 DEVICE_CONTROL_OWNER = "bms_service_api"
 MANIFEST_SCHEMA = "sequence_qc.manifest.v1"
-DORADO_LOCK_PATH = Path(__file__).resolve().parents[3] / "config" / "ngs" / "dorado_v1.3.1.lock.json"
+DORADO_LOCK_PATH = Path(__file__).resolve().parents[3] / "config" / "ngs" / "dorado_v2.1.2.lock.json"
 
 
 def normalized_fasta_sequence_identity(path: Path) -> tuple[str, int]:
@@ -372,9 +372,11 @@ ONT_WORKFLOW_ALIASES = {
 }
 
 
+WF_CLONE_MODEL_CONTRACT = json.loads((Path(__file__).resolve().parents[3] / "config/ngs/wf_clone_validation_v1.8.4.lock.json").read_text())["models"]
+
 WF_CLONE_DEFAULTS: dict[str, Any] = {
     "wf_clone_assembly_tool": "flye",
-    "wf_clone_basecaller_model": "dna_r10.4.1_e8.2_400bps_hac@v5.0.0",
+    "wf_clone_basecaller_model": WF_CLONE_MODEL_CONTRACT["default"],
     "wf_clone_large_construct": False,
     "wf_clone_approx_size": 7000,
     "wf_clone_assm_coverage": 60,
@@ -468,9 +470,8 @@ def _normalize_wf_clone_controls(normalized: dict[str, Any]) -> None:
     if assembly_tool not in {"flye", "canu"}:
         raise ValueError("wf_clone_assembly_tool must preserve an exact supported value: flye or canu")
     model_id = str(normalized.get("wf_clone_basecaller_model") or "").strip()
-    accepted_model = str(WF_CLONE_DEFAULTS["wf_clone_basecaller_model"])
-    if model_id != accepted_model:
-        raise ValueError(f"wf_clone_basecaller_model must equal the locked exact identity {accepted_model}")
+    if model_id not in WF_CLONE_MODEL_CONTRACT["accepted_upstream_ids"]:
+        raise ValueError("wf_clone_basecaller_model must select an installed exact native Medaka profile")
     normalized["wf_clone_assembly_tool"] = assembly_tool
     normalized["wf_clone_basecaller_model"] = model_id
 
@@ -547,6 +548,14 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     spec = get_ont_workflow_spec(canonical_id)
     normalized: dict[str, Any] = dict(WORKFLOW_DEFAULTS.get(canonical_id, {}))
     normalized.update(dict(params or {}))
+    # Historical direct native requests predate the descriptive input identity.
+    # Derive it only from one selected native input; never overwrite an explicit
+    # choice or turn absent observations into an additional admission condition.
+    if not (normalized.get("ont_input_mode") or normalized.get("input_mode")):
+        selected_inputs = [mode for mode, keys in (("pod5", ("pod5_dir",)), ("bam", ("bam_path", "bam_input")), ("fastq", ("fastq_path", "fastq_input")))
+                           if any(normalized.get(key) for key in keys)]
+        if len(selected_inputs) == 1:
+            normalized["ont_input_mode"] = selected_inputs[0]
     if canonical_id in {"ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening", "wf_clone_validation"}:
         normalized["expected_plasmid_size"] = effective_expected_plasmid_size(normalized.get("expected_plasmid_size"))
         consensus_setting = samtools_consensus_setting()
@@ -554,25 +563,25 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
         if consensus_config not in consensus_setting["enum"]:
             raise ValueError("samtools_consensus_config must be an installed samtools preset or null (unchanged)")
 
+    def setting_bool(name: str, default: bool) -> bool:
+        value = normalized.get(name, default)
+        if not isinstance(value, bool):
+            raise ValueError(f"{name} must be boolean")
+        return value
+
+    def setting_int(name: str, default: int, minimum: int, maximum: int) -> int:
+        value = normalized.get(name, default)
+        if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+            raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
+        return value
+
     if canonical_id == "ont_fastq_qc":
-        def fastq_bool(name: str, default: bool) -> bool:
-            value = normalized.get(name, default)
-            if not isinstance(value, bool):
-                raise ValueError(f"{name} must be boolean")
-            return value
-
-        def fastq_int(name: str, default: int, minimum: int, maximum: int) -> int:
-            value = normalized.get(name, default)
-            if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
-                raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
-            return value
-
         normalized["ont_workflow_id"] = spec.workflow_id
-        normalized["enable_rotating_reference_frames"] = fastq_bool("enable_rotating_reference_frames", True)
-        normalized["rotation_scan_step_bp"] = fastq_int("rotation_scan_step_bp", 1, 1, 10_000)
-        normalized["single_ref_split_min_mapq"] = fastq_int("single_ref_split_min_mapq", 20, 0, 60)
-        normalized["single_ref_split_min_segment_bp"] = fastq_int("single_ref_split_min_segment_bp", 250, 1, 1_000_000)
-        normalized["single_ref_split_max_query_gap_bp"] = fastq_int("single_ref_split_max_query_gap_bp", 500, 0, 1_000_000)
+        normalized["enable_rotating_reference_frames"] = setting_bool("enable_rotating_reference_frames", True)
+        normalized["rotation_scan_step_bp"] = setting_int("rotation_scan_step_bp", 1, 1, 10_000)
+        normalized["single_ref_split_min_mapq"] = setting_int("single_ref_split_min_mapq", 20, 0, 60)
+        normalized["single_ref_split_min_segment_bp"] = setting_int("single_ref_split_min_segment_bp", 250, 1, 1_000_000)
+        normalized["single_ref_split_max_query_gap_bp"] = setting_int("single_ref_split_max_query_gap_bp", 500, 0, 1_000_000)
         normalized["manifest_contract"] = MANIFEST_SCHEMA
         for key in list(normalized):
             if (
@@ -590,7 +599,8 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     lock = json.loads(lock_bytes)
     current_lock_sha256 = hashlib.sha256(lock_bytes).hexdigest()
     submitted_lock_sha256 = str(normalized.get("dorado_lock_sha256") or "").strip().lower()
-    if submitted_lock_sha256 and submitted_lock_sha256 != current_lock_sha256:
+    cached_resume = bool(normalized.get("resume_job_id"))
+    if not cached_resume and submitted_lock_sha256 and submitted_lock_sha256 != current_lock_sha256:
         raise ValueError("accepted Dorado lock identity changed before execution")
     submitted_model_id = str(normalized.get("dorado_resolved_model_id") or "").strip()
     supplied_model = str(normalized.get("dorado_model") or "").strip()
@@ -661,8 +671,8 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
         raise ValueError("dorado_batch_size must be an integer")
     else:
         batch_size = int(raw_batch)
-    if not int(lock["policy"]["batch_size_min"]) <= batch_size <= int(lock["policy"]["batch_size_max"]):
-        raise ValueError("dorado_batch_size is outside the locked bounded policy")
+    if batch_size < int(lock["policy"]["batch_size_min"]):
+        raise ValueError("dorado_batch_size must be a non-negative integer (0 = native auto)")
     raw_qscore = normalized.get("min_qscore", 10)
     if isinstance(raw_qscore, bool) or not (
         isinstance(raw_qscore, int) or (isinstance(raw_qscore, str) and re.fullmatch(r"[0-9]+", raw_qscore.strip()))
@@ -671,7 +681,8 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     min_qscore = int(raw_qscore)
     if min_qscore < 0 or min_qscore > 30:
         raise ValueError("min_qscore must be an integer from 0 through 30")
-    resolved_model = lock["models"][molecule_type][quality_mode]["id"]
+    resolved_model = (submitted_model_id if cached_resume and submitted_model_id
+                      else lock["models"][molecule_type][quality_mode]["id"])
     if submitted_model_id and submitted_model_id != resolved_model:
         raise ValueError("accepted Dorado model identity changed before execution")
 
@@ -682,7 +693,8 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     normalized["dorado_resolved_model_id"] = resolved_model
     normalized["dorado_basecall_mode"] = basecall_mode
     if basecall_mode == "duplex":
-        normalized["dorado_stereo_model"] = lock["models"]["stereo"]["id"]
+        if not cached_resume or not normalized.get("dorado_stereo_model"):
+            normalized["dorado_stereo_model"] = lock["models"]["stereo"]["id"]
     else:
         normalized.pop("dorado_stereo_model", None)
     normalized["dorado_batch_size"] = batch_size
@@ -693,8 +705,9 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
             normalized.pop(key, None)
         else:
             normalized[key] = value
-    normalized["dorado_lock_sha256"] = current_lock_sha256
-    normalized["dorado_device"] = ONT_QUALITY_MODE_CONTRACT["default_device"]
+    normalized["dorado_lock_sha256"] = submitted_lock_sha256 if cached_resume and submitted_lock_sha256 else current_lock_sha256
+    if not cached_resume or not normalized.get("dorado_device"):
+        normalized["dorado_device"] = ONT_QUALITY_MODE_CONTRACT["default_device"]
     normalized["manifest_contract"] = MANIFEST_SCHEMA
     raw_emit_moves = normalized.get("emit_moves", basecall_mode == "simplex")
     if not isinstance(raw_emit_moves, bool):
@@ -702,6 +715,15 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     if basecall_mode == "duplex" and raw_emit_moves:
         raise ValueError("emit_moves is unavailable for duplex until move-tag semantics are qualified")
     normalized["emit_moves"] = raw_emit_moves
+
+    # A missing declaration on newly basecalled POD5 can use its exact native
+    # profile. Never replace an explicit/saved declaration, or infer read origin
+    # for imported BAM/FASTQ. FAST has no current native Medaka auto-mapping.
+    clone_selected = canonical_id == "wf_clone_validation" or (
+        canonical_id == "ont_construct_screening" and normalized.get("run_assembly") is True)
+    if (clone_selected and normalized.get("pod5_dir") and "wf_clone_basecaller_model" not in (params or {})
+            and resolved_model in WF_CLONE_MODEL_CONTRACT["accepted_upstream_ids"]):
+        normalized["wf_clone_basecaller_model"] = resolved_model
 
     if canonical_id == "ont_construct_screening":
         run_assembly = normalized.get("run_assembly", False)
@@ -716,22 +738,10 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
 
     dimer_workflows = {"ont_plasmid_qc", "ont_construct_screening", "ont_fastq_qc", "wf_clone_validation"}
     if canonical_id in dimer_workflows:
-        def dimer_bool(name: str, default: bool) -> bool:
-            value = normalized.get(name, default)
-            if not isinstance(value, bool):
-                raise ValueError(f"{name} must be boolean")
-            return value
-
-        def dimer_int(name: str, default: int, minimum: int, maximum: int) -> int:
-            value = normalized.get(name, default)
-            if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
-                raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
-            return value
-
-        normalized["enable_rotating_reference_frames"] = dimer_bool("enable_rotating_reference_frames", True)
-        normalized["rotation_scan_step_bp"] = dimer_int("rotation_scan_step_bp", 1, 1, 10_000)
-        normalized["single_ref_split_min_mapq"] = dimer_int("single_ref_split_min_mapq", 20, 0, 60)
-        normalized["single_ref_split_min_segment_bp"] = dimer_int("single_ref_split_min_segment_bp", 250, 1, 1_000_000)
-        normalized["single_ref_split_max_query_gap_bp"] = dimer_int("single_ref_split_max_query_gap_bp", 500, 0, 1_000_000)
+        normalized["enable_rotating_reference_frames"] = setting_bool("enable_rotating_reference_frames", True)
+        normalized["rotation_scan_step_bp"] = setting_int("rotation_scan_step_bp", 1, 1, 10_000)
+        normalized["single_ref_split_min_mapq"] = setting_int("single_ref_split_min_mapq", 20, 0, 60)
+        normalized["single_ref_split_min_segment_bp"] = setting_int("single_ref_split_min_segment_bp", 250, 1, 1_000_000)
+        normalized["single_ref_split_max_query_gap_bp"] = setting_int("single_ref_split_max_query_gap_bp", 500, 0, 1_000_000)
 
     return normalized

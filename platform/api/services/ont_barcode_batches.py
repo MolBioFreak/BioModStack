@@ -11,7 +11,7 @@ import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Annotated, Any, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select, text
@@ -24,10 +24,12 @@ from database import (
     NgsReferenceSetManifest,
     NgsReferenceSetMapping,
 )
-from paths import get_inputs_dir
+from paths import get_inputs_dir, get_results_dir
+from schemas import ExecutionPolicy
+from fastapi import HTTPException
 from services import alignment_access, ont_submission_trust
 from services.molbio_ngs_receipts import consume_molbio_ngs_receipt
-from services.ont_barcode_units import load_barcode_units
+from services.ont_barcode_units import _resolve_barcode_catalogs
 from services.ont_ngs_contract import normalized_fasta_sequence_sha256
 
 
@@ -89,6 +91,10 @@ class BarcodeBatchRequest(BaseModel):
     name_prefix: str | None = Field(default=None, max_length=128)
     pinned_gpu: int | None = Field(default=None, ge=0, le=15)
     mappings: list[BarcodeBatchRequestMapping] = Field(min_length=1, max_length=96)
+    reference_set_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    execution_target_id: str | None = Field(default=None, min_length=1, max_length=128)
+    execution_policy: ExecutionPolicy | None = None
+    execution_plan_approvals: dict[str, Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]] = Field(default_factory=dict)
 
     @field_validator("idempotency_key")
     @classmethod
@@ -199,6 +205,7 @@ def _normalized_request(request: BarcodeBatchRequest, *, source_job_id: str) -> 
         "name_prefix": request.name_prefix,
         "pinned_gpu": request.pinned_gpu,
         "mappings": mappings,
+        **request.model_dump(mode="json", include={"execution_target_id", "execution_policy"}, exclude_unset=True),
     }
 
 
@@ -253,7 +260,10 @@ def _validate_source_products(source: Mapping[str, Any]) -> dict[str, Any]:
         "dorado_runtime_provenance": root / "basecall" / "dorado_runtime_provenance.json",
     }
     documents: dict[str, dict[str, Any]] = {}
+    manifest_stats = {}
     for label, path in paths.items():
+        if label in {"demux_manifest", "barcode_units_manifest"}:
+            manifest_stats[path] = _confined_file(path, root, label).stat()
         resolved, payload, payload_bytes = _read_json_file(path, root, label)
         observed = _sha256_bytes(payload_bytes)
         if observed != digests[label]:
@@ -289,17 +299,13 @@ def _validate_source_products(source: Mapping[str, Any]) -> dict[str, Any]:
         raise BarcodeBatchError("source calls/preflight identities are inconsistent", status_code=409)
 
     try:
-        demux_units = load_barcode_units(
-            paths["demux_manifest"],
+        demux_units, catalog_units = _resolve_barcode_catalogs(
+            [
+                (paths["demux_manifest"], demux, digests["demux_manifest"]),
+                (paths["barcode_units_manifest"], catalog, digests["barcode_units_manifest"]),
+            ],
             root,
-            expected_manifest_sha256=digests["demux_manifest"],
-            expected_source_calls_sha256=source_calls_sha256,
-            expected_preflight_sha256=preflight_sha256,
-        )
-        catalog_units = load_barcode_units(
-            paths["barcode_units_manifest"],
-            root,
-            expected_manifest_sha256=digests["barcode_units_manifest"],
+            manifest_stats=manifest_stats,
             expected_source_calls_sha256=source_calls_sha256,
             expected_preflight_sha256=preflight_sha256,
         )
@@ -594,7 +600,8 @@ async def _create_one_child(
     child_job_id: str,
     mapping_id: str,
     request: BarcodeBatchRequest,
-) -> tuple[str, str]:
+    prepare_only: bool = False,
+) -> tuple[str, str] | dict[str, Any]:
     unit = source_products["unit_by_id"][mapping["unit_id"]]
     revision_binding = {
         "sequence_id": str(receipt.sequence_id),
@@ -653,6 +660,9 @@ async def _create_one_child(
         name=_safe_child_name(prefix, str(mapping["unit_id"])),
         params=params,
         pinned_gpu=request.pinned_gpu,
+        execution_target_id=request.execution_target_id,
+        execution_policy=request.execution_policy,
+        execution_plan_approval=request.execution_plan_approvals.get(str(mapping["unit_id"])),
     )
     trusted_params = frozenset(
         {
@@ -678,15 +688,16 @@ async def _create_one_child(
         trusted_result_paths=frozenset({"bam_path"}),
     ).model_copy(
         update={
-            "parent_job_id": str(source["id"]),
-            "child_stage": f"barcoded_reference_set_{reference_set_id[:8]}",
+            "parent_job_id": None,
             "batch_id": reference_set_id,
             "batch_name": f"{prefix} barcoded batch",
         }
     )
+    if prepare_only:
+        from routers.jobs import preview_job_execution_plan
+        return await preview_job_execution_plan(job, session)
     token, token_digest = alignment_access.issue_alignment_access_token()
-    trust_token = ont_submission_trust.begin_trusted_ont_job_creation(token_digest)
-    try:
+    with ont_submission_trust.trusted_ont_job_creation(token_digest):
         created = await create_job(
             job,
             background_tasks,
@@ -694,8 +705,6 @@ async def _create_one_child(
             _preallocated_job_id=child_job_id,
             _commit=False,
         )
-    finally:
-        ont_submission_trust.end_trusted_ont_job_creation(trust_token)
     created_id = getattr(created, "id", None)
     if created_id is not None and str(created_id) != child_job_id:
         raise BarcodeBatchError("canonical job creation returned an unexpected child identity", status_code=409, code="CHILD_IDENTITY_CONFLICT")
@@ -712,6 +721,7 @@ async def create_barcoded_reference_set(
     background_tasks: Any,
     http_request: Any,
     response: Any,
+    prepare_only: bool = False,
 ) -> dict[str, Any]:
     """Validate and atomically create one server-authorized barcode child set."""
 
@@ -728,6 +738,7 @@ async def create_barcoded_reference_set(
 
     staged_manifest_path: Path | None = None
     committed = False
+    transaction_job_dirs: list[str] = []
     try:
         await _begin_writer_transaction(session)
         existing = await _find_idempotent_manifest(
@@ -749,7 +760,7 @@ async def create_barcoded_reference_set(
         receipt_ids = [str(item["molbio_ngs_receipt_id"]) for item in mappings]
         receipts = await _validate_receipts(session, receipt_ids)
 
-        reference_set_id = str(uuid.uuid4())
+        reference_set_id = request.reference_set_id or str(uuid.uuid4())
         child_ids = {
             item["unit_id"]: str(uuid.uuid5(CHILD_ID_NAMESPACE, f"{reference_set_id}:{item['unit_id']}"))
             for item in mappings
@@ -814,7 +825,28 @@ async def create_barcoded_reference_set(
             "source_units": source_units,
             "entries": manifest_entries,
         }
-        staged_manifest_path, staged_manifest_sha256 = _stage_manifest(reference_set_id, manifest_payload)
+        if request.reference_set_id:
+            staged_manifest_path = get_inputs_dir() / REFERENCE_SET_ROOT_NAME / reference_set_id / "reference_set.json"
+            _, retained, raw = _read_json_file(staged_manifest_path, get_inputs_dir(), "retained reference set")
+            if retained != manifest_payload or raw != canonical_json_bytes(manifest_payload):
+                raise BarcodeBatchError("retained reference set differs from current source/receipt authority", status_code=409)
+            staged_manifest_sha256 = _sha256_bytes(raw)
+        else:
+            staged_manifest_path, staged_manifest_sha256 = _stage_manifest(reference_set_id, manifest_payload)
+        if prepare_only:
+            previews = {}
+            for item in mappings:
+                previews[item["unit_id"]] = await _create_one_child(
+                    session=session, background_tasks=background_tasks, source=source,
+                    source_products=source_products, mapping=item,
+                    receipt=receipts[item["molbio_ngs_receipt_id"]],
+                    reference_set_id=reference_set_id, reference_set_sha256=staged_manifest_sha256,
+                    reference_set_path=staged_manifest_path, child_job_id=child_ids[item["unit_id"]],
+                    mapping_id=mapping_ids[item["unit_id"]], request=request, prepare_only=True,
+                )
+            await session.rollback()
+            return {"request": request.model_copy(update={"reference_set_id": reference_set_id, "execution_plan_approvals": {}}).model_dump(mode="json", exclude_unset=True),
+                    "request_fingerprint": fingerprint, "previews": previews}
         manifest_row = NgsReferenceSetManifest(
             id=reference_set_id,
             manifest_schema=REFERENCE_SET_SCHEMA,
@@ -833,6 +865,9 @@ async def create_barcoded_reference_set(
         child_tokens: list[tuple[str, str]] = []
         for item in mappings:
             receipt = receipts[item["molbio_ngs_receipt_id"]]
+            child_path = get_results_dir() / child_ids[item["unit_id"]]
+            if not child_path.exists() and not child_path.is_symlink():
+                transaction_job_dirs.append(child_ids[item["unit_id"]])
             child_id, token = await _create_one_child(
                 session=session,
                 background_tasks=background_tasks,
@@ -884,23 +919,18 @@ async def create_barcoded_reference_set(
         for child_id, token in child_tokens:
             alignment_access.set_alignment_access_cookie(child_id, token, response, http_request)
         return _manifest_result(manifest_row, sorted(mapping_rows, key=lambda row: str(row.unit_id)), manifest_payload)
-    except BarcodeBatchError:
+    except BaseException as exc:
         if committed:
             raise
         await session.rollback()
-        _remove_staged_manifest(staged_manifest_path)
-        raise
-    except IntegrityError as exc:
-        if committed:
+        if not request.reference_set_id and not prepare_only:
+            _remove_staged_manifest(staged_manifest_path)
+        from services.ont_pooled_reference_assignment import _remove_job_dirs
+        _remove_job_dirs(transaction_job_dirs)
+        if isinstance(exc, IntegrityError):
+            raise BarcodeBatchError("barcode batch could not be committed atomically", status_code=409, code="BARCODE_BATCH_CONFLICT") from exc
+        if isinstance(exc, (BarcodeBatchError, HTTPException)) or not isinstance(exc, Exception):
             raise
-        await session.rollback()
-        _remove_staged_manifest(staged_manifest_path)
-        raise BarcodeBatchError("barcode batch could not be committed atomically", status_code=409, code="BARCODE_BATCH_CONFLICT") from exc
-    except Exception as exc:
-        if committed:
-            raise
-        await session.rollback()
-        _remove_staged_manifest(staged_manifest_path)
         raise BarcodeBatchError("barcode batch was rolled back and could not be committed", status_code=422, code="BARCODE_BATCH_ROLLED_BACK") from exc
 
 

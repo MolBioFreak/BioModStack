@@ -161,9 +161,9 @@ async def test_bundle_preparation_refreshes_admission_without_retargeting(tmp_pa
                 job = await s.get(Job, 'job')
                 job.status, job.queue_status = 'cancelled', 'cancelled'
             await s.commit()
-            assert targets.target_eligible(target) == (change in {'fresh', 'capacity', 'cancelled'} | identity_changes)
+            assert targets.target_eligible(target) == (change in {'fresh', 'preload', 'capacity', 'cancelled'} | identity_changes)
         release.set()
-        if change == 'fresh':
+        if change in {'fresh', 'preload'}:
             assert await asyncio.wait_for(task, 5) == 'remote:attempt'
             assert staged == [True] and commands == ['prepare', 'run']
             assert admissions == [Clock.utcnow().isoformat()] * 2

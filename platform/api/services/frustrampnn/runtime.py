@@ -189,6 +189,21 @@ def open_regular_no_follow(path: Path | str, *, label: str) -> int:
     return descriptor
 
 
+def resolve_read_input(path: Path | str, *, allowed_root: Path | str, label: str) -> Path:
+    """Resolve a caller-owned incoming alias, then use the strict physical reader.
+
+    This is not for images, locks, writable binds or publication destinations.
+    The caller supplies its actual input custody root, not the alias parent.
+    """
+    _lexical_parts(path, label=label)
+    try:
+        resolved = Path(path).resolve(strict=True)
+        resolved.relative_to(Path(allowed_root).resolve(strict=True))
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise RuntimeValidationError(f"{label} escapes caller input root") from exc
+    return resolved
+
+
 def sha256_fd(descriptor: int) -> str:
     """Hash exact bytes from an already-open regular-file descriptor."""
 
@@ -807,6 +822,7 @@ def build_frustrampnn_command(
     checkpoint: Path | str = FRUSTRAMPNN_RUNTIME_IDENTITY.checkpoint_path,
     chains: tuple[str, ...] | None = None,
     positions: tuple[int, ...] | None = None,
+    input_root: Path | str | None = None,
 ) -> FrustraMPNNInvocation:
     """Build the exact scheduler-to-container GPU-safe FrustraMPNN invocation."""
 
@@ -822,6 +838,8 @@ def build_frustrampnn_command(
     if not isinstance(executable, str) or not executable or "\x00" in executable:
         raise RuntimeValidationError("Apptainer executable is invalid")
     container_path = _absolute_safe_host_path(container, label="container")
+    if input_root is not None:
+        normalized = resolve_read_input(normalized, allowed_root=input_root, label="normalized input")
     normalized_path = _absolute_safe_host_path(normalized, label="normalized input")
     output_path = _absolute_safe_host_path(output_root, label="output root")
     raw_path = _absolute_safe_host_path(raw, label="raw output")

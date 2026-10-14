@@ -11,13 +11,24 @@ from test_remote_lifecycle_gaps import store, preparing, receipt, lifecycle_invo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('terminal', [False, True])
-async def test_lost_lease_must_fence_observation_and_terminal(store, monkeypatch, terminal):
+@pytest.mark.parametrize('shared', [False, True])
+async def test_lost_lease_must_fence_observation_and_terminal(store, monkeypatch, terminal, shared):
     async with store() as s:
-        (await s.get(Job, 'job')).remote_state = 'old_state'
+        job = await s.get(Job, 'job')
+        job.remote_state = 'old_state'
+        if shared:
+            (await s.get(ExecutionTarget, 'target')).leased_job_id = 'legacy-sibling'
+            job.provenance = dict(job.provenance or {}, remote_execution_assignment=dict(
+                policy='vram_packing', lease_id='claim', root_job_id='job', execution_target_id='target'))
         await s.commit()
     async def remote_status(*_):
         async with store() as other:
-            (await other.get(ExecutionTarget, 'target')).leased_job_id = 'successor-job'
+            if shared:
+                current = await other.get(Job, 'job')
+                current.provenance = dict(current.provenance, remote_execution_assignment=dict(
+                    current.provenance['remote_execution_assignment'], lease_id='successor-claim'))
+            else:
+                (await other.get(ExecutionTarget, 'target')).leased_job_id = 'successor-job'
             await other.commit()
         return receipt('failed' if terminal else 'running')
     monkeypatch.setattr(ex, 'remote_status', remote_status)
@@ -26,7 +37,7 @@ async def test_lost_lease_must_fence_observation_and_terminal(store, monkeypatch
     async with store() as s:
         job = await s.get(Job, 'job')
         assert (job.status, job.remote_state) == ('running', 'old_state')
-        assert (await s.get(ExecutionTarget, 'target')).leased_job_id == 'successor-job'
+        assert (await s.get(ExecutionTarget, 'target')).leased_job_id == ('legacy-sibling' if shared else 'successor-job')
 
 
 @pytest.mark.asyncio
@@ -113,8 +124,17 @@ def test_controller_guard_is_cross_process_and_released_on_crash(tmp_path, monke
 
 
 @pytest.mark.asyncio
-async def test_live_staging_producer_is_not_expired(store, monkeypatch):
+@pytest.mark.parametrize('shared', [False, True])
+async def test_live_staging_producer_is_not_expired(store, monkeypatch, shared):
     await preparing(store)
+    if shared:
+        async with store() as s:
+            job = await s.get(Job, 'job')
+            job.provenance = dict(job.provenance or {}, remote_execution_assignment=dict(
+                policy='vram_packing', lease_id='claim', root_job_id='job', execution_target_id='target',
+                claimed_at=datetime.utcnow().isoformat() + 'Z'))
+            (await s.get(ExecutionTarget, 'target')).leased_job_id = 'legacy-sibling'
+            await s.commit()
     entered, release = asyncio.Event(), asyncio.Event()
     async def ready(s, *_):
         return await s.get(ExecutionTarget, 'target')
@@ -173,7 +193,7 @@ async def test_live_staging_producer_is_not_expired(store, monkeypatch):
         async with store() as s:
             j = await s.get(Job, 'job')
             assert (j.status, j.queue_status, j.remote_state) == ('queued', 'preparing', 'staging')
-            assert (await s.get(ExecutionTarget, 'target')).leased_job_id == 'job'
+            assert (await s.get(ExecutionTarget, 'target')).leased_job_id == ('legacy-sibling' if shared else 'job')
     finally:
         release.set()
         stage_entered.cancel()

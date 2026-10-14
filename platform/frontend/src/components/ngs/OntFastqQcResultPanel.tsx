@@ -434,7 +434,7 @@ export function OntFastqQcResultPanel({
             </section>
 
             <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
-                <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Governed downloads</h4>
+                <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Downloads</h4>
                 {pageControls('artifacts')}
                 <div className="mt-2 space-y-3">
                     {artifactRoleGroups.map((group) => (
@@ -466,7 +466,7 @@ export function OntFastqQcResultPanel({
             </section>
 
             <details className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs">
-                <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Alignment-session receipts</summary>
+                <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Alignment sessions</summary>
                 <div className="mt-2 space-y-1 text-[var(--text-secondary)]">
                     {result.alignment_sessions.map((session) => (
                         <div key={session.session_id}>
@@ -477,10 +477,10 @@ export function OntFastqQcResultPanel({
             </details>
 
             <details className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs">
-                <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Stage receipts</summary>
+                <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Processing stages</summary>
                 <div className="mt-2 space-y-1 text-[var(--text-secondary)]">
                     {result.stages.map((stage) => (
-                        <div key={stage.stage}>{stage.stage}: {stage.status} · {stage.output_count.toLocaleString()} governed outputs</div>
+                        <div key={stage.stage}>{stage.stage}: {stage.status} · {stage.output_count.toLocaleString()} output files</div>
                     ))}
                 </div>
             </details>
@@ -499,7 +499,7 @@ export function OntFastqQcResultPanel({
             </details>
 
             <details className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs">
-                <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Technical provenance and historical resource fields</summary>
+                <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Run provenance and resource use</summary>
                 <div className="mt-2 space-y-1 text-[var(--text-secondary)]">
                     <div>Sequence-QC manifest SHA-256: <span className="font-mono">{result.authority.sequence_qc_manifest_sha256}</span></div>
                     <div>Construct-verification manifest SHA-256: <span className="font-mono">{result.authority.construct_verification_manifest_sha256}</span></div>
@@ -508,9 +508,8 @@ export function OntFastqQcResultPanel({
             </details>
 
             <details className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs">
-                <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Technical authority and lifecycle</summary>
+                <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Run details</summary>
                 <div className="mt-2 space-y-1 text-[var(--text-secondary)]">
-                    <div>Stages: {result.stages.map((stage) => `${stage.stage}=${stage.status} (${stage.output_count})`).join(' · ')}</div>
                     <div>Threshold profile: {verification.threshold_profile.id} v{verification.threshold_profile.version} · {verification.threshold_profile.calibration_status}</div>
                     <div>Artifact set SHA-256: <span className="font-mono">{result.authority.artifact_set_sha256}</span></div>
                     <div>GPU: not applicable. This workflow consumes existing FASTQ and does not invoke Dorado.</div>

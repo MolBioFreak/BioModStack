@@ -1,3 +1,4 @@
+import './BioXpSchemaInput.css';
 import { createContext, useContext, useRef, useState } from 'react';
 import { isMethodNumber } from '../lib/bioxpMethodNumber';
 import { BioXpMethodExpression } from './BioXpMethodExpression';
@@ -25,7 +26,12 @@ function resolve(schema: Schema, root: Schema): Schema {
 }
 const variants = (schema: Schema, root = schema): Schema[] => {
     const resolved = resolve(schema, root);
-    return (resolved.anyOf ?? resolved.oneOf ?? (Array.isArray(resolved.type) ? resolved.type.map(type => ({ ...resolved, type })) : [resolved])).map(choice => resolve(choice, root));
+    return (resolved.anyOf ?? resolved.oneOf ?? (Array.isArray(resolved.type) ? resolved.type.map(type => ({ ...resolved, type })) : [resolved])).flatMap(choice => {
+        const child = resolve(choice, root);
+        // Producer references can themselves be unions (native occurrence OR
+        // authored Method result). Expose their typed alternatives, not a free object.
+        return choice !== resolved && (child.anyOf || child.oneOf) ? variants(child, root) : [child];
+    });
 };
 export function schemaInitialValue(schema: Schema, root = schema): unknown {
     schema = resolve(schema, root);
@@ -113,7 +119,7 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
     };
     if (rawDraft && isMethodNumber(value)) return fallback(label, value, onChange);
     if (rawDraft && objectValue(value) && objectValue(value.expr)) return <BioXpMethodExpression label={label} value={value} onChange={onChange} literal={(v, change) => fallback(`${label} literal`, v, change)} />;
-    return <fieldset className="min-w-0 space-y-2 rounded border border-slate-700 p-2">
+    return <fieldset className="bioxp-schema-field min-w-0 space-y-2 rounded border border-slate-700 p-2">
         <legend>{display(label)}</legend>
         {rawDraft && ['string', 'number', 'integer', 'boolean'].includes(String(kind)) && !enums && <button type="button" aria-label={`Use expression for ${label}`} onClick={() => onChange({ expr: { version: 1, op: 'literal', value } })}>Use expression for {display(label)}</button>}
         {schema.description && <p className="text-xs text-slate-400">{schema.description}</p>}
@@ -129,6 +135,7 @@ export function BioXpSchemaInput({ label, schema, value, onChange, fallback, roo
                     <label>{display(`${label}.${name}`)}{active.required?.includes(name) ? ' *' : ''}<select aria-label={`${label}.${name} presence`} className={classes} value={value[name] === undefined ? 'omitted' : 'value'} onChange={event => update(name, event.target.value === 'omitted' ? undefined : initialValue(child))}>
                         <option value="omitted">{rawDraft ? 'Unspecified (preserved)' : `Omit (service default${Object.hasOwn(child, 'default') ? `: ${JSON.stringify(child.default)}` : ''})`}</option><option value="value">Explicit value</option>
                     </select></label>
+                    {rawDraft && value[name] === undefined && Object.hasOwn(child, 'source_default') && <button type="button" aria-label={`Use source value for ${label}.${name}`} onClick={() => update(name, structuredClone(child.source_default))}>Use source value: {JSON.stringify(child.source_default)}</button>}
                     {value[name] !== undefined && <BioXpSchemaInput label={`${label}.${name}`} schema={child} rootSchema={rootSchema} rawDraft={rawDraft} value={value[name]} onChange={next => update(name, next)} fallback={fallback} />}
                 </div>;
             })}

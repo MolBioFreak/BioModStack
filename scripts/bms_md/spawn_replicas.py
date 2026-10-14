@@ -9,6 +9,7 @@ from typing import Any
 import requests
 
 from scripts.child_job_utils import component_runtime_enabled, submit_child_job
+from .native_config import lane_config, lane_count, compatibility_key, final_stage_name
 
 
 def _digest(payload: Any) -> str:
@@ -26,7 +27,7 @@ def spawn_replicas(
 ) -> dict[str, Any]:
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     config = json.loads(normalized_config.read_text(encoding="utf-8"))
-    replica_count = int(metadata["replicas"])
+    replica_count = lane_count(config) if config.get("schema") == "bms.md.job.v3" else int(metadata["replicas"])
     engine = str(metadata["engine"])
     base_seed = int(config["random_seed"])
     try:
@@ -35,27 +36,23 @@ def spawn_replicas(
         raise ValueError("MD replica execution.gpu_id must identify one physical scheduler GPU") from exc
     if scheduler_gpu_id < 0:
         raise ValueError("MD replica execution.gpu_id must identify one physical scheduler GPU")
-    execution_plan_sha256 = _digest(config)
-    compatibility_key = _digest({
-        "engine": config.get("engine"),
-        "engine_runtime": config.get("engine_runtime"),
-        "chemistry": config.get("chemistry"),
-        "protocol": config.get("protocol"),
-        "input_hashes": {
-            key: value for key, value in config.get("input", {}).items()
-            if key.endswith("_sha256")
-        },
-    })
     created: list[dict[str, Any]] = []
 
     for replica_index in range(replica_count):
+        effective = lane_config(config, replica_index)
+        lane_path = normalized_config
+        if config.get("windows"):
+            from .aggregate_children import publish_json_immutable
+            lane_path = normalized_config.parent / "lanes" / f"replica_{replica_index}.json"
+            publish_json_immutable(effective, lane_path)
+        execution_plan_sha256 = _digest(effective)
         name = f"{parent_name} - MD replica {replica_index + 1}/{replica_count}"
         payload: dict[str, Any] = {
             "name": name,
             "model_id": "molecular_dynamics",
             "mode": "replica",
             "params": {
-                "md_job_config": str(normalized_config.resolve()),
+                "md_job_config": str(lane_path.resolve()),
                 "md_preparation_bundle": str(preparation_bundle.resolve()),
                 "md_replica_index": replica_index,
                 "md_replica_seed": base_seed + replica_index,
@@ -63,7 +60,7 @@ def spawn_replicas(
                 "md_replica_count": replica_count,
                 "lineage_root_job_id": parent_job_id,
                 "md_execution_plan_sha256": execution_plan_sha256,
-                "md_compatibility_key": compatibility_key,
+                "md_compatibility_key": compatibility_key(effective),
                 "md_attempt": 0,
             },
             "parent_job_id": parent_job_id,
@@ -72,6 +69,11 @@ def spawn_replicas(
             "child_stage": "md_replica",
             "pinned_gpu": scheduler_gpu_id,
         }
+        if config.get("schema") == "bms.md.job.v3":
+            payload["params"]["md_final_stage"] = final_stage_name(effective)
+        if "window_id" in effective:
+            payload["params"].update(md_window_id=effective["window_id"],
+                                     md_replicate_index=effective["replicate_index"])
         if component_runtime_enabled():
             child_id = submit_child_job(
                 payload, parent_job_id=parent_job_id, stage="md_replica",
@@ -90,6 +92,7 @@ def spawn_replicas(
                 "id": child["id"],
                 "name": child["name"],
                 "replica_index": replica_index,
+                **({"window_id": effective["window_id"], "replicate_index": effective["replicate_index"]} if "window_id" in effective else {}),
                 "replica_seed": base_seed + replica_index,
                 "status": child["status"],
             }
@@ -149,7 +152,9 @@ def prepare_replica_retry(runtime, *, component_id: str, operation_id: str,
         children.append(dict(id=request.component_id, name=request.payload.get('name', ''),
             replica_index=child_params['md_replica_index'],
             replica_seed=child_params['md_replica_seed'],
-            attempt=child_params.get('md_attempt', 0), status='queued'))
+            attempt=child_params.get('md_attempt', 0), status='queued',
+            **({"window_id": child_params["md_window_id"], "replicate_index": child_params["md_replicate_index"]}
+               if "md_window_id" in child_params else {})))
     children.sort(key=lambda row: row['replica_index'])
     count = int(params['md_replica_count'])
     if [row['replica_index'] for row in children] != list(range(count)):

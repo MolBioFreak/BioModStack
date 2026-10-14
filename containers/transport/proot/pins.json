@@ -1,0 +1,11 @@
+{
+  "source_repository": "https://github.com/jorge-lip/proot-udocker.git",
+  "source_commit": "fe64598e08ca3b4e9884c4cf8ecb83f6dc9720b8",
+  "uthash_commit": "e493aa90a2833b4655927598f169c31cfcdf7861",
+  "patch_sha256": "24abd8d211a780bdb1f54175f757db02cbf16e63501c354b9a0744f2982fb19c",
+  "artifact_sha256": "5ff4fd4367f2cdf3fcbb8088f5e36eed2070a97fc0e401f97ca30b2f90facd5a",
+  "artifact_size": 1157920,
+  "original_englib_sha256": "2a4804ba82e087ca3e99305fce9887227925d2b56aaefcad6474c4cb86b7a157",
+  "original_modern_engine_sha256": "a9a3161b733b7114c87fd81e0d50381b5ec2cccad7f2b981257a834b8220cc34",
+  "installed_manifest_sha256": "b1bafbf468885612e118d8e85302f83ce6bba540e795ea4e5c3c49fb08e988ae"
+}

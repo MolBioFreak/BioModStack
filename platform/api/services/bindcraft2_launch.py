@@ -194,7 +194,8 @@ def materialize_campaign(settings: dict, output_dir: Path, *, preview_digest: st
 
 def materialize_native_action(source_output_dir: Path, output_dir: Path, *, operation: str,
                               options: dict | None = None, source_job_id: str | None = None,
-                              compiler: Callable = _native_compile) -> dict:
+                              compiler: Callable = _native_compile,
+                              source_campaign_immutable: bool = False) -> dict:
     """Snapshot native state into an existing owner-allocated child Job.
 
     The Jobs owner resolves source_job_id and its output directory. No arbitrary
@@ -220,17 +221,9 @@ def materialize_native_action(source_output_dir: Path, output_dir: Path, *, oper
     else:
         original = json.loads((source / 'compilation.json').read_text())
         read_campaign_receipt(source_output_dir)
-        # Copy native output/state as a tree, including hidden sweep/dedup state.
-        # The published source is never used as an execution directory.
-        for folder in ('campaign', 'sources'):
-            source_folder = source / folder
-            if source_folder.exists():
-                if not source_folder.resolve().is_relative_to(source):
-                    raise ValueError('BC2 snapshot escapes the source job')
-                for path in source_folder.rglob('*'):
-                    if path.is_symlink() and not path.resolve().is_relative_to(source):
-                        raise ValueError('BC2 snapshot escapes the source job')
-                shutil.copytree(source_folder, destination / folder, dirs_exist_ok=True)
+        from services.bindcraft2_runtime import materialize_action_tree
+        materialize_action_tree(source, destination, action,
+                                campaign_immutable=source_campaign_immutable)
         mapped = json.loads(json.dumps(original['requested_settings']))
         native_source_root = Path(original['native_request']['project_folder']).parent
         for index, row in enumerate(original['native_request'].get('targets', [])):

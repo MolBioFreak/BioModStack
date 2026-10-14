@@ -252,6 +252,78 @@ def _canonical_fingerprint(run: dict[str, Any], resource: str, archive_sha256: s
     return hashlib.sha256(payload).hexdigest()
 
 
+def retained_scalar_records(design, job, *, scalar_read=None, manifest_indexes=None):
+    """Read exact imported sample values without claiming local Boltz production."""
+    from paths import get_data_root, resolve_runtime_data_path
+    from services.boltz_scientific_persistence import _snapshot
+    from services.boltz_scientific_consumer import scalar_records
+    from services.core_protein_scientific_contract import validate_metric
+    if job.id != design.job_id:
+        raise ValueError('foreign import owner')
+    root = Path(job.output_dir)
+    root = resolve_runtime_data_path(root) if root.is_absolute() else get_data_root() / root
+    if scalar_read is None:
+        _, manifest_bytes = _snapshot(root, 'normalized/import-manifest.json')
+        manifest = json.loads(manifest_bytes)
+    else:
+        _, manifest = scalar_read(root, 'normalized/import-manifest.json')
+    provenance = (design.provenance or {}).get('external_import') or {}
+    if (manifest['provider']['id'] != PROVIDER_ID
+            or manifest['source']['source_fingerprint'] != provenance.get('source_fingerprint')):
+        raise ValueError('foreign import manifest')
+    # Lists retain ambiguity per identity, including duplicate structure declarations.
+    key = str(root)
+    if manifest_indexes is None:
+        manifest_indexes = {}
+    if key not in manifest_indexes:
+        samples, structures = {}, {}
+        for row in manifest['samples']:
+            samples.setdefault(row['sample_id'], []).append(row)
+        for row in manifest['artifacts']:
+            if row['kind'] == 'structure':
+                structures.setdefault(row['sample_id'], []).append(row)
+        manifest_indexes[key] = samples, structures
+    samples, structures = manifest_indexes[key]
+    matches = samples.get(provenance.get('sample_id'), [])
+    if len(matches) != 1:
+        raise ValueError('ambiguous imported sample')
+    sample = matches[0]
+    declared = structures.get(sample['sample_id'], [])
+    if len(declared) != 1 or declared[0]['path'] != sample['structure_path']:
+        raise ValueError('imported sample document binding mismatch')
+    structure = dict(path=str(root / sample['structure_path']), sha256=declared[0]['sha256'])
+    if scalar_read is None:
+        structure, _ = _snapshot(root, sample['structure_path'])
+    if (len(declared) != 1 or declared[0]['sha256'] != structure['sha256']
+            or str(resolve_runtime_data_path(Path(design.pdb_path))) != structure['path']):
+        raise ValueError('imported sample structure binding mismatch')
+    if scalar_read is None:
+        artifact, content = _snapshot(root, 'artifacts/metrics.json')
+        metrics = json.loads(content)
+    else:
+        artifact, metrics = scalar_read(root, 'artifacts/metrics.json')
+    index = int(sample['sample_id'].removeprefix('sample_'))
+    raw = metrics['all_sample_results'][index]['metrics']
+    if raw != sample['provider_metrics']:
+        raise ValueError('imported sample metric binding mismatch')
+    source = dict(artifact_sha256=artifact['sha256'], candidate_id=sample['sample_id'],
+                  document_id=sample['structure_path'])
+    version = 'boltz_api:' + str(manifest['provider'].get('provider_version') or 'unreported')
+    records = scalar_records(raw, source, version)
+    # Provider naming is retained: structure_confidence is not silently renamed
+    # to the local weighted confidence_score.
+    records = [r for r in records if r['metric_key'] != 'confidence_score']
+    value = raw.get('structure_confidence')
+    state = 'unavailable' if value is None else 'ok'
+    if value is not None and (type(value) not in (float, int) or not math.isfinite(value) or not 0 <= value <= 1):
+        state, value = 'invalid', None
+    records.append(validate_metric(dict(metric_key='structure_confidence', value=value, state=state,
+        reason_code=None if state == 'ok' else 'provider_value_unavailable_or_invalid',
+        unit='dimensionless', scope='provider_native_structure_confidence', direction='higher_is_better',
+        producer_version=version, derivation_version='boltz-api-native-scalar-v1', source=source)))
+    return records
+
+
 def preview_boltz_api_run(source_dir: Path) -> ExternalImportPreview:
     source_dir = source_dir.expanduser().resolve()
     if not source_dir.is_dir() or source_dir.is_symlink():

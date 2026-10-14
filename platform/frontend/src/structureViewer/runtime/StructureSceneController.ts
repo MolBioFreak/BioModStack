@@ -81,6 +81,10 @@ export class StructureSceneController {
     }
 
     diagnostics(): MolstarEngineDiagnostics { return this.adapter.diagnostics(); }
+    getMeasurementResults() { return this.adapter.getMeasurementResults?.() ?? []; }
+    subscribeMeasurementResults(handler: () => void) { return this.adapter.subscribeMeasurementResults?.(handler) ?? (() => undefined); }
+    getExactAtomSelections() { return this.adapter.getExactAtomSelections?.() ?? viewerUnsupported('Native atom selection is unavailable', 'measurements'); }
+    getEntityType(residue: ResidueRef) { return this.adapter.getEntityType?.(residue); }
 
     capturePresentation(): ViewerResult<StructureScenePresentation> {
         if (this.disposed || !this.scene) return viewerCancelled('Structure viewer is unavailable');
@@ -88,6 +92,7 @@ export class StructureSceneController {
         const captured = this.adapter.capturePresentation();
         if (captured.status !== 'ok') return captured;
         return viewerOk({
+            ...this.scene.presentation,
             ...captured.value,
             layers: this.scene.presentation?.layers ?? [],
         });
@@ -116,7 +121,7 @@ export class StructureSceneController {
         this.emit(type, this.scene, payload, origin);
     }
 
-    async loadScene(state: StructureSceneState): Promise<ViewerResult<void>> {
+    async loadScene(state: StructureSceneState, restorePresentation = false): Promise<ViewerResult<void>> {
         if (this.disposed) return viewerCancelled('Structure scene controller is disposed');
         const replacingResources = !this.scene || sceneResourceKey(this.scene) !== sceneResourceKey(state);
         const token = ++this.operationToken;
@@ -128,7 +133,12 @@ export class StructureSceneController {
 
         let result: ViewerResult<void>;
         try {
-            result = await this.adapter.reconcileScene(this.scene, state, abortController.signal);
+            // Explicit restore replays captured native state even if authored records
+            // are unchanged after independent native-tool edits.
+            const previous = restorePresentation && this.scene
+                ? { ...this.scene, presentation: { ...this.scene.presentation, measurements: undefined, camera: undefined, representations: undefined } }
+                : this.scene;
+            result = await this.adapter.reconcileScene(previous, state, abortController.signal);
         } catch (error) {
             result = viewerError(error);
         }
@@ -145,6 +155,9 @@ export class StructureSceneController {
                 this.appliedSegmentations.clear();
             }
             this.emit('scene-ready', state, {});
+        } else if (restorePresentation && this.scene && result.status !== 'cancelled') {
+            // The restore caller displays its error locally; keep the current viewer usable.
+            this.emit('scene-ready', this.scene, {});
         } else if (result.status !== 'cancelled') {
             this.emit('scene-error', state, {
                 status: result.status,
@@ -194,7 +207,9 @@ export class StructureSceneController {
     captureSnapshot(): ViewerResult<ViewerSnapshot> {
         if (!this.scene) return viewerUnsupported('No ready scene is available to snapshot', 'snapshots');
         const diagnostics = this.adapter.diagnostics();
-        return viewerOk(createViewerSnapshot(this.scene, {
+        const captured = this.capturePresentation();
+        if (captured.status !== 'ok') return captured;
+        return viewerOk(createViewerSnapshot({ ...this.scene, presentation: captured.value }, {
             adapterVersion: `${diagnostics.wrapper}:${diagnostics.engineVersion}`,
             capturedAt: new Date().toISOString(),
         }));
@@ -290,12 +305,12 @@ export class StructureSceneController {
             }
             return viewerOk(undefined);
         };
-        const restored = await this.loadScene(next);
+        const restored = await this.loadScene(next, true);
         const resourcesRestored = restored.status === 'ok'
             ? await applyResources(resources?.volumes ?? [], snapshot.volumeStates, resources?.registrations ?? [], resources?.segmentations ?? [])
             : restored;
         if (resourcesRestored.status !== 'ok') {
-            const sceneRollback = await this.loadScene(previous);
+            const sceneRollback = await this.loadScene(previous, true);
             const resourceRollback = sceneRollback.status === 'ok'
                 ? await applyResources(previousVolumes, previousPresentations, previousRegistrations, previousSegmentations)
                 : sceneRollback;

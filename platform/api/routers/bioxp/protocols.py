@@ -77,6 +77,48 @@ def _job(payload, *, job_id=None, live=False):
     return job
 
 
+@router.get("/protocols/calibration/schema")
+async def calibration_schema():
+    from copy import deepcopy
+    from bioxp_method_calibration import CALIBRATION
+    return deepcopy(CALIBRATION)
+
+
+@router.post("/protocols/calibration/analyze")
+async def analyze_calibration(
+    request: dict,
+    expected_connection_generation: int | None = Query(default=None, ge=0),
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+):
+    from bioxp_method_calibration import CALIBRATION
+    from bioxp_method_native import validate
+    try:
+        payload = validate(request, CALIBRATION['analysis_request'])
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+    generation = runtime.connection.generation if expected_connection_generation is None else expected_connection_generation
+    try:
+        async with runtime.connection.active_request_lease(expected_generation=generation, require_fresh=False) as client:
+            return await client.request('protocol_calibration_analyze', json_data=payload)
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
+@router.get("/pipettes/pressure-captures/{stream_session_id}")
+async def pressure_capture(
+    stream_session_id: str,
+    expected_connection_generation: int | None = Query(default=None, ge=0),
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+):
+    generation = runtime.connection.generation if expected_connection_generation is None else expected_connection_generation
+    try:
+        return await runtime.connection.request_active_v2_query(
+            'pipette_pressure_capture', expected_generation=generation,
+            path_params={'stream_session_id': stream_session_id})
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+
+
 @router.post("/protocols/submit", response_model=ProtocolJob, response_model_exclude_unset=True)
 async def submit_bioxp_protocol(
     submission: ProtocolSubmission,

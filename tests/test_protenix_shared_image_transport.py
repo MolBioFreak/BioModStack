@@ -68,7 +68,7 @@ workflow {
               "protenix_container_path": str(source), "protenix_weights": str(weights),
               "memory_gpu": "256 MB", "memory_cpu": "256 MB", "cpus_per_gpu": 1}
     (tmp_path / "params.json").write_text(json.dumps(params))
-    (tmp_path / "nextflow.config").write_text((REPO / 'nextflow.config').read_text() + '\n' + '''
+    (tmp_path / "nextflow.config").write_text(Path(os.environ.get('BMS_TEST_NEXTFLOW_CONFIG', REPO / 'nextflow.config')).read_text() + '\n' + '''
 apptainer.enabled = true
 apptainer.autoMounts = true
 process.executor = 'local'
@@ -120,10 +120,9 @@ raise SystemExit(subprocess.run(args[index+1:], env=os.environ | {{'APPTAINER_CO
     assert list(store.rglob("*.sif")) == [shared]
     launches = [json.loads(line) for line in log.read_text().splitlines()]
     assert len(launches) == 2
-    expected_weights_bind = f"{weights}:/protenix_weights" + (":ro" if shared_weights else "")
+    expected_weights_bind = f"{weights}:/protenix_weights:ro"
     assert all(expected_weights_bind in launch["bind"] for launch in launches)
-    if not shared_weights:
-        assert all(expected_weights_bind + ":ro" not in launch["bind"] for launch in launches)
+    assert all(f"{weights}:{weights}:ro" in launch["bind"] for launch in launches)
     assert all(launch["image"] == str(shared) for launch in launches)
     assert all(f"{shared.parent}:{shared.parent}:ro" in launch["bind"] for launch in launches)
     # Reusing an existing preflight must still validate the reference before

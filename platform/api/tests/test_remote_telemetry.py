@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from database import ExecutionTarget
+from database import Base, ExecutionTarget
 from services.remote_execution import telemetry as mod, targets, telemetry_probe
 
 
@@ -137,7 +137,7 @@ def test_deltas_first_sample_reset_and_unknown():
 async def test_background_singleflight_slow_failure_and_many_viewers(tmp_path, monkeypatch):
     engine = create_async_engine(f'sqlite+aiosqlite:///{tmp_path}/telemetry.db')
     async with engine.begin() as connection:
-        await connection.run_sync(ExecutionTarget.__table__.create)
+        await connection.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
         session.add(target()); await session.commit()
@@ -208,3 +208,39 @@ def test_vm_probe_does_not_measure_only_ssh_session(monkeypatch):
     result = telemetry_probe.snapshot('/tmp')
     assert result['cpu']['scope'] in ('host', 'cgroup')
     assert result['cpu']['allocated_cores'] > 0
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', [None, 'boot', 'ticks', 'response-race', 'unowned'])
+async def test_process_attribution_is_same_boot_attempt_and_survives_sample_readback(tmp_path, monkeypatch, change):
+    import os
+    attempt = tmp_path/'attempts'/'attempt-one'; attempt.mkdir(parents=True)
+    pid = os.getpid()
+    boot = telemetry_probe.read('/proc/sys/kernel/random/boot_id')
+    ticks = telemetry_probe.process_identity(pid)[1]
+    state = dict(job_id='job-one', attempt_id='attempt-one', boot_id=boot,
+        workflow_pid=pid, workflow_start_ticks=ticks, generation=2, continuation_lease_id='retry-one')
+    if change == 'boot': state['boot_id'] = 'foreign'
+    if change == 'ticks': state['workflow_start_ticks'] += 1
+    (attempt/'status.json').write_text(json.dumps(state))
+    (attempt/'execution-envelope.json').write_text(json.dumps(dict(job_id='job-one',
+        attempt_id='attempt-one', execution_target_id='vast:8')))
+    def query(argv, **kwargs):
+        assert '--query-compute-apps=gpu_uuid,pid,used_gpu_memory' in argv
+        if change == 'response-race':
+            (attempt/'status.json').write_text(json.dumps(dict(state, generation=3)))
+        return SimpleNamespace(stdout=f'GPU-0, {1 if change == "unowned" else pid}, 700\n')
+    monkeypatch.setattr(telemetry_probe.subprocess, 'run', query)
+    processes = telemetry_probe.gpu_processes(tmp_path)
+    if change:
+        assert processes == []
+    else:
+        assert processes == [dict(job_id='job-one', attempt_id='attempt-one', execution_target_id='vast:8',
+            boot_id=boot, generation=2, continuation_lease_id='retry-one', gpu_uuid='GPU-0',
+            pid=pid, memory_used_mb=700)]
+    raw = dict(fixture(), gpu_processes=processes)
+    async def remote(*args, **kwargs): return SimpleNamespace(stdout=json.dumps(raw))
+    monkeypatch.setattr(mod, 'run_remote', remote)
+    owner = mod.RemoteTelemetry(); worker = target(); value = entry()
+    owner.entries[mod.identity(worker)] = value
+    await owner.collect(worker, value)
+    assert owner.read(worker, include_history=False)['gpu_processes'] == processes

@@ -8,9 +8,12 @@ def shellQuote(value) {
     return "'${text.replace("'", "'\"'\"'")}'"
 }
 
+include { ngsResultPublishMode } from './publication'
+
 process FastqPlasmidQC {
     label 'fastq_qc_cpu'
-    publishDir "${params.out_dir}/fastq_qc", mode: 'copy'
+    publishDir "${params.out_dir}/fastq_qc", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", saveAs: { name -> name ==~ /.*\.(bam|bai|fasta|fai|fastq)(\.gz)?$/ ? name : null }
+    publishDir "${params.out_dir}/fastq_qc", mode: 'copy', saveAs: { name -> name == 'construct_verification_input' || name ==~ /.*\.(bam|bai|fasta|fai|fastq)(\.gz)?$/ ? null : name }
     tag "fastq_qc"
 
     input:
@@ -27,7 +30,8 @@ process FastqPlasmidQC {
     path "fastq_coverage.tsv", emit: coverage
     path "per_base_support.tsv", emit: per_base_support
     path "qc_manifest.json", emit: qc_manifest
-    path "construct_verification_input", emit: verification_input
+    env published_directory, emit: verification_input
+    path "construct_verification_input/**", type: 'file', hidden: true, emit: publication_files
     path "reference_qc.fasta", emit: reference
     path "reference_qc.fasta.fai", emit: reference_index
     path "igv_coverage_depth.bedgraph", emit: igv_coverage_depth
@@ -48,6 +52,9 @@ process FastqPlasmidQC {
     path "fastq_qc.log", emit: log
 
     script:
+
+    def retainedReference = (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source in ['server_consumed_receipt', 'pooled_reference_set_receipt'] || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false'
+    def retainedReadsArg = (params.ont_input_provenance?.source == 'managed_fastq_launch_snapshot' || params.pooled_assignment_target_binding?.binding_source == 'reviewed_pooled_assignment_summary' || (params.ont_input_mode ?: params.input_mode ?: '').toString() == 'bam') ? '--retained-source-reads' : ''
     def expectedSize = params.expected_plasmid_size == null ? '' : (params.expected_plasmid_size as Integer).toString()
     def minReadLength = (params.min_fastq_read_length ?: 0) as Integer
     def minimapPreset = ((params.fastq_minimap2_preset ?: 'map-ont') as String).trim()
@@ -78,6 +85,8 @@ process FastqPlasmidQC {
     def inputModeArg = shellQuote(inputMode)
     """
     set -euo pipefail
+    export published_directory="\$PWD/construct_verification_input"
+    source "${params.code_root ?: projectDir}/scripts/ngs_input_snapshot.sh"
 
     if ! command -v samtools >/dev/null 2>&1; then
         echo "CRITICAL_FAILURE: SAMTOOLS_RUNTIME_UNAVAILABLE" >&2
@@ -109,14 +118,14 @@ process FastqPlasmidQC {
             len = length(\$0)
             if (len >= minlen) print read_id "\\t" len
         }
+        END {
+            print (NR == 0 || NR % 4 != 0 ? "invalid" : NR / 4) > "fastq.accounting.tmp"
+        }
     ' >> read_lengths.tsv
 
-    source_total_reads=\$(\${reader} "${fastq}" | awk '
-        END {
-            if (NR == 0 || NR % 4 != 0) exit 86
-            print NR / 4
-        }
-    ') || { echo "CRITICAL_FAILURE: FASTQ_RECORD_ACCOUNTING_INVALID" >&2; exit 86; }
+    read -r source_total_reads < fastq.accounting.tmp
+    rm -f fastq.accounting.tmp
+    [[ "\${source_total_reads}" != invalid ]] || { echo "CRITICAL_FAILURE: FASTQ_RECORD_ACCOUNTING_INVALID" >&2; exit 86; }
     reads_passing_length_filter=\$(awk 'NR > 1 {c++} END {print c + 0}' read_lengths.tsv)
     total_reads="\${source_total_reads}"
     total_bases=\$(awk 'NR > 1 {s += \$2} END {print s + 0}' read_lengths.tsv)
@@ -150,8 +159,7 @@ process FastqPlasmidQC {
         n50_read_length=0
     fi
 
-    cp --reflink=auto -- "${reference}" reference.snapshot.fasta
-    chmod 0444 reference.snapshot.fasta
+    ngs_input_snapshot "${reference}" reference.snapshot.fasta ${retainedReference}
     reference_raw_sha256_before="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
     normalized_reference="\$(awk '
       BEGIN { records=0; sequence="" }
@@ -173,8 +181,8 @@ process FastqPlasmidQC {
         echo "CRITICAL_FAILURE: REFERENCE_DIGEST_MISMATCH" >&2
         exit 95
     fi
-    cp --reflink=auto -- reference.snapshot.fasta reference_qc.fasta
-    "\${SAMTOOLS_CMD[@]}" faidx reference_qc.fasta
+    ngs_input_snapshot reference.snapshot.fasta reference_qc.fasta true true
+    ngs_reference_index "${reference}" reference_qc.fasta ${retainedReference} true || "\${SAMTOOLS_CMD[@]}" faidx reference_qc.fasta
     reference_raw_sha256_after="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
     if [[ "\${reference_raw_sha256_before}" != "\${reference_raw_sha256_after}" ]]; then
         echo "CRITICAL_FAILURE: REFERENCE_SNAPSHOT_CHANGED" >&2
@@ -194,13 +202,25 @@ process FastqPlasmidQC {
         else printf "0"
     }')
 
-    mapped_alignment_records=\$("\${SAMTOOLS_CMD[@]}" view -c -F 4 "${bam}")
-    unmapped_alignment_records=\$("\${SAMTOOLS_CMD[@]}" view -c -f 4 "${bam}")
-    mapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -F 2308 "${bam}")
-    unmapped_reads=\$("\${SAMTOOLS_CMD[@]}" view -c -f 4 -F 2304 "${bam}")
+    # Decode the BAM once for all six flag counts. Keep independent secondary
+    # and supplementary bits, including records with both bits set; flagstat's
+    # mutually exclusive categories are not equivalent to the original filters.
+    "\${SAMTOOLS_CMD[@]}" view "${bam}" | awk -F '\t' '
+        {
+            unmapped = int(\$2 / 4) % 2
+            secondary = int(\$2 / 256) % 2
+            supplementary = int(\$2 / 2048) % 2
+            if (unmapped) u++; else m++
+            if (!secondary && !supplementary) {
+                if (unmapped) pu++; else pm++
+            }
+            s += secondary; x += supplementary
+        }
+        END { printf "%.0f %.0f %.0f %.0f %.0f %.0f\\n", m, u, pm, pu, s, x }
+    ' > bam.accounting.tmp
+    read -r mapped_alignment_records unmapped_alignment_records mapped_reads unmapped_reads secondary_alignments supplementary_alignments < bam.accounting.tmp
+    rm -f bam.accounting.tmp
     primary_mapped_reads="\${mapped_reads}"
-    secondary_alignments=\$("\${SAMTOOLS_CMD[@]}" view -c -f 256 "${bam}")
-    supplementary_alignments=\$("\${SAMTOOLS_CMD[@]}" view -c -f 2048 "${bam}")
     total_alignment_records=\$((mapped_alignment_records + unmapped_alignment_records))
     logical_read_records=\$((mapped_reads + unmapped_reads))
     if [[ "\${logical_read_records}" -ne "\${source_total_reads}" ]]; then
@@ -312,11 +332,11 @@ process FastqPlasmidQC {
     bam_local=\$(basename "${bam}")
     bai_local=\$(basename "${bai}")
     if [[ "\${bam_local}" != "aligned.bam" ]]; then
-        cp -- "${bam}" aligned.bam
+        ngs_input_snapshot "${bam}" aligned.bam true true
         bam_local="aligned.bam"
     fi
     if [[ "\${bai_local}" != "aligned.bam.bai" ]]; then
-        cp -- "${bai}" aligned.bam.bai
+        ngs_input_snapshot "${bai}" aligned.bam.bai true true
         bai_local="aligned.bam.bai"
     fi
 
@@ -466,11 +486,13 @@ process FastqPlasmidQC {
         echo "Consensus: \${consensus_status} (\${consensus_length} bp)"
     } > fastq_qc.log
 
+    if [[ -f fastq_consensus.fasta ]]; then chmod 0444 fastq_consensus.fasta; fi
     "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_construct_verification_input.py" \\
         --reference-fasta reference_qc.fasta \\
         --expected-reference-sha256 ${referenceSequenceSha256} \\
         --source-reads "${fastq}" \\
         --consensus-fasta fastq_consensus.fasta \\
+        --retained-consensus ${retainedReadsArg} \\
         --consensus-method samtools_consensus \\
         --out-dir construct_verification_input
 
@@ -510,5 +532,9 @@ process FastqPlasmidQC {
         --igv-report igv_report.html \\
         --igv-report-log igv_report.log \\
         --log fastq_qc.log
+    # Native writers are finished; metadata/logs remain private publications.
+    for completed in aligned.bam aligned.bam.bai reference_qc.fasta reference_qc.fasta.fai fastq_consensus.fasta fastq_consensus.fasta.fai; do
+        if [[ -f "\${completed}" && ! -L "\${completed}" ]] && (( (8#\$(stat -c %a "\${completed}") & 8#222) != 0 )); then chmod 0444 "\${completed}"; fi
+    done
     """
 }

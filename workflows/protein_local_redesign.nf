@@ -65,6 +65,13 @@ def partitionProteinLocalGpuBatches(allPdbs, gpus) {
     return batches
 }
 
+// Closed outputs retain independent names; cache hits republish too.
+def proteinlocalredesignPublishMode(workDir, outputDir) {
+    def destination = file(outputDir).toAbsolutePath()
+    while (!java.nio.file.Files.exists(destination)) destination = destination.parent
+    java.nio.file.Files.getFileStore(workDir) == java.nio.file.Files.getFileStore(destination) ? 'link' : 'copy'
+}
+
 process PrepareProteinLocalValidatorInput {
     tag "${producer_meta.candidate_id}"
     label 'process_low'
@@ -175,7 +182,7 @@ PY
 process StageProteinLocalValidatedCandidates {
     label 'process_low'
 
-    publishDir "${params.out_dir}/validation/review_candidates", mode: 'copy', pattern: 'review_candidates/*.pdb', saveAs: { filename -> filename.replace('review_candidates/', '') }
+    publishDir "${params.out_dir}/validation/review_candidates", mode: "${proteinlocalredesignPublishMode(workflow.workDir, params.out_dir)}", pattern: 'review_candidates/*.pdb', saveAs: { filename -> filename.replace('review_candidates/', '') }
 
     input:
     path candidate_pdbs
@@ -187,9 +194,22 @@ process StageProteinLocalValidatedCandidates {
 
     script:
     """
+    # Native writers and analysis have returned before these retained names.
+    publish_closed_structure() {
+        local source destination
+        destination="\${@: -1}"
+        for source in "\${@:1:\$#-1}"; do
+            [ -f "\$source" ] || continue
+            if [ "\$(stat -Lc %d "\$source")" = "\$(stat -Lc %d "\$destination")" ]; then
+                cp -L -l --remove-destination "\$source" "\$destination/"
+            else
+                cp -L --remove-destination "\$source" "\$destination/"
+            fi
+        done
+    }
     test -s ${suite_receipt}
     mkdir -p review_candidates
-    cp ${candidate_pdbs} review_candidates/
+    publish_closed_structure ${candidate_pdbs} review_candidates/
     """
 }
 
@@ -455,9 +475,9 @@ process PrepProteinLocalMPNN {
 process ExportProteinLocalMPNNResults {
     label 'process_low'
 
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: 'published/*.pdb', saveAs: { fn -> fn.replace('published/', '') }
+    publishDir "${params.out_dir}/pdb_files", mode: "${proteinlocalredesignPublishMode(workflow.workDir, params.out_dir)}", pattern: 'published/*.pdb', saveAs: { fn -> fn.replace('published/', '') }
     publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: 'published/*.json', saveAs: { fn -> fn.replace('published/', '') }
-    publishDir "${params.out_dir}/run/mpnn/results", mode: 'copy', pattern: 'published/*.pdb', saveAs: { fn -> fn.replace('published/', '') }
+    publishDir "${params.out_dir}/run/mpnn/results", mode: "${proteinlocalredesignPublishMode(workflow.workDir, params.out_dir)}", pattern: 'published/*.pdb', saveAs: { fn -> fn.replace('published/', '') }
     publishDir "${params.out_dir}/run/mpnn/results", mode: 'copy', pattern: 'published/*.json', saveAs: { fn -> fn.replace('published/', '') }
 
     input:
@@ -470,7 +490,20 @@ process ExportProteinLocalMPNNResults {
     script:
     """
     mkdir -p published
-    cp ${pdb_files} published/
+    # Native writers and analysis have returned before these retained names.
+    publish_closed_structure() {
+        local source destination
+        destination="\${@: -1}"
+        for source in "\${@:1:\$#-1}"; do
+            [ -f "\$source" ] || continue
+            if [ "\$(stat -Lc %d "\$source")" = "\$(stat -Lc %d "\$destination")" ]; then
+                cp -L -l --remove-destination "\$source" "\$destination/"
+            else
+                cp -L --remove-destination "\$source" "\$destination/"
+            fi
+        done
+    }
+    publish_closed_structure ${pdb_files} published/
     cp ${json_files} published/
     """
 }
@@ -479,7 +512,7 @@ process ExportProteinLocalBoltzPredictions {
     label 'process_low'
     errorStrategy 'ignore'
 
-    publishDir "${params.out_dir}/validation/boltz2", mode: 'copy', pattern: 'published/*.pdb', saveAs: { fn -> fn.replace('published/', '') }
+    publishDir "${params.out_dir}/validation/boltz2", mode: "${proteinlocalredesignPublishMode(workflow.workDir, params.out_dir)}", pattern: 'published/*.pdb', saveAs: { fn -> fn.replace('published/', '') }
     publishDir "${params.out_dir}/validation/boltz2", mode: 'copy', pattern: 'published/*.json', saveAs: { fn -> fn.replace('published/', '') }
 
     input:
@@ -492,7 +525,20 @@ process ExportProteinLocalBoltzPredictions {
     script:
     """
     mkdir -p published
-    cp ${pdb_files} published/
+    # Native writers and analysis have returned before these retained names.
+    publish_closed_structure() {
+        local source destination
+        destination="\${@: -1}"
+        for source in "\${@:1:\$#-1}"; do
+            [ -f "\$source" ] || continue
+            if [ "\$(stat -Lc %d "\$source")" = "\$(stat -Lc %d "\$destination")" ]; then
+                cp -L -l --remove-destination "\$source" "\$destination/"
+            else
+                cp -L --remove-destination "\$source" "\$destination/"
+            fi
+        done
+    }
+    publish_closed_structure ${pdb_files} published/
     cp ${json_files} published/
     """
 }

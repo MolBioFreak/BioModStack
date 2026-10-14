@@ -3,9 +3,12 @@
  * Process names are preserved to avoid behavior-changing call-site churn.
  */
 
+include { ngsResultPublishMode } from './publication'
+
 process PrepareBamForAnalysis {
     label 'dorado_cpu'
-    publishDir "${params.out_dir}/align", mode: 'copy'
+    publishDir "${params.out_dir}/align", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", pattern: '*.{bam,bai,fasta,fai}'
+    publishDir "${params.out_dir}/align", mode: 'copy', saveAs: { name -> name ==~ /.*\.(bam|bai|fasta|fai)$/ ? null : name }
     tag "bam_prepare"
 
     input:
@@ -16,6 +19,8 @@ process PrepareBamForAnalysis {
     path "bam_prepare.log", emit: log
 
     script:
+
+    def retainedBam = params.source_external_move_registration_receipt_id ? 'true' : 'false'
     def bamMinMapq = Math.max((params.bam_min_mapq ?: 0) as Integer, 0)
     def declaredSourceSha256 = params.bam_source_sha256?.toString()?.trim()?.toLowerCase() ?: ''
     if (declaredSourceSha256 && !(declaredSourceSha256 ==~ /[0-9a-f]{64}/)) {
@@ -24,10 +29,9 @@ process PrepareBamForAnalysis {
     """
     set -euo pipefail
 
-    # Authenticate one task-local regular-file copy and consume only that copy.
-    # The staged input may be a symlink to caller-writable storage.
-    cp --reflink=auto -- "${bam}" source.snapshot.bam
-    chmod 0444 source.snapshot.bam
+    source "${params.code_root ?: projectDir}/scripts/ngs_input_snapshot.sh"
+    # Retained inputs keep their version; legacy mutable inputs get a snapshot.
+    ngs_input_snapshot "${bam}" source.snapshot.bam ${retainedBam}
     source_sha256_before="\$(sha256sum source.snapshot.bam | awk '{print \$1}')"
     if [[ -n "${declaredSourceSha256}" && "\${source_sha256_before}" != "${declaredSourceSha256}" ]]; then
         echo "ERROR: task-local source BAM snapshot does not match authorized bam_source_sha256." >&2
@@ -71,6 +75,7 @@ process PrepareBamForAnalysis {
         echo "output_records=\${output_records}"
         echo "mapped_records=\${mapped_records}"
     } >> bam_prepare.log
+    chmod 0444 aligned.bam aligned.bam.bai
     """
 }
 process ValidateMappedBam {
@@ -152,11 +157,10 @@ process ValidateMappedBam {
             echo "ERROR: mapped BAM contigs lack @SQ M5; trusted bam_reference_sha256 and bam_source_sha256 provenance are both required." >&2
             exit 1
         fi
+        # PrepareBamForAnalysis already authenticates the original input before
+        # sort/filter/index. Its output has different BAM bytes (including PG
+        # records), so the original digest cannot authenticate this derived BAM.
         actual_source_sha256=\$(sha256sum "${bam}" | cut -d ' ' -f1)
-        if [[ "${declaredSourceSha256}" != "\${actual_source_sha256}" ]]; then
-            echo "ERROR: bam_source_sha256 does not match the exact BAM object being validated." >&2
-            exit 1
-        fi
         expected_reference_sha256=\$(awk '!/^>/ { gsub(/[[:space:]]/, ""); printf "%s", toupper(\$0) }' "${reference}" \\
             | sha256sum | cut -d ' ' -f1)
         if [[ "${declaredReferenceSha256}" != "\${expected_reference_sha256}" ]]; then
@@ -165,6 +169,7 @@ process ValidateMappedBam {
         fi
         {
             echo "reference_identity=trusted_source_bam_and_reference_sha256"
+            echo "authenticated_source_bam_sha256=${declaredSourceSha256}"
             echo "validated_bam_sha256=\${actual_source_sha256}"
             echo "validated_reference_sha256=\${expected_reference_sha256}"
         } >> bam_mapped_check.log
@@ -176,8 +181,10 @@ process ValidateMappedBam {
         echo "mapped_reads=\${mapped_reads}"
     } >> bam_mapped_check.log
 
-    cp "${bam}" aligned.bam
-    cp "${bai}" aligned.bam.bai
+    # These channels are completed PrepareBamForAnalysis products.
+    source "${params.code_root ?: projectDir}/scripts/ngs_input_snapshot.sh"
+    ngs_input_snapshot "${bam}" aligned.bam true
+    ngs_input_snapshot "${bai}" aligned.bam.bai true
     """
 }
 process BamToFastqForQC {
@@ -203,11 +210,13 @@ process BamToFastqForQC {
         echo "ERROR: BAM-to-FASTQ conversion produced zero reads." >&2
         exit 1
     fi
+    chmod 0444 reads_for_qc.fastq
     """
 }
 process PrepareReferenceForIGV {
     label 'dorado_cpu'
-    publishDir "${params.out_dir}/align", mode: 'copy'
+    publishDir "${params.out_dir}/align", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", pattern: '*.{bam,bai,fasta,fai}'
+    publishDir "${params.out_dir}/align", mode: 'copy', saveAs: { name -> name ==~ /.*\.(bam|bai|fasta|fai)$/ ? null : name }
     tag "reference_prepare"
 
     input:
@@ -221,8 +230,12 @@ process PrepareReferenceForIGV {
     script:
     """
     set -euo pipefail
-    cp "${reference}" reference.fasta
-    samtools faidx reference.fasta > /dev/null 2>&1
+    source "${params.code_root ?: projectDir}/scripts/ngs_input_snapshot.sh"
+    ngs_input_snapshot "${reference}" reference.fasta ${ (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source in ['server_consumed_receipt', 'pooled_reference_set_receipt'] || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false' } true
+    if ! ngs_reference_index "${reference}" reference.fasta ${ (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source in ['server_consumed_receipt', 'pooled_reference_set_receipt'] || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false' } true; then
+        samtools faidx reference.fasta > /dev/null 2>&1
+        chmod 0444 reference.fasta.fai
+    fi
     echo "Prepared reference.fasta and reference.fasta.fai for IGV" > reference_prepare.log
     """
 }

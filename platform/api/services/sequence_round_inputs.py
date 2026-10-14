@@ -61,7 +61,9 @@ def design_request(root, owner, design, request):
     params = deepcopy(request.params)
     if request.model_id == 'caliby_experimental':
         # Native Caliby accepts CIF directly; never force PDB conversion here.
-        directory = _materialize_protein_local_selection(root, owner, [design], 'sequence_design')
+        from services.binder_continuation import retained_selection
+        directory = retained_selection(owner, root, [design], kind='native',
+            create=lambda: _materialize_protein_local_selection(root, owner, [design], 'sequence_design'))
         row = json.loads((directory / 'selection_manifest.json').read_text())['designs'][0]
         path = row['selection_pdb_path']
         params['ensembles'] = [{'ensemble_id': design.id, 'states': [

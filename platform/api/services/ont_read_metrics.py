@@ -33,33 +33,6 @@ RAW_READ_METRICS_CONTRACT_SHA256 = hashlib.sha256(RAW_READ_METRICS_CONTRACT.enco
 RAW_READ_METRICS_MAX_ROWS = 500_000
 RAW_READ_METRICS_MAX_BYTES = 512 * 1024 * 1024
 
-RAW_READ_METRIC_COLUMNS = (
-    "read_id",
-    "sample_count",
-    "sampling_rate_hz",
-    "duration_seconds",
-    "channel_number",
-    "start_mux",
-    "start_time_samples",
-    "acquisition_start_seconds",
-    "time_since_mux_change_seconds",
-    "num_reads_since_mux_change",
-    "num_minknow_events",
-    "minknow_event_rate_per_second",
-    "median_before_pa",
-    "open_pore_level_pa",
-    "tracked_scaling_shift",
-    "tracked_scaling_scale",
-    "predicted_scaling_shift",
-    "predicted_scaling_scale",
-    "current_mean_pa",
-    "current_median_pa",
-    "current_stddev_pa",
-    "current_mad_pa",
-    "current_min_pa",
-    "current_max_pa",
-)
-
 RAW_READ_METRIC_SCHEMA = pa.schema([
     ("read_id", pa.string()),
     ("sample_count", pa.int64()),
@@ -86,6 +59,7 @@ RAW_READ_METRIC_SCHEMA = pa.schema([
     ("current_min_pa", pa.float64()),
     ("current_max_pa", pa.float64()),
 ])
+RAW_READ_METRIC_COLUMNS = tuple(RAW_READ_METRIC_SCHEMA.names)
 
 _INTEGER_COLUMNS = frozenset({
     "sample_count", "sampling_rate_hz", "channel_number", "start_mux",
@@ -96,7 +70,7 @@ _FLOAT_COLUMNS = frozenset(RAW_READ_METRIC_COLUMNS).difference(_INTEGER_COLUMNS)
 
 
 class OntReadMetricError(ValueError):
-    """A raw-read metric artifact failed its closed authority contract."""
+    """A raw-read metric artifact is invalid."""
 
 
 def _validate_metric_row(value: object) -> dict[str, Any]:

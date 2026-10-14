@@ -17,7 +17,7 @@ number_of_dispenses number_back_to_source retract_distance_mm aspiration_top_spe
  dispense_top_speed_ul_s reaspiration_volume_ul dispense_to_reaspiration_delay_ms slope_n1 slope_n2
 contact_mode dispense_speed_ul_s final_empty_tip search_speed_mm_s tracking touch_off lld
 pressure_streaming backlash_increments correction_points calibration_function channels tip_profile_id
-head_reference tip_policy""".split())
+head_reference tip_policy selected_correction""".split())
 
 
 def source_catalog_text() -> str:
@@ -166,7 +166,7 @@ def resolve_liquid_settings(requested: dict, *, liquid_class: dict | None = None
         elif field in applicable and field in cls and (cls[field] is not None or
                 (liquid_class or {}).get("provenance_kind") != "manufacturer"):
             source, ref, found, value = "liquid_class", liquid_class, True, cls[field]
-        elif field in applicable and field in wat and wat[field] is not None:
+        elif field != "selected_correction" and field in applicable and field in wat and wat[field] is not None:
             source, ref, found, value = "water", water, True, wat[field]
         if found:
             resolved[field] = deepcopy(value)

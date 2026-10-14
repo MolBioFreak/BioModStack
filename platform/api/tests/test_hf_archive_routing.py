@@ -45,6 +45,24 @@ def test_irrelevant_or_oversized_archive_uses_ordinary_route(catalog, selected):
     assert cache._weights_archive_artifact([entry]) is None
 
 
+@pytest.mark.parametrize('physical_member', [False, True])
+def test_named_publication_is_not_physical_archive_membership(catalog, physical_member):
+    path, index = catalog
+    entry = SimpleNamespace(sha256='e' * 64, size_bytes=index['archive']['size_bytes'] * 2)
+    index.update(schema=cache.hf_assets.NAMED_INDEX_SCHEMA,
+                 dependencies=['weights/esmfold2'], artifacts=[dict(
+                     name='weights/esmfold2/model', sha256=entry.sha256,
+                     size_bytes=entry.size_bytes, mode=0o444)])
+    if physical_member:
+        index['digest_sizes'][entry.sha256] = entry.size_bytes
+    path.write_text(json.dumps(index))
+    result = cache._weights_archive_artifact([entry])
+    if physical_member:
+        assert result is not None and result.sha256 == index['archive']['sha256']
+    else:
+        assert result is None
+
+
 def test_many_small_members_keep_packed_delivery(catalog):
     path, index = catalog
     entries = [SimpleNamespace(sha256=f'{i:064x}', size_bytes=4096)

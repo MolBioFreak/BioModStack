@@ -1,0 +1,45 @@
+diff --git a/src/extension/fake_id0/fake_id0.c b/src/extension/fake_id0/fake_id0.c
+index b21b241..e232ee0 100644
+--- a/src/extension/fake_id0/fake_id0.c
++++ b/src/extension/fake_id0/fake_id0.c
+@@ -164,8 +164,38 @@ static void override_permissions(const Tracee *tracee, const char *path, bool is
+ 	/* Copy the current permissions */
+ 	new_mode = perms.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO);
+ 
+-	/* Add read and write permissions to everything.  */
+-	new_mode |= (S_IRUSR | S_IWUSR);
++	/* Read-only lookup must not chmod an already accessible object: even
++	 * chmod-and-restore changes ctime.  Retain permission emulation for
++	 * inaccessible reads and all mutating operations (including O_TRUNC
++	 * and O_CREAT, which may need write permission on the parent). */
++	mode_t needed = S_IRUSR | S_IWUSR;
++	word_t flags = O_RDWR;
++	switch (get_sysnum(tracee, ORIGINAL)) {
++	case PR_open:
++		flags = peek_reg(tracee, ORIGINAL, SYSARG_2);
++		break;
++	case PR_openat:
++		flags = peek_reg(tracee, ORIGINAL, SYSARG_3);
++		break;
++	case PR_fstatat64:
++	case PR_lstat:
++	case PR_lstat64:
++	case PR_newfstatat:
++	case PR_oldlstat:
++	case PR_oldstat:
++	case PR_stat:
++	case PR_statx:
++	case PR_stat64:
++	case PR_statfs:
++	case PR_statfs64:
++		flags = O_RDONLY;
++		break;
++	default:
++		break;
++	}
++	if ((flags & (O_ACCMODE | O_TRUNC | O_CREAT)) == O_RDONLY)
++		needed = is_final ? S_IRUSR : S_IXUSR;
++	new_mode |= needed;
+ 
+ 	/* Always add 'x' bit to directories */
+ 	if (S_ISDIR(perms.st_mode))

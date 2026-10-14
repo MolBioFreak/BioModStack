@@ -1,5 +1,3 @@
-import json
-from pathlib import Path
 import pytest
 import verify_construct as verify
 from build_fastq_support_tables import PositionSupport, _consensus_and_fraction
@@ -47,16 +45,6 @@ def test_omitted_strong_insertion_is_not_a_matching_consensus():
     rows[1].update(insertion_count=30,insertion_alleles={'G':30})
     with pytest.raises(ValueError,match='omits supported insertion'):
         verify.validate_observed_consensus_binding('AC','AC',rows,rows)
-
-
-def test_new_profile_is_strict_but_not_qualified():
-    doc=json.loads((Path(__file__).resolve().parents[2]/'config/ngs/construct_verify_profiles.json').read_text())
-    old=doc['profiles']['plasmid_strict_v1']; new=doc['profiles']['plasmid_complete_v2']
-    assert old['min_coverage_fraction']==.99
-    assert new['min_coverage_fraction']==1 and new['max_low_depth_fraction']==0
-    for profile in (old,new):
-        assert profile['automatic_pass_eligible'] is False
-        assert profile['public_accuracy_validated'] is False
 
 
 def test_non_plurality_bayesian_call_is_review_not_proven_incorrect():

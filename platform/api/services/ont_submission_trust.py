@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 import hashlib
 import os
+import re
 from pathlib import Path
 import stat
 from typing import Any, Mapping
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from paths import get_inputs_dir
 
@@ -67,6 +69,7 @@ ONT_SERVER_CONTROLLED_RUNTIME_PARAMS = frozenset(
         "dorado_lock_sha256",
         "dorado_device",
         "dorado_model_root",
+        "dorado_input_binding_json",
         "dorado_preflight",
         "dorado_resolved_model_id",
         "dorado_runtime_sif",
@@ -79,6 +82,8 @@ ONT_SERVER_CONTROLLED_RUNTIME_PARAMS = frozenset(
         "out_dir",
         "output_dir",
         "pod5_python",
+        "resume_job_id",
+        "resume_root_job_id",
         "resume_source_dir",
         "resume_work_dir",
         "singularity_cache",
@@ -97,6 +102,20 @@ ONT_SERVER_CONTROLLED_RUNTIME_PARAMS = frozenset(
 
 ONT_SERVER_CONTROLLED_PARAMS = ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS | ONT_SERVER_CONTROLLED_RUNTIME_PARAMS
 
+
+def fresh_computation_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Retain scientific selections, not a previous execution's resolved runtime."""
+    runtime = ONT_SERVER_CONTROLLED_RUNTIME_PARAMS - {
+        "managed_reference_fasta_path", "managed_reference_path",
+    }
+    selected = dict(params)
+    if (selected.get("dorado_quality_mode") and selected.get("dorado_resolved_model_id")
+            and selected.get("dorado_model") == selected["dorado_resolved_model_id"]):
+        selected["dorado_model"] = selected["dorado_quality_mode"]
+    return {key: value for key, value in selected.items()
+            if key not in runtime and not key.startswith("resume_")}
+
+
 _trusted_ont_job_creation: ContextVar[bool] = ContextVar("trusted_ont_job_creation", default=False)
 _alignment_capability_digest: ContextVar[str | None] = ContextVar("ont_alignment_capability_digest", default=None)
 
@@ -112,6 +131,16 @@ def end_trusted_ont_job_creation(tokens: tuple[Token[bool], Token[str | None]]) 
     trust_token, digest_token = tokens
     _alignment_capability_digest.reset(digest_token)
     _trusted_ont_job_creation.reset(trust_token)
+
+
+@contextmanager
+def trusted_ont_job_creation(capability_digest: str | None = None):
+    """Scope trusted job creation and restore both context values on every exit."""
+    tokens = begin_trusted_ont_job_creation(capability_digest)
+    try:
+        yield
+    finally:
+        end_trusted_ont_job_creation(tokens)
 
 
 def is_trusted_ont_job_creation() -> bool:
@@ -237,8 +266,9 @@ def publish_immutable_launch_snapshot(
     expected_sha256: str,
     expected_size_bytes: int,
     suffix: str,
+    source_retained: bool = False,
 ) -> Path:
-    """Copy exact governed bytes into a private no-follow launch snapshot."""
+    """Publish a private launch name, sharing only completion-retained bodies."""
     if (
         not family.isidentifier()
         or not authority_id
@@ -284,6 +314,35 @@ def publish_immutable_launch_snapshot(
         unique = uuid4().hex
         temp_name = f".launch-{unique}.partial"
         final_name = f"launch-{unique}{suffix}"
+        if source_retained and not os.fstat(source_fd).st_mode & 0o222:
+            digest = hashlib.sha256()
+            size = 0
+            while chunk := os.read(source_fd, 1024 * 1024):
+                digest.update(chunk)
+                size += len(chunk)
+            if size != expected_size_bytes or digest.hexdigest() != expected_sha256:
+                raise ValueError("launch snapshot source bytes diverged from authority")
+            source_parent_fd, source_name = _open_runtime_snapshot_parent(source, source_root_path, label=family)
+            try:
+                try:
+                    os.link(source_name, final_name, src_dir_fd=source_parent_fd,
+                            dst_dir_fd=destination_fd, follow_symlinks=False)
+                except OSError as exc:
+                    import errno
+                    if exc.errno != errno.EXDEV:
+                        raise
+                    os.lseek(source_fd, 0, os.SEEK_SET)
+                else:
+                    linked = True
+                    before = os.fstat(source_fd)
+                    current = os.stat(final_name, dir_fd=destination_fd, follow_symlinks=False)
+                    if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
+                        raise ValueError("launch snapshot source identity changed")
+                    os.fsync(destination_fd)
+                    temp_name = None
+                    return destination_directory / final_name
+            finally:
+                os.close(source_parent_fd)
         snapshot_fd = os.open(
             temp_name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -531,6 +590,11 @@ def verify_managed_reference_snapshot(
     path = _canonical_absolute_path(params.get("reference_fasta"))
     if root is None or path is None:
         raise ValueError("managed reference snapshot path is invalid")
+    verify_managed_reference_bytes(path, root, snapshot_sha256, expected_bytes)
+
+
+def verify_managed_reference_bytes(path: Path, root: Path, snapshot_sha256: str, expected_bytes: int) -> None:
+    """Shared no-follow byte check for resolved revisions and final launch authority."""
     file_fd = _open_runtime_snapshot(path, root, label="managed reference")
     digest = hashlib.sha256()
     byte_count = 0
@@ -546,6 +610,50 @@ def verify_managed_reference_snapshot(
         raise ValueError("managed reference snapshot digest mismatch before consumption")
 
 
+def canonical_launch_snapshot_id(value: str) -> str:
+    """Validate, never repair, a public retained snapshot selector."""
+    if not isinstance(value, str) or str(UUID(value)) != value:
+        raise ValueError("launch snapshot ID must be a canonical UUID")
+    return value
+
+
+def validate_fastq_snapshot_selector(relative_path: str, sha256: str) -> str:
+    if (not isinstance(relative_path, str) or len(relative_path) > 4096
+            or re.fullmatch(r"[0-9a-f]{64}/[0-9a-f]{64}/launch-[0-9a-f]{32}\.fastq(?:\.gz)?", relative_path) is None
+            or relative_path.split("/")[1] != sha256):
+        raise ValueError("invalid managed FASTQ launch snapshot selector")
+    return relative_path
+
+
+def fastq_launch_snapshot_descriptor(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a server-materialized custody selection into its closed replay selector."""
+    provenance = params["ont_input_provenance"]
+    relative = str(Path(params["fastq_path"]).relative_to(get_inputs_dir() / "ont_fastq_launch_snapshots"))
+    validate_fastq_snapshot_selector(relative, provenance["sha256"])
+    return {"relative_path": relative, "sha256": provenance["sha256"], "size_bytes": provenance["size_bytes"]}
+
+
+def resolve_fastq_launch_custody(
+    *, relative_path: str, sha256: str, size_bytes: int, submitted_path: str,
+) -> dict[str, Any]:
+    """Verify retained bytes; the original requested path is only a source label."""
+    validate_fastq_snapshot_selector(relative_path, sha256)
+    root = get_inputs_dir()
+    label = _canonical_absolute_path(submitted_path)
+    if label is None or label == root or root not in label.parents:
+        raise ValueError("ordinary FASTQ source label is outside the input root")
+    path = root / "ont_fastq_launch_snapshots" / relative_path
+    params = {
+        "fastq_path": str(path), "ont_input_mode": "fastq",
+        "ont_input_provenance": {
+            "mode": "fastq", "path": str(path), "source": "managed_fastq_launch_snapshot",
+            "submitted_path": str(label), "sha256": sha256, "size_bytes": size_bytes,
+        },
+    }
+    verify_fastq_launch_custody(params)
+    return params
+
+
 def materialize_fastq_launch_custody(params: Mapping[str, Any]) -> dict[str, Any]:
     """Preserve ordinary uploaded FASTQ bytes via the existing immutable snapshot owner.
 
@@ -556,7 +664,7 @@ def materialize_fastq_launch_custody(params: Mapping[str, Any]) -> dict[str, Any
     provenance = result.get("ont_input_provenance")
     if (result.get("ont_input_mode") != "fastq" or not isinstance(provenance, Mapping)
             or provenance.get("source") != "submitted_path"):
-        raise ValueError("ordinary FASTQ custody requires submitted-path input authority")
+        raise ValueError("This FASTQ snapshot operation requires a submitted-path FASTQ input.")
     source = _canonical_absolute_path(result.get("fastq_path"))
     root = _canonical_absolute_path(get_inputs_dir())
     if source is None or root is None:
@@ -608,6 +716,81 @@ def verify_fastq_launch_custody(params: Mapping[str, Any]) -> None:
         os.close(descriptor)
     if digest.hexdigest() != expected_sha256 or size != expected_size:
         raise ValueError("managed FASTQ launch custody bytes changed")
+
+
+def dorado_preflight_parameters(params: Mapping[str, Any]) -> dict[str, str]:
+    """Pin the existing selected root and its preflight transport together."""
+    import json
+    from paths import get_weights_root
+    selected = Path(params.get('dorado_model_root') or get_weights_root() / 'dorado/2.1.2')
+    # Missing assets remain the native preflight owner's error, not a new gate.
+    root = str(selected.resolve()) if selected.is_dir() else str(selected)
+    bound = {**dict(params), 'dorado_model_root': root}
+    return {'dorado_model_root': root, 'dorado_input_binding_json': json.dumps(
+        dorado_selected_input_binding(bound), sort_keys=True, separators=(',', ':'))}
+
+
+def dorado_selected_input_binding(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Project existing published selections, never infer custody from chmod.
+
+    Called by the native compiler, not accepted from an operator. Logical member
+    names/digests survive worker relocation; controller alias text is used only
+    when the local selected layout actually contains that declared alias.
+    """
+    import json
+    from paths import get_weights_root
+    from model_registry import model_acquisition_plan
+    from services.runtime_acquisition import _layouts
+    from services.remote_execution.hf_assets import published_asset_rows
+    from scripts.lib.pinned_weight_layout import _verify_tree
+    from scripts.dorado_p4_preflight import load_lock, resolve_model
+
+    code = Path(__file__).resolve().parents[3]
+    lock = load_lock(Path(params.get('dorado_lock_manifest') or code / 'config/ngs/dorado_v2.1.2.lock.json'))
+    version = lock['dorado']['version'].split('+')[0]
+    weights = get_weights_root().resolve()
+    selected = Path(params.get('dorado_model_root') or weights / 'dorado' / version).resolve()
+    models = [resolve_model(lock, params.get('ont_molecule_type') or 'dna', params.get('dorado_quality_mode') or 'sup')]
+    if params.get('dorado_basecall_mode') == 'duplex':
+        models.append(lock['models']['stereo'])
+    modified = params.get('modified_bases') or 'none'
+    if modified != 'none':
+        models.append(lock['models']['modified_bases'][modified])
+    bindings = {}
+    layouts = list(_layouts(model_acquisition_plan('nanopore')))
+    for model in models:
+        directory = selected / model['id']
+        members = None
+        for dependency, entries in layouts:
+            digest = hashlib.sha256(json.dumps({'dependency': dependency, 'members': sorted(entries, key=lambda e: e['member_path'])}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            layout = weights / 'layouts' / dependency['relative_path'] / digest
+            if not directory.is_relative_to(layout):
+                continue
+            selected_entries = [dict(member_path=(layout / entry['member_path']).relative_to(directory).as_posix(), manifest=entry['manifest'])
+                                for entry in entries if (layout / entry['member_path']).is_relative_to(directory)]
+            try:
+                # Observe only this model, not unused quality/stereo siblings.
+                observed = _verify_tree(directory, selected_entries, frozen=True, weights_root=weights)
+            except (OSError, RuntimeError, ValueError):
+                # Retention evidence never adds a compiler admission gate.
+                # The original scientific preflight still verifies its lock.
+                continue
+            members = {}
+            for name, row in observed.items():
+                native = directory / name
+                members[name] = dict(sha256=row['sha256'], bytes=row['size'],
+                                     alias=os.readlink(native) if native.is_symlink() else None)
+            break
+        if members is None and selected == (weights / 'dorado' / version).resolve():
+            prefix = f"weights/dorado/{version}/{model['id']}"
+            rows = published_asset_rows(prefix)
+            if rows and all(not row.get('target') for row in rows):
+                members = {row['name'][len(prefix) + 1:]: dict(sha256=row['sha256'], bytes=row['size_bytes'], alias=None) for row in rows}
+        if members:
+            bindings[model['id']] = dict(retained=True, members=members)
+    provenance = params.get('ont_input_provenance') or {}
+    inputs = provenance.get('retained_pod5') if provenance.get('source') == 'retained_pod5_generation' else None
+    return {'models': bindings, 'inputs': inputs or {}}
 
 
 def verify_launch_input_snapshots(params: Mapping[str, Any]) -> None:

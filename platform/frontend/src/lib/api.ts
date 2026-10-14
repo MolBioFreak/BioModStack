@@ -1,8 +1,8 @@
 import axios from 'axios';
 import type { CmSubmitRequest } from '../components/conformationalMapping/conformationalMappingApi';
-import type { MolecularDynamicsLaunchIntent } from '../components/molecularDynamicsUiState';
-import { parseMetricPoints, validateScientificEnvelope } from './scientificAnalytics';
-import type { ScientificPoint, ScientificCohort } from './scientificAnalytics';
+import type { MolecularDynamicsLaunchIntent, MolecularDynamicsNativeIntent, MolecularDynamicsAnalysisOptions, MolecularDynamicsNativeStage } from '../components/molecularDynamicsUiState';
+import { parseMetricPoints, parseNativeResults, validateScientificEnvelope } from './scientificAnalytics';
+import type { ScientificPoint, ScientificCohort, NativeResults, NativeScalarQuery } from './scientificAnalytics';
 type ScientificPointFields = Partial<Omit<ScientificPoint, 'id' | 'name' | 'metrics' | 'contract_revision'>> & { contract_revision?: 1 | null };
 import type { TelemetryChartHistoryResponse } from './telemetryChart';
 import type { ViewerSnapshotV2 } from '../structureViewer/contracts/m6Reproducibility';
@@ -163,10 +163,11 @@ export interface Job {
 export interface MDArtifact {
     id: string;
     replica: number;
+    window_id?: string | null; replicate_index?: number | null; stage?: string; step?: number | null;
     name: string;
     bytes: number;
     sha256: string;
-    semantic_role: 'analysis_topology' | 'analysis_trajectory' | 'representative_structure' | 'trajectory_frame_map' | 'atom_order_manifest' | null;
+    semantic_role: 'analysis_topology' | 'analysis_trajectory' | 'representative_structure' | 'trajectory_frame_map' | 'atom_order_manifest' | 'pull_coordinates' | 'production_tpr' | null;
     atom_order_identity: string | null;
     selection_method?: string | null;
     source_frame?: number | null;
@@ -314,6 +315,11 @@ export interface ProteinLocalRedesignResultArtifact {
 }
 
 export interface ProteinLocalRedesignResultItem {
+    producer_sample_id?: string;
+    sample_index_semantics?: 'producer_suffix_not_generation_index' | 'producer_sample_id';
+    confidence_status?: 'available' | 'unavailable';
+    confidence_reason?: string | null;
+    metric_interpretations?: Record<string, string>;
     item_id: string;
     design_id: string | null;
     candidate_id: string;
@@ -336,17 +342,20 @@ export interface MDSummary {
     job_id: string;
     status: string;
     result_state: 'partial' | 'completed' | null;
+    dynamics_state?: string | null; analysis_state?: string | null; analysis_error?: { code: string; message: string } | null;
+    protocol?: { schema?: string; stages?: MolecularDynamicsNativeStage[]; [key: string]: unknown };
     source: 'validated_job_owned_manifests';
     bounded: true;
     aggregate_manifest_sha256: string;
     replica_count: number;
     artifact_count: number;
-    replicas: Array<{ replica: number; status: string; engine: { name?: string; version?: string; platform?: string }; performance: Record<string, number> }>;
+    replicas: Array<{ replica: number; window_id?: string | null; replicate_index?: number | null; status: string; publication_errors?: Record<string, string>; engine: { name?: string; version?: string; platform?: string }; performance: Record<string, number> }>;
     // Analysis availability is owned by the independent analysis endpoint.
-    trajectory_playback: { supported: false; reason: string } | {
+    trajectory_playback: { supported: false; reason: string; error?: { code: string; message: string } } | {
         supported: true;
         replicas: Array<{
             replica: number;
+            window_id?: string | null; replicate_index?: number | null;
             trajectory_sha256: string;
             frame_map_artifact_id: string;
             frame_count: number;
@@ -361,6 +370,7 @@ export interface MDSummary {
 export interface MDTrajectoryFrameMap {
     schema: 'bms.md.trajectory-frame-map.v1';
     replica: number;
+    window_id?: string | null; replicate_index?: number | null; stage?: string;
     trajectory_sha256: string;
     frames: Array<{ display_frame: number; source_frame: number; time_ps: number; step: number }>;
 }
@@ -373,12 +383,29 @@ export interface MDAnalysisPoint {
     radius_of_gyration_angstrom: number;
 }
 
+export interface MDPullCoordinateReport {
+    coordinate: number; column: number; label: string; unit: string; groups: string[]; window?: string | null; replica: number; sample_count?: number;
+    dimension: 1; time_unit: 'ps'; points: Array<{ time_ps: number; value: number }>;
+    histogram: { edges: number[]; counts: number[]; sample_count: number; normalization: 'count' };
+}
+export interface MDWhamReport {
+    status: 'completed' | 'failed'; dimension: 1; method: 'gmx_wham'; scope: 'selected_coordinate_across_windows';
+    coordinate_unit: string; energy_unit: 'kJ/mol'; request: NonNullable<MolecularDynamicsAnalysisOptions['wham']>;
+    inputs: Array<Record<string, unknown>>; returncode?: number; error?: { code: string; message: string };
+    points?: Array<{ coordinate: number; pmf_kj_mol: number }>;
+    histograms?: { columns: NonNullable<MolecularDynamicsAnalysisOptions['wham']>['windows']; rows: number[][] };
+}
 export interface MDAnalysisReplicaReport {
     schema: 'bms.md.analysis.v1';
-    status: 'completed' | 'failed';
+    status: 'completed' | 'failed' | 'not_applicable';
+    method?: string; selection?: string | null; reason?: string;
+    window_id?: string | null; replicate_index?: number | null;
+    observables?: Record<string, string>; specialized_analyzers?: Array<{ analyzer_id: string; status: string; reason?: string; definition?: string; selection_a?: string; selection_b?: string; cutoff_angstrom?: number; points?: Array<{ time_ps: number; source_frame: number; minimum_distance_angstrom: number; contact_count: number }> }>;
+    pull_coordinates?: MDPullCoordinateReport[];
+    pull_source?: { sha256: string; path: string }; pull_error?: { code: string; message: string };
     replica?: number;
     points?: MDAnalysisPoint[];
-    residue_metrics?: Array<{ segid: string; resid: number; resname: string; backbone_rmsf_angstrom: number; backbone_atom_count: number }>;
+    residue_metrics?: Array<{ segid: string; resid: number; resname: string; backbone_rmsf_angstrom?: number; backbone_atom_count?: number; rmsf_angstrom?: number; atom_count?: number }>;
     block_statistics?: Array<{ block: number; count: number; mean_rmsd_angstrom: number; mean_radius_of_gyration_angstrom: number }>;
     summary?: { count: number; min: number; mean: number; max: number; final: number };
     failure?: { code: string; message: string };
@@ -388,9 +415,12 @@ export interface MDAnalysisReplicaReport {
 export interface MDAnalysisReportSet {
     schema: 'bms.md.analysis-report-set.v1';
     job_id: string;
-    status: 'absent' | 'partial' | 'completed';
+    status: 'absent' | 'partial' | 'completed' | 'failed';
     bounded: true;
-    replica_states: Array<{ replica: number; status: 'absent' | 'completed' | 'failed' }>;
+    wham?: MDWhamReport | null;
+    collection?: { status: string | null; completed_analysis_children: number | null; failed_analysis_children: number | null; cancelled_analysis_children: number | null; collection_errors?: Array<{ code: string; message: string }> | null } | null;
+    execution?: Array<{ replica: number; job_id: string; status: string; error?: string | { code?: string; message: string } | null }>;
+    replica_states: Array<{ replica: number; status: 'absent' | 'completed' | 'failed' | 'not_applicable' }>;
     reports: MDAnalysisReplicaReport[];
     ensemble: {
         statistical_unit: 'replica';
@@ -405,9 +435,64 @@ export interface MDAnalysisReportSet {
     retry: { eligible: boolean; active: boolean; reason: string };
 }
 
+/** Validate numeric plotting data without projecting away native result fields. */
+export function parseMDAnalysisReportSet(value: unknown): MDAnalysisReportSet {
+    const fail = () => { throw new Error('Invalid MD analysis report response.'); };
+    const record = (v: unknown): Record<string, unknown> => !v || typeof v !== 'object' || Array.isArray(v) ? fail() : v as Record<string, unknown>;
+    const array = (v: unknown): unknown[] => Array.isArray(v) ? v : fail();
+    const number = (v: unknown) => { if (typeof v !== 'number' || !Number.isFinite(v)) fail(); };
+    const string = (v: unknown) => { if (typeof v !== 'string') fail(); };
+    const error = (v: unknown) => { const e = record(v); string(e.message); if (e.code !== undefined) string(e.code); };
+    const root = record(value);
+    if (root.schema !== 'bms.md.analysis-report-set.v1' || root.bounded !== true || !['absent', 'partial', 'completed', 'failed'].includes(String(root.status))) fail();
+    string(root.job_id);
+    array(root.replica_states).forEach(v => { const r = record(v); number(r.replica); if (!['absent', 'completed', 'failed', 'not_applicable'].includes(String(r.status))) fail(); });
+    array(root.reports).forEach(v => {
+        const r = record(v);
+        if (r.schema !== 'bms.md.analysis.v1' || !['completed', 'failed', 'not_applicable'].includes(String(r.status))) fail();
+        record(r.inputs);
+        if (r.selection !== undefined && r.selection !== null) string(r.selection);
+        if (r.method !== undefined) string(r.method);
+        if (r.window_id != null) string(r.window_id);
+        if (r.replicate_index != null) number(r.replicate_index);
+        if (r.specialized_analyzers !== undefined) array(r.specialized_analyzers).forEach(v => {
+            const c = record(v); string(c.analyzer_id); string(c.status);
+            ['reason', 'definition', 'selection_a', 'selection_b'].forEach(k => { if (c[k] !== undefined) string(c[k]); });
+            if (c.cutoff_angstrom !== undefined) number(c.cutoff_angstrom);
+            if (c.points !== undefined) array(c.points).forEach(v => { const p = record(v); ['time_ps', 'source_frame', 'minimum_distance_angstrom', 'contact_count'].forEach(k => number(p[k])); });
+        });
+        if (r.points !== undefined) array(r.points).forEach(v => { const p = record(v); ['replica', 'time_ps', 'source_frame', 'rmsd_angstrom', 'radius_of_gyration_angstrom'].forEach(k => number(p[k])); });
+        if (r.residue_metrics !== undefined) array(r.residue_metrics).forEach(v => { const p = record(v); ['segid', 'resname'].forEach(k => string(p[k])); number(p.resid); ['backbone_rmsf_angstrom', 'backbone_atom_count', 'rmsf_angstrom', 'atom_count'].forEach(k => { if (k in p) number(p[k]); }); });
+        if (r.pull_coordinates !== undefined) array(r.pull_coordinates).forEach(v => {
+            const p = record(v); if (p.dimension !== 1 || p.time_unit !== 'ps') fail();
+            ['coordinate', 'column', 'replica'].forEach(k => number(p[k])); ['label', 'unit'].forEach(k => string(p[k]));
+            array(p.groups).forEach(string); if (p.window != null) string(p.window);
+            if (p.sample_count !== undefined) number(p.sample_count);
+            array(p.points).forEach(v => { const q = record(v); number(q.time_ps); number(q.value); });
+            const h = record(p.histogram); if (h.normalization !== 'count') fail(); array(h.edges).forEach(number); array(h.counts).forEach(number); number(h.sample_count);
+        });
+    });
+    if (root.wham != null) {
+        const w = record(root.wham);
+        if (w.dimension !== 1 || w.method !== 'gmx_wham' || w.scope !== 'selected_coordinate_across_windows' || w.energy_unit !== 'kJ/mol' || !['completed', 'failed'].includes(String(w.status))) fail();
+        string(w.coordinate_unit); record(w.request); array(w.inputs);
+        if (w.points !== undefined) array(w.points).forEach(v => { const p = record(v); number(p.coordinate); number(p.pmf_kj_mol); });
+        if (w.histograms !== undefined) { const h = record(w.histograms); array(h.columns); array(h.rows).forEach(row => array(row).forEach(number)); }
+    }
+    if (root.collection != null) {
+        const c = record(root.collection);
+        if (c.collection_errors != null) array(c.collection_errors).forEach(error);
+    }
+    if (root.execution !== undefined) array(root.execution).forEach(v => { const e = record(v); number(e.replica); string(e.job_id); string(e.status); if (e.error != null) { if (typeof e.error === 'string') string(e.error); else error(e.error); } });
+    return value as MDAnalysisReportSet;
+}
+
 export const fetchMDSummary = (jobId: string) => api.get<MDSummary>(`/api/jobs/${jobId}/md/summary`);
 export const fetchMDArtifacts = (jobId: string) => api.get<{ schema: string; job_id: string; source: string; bounded: true; analysis_error?: { code: string; message: string } | null; artifacts: MDArtifact[] }>(`/api/jobs/${jobId}/md/artifacts`);
-export const fetchMDAnalysis = (jobId: string) => api.get<MDAnalysisReportSet>(`/api/jobs/${jobId}/md/analysis`);
+export const fetchMDAnalysis = async (jobId: string) => {
+    const response = await api.get<unknown>(`/api/jobs/${jobId}/md/analysis`);
+    return { ...response, data: parseMDAnalysisReportSet(response.data) };
+};
 export const retryMDAnalysis = (jobId: string) => api.post<{ schema: 'bms.md.analysis-retry.v1'; status: string; created_child_ids: string[] }>(`/api/jobs/${jobId}/md/analysis/retry`);
 
 export interface MDRunDetail {
@@ -417,7 +502,7 @@ export interface MDRunDetail {
     simulated_time_ps: number; requested_time_ps: number; checkpoint_available: boolean;
     allowed_actions: Array<'pause' | 'resume_dynamics' | 'retry_dynamics' | 'cancel' | 'view_logs' | 'reorchestrate' | 'delete_failed_launch'>;
     action_explanations?: Partial<Record<'resume_dynamics' | 'retry_dynamics', string>>;
-    replicas: Array<{ id: string; replica_index: number; attempt: number; state: string; active: boolean; engine: string; failure: unknown; retry_eligible: boolean }>;
+    replicas: Array<{ id: string; replica_index: number; window_id?: string | null; replicate_index?: number | null; attempt: number; state: string; active: boolean; engine: string; failure: unknown; retry_eligible: boolean }>;
     segments: Array<{ id: string; replica_run_id: string; segment_index: number; state: string; source_segment_id: string | null; source_checkpoint_id: string | null; start_step: number | null; end_step: number | null; start_time_ps: number | null; end_time_ps: number | null }>;
     checkpoints: Array<{ id: string; segment_id: string; logical_role: string; relative_path: string; sha256: string; bytes: number; step: number; time_ps: number }>;
     events: Array<{ id: string; event_type: string; state_version: number; payload: Record<string, unknown>; created_at: string }>;
@@ -484,7 +569,7 @@ export interface WorkflowPackSelection {
 }
 export interface MdLaunchPreviewRequest {
     schema_version: 'bms.md.launch-preview-request.v1';
-    intent: MolecularDynamicsLaunchIntent;
+    intent: MolecularDynamicsLaunchIntent | MolecularDynamicsNativeIntent;
 }
 // Reuse native scientific contracts, never translate them into synthetic Jobs.
 export type NativeWorkflowProvisionRequest =
@@ -591,6 +676,9 @@ export interface ExecutionTarget {
     artifact_inventory?: ObservedArtifactInventory | null;
     preload?: RemotePreloadProgress | null;
     progress?: RemoteArtifactProgress | null;
+    /** Outstanding scheduler claims, including Jobs with no progress yet. */
+    active_job_ids?: string[];
+    job_progress?: RemoteArtifactProgress[];
     id: string;
     provider: 'vast';
     provider_instance_id: string;
@@ -608,6 +696,11 @@ export interface ExecutionTarget {
     last_error: string | null;
     last_seen_at: string | null;
     activated_at: string | null;
+}
+
+/** Older responses lack claim IDs; explicit empty IDs override stale progress. */
+export function activeExecutionTargetJobIds(target: ExecutionTarget): string[] {
+    return target.active_job_ids ?? (target.progress ? [target.progress.job_id] : []);
 }
 
 export interface DiscoveredExecutionTarget {
@@ -1007,6 +1100,12 @@ export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const fetchRFD3LocalRedesign = (id: string) => api.get<RFD3LocalRedesignReadModel>(`/api/jobs/${id}/rfd3-local-redesign`);
 export const fetchRFD3Generation = (id: string) => api.get<RFD3GenerationReadModel>(`/api/jobs/${encodeURIComponent(id)}/rfd3-generation`);
 export const fetchProteinLocalRedesignResults = (id: string) => api.get<ProteinLocalRedesignResultSurface>(`/api/jobs/${encodeURIComponent(id)}/workflow-results`);
+export interface NativeConfidenceArtifacts {
+    design_id: string; status: 'ok' | 'unavailable'; reason: string | null;
+    artifacts: Array<{ role: string; filename: string; retained: boolean; scope: string; download_url: string | null; download_reason?: string | null }>;
+}
+export const fetchNativeConfidenceArtifacts = (id: string) => api.get<NativeConfidenceArtifacts>(`/api/designs/${id}/confidence-artifacts`);
+
 export const fetchDesignById = (id: string, jobId?: string) => api.get<Design>(`/api/designs/${id}`, { params: { job_id: jobId } });
 export interface ProteinBaseBundleImportRequest {
     bundle_path: string;
@@ -1515,22 +1614,42 @@ export interface OntManagedReferenceRequest {
     global_domain_experiment_id: string;
     molbio_ngs_state_revision_id: string;
     ngs_reference_revision_id: string;
+    launch_snapshot_id?: string | null;
+}
+
+export interface OntFastqLaunchSnapshot {
+    relative_path: string;
+    sha256: string;
+    size_bytes: number;
 }
 
 export interface OntNgsSubmitRequest extends ExecutionPlacement {
-    name?: string;
+    name?: string | null;
     params: Record<string, unknown>;
     pinned_gpu?: number | null;
     source_instrument_run_id?: string | null;
     managed_reference?: OntManagedReferenceRequest | null;
+    fastq_snapshot?: OntFastqLaunchSnapshot | null;
+    comparison_launch_id?: string | null;
+    execution_plan_approval?: string | null;
 }
 
-export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) => {
+export interface OntNgsPreparedReview {
+    workflow_id: string;
+    request: OntNgsSubmitRequest;
+    preview: import('../components/ExecutionPlanApproval').ExecutionPlanPreview;
+}
+
+export const prepareOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) =>
+    api.post<OntNgsPreparedReview>(`/api/ont/ngs/${workflowId}/prepare`, prepareExecutionPlacement(request));
+
+export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest, launchContextId?: string | null) => {
     const payload = prepareExecutionPlacement(request);
     if (payload.execution_target_id && payload.pinned_gpu != null) {
         throw new Error('Controller GPU pins cannot be used on a worker. Choose worker scheduler assignment explicitly.');
     }
-    return api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, payload);
+    return api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, payload, launchContextId === undefined
+        ? undefined : jobLaunchContextConfig({ launch_context_id: launchContextId }, { launchContext: false }));
 };
 
 export interface MolBioNgsReceiptRequest {
@@ -1582,6 +1701,10 @@ export interface OntBarcodeBatchSubmitRequest {
     name_prefix?: string;
     pinned_gpu?: number | null;
     mappings: OntBarcodeBatchMapping[];
+    execution_target_id?: string | null;
+    execution_policy?: ExecutionPolicy;
+    reference_set_id?: string | null;
+    execution_plan_approvals?: Record<string, string>;
 }
 
 export interface OntBarcodeBatchSubmitResponse {
@@ -1594,7 +1717,6 @@ export const submitOntBarcodeBatch = (
     sourceJobId: string,
     request: OntBarcodeBatchSubmitRequest,
 ) => {
-    assertLocalOnlySubmission('ONT barcode batch');
     return api.post<OntBarcodeBatchSubmitResponse>(
         `/api/jobs/${encodeURIComponent(sourceJobId)}/barcode-batches`,
         request,
@@ -1614,6 +1736,10 @@ export interface PooledReferenceAssignmentSubmitRequest {
     targets: PooledReferenceAssignmentTarget[];
     min_mapq: number;
     min_alignment_score_margin: number;
+    execution_target_id?: string | null;
+    execution_policy?: ExecutionPolicy;
+    reference_set_id?: string | null;
+    execution_plan_approval?: string | null;
 }
 
 export interface PooledReferenceAssignmentSubmitResponse {
@@ -1628,7 +1754,6 @@ export interface PooledReferenceAssignmentSubmitResponse {
 export const submitPooledReferenceAssignment = (
     request: PooledReferenceAssignmentSubmitRequest,
 ) => {
-    assertLocalOnlySubmission('Pooled reference assignment');
     return api.post<PooledReferenceAssignmentSubmitResponse>(
         '/api/ont/ngs/pooled-reference-assignment/submit',
         request,
@@ -1678,6 +1803,10 @@ export interface PooledAssignmentReleaseRequest {
     name_prefix?: string;
     pinned_gpu?: number;
     target_ids: string[];
+    execution_target_id?: string | null;
+    execution_policy?: ExecutionPolicy;
+    release_id?: string | null;
+    execution_plan_approvals?: Record<string, string>;
 }
 
 export interface PooledAssignmentReleaseResponse {
@@ -1702,6 +1831,28 @@ export const releasePooledAssignment = (
     `/api/jobs/${encodeURIComponent(assignmentJobId)}/pooled-assignment/release`,
     request,
 );
+
+export interface OntDomainPreparedReview<T> {
+    request: T;
+    request_fingerprint: string;
+    previews: Record<string, import('../components/ExecutionPlanApproval').ExecutionPlanPreview>;
+}
+
+export const prepareOntBarcodeBatch = (sourceJobId: string, request: OntBarcodeBatchSubmitRequest) =>
+    api.post<OntDomainPreparedReview<OntBarcodeBatchSubmitRequest>>(
+        `/api/jobs/${encodeURIComponent(sourceJobId)}/barcode-batches/prepare`, request,
+    );
+
+export const preparePooledReferenceAssignment = (request: PooledReferenceAssignmentSubmitRequest) =>
+    api.post<{ request: PooledReferenceAssignmentSubmitRequest; request_fingerprint: string;
+        preview: import('../components/ExecutionPlanApproval').ExecutionPlanPreview }>(
+        '/api/ont/ngs/pooled-reference-assignment/prepare', request,
+    );
+
+export const preparePooledAssignmentRelease = (assignmentJobId: string, request: PooledAssignmentReleaseRequest) =>
+    api.post<OntDomainPreparedReview<PooledAssignmentReleaseRequest>>(
+        `/api/jobs/${encodeURIComponent(assignmentJobId)}/pooled-assignment/release/prepare`, request,
+    );
 
 export interface BoltzGenPreviewResponse {
     yaml_text: string;
@@ -2021,7 +2172,7 @@ export const fetchJobLogs = (jobId: string): Promise<{ data: JobLogs }> => {
 export interface ExecutionStage {
     id: string;
     label: string;
-    state: 'planned' | 'running' | 'completed' | 'awaiting_input' | 'failed' | 'cancelled' | 'unknown';
+    state: 'planned' | 'running' | 'completed' | 'awaiting_input' | 'failed' | 'cancelled' | 'unknown' | 'not_requested' | 'skipped';
     source: 'plan' | 'recorded' | 'model';
 }
 
@@ -2243,6 +2394,7 @@ export interface DesignFrustraMPNNProjection {
 }
 
 export interface Design {
+    native_sample?: { producer_method?: string; producer_sample?: string; producer_rank?: number; producer_output_key?: string; producer_partition?: string; [key: string]: UntypedApiValue } | null;
     core_protein_scientific_contract?: 1 | null;
     scientific_structure_document?: import('../structureViewer/contracts/structureIdentity').StructureDocumentRef | null;
     id: string;
@@ -2474,6 +2626,7 @@ export interface DesignAggregateSummary {
 }
 
 export interface DesignListResponse {
+    scientific?: NativeResults | null;
     model_counts?: Record<string, number>;
     designs: Design[];
     total: number;
@@ -2481,6 +2634,8 @@ export interface DesignListResponse {
 }
 
 export interface DesignFilters {
+    native?: NativeScalarQuery;
+    native_output?: 'page' | 'ids';
     job_id?: string;
     model_id?: string;
     include_children?: boolean;
@@ -2630,10 +2785,15 @@ export interface BackboneSummary {
     }>;
 }
 
-export const fetchDesigns = (filters: DesignFilters = {}) =>
-    filters.design_ids?.length
+export const fetchDesigns = async (filters: DesignFilters = {}) => {
+    const response = await (filters.native || filters.design_ids?.length
         ? api.post<DesignListResponse>('/api/designs/query', filters)
-        : api.get<DesignListResponse>('/api/designs', { params: filters });
+        : api.get<DesignListResponse>('/api/designs', { params: filters }));
+    if (response.data.scientific) response.data.scientific = parseNativeResults(response.data.scientific);
+    return response;
+};
+export const exportNativeResults = (filters: DesignFilters, format: 'csv' | 'json') =>
+    api.post<Blob>('/api/designs/query', {...filters, native: filters.native ?? {}, native_output: format}, {responseType: 'blob'});
 
 export const fetchBackboneSummary = (jobId: string, artifactGroup?: string) =>
     api.get<BackboneSummary>(`/api/designs/by-job/${jobId}/backbone-summary`, {
@@ -4211,8 +4371,8 @@ export interface PAEData {
     confidence_file?: string | null;
 }
 
-export const fetchPAEData = (designId: string) =>
-    api.get<unknown>(`/api/designs/${designId}/pae`);
+export const fetchPAEData = (designId: string, maxSize = 1024) =>
+    api.get<unknown>(`/api/designs/${designId}/pae`, { params: { max_size: maxSize } });
 
 // ============================================================
 // DEBUG ORCHESTRATOR OVERRIDES
@@ -5333,10 +5493,6 @@ export const fetchMolecularRevisionSummaries = (sequenceId: string, limit = 50, 
         `/api/molbio/sequences/${encodeURIComponent(sequenceId)}/revisions`, { params: { limit, offset }, signal },
     ));
 
-export const fetchMolecularRevisions = (sequenceId: string, limit = 100, offset = 0, signal?: AbortSignal) =>
-    apiData(api.get<MolecularRevision[]>(
-        `/api/sequences/${encodeURIComponent(sequenceId)}/revisions`, { params: { limit, offset }, signal },
-    ));
 export const fetchMolecularRevision = (sequenceId: string, revisionId: string) =>
     apiData(api.get<MolecularRevision>(
         `/api/sequences/${encodeURIComponent(sequenceId)}/revisions/${encodeURIComponent(revisionId)}`,

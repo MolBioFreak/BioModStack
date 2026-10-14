@@ -19,44 +19,41 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+class BarcodeProductContainmentError(ValueError):
+    """Unsafe product paths are custody failures, not unavailable provenance."""
+
+
 def _confined(path: Path, root: Path, label: str) -> Path:
     if path.is_symlink():
-        raise ValueError(f"{label} symlink is forbidden")
+        raise BarcodeProductContainmentError(f"{label} symlink is forbidden")
     resolved = path.resolve(strict=True)
     try:
         relative = resolved.relative_to(root)
     except ValueError as exc:
-        raise ValueError(f"{label} must be confined beneath the authoritative result root") from exc
+        raise BarcodeProductContainmentError(f"{label} must be confined beneath the authoritative result root") from exc
     cursor = root
     for part in relative.parts:
         cursor = cursor / part
         if cursor.is_symlink():
-            raise ValueError(f"{label} symlink is forbidden")
+            raise BarcodeProductContainmentError(f"{label} symlink is forbidden")
     if not resolved.is_file():
         raise ValueError(f"{label} must be a regular file")
     return resolved
 
 
-def load_barcode_unit(
-    manifest_path: Path,
-    result_root: Path,
-    unit_id: str,
-    *,
-    expected_manifest_sha256: str | None = None,
-    expected_source_calls_sha256: str | None = None,
-    expected_preflight_sha256: str | None = None,
-) -> dict[str, Any]:
-    """Resolve one exact unit from an authoritative, confined demux manifest."""
+def _result_root(result_root: Path) -> Path:
     root = Path(result_root)
     if root.is_symlink():
         raise ValueError("authoritative result root symlink is forbidden")
     root = root.resolve(strict=True)
     if not root.is_dir():
         raise ValueError("authoritative result root must be a directory")
-    requested = str(unit_id).strip()
-    if not _UNIT_ID.fullmatch(requested):
-        raise ValueError("unknown or malformed barcode unit")
-    manifest = _confined(Path(manifest_path), root, "barcode manifest")
+    return root
+
+
+def _read_barcode_manifest(
+    manifest: Path, expected_manifest_sha256: str | None = None,
+) -> tuple[dict[str, Any], str]:
     try:
         manifest_bytes = manifest.read_bytes()
     except OSError as exc:
@@ -71,6 +68,20 @@ def load_barcode_unit(
         payload = json.loads(manifest_bytes.decode("utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("barcode manifest is unreadable or malformed") from exc
+    return payload, observed_manifest_sha256
+
+
+def _validate_barcode_manifest(
+    manifest_path: Path, result_root: Path, payload: dict[str, Any],
+    observed_manifest_sha256: str, expected_manifest_sha256: str | None = None,
+) -> tuple[Path, Path]:
+    root = _result_root(result_root)
+    manifest = _confined(Path(manifest_path), root, "barcode manifest")
+    if expected_manifest_sha256 is not None and (
+        not re.fullmatch(r"[0-9a-f]{64}", expected_manifest_sha256)
+        or observed_manifest_sha256 != expected_manifest_sha256
+    ):
+        raise ValueError("barcode manifest does not match the source job terminal-product anchor")
     if payload.get("schema") not in {"biomodstack.dorado_demux.v1", "biomodstack.dorado_barcode_units.v1"}:
         raise ValueError("barcode manifest schema is unsupported")
     units = payload.get("units")
@@ -86,13 +97,25 @@ def load_barcode_unit(
         source = payload.get("source_calls")
         if not isinstance(source, dict) or payload.get("total_reads") != sum(counts) or source.get("read_count") != sum(counts):
             raise ValueError("barcode manifest source/unit read-count parity failed")
-    matches = [item for item in units if isinstance(item, dict) and item.get("unit_id") == requested]
-    if len(matches) != 1:
+    return root, manifest
+
+
+def _resolve_barcode_unit(
+    manifest: Path, root: Path, payload: dict[str, Any],
+    observed_manifest_sha256: str, units_by_id: dict[str, dict[str, Any]],
+    unit_id: str, *,
+    expected_source_calls_sha256: str | None = None,
+    expected_preflight_sha256: str | None = None,
+) -> dict[str, Any]:
+    requested = str(unit_id).strip()
+    if not _UNIT_ID.fullmatch(requested):
+        raise ValueError("unknown or malformed barcode unit")
+    item = units_by_id.get(requested)
+    if item is None:
         raise ValueError(f"unknown or duplicate barcode unit: {requested}")
-    item = matches[0]
     raw_path = Path(str(item.get("bam_path") or ""))
     if raw_path.is_absolute() or not raw_path.parts:
-        raise ValueError("barcode BAM path must be a confined relative path")
+        raise BarcodeProductContainmentError("barcode BAM path must be a confined relative path")
     bam = _confined(manifest.parent / raw_path, root, "barcode BAM")
     expected = str(item.get("bam_sha256") or "").lower()
     observed = _sha256(bam)
@@ -101,7 +124,7 @@ def load_barcode_unit(
     raw_unit_manifest = Path(str(item.get("unit_manifest_path") or ""))
     expected_unit_manifest_sha = str(item.get("unit_manifest_sha256") or "").lower()
     if raw_unit_manifest.is_absolute() or not raw_unit_manifest.parts:
-        raise ValueError("barcode unit manifest path must be a confined relative path")
+        raise BarcodeProductContainmentError("barcode unit manifest path must be a confined relative path")
     unit_manifest = _confined(manifest.parent / raw_unit_manifest, root, "barcode unit manifest")
     try:
         unit_manifest_bytes = unit_manifest.read_bytes()
@@ -132,7 +155,9 @@ def load_barcode_unit(
     source_calls_sha256 = str(unit_payload.get("source_calls_sha256") or "").lower()
     preflight_sha256 = str(unit_payload.get("preflight_sha256") or "").lower()
     if payload.get("schema") == "biomodstack.dorado_demux.v1":
-        source = payload.get("source_calls") if isinstance(payload.get("source_calls"), dict) else {}
+        source = payload.get("source_calls")
+        if not isinstance(source, dict):
+            source = {}
         expected_source_calls_sha256 = expected_source_calls_sha256 or str(source.get("sha256") or "").lower()
         expected_preflight_sha256 = expected_preflight_sha256 or str(payload.get("preflight_sha256") or "").lower()
     if (
@@ -169,6 +194,30 @@ def load_barcode_unit(
     }
 
 
+def load_barcode_unit(
+    manifest_path: Path,
+    result_root: Path,
+    unit_id: str,
+    *,
+    expected_manifest_sha256: str | None = None,
+    expected_source_calls_sha256: str | None = None,
+    expected_preflight_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Resolve one exact unit from an authoritative, confined demux manifest."""
+    root = _result_root(result_root)
+    if not _UNIT_ID.fullmatch(str(unit_id).strip()):
+        raise ValueError("unknown or malformed barcode unit")
+    manifest = _confined(Path(manifest_path), root, "barcode manifest")
+    payload, digest = _read_barcode_manifest(manifest, expected_manifest_sha256)
+    _validate_barcode_manifest(manifest, root, payload, digest, expected_manifest_sha256)
+    return _resolve_barcode_unit(
+        manifest, root, payload, digest,
+        {item.get("unit_id"): item for item in payload["units"]}, unit_id,
+        expected_source_calls_sha256=expected_source_calls_sha256,
+        expected_preflight_sha256=expected_preflight_sha256,
+    )
+
+
 def load_barcode_units(
     manifest_path: Path,
     result_root: Path,
@@ -177,26 +226,88 @@ def load_barcode_units(
     expected_source_calls_sha256: str | None = None,
     expected_preflight_sha256: str | None = None,
 ) -> list[dict[str, Any]]:
-    """List all exact units, validating every unit through the same fail-closed resolver."""
+    """List exact units, reading and validating the aggregate once per call."""
     manifest = Path(manifest_path)
     try:
-        payload = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        manifest_stat = manifest.stat() if expected_manifest_sha256 is not None else None
+    except OSError as exc:
         raise ValueError("barcode manifest is unreadable or malformed") from exc
-    units = payload.get("units")
-    if not isinstance(units, list):
-        raise ValueError("barcode manifest units must be a list")
-    identifiers = [str(item.get("unit_id") or "") for item in units if isinstance(item, dict)]
-    if len(identifiers) != len(units):
-        raise ValueError("barcode manifest units must be objects")
-    return [
-        load_barcode_unit(
-            manifest,
-            result_root,
-            identifier,
-            expected_manifest_sha256=expected_manifest_sha256,
-            expected_source_calls_sha256=expected_source_calls_sha256,
-            expected_preflight_sha256=expected_preflight_sha256,
+    payload, digest = _read_barcode_manifest(manifest)
+    return _resolve_barcode_catalogs(
+        [(manifest, payload, digest)], result_root,
+        manifest_stats={manifest: manifest_stat},
+        expected_manifest_sha256=expected_manifest_sha256,
+        expected_source_calls_sha256=expected_source_calls_sha256,
+        expected_preflight_sha256=expected_preflight_sha256,
+    )[0]
+
+
+def _resolve_barcode_catalogs(
+    catalogs: list[tuple[Path, dict[str, Any], str]],
+    result_root: Path,
+    *,
+    manifest_stats: dict[Path, Any] | None = None,
+    expected_manifest_sha256: str | None = None,
+    expected_source_calls_sha256: str | None = None,
+    expected_preflight_sha256: str | None = None,
+) -> list[list[dict[str, Any]]]:
+    """Resolve freshly read catalogs; callers own their byte/digest authentication.
+
+    Reuse only complete, type-exact unit metadata with the same relative-path
+    base and explicit common provenance. Different catalogs retain independent
+    validation, rather than acquiring a new equality/admission requirement.
+    Nothing survives this operation.
+    """
+    results: list[list[dict[str, Any]]] = []
+    previous_key = None
+    for manifest, payload, digest in catalogs:
+        original_manifest = manifest
+        manifest_stat = (manifest_stats or {}).get(manifest)
+        units = payload.get("units")
+        if not isinstance(units, list):
+            raise ValueError("barcode manifest units must be a list")
+        identifiers = [str(item.get("unit_id") or "") for item in units if isinstance(item, dict)]
+        if len(identifiers) != len(units):
+            raise ValueError("barcode manifest units must be objects")
+        # The existing list entrypoint accepts an empty list without unit checks.
+        if not units:
+            results.append([])
+            previous_key = None
+            continue
+        root, manifest = _validate_barcode_manifest(
+            manifest, result_root, payload, digest, expected_manifest_sha256,
         )
-        for identifier in identifiers
-    ]
+        key = (manifest.parent, json.dumps(units, sort_keys=True))
+        if (
+            key == previous_key
+            and expected_source_calls_sha256
+            and expected_preflight_sha256
+        ):
+            resolved = [dict(unit, manifest_path=str(manifest), manifest_sha256=digest) for unit in results[-1]]
+        else:
+            units_by_id = {item.get("unit_id"): item for item in units}
+            resolved = [
+                _resolve_barcode_unit(
+                    manifest, root, payload, digest, units_by_id, identifier,
+                    expected_source_calls_sha256=expected_source_calls_sha256,
+                    expected_preflight_sha256=expected_preflight_sha256,
+                )
+                for identifier in identifiers
+            ]
+        if manifest_stat is not None:
+            # Preserve the existing anchored-list replacement check without
+            # rereading unchanged catalog bodies for each unit or catalog.
+            current_manifest = _confined(original_manifest, root, "barcode manifest")
+            current_stat = current_manifest.stat()
+            if any(getattr(current_stat, field) != getattr(manifest_stat, field) for field in (
+                "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns",
+            )):
+                try:
+                    current_bytes = current_manifest.read_bytes()
+                except OSError as exc:
+                    raise ValueError("barcode manifest is unreadable or malformed") from exc
+                if hashlib.sha256(current_bytes).hexdigest() != digest:
+                    raise ValueError("barcode manifest does not match the source job terminal-product anchor")
+        results.append(resolved)
+        previous_key = key
+    return results

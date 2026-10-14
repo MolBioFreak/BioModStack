@@ -5,12 +5,19 @@ def shellQuote(value) {
     return "'${text.replace("'", "'\"'\"'")}'"
 }
 
+// Closed outputs retain independent names; cache hits republish too.
+def boltzcpexperimentalPublishMode(workDir, outputDir) {
+    def destination = file(outputDir).toAbsolutePath()
+    while (!java.nio.file.Files.exists(destination)) destination = destination.parent
+    java.nio.file.Files.getFileStore(workDir) == java.nio.file.Files.getFileStore(destination) ? 'link' : 'copy'
+}
+
 process RunBoltzCPExperimental {
     label 'BoltzCP'
     label 'gpu'
 
     publishDir "${params.out_dir}/run/boltz_cp_experimental", mode: 'copy', pattern: '*.log'
-    publishDir "${params.out_dir}/inputs/boltz_cp", mode: 'copy', pattern: 'staged_input/**', saveAs: { filename -> filename.replace('staged_input/', '') }
+    publishDir "${params.out_dir}/inputs/boltz_cp", mode: "${boltzcpexperimentalPublishMode(workflow.workDir, params.out_dir)}", pattern: 'staged_input/**', saveAs: { filename -> filename.replace('staged_input/', '') }
     publishDir "${params.out_dir}/processed/boltz_cp", mode: 'copy', pattern: 'cp_results/processed/**', saveAs: { filename -> filename.replace('cp_results/processed/', '') }
 
     input:
@@ -141,7 +148,49 @@ PY
 
     mkdir -p staged_input
     if [ -d ${inputConfigPath} ]; then
-        cp -R ${inputConfigPath} staged_input/input_bundle
+        python3 - ${inputConfigPath} ${shellQuote(params.get('boltz_prepared_msa_sha256') ?: '')} <<'PY'
+import errno
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+source = Path(sys.argv[1]).resolve(strict=True)
+leaves = set()
+selected = set()
+manifest = source / 'msa-inputs.json'
+if sys.argv[2] and manifest.is_file():
+    selected.add(Path('msa-inputs.json'))
+    for config in json.loads(manifest.read_text())['configs']:
+        selected.add(Path(config['path']))
+        for chain in config['chains']:
+            alignment = chain['alignment']
+            if alignment['mode'] != 'empty':
+                leaves.add((source / alignment['path']).resolve(strict=True))
+                selected.add(Path(alignment['path']))
+def stage(src, dst):
+    # YAML is rewritten twice below. Legacy/unbound inputs and metadata stay private.
+    if Path(src).resolve() not in leaves:
+        return shutil.copyfile(src, dst)
+    try:
+        os.link(Path(src).resolve(strict=True), dst)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        shutil.copyfile(src, dst)
+    return dst
+destination = Path('staged_input/input_bundle')
+if selected:
+    # Provider operation history remains at its durable input owner; native
+    # Fold-CP consumes only the declared config/alignment closure and receipt.
+    destination.mkdir()
+    for relative in sorted(selected):
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        stage(source / relative, target)
+else:
+    shutil.copytree(source, destination, copy_function=stage)
+PY
         # The Fold-CP application refuses any directory entry that is not a
         # .fasta/.yaml file, and a prepared bundle also carries its alignments
         # and operation records beside the config. Hand the application the
@@ -222,7 +271,20 @@ for path in files:
                 data = source.read_bytes()
                 target = package_root / '.portable-msa' / (hashlib.sha256(data).hexdigest() + source.suffix)
                 target.parent.mkdir(exist_ok=True)
-                target.write_bytes(data)
+                # A portable binding names the retained immutable input version.
+                # The generated config remains private; only its closed MSA is shared.
+                import errno
+                import os
+                if not target.exists():
+                    try:
+                        if not ${params.get('boltz_prepared_msa_sha256') ? 'True' : 'False'}:
+                            target.write_bytes(data)  # legacy mutable source snapshot
+                        else:
+                            os.link(source, target)
+                    except OSError as exc:
+                        if exc.errno != errno.EXDEV:
+                            raise
+                        target.write_bytes(data)
                 protein['msa'] = str(target.resolve())
     path.write_text(yaml.safe_dump(document, sort_keys=False))
     bound = resolve_boltz_config(path, root=package_root)

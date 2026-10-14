@@ -344,7 +344,9 @@ def test_missing_copy_accounting_and_reuse(tree, monkeypatch):
     m, cache, root, make, prior, marker = tree
     successor = make(b'next', ('weights/a.sif', 'weights/b.sif'))
     result = m.install(root, successor, m.boot_id(), cache)
-    assert result['admission']['additional_copy_bytes'] >= 2 * len(b'next')
+    assert result['admission']['additional_copy_bytes'] == 0
+    release = m.release_path(root, successor)
+    assert (release / 'weights/a.sif').stat().st_ino == (release / 'weights/b.sif').stat().st_ino
     assert result['admission']['reservation'] is False
     def forbidden(*args, **kwargs):
         raise AssertionError('verified installed leaves must not be copied again')
@@ -370,6 +372,7 @@ def test_low_space_rejects_before_first_copy(tree, monkeypatch):
 def test_real_syscall_faults_retain_prior_identity(tree, monkeypatch, failure):
     m, cache, root, make, prior, marker = tree
     successor = make(b'new image' * 100)
+    for row in successor['artifacts']: row['mode'] = 0o555
     before = marker.read_bytes()
     write, fsync, replace = os.write, os.fsync, os.replace
     def fail_write(fd, data):
@@ -402,6 +405,7 @@ def test_real_syscall_faults_retain_prior_identity(tree, monkeypatch, failure):
 def test_abrupt_process_death_before_publication_and_retry(tree):
     m, cache, root, make, prior, marker = tree
     successor = make(b'new image' * 100)
+    for row in successor['artifacts']: row['mode'] = 0o555
     before = marker.read_bytes()
     def child():
         original = os.write
@@ -415,10 +419,10 @@ def test_abrupt_process_death_before_publication_and_retry(tree):
     process.join(10)
     assert process.exitcode == 91
     assert marker.read_bytes() == before
-    orphans = list(root.rglob('.partial-*'))
+    orphans = list(root.parent.parent.glob('cache/artifacts/v1/objects/modes/*/.partial-*'))
     assert len(orphans) == 1 and orphans[0].read_bytes() == b'new ima'
     assert m.install(root, successor, m.boot_id(), cache)['release']['state'] == 'verified'
-    assert orphans[0].exists()  # no opportunistic GC or existing asset deletion
+    assert not orphans[0].exists()  # only this digest's unpublished stage, under its lock
     assert (root / 'releases' / m.validate_manifest(prior, cache)).exists()
 
 
@@ -477,12 +481,12 @@ def test_boot_change_during_copy_prevents_activation(tree, monkeypatch):
     successor = make(b'new')
     before = marker.read_bytes()
     boot = m.boot_id()
-    original = cache.Cache._publish_copy
+    original = cache.Cache._publish_immutable
     def copy_then_reboot(*args, **kwargs):
         result = original(*args, **kwargs)
         monkeypatch.setattr(m, 'boot_id', lambda: 'changed')
         return result
-    monkeypatch.setattr(cache.Cache, '_publish_copy', copy_then_reboot)
+    monkeypatch.setattr(cache.Cache, '_publish_immutable', copy_then_reboot)
     with pytest.raises(ValueError, match='worker_boot_changed'):
         m.install(root, successor, boot, cache)
     assert marker.read_bytes() == before
@@ -527,6 +531,7 @@ def test_after_active_rename_fsync_failure_is_ambiguous_but_complete(tree, monke
 def test_mid_copy_headroom_drop_aborts_and_cleans_partial(tree, monkeypatch):
     m, cache, root, make, prior, marker = tree
     successor = make(b'x' * (cache.CHUNK * 2))
+    for row in successor['artifacts']: row['mode'] = 0o555
     before = marker.read_bytes()
     original_write, original_stat = os.write, os.fstatvfs
     wrote = False
@@ -553,19 +558,19 @@ def test_parent_renamed_during_copy_cannot_activate(tree, monkeypatch):
     m, cache, root, make, prior, marker = tree
     successor = make(b'new')
     before = marker.read_bytes()
-    original = cache.Cache._publish_copy
-    def rename_after_copy(storage, source, out, name, row, mode):
-        original(storage, source, out, name, row, mode)
+    original = cache.Cache._publish_immutable
+    def rename_after_copy(storage, source, objects, out, name, row, mode):
+        original(storage, source, objects, out, name, row, mode)
         path = root / 'releases' / m.validate_manifest(successor, cache) / 'weights'
         path.rename(path.with_name('retained'))
         path.mkdir()
-    monkeypatch.setattr(cache.Cache, '_publish_copy', rename_after_copy)
+    monkeypatch.setattr(cache.Cache, '_publish_immutable', rename_after_copy)
     with pytest.raises(ValueError, match='managed_directory_changed'):
         m.install(root, successor, m.boot_id(), cache)
     assert marker.read_bytes() == before
 
 
-@pytest.mark.parametrize('state,copies', [('cold', 3), ('cached', 1), ('installed', 0)])
+@pytest.mark.parametrize('state,copies', [('cold', 2), ('cached', 0), ('installed', 0)])
 def test_preupload_peak_budget_is_conservative_and_not_reserved(tree, state, copies):
     m, cache, root, make, prior, marker = tree
     before = marker.read_bytes()
@@ -654,16 +659,16 @@ def test_install_resolves_release_path_independently_of_member_count(tree, monke
         target=target, sha256=hashlib.sha256(target.encode()).hexdigest(),
         size_bytes=len(target), mode=0o777))
     release = managed.release_path(root, manifest)
-    original_path, original_copy = managed.release_path, cache.Cache._publish_copy
+    original_path, original_copy = managed.release_path, cache.Cache._publish_immutable
     resolutions, copies = [], []
     def resolve(*args):
         resolutions.append(args)
         return original_path(*args)
-    def copy(storage, source, out, name, row, mode):
+    def copy(storage, source, objects, out, name, row, mode):
         copies.append(row['name'])
-        return original_copy(storage, source, out, name, row, mode)
+        return original_copy(storage, source, objects, out, name, row, mode)
     monkeypatch.setattr(managed, 'release_path', resolve)
-    monkeypatch.setattr(cache.Cache, '_publish_copy', copy)
+    monkeypatch.setattr(cache.Cache, '_publish_immutable', copy)
     installed = managed.install(root, manifest, managed.boot_id(), cache)
     assert installed['release']['state'] == 'verified'
     assert all(row['state'] == 'verified' for row in installed['release']['artifacts'])
@@ -688,14 +693,14 @@ def test_interrupted_install_reuses_verified_destinations_on_retry(tree, monkeyp
     managed, cache, root, make, _, marker = tree
     manifest = make(b'retained cached payload', tuple(f'weights/retry/member-{i}' for i in range(3)))
     prior_active = marker.read_bytes()
-    original = cache.Cache._publish_copy
+    original = cache.Cache._publish_immutable
     attempted = []
-    def interrupt(storage, source, out, name, row, mode):
+    def interrupt(storage, source, objects, out, name, row, mode):
         attempted.append(row['name'])
         if len(attempted) == 2:
             raise RuntimeError('fixture interrupted install')
-        return original(storage, source, out, name, row, mode)
-    monkeypatch.setattr(cache.Cache, '_publish_copy', interrupt)
+        return original(storage, source, objects, out, name, row, mode)
+    monkeypatch.setattr(cache.Cache, '_publish_immutable', interrupt)
     with pytest.raises(RuntimeError, match='fixture interrupted install'):
         managed.install(root, manifest, managed.boot_id(), cache)
     assert marker.read_bytes() == prior_active
@@ -703,10 +708,10 @@ def test_interrupted_install_reuses_verified_destinations_on_retry(tree, monkeyp
     assert not (release / 'manifest.json').exists()
     assert (release / 'weights/retry/member-0').read_bytes() == b'retained cached payload'
     copied = []
-    def retry_copy(storage, source, out, name, row, mode):
+    def retry_copy(storage, source, objects, out, name, row, mode):
         copied.append(row['name'])
-        return original(storage, source, out, name, row, mode)
-    monkeypatch.setattr(cache.Cache, '_publish_copy', retry_copy)
+        return original(storage, source, objects, out, name, row, mode)
+    monkeypatch.setattr(cache.Cache, '_publish_immutable', retry_copy)
     result = managed.install(root, manifest, managed.boot_id(), cache)
     assert result['release']['state'] == 'verified'
     assert copied == ['weights/retry/member-1', 'weights/retry/member-2']

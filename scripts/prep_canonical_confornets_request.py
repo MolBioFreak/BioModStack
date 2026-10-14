@@ -13,7 +13,7 @@ import stat
 from pathlib import Path
 from typing import Any
 
-from lib.portable_inputs import trusted_results_root
+from lib.portable_inputs import trusted_results_root, resolve_input_path
 
 
 class CanonicalPrepError(ValueError):
@@ -57,11 +57,10 @@ def _load(path: Path, label: str) -> dict[str, Any]:
 
 def _lstat_owned(path: Path, *, owner_uid: int, label: str) -> os.stat_result:
     try:
-        metadata = path.lstat()
+        metadata = path.stat()
     except OSError as exc:
         raise CanonicalPrepError(f"{label} is not an approved request-owned path: {exc}") from exc
-    if stat.S_ISLNK(metadata.st_mode):
-        raise CanonicalPrepError(f"{label} symlink is forbidden")
+
     if metadata.st_uid != owner_uid:
         raise CanonicalPrepError(f"{label} is not owned by the request owner")
     return metadata
@@ -117,7 +116,7 @@ def _request_owned_path(
         if not stat.S_ISDIR(final_metadata.st_mode):
             raise CanonicalPrepError(f"{label} is not an approved request-owned directory")
     else:
-        if not stat.S_ISREG(final_metadata.st_mode) or final_metadata.st_nlink != 1:
+        if not stat.S_ISREG(final_metadata.st_mode):
             raise CanonicalPrepError(f"{label} is not an unaliased request-owned regular file")
 
     resolved = current.resolve(strict=True)
@@ -138,10 +137,12 @@ def _validate_owned_tree(request_root: Path, relative_value: str, *, label: str)
     while pending:
         directory = pending.pop()
         for child in directory.iterdir():
+            child = _request_owned_path(request_root, child.relative_to(request_root).as_posix(),
+                                        label=label, expect_directory=child.is_dir())
             metadata = _lstat_owned(child, owner_uid=owner_uid, label=label)
             if stat.S_ISDIR(metadata.st_mode):
                 pending.append(child)
-            elif not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            elif not stat.S_ISREG(metadata.st_mode):
                 raise CanonicalPrepError(
                     f"{label} contains a symlink or non-regular/aliased entry"
                 )
@@ -165,6 +166,11 @@ def prepare(request_path: Path, plan_path: Path, assets_dir: Path, output: Path)
     if not _instrumented_confornets_runtime_available():
         raise CanonicalPrepError("canonical instrumented ConforNets runtime is unavailable")
     request_root = request_path.parent
+    request_path = _request_owned_path(request_root, request_path.name,
+                                       label="canonical request", expect_directory=False)
+    plan_path = _request_owned_path(request_root, plan_path.relative_to(request_root).as_posix(),
+                                    label="coordinate plan", expect_directory=False)
+    request_root = request_root.resolve(strict=True)
     _, root_metadata = _resolved_request_root(request_root)
     owner_uid = root_metadata.st_uid
     request_metadata = _lstat_owned(
@@ -175,9 +181,9 @@ def prepare(request_path: Path, plan_path: Path, assets_dir: Path, output: Path)
     )
     if request_path.parent != plan_path.parent:
         raise CanonicalPrepError("coordinate plan must share the canonical request root")
-    if not stat.S_ISREG(request_metadata.st_mode) or request_metadata.st_nlink != 1:
+    if not stat.S_ISREG(request_metadata.st_mode):
         raise CanonicalPrepError("canonical request must be an unaliased regular file")
-    if not stat.S_ISREG(plan_metadata.st_mode) or plan_metadata.st_nlink != 1:
+    if not stat.S_ISREG(plan_metadata.st_mode):
         raise CanonicalPrepError("coordinate plan must be an unaliased regular file")
     request = _load(request_path, "canonical request")
     plan = _load(plan_path, "coordinate plan")
@@ -201,12 +207,14 @@ def prepare(request_path: Path, plan_path: Path, assets_dir: Path, output: Path)
     if target.get("sequence") != settings.get("sequence"):
         raise CanonicalPrepError("canonical target sequence mismatch")
 
-    checkpoint = _resolve_authenticated(
-        request_root,
-        settings["checkpoint"]["path"],
-        settings["checkpoint"]["sha256"],
-        "checkpoint",
-    )
+    logical_checkpoint = settings["checkpoint"]["path"]
+    checkpoint = resolve_input_path(logical_checkpoint, owner=request_path)
+    if checkpoint == request_root / logical_checkpoint:
+        # Retained requests without an envelope still use their original custody.
+        checkpoint = _request_owned_path(request_root, logical_checkpoint,
+                                         label="checkpoint", expect_directory=False)
+    if _sha256_file(checkpoint) != settings["checkpoint"]["sha256"]:
+        raise CanonicalPrepError("checkpoint SHA-256 mismatch")
     repo_path = Path(settings["backend_identity"]["repo_path"])
     if repo_path != _CANONICAL_CONFORNETS_REPO or not _instrumented_confornets_runtime_available():
         raise CanonicalPrepError("canonical instrumented ConforNets runtime is unavailable")

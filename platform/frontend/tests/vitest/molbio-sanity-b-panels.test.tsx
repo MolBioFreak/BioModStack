@@ -27,7 +27,7 @@ vi.mock('../../src/components/MolBioToolkit/PrimerTmSettingsPanel', () => ({ Pri
 vi.mock('../../src/components/MolBioToolkit/panels/GibsonDesignWorkspace', () => ({ GibsonDesignWorkspace: () => null }));
 let root: Root, host: HTMLDivElement, client: QueryClient;
 const seq = { name: 'editable', sequence: 'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT', circular: false, sequenceType: 'dna' as const, features: [], primers: [] };
-const settings = { algorithm: 'wallace', salt_correction: 'none' } as any;
+const settings: api.PrimerTmSettings = { algorithm: 'wallace', salt_correction: 'none', primer_concentration_nM: 250, template_concentration_nM: 0, na_mM: 50, k_mM: 0, tris_mM: 0, mg_mM: 0, dntps_mM: 0, dmso_percent: 0, formamide_percent: 0, self_complementary: false };
 const noop = () => {};
 const primerProps = { sequenceData: seq, selection: null, onHighlight: noop, onAddPrimer: vi.fn(), onRemovePrimer: noop, tmOptions: null, tmSettings: settings, onTmSettingsChange: noop };
 const alignment = { query_name: 'OBSOLETE', reference_aligned: 'ACGTACGT', query_aligned: 'ACGTACGT', midline: '||||||||', reference_start: 0, reference_end: 8, query_start: 0, query_end: 8, identity_pct: 100, query_coverage: 100, reference_coverage: 20, score: 16, variants: [], mode: 'placement', strand: 'forward' };
@@ -64,16 +64,17 @@ it('chemistry changes calculate Tm but not unchanged QC; hidden drafts do no wor
  await render(<PrimerPanel {...primerProps} />);
  await input(host.querySelector('input[placeholder="Sequence (5\'→3\')"]')!, 'ACGTACGTACGTACGT'); await tick();
  expect(api.calculatePrimerTm).toHaveBeenCalledTimes(1); expect(api.calculatePrimerQc).toHaveBeenCalledTimes(1);
- await render(<PrimerPanel {...primerProps} tmSettings={{ ...settings, sodium: 90 }} />); await tick();
+ await render(<PrimerPanel {...primerProps} tmSettings={{ ...settings, na_mM: 90 }} />); await tick();
  expect(api.calculatePrimerTm).toHaveBeenCalledTimes(2); expect(api.calculatePrimerQc).toHaveBeenCalledTimes(1);
- await click('Library'); await render(<PrimerPanel {...primerProps} tmSettings={{ ...settings, sodium: 100 }} />); await tick();
+ expect(vi.mocked(api.calculatePrimerTm).mock.calls[1][0].settings).toEqual({ ...settings, na_mM: 90 });
+ await click('Library'); await render(<PrimerPanel {...primerProps} tmSettings={{ ...settings, na_mM: 100 }} />); await tick();
  expect(api.calculatePrimerTm).toHaveBeenCalledTimes(2); expect(api.calculatePrimerQc).toHaveBeenCalledTimes(1);
 });
 it('Add Primer never attaches preceding chemistry metrics to the current draft', async () => {
  await render(<PrimerPanel {...primerProps} />);
  await input(host.querySelector('input[placeholder="Sequence (5\'→3\')"]')!, 'ACGTACGTACGTACGT'); await tick();
  vi.mocked(api.calculatePrimerTm).mockResolvedValue({ data: [metric(75)] } as any);
- const currentSettings = { ...settings, sodium: 90 };
+ const currentSettings = { ...settings, na_mM: 90 };
  await render(<PrimerPanel {...primerProps} tmSettings={currentSettings} />);
  await click('Add Primer');
  expect(primerProps.onAddPrimer).toHaveBeenCalledTimes(1);
@@ -127,7 +128,7 @@ it('designed pair adds once and metrics disappear after chemistry changes', asyn
  const run = [...host.querySelectorAll('button')].find(b => b.textContent?.includes('Design') && b.textContent?.trim() !== 'Design')!;
  await act(async () => run.click()); await click('Add Pair');
  expect(batch).toHaveBeenCalledTimes(1); expect(batch.mock.calls[0][0]).toHaveLength(2); expect(primerProps.onAddPrimer).not.toHaveBeenCalled();
- await render(<PrimerPanel {...primerProps} onAddPrimers={batch} tmSettings={{ ...settings, sodium: 90 }} />);
+ await render(<PrimerPanel {...primerProps} onAddPrimers={batch} tmSettings={{ ...settings, na_mM: 90 }} />);
  expect(host.textContent).not.toContain('Add Pair');
 });
 it('library Tm failure never relabels stored metrics with active chemistry', async () => {

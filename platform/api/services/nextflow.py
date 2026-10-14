@@ -2230,7 +2230,8 @@ async def _prepare_launch_msa_on_controller(session, job, model_id, params, dest
                 raise asyncio.CancelledError()
             from database import ExecutionTarget
             target = await session.get(ExecutionTarget, job.execution_target_id, populate_existing=True)
-            if target is None or target.leased_job_id != str(job.id):
+            from services.remote_execution.claims import job_has_claim
+            if target is None or not job_has_claim(target, job):
                 raise asyncio.CancelledError()
 
     async def publish(state, operation=None):
@@ -2293,6 +2294,18 @@ async def _prepare_launch_msa_on_controller(session, job, model_id, params, dest
         return result
 
 
+def _local_nextflow_source_root(invocation, params, environment):
+    """Bind the compiled retained source and the original cache at local spawn."""
+    root = (Path(invocation.native_parameters['code_root'])
+        if invocation.model_id == 'nanopore' and params.get('resume_work_dir')
+        else PROJECT_ROOT)
+    if root != PROJECT_ROOT:
+        environment['BMS_HOME'] = str(root)
+        if invocation.native_parameters.get('resume_source_dir'):
+            environment['NXF_CACHE_DIR'] = str(Path(invocation.native_parameters['resume_source_dir']) / '.nextflow')
+    return root
+
+
 async def _compile_launch_nextflow_invocation(session, job, params, output_dir, *, prepared_invocation=None):
     """One execution-owner handoff for local retry and ordinary remote launch."""
     from dataclasses import replace
@@ -2324,7 +2337,7 @@ async def _pin_local_invocation_images(session, job, invocation):
     to release an image that a retry or retained execution may still need.
     """
     from paths import get_container_dir
-    from services.remote_execution.bundle import _runtime_assets
+    from services.remote_execution.bundle import _runtime_assets, _is_runtime_image
     from services.remote_execution.images import bind_local_image_references
 
     def pin():
@@ -2338,10 +2351,25 @@ async def _pin_local_invocation_images(session, job, invocation):
         from paths import get_weights_root
         import hashlib
         metadata_hashes = {}
+        # The selected native closure also declares hashed image/runtime leaves.
+        # Resolve those through the same owner as remote staging, not weights.
+        hashed_kinds = frozenset(d.kind for d in plan.dependencies
+            if d.kind != 'weights' and str(d.semantic_release or '').startswith('sha256:'))
+        if hashed_kinds:
+            from services.remote_execution.bundle import _sha256_file
+            hashed_paths = {d.relative_path for d in plan.dependencies
+                            if str(d.semantic_release or '').startswith('sha256:')}
+            for path, relative in _runtime_assets(invocation.model_id, invocation.mode,
+                    invocation.native_parameters, native_invocation=invocation,
+                    only_kinds=hashed_kinds):
+                if relative.partition('/')[2] in hashed_paths and path.is_file():
+                    metadata_hashes[relative] = _sha256_file(path)
         for dependency in plan.dependencies:
             if not str(dependency.semantic_release or '').startswith('sha256:'):
                 continue
-            if dependency.kind != 'weights' or not dependency.relative_path:
+            if dependency.kind != 'weights':
+                continue
+            if not dependency.relative_path:
                 raise ValueError('Local runtime metadata has no declared weights binding')
             data = _native_metadata_bytes(get_weights_root(), dependency.relative_path)
             metadata_hashes['weights/' + dependency.relative_path] = hashlib.sha256(data).hexdigest()
@@ -2359,6 +2387,8 @@ async def _pin_local_invocation_images(session, job, invocation):
                 if dependency.kind == 'image':
                     if not dependency.relative_path:
                         raise ValueError('Retained image lacks its declared semantic name')
+                    if not dependency.relative_path.lower().endswith('.sif'):
+                        continue  # Nested clone .img leaves stay native-lock owned.
                     name = Path(dependency.relative_path).name
                     selected[name] = Path(previous['environment'][image_environment_key(name)])
             if previous.get('store_root') != str(root):
@@ -2367,6 +2397,8 @@ async def _pin_local_invocation_images(session, job, invocation):
             for path, relative in _runtime_assets(invocation.model_id, invocation.mode,
                     invocation.native_parameters, native_invocation=invocation,
                     only_kinds=frozenset({'image'})):
+                if not _is_runtime_image(path, relative):
+                    continue  # Same regular nested-image boundary as remote bundling.
                 name = Path(relative).name
                 existing = selected.setdefault(name, path)
                 if existing != path:
@@ -3251,6 +3283,7 @@ async def launch_nextflow_job(
                         env.pop(key)
                 env.update(image_environment)
                 cmd = list(invocation.command)
+                launch_source_root = _local_nextflow_source_root(invocation, launch_params, env)
                 from services import rf_filter_task_roster
                 await rf_filter_task_roster.begin_command(session, job, cmd)
                 cmd = _component_launch_command(invocation, job, cmd, env,
@@ -3451,7 +3484,7 @@ async def launch_nextflow_job(
                     with open(log_path, "ab", buffering=0) as log_sink:
                         process = await asyncio.create_subprocess_exec(
                             *cmd,
-                            cwd=str(PROJECT_ROOT),
+                            cwd=str(launch_source_root),
                             stdout=log_sink,
                             stderr=asyncio.subprocess.STDOUT,
                             env=env,
@@ -3481,7 +3514,7 @@ async def launch_nextflow_job(
                         attempt=attempt,
                         command=cmd,
                         environment=env,
-                        working_directory=PROJECT_ROOT,
+                        working_directory=launch_source_root,
                         log_path=log_path,
                     )
                     # systemd-run is the atomic claim. There is intentionally no
@@ -3990,16 +4023,18 @@ def resolve_nextflow_executable() -> str:
 
     BioModStack keeps versioned official Nextflow launchers under
     ``~/.local/lib/nextflow/<version>/nextflow``.  Prefer an explicitly pinned
-    binary, then the managed 25.10.1 launcher, and only then fall back to PATH.
+    binary (BMS_NEXTFLOW_BIN), then the launch owner's bound worker executable
+    (BMS_NEXTFLOW_EXECUTABLE), then the managed 25.10.1 launcher and PATH.
     An invalid explicit pin is an operator error and must fail loudly instead of
     silently selecting a different wrapper.
     """
-    explicit = str(os.getenv("BMS_NEXTFLOW_BIN") or "").strip()
-    if explicit:
-        candidate = Path(explicit).expanduser()
-        if not candidate.is_file() or not os.access(candidate, os.X_OK):
-            raise RuntimeError(f"BMS_NEXTFLOW_BIN is not an executable file: {candidate}")
-        return str(candidate.resolve())
+    for key in ('BMS_NEXTFLOW_BIN', 'BMS_NEXTFLOW_EXECUTABLE'):
+        explicit = str(os.getenv(key) or '').strip()
+        if explicit:
+            candidate = Path(explicit).expanduser()
+            if not candidate.is_file() or not os.access(candidate, os.X_OK):
+                raise RuntimeError(f"{key} is not an executable file: {candidate}")
+            return str(candidate.resolve())
 
     version = resolve_nextflow_version()
     managed = Path.home() / ".local" / "lib" / "nextflow" / version / "nextflow"
@@ -4097,6 +4132,88 @@ def build_job_nextflow_command(job, params, output_dir, *, compiled_parameters=N
     return list(invocation.command)
 
 
+def _bind_ont_runtime(invocation, params):
+    """Keep the system-owned image selector even when old FASTQ normalization
+    discarded dormant dorado_* scientific settings. This is runtime transport,
+    not a different historical compiler or a new scientific selection.
+    """
+    from dataclasses import replace
+    from component_runtime import canonical_bytes, NativeInvocation
+    selected = params.get('dorado_runtime_sif')
+    if (not selected or invocation.native_parameters.get('dorado_runtime_sif')
+            or not any(row.kind == 'image' and row.selector == 'dorado_runtime_sif'
+                       for row in invocation.execution_plan.dependencies)):
+        return invocation
+    native = canonical_bytes(dict(invocation.native_parameters, dorado_runtime_sif=selected))
+    effective = canonical_bytes(dict(json.loads(invocation.effective_json), dorado_runtime_sif=selected))
+    plan = replace(invocation.execution_plan, native_parameters_json=native, effective_json=effective)
+    fields = dict(native_parameters_json=native, effective_json=effective, execution_plan=plan)
+    if isinstance(invocation, NativeInvocation):
+        fields['command'] = (*invocation.command, '--dorado_runtime_sif', str(selected))
+    return replace(invocation, **fields)
+
+
+def _compile_retained_ont_invocation(job, params, output_dir, source, *, preview_only):
+    """Run the recorded compiler, not today's compiler with an old source label.
+
+    The existing bundle archive owner recovers and verifies committed bytes.
+    A separate interpreter keeps historical imports out of the controller and
+    gives its metadata/config readers the same source root as its compiler.
+    """
+    import pickle
+    import subprocess
+    import sys
+    from paths import get_code_root
+    from services.remote_execution.bundle import stage_retained_ont_source
+    from component_runtime import NativeInvocation, NativeInvocationPreview
+
+    repo = get_code_root().resolve()
+    root = stage_retained_ont_source(source)
+    # stdout is a private pipe from verified, executable Git source, never a
+    # deserialization boundary for a request, worker or retained output file.
+    bootstrap = '''
+import contextlib, json, pickle, sys
+from types import SimpleNamespace
+with contextlib.redirect_stdout(sys.stderr):
+    from component_runtime import SourceIdentity, canonical_bytes
+    from services.core_protein_scientific_contract import workflow_params
+    from services.ont_ngs_contract import replay_expected_plasmid_size
+    from services.nextflow import compile_nextflow_invocation
+    value = json.load(sys.stdin)
+    job = SimpleNamespace(**value['job'])
+    prepared = workflow_params(job, value['params'])
+    prepared = replay_expected_plasmid_size(prepared, job.provenance, mode=job.mode)
+    invocation = compile_nextflow_invocation(job.model_id, job.mode, prepared,
+        value['output_dir'], job_id=job.id,
+        source_identity=SourceIdentity(**value['source']),
+        requested_identity_json=canonical_bytes(job.params),
+        _preview_only=value['preview_only'])
+pickle.dump(invocation, sys.stdout.buffer)
+'''
+    prepared = dict(params, code_root=str(root))
+    # Legacy cached Jobs store "work" relative to the controller checkout.
+    # Moving the launch cwd to the archived source must not move their cache.
+    for key in ('resume_work_dir', 'resume_source_dir'):
+        if prepared.get(key) and not Path(str(prepared[key])).is_absolute():
+            prepared[key] = str((repo / str(prepared[key])).resolve())
+    payload = dict(job=dict(id=job.id, model_id=job.model_id, mode=job.mode,
+                           params=dict(job.params or {}), provenance=dict(job.provenance or {})),
+                   params=prepared, output_dir=str(output_dir),
+                   source=dict(revision=source.revision, tree=source.tree), preview_only=preview_only)
+    result = subprocess.run([sys.executable, '-c', bootstrap], cwd=root,
+        env={**os.environ, 'BMS_HOME': str(root),
+             'PYTHONPATH': os.pathsep.join((str(root / 'platform/api'), str(root))),
+             'PYTHONDONTWRITEBYTECODE': '1'},
+        input=json.dumps(payload).encode(), capture_output=True, timeout=180)
+    if result.returncode:
+        raise ValueError('Retained ONT compiler failed: ' + result.stderr.decode(errors='replace'))
+    invocation = pickle.loads(result.stdout)
+    expected_type = NativeInvocationPreview if preview_only else NativeInvocation
+    if type(invocation) is not expected_type or invocation.source_identity != source:
+        raise ValueError('Retained ONT compiler source identity changed')
+    return _bind_ont_runtime(invocation, params)
+
+
 @overload
 def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: Literal[True]) -> 'NativeInvocationPreview': ...
 
@@ -4119,6 +4236,9 @@ def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: b
     pinned_tree = getattr(job, 'execution_source_tree', None)
     if pinned_revision is not None or pinned_tree is not None:
         if SourceIdentity(pinned_revision, pinned_tree) != source:
+            if job.model_id == 'nanopore' and params.get('resume_work_dir'):
+                return _compile_retained_ont_invocation(job, params, output_dir,
+                    SourceIdentity(pinned_revision, pinned_tree), preview_only=_preview_only)
             raise ValueError('Job source identity changed; explicit re-preview is required')
     requested = (job.provenance or {}).get('core_protein_requested_params')
     # Preserve request identity separately from the existing native provenance
@@ -4142,6 +4262,8 @@ def compile_job_nextflow_invocation(job, params, output_dir, *, _preview_only: b
     if SourceIdentity.from_checkout(get_code_root()) != source:
         raise ValueError('Source identity changed during native compilation')
     invocation = replace(invocation, source_identity=source, requested_json=requested_json)
+    if job.model_id == 'nanopore':
+        invocation = _bind_ont_runtime(invocation, params)
     # Prepared package transport is an executable launch binding, not preview
     # authority. Its paired identity is validated by the real launch below.
     return invocation if _preview_only else _bind_protenix_msa_transport(invocation, params)
@@ -4174,6 +4296,11 @@ def _native_plan_metadata_settings(model_id, params):
         return settings
     path = Path(str(name)).expanduser()
     roots = (get_results_dir().resolve(), get_inputs_dir().resolve(), get_data_root().resolve())
+    if key == 'md_config':
+        # MD preparation publishes normalized configs in the installation-owned
+        # Nextflow work root, which need not be inside BMS_DATA on a worker.
+        # Never trust params.work_dir or a config's parent as input authority.
+        roots += (get_work_dir().resolve(),)
     if (not path.is_absolute() or any(part.is_symlink() for part in (path, *path.parents))
             or not any(path.resolve().is_relative_to(root) for root in roots)
             or not path.is_file() or path.stat().st_size > 16 * 1024 * 1024):
@@ -4188,6 +4315,14 @@ def _native_plan_metadata_settings(model_id, params):
                 or document.get('request_sha256') != params.get('shape_request_sha256')):
             raise ValueError('Shape request snapshot identity mismatch')
     settings[key] = document
+    if key == 'cm_request' and document.get('backend') == 'protenix_v2_ensemble':
+        registry_path = path.parent / 'cm_runtime_registry_v1.json'
+        if registry_path.is_file():
+            from scripts.lib.portable_inputs import _contained
+            registry_path = _contained(registry_path, roots)
+            if registry_path.stat().st_size > 16 * 1024 * 1024:
+                raise ValueError('CM runtime registry is not a bounded managed input')
+            settings['cm_runtime_registry'] = json.loads(registry_path.read_bytes())
     return settings
 
 
@@ -4263,15 +4398,61 @@ async def compile_native_workflow_provision_request(workflow_request, http_reque
         normalized = await normalize_md_provision_request(workflow_request.request.intent, session)
     else:
         raise ValueError('Expected a closed native workflow provisioning request')
+    native_parameters: dict[str, Any] = {'input_bindings': normalized.input_bindings}
+    if normalized.model_id == 'molecular_dynamics':
+        from paths import get_md_preparation_runtime_lock
+        native_parameters['md_preparation_runtime_lock'] = str(get_md_preparation_runtime_lock())
     plan = build_selected_execution_plan(
         model_id=normalized.model_id, mode=normalized.mode, entrypoint=normalized.entrypoint,
         requested=normalized.requested_params, effective=normalized.effective_params,
         metadata_settings=normalized.effective_params,
-        native_parameters={'input_bindings': normalized.input_bindings}, source_identity=source,
+        native_parameters=native_parameters, source_identity=source,
     )
     if await asyncio.to_thread(current_source_identity) != (source.revision, source.tree):
         raise ValueError('Workflow provision source identity changed')
     return plan
+
+
+def cm_runtime_references(params):
+    """Concrete selected CM inventory for preview, discovery and local placement."""
+    if not params.get('cm_request_path'):
+        return None
+    document = _native_plan_metadata_settings('conformational_mapping', params)['cm_request']
+    if document.get('backend') != 'confornets':
+        return None
+    from paths import get_weights_root
+    from scripts.lib.portable_inputs import cm_checkpoint_inventory, _contained, _identity
+    try:
+        return cm_checkpoint_inventory(document, weights_root=get_weights_root())
+    except (OSError, ValueError) as installed_error:
+        # Old requests can own a retained private snapshot of an uninstalled
+        # version. Preserve that exact supported source, never the current
+        # default. Retry custody still treats this legacy body as private.
+        from paths import get_inputs_dir, get_results_dir, get_data_root
+        checkpoint = document['confornets']['checkpoint']
+        try:
+            source = _contained(Path(params['cm_request_path']).parent / checkpoint['path'],
+                [root.resolve() for root in (get_inputs_dir(), get_results_dir(), get_data_root())])
+            digest, size = _identity(source)
+        except (OSError, ValueError):
+            raise installed_error
+        if digest != checkpoint['sha256']:
+            raise ValueError('Retained CM checkpoint digest mismatch') from installed_error
+        return {str(source): dict(sha256=digest, size_bytes=size, format='pt', path=str(source))}
+
+
+def cm_portable_bindings(params):
+    inventory = cm_runtime_references(params)
+    if inventory is None:
+        return None
+    from paths import get_weights_root, get_inputs_dir, get_results_dir, get_data_root, get_work_dir
+    from scripts.lib.portable_inputs import bind_cm_checkpoint, SCHEMA
+    document = _native_plan_metadata_settings('conformational_mapping', params)['cm_request']
+    binding = bind_cm_checkpoint(document, owner=params['cm_request_path'], runtime_references=inventory)
+    return dict(schema=SCHEMA, results_root=str(get_results_dir().resolve()),
+        roots=[str(root.resolve()) for root in (
+        get_weights_root(), get_inputs_dir(), get_results_dir(), get_data_root(), get_work_dir())],
+        bindings=[binding])
 
 
 def compile_workflow_provision_request(request):
@@ -4358,28 +4539,6 @@ def compile_workflow_provision_request(request):
         output_dir=str(output), child_output_dir=None,
     )
     invocation = compile_job_nextflow_invocation(snapshot, params, str(output), _preview_only=True)
-    if (typed.model_id, typed.mode) == ('conformational_mapping', 'map'):
-        # The same managed checkpoint selected by native CM submission must own
-        # the request snapshot. Inspect only that registered file, never recurse
-        # through model trees during a read-only preview.
-        cm = _native_plan_metadata_settings(typed.model_id, typed.params).get('cm_request', {})
-        if cm.get('backend') == 'confornets':
-            from paths import get_weights_root, get_inputs_dir
-            from scripts.lib.portable_inputs import _contained, _identity
-            root = get_weights_root()
-            selected = invocation.execution_plan.dependencies
-            if not any(row.kind == 'weights' and row.relative_path == 'openfold3' for row in selected):
-                raise ValueError('CM checkpoint has no selected OpenFold3 dependency')
-            checkpoint = _contained(root / 'openfold3/of3-p2-155k.pt', [root.resolve()])
-            source_sha, source_size = _identity(checkpoint)
-            record = cm['confornets']['checkpoint']
-            request_path = Path(typed.params['cm_request_path'])
-            snapshot = Path(record['path'])
-            if not snapshot.is_absolute():
-                snapshot = request_path.parent / snapshot
-            snapshot = _contained(snapshot, [get_results_dir().resolve(), get_inputs_dir().resolve(), get_data_root().resolve()])
-            if source_sha != record['sha256'] or _identity(snapshot) != (source_sha, source_size):
-                raise ValueError('CM checkpoint snapshot differs from selected managed runtime source')
     if invocation.requested_json != canonical_bytes(original):
         raise ValueError('Workflow provision changed requested scientific identity')
     return invocation
@@ -4457,8 +4616,7 @@ def _bind_prepared_boltz_plan(invocation, supplied):
     from dataclasses import replace
     from biomodstack_msa_handoff import digest
     from biomodstack_boltz_msa import hydrate_prepared_boltz_task
-    from services.model_msa_handoff import _boltz_roster, _boltz_task_proteins
-    from component_runtime import _LAUNCH_BINDING_KEYS
+    from services.model_msa_handoff import _boltz_roster, _boltz_task_proteins, boltz_msa_settings
 
     plan = invocation.execution_plan
     if plan is None:
@@ -4478,10 +4636,7 @@ def _bind_prepared_boltz_plan(invocation, supplied):
     if digest(raw) != sha256:
         raise ValueError('Prepared Boltz MSA manifest digest mismatch')
     manifest = json.loads(raw)
-    settings = {k: v for k, v in native.items()
-                if k.startswith(('msa_', 'colabfold_', 'boltz_'))
-                and not k.endswith(('_path', '_dir'))
-                and k not in _LAUNCH_BINDING_KEYS}
+    settings = boltz_msa_settings(native)
     if manifest.get('schema') != 'bms.boltz-msa-inputs.v1' or manifest.get('settings') != settings:
         raise ValueError('Prepared Boltz MSA schema/scientific settings mismatch')
     tasks = _boltz_roster(native)
@@ -5300,13 +5455,15 @@ def compile_nextflow_invocation(
                     "conformational_mapping resume_work_dir must equal the authoritative work directory"
                 )
         gpu_id = params.get("gpu_id")
-        if isinstance(gpu_id, int) and not isinstance(gpu_id, bool):
+        if _preview_only and gpu_id is None:
+            normalized_gpu_id = None
+        elif isinstance(gpu_id, int) and not isinstance(gpu_id, bool):
             normalized_gpu_id = gpu_id
         elif isinstance(gpu_id, str) and gpu_id.isascii() and gpu_id.isdecimal():
             normalized_gpu_id = int(gpu_id)
         else:
             raise ValueError("conformational_mapping gpu_id must be a non-negative integer")
-        if normalized_gpu_id < 0:
+        if normalized_gpu_id is not None and normalized_gpu_id < 0:
             raise ValueError("conformational_mapping gpu_id must be a non-negative integer")
         workflow_entrypoint = resolve_nextflow_entrypoint(
             effective_profile="conformational_mapping",
@@ -5334,14 +5491,31 @@ def compile_nextflow_invocation(
         command.extend(["--cm_request_path", request_path])
         for key, value in msa_params.items():
             command.extend(['--' + key, str(value).lower() if isinstance(value, bool) else str(value)])
-        command.extend([
-            "--run_frustrampnn", "true",
-            "--gpu_id", str(normalized_gpu_id),
-            "--frustrampnn_physical_gpu_id", str(normalized_gpu_id),
-        ])
+        command.extend(["--run_frustrampnn", "true"])
         native_parameters.update(out_dir=str(output_dir), cm_request_path=request_path,
-            run_frustrampnn=True, gpu_id=normalized_gpu_id,
-            frustrampnn_physical_gpu_id=normalized_gpu_id)
+            run_frustrampnn=True)
+        if not _preview_only:
+            command.extend(["--gpu_id", str(normalized_gpu_id),
+                "--frustrampnn_physical_gpu_id", str(normalized_gpu_id)])
+            native_parameters.update(gpu_id=normalized_gpu_id,
+                frustrampnn_physical_gpu_id=normalized_gpu_id)
+        if cm_request.get('backend') == 'protenix_v2_ensemble':
+            weights = Path(os.environ.get('BMS_PROTENIX_WEIGHTS') or get_weights_root() / 'protenix')
+            # Pin an installed generation, not a mutable activation alias beneath
+            # the preflight and native consumer. Missing runtime stays with the
+            # existing acquisition/preflight owner, not a new compiler gate.
+            if weights.is_dir():
+                native_parameters['protenix_weights'] = str(weights.resolve(strict=True))
+                command.extend(['--protenix_weights', native_parameters['protenix_weights']])
+        envelope = cm_portable_bindings(params)
+        if envelope is not None:
+            binding_path = Path(output_dir) / '.cm-portable-input-bindings.json'
+            plan_input(binding_path, json.dumps(envelope, sort_keys=True, separators=(',', ':')).encode())
+            selected_checkpoint = envelope['bindings'][0]['path']
+            native_parameters.update(cm_portable_input_bindings=str(binding_path),
+                                     cn_checkpoint_path=selected_checkpoint)
+            command.extend(['--cm_portable_input_bindings', str(binding_path),
+                            '--cn_checkpoint_path', selected_checkpoint])
         if job_id:
             native_parameters['job_id'] = str(job_id)
         return finish_command(command)
@@ -5561,10 +5735,28 @@ def compile_nextflow_invocation(
         effective_profile = resolve_ont_workflow_alias(effective_profile)
         params = normalize_ont_launch_params(effective_profile, params)
         params['workflow_id'] = effective_profile
+        # Server-generated from the selected publication/owned POD5 version.
+        params.pop('dorado_input_binding_json', None)
+        if (params.get('pod5_dir') and
+                (params.get('ont_input_mode') or params.get('input_mode') or 'pod5') == 'pod5'):
+            from services.ont_submission_trust import dorado_preflight_parameters
+            params.update(dorado_preflight_parameters(params))
+        if (effective_profile == 'wf_clone_validation' or
+                (effective_profile == 'ont_construct_screening' and params.get('run_assembly') is True)):
+            from scripts.validate_wf_clone_runtime import resolve_nextflow_home
+            # Carry the installed engine selection into the plan and argv. The
+            # task must not invent a different cache after inventory selected it.
+            params['wf_clone_nxf_home'] = str(resolve_nextflow_home(params.get('wf_clone_nxf_home')))
     is_fastq_only_ont_command = (
         effective_profile == 'ont_fastq_qc'
         and str(params.get('ont_input_mode') or params.get('input_mode') or '').strip() == 'fastq'
     )
+
+    if model_id == 'molecular_dynamics' and mode == 'simulate':
+        from paths import get_md_preparation_runtime_lock
+        # Carry the same managed binding as provisioning into argv so the
+        # existing bundle path map relocates the lock, not the host fallback.
+        params['md_preparation_runtime_lock'] = str(get_md_preparation_runtime_lock())
 
     if model_id == 'molecular_dynamics' and params.get('md_job_config'):
         params = dict(params)

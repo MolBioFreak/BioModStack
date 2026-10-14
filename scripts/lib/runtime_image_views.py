@@ -1,7 +1,8 @@
-"""Derived rootfs and CoW-only execution views under the shared image authority.
+"""Derived rootfs and private execution views under the shared image authority.
 
 Trusted extractors/engines only: this is source preservation, not a sandbox.
-No SIF copies, writable shared hardlinks, byte-copy fallback or second ref store.
+Prefer reflinks; unsupported filesystems receive independent byte copies.
+No SIF copies, writable donor hardlinks or second reference store.
 """
 from __future__ import annotations
 
@@ -59,7 +60,7 @@ def _remove(parent, name):
         os.unlink(name, dir_fd=parent)
 
 
-def _walk_tree(path):
+def _walk_tree(path, *, excluded=()):
     """Walk once using held no-follow ancestry; reject replacement/mutation.
 
     Yielded parent FDs are borrowed only until the next iteration. No regular
@@ -78,7 +79,9 @@ def _walk_tree(path):
                     raise Error('tree directory changed')
                 yield parent, name, relative, before
                 for child in sorted(os.listdir(fd)):
-                    yield from walk(fd, child, relative + '/' + child)
+                    child_relative = relative + '/' + child
+                    if child_relative.removeprefix('./') not in excluded:
+                        yield from walk(fd, child, child_relative)
                 if not _same(before, os.fstat(fd)):
                     raise Error('tree directory membership changed')
             finally:
@@ -92,10 +95,10 @@ def _walk_tree(path):
         _check_directory(path.parent, parent)
 
 
-def snapshot_tree(path):
+def snapshot_tree(path, *, excluded=()):
     return {relative: _identity(info) + (
                 os.readlink(name, dir_fd=parent) if stat.S_ISLNK(info.st_mode) else None,)
-            for parent, name, relative, info in _walk_tree(path)}
+            for parent, name, relative, info in _walk_tree(path, excluded=excluded)}
 
 
 def _inventory(path, *, freeze=False, identities=None):
@@ -381,6 +384,43 @@ def _derive(root, digest, image_fd, identity, extract, *, verification=None):
         return path, manifest
 
 
+def allocate_private_file(source_fd, destination_fd, before):
+    """Populate an exclusive private inode from a checked no-follow donor.
+
+    Callers own opening, modes and cleanup. Only unsupported reflink features
+    allow byte allocation; operational faults are propagated unchanged.
+    """
+    target = os.fstat(destination_fd)
+    if (not stat.S_ISREG(target.st_mode) or target.st_nlink != 1
+            or (target.st_dev, target.st_ino) == (before.st_dev, before.st_ino)):
+        raise Error('private allocation requires an independent exclusive inode')
+    if not _same(before, os.fstat(source_fd)):
+        raise Error('private allocation source changed')
+    try:
+        fcntl.ioctl(destination_fd, FICLONE, source_fd)
+    except OSError as exc:
+        if exc.errno not in {errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY, errno.EINVAL, errno.ENOSYS}:
+            raise
+        os.ftruncate(destination_fd, 0)
+        offset = 0
+        while offset < before.st_size:
+            chunk = os.pread(source_fd, min(1024 * 1024, before.st_size - offset), offset)
+            if not chunk:
+                raise Error('private allocation source changed')
+            written = 0
+            while written < len(chunk):
+                count = os.pwrite(destination_fd, chunk[written:], offset + written)
+                if count <= 0:
+                    raise OSError(errno.EIO, 'private allocation made no progress')
+                written += count
+            offset += len(chunk)
+        os.ftruncate(destination_fd, before.st_size)
+    if os.fstat(destination_fd).st_size != before.st_size:
+        raise Error('private allocation size mismatch')
+    if not _same(before, os.fstat(source_fd)):
+        raise Error('private allocation source changed')
+
+
 def _clone(source, destination, manifest):
     rows = manifest["original"]
     seen, inodes = set(), {}
@@ -425,12 +465,7 @@ def _clone(source, destination, manifest):
                     raise Error('derived rootfs changed during cloning')
                 out = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 try:
-                    try:
-                        fcntl.ioctl(out, FICLONE, src)
-                    except OSError as exc:
-                        if exc.errno in {errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY, errno.EINVAL, errno.ENOSYS}:
-                            raise CoWUnavailable("private image views require FICLONE; no byte-copy fallback") from exc
-                        raise
+                    allocate_private_file(src, out, before)
                 finally:
                     os.close(out)
     if seen != set(rows):

@@ -44,9 +44,9 @@ test('curated dashboard explains readings and histogram has no floating box or s
 
 test('lab reaches 2D and 3D, palette, finite coordinates, missing color and exact callbacks', async () => {
     await mount(<CohortAnalytics {...props} mode="analytics" />);
-    expect(host.querySelector('[aria-label="Plotly Lab"]')).toBeTruthy();
+    expect(host.querySelector('[aria-label="Custom charts"]')).toBeTruthy();
     await change('2D color metric', 'raw_color');
-    await change('Plotly Lab palette', 'Plasma');
+    await change('Custom chart palette', 'Plasma');
     const scatter = plots.get('scatter');
     expect(scatter.data[0].marker.colorscale).toBe('Plasma');
     expect(scatter.data[1].customdata).toEqual(['native:a']);
@@ -54,11 +54,11 @@ test('lab reaches 2D and 3D, palette, finite coordinates, missing color and exac
     scatter.onClick({ points: [{ customdata: 'native:a' }] });
     scatter.onSelected({ points: [{ customdata: 'native:b' }, { customdata: 'native:b' }, { customdata: 'foreign' }] });
     expect(inspect).toHaveBeenCalledWith('native:a'); expect(select).toHaveBeenCalledWith(['native:b']);
-    await change('Plotly Lab view', '3D');
+    await change('Custom chart view', '3D');
     await change('3D Z metric', 'raw_z');
     expect(plots.get('scatter3d').data[0].customdata).toEqual(['native:a', 'native:b']);
     expect(plots.get('scatter3d').config.toImageButtonOptions.format).toBe('svg');
-    await change('Plotly Lab view', '2D');
+    await change('Custom chart view', '2D');
     await change('2D X metric', 'raw_z');
     await act(async () => root.render(<CohortAnalytics {...props} rows={rows.filter(row => row.id === 'native:c')} mode="analytics" />));
     await act(async () => root.render(<CohortAnalytics {...props} mode="analytics" />));
@@ -78,11 +78,11 @@ test('consumer picker extension receives controlled native keys without translat
 test('original dashboard explicitly opens the extracted lab without advanced charts', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await mount(<QueryClientProvider client={client}><AnalyticsDashboard designs={[{ id: 'legacy-ui-fixture', name: 'Legacy UI fixture', plddt_overall: 80, pae_overall: 4, iptm: 0.6 } as import('../../src/lib/api').Design]} /></QueryClientProvider>);
-    const button = Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Open Plotly Lab');
+    const button = Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Open custom charts');
     expect(button).toBeTruthy();
     await act(async () => button!.click());
-    expect(host.querySelector('[aria-label="Plotly Lab"]')).toBeTruthy();
+    expect(host.querySelector('[aria-label="Custom charts"]')).toBeTruthy();
     expect(host.textContent).toContain('Show Advanced Charts');
-    await change('Plotly Lab view', '3D');
+    await change('Custom chart view', '3D');
     expect(host.querySelector('select[aria-label="3D Z metric"]')).toBeTruthy();
 });

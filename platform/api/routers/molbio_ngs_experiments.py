@@ -950,7 +950,7 @@ async def retired_domain_reference_authoring() -> None:
     """New reference authoring belongs to MolBio; historical readers stay live."""
     raise HTTPException(status_code=410, detail={
         "code": "domain_reference_authoring_retired",
-        "message": "Import or design in the shared molecular catalogue, then explicitly attach the selected revision. Historical Domain references remain readable.",
+        "message": "Import or design a sequence in the molecular catalogue, then attach its saved revision. Existing references remain readable.",
         "dna_import": "/api/molbio/sequences/import/commit",
         "rna_create": "/api/sequences/",
     })

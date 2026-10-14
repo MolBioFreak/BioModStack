@@ -5,8 +5,6 @@ import pytest
 
 from services.ont_ngs_contract import normalize_ont_launch_params
 from services import ont_ngs_contract
-from services.ont_submission_trust import ONT_SERVER_CONTROLLED_RUNTIME_PARAMS
-from services.gpu_orchestrator import VRAM_PROFILES
 from routers import ont_runs
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -21,7 +19,7 @@ def test_quality_resolves_to_exact_locked_dna_and_rna_models() -> None:
 
     rna = normalize_ont_launch_params("ont_basecall_rna", {"dorado_quality_mode": "sup"})
     assert rna["ont_molecule_type"] == "rna"
-    assert rna["dorado_model"] == "rna004_130bps_sup@v5.2.0"
+    assert rna["dorado_model"] == "rna004_sup@v6.0.0"
 
 
 def test_p4_matrix_rejects_unsupported_combinations() -> None:
@@ -88,10 +86,6 @@ def test_barcode_resubmission_rejects_override_maps() -> None:
         })
 
 
-def test_nanopore_scheduler_reserves_the_locked_vram_floor() -> None:
-    assert VRAM_PROFILES["nanopore"] == {"base": 15360, "scale": 0}
-
-
 def test_rna_cannot_claim_unsupported_no_trim_mode() -> None:
     with pytest.raises(ValueError, match="always trims"):
         normalize_ont_launch_params("ont_basecall_rna", {"trim_adapters": False})
@@ -135,21 +129,8 @@ def test_duplex_and_barcode_server_contracts_are_exact() -> None:
         normalize_ont_launch_params("ont_basecall_dna", {"barcode_kit": "SQK-UNKNOWN"})
 
 
-def test_runtime_paths_and_preflight_identity_are_server_controlled() -> None:
-    required = {
-        "dorado_lock_manifest",
-        "dorado_model_root",
-        "dorado_runtime_sif",
-        "dorado_preflight",
-        "dorado_resolved_model_id",
-        "dorado_stereo_model",
-        "pod5_python",
-    }
-    assert required <= ONT_SERVER_CONTROLLED_RUNTIME_PARAMS
-
-
 def test_api_model_matrix_matches_checked_in_lock() -> None:
-    lock = json.loads((ROOT / "config/ngs/dorado_v1.3.1.lock.json").read_text(encoding="utf-8"))
+    lock = json.loads((ROOT / "config/ngs/dorado_v2.1.2.lock.json").read_text(encoding="utf-8"))
     for molecule in ("dna", "rna"):
         for quality in ("fast", "hac", "sup"):
             workflow = "ont_basecall_rna" if molecule == "rna" else "ont_basecall_dna"

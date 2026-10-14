@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { methodsGet, methodRows, type MethodRecord } from '../lib/bioxpMethods';
+import { methodsGet, methodRows, type MethodRecord, type MethodCatalog } from '../lib/bioxpMethods';
 import { createContext, useContext, useState, useRef, useEffect } from 'react';
 import type { MethodValue } from '../lib/bioxpMethods';
 import type { BioXpOperatorJsonSchema as Schema } from '../lib/bioxpClient';
@@ -21,15 +21,21 @@ export function editClassSettings(entry: MethodValue, next: unknown, touched?: s
     }
     return { ...entry, settings: next, authored_settings: authored };
 }
-export function RepairWorkspaceClassEditor({ value, schema = liquidClassEditorSchema, onChange }: { value: MethodValue; schema?: Schema; onChange: (value: MethodValue) => void }) {
+export function RepairWorkspaceClassEditor({ value, schema = liquidClassEditorSchema, catalog, onChange }: { value: MethodValue; schema?: Schema; catalog?: MethodCatalog; onChange: (value: MethodValue) => void }) {
     const { source: _source, ...editable } = value;
     const fields = schema.properties ?? {}, settingsSchema = fields.settings ?? liquidClassEditorSchema.properties!.settings;
+    const recipe = catalog?.actions?.find(row => row.action === 'liquid_recipe');
+    const correction = (recipe?.input_schema ?? recipe?.inputs)?.properties?.liquid?.properties?.requested?.properties?.selected_correction;
     const keys = Object.keys(settingsSchema.properties ?? {});
     const groups: [string, (key: string) => boolean][] = [['Aspiration', k => /aspirat|leading_air|trailing_air|air_gap/.test(k)], ['Dispense', k => /dispens|blowout|carry/.test(k)], ['Segments / multi', k => /segment|conditioning|excess|reaspiration|number_|sample_count/.test(k)], ['Application controls', () => true]];
     const assigned = new Set<string>();
     return <section aria-label="Liquid class tasks">
         <MethodFields label="Class context" schema={fields.context ?? liquidClassEditorSchema.properties!.context} value={value.context} onChange={context => onChange({ ...value, context })} />
         {groups.map(([title, accepts]) => { const selected = keys.filter(k => !assigned.has(k) && accepts(k)); selected.forEach(k => assigned.add(k)); return <LazyFields key={title} label={title}>{() => <>{selected.map(key => <MethodFields key={key} label={key.replaceAll('_', ' ')} schema={settingsSchema.properties![key]} value={object(value.settings)[key]} onChange={v => { const settings = { ...object(value.settings) }; if (v === undefined) delete settings[key]; else settings[key] = v; onChange(editClassSettings(value, settings, key)); }} />)}</>}</LazyFields>; })}
+        {correction && <LazyFields label="Explicit calibration correction">{() => <><MethodFields label="Selected correction" schema={correction} value={Object.hasOwn(object(value.authored_settings), 'selected_correction') ? object(value.authored_settings).selected_correction : object(value.settings).selected_correction} onChange={selected => {
+            const settings = { ...object(value.settings) }; if (selected === undefined) delete settings.selected_correction; else settings.selected_correction = selected;
+            onChange(editClassSettings(value, settings, 'selected_correction'));
+        }} /><p>Explicitly selected function; not automatically applied. Native compilation owns evaluation.</p></>}</LazyFields>}
         <LazyFields label="Source, exact identity & provenance">{() => <pre>{JSON.stringify({ id: value.id, revision: value.revision, source: value.source, authored_settings: value.authored_settings }, null, 2)}</pre>}</LazyFields>
         <LazyFields label="Advanced class fields">{() => <MethodFields label="Liquid class" schema={{ ...schema, properties: Object.fromEntries(Object.entries(fields).filter(([key]) => key !== 'source')) }} value={editable} onChange={v => { const next: MethodValue = { ...object(v), ...(Object.hasOwn(value, 'source') ? { source: value.source } : {}) }; onChange(JSON.stringify(value.settings) === JSON.stringify(next.settings) ? next : { ...next, authored_settings: editClassSettings(value, next.settings).authored_settings }); }} />}</LazyFields>
         <p>Requested, resolved, emitted and reported-applied are separate. Source blanks are unreported, not zero. Unsupported fields remain in Advanced and compiler evidence.</p>

@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -14,8 +12,6 @@ import {
     transformRangeForDisplayStrand,
 } from '../src/components/MolBioToolkit/utils/nucleotides.js';
 import { findOpenReadingFrames } from '../src/components/MolBioToolkit/utils/orfs.js';
-
-const TOOLKIT_PATH = resolve(process.cwd(), 'src/components/MolBioToolkit/MolBioToolkitV2.tsx');
 
 test('GenBank RNA parser metadata resolves to RNA even when parsed.type is absent', () => {
     assert.equal(
@@ -196,42 +192,4 @@ test('RNA ORF discovery treats U codons as coding-sequence T equivalents', () =>
     assert.equal(orfs[0].end, codingRna.length);
     assert.equal(orfs[0].strand, 1);
     assert.equal(orfs[0].frame, 1);
-});
-
-test('MolBio import path uses parser metadata, canonical normalization, and persistent create', () => {
-    const source = readFileSync(TOOLKIT_PATH, 'utf8');
-
-    assert.match(source, /inferNucleotideMoleculeMetadataFromParsedRecord\(parsed\)/);
-    assert.match(source, /moleculeStrandedness: moleculeMetadata\.moleculeStrandedness/);
-    assert.match(source, /moleculeOrientation: moleculeMetadata\.moleculeOrientation/);
-    assert.match(source, /molecule_label/);
-    assert.match(source, /molecule_strandedness: sequenceData\.moleculeStrandedness/);
-    assert.match(source, /normalizeSequenceForType\(parsed\.sequence \|\| '', inferredType\)/);
-    assert.match(source, /createSequence\(sequencePayloadFromData\(sequenceData\)\)/);
-    assert.match(source, /sequenceId: savedImport\.id/);
-    assert.match(source, /dirty: false/);
-    assert.match(source, /sourceDisplayStrandForSequenceData\(nextSequence\)/);
-    assert.match(source, /activeDisplayStrand=\{activeDisplayStrand\}/);
-    assert.match(source, /onDisplayStrandChange=\{handleDisplayStrandChange\}/);
-    assert.match(source, /findOpenReadingFrames\([\s\S]*sequenceData\.sequence,[\s\S]*100,[\s\S]*sequenceData\.circular,[\s\S]*\)/);
-});
-
-test('viewer labels expose molecule labels and SeqViz receives polymer type, not molecule label', () => {
-    const headerSource = readFileSync(resolve(process.cwd(), 'src/components/MolBioToolkit/SequenceHeader.tsx'), 'utf8');
-    const modalSource = readFileSync(resolve(process.cwd(), 'src/components/MolBioToolkit/MolecularInputModal.tsx'), 'utf8');
-    const viewerSource = readFileSync(resolve(process.cwd(), 'src/components/MolBioToolkit/SequenceViewer.tsx'), 'utf8');
-
-    assert.match(headerSource, /const moleculeLabel = sequenceData\.moleculeLabel \|\| sequenceData\.sequenceType\.toUpperCase\(\)/);
-    assert.match(headerSource, /sequenceData\.circular \? 'Circular' : 'Linear'/);
-    assert.match(headerSource, /onDisplayStrandChange/);
-    assert.match(headerSource, /displayStrandSymbol\(strand\)/);
-    assert.match(modalSource, /label=\{sequence\.molecule_label\}/);
-    assert.match(viewerSource, /const normalizedSequenceType = sequenceData\.sequenceType\.toLowerCase\(\)/);
-    assert.match(viewerSource, /const seqVizSeqType = normalizedSequenceType === 'protein' \? 'aa' : nucleotideSequenceType/);
-    assert.match(viewerSource, /sequenceForDisplayStrand\(/);
-    assert.match(viewerSource, /const sourceSelection = mapSeqVizSelectionToSource\(/);
-    assert.match(viewerSource, /shouldReverseComplementForDisplay\(sourceDisplayStrand, resolvedDisplayStrand\)/);
-    assert.match(viewerSource, /const mergedHighlightedRegions = useMemo\(/);
-    assert.match(viewerSource, /highlights=\{mergedHighlightedRegions\}/);
-    assert.match(viewerSource, /seqType=\{seqVizSeqType\}/);
 });

@@ -77,7 +77,8 @@ it('Pipettes keeps manual controls separate from saved workflows', async () => {
     };
     await act(async () => root.render(<QueryClientProvider client={client}><BioXpCockpit /></QueryClientProvider>));
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
-    await click('Pipettes'); await change('Location number', '4'); await append('lower'); const ids = rows();
+    await click('Pipettes'); await click('Position / Z'); await change('Location number', '4'); const ids = rows();
+    expect(host.querySelector('#control-panel-pipettes [aria-label="Step to append"]')).toBeNull();
     expect(host.querySelector('[aria-label="Workflow name"]')).toBeNull();
     expect([...host.querySelectorAll('button')].some(el => ['Save workflow', 'Open workflow'].includes(el.textContent!))).toBe(false);
     expect(button('Move now')).toBeTruthy();

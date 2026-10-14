@@ -8,11 +8,12 @@ def shellQuote(value) {
     return "'${text.replace("'", "'\"'\"'")}'"
 }
 
+include { ngsResultPublishMode } from './publication'
+
 process DoradoAlign {
     label 'dorado_cpu'
-    publishDir "${params.out_dir}/align", mode: 'copy', saveAs: { filename ->
-        filename == 'qc_manifest.json' ? null : filename
-    }
+    publishDir "${params.out_dir}/align", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", saveAs: { name -> name in ['aligned.bam', 'aligned.bam.bai', 'reference.fasta', 'reference.fasta.fai'] ? name : null }
+    publishDir "${params.out_dir}/align", mode: 'copy', saveAs: { name -> name in ['aligned.bam', 'aligned.bam.bai', 'reference.fasta', 'reference.fasta.fai', 'qc_manifest.json'] ? null : name }
     publishDir "${params.out_dir}", mode: 'copy', pattern: 'qc_manifest.json'
     tag "align"
 
@@ -28,6 +29,9 @@ process DoradoAlign {
     path "qc_manifest.json", emit: primary_manifest, optional: true
 
     script:
+
+    def retainedReference = (params.managed_reference_snapshot_sha256 || params.molbio_revision_binding?.binding_source in ['server_consumed_receipt', 'pooled_reference_set_receipt'] || params.comparison_panel_binding?.binding_source == 'server_approved_panel_receipt') ? 'true' : 'false'
+    def retainedBam = params.source_external_move_registration_receipt_id ? 'true' : 'false'
     def rawBamMinMapq = (params.bam_min_mapq ?: '0').toString().trim()
     if (!(rawBamMinMapq ==~ /[0-9]+/)) {
         throw new IllegalArgumentException('bam_min_mapq must be an integer between 0 and 255')
@@ -58,12 +62,12 @@ process DoradoAlign {
     }
     """
     set -euo pipefail
+    source "${params.code_root ?: projectDir}/scripts/ngs_input_snapshot.sh"
 
     # Nextflow may stage the input as a symlink to a caller-writable result.
     # Authenticate one task-local copy and consume only that copy so mutation
     # and restoration of the source cannot race the aligner.
-    cp --reflink=auto -- "${bam}" source.snapshot.bam
-    chmod 0444 source.snapshot.bam
+    ngs_input_snapshot "${bam}" source.snapshot.bam ${retainedBam}
     source_sha256_before="\$(sha256sum source.snapshot.bam | awk '{print \$1}')"
     if [[ -n "${declaredSourceSha256}" && "\${source_sha256_before}" != "${declaredSourceSha256}" ]]; then
         echo "ERROR: task-local source BAM snapshot does not match authorized bam_source_sha256." >&2
@@ -71,8 +75,7 @@ process DoradoAlign {
     fi
 
     # Snapshot, authenticate, align against, and publish the same reference bytes.
-    cp --reflink=auto -- "${reference}" reference.snapshot.fasta
-    chmod 0444 reference.snapshot.fasta
+    ngs_input_snapshot "${reference}" reference.snapshot.fasta ${retainedReference}
     reference_raw_sha256_before="\$(sha256sum reference.snapshot.fasta | awk '{print \$1}')"
     normalized_reference="\$(awk '
       BEGIN { records=0; sequence="" }
@@ -113,9 +116,11 @@ process DoradoAlign {
     fi
 
     samtools index aligned.bam
+    chmod 0444 aligned.bam aligned.bam.bai
     rm -f -- reference.fasta
-    cp reference.snapshot.fasta reference.fasta
+    ngs_input_snapshot reference.snapshot.fasta reference.fasta true true
     samtools faidx reference.fasta
+    chmod 0444 reference.fasta.fai
 
     input_records=\$(samtools view -c source.snapshot.bam)
     output_records=\$(samtools view -c aligned.bam)

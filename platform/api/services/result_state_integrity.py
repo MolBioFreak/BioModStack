@@ -478,6 +478,7 @@ async def finalize_successful_job(
     """Ingest, validate, and commit results before exposing terminal completion."""
     job_id = str(job.id)
     manual_remote_pull = bool(job.execution_target_id and job.remote_state == "returning")
+    from services.remote_execution.claims import job_claim_authority
     remote_authority = (
         [Job.execution_target_id == job.execution_target_id,
          Job.remote_attempt_id == job.remote_attempt_id,
@@ -486,10 +487,7 @@ async def finalize_successful_job(
          Job.execution_source_revision == job.execution_source_revision,
          Job.execution_source_tree == job.execution_source_tree,
          Job.execution_bundle_sha256 == job.execution_bundle_sha256,
-         *([] if job.remote_state == "returning" else [select(ExecutionTarget.id).where(
-             ExecutionTarget.id == job.execution_target_id,
-             ExecutionTarget.leased_job_id == job_id,
-         ).exists()])]
+         *([] if job.remote_state == "returning" else [job_claim_authority(job)])]
         if job.execution_target_id else []
     )
     default_ingester = ingest_fn is None
@@ -600,7 +598,7 @@ async def finalize_successful_job(
                 raise RuntimeError('Antibody root native closeout lacks its declared parent candidate rows')
         count = await _authoritative_result_count(session, job)
         idempotent_prior_results = False
-        result_kind = "design"
+        result_kind = "ngs_native" if job.model_id == "nanopore" else "design"
         if sequence_owner is not None:
             await sequence_owner.read_published_native_results(job, session)
             result_kind = sequence_owner.DIRECTORY + "_native"

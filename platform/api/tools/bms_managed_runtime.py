@@ -510,8 +510,8 @@ def check_space(parent, manifest, rows, *, metadata_allowance_bytes=None):
     fs = os.fstatvfs(parent)
     block = fs.f_frsize or fs.f_bsize
     rounded = lambda n: ((n + block - 1) // block) * block
-    # Budget all absent/bad leaves concurrently: completed leaves are retained
-    # on failure. Account duplicates by destination, not by source digest.
+    # Rows represent absent CAS bodies or unique permission projections; directory
+    # views add metadata only. Completed bodies remain retained on failure.
     payload = sum(rounded(row['size_bytes']) for row in rows)
     metadata = metadata_allowance_bytes
     if metadata is None:
@@ -530,8 +530,8 @@ def incremental_admission_rows(manifest, observed, storage):
     """Additional bytes for the actual cache-upload/install path, not cold totals.
 
     Existing bytes already reduce f_bavail. Each uncached content object needs
-    one upload plus one atomic CAS publication; each unverified non-image
-    destination needs its own installed copy. Links are generated metadata, not
+    one upload plus one atomic CAS publication; immutable destinations are
+    hardlinks, plus at most one body per non-default mode. Links are metadata, not
     uploads. The caller owns the admission lock and validates the manifest.
     Cache.probe and observe must verify bytes before any reuse is credited.
     This is a point-in-time estimate, never a reservation or permission to skip
@@ -539,15 +539,19 @@ def incremental_admission_rows(manifest, observed, storage):
     """
     if len(observed['artifacts']) != len(manifest['artifacts']):
         raise ValueError('admission_observation_mismatch')
-    objects, additional = {}, []
+    objects, additional, projections = {}, [], set()
     for row, seen in zip(manifest['artifacts'], observed['artifacts'], strict=True):
         if any(seen.get(key) != row[key] for key in ('name', 'sha256', 'size_bytes')):
             raise ValueError('admission_observation_mismatch')
         if seen.get('state') not in {'verified', 'missing', 'corrupt', 'incompatible'}:
             raise ValueError('admission_observation_mismatch')
         kind = row.get('kind')
-        if kind != 'runtime_image' and seen['state'] != 'verified':
+        mode = row.get('mode', 0o644) & 0o555
+        projection = (row['sha256'], mode)
+        if (kind not in {'runtime_image', 'runtime_link'} and mode != 0o444 and projection not in projections
+                and not storage.projection_present(row, mode)):
             additional.append(row)
+            projections.add(projection)
         if kind == 'runtime_link':
             continue
         key = (kind == 'runtime_image', row['sha256'])
@@ -633,7 +637,14 @@ def install(root, manifest, expected_boot, cache):
             raise ValueError('active_generation_damaged')
         if any(r.get('kind') == 'runtime_image' for r in missing):
             raise ValueError('incomplete_shared_image')
-        budget = check_space(parent, manifest, missing)
+        storage = cache.Cache(root.parent.parent / 'cache/artifacts/v1')
+        projections = {}
+        for row in missing:
+            if row.get('kind') not in {'runtime_image', 'runtime_link'}:
+                mode = row['mode'] & 0o555
+                if not storage.projection_present(row, mode):
+                    projections[(row['sha256'], mode)] = row
+        budget = check_space(parent, manifest, list(projections.values()))
         def copy_progress(event):
             if event.get('state') == 'transferring':
                 # Check between chunks as well as before a whole-file copy.
@@ -668,7 +679,8 @@ def install(root, manifest, expected_boot, cache):
                                              release, row['target'])
                     continue
                 # Recheck actual remaining free space before each large copy.
-                check_space(out, manifest, [row], metadata_allowance_bytes=budget["metadata_allowance_bytes"])
+                check_space(out, manifest, [] if storage.projection_present(row, row["mode"] & 0o555) else [row],
+                            metadata_allowance_bytes=budget["metadata_allowance_bytes"])
                 with storage.locked(row), storage.objects(row) as objects:
                     source = os.open(row['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                                      dir_fd=objects)
@@ -681,7 +693,7 @@ def install(root, manifest, expected_boot, cache):
                             raise ValueError('worker_boot_changed')
                         # Use the SAME descriptor whose filesystem was admitted;
                         # do not reopen the destination through mutable pathnames.
-                        storage._publish_copy(source, out, destination.name, row, row['mode'] & 0o555)
+                        storage._publish_immutable(source, objects, out, destination.name, row, row['mode'] & 0o555)
                     finally:
                         os.close(source)
         tree_fence()
@@ -697,7 +709,7 @@ def install(root, manifest, expected_boot, cache):
 def container_environment(worker_root, release, backend):
     if backend not in {'apptainer', 'udocker'}:
         raise ValueError('unsupported_container_backend')
-    tools = worker_root / 'tools/udocker-1.3.17'
+    tools = worker_root / 'tools/udocker-1.3.17-bms1'
     env = dict(BMS_CONTAINER_BACKEND=backend,
                BMS_SHARED_WEIGHTS_MODE='cow' if backend == 'udocker' else 'ro',
                BMS_RUNTIME_IMAGE_STORE=str(worker_root / 'cache/runtime-images'),

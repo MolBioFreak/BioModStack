@@ -6,8 +6,7 @@ This is the explicitly unfinished extension in the corrective commit series.
 
 ## Existing behavior that must remain intact
 
-`wf_clone_validation` and `ont_construct_screening` require an authoritative
-expected reference. Never bypass this with an empty file, dummy sequence, an
+`wf_clone_validation` and `ont_construct_screening` require an expected reference sequence. Never bypass this with an empty file, dummy sequence, an
 assembly relabeled operator-supplied, or a hidden mode inside the strict verifier.
 Reconstruction of an unknown plasmid and verification of an expected construct
 are distinct scientific operations. They may reuse the same assembly engine.

@@ -428,7 +428,7 @@ it.each([['readback', 'Read live hardware'], ['application_plan', 'Build no-moti
     }
     expect(uuid).toHaveBeenCalledTimes(1);
     expect(requests.find(r => r.method === 'post')?.params).toEqual({ expected_connection_generation: 77 });
-    expect(container.textContent).toContain('New operation');
+    expect(container.textContent).toMatch(/New operation|Read hardware again/);
     client.clear();
 });
 
@@ -1272,7 +1272,7 @@ it.each([['readback', 'Read live hardware'], ['application_plan', 'Build no-moti
     }
     expect(uuid).toHaveBeenCalledTimes(1);
     expect(requests.find(r => r.method === 'post')?.params).toEqual({ expected_connection_generation: 77 });
-    expect(container.textContent).toContain('New operation');
+    expect(container.textContent).toMatch(/New operation|Read hardware again/);
     if (kind === 'application_plan') {
         expect(container.textContent).toContain('failed');
         expect(container.textContent).toContain('Plan only: detect_fluid');

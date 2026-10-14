@@ -7,9 +7,29 @@ import base64
 import json
 import re
 import shutil
+import os
+import errno
+import stat
 from pathlib import Path
 
 _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def stage_source(source: Path, destination: Path) -> None:
+    """Retain a completed input, privately acquire mutable legacy sources."""
+    source = source.resolve(strict=True)
+    before = source.stat()
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError("terminal source must be regular")
+    if not before.st_mode & 0o222:
+        try:
+            os.link(source, destination)
+            return
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+    shutil.copyfile(source, destination)
+    destination.chmod(0o444)
 
 
 def main() -> None:
@@ -39,7 +59,7 @@ def main() -> None:
         json.dumps(projected, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
         encoding="utf-8",
     )
-    shutil.copyfile(args.source, destination / f"source{suffix}")
+    stage_source(args.source, destination / f"source{suffix}")
 
 
 if __name__ == "__main__":

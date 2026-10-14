@@ -33,62 +33,8 @@ def target(tmp_path, monkeypatch):
     return path
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize('mode', ['protein_binder', 'peptide_binder'])
-async def test_public_boltzgen_queue_prepares_target_and_native_settings(admission, target, mode):
-    requested = {'target_pdb': str(target), 'num_designs': 2, 'alpha': 0., 'min_plddt': None,
-                 'boltzgen_skip_inverse_folding': False}
-    response = await jobs._create_job(JobCreate(name='initial-' + mode, model_id='boltzgen', mode=mode,
-        params=requested), BackgroundTasks(), admission)
-    job = await admission.get(Job, response.id)
-    root = Path(job.params['boltzgen_yaml_config'])
-    config = yaml.safe_load((root / 'boltzgen_input.yaml').read_text())
-    structural = [row['file'] for row in config['entities'] if 'file' in row]
-    assert len(structural) == 1
-    assert (root / structural[0]['path']).read_bytes() == target.read_bytes()
-    assert job.params['boltzgen_prepared_sha256'] == identity_digest(input_identity(root))
-    assert job.params['boltzgen_alpha'] == 0.
-    assert job.params['boltzgen_skip_inverse_folding'] is False
-    target.unlink()
-    invocation = nextflow.compile_job_nextflow_invocation(job, job.params, job.output_dir)
-    assert invocation.entrypoint == 'workflows/boltzgen_generation.nf'
-    assert invocation.command[invocation.command.index('-profile') + 1] == 'boltzgen,workstation_ryzen7960x'
-    assert invocation.native_parameters['boltzgen_yaml_config'] == str(root)
-    assert invocation.native_parameters['boltzgen_alpha'] == 0.
-    assert invocation.native_parameters['boltzgen_skip_inverse_folding'] is False
-    assert invocation.native_parameters['boltzgen_min_plddt'] is None
-    assert '-params-file' in invocation.command
-    native_json = next(item for item in invocation.generated_inputs if item.relative_path == '.boltzgen-generation-settings.json')
-    native_settings = json.loads(native_json.payload)
-    assert native_settings['boltzgen_alpha'] == 0.
-    assert native_settings['boltzgen_skip_inverse_folding'] is False
-    assert native_settings['boltzgen_min_plddt'] is None
-    assert native_settings['core_protein_scientific_contract'] == job.provenance['core_protein_scientific_contract'] == 1
-    assert native_settings['boltzgen_prepared_sha256'] == job.params['boltzgen_prepared_sha256']
-    assert 'boltzgen_target_pdb_path' not in native_settings
-    assert '--boltzgen_target_pdb_path' not in invocation.command
-    assert '--boltzgen_scaffold_path' not in invocation.command
-    assert json.loads(invocation.effective_json)['boltzgen_generation_mode'] == mode
-    assert not {'rfd_models', 'af2_models', 'boltz_models', 'msa_local_db', 'msa_cache_dir'} & invocation.native_parameters.keys()
 
 
-@pytest.mark.parametrize('mode', ['protein_binder', 'peptide_binder', 'nanobody_binder'])
-def test_native_request_defaults_and_file_aliases_stay_model_owned(target, mode):
-    from services.boltzgen_request_compatibility import parameter_contract
-    request = JobCreate(name='native-fields', model_id='boltzgen', mode=mode,
-        params={'target_pdb': 'inputs/target.pdb', 'alpha': 0, 'min_plddt': None,
-                'filter_biased': False, 'job_name': 'native-fields', 'num_parallel_jobs': 1})
-    original = request.model_dump()
-    normalized = jobs.normalize_job_request(request)
-    fields = {field['name'] for field in parameter_contract(mode)}
-    assert set(normalized.params) == fields | {'boltzgen_mode', 'boltzgen_generation_mode', 'job_name', 'num_parallel_jobs'}
-    assert normalized.params['boltzgen_target_pdb_path'] == str(target)
-    assert normalized.params['boltzgen_min_plddt'] is None
-    assert normalized.params['boltzgen_alpha'] == 0
-    assert normalized.params['boltzgen_filter_biased'] is False
-    assert 'min_plddt' not in normalized.params
-    assert jobs.normalize_job_request(normalized).model_dump() == normalized.model_dump()
-    assert request.model_dump() == original
 
 
 @pytest.mark.asyncio

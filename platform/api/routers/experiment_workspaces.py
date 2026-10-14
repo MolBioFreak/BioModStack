@@ -65,7 +65,6 @@ from experiment_services import (
 )
 from services.ngs_molbio_release_acceptance import (
     SharedPackageAcceptanceError,
-    acceptance_operational_receipt,
     persist_shared_package_evidence,
 )
 from services.ngs_molbio_n5 import operational_receipt
@@ -159,10 +158,6 @@ async def _require_mutation_owner(
 
 class StrictRequestModel(BaseModel):
     model_config = {"extra": "forbid"}
-
-
-class SharedPackageAcceptanceRequest(StrictRequestModel):
-    evidence: dict[str, Any]
 
 
 class SharedPackageEvidenceIngestRequest(StrictRequestModel):
@@ -1117,29 +1112,15 @@ async def record_ngs_molbio_package_evidence(
         ) from exc
 
 
-@router.post(
-    "/ops/ngs-molbio/package-acceptance", status_code=status.HTTP_201_CREATED,
-    deprecated=True,
-    description="Historical v1 acceptance only. This receipt cannot establish current PM-11/PM-12 acceptance.",
-)
-async def record_ngs_molbio_package_acceptance(
-    payload: SharedPackageAcceptanceRequest,
-    request: Request,
-    session: AsyncSession = Depends(get_experiment_session),
-    core_session: AsyncSession = Depends(get_session),
-) -> dict[str, Any]:
-    try:
-        actor = _operator_principal(request)
-        receipt = await acceptance_operational_receipt(
-            session,
-            core_session,
-            payload.evidence,
-            accepted_by=actor,
-        )
-        return json.loads(receipt.receipt_json)
-    except SharedPackageAcceptanceError as exc:
-        await session.rollback()
-        raise HTTPException(status_code=409, detail={"code": "package_acceptance_rejected", "message": str(exc)}) from exc
+@router.post("/ops/ngs-molbio/package-acceptance", deprecated=True, status_code=status.HTTP_410_GONE)
+async def record_ngs_molbio_package_acceptance() -> None:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={
+            "code": "package_acceptance_retired",
+            "message": "Online v1 package acceptance is retired. Existing receipts remain readable.",
+        },
+    )
 
 
 async def _creation_receipt_authority(

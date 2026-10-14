@@ -778,7 +778,8 @@ async def _read_managed_confornets_checkpoint(
     """Expose one server-owned checkpoint identity without accepting a host path."""
     global _confornets_discovery_digest
     checkpoint = get_weights_root() / "openfold3" / "of3-p2-155k.pt"
-    if not checkpoint.is_file() or checkpoint.is_symlink():
+    checkpoint = checkpoint.resolve(strict=False)
+    if not checkpoint.is_file() or not checkpoint.is_relative_to(get_weights_root().resolve()):
         if reuse_discovery_checksum:
             _confornets_discovery_digest = None
         return None
@@ -2323,11 +2324,11 @@ async def submit_request(
         if confor_sources:
             assert checkpoint_source is not None
             staged_assets = stage_registered_assets(
-                [_registered(source) for source in confor_sources],
+                [_registered(source) for source in confor_sources if source is not checkpoint_source],
                 principal_id=principal_id, destination_root=root / "registered",
             )
             settings = params["confornets"]
-            settings["checkpoint"]["path"] = staged_assets[checkpoint_source.source_id].relative_to(root).as_posix()
+            settings["checkpoint"]["path"] = f"registered/{checkpoint_source.source_id}{Path(checkpoint_source.relative_path).suffix.lower()}"
             if config_source is not None:
                 settings["config"]["path"] = staged_assets[config_source.source_id].relative_to(root).as_posix()
             for item, source in zip(settings["references"], references, strict=True):
@@ -3072,10 +3073,36 @@ def _copy_clean_retry_authority(
         raise HTTPException(status_code=409, detail="retry input files disagree with persisted CM authority")
 
     expected_files = _validated_retry_authority(persisted_authority)
+    installed_checkpoint = None
+    checkpoint_name = None
+    if request_payload.get('backend') == 'confornets':
+        from scripts.lib.portable_inputs import cm_checkpoint_inventory
+        checkpoint = request_payload['confornets']['checkpoint']
+        candidate = Path(checkpoint['path'])
+        if not candidate.is_absolute() and '..' not in candidate.parts:
+            try:
+                inventory = cm_checkpoint_inventory(request_payload, weights_root=get_weights_root())
+            except (OSError, ValueError):
+                # Historical private-only sources keep their existing custody;
+                # an unavailable managed version is not permission to use latest.
+                inventory = {}
+            if inventory:
+                installed_checkpoint = next(iter(inventory.values()))
+                checkpoint_name = candidate.as_posix()
+                expected_checkpoint = expected_files.get(checkpoint_name)
+                if expected_checkpoint is not None and expected_checkpoint != {
+                    'sha256': installed_checkpoint['sha256'], 'size_bytes': installed_checkpoint['size_bytes']
+                }:
+                    raise HTTPException(status_code=409, detail='persisted CM checkpoint authority differs from selected runtime')
     try:
         source_files = _retry_authority_paths(source_root)
     except OSError as exc:
         raise HTTPException(status_code=409, detail="persisted CM retry authority contains unsafe source paths") from exc
+    if installed_checkpoint is not None:
+        # Retain old authority/document identities but do not create another
+        # checkpoint body. Subsequent retries resolve the same sealed digest.
+        source_files.pop(checkpoint_name, None)
+        expected_files.pop(checkpoint_name, None)
     if set(source_files) != set(expected_files):
         raise HTTPException(status_code=409, detail="persisted CM retry authority does not match registered source files")
 

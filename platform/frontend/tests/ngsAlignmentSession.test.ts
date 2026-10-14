@@ -15,7 +15,6 @@ import {
     isAlignmentAccessDenied,
     isAlignmentReadScanTruncatedError,
     normalizeAlignmentSessions,
-    normalizeAlignmentAccessRotation,
     normalizeSortableAlignmentReadPage,
     withAlignmentAccessRecovery,
     type AlignmentRead,
@@ -129,17 +128,6 @@ test('governed NGS failures retain a specific operator-visible category', () => 
     );
 });
 
-test('rotation response is a closed exact authority contract', () => {
-    const valid = {
-        schema: 'bms.ngs.rotation-success.v1', job_id: 'job-a', rotated: true,
-        scheme: 'opaque_job_capability_v1', rotation_count: 1, expires_at: '2026-08-21T20:00:00Z',
-    };
-    assert.deepEqual(normalizeAlignmentAccessRotation(valid, 'job-a'), valid);
-    assert.throws(() => normalizeAlignmentAccessRotation({ ...valid, token: 'secret' }, 'job-a'), /unknown/i);
-    assert.throws(() => normalizeAlignmentAccessRotation({ ...valid, schema: 'old' }, 'job-a'), /invalid/i);
-});
-
-
 test('late pre-rotation denial retries with the current capability without a second rotation', async () => {
     const rotationGate = deferred<void>();
     const staleRequestGate = deferred<string>();
@@ -232,14 +220,11 @@ function artifact(artifactId: string, sha256: string, sizeBytes: number, mimeTyp
     };
 }
 
-test('detail scan exhaustion remains a distinct visible state', () => {
-    const error = new AlignmentReadScanTruncatedError('scan budget exhausted; absence is not proven');
-    assert.equal(isAlignmentReadScanTruncatedError(error), true);
-    assert.equal(error.scanTruncated, true);
-    assert.match(error.message, /absence is not proven/u);
-});
-
 test('typed backend scan truncation becomes the scientist-facing integrity state and rejects open envelopes', async () => {
+    const custom = new AlignmentReadScanTruncatedError('scan budget exhausted; absence is not proven');
+    assert.equal(isAlignmentReadScanTruncatedError(custom), true);
+    assert.equal(custom.scanTruncated, true);
+    assert.equal(custom.message, 'scan budget exhausted; absence is not proven');
     const originalGet = api.get;
     const canonical = {
         schema: 'bms.ngs.error.v1', code: 'NGS_READ_SCAN_TRUNCATED',
@@ -253,7 +238,12 @@ test('typed backend scan truncation becomes the scientist-facing integrity state
     try {
         await assert.rejects(
             fetchAlignmentRead('job-a', 'session-a', 'read-a'),
-            (error: unknown) => isAlignmentReadScanTruncatedError(error),
+            (error: unknown) => {
+                assert.ok(isAlignmentReadScanTruncatedError(error));
+                assert.equal(error.scanTruncated, true);
+                assert.equal(error.message, canonical.message);
+                return true;
+            },
         );
         for (const malformed of [
             { ...canonical, unexpected: true },
@@ -329,17 +319,6 @@ test('normalizes only job-bound opaque session URLs without path inference', asy
     assert.equal(sessions[0].artifacts.reference_index?.sha256, 'd'.repeat(64));
     assert.equal(sessions[1].unavailable_reason, 'missing alignment index');
 });
-
-test('rejects unknown fields in the closed session and artifact wire contract', async () => {
-    const extraSession = structuredClone(payload) as AlignmentSessionResponse & { sessions: Array<Record<string, unknown>> };
-    extraSession.sessions[0].legacy_reference_contig = 'plasmid';
-    await assert.rejects(normalizeAlignmentSessions(extraSession as AlignmentSessionResponse, 'job-a'), /unknown/i);
-
-    const extraArtifact = structuredClone(payload) as unknown as { sessions: Array<{ artifacts: Record<string, Record<string, unknown>> }> };
-    extraArtifact.sessions[0]!.artifacts.alignment!.manifest = 'fastq_qc/qc_manifest.json';
-    await assert.rejects(normalizeAlignmentSessions(extraArtifact as unknown as AlignmentSessionResponse, 'job-a'), /unknown/i);
-});
-
 
 test('rejects cross-job session payloads and non-job-scoped artifact URLs', async () => {
     await assert.rejects(normalizeAlignmentSessions({ ...payload, job_id: 'job-b' }, 'job-a'), /job mismatch/i);

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import time
 from pathlib import Path
 from typing import Any, Mapping
@@ -80,7 +79,7 @@ def run_openmm_job(
     if config.get("schema") == "bms.md.job.v2":
         if preparation_bundle is None:
             raise ValueError("bms.md.job.v2 requires an immutable preparation bundle")
-        from .chemistry.prepare import verify_preparation_bundle
+        from .chemistry.prepare import retain_prepared_file, verify_preparation_bundle
         chemistry = config.get("chemistry") or {}
         preparation_manifest = verify_preparation_bundle(
             preparation_bundle,
@@ -91,8 +90,8 @@ def run_openmm_job(
         if not private_bundle.exists():
             private_bundle.mkdir()
             for record in preparation_manifest["files"]:
-                shutil.copy2(Path(preparation_bundle) / record["path"], private_bundle / record["path"])
-            shutil.copy2(Path(preparation_bundle) / "preparation_manifest.json", private_bundle / "preparation_manifest.json")
+                retain_prepared_file(Path(preparation_bundle) / record["path"], private_bundle / record["path"])
+            retain_prepared_file(Path(preparation_bundle) / "preparation_manifest.json", private_bundle / "preparation_manifest.json")
         consumed = verify_preparation_bundle(
             private_bundle,
             expected_profile_id=chemistry.get("profile_id"),
@@ -103,7 +102,6 @@ def run_openmm_job(
         preparation_artifacts = {
             f"preparation_{index}": private_bundle / record["path"]
             for index, record in enumerate(consumed["files"])
-            if record["path"] not in {"system.gro", "system.top"}
         }
         preparation_artifacts["preparation_manifest"] = private_bundle / "preparation_manifest.json"
         coordinates = private_bundle / "system.gro"

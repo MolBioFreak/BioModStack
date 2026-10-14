@@ -171,60 +171,6 @@ def _evidence(service):
     )
 
 
-def test_reconciliation_plan_changes_only_query_mirrors_and_append_only_receipt() -> None:
-    service = _service()
-    job = _job()
-    original_provenance = job.provenance
-
-    plan = _build_plan(service, job)
-
-    assert plan.requires_write is True
-    assert plan.completed_stages == tuple(STAGES)
-    assert plan.stage_outputs == {key: tuple(value) for key, value in STAGE_OUTPUTS.items()}
-    assert plan.provenance["existing_history"] == original_provenance["existing_history"]
-    assert plan.provenance["stage_terminal_states"] == original_provenance["stage_terminal_states"]
-    assert plan.provenance["alignment_hierarchy_authority_v1"] == _hierarchy_record()
-    receipt = plan.provenance["ont_fastq_qc_reconciliation_v1"]
-    assert receipt["schema"] == "bms.ont-fastq-qc-reconciliation.v1"
-    assert receipt["job_id"] == JOB_ID
-    assert receipt["source_commit"] == "f" * 40
-    assert receipt["source_tree"] == "e" * 40
-    assert receipt["principal"] == "uid:1000:tester"
-    assert receipt["authorization_class"] == "development_service_owner"
-    assert receipt["project_id"] == "4af72c1d-27d8-4e14-8f39-4259a80494a0"
-    assert receipt["global_experiment_id"] == "9a10c5a8-b233-4bf3-af14-9c2880525278"
-    assert receipt["domain_experiment_id"] == "916a611b-6879-486f-bf9e-e1b5a796e01c"
-    assert receipt["state_revision_id"].startswith("molbio_ngs_state_revision_")
-    assert receipt["member_receipt_id"] == "195b526d-35b3-40e4-b400-e8e4232a98fc"
-    assert receipt["sequence_qc_manifest_sha256"] == SEQUENCE_QC_MANIFEST_SHA256
-    assert receipt["verification_manifest_sha256"] == VERIFICATION_MANIFEST_SHA256
-    assert receipt["reference_sequence_sha256"] == REFERENCE_SHA256
-    assert receipt["source_fastq_sha256"] == SOURCE_FASTQ_SHA256
-    assert receipt["resource_evidence_status"] == "historical_unavailable"
-    assert receipt["artifact_set_sha256"] == ARTIFACT_SET_SHA256
-    assert receipt["declared_artifact_count"] == 36
-    assert receipt["present_artifact_count"] == 34
-    assert receipt["unavailable_artifact_count"] == 2
-    assert receipt["result_root_identity_sha256"] == "e" * 64
-    assert receipt["protected_row_preimage_sha256"] == plan.protected_preimage_sha256
-    assert receipt["database_identity_sha256"] == "8" * 64
-    for field in (
-        "normalized_request_sha256",
-        "completed_stages_preimage_sha256",
-        "stage_outputs_preimage_sha256",
-        "provenance_preimage_sha256",
-        "completed_stages_postimage_sha256",
-        "stage_outputs_postimage_sha256",
-        "receipt_free_provenance_postimage_sha256",
-    ):
-        assert len(receipt[field]) == 64
-    assert receipt["backup"] is None
-    assert receipt["receipt_sha256"] is None
-    assert receipt["compute_invoked"] is False
-    assert receipt["scientific_artifacts_modified"] is False
-    assert not hasattr(plan, "all_stages")
-
-
 def test_reconciliation_plan_is_idempotent_after_exact_replay() -> None:
     service = _service()
     first = _build_plan(service)

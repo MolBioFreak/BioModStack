@@ -31,6 +31,7 @@ from .bundle import (
 )
 from .contracts import RemoteAttemptStatus, RemoteResultManifest
 from .targets import ExecutionTargetError, get_ready_target
+from .claims import job_has_claim, shared_assignment, target_claim_authority, job_claim_authority
 from .transport import (
     RemoteConnection,
     RemoteTransportError,
@@ -167,8 +168,7 @@ async def _verify_launch_runner(session, job, connection, target) -> None:
         ExecutionTarget.username == target.username, ExecutionTarget.remote_root == target.remote_root,
         ExecutionTarget.capabilities["runner_sha256"].as_string() == (target.capabilities or {}).get("runner_sha256"),
         ExecutionTarget.capabilities["nextflow_launcher_sha256"].as_string() == (target.capabilities or {}).get("nextflow_launcher_sha256"),
-        ExecutionTarget.leased_job_id == str(job.id),
-        ExecutionTarget.lease_acquired_at == target.lease_acquired_at,
+        target_claim_authority(job),
     ]
     attached_binding = (target.capabilities or {}).get("critical_runtime_binding")
     if attached_binding:
@@ -243,10 +243,6 @@ async def _stage_bundle(
             f"{bundle.remote_runtime_dir}/data/runtime/cm-api-python/releases",
         ],
     )
-    for transfer in bundle.runtime_transfers:
-        if transfer.remote_destination.rstrip('/') == f"{bundle.remote_runtime_dir}/support-python":
-            await check_fence()
-            await _transfer_plan(connection, transfer)
     await run_remote(
         connection,
         [
@@ -315,6 +311,29 @@ async def _stage_secret_environment(
     )
 
 
+async def _cached_ont_work_attempt(session, job):
+    """Find the existing native cache owner, not its lease/process authority.
+
+    Cached successors have new attempts but share the original work/cache. Walk
+    the existing resume ancestry so repeated resumes do not drift namespaces.
+    Legacy rows without ancestry/attempt observations keep the existing default.
+    """
+    if job.model_id != 'nanopore' or not (job.params or {}).get('resume_work_dir'):
+        return None
+    seen, attempt = {str(job.id)}, None
+    source_id = (job.params or {}).get('resume_job_id')
+    while source_id and str(source_id) not in seen:
+        seen.add(str(source_id))
+        source = await session.get(Job, str(source_id))
+        if source is None or source.execution_target_id != job.execution_target_id:
+            break
+        if source.remote_attempt_id:
+            attempt = str(source.remote_attempt_id)
+        source_id = ((source.params or {}).get('resume_job_id')
+                     if (source.params or {}).get('resume_work_dir') else None)
+    return attempt
+
+
 def _archive_envelope(bundle: PreparedRemoteBundle) -> None:
     envelope_root = get_data_root() / "remote-execution" / "envelopes"
     envelope_root.mkdir(parents=True, exist_ok=True)
@@ -336,6 +355,7 @@ def _remote_receipt(
     state: str,
     started_at: datetime | None = None,
     error: str | None = None,
+    job: Job | None = None,
 ) -> dict[str, Any]:
     capabilities = target.capabilities if isinstance(target.capabilities, dict) else {}
     context_identity = None
@@ -365,7 +385,9 @@ def _remote_receipt(
         "ssh_host": str(target.host),
         "ssh_port": target.port,
         "ssh_username": str(target.username),
-        "lease_acquired_at": target.lease_acquired_at.isoformat() if target.lease_acquired_at else None,
+        "lease_acquired_at": (target.lease_acquired_at.isoformat()
+            if target.lease_acquired_at and not shared_assignment(job) else None),
+        "claim_lease_id": shared_assignment(job).get("lease_id"),
         "remote_root": str(target.remote_root),
         "remote_attempt_dir": bundle.remote_attempt_dir,
         "source_revision": bundle.envelope.source_revision,
@@ -411,11 +433,7 @@ async def _publish_remote_transition(
     session: AsyncSession, job: Job, values: dict[str, Any], *, release_lease: bool = False, require_lease: bool = True,
 ) -> bool:
     """CAS the complete attempt/claim snapshot; never autoflush a stale owner."""
-    lease_authority = [select(ExecutionTarget.id).where(
-        ExecutionTarget.id == job.execution_target_id,
-        ExecutionTarget.leased_job_id == str(job.id),
-        *_attempt_lease_predicates(job),
-    ).exists()]
+    lease_authority = [job_claim_authority(job)]
     if not require_lease:
         lease_authority = []
     with session.no_autoflush:
@@ -441,7 +459,7 @@ async def _publish_remote_transition(
         await session.rollback()
         return False
     if release_lease:
-        await _release_remote_target_lease(session, job)
+        await _release_remote_target_lease(session, job, flush=False)
     # Discard the stale ORM projection before commit can flush it.
     session.expire(job)
     await session.commit()
@@ -595,7 +613,7 @@ async def _launch_remote_job_owned(
         connection = RemoteConnection.from_target(target)
         def target_generation(row):
             return (RemoteConnection.from_target(row), row.host_key_sha256, row.activated_at,
-                    row.leased_job_id, row.lease_acquired_at,
+                    *((row.leased_job_id, row.lease_acquired_at) if not shared_assignment(job) else ()),
                     (row.provider_metadata or {}).get("setup", {}).get("started_at"),
                     (row.capabilities or {}).get("runner_sha256"),
                     (row.capabilities or {}).get("nextflow_launcher_sha256"))
@@ -613,10 +631,12 @@ async def _launch_remote_job_owned(
                 raise RemoteExecutionError("Remote target attachment or lease changed during preparation")
 
         await _verify_launch_runner(session, job, connection, target)
+        cached_work_attempt_id = await _cached_ont_work_attempt(session, job)
         preparation = asyncio.create_task(asyncio.to_thread(
             prepare_remote_bundle, job=job, target=target, command=command,
             native_invocation=native_invocation,
             environment=environment, attempt_id=requested_attempt_id,
+            cached_work_attempt_id=cached_work_attempt_id,
         ))
         try:
             bundle = await asyncio.shield(preparation)
@@ -640,7 +660,7 @@ async def _launch_remote_job_owned(
         provenance = dict(job.provenance or {})
         provenance['remote_execution_assignment'] = {
             **provenance.get('remote_execution_assignment', {}), 'resources': resources}
-        provenance["remote_execution_receipt"] = _remote_receipt(bundle, target, state="staging")
+        provenance["remote_execution_receipt"] = _remote_receipt(bundle, target, state="staging", job=job)
         if not await _publish_remote_transition(session, job, {
             "nextflow_run_id": run_id, "remote_attempt_id": bundle.attempt_id,
             "remote_state": "staging", "execution_source_revision": bundle.envelope.source_revision,
@@ -664,7 +684,8 @@ async def _launch_remote_job_owned(
                     and (current.status, current.queue_status, current.remote_state) == ("queued", "preparing", "staging")
                     and current.remote_attempt_id == attempt_id
                     and current.nextflow_run_id == run_id and current.execution_target_id == target_id
-                    and owner.leased_job_id == job_id and owner.lease_acquired_at == lease_epoch
+                    and job_has_claim(owner, current)
+                    and (bool(shared_assignment(current)) or owner.lease_acquired_at == lease_epoch)
                     and target_generation(owner) == admitted_generation
                     and dict((current.provenance or {}).get("remote_execution_assignment") or {}) == assignment)
             if not valid:
@@ -722,7 +743,7 @@ async def _launch_remote_job_owned(
             return run_id
         provenance = dict(job.provenance or {})
         provenance["remote_execution_receipt"] = _remote_receipt(
-            bundle, target, state=status.state, started_at=status.started_at,
+            bundle, target, state=status.state, started_at=status.started_at, job=job,
         )
         published = await _publish_started_receipt(
             session, job, status, provenance["remote_execution_receipt"],
@@ -799,11 +820,7 @@ async def _acquire_remote_terminal_fence(session: AsyncSession, job: Job) -> boo
             Job.queue_status == "running",
             Job.execution_target_id == job.execution_target_id,
             Job.remote_state == job.remote_state,
-            select(ExecutionTarget.id).where(
-                ExecutionTarget.id == job.execution_target_id,
-                ExecutionTarget.leased_job_id == str(job.id),
-                *_attempt_lease_predicates(job),
-            ).exists(),
+            job_claim_authority(job),
             Job.nextflow_run_id == job.nextflow_run_id,
             Job.remote_attempt_id == job.remote_attempt_id,
         )
@@ -817,11 +834,45 @@ async def _acquire_remote_terminal_fence(session: AsyncSession, job: Job) -> boo
     return True
 
 
-async def _release_remote_target_lease(session: AsyncSession, job: Job) -> None:
+async def _release_remote_target_lease(session: AsyncSession, job: Job, *, flush: bool = True) -> bool:
     target_id = str(job.execution_target_id or "").strip()
     if not target_id:
-        return
-    await session.execute(
+        return False
+    assignment = shared_assignment(job)
+    if assignment:
+        from sqlalchemy import func
+        from sqlalchemy.orm.attributes import set_committed_value
+        if flush:
+            await session.flush()
+        with session.no_autoflush:
+            current = (await session.execute(select(Job.provenance).where(
+                Job.id == str(job.id), Job.execution_target_id == target_id,
+                Job.provenance["remote_execution_assignment"]["lease_id"].as_string() == assignment.get("lease_id"),
+                Job.provenance["remote_execution_assignment"]["released_at"].as_string().is_(None),
+            ))).scalar_one_or_none()
+            if current is None:
+                return False
+            provenance = dict(current)
+            provenance["remote_execution_assignment"] = dict(
+                current["remote_execution_assignment"], released_at=datetime.utcnow().isoformat() + "Z")
+            released = await session.execute(update(Job).where(
+                Job.id == str(job.id), Job.provenance == current,
+            ).values(provenance=provenance).execution_options(synchronize_session=False))
+            if released.rowcount != 1:
+                return False
+            # Do not replace provider_metadata: a sibling may publish progress.
+            await session.execute(update(ExecutionTarget).where(ExecutionTarget.id == target_id).values(
+                provider_metadata=func.json_remove(ExecutionTarget.provider_metadata,
+                    '$.job_progress.' + json.dumps(str(job.id))),
+            ).execution_options(synchronize_session=False))
+        set_committed_value(job, "provenance", provenance)
+        await session.execute(update(ExecutionTarget).where(
+            ExecutionTarget.id == target_id, ExecutionTarget.leased_job_id == str(job.id),
+            *_attempt_lease_predicates(job),
+        ).values(leased_job_id=None, lease_acquired_at=None,
+                 updated_at=datetime.utcnow()).execution_options(synchronize_session=False))
+        return True
+    released = await session.execute(
         update(ExecutionTarget)
         .where(
             ExecutionTarget.id == target_id,
@@ -835,6 +886,8 @@ async def _release_remote_target_lease(session: AsyncSession, job: Job) -> None:
         )
         .execution_options(synchronize_session=False)
     )
+
+    return released.rowcount == 1
 
 
 def _preparation_expired(job: Job) -> bool:
@@ -937,7 +990,10 @@ async def pause_md_production(session: AsyncSession, job: Job, *, operation_id: 
             relative = native.relative_to(remote_root).as_posix()
             local = output
             local.mkdir(parents=True, exist_ok=True)
-            selected = [relative + '/production/production.cpt', relative + '/md-checkpoint-receipt.json']
+            checkpoint_path = checkpoint['receipt']['checkpoint_path']
+            # Reuse canonical relative-path containment before selected transport.
+            _safe_result_path(local / relative, checkpoint_path)
+            selected = [relative + '/' + checkpoint_path, relative + '/md-checkpoint-receipt.json']
             await rsync_selected_from_remote(connection, str(remote_root), local, selected,
                 max_file_bytes=max(checkpoint['receipt']['bytes'], checkpoint['receipt_bytes']), timeout=300)
             checkpoint['local_output_dir'] = str(local / relative)
@@ -946,6 +1002,26 @@ async def pause_md_production(session: AsyncSession, job: Job, *, operation_id: 
                 {'remote_state':'paused', 'status':'paused', 'queue_status':'paused', 'paused':True}, release_lease=True):
             raise RemoteExecutionError('MD pause current attempt changed during checkpoint return')
     return observed
+
+
+async def _reacquire_remote_claim(session, job, target, resources):
+    """Continue through the scheduler's target-scoped VRAM admission owner.
+
+    The existing continuation Job CAS commits this claim and the operation
+    together; capacity refusal rolls back without disturbing any sibling.
+    """
+    from services.gpu_orchestrator import _reserve_remote_capacity, estimate_vram
+    indices = list(resources.get("gpu_ids") or [])
+    estimate = int(job.vram_estimate_mb or 0)
+    if indices and not estimate:
+        estimate = estimate_vram(job.model_id or "default", job.sequence_length or 300, job.params or {})
+    assignment = await _reserve_remote_capacity(session, job, target,
+        vram_estimate_mb=estimate if indices else 0, gpu_ids=indices)
+    if assignment is None:
+        await session.rollback()
+        raise RemoteExecutionError("Continuation target GPU reservations leave insufficient VRAM capacity")
+    return {**((job.provenance or {}).get("remote_execution_assignment") or {}),
+            **assignment, "resources": resources, "released_at": None}
 
 
 async def resume_md_production(session: AsyncSession, job: Job, *, operation_id: str,
@@ -1012,19 +1088,11 @@ async def resume_md_production(session: AsyncSession, job: Job, *, operation_id:
             gpu_ids=resources['gpu_ids'], minimum_gpu_memory_mb=resources.get('minimum_gpu_memory_mb',0))
         if admission['devices'] != resources.get('admission',{}).get('devices'):
             raise RemoteExecutionError('MD continuation physical devices changed')
-        claimed = await session.execute(update(ExecutionTarget).where(
-            ExecutionTarget.id == target.id, ExecutionTarget.leased_job_id.is_(None),
-            ExecutionTarget.active.is_(True), ExecutionTarget.state == 'ready',
-            *(getattr(ExecutionTarget,key) == getattr(target,key) for key in
-              ('host','port','username','remote_root','host_key_sha256')),
-        ).values(leased_job_id=str(job.id),lease_acquired_at=datetime.utcnow()).execution_options(synchronize_session=False))
-        if claimed.rowcount != 1:
-            await session.rollback()
-            raise RemoteExecutionError('MD continuation target is already reserved')
-        await session.refresh(target)
-        receipt['lease_acquired_at'] = target.lease_acquired_at.isoformat()
+        assignment = await _reacquire_remote_claim(session, job, target, resources)
+        receipt['claim_lease_id'] = assignment['lease_id']
         intent.update(attempt_id=str(job.remote_attempt_id), resources=dict(resources,admission=admission))
-        provenance.update(component_md_resume=intent, remote_execution_receipt=receipt)
+        provenance.update(component_md_resume=intent, remote_execution_receipt=receipt,
+                          remote_execution_assignment=assignment)
         if not await _publish_remote_transition(session, job,
                 {'provenance':provenance,'status':'running','queue_status':'running','paused':False,
                  'remote_state':'md_resume_requested','completed_at':None}, require_lease=False):
@@ -1057,6 +1125,41 @@ async def resume_md_production(session: AsyncSession, job: Job, *, operation_id:
         raise
 
 
+def _completed_optional_md_retry(job, component_id):
+    """Read requiredness from the retained request, never from the retry caller."""
+    from component_runtime import ComponentRequest
+    provenance = job.provenance or {}
+    if not job.execution_target_id:
+        from scripts.lib.component_adapter import runtime_from_environment
+        runtime = runtime_from_environment(Path(provenance['component_context_path']))
+        if runtime.root_job_id != str(job.id) or runtime.target_id != 'local':
+            raise RemoteExecutionError('Retry retained root/target conflicts')
+        request = runtime.request(component_id)
+    else:
+        root = Path(job.child_output_dir or job.output_dir).expanduser().resolve()
+        path = root / '.bms-components.json'
+        if path.is_symlink() or not path.is_file():
+            raise RemoteExecutionError('Retry retained component publication is unavailable')
+        publication = json.loads(path.read_bytes())
+        receipt = provenance.get('remote_execution_receipt') or {}
+        expected = receipt.get('component_context_identity') or provenance.get('assignment_context') or {}
+        for key in ('root_job_id', 'attempt_id', 'target_id', 'lease_id', 'source_identity', 'plan_sha256'):
+            if key not in expected or publication.get(key) != expected[key]:
+                raise RemoteExecutionError('Retry retained component attempt conflicts')
+        if (publication.get('schema_name') != 'bms.component-projection.v1'
+                or publication.get('generation') != receipt.get('generation', 0)
+                or publication.get('current_plan_sha256') != receipt.get('plan_sha256', expected['plan_sha256'])):
+            raise RemoteExecutionError('Retry retained component generation conflicts')
+        rows = [row for row in [*publication.get('components', []), *publication.get('unprojected_components', [])]
+                if row['component_id'] == component_id]
+        if len(rows) != 1:
+            raise RemoteExecutionError('Retry retained component request is unavailable')
+        request = ComponentRequest.capture(**rows[0]['request'])
+    if request.component_id != component_id or request.parent_job_id != str(job.id):
+        raise RemoteExecutionError('Retry retained component identity conflicts')
+    return request.optional_md_analysis
+
+
 async def retry_component_execution(session: AsyncSession, job: Job, *, component_id: str,
                                     operation_id: str, actor: str, failure_code: str) -> dict:
     """Explicit native retry outbox; one original root, target and durable edge."""
@@ -1080,10 +1183,12 @@ async def retry_component_execution(session: AsyncSession, job: Job, *, componen
         saved = previous if previous.get('operation_id') == operation_id else history.get(operation_id)
         if saved and any(saved.get(key) != value for key, value in intent.items()):
             raise RemoteExecutionError('Immutable component retry operation conflicts')
+        completed_optional = (job.status == 'completed' and not saved
+                              and _completed_optional_md_retry(job, component_id))
         if saved:
             intent = dict(saved)
         elif previous:
-            if job.status != 'failed' or previous.get('state') not in {'accepted', 'queued'}:
+            if (job.status != 'failed' and not completed_optional) or previous.get('state') not in {'accepted', 'queued'}:
                 raise RemoteExecutionError('Another component retry is still pending')
             history[previous['operation_id']] = previous
         if provenance.get('component_checkpoint_resume'):
@@ -1091,8 +1196,8 @@ async def retry_component_execution(session: AsyncSession, job: Job, *, componen
         if not job.execution_target_id:
             return await _queue_local_component_retry(session, job, intent, history, saved)
         if not saved:
-            if job.status != 'failed':
-                raise RemoteExecutionError('Component retry requires a failed retained root')
+            if job.status != 'failed' and not completed_optional:
+                raise RemoteExecutionError('Component retry requires a failed root or retained optional MD analysis')
             receipt = provenance.get('remote_execution_receipt') or {}
             context = receipt.get('component_context_identity') or provenance.get('assignment_context') or {}
             if (context.get('root_job_id') != str(job.id)
@@ -1146,9 +1251,12 @@ async def _queue_local_component_retry(session, job, intent, history, saved):
         return dict(child_job_id=intent['child_job_id'], attempt_id=intent['attempt_id'],
                     target_id='local', state='queued', operation_id=intent['operation_id'])
     state = runtime.root_state() or {}
-    if (job.status != 'failed' or state.get('state') != 'failed' or not state.get('quiescent')
+    optional = runtime.request(intent['component_id']).optional_md_analysis
+    if (not (job.status == 'failed' or (job.status == 'completed' and optional))
+            or not (state.get('state') == 'failed' or (state.get('state') == 'completed' and optional))
+            or not state.get('quiescent')
             or state.get('boot_id') != Path('/proc/sys/kernel/random/boot_id').read_text().strip()):
-        raise RemoteExecutionError('Local retry requires same-boot failed quiescent root')
+        raise RemoteExecutionError('Local retry requires same-boot quiescent failed root or completed optional MD analysis')
     prepare_retry = (prepare_analysis_retry if runtime.request(intent['component_id']).stage == 'md_analysis'
                      else prepare_replica_retry)
     replacement, _ = prepare_retry(runtime, component_id=intent['component_id'],
@@ -1260,10 +1368,11 @@ async def _retry_remote_component_owned(session, job, intent: dict[str, Any]):
             return edge
     if edge is None and intent.get('state') not in {'requested', 'uncertain'}:
         receipt = (job.provenance or {}).get('remote_execution_receipt') or {}
-        if (status.state != 'failed' or not status.quiescent
+        optional = status.state == 'succeeded' and _completed_optional_md_retry(job, intent['component_id'])
+        if ((status.state != 'failed' and not optional) or not status.quiescent
                 or status.generation != intent['predecessor_generation']
                 or status.continuation_lease_id != receipt.get('continuation_lease_id')):
-            raise RemoteExecutionError('Retry predecessor is not the owned failed quiescent generation')
+            raise RemoteExecutionError('Retry predecessor is not an owned quiescent eligible generation')
         from .targets import admit_target_resources
         target = await get_ready_target(session, str(job.execution_target_id))
         connection, attempt_dir = _connection_for_attempt(target, job)
@@ -1275,22 +1384,14 @@ async def _retry_remote_component_owned(session, job, intent: dict[str, Any]):
         if admission['devices'] != resources.get('admission', {}).get('devices'):
             raise RemoteExecutionError('Retry physical target devices changed')
         resources['admission'] = admission
-        epoch = datetime.utcnow()
-        keys = ('host', 'port', 'username', 'remote_root', 'host_key_sha256')
-        claimed = await session.execute(update(ExecutionTarget).where(
-            ExecutionTarget.id == target.id, ExecutionTarget.leased_job_id.is_(None),
-            ExecutionTarget.active.is_(True), ExecutionTarget.state == 'ready',
-            *(getattr(ExecutionTarget, key) == getattr(target, key) for key in keys),
-        ).values(leased_job_id=str(job.id), lease_acquired_at=epoch).execution_options(synchronize_session=False))
-        if claimed.rowcount != 1:
-            await session.rollback()
-            raise RemoteExecutionError('Retry target capacity is already reserved')
+        assignment = await _reacquire_remote_claim(session, job, target, resources)
         intent = dict(intent, state='requested', resources=resources)
         provenance = dict(job.provenance or {})
         receipt = dict(provenance.get('remote_execution_receipt') or {},
-            lease_acquired_at=epoch.isoformat(), continuation_lease_id=intent['continuation_lease_id'],
+            claim_lease_id=assignment['lease_id'], continuation_lease_id=intent['continuation_lease_id'],
             generation=intent['predecessor_generation'] + 1)
-        provenance.update(component_retry=intent, remote_execution_receipt=receipt)
+        provenance.update(component_retry=intent, remote_execution_receipt=receipt,
+                          remote_execution_assignment=assignment)
         if not await _publish_remote_transition(session, job, {
                 'provenance': provenance, 'status': 'running', 'queue_status': 'running',
                 'remote_state': 'component_retry_requested', 'completed_at': None,
@@ -1371,16 +1472,7 @@ async def _request_remote_checkpoint_resume_owned(session: AsyncSession, job: Jo
     if admission['devices'] != resources.get('admission', {}).get('devices'):
         raise RemoteExecutionError('Checkpoint physical target devices changed')
     continuation_lease = uuid.uuid4().hex
-    epoch = datetime.utcnow()
-    identity_fields = ("host", "port", "username", "remote_root", "host_key_sha256")
-    claimed = await session.execute(update(ExecutionTarget).where(
-        ExecutionTarget.id == target.id, ExecutionTarget.leased_job_id.is_(None),
-        ExecutionTarget.active.is_(True), ExecutionTarget.state == "ready",
-        *(getattr(ExecutionTarget, key) == getattr(target, key) for key in identity_fields),
-    ).values(leased_job_id=str(job.id), lease_acquired_at=epoch).execution_options(synchronize_session=False))
-    if claimed.rowcount != 1:
-        await session.rollback()
-        raise RemoteExecutionError("Checkpoint worker capacity is already reserved")
+    assignment = await _reacquire_remote_claim(session, job, target, resources)
     provenance = dict(job.provenance or {})
     binding = dict(operation_id=uuid.uuid4().hex, attempt_id=str(job.remote_attempt_id),
         boot_id=receipt['boot_id'], original_lease_id=checkpoint['lease_id'],
@@ -1388,7 +1480,8 @@ async def _request_remote_checkpoint_resume_owned(session: AsyncSession, job: Jo
         decision=decision, continuation_lease_id=continuation_lease, resource_admission=admission)
     provenance['remote_checkpoint_operation'] = dict(binding=binding, state='requested',
         predecessor_receipt=dict(receipt), checkpoint=checkpoint)
-    receipt.update(lease_acquired_at=epoch.isoformat())
+    receipt.update(claim_lease_id=assignment["lease_id"])
+    provenance["remote_execution_assignment"] = assignment
     provenance["remote_execution_receipt"] = receipt
     # Target claim above and full existing job/source/attempt CAS below commit
     # together. Its prior lease epoch no longer applies to this fresh lease.
@@ -1673,6 +1766,10 @@ def _verify_result_package(
         or manifest.generation != status.generation
     ):
         raise RemoteExecutionError("Remote result manifest identity does not match the BMS Job")
+    for relative in manifest.directories:
+        path = _safe_result_path(incoming, relative)
+        if path.is_symlink() or not path.is_dir():
+            raise RemoteExecutionError(f"Returned directory is missing: {relative}")
     declared: set[str] = set()
     for artifact in manifest.artifacts:
         path = _safe_result_path(incoming, artifact.relative_path)
@@ -1768,6 +1865,9 @@ async def _fetch_result_manifest(
                     path.unlink()
                 else:
                     raise RemoteExecutionError("Retained result staging contains undeclared files")
+    from .result_generation import committed_payloads, reuse_payload
+
+    previous = committed_payloads(job)
     missing = []
     for artifact in manifest.artifacts:
         path = _safe_result_path(incoming, artifact.relative_path)
@@ -1780,9 +1880,7 @@ async def _fetch_result_manifest(
         missing.append(artifact)
     total_bytes = sum(int(artifact.size_bytes) for artifact in manifest.artifacts)
     configured_limit = int(os.environ.get("BMS_REMOTE_MAX_RETURN_BYTES", DEFAULT_MAX_RESULT_BYTES))
-    free_budget = max(0, shutil.disk_usage(incoming.parent).free - RESULT_DISK_RESERVE_BYTES)
-    missing_bytes = sum(int(artifact.size_bytes) for artifact in missing)
-    if total_bytes > configured_limit or missing_bytes + len(manifest_bytes) > free_budget:
+    if total_bytes > configured_limit:
         raise RemoteExecutionError("Remote result package exceeds the local return-byte budget")
     # A deterministic sibling temp cannot pollute the declared payload inventory.
     from .result_generation import move
@@ -1793,6 +1891,16 @@ async def _fetch_result_manifest(
         handle.flush()
         os.fsync(handle.fileno())
     move(temporary, incoming / "result-manifest.json")
+    for relative in manifest.directories:
+        directory = checked(_safe_result_path(incoming, relative))
+        directory.mkdir(parents=True, exist_ok=True)
+    for artifact in missing:
+        reuse_payload(job, artifact, previous, _safe_result_path(incoming, artifact.relative_path))
+    missing_bytes = sum(int(artifact.size_bytes) for artifact in missing
+                        if not _safe_result_path(incoming, artifact.relative_path).is_file())
+    free_budget = max(0, shutil.disk_usage(incoming.parent).free - RESULT_DISK_RESERVE_BYTES)
+    if missing_bytes > free_budget:
+        raise RemoteExecutionError("Remote result package exceeds the local return-byte budget")
     return manifest
 
 
@@ -1870,6 +1978,9 @@ async def _recover_result_generation(session, job):
     if not journal_path(job).exists():
         return False
     identity = _pull_identity(job)
+    # Import failure belongs to the pull transaction owner: it rolls back before
+    # calling us (including flushed state). Do not discard unrelated caller work
+    # here. Successful finalizers commit before entering this recovery boundary.
     await session.refresh(job)
     if _pull_identity(job) != identity:
         raise RemoteExecutionError("Result publication recovery authority changed")
@@ -1895,7 +2006,7 @@ async def _recover_result_generation(session, job):
 async def _finish_remote_cancellation(session: AsyncSession, job: Job, status=None) -> bool:
     target = (await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
               if job.execution_target_id else None)
-    leased = bool(target and target.leased_job_id == str(job.id))
+    leased = job_has_claim(target, job)
     if job.remote_attempt_id and leased and (status is None or not getattr(status, "quiescent", False)):
         return False
     if not await cancel_local_result_transfer(job, guard_owned=True):
@@ -1992,20 +2103,22 @@ async def _service_remote_external_inputs(session, job, status) -> None:
         ('status', 'queue_status', 'remote_attempt_id', 'nextflow_run_id', 'execution_target_id',
          'execution_source_revision', 'execution_source_tree', 'execution_bundle_sha256', 'params')})
     lease_epoch = receipt.get('lease_acquired_at')
+    claim_id = shared_assignment(job).get('lease_id')
 
     async def check_fence():
         await session.refresh(job)
         current_target = (await session.execute(select(ExecutionTarget).where(
-            ExecutionTarget.id == str(job.execution_target_id), ExecutionTarget.leased_job_id == str(job.id),
-            *_attempt_lease_predicates(job)))).scalar_one_or_none()
+            target_claim_authority(job)))).scalar_one_or_none()
         current = canonical_bytes({key: getattr(job, key) for key in
             ('status', 'queue_status', 'remote_attempt_id', 'nextflow_run_id', 'execution_target_id',
              'execution_source_revision', 'execution_source_tree', 'execution_bundle_sha256', 'params')})
         current_receipt = (job.provenance or {}).get('remote_execution_receipt') or {}
         if (current != snapshot or (job.status, job.queue_status) != ('running', 'running')
                 or current_receipt.get('component_context_identity') != authority
-                or current_target is None or not lease_epoch
-                or current_receipt.get('lease_acquired_at') != lease_epoch):
+                or current_target is None
+                or (claim_id is not None and shared_assignment(job).get('lease_id') != claim_id)
+                or (claim_id is None and (not lease_epoch
+                    or current_receipt.get('lease_acquired_at') != lease_epoch))):
             raise asyncio.CancelledError('External service owner changed')
 
     await check_fence()
@@ -2118,12 +2231,12 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
                 return changed
             return await _finish_remote_cancellation(session, job) or changed
         if job.status == "cancelled" and job.remote_attempt_id and (
-                target is None or target.leased_job_id != str(job.id)):
+                not job_has_claim(target, job)):
             # Compute can release its lease before local result return finishes.
             if job.remote_state == "cancelled":
                 return changed
             return await _finish_remote_cancellation(session, job) or changed
-        if target is None or target.leased_job_id != str(job.id) or not job.remote_attempt_id:
+        if not job_has_claim(target, job) or not job.remote_attempt_id:
             return changed
         identity = _pull_identity(job)
         try:
@@ -2139,7 +2252,7 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
         target = await session.get(ExecutionTarget, str(identity["execution_target_id"]), populate_existing=True)
         if (job is None or _pull_identity(job) != identity or
                 job.status not in {"completed", "failed", "cancelled"} or
-                target is None or target.leased_job_id != job_id):
+                not job_has_claim(target, job)):
             return changed
         if job.status == "cancelled":
             if observed.state not in TERMINAL_REMOTE_STATES or not observed.quiescent:
@@ -2871,7 +2984,15 @@ def _native_result_view(job, status, artifact_root, manifest):
         records.append(artifact.model_copy(update={'relative_path': local.as_posix()}))
     # This is a native path projection of authenticated entries, not a new
     # transport manifest or any changed scientific bytes/digests.
-    return relative, root, manifest.model_copy(update={'artifacts': records})
+    directories = []
+    for directory in manifest.directories:
+        try:
+            local = PurePosixPath(directory).relative_to(relative)
+        except ValueError:
+            continue
+        if local.parts:
+            directories.append(local.as_posix())
+    return relative, root, manifest.model_copy(update={'artifacts': records, 'directories': directories})
 
 
 def retained_result_view(job, *, diagnostics: bool = False):
@@ -3062,7 +3183,7 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
                 output_root=local_output, manifest=native_manifest,
             )
         await session.flush()
-        if job.model_id == "nanopore" and ngs_completion_path != "shared_native_import":
+        if job.model_id == "nanopore" and ngs_completion_path not in {"shared_native_import", "pooled_review"}:
             job.completed_at = job.completed_at or datetime.utcnow()
         elif job.model_id == "msa_batch":
             msa_manifest = local_output / "msa_manifest.json"
@@ -3108,6 +3229,7 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
                     or str(job.execution_target_id or "") != expected_target_id
                     or (job.status, job.queue_status, job.remote_state) != expected_terminal):
                 return False
+            await _recover_result_generation(session, job)
             # The finalizer committed the terminal state and lease release
             # atomically. Consume that result without claiming its old lease.
             if result.completed:
@@ -3147,6 +3269,7 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
     job.completed_at = job.completed_at or datetime.utcnow()
     await _release_remote_target_lease(session, job)
     await session.commit()
+    await _recover_result_generation(session, job)
     return True
 
 

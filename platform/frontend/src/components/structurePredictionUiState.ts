@@ -443,13 +443,20 @@ export const resolveStructurePredictorSelection = (
             error: 'Boltz + Protenix requires complex mode. The saved ensemble was not replaced.' };
     }
 
+    // Match the existing complex API interpretation, retaining the literal saved token.
+    if (mode === 'complex' && (requestedSelection === 'both' || requestedSelection === 'all')) {
+        return { requestedSelection, canonicalSelection: 'boltz_protenix',
+            families: ['boltz', 'protenix'], valid: true };
+    }
     if (isLegacyStructurePredictorSelection(requestedSelection)) {
         return {
             requestedSelection,
             canonicalSelection: 'boltz',
             families: [],
             valid: false,
-            error: 'RF3 is retained for historical result review only and cannot be submitted or retried.',
+            error: requestedSelection === 'rf3'
+                ? 'RF3 is not accepted by the standalone or complex sequence-prediction API. Embedded PDB-input uses and historical results remain separate contexts.'
+                : `Saved ${requestedSelection} has no established non-complex replay interpretation. Its original token is retained; select a current predictor explicitly.`,
         };
     }
 

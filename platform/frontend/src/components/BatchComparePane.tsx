@@ -62,11 +62,12 @@ export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeM
     });
 
     const comparison = batchData?.data;
+    const useNative = nativeMetrics || !!comparison?.scientific_cohorts?.length;
     const points = useQuery({
         queryKey: ['comparison-native-points', selectedJobIds],
         queryFn: async () => (await Promise.all(selectedJobIds.map(id => fetchJobDesignMetrics(id, false))))
             .flatMap(response => response.data).filter((point): point is ScientificPoint => point.contract_revision === 1),
-        enabled: nativeMetrics && selectedJobIds.length > 0,
+        enabled: useNative && selectedJobIds.length > 0,
     });
 
     const toggleJob = (id: string) => {
@@ -84,15 +85,14 @@ export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeM
             avg_plddt: comparison.metrics_summary['plddt_overall']?.[jobId],
             avg_pae: comparison.metrics_summary['pae_overall']?.[jobId],
             avg_ptm: comparison.metrics_summary['ptm']?.[jobId],
-            success_rate: comparison.metrics_summary['success_rate']?.[jobId],
-            total_designs: job?.design_count || 0
+            total_designs: job?.design_count ?? null
         };
     }) : [];
 
     return (
-        <div className="flex h-[800px]">
+        <div className="flex min-w-0 flex-col lg:h-[800px] lg:flex-row">
             {/* Sidebar: Job Selector */}
-            <div className="w-80 border-r border-slate-800 bg-slate-900/30 flex flex-col">
+            <div className="flex max-h-64 min-w-0 flex-col border-b border-slate-800 bg-slate-900/30 lg:max-h-none lg:w-80 lg:shrink-0 lg:border-b-0 lg:border-r">
                 <div className="p-4 border-b border-slate-800">
                     <h3 className="font-semibold text-slate-200">Select Jobs</h3>
                     <p className="text-xs text-slate-500 mt-1">Select multiple jobs to compare</p>
@@ -104,39 +104,41 @@ export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeM
                         </div>
                     ) : (
                         jobs.map((job: Job) => (
-                            <div
+                            <button
+                                type="button"
                                 key={job.id}
+                                aria-pressed={selectedJobIds.includes(job.id)}
                                 onClick={() => toggleJob(job.id)}
-                                className={`p-3 rounded-lg mb-1 cursor-pointer transition-colors border ${selectedJobIds.includes(job.id)
+                                className={`block w-full text-left p-3 rounded-lg mb-1 cursor-pointer transition-colors border focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400 ${selectedJobIds.includes(job.id)
                                     ? 'bg-blue-500/10 border-blue-500/50'
                                     : 'bg-transparent border-transparent hover:bg-slate-800'
                                     }`}
                             >
-                                <div className="flex items-start justify-between">
-                                    <span className={`text-sm font-medium ${selectedJobIds.includes(job.id) ? 'text-blue-400' : 'text-slate-300'}`}>
+                                <span className="flex items-start justify-between">
+                                    <span className={`min-w-0 break-words text-sm font-medium ${selectedJobIds.includes(job.id) ? 'text-blue-400' : 'text-slate-300'}`}>
                                         {job.name}
                                     </span>
                                     {selectedJobIds.includes(job.id) && (
-                                        <div className="w-2 h-2 rounded-full bg-blue-500 mt-1.5" />
+                                        <span aria-hidden="true" className="w-2 h-2 shrink-0 rounded-full bg-blue-500 mt-1.5" />
                                     )}
-                                </div>
-                                <div className="flex items-center gap-2 mt-1 text-xs text-slate-500">
+                                </span>
+                                <span className="flex items-center gap-2 mt-1 text-xs text-slate-500">
                                     <span>{job.mode}</span>
                                     <span>•</span>
                                     <span>{new Date(job.created_at).toLocaleDateString()}</span>
-                                </div>
-                            </div>
+                                </span>
+                            </button>
                         ))
                     )}
                 </div>
             </div>
 
             {/* Main Content: Comparison */}
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="min-w-0 flex-1 overflow-y-auto p-4 lg:p-6">
                 {selectedJobIds.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-slate-500">
                         <div className="text-4xl mb-4">📊</div>
-                        <p>Select jobs from the sidebar to begin comparison</p>
+                        <p>Select jobs to begin comparison</p>
                     </div>
                 ) : isLoading ? (
                     <div className="h-full flex items-center justify-center">
@@ -144,15 +146,22 @@ export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeM
                     </div>
                 ) : comparison ? (
                     <div className="space-y-8">
-                        {nativeMetrics && <>
+                        {useNative && <>
                             <p>Native measurements stay in their producer cohorts; parent and descendant jobs are not pooled. Missing measurements are not zero. Open native observations to compare original record sets without turning them into Designs.</p>
                             {selectedJobIds.map(id => <NativeObservations key={id} jobId={id} launchContextId={launchContextId} />)}
                             {points.isError ? <p role="alert">Native comparison measurements could not be loaded.</p>
                                 : points.isPending ? <p>Loading native measurements…</p>
-                                : points.data.length ? <ScientificAnalytics points={points.data} cohorts={comparison.scientific_cohorts ?? []} />
+                                : points.data.length ? <>
+                                    <ScientificAnalytics points={points.data} cohorts={comparison.scientific_cohorts ?? []} />
+                                    <details><summary>Retained native records and producer scopes</summary><div className="overflow-auto"><table className="text-left text-xs"><thead><tr><th>Design / owning Job</th><th>Producer version / scope / unit</th><th>Availability</th></tr></thead><tbody>
+                                        {points.data.map(point => <tr key={`${point.source_job_id}:${point.id}`}><td className="p-2">{point.name} ({point.id})<br />{point.source_job_id}</td>
+                                            <td>{[...new Set(Object.values(point.metric_descriptors).map(d => `${d.producer_version} / ${d.scope} / ${d.unit}`))].join('; ') || 'Unavailable'}</td>
+                                            <td>{point.publication_state?.reason_code ?? (Object.keys(point.metric_states).length ? `${Object.values(point.metric_states).filter(s => s.state === 'ok').length} observed measurements` : 'Measurements unavailable')}</td></tr>)}
+                                    </tbody></table></div></details>
+                                </>
                                 : <p>No canonical native measurements reported for this selection.</p>}
                         </>}
-                        {!nativeMetrics && <>
+                        {!useNative && <>
                         {/* Summary Table */}
                         <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700/50">
                             <h3 className="text-lg font-semibold text-white mb-4">Summary Statistics</h3>
@@ -161,7 +170,6 @@ export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeM
                                     <thead>
                                         <tr className="border-b border-slate-700 text-slate-400">
                                             <th className="px-4 py-2 text-left">Job</th>
-                                            <th className="px-4 py-2 text-center text-emerald-400">Success Rate</th>
                                             <th className="px-4 py-2 text-center text-blue-400">Avg pLDDT</th>
                                             <th className="px-4 py-2 text-center text-amber-400">Avg PAE</th>
                                             <th className="px-4 py-2 text-center text-violet-400">Avg pTM</th>
@@ -172,11 +180,10 @@ export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeM
                                         {tableRows.map((stat) => (
                                             <tr key={stat.job_id} className="hover:bg-slate-800/30">
                                                 <td className="px-4 py-3 font-medium text-slate-200">{stat.job_name}</td>
-                                                <td className="px-4 py-3 text-center font-mono">{stat.success_rate != null ? (stat.success_rate * 100).toFixed(1) + '%' : '—'}</td>
                                                 <td className="px-4 py-3 text-center font-mono">{stat.avg_plddt?.toFixed(1) || '—'}</td>
                                                 <td className="px-4 py-3 text-center font-mono">{stat.avg_pae?.toFixed(1) || '—'}</td>
                                                 <td className="px-4 py-3 text-center font-mono">{stat.avg_ptm?.toFixed(2) || '—'}</td>
-                                                <td className="px-4 py-3 text-center font-mono">{stat.total_designs}</td>
+                                                <td className="px-4 py-3 text-center font-mono">{stat.total_designs ?? '—'}</td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -184,29 +191,6 @@ export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeM
                             </div>
                         </div>
 
-                        {/* Distributions */}
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                            <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700/50 h-80">
-                                <h4 className="text-sm font-semibold text-slate-300 mb-4">Average pLDDT Comparison</h4>
-                                <div className="flex items-end h-[200px] gap-4 px-4">
-                                    {tableRows.map((stat) => (
-                                        <div key={stat.job_id} className="flex-1 flex flex-col justify-end gap-2 group">
-                                            <div
-                                                className="w-full bg-blue-500/20 group-hover:bg-blue-500/40 rounded-t transition-all relative"
-                                                style={{ height: `${(stat.avg_plddt || 0)}%` }}
-                                            >
-                                                <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-xs text-white opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    {stat.avg_plddt?.toFixed(1)}
-                                                </div>
-                                            </div>
-                                            <div className="text-xs text-slate-500 truncate text-center" title={stat.job_name}>
-                                                {stat.job_name}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        </div>
                         </>}
                     </div>
                 ) : (

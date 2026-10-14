@@ -1,4 +1,4 @@
-/** Pinned Dorado 1.3.1 P4 data plane: preflight -> exact model -> optional demux. */
+/** Dorado 2.1.2: verify inputs and models, basecall, then optionally demultiplex. */
 def doradoShellQuote(value) {
     return "'" + value.toString().replace("'", "'\"'\"'") + "'"
 }
@@ -18,12 +18,12 @@ process DoradoPreflight {
     script:
     def python = doradoShellQuote(params.pod5_python ?: 'python3')
     def scriptPath = doradoShellQuote("${params.code_root}/scripts/dorado_p4_preflight.py")
-    def lockPath = doradoShellQuote(params.dorado_lock_manifest ?: "${params.code_root}/config/ngs/dorado_v1.3.1.lock.json")
+    def lockPath = doradoShellQuote(params.dorado_lock_manifest ?: "${params.code_root}/config/ngs/dorado_v2.1.2.lock.json")
     def expectedLockSha256 = (params.dorado_lock_sha256 ?: '').toString().trim().toLowerCase()
     if (expectedLockSha256 && !(expectedLockSha256 ==~ /[0-9a-f]{64}/)) {
         throw new IllegalArgumentException('dorado_lock_sha256 must be exactly 64 hexadecimal characters')
     }
-    def modelRoot = doradoShellQuote(params.dorado_model_root ?: "${params.weights_root}/dorado/1.3.1")
+    def modelRoot = doradoShellQuote(params.dorado_model_root ?: "${params.weights_root}/dorado/2.1.2")
     def runtimeSif = doradoShellQuote(params.dorado_runtime_sif ?: "${params.container_dir}/dorado.sif")
     def molecule = doradoShellQuote(params.ont_molecule_type ?: 'dna')
     def quality = doradoShellQuote(params.dorado_quality_mode ?: 'sup')
@@ -31,6 +31,7 @@ process DoradoPreflight {
     def modified = doradoShellQuote(params.modified_bases ?: 'none')
     def device = doradoShellQuote(params.dorado_device ?: 'cuda:0')
     def minQscore = doradoShellQuote(params.min_qscore != null ? params.min_qscore : 10)
+    def selectedBinding = doradoShellQuote(params.dorado_input_binding_json ?: '{}')
     def optional = []
     if (params.dorado_batch_size != null && params.dorado_batch_size.toString().trim()) optional += "--batch-size ${doradoShellQuote(params.dorado_batch_size)}"
     if (params.duplex_pairs) optional += "--pairs ${doradoShellQuote(params.duplex_pairs)}"
@@ -52,6 +53,7 @@ process DoradoPreflight {
       --quality ${quality} \
       --mode ${mode} \
       --model-root ${modelRoot} \
+      --selected-binding-json ${selectedBinding} \
       --runtime-sif ${runtimeSif} \
       --modified-bases ${modified} \
       --device ${device} \
@@ -103,8 +105,6 @@ process DoradoBasecall {
     batch_size="\$(jq -r '.execution_policy.batch_size' dorado_preflight.json)"
     device="\$(jq -r '.execution_policy.device' dorado_preflight.json)"
     min_qscore="\$(jq -r '.execution_policy.min_qscore' dorado_preflight.json)"
-    min_gpu_total="\$(jq -r '.execution_policy.min_gpu_total_mib' dorado_preflight.json)"
-    min_gpu_free="\$(jq -r '.execution_policy.min_gpu_free_mib' dorado_preflight.json)"
     pair_relative="\$(jq -r '.pairs.relative_path // empty' dorado_preflight.json)"
     barcode_kit="\$(jq -r '.barcoding.kit // empty' dorado_preflight.json)"
     sample_relative="\$(jq -r '.barcoding.sample_sheet.relative_path // empty' dorado_preflight.json)"
@@ -122,19 +122,22 @@ process DoradoBasecall {
     if [[ "\${mode}" == duplex && "\${trim_adapters}" == false ]]; then
       echo 'locked Dorado duplex lacks an adapter-trim control; trim_adapters=false is unsupported' >&2; exit 1
     fi
-    [[ "\${min_gpu_total}" =~ ^[0-9]+\$ && "\${min_gpu_free}" =~ ^[0-9]+\$ ]]
 
     verify_model_tree() {
-      local model_dir="\$1" expected_sha="\$2" expected_files="\$3" expected_bytes="\$4"
+      local model_dir="\$1" expected_sha="\$2" expected_files="\$3" expected_bytes="\$4" json_key="\$5"
       local inventory observed_sha observed_files=0 observed_bytes=0 file rel size file_sha
       [[ -d "\${model_dir}" && ! -L "\${model_dir}" ]]
-      if find "\${model_dir}" -type l -print -quit | grep -q .; then echo "model tree contains a symlink: \${model_dir}" >&2; exit 1; fi
+      while IFS= read -r -d '' file; do
+        rel="\${file#\${model_dir}/}"
+        declared_alias="\$(jq -r "\${json_key}.members" dorado_preflight.json | jq -r --arg rel "\${rel}" '.[\$rel].alias // empty')"
+        [[ -n "\${declared_alias}" && "\$(readlink -- "\${file}")" == "\${declared_alias}" && -f "\${file}" ]] || { echo "undeclared model alias: \${file}" >&2; exit 1; }
+      done < <(find "\${model_dir}" -type l -print0)
       inventory="\$(mktemp)"
       while IFS= read -r -d '' file; do
-        rel="\${file#\${model_dir}/}"; size="\$(stat -c %s "\${file}")"; file_sha="\$(sha256sum "\${file}" | cut -d' ' -f1)"
+        rel="\${file#\${model_dir}/}"; size="\$(stat -Lc %s "\${file}")"; file_sha="\$(sha256sum "\${file}" | cut -d' ' -f1)"
         printf '%s\\0%s\\0%s\\n' "\${rel}" "\${size}" "\${file_sha}" >> "\${inventory}"
         observed_files=\$((observed_files + 1)); observed_bytes=\$((observed_bytes + size))
-      done < <(find "\${model_dir}" -type f -print0 | sort -z)
+      done < <(find -L "\${model_dir}" -type f -print0 | sort -z)
       observed_sha="\$(sha256sum "\${inventory}" | cut -d' ' -f1)"; rm -f "\${inventory}"
       [[ "\${observed_sha}" == "\${expected_sha}" && "\${observed_files}" == "\${expected_files}" && "\${observed_bytes}" == "\${expected_bytes}" ]] || {
         echo "model identity changed after preflight: \${model_dir}; sha=\${observed_sha}/\${expected_sha} files=\${observed_files}/\${expected_files} bytes=\${observed_bytes}/\${expected_bytes}" >&2; exit 1;
@@ -142,28 +145,42 @@ process DoradoBasecall {
     }
     snapshot_model() {
       local model_name="\$1" json_key="\$2"
-      local source="/weights/dorado/1.3.1/\${model_name}" target="sealed_models/\${model_name}"
+      local source="/weights/dorado/2.1.2/\${model_name}" target="sealed_models/\${model_name}"
       local expected_sha expected_files expected_bytes
       expected_sha="\$(jq -r "\${json_key}.aggregate_sha256" dorado_preflight.json)"
       expected_files="\$(jq -r "\${json_key}.files" dorado_preflight.json)"
       expected_bytes="\$(jq -r "\${json_key}.bytes" dorado_preflight.json)"
-      verify_model_tree "\${source}" "\${expected_sha}" "\${expected_files}" "\${expected_bytes}"
-      mkdir -p "\${target}"; cp -a --reflink=auto "\${source}/." "\${target}/"
-      verify_model_tree "\${target}" "\${expected_sha}" "\${expected_files}" "\${expected_bytes}"
+      verify_model_tree "\${source}" "\${expected_sha}" "\${expected_files}" "\${expected_bytes}" "\${json_key}"
+      # The selected dependency/bind owner, not file mode or the client,
+      # supplies retained authority for a concrete publisher-owned generation.
+      if [[ "\$(jq -r "\${json_key}.retained // false" dorado_preflight.json)" == true ]]; then
+        ln -s -- "\${source}" "\${target}"
+      else
+        mkdir -p "\${target}"; cp -a --reflink=auto "\${source}/." "\${target}/"
+      fi
+      verify_model_tree "\$(readlink -f -- "\${target}")" "\${expected_sha}" "\${expected_files}" "\${expected_bytes}" "\${json_key}"
     }
 
     runtime_expected="\$(jq -r '.runtime.assets.runtime_sif.sha256' dorado_preflight.json)"
     runtime_observed="\$(sha256sum /runtime/dorado.sif | cut -d' ' -f1)"
     [[ "\${runtime_observed}" == "\${runtime_expected}" ]] || { echo 'Dorado runtime changed after preflight' >&2; exit 1; }
 
+    source "${params.code_root ?: projectDir}/scripts/ngs_input_snapshot.sh"
     pod5_source=${doradoShellQuote(pod5_dir)}
+    retained_pod5="\$(jq -r '.inputs.retained // false' dorado_preflight.json)"
     mkdir -p sealed_pod5 sealed_models
     while IFS=\$'\t' read -r relative expected_sha expected_bytes; do
       [[ "\${relative}" != /* && "\${relative}" != *'..'* ]]
       source_file="\${pod5_source}/\${relative}"; target_file="sealed_pod5/\${relative}"
       [[ -f "\${source_file}" && ! -L "\${source_file}" ]]
       [[ "\$(sha256sum "\${source_file}" | cut -d' ' -f1)" == "\${expected_sha}" && "\$(stat -c %s "\${source_file}")" == "\${expected_bytes}" ]] || { echo "POD5 input changed after preflight: \${relative}" >&2; exit 1; }
-      mkdir -p "\$(dirname "\${target_file}")"; cp --reflink=auto --preserve=mode,timestamps "\${source_file}" "\${target_file}"
+      mkdir -p "\$(dirname "\${target_file}")"
+      if [[ "\${retained_pod5}" == true ]]; then
+        # Keep the owned source's ctime-bound receipt intact (no hardlink/chmod).
+        ln -s -- "\$(readlink -f -- "\${source_file}")" "\${target_file}"
+      else
+        ngs_input_snapshot "\${source_file}" "\${target_file}" false
+      fi
       [[ "\$(sha256sum "\${target_file}" | cut -d' ' -f1)" == "\${expected_sha}" ]] || { echo "POD5 snapshot identity mismatch: \${relative}" >&2; exit 1; }
     done < <(jq -r '.inputs.files[] | [.relative_path,.sha256,.bytes] | @tsv' dorado_preflight.json)
 
@@ -197,14 +214,6 @@ process DoradoBasecall {
         selected_logical["\${logical_id}"]=1
       done
     fi
-    for gpu_id in "\${gpu_ids[@]}"; do
-      gpu_memory="\$(nvidia-smi --id="\${gpu_id}" --query-gpu=memory.total,memory.free --format=csv,noheader,nounits | head -n1 | tr -d ' ')"
-      gpu_total="\${gpu_memory%%,*}"; gpu_free="\${gpu_memory##*,}"
-      if (( gpu_total < min_gpu_total || gpu_free < min_gpu_free )); then
-        echo "Dorado GPU admission denied for \${gpu_id}: total=\${gpu_total}MiB free=\${gpu_free}MiB required_total=\${min_gpu_total}MiB required_free=\${min_gpu_free}MiB" >&2
-        exit 1
-      fi
-    done
 
     pod5_root="\$PWD/sealed_pod5"
     base_model="\$PWD/sealed_models/\${model_id}"
@@ -217,15 +226,16 @@ process DoradoBasecall {
     if [[ -n "\${barcode_kit}" ]]; then command+=(--kit-name "\${barcode_kit}"); fi
     if [[ -n "\${sample_relative}" ]]; then command+=(--sample-sheet "\${pod5_root}/\${sample_relative}"); fi
     if [[ -n "\${mod_model_id}" ]]; then command+=(--modified-bases-models "\$PWD/sealed_models/\${mod_model_id}"); fi
+    source ${doradoShellQuote(params.code_root + '/scripts/dorado_supports_option.sh')}
     if [[ "\${molecule}" == dna && "\${mode}" == simplex && "\${trim_adapters}" == false ]]; then
-      bash ${doradoShellQuote(params.code_root + '/scripts/dorado_supports_option.sh')} dorado basecaller --no-trim || { echo 'locked Dorado runtime lacks --no-trim' >&2; exit 1; }
+      dorado_supports_option dorado basecaller --no-trim || { echo 'locked Dorado runtime lacks --no-trim' >&2; exit 1; }
       command+=(--no-trim)
     fi
-    if [[ '${summaryRequested}' == 'true' && "\${mode}" == simplex ]] && bash ${doradoShellQuote("${params.code_root}/scripts/dorado_supports_option.sh")} dorado basecaller --emit-summary; then command+=(--emit-summary); fi
+    if [[ '${summaryRequested}' == 'true' && "\${mode}" == simplex ]] && dorado_supports_option dorado basecaller --emit-summary; then command+=(--emit-summary); fi
     emit_moves='${movesRequested}'
     if [[ "\${emit_moves}" == true ]]; then
       [[ "\${mode}" == simplex ]] || { echo 'move-tag emission is not qualified for duplex' >&2; exit 1; }
-      bash ${doradoShellQuote(params.code_root + '/scripts/dorado_supports_option.sh')} dorado basecaller --emit-moves || { echo 'locked Dorado runtime lacks --emit-moves' >&2; exit 1; }
+      dorado_supports_option dorado basecaller --emit-moves || { echo 'locked Dorado runtime lacks --emit-moves' >&2; exit 1; }
       command+=(--emit-moves)
     fi
 
@@ -235,26 +245,41 @@ process DoradoBasecall {
     if [[ -f sequencing_summary.txt ]]; then mv sequencing_summary.txt sequencing_summary.tsv; fi
     calls_sha="\$(sha256sum calls.bam | cut -d' ' -f1)"
     preflight_sha="\$(sha256sum dorado_preflight.json | cut -d' ' -f1)"
-    read_count="\$(samtools view -c calls.bam)"
-    read_inventory_sha256="\$(samtools view calls.bam | cut -f1 | LC_ALL=C sort | sha256sum | cut -d' ' -f1)"
-    mv_tag_count="\$(samtools view calls.bam | awk 'BEGIN{n=0} {for(i=12;i<=NF;i++) if(\$i ~ /^mv:B:/) {n++; break}} END{print n}')"
-    ts_tag_count="\$(samtools view calls.bam | awk 'BEGIN{n=0} {for(i=12;i<=NF;i++) if(\$i ~ /^ts:i:/) {n++; break}} END{print n}')"
-    ns_tag_count="\$(samtools view calls.bam | awk 'BEGIN{n=0} {for(i=12;i<=NF;i++) if(\$i ~ /^ns:i:/) {n++; break}} END{print n}')"
+    read_inventory_sha256="\$(samtools view calls.bam | awk '
+      BEGIN { mv=0; ts=0; ns=0; dx=0 }
+      {
+        print \$1
+        has_mv=0; has_ts=0; has_ns=0; has_dx=0
+        for (i=12; i<=NF; i++) {
+          if (\$i ~ /^mv:B:/) has_mv=1
+          if (\$i ~ /^ts:i:/) has_ts=1
+          if (\$i ~ /^ns:i:/) has_ns=1
+          if (\$i == "dx:i:1") has_dx=1
+        }
+        mv+=has_mv; ts+=has_ts; ns+=has_ns; dx+=has_dx
+      }
+      END { printf "%.0f %s %s %s %s\\n", NR, mv, ts, ns, dx > "calls.accounting.tmp" }
+    ' | LC_ALL=C sort | sha256sum | cut -d' ' -f1)"
+    read -r read_count mv_tag_count ts_tag_count ns_tag_count duplex_dx1 < calls.accounting.tmp
+    rm -f calls.accounting.tmp
     if [[ "\${emit_moves}" == true ]] && (( mv_tag_count != read_count || ts_tag_count != read_count || ns_tag_count != read_count )); then
       echo "Dorado move-tag contract incomplete: reads=\${read_count} mv=\${mv_tag_count} ts=\${ts_tag_count} ns=\${ns_tag_count}" >&2; exit 1
     fi
-    duplex_dx1=0
     if [[ "\${mode}" == duplex ]]; then
-      duplex_dx1="\$(samtools view calls.bam | awk 'BEGIN{n=0} {for(i=12;i<=NF;i++) if(\$i=="dx:i:1") {n++; break}} END{print n}')"
       (( read_count > 0 && duplex_dx1 == read_count )) || { echo "Dorado duplex output lacks authoritative dx:i:1 calls" >&2; exit 1; }
+    else
+      duplex_dx1=0
     fi
     jq -n --arg schema 'biomodstack.dorado_runtime_provenance.v1' --arg mode "\${mode}" --arg model_id "\${model_id}" --arg calls_sha256 "\${calls_sha}" --arg preflight_sha256 "\${preflight_sha}" --arg runtime_sha256 "\${runtime_observed}" --arg read_inventory_sha256 "\${read_inventory_sha256}" --argjson emit_moves "\${emit_moves}" --argjson read_count "\${read_count}" --argjson mv_tag_count "\${mv_tag_count}" --argjson ts_tag_count "\${ts_tag_count}" --argjson ns_tag_count "\${ns_tag_count}" --argjson duplex_dx1 "\${duplex_dx1}" '{schema:\$schema,mode:\$mode,model_id:\$model_id,preflight_sha256:\$preflight_sha256,runtime_sha256:\$runtime_sha256,emit_moves:\$emit_moves,calls_bam:{sha256:\$calls_sha256,read_count:\$read_count,read_inventory_sha256:\$read_inventory_sha256,move_tags:{mv:\$mv_tag_count,ts:\$ts_tag_count,ns:\$ns_tag_count},duplex_dx1:\$duplex_dx1},network:"denied_by_namespace",model_download:"denied_by_namespace_and_sealed_models"}' > dorado_runtime_provenance.json
     """
 }
 
+include { ngsResultPublishMode } from './publication'
+
 process DoradoDemux {
     label 'dorado_cpu'
-    publishDir "${params.out_dir}/demux", mode: 'copy'
+    publishDir "${params.out_dir}/demux", mode: "${ngsResultPublishMode(workflow.workDir, params.out_dir)}", saveAs: { name -> name ==~ /.*\.bam$/ ? name : null }
+    publishDir "${params.out_dir}/demux", mode: 'copy', saveAs: { name -> name == 'demux' || name ==~ /.*\.bam$/ ? null : name }
     tag 'dorado-demux'
 
     input:
@@ -262,7 +287,8 @@ process DoradoDemux {
     path preflight_json
 
     output:
-    path "demux", emit: directory
+    env published_directory, emit: directory
+    path "demux/**", type: 'file', hidden: true, emit: publication_files
     path "demux_manifest.json", emit: manifest
     path "per_barcode_units.json", emit: units
     path "demux.log", emit: log
@@ -270,11 +296,12 @@ process DoradoDemux {
     script:
     """
     set -euo pipefail
+    export published_directory="\$PWD/demux"
     [[ "\$(jq -r '.schema' ${doradoShellQuote(preflight_json)})" == 'biomodstack.dorado_preflight.v1' ]]
     [[ "\$(jq -r '.selection.mode' ${doradoShellQuote(preflight_json)})" == 'simplex' ]]
     [[ -n "\$(jq -r '.barcoding.kit // empty' ${doradoShellQuote(preflight_json)})" ]]
     mkdir -p demux
-    dorado demux --no-classify --output-dir demux ${doradoShellQuote(bam)} > demux.log 2>&1
+    dorado demux --no-classify --threads ${task.cpus} --output-dir demux ${doradoShellQuote(bam)} > demux.log 2>&1
     shopt -s globstar nullglob
     declare -A alias_to_barcode=()
     declare -A barcode_to_alias=()
@@ -289,12 +316,17 @@ process DoradoDemux {
       [[ "\${value}" == 'unclassified' || "\${value}" =~ ^barcode(0[1-9]|[1-8][0-9]|9[0-6])\$ ]]
     }
     canonical_label() {
-      local candidate="\$1" filename stem mapped
+      local candidate="\$1" filename stem parent category mapped
       filename="\${candidate##*/}"
       stem="\${filename%.bam}"
-      for segment in "\${filename}" "\${stem}"; do
+      parent="\${candidate%/*}"; category="\${parent%/*}"
+      parent="\${parent##*/}"; category="\${category##*/}"
+      # Dorado 2.x writes chunked BAMs below bam_pass/<barcode-or-alias>.
+      # Match that native directory boundary, never a substring of a read/run ID.
+      if [[ "\${category}" != bam_pass && "\${category}" != bam_fail ]]; then parent=''; fi
+      for segment in "\${filename}" "\${stem}" "\${parent}"; do
+        [[ -n "\${segment}" ]] || continue
         if is_canonical_label "\${segment}"; then printf '%s\n' "\${segment}"; return 0; fi
-        if is_canonical_label "\${stem}"; then printf '%s\n' "\${stem}"; return 0; fi
         mapped="\${alias_to_barcode[\${segment}]:-}"
         if is_canonical_label "\${mapped}"; then printf '%s\n' "\${mapped}"; return 0; fi
       done
@@ -307,6 +339,7 @@ process DoradoDemux {
     for source_bam in "\${source_bams[@]}"; do
       [[ -L "\${source_bam}" ]] && { echo 'demux symlink forbidden' >&2; exit 1; }
       samtools quickcheck -u -v "\${source_bam}"
+      chmod 0444 "\${source_bam}"
       if ! source_label="\$(canonical_label "\${source_bam}")"; then
         echo "CRITICAL_FAILURE: UNKNOWN_DEMUX_LABEL" >&2
         exit 86
@@ -329,7 +362,7 @@ process DoradoDemux {
         [[ "\${source_label}" == "\${label}" ]] && label_bams+=("\${source_bam}")
       done
       unit_bam="demux/units/\${label}.bam"
-      if (( \${#label_bams[@]} == 1 )); then cp "\${label_bams[0]}" "\${unit_bam}"; else samtools merge -u -f "\${unit_bam}" "\${label_bams[@]}"; fi
+      if (( \${#label_bams[@]} == 1 )); then chmod 0444 "\${label_bams[0]}"; ln "\${label_bams[0]}" "\${unit_bam}"; else samtools merge -u -f "\${unit_bam}" "\${label_bams[@]}"; chmod 0444 "\${unit_bam}"; fi
       samtools quickcheck -u -v "\${unit_bam}"
       reads="\$(samtools view -c "\${unit_bam}")"; sha="\$(sha256sum "\${unit_bam}" | cut -d' ' -f1)"
       sample_alias="\${barcode_to_alias[\${label}]:-}"

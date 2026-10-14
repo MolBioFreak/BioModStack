@@ -51,7 +51,7 @@ and installation-specific configuration do not belong in Git. Approved release
 assets and controlled scientific fixtures are explicit exceptions, not permission
 to commit arbitrary packages or logs. The
 [repository maintenance guide](docs/Repository_Maintenance.md) explains the
-hash-bound exceptions, hygiene checks, and source-record regeneration. Active
+hash-bound exceptions, hygiene checks, and deployed source metadata. Active
 plans and source-bound contracts remain until their controlled retirement; Git
 history is the archive for obsolete material.
 
@@ -194,9 +194,6 @@ git diff --cached --check
 
 The scanner examines the index, not untracked or unstaged work. It is not a
 complete secret/history audit or proof that every source file is necessary.
-Source-tree edits also require the existing runtime implementation record to be
-regenerated and validated before integration; see
-[Repository Maintenance](docs/Repository_Maintenance.md).
 
 Run the smallest relevant validation for the changed owner surface. For API
 work, use the locked development environment:

@@ -225,6 +225,7 @@ def _slow5_open(
     temporary_root: Path | None = None,
     source_fd: int | None = None,
     index_fd: int | None = None,
+    retained_pair: bool = False,
 ):
     try:
         import pyslow5  # type: ignore
@@ -243,12 +244,19 @@ def _slow5_open(
     try:
         snapshot = root / "source.blow5"
         snapshot_index = root / "source.blow5.idx"
-        source_identity = _copy_slow5_snapshot(
-            path, snapshot, expected=expected, label="BLOW5", source_fd=source_fd
-        )
-        index_identity = _copy_slow5_snapshot(
-            index, snapshot_index, expected=expected_index, label="BLOW5 index", source_fd=index_fd
-        )
+        if retained_pair and source_fd is not None and index_fd is not None:
+            # The descriptor socket is the authority and container visibility
+            # boundary. Native slow5 needs an adjacent filename, not a host path.
+            snapshot.symlink_to(f"/proc/self/fd/{source_fd}")
+            snapshot_index.symlink_to(f"/proc/self/fd/{index_fd}")
+            source_identity, index_identity = expected, expected_index
+        else:
+            source_identity = _copy_slow5_snapshot(
+                path, snapshot, expected=expected, label="BLOW5", source_fd=source_fd
+            )
+            index_identity = _copy_slow5_snapshot(
+                index, snapshot_index, expected=expected_index, label="BLOW5 index", source_fd=index_fd
+            )
         handle = pyslow5.Open(str(snapshot), "r")
         if handle is None:
             raise ValueError("BLOW5 could not be opened")
@@ -525,6 +533,15 @@ def semantic_validate(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError("BLOW5 unit name is not a run-info fingerprint")
         if fingerprint in groups:
             raise ValueError("duplicate BLOW5 run-info partition")
+        # These are this conversion's completed native products, not external
+        # inputs. Finalize mode BEFORE the ctime-bound scientific receipt.
+        for completed in (blow5_path, index_path):
+            descriptor = os.open(completed, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                if os.fstat(descriptor).st_mode & 0o222:
+                    os.fchmod(descriptor, 0o444)
+            finally:
+                os.close(descriptor)
         slow5 = _slow5_open(
             blow5_path,
             index_path=index_path,
@@ -627,6 +644,7 @@ def semantic_validate(args: argparse.Namespace) -> dict[str, Any]:
         "partition_count": len(groups),
         "partition_counts": dict(sorted(observed_group_counts.items())),
         "output_identities": output_identities,
+        "retained_indexed_pair": True,
         "total_signal_samples_compared": total_samples,
         "signal_samples": "bit_exact_int16",
         "mapping_contract": "verified_signal_and_full_common_field_contract_exact",
@@ -830,6 +848,7 @@ def external_blow5_validate(args: argparse.Namespace) -> dict[str, Any]:
             temporary_root=temporary_root,
             source_fd=received_files[0],
             index_fd=received_files[1],
+            retained_pair=getattr(args, "retained_pair", False),
         )
     else:
         blow5_identity = _verify_external_file(
@@ -939,6 +958,7 @@ def main() -> int:
         external.add_argument(f"--expected-{prefix}-root-device", type=int, required=True)
         external.add_argument(f"--expected-{prefix}-root-inode", type=int, required=True)
     external.add_argument("--fd-socket", type=Path)
+    external.add_argument("--retained-pair", action="store_true")
     external.add_argument("--metrics", type=Path)
     external.add_argument("--receipt", type=Path, required=True)
     partition = subparsers.add_parser("partition-pod5")

@@ -41,7 +41,7 @@ const WORKFLOW_CHOICES: readonly WorkflowChoice[] = [
         key: 'constructScreening',
         title: 'Screen a construct',
         input: 'POD5, BAM, or FASTQ + saved MolBio revision',
-        result: 'BMS construct-screening evidence; not a competing clone report',
+        result: 'Construct-screening results',
     },
     {
         key: 'fastqQc',
@@ -83,7 +83,7 @@ const WORKFLOW_CHOICES: readonly WorkflowChoice[] = [
         key: 'barcode',
         title: 'Classify and demultiplex RBK114',
         input: 'DNA POD5',
-        result: 'Canonical barcodeNN units and demux outputs',
+        result: 'Barcode groups and demultiplexed reads',
     },
     {
         key: 'pooledAssignment',

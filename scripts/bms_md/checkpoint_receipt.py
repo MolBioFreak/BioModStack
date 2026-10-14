@@ -8,6 +8,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .native_config import final_stage_name, compatibility_key
+
 _STEP = re.compile(r"(?:^|\s)step\s*=\s*(\d+)", re.IGNORECASE)
 _TIME = re.compile(r"(?:^|\s)t\s*=\s*([0-9]+(?:\.[0-9]*)?(?:[eE][+-]?\d+)?)")
 
@@ -33,9 +35,11 @@ def write_checkpoint_receipt(
 ) -> Path:
     config_path = Path(config_path).expanduser().resolve(strict=True)
     output_dir = Path(output_dir).expanduser().resolve(strict=True)
-    # Native pause/resume is production-only. A fresher equilibration or backup
-    # checkpoint must never become a stage-less production snapshot.
-    checkpoint = output_dir / "production" / "production.cpt"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    # Only the final authored stage is eligible; fresher equilibration/backup
+    # checkpoints do not become production continuation snapshots.
+    stage = final_stage_name(config)
+    checkpoint = output_dir / stage / f"{stage}.cpt"
     if (not checkpoint.is_file() or checkpoint.is_symlink()
             or checkpoint.parent.is_symlink()
             or (minimum_mtime_ns is not None and checkpoint.stat().st_mtime_ns < minimum_mtime_ns)):
@@ -59,17 +63,7 @@ def write_checkpoint_receipt(
     if not steps or not times:
         raise RuntimeError(f"GROMACS checkpoint metadata is incomplete for {relative_path}")
 
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    compatibility = _digest({
-        "engine": config.get("engine"),
-        "engine_runtime": config.get("engine_runtime"),
-        "chemistry": config.get("chemistry"),
-        "protocol": config.get("protocol"),
-        "input_hashes": {
-            key: value for key, value in (config.get("input") or {}).items()
-            if key.endswith("_sha256")
-        },
-    })
+    compatibility = compatibility_key(config)
     checkpoint_bytes = checkpoint.read_bytes()
     receipt = {
         "schema": "bms.md.checkpoint-receipt.v1",
@@ -81,6 +75,8 @@ def write_checkpoint_receipt(
         "execution_plan_sha256": _digest(config),
         "compatibility_key": compatibility,
     }
+    if config.get("schema") == "bms.md.job.v3":
+        receipt.update(job_schema=config["schema"], native_stage=stage)
     receipt_path = output_dir / "md-checkpoint-receipt.json"
     _atomic_json(receipt_path, receipt)
     return receipt_path

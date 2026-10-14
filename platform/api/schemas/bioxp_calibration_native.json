@@ -1,0 +1,4393 @@
+{
+  "measurement_form": {
+    "$defs": {
+      "MeasurementField": {
+        "additionalProperties": false,
+        "properties": {
+          "field_id": {
+            "minLength": 1,
+            "title": "Field Id",
+            "type": "string"
+          },
+          "label": {
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "unit": {
+            "enum": [
+              "degC",
+              "uL",
+              "mg",
+              "g",
+              "steps"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "module": {
+            "enum": [
+              "rc",
+              "oc",
+              "tc",
+              "pipette"
+            ],
+            "title": "Module",
+            "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Zone"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Target"
+          },
+          "commanded": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Commanded"
+          },
+          "controller_reported": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Controller Reported"
+          },
+          "repetitions": {
+            "default": 1,
+            "minimum": 1,
+            "title": "Repetitions",
+            "type": "integer"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          }
+        },
+        "required": [
+          "field_id",
+          "label",
+          "unit",
+          "module"
+        ],
+        "title": "MeasurementField",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "fields": {
+        "items": {
+          "$ref": "#/$defs/MeasurementField"
+        },
+        "minItems": 1,
+        "title": "Fields",
+        "type": "array"
+      }
+    },
+    "required": [
+      "fields"
+    ],
+    "title": "MeasurementForm",
+    "type": "object"
+  },
+  "measurement_response": {
+    "additionalProperties": false,
+    "properties": {
+      "measurements": {
+        "additionalProperties": {
+          "items": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "title": "Measurements",
+        "type": "object"
+      }
+    },
+    "required": [
+      "measurements"
+    ],
+    "title": "MeasurementResponse",
+    "type": "object"
+  },
+  "pending_measurement": {
+    "$defs": {
+      "MeasurementField": {
+        "additionalProperties": false,
+        "properties": {
+          "field_id": {
+            "minLength": 1,
+            "title": "Field Id",
+            "type": "string"
+          },
+          "label": {
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "unit": {
+            "enum": [
+              "degC",
+              "uL",
+              "mg",
+              "g",
+              "steps"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "module": {
+            "enum": [
+              "rc",
+              "oc",
+              "tc",
+              "pipette"
+            ],
+            "title": "Module",
+            "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Zone"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Target"
+          },
+          "commanded": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Commanded"
+          },
+          "controller_reported": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Controller Reported"
+          },
+          "repetitions": {
+            "default": 1,
+            "minimum": 1,
+            "title": "Repetitions",
+            "type": "integer"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          }
+        },
+        "required": [
+          "field_id",
+          "label",
+          "unit",
+          "module"
+        ],
+        "title": "MeasurementField",
+        "type": "object"
+      },
+      "MeasurementForm": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/$defs/MeasurementField"
+            },
+            "minItems": 1,
+            "title": "Fields",
+            "type": "array"
+          }
+        },
+        "required": [
+          "fields"
+        ],
+        "title": "MeasurementForm",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "stage_id": {
+        "minLength": 1,
+        "title": "Stage Id",
+        "type": "string"
+      },
+      "action_id": {
+        "minLength": 1,
+        "title": "Action Id",
+        "type": "string"
+      },
+      "source_occurrence_id": {
+        "minLength": 1,
+        "title": "Source Occurrence Id",
+        "type": "string"
+      },
+      "measurement_form": {
+        "$ref": "#/$defs/MeasurementForm"
+      }
+    },
+    "required": [
+      "stage_id",
+      "action_id",
+      "source_occurrence_id",
+      "measurement_form"
+    ],
+    "title": "PendingMeasurement",
+    "type": "object"
+  },
+  "pending_review": {
+    "$defs": {
+      "MeasurementField": {
+        "additionalProperties": false,
+        "properties": {
+          "field_id": {
+            "minLength": 1,
+            "title": "Field Id",
+            "type": "string"
+          },
+          "label": {
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "unit": {
+            "enum": [
+              "degC",
+              "uL",
+              "mg",
+              "g",
+              "steps"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "module": {
+            "enum": [
+              "rc",
+              "oc",
+              "tc",
+              "pipette"
+            ],
+            "title": "Module",
+            "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Zone"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Target"
+          },
+          "commanded": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Commanded"
+          },
+          "controller_reported": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Controller Reported"
+          },
+          "repetitions": {
+            "default": 1,
+            "minimum": 1,
+            "title": "Repetitions",
+            "type": "integer"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          }
+        },
+        "required": [
+          "field_id",
+          "label",
+          "unit",
+          "module"
+        ],
+        "title": "MeasurementField",
+        "type": "object"
+      },
+      "MeasurementForm": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/$defs/MeasurementField"
+            },
+            "minItems": 1,
+            "title": "Fields",
+            "type": "array"
+          }
+        },
+        "required": [
+          "fields"
+        ],
+        "title": "MeasurementForm",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "stage_id": {
+        "minLength": 1,
+        "title": "Stage Id",
+        "type": "string"
+      },
+      "action_id": {
+        "minLength": 1,
+        "title": "Action Id",
+        "type": "string"
+      },
+      "source_occurrence_id": {
+        "minLength": 1,
+        "title": "Source Occurrence Id",
+        "type": "string"
+      },
+      "measurement_form": {
+        "$ref": "#/$defs/MeasurementForm"
+      },
+      "reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Reason"
+      }
+    },
+    "required": [
+      "stage_id",
+      "action_id",
+      "source_occurrence_id",
+      "measurement_form",
+      "reason"
+    ],
+    "title": "PendingMeasurementReview",
+    "type": "object"
+  },
+  "measurement_record": {
+    "$defs": {
+      "MeasurementField": {
+        "additionalProperties": false,
+        "properties": {
+          "field_id": {
+            "minLength": 1,
+            "title": "Field Id",
+            "type": "string"
+          },
+          "label": {
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "unit": {
+            "enum": [
+              "degC",
+              "uL",
+              "mg",
+              "g",
+              "steps"
+            ],
+            "title": "Unit",
+            "type": "string"
+          },
+          "module": {
+            "enum": [
+              "rc",
+              "oc",
+              "tc",
+              "pipette"
+            ],
+            "title": "Module",
+            "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Zone"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Target"
+          },
+          "commanded": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Commanded"
+          },
+          "controller_reported": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Controller Reported"
+          },
+          "repetitions": {
+            "default": 1,
+            "minimum": 1,
+            "title": "Repetitions",
+            "type": "integer"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          }
+        },
+        "required": [
+          "field_id",
+          "label",
+          "unit",
+          "module"
+        ],
+        "title": "MeasurementField",
+        "type": "object"
+      },
+      "MeasurementForm": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/$defs/MeasurementField"
+            },
+            "minItems": 1,
+            "title": "Fields",
+            "type": "array"
+          }
+        },
+        "required": [
+          "fields"
+        ],
+        "title": "MeasurementForm",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "stage_id": {
+        "minLength": 1,
+        "title": "Stage Id",
+        "type": "string"
+      },
+      "action_id": {
+        "minLength": 1,
+        "title": "Action Id",
+        "type": "string"
+      },
+      "source_occurrence_id": {
+        "minLength": 1,
+        "title": "Source Occurrence Id",
+        "type": "string"
+      },
+      "measurement_form": {
+        "$ref": "#/$defs/MeasurementForm"
+      },
+      "measurements": {
+        "additionalProperties": {
+          "items": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "title": "Measurements",
+        "type": "object"
+      },
+      "reviewer": {
+        "title": "Reviewer",
+        "type": "string"
+      },
+      "note": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Note"
+      },
+      "job_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Job Id"
+      },
+      "source": {
+        "const": "operator_external_measurement",
+        "title": "Source",
+        "type": "string"
+      }
+    },
+    "required": [
+      "stage_id",
+      "action_id",
+      "source_occurrence_id",
+      "measurement_form",
+      "measurements",
+      "reviewer",
+      "note",
+      "job_id",
+      "source"
+    ],
+    "title": "MeasurementRecord",
+    "type": "object"
+  },
+  "analysis_request": {
+    "$defs": {
+      "CorrectionDomain": {
+        "additionalProperties": false,
+        "properties": {
+          "minimum_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Minimum Ul"
+          },
+          "maximum_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Maximum Ul"
+          }
+        },
+        "required": [
+          "minimum_ul",
+          "maximum_ul"
+        ],
+        "title": "CorrectionDomain",
+        "type": "object"
+      },
+      "MassObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "mass_density",
+            "title": "Kind",
+            "type": "string"
+          },
+          "mass_mg": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Mass Mg"
+          },
+          "density_mg_per_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Density Mg Per Ul"
+          }
+        },
+        "required": [
+          "kind",
+          "mass_mg",
+          "density_mg_per_ul"
+        ],
+        "title": "MassObservation",
+        "type": "object"
+      },
+      "PipetteAnalysis": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "pipette",
+            "title": "Kind",
+            "type": "string"
+          },
+          "model": {
+            "enum": [
+              "descriptive",
+              "exact_point_offset",
+              "affine_inverse_ols"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/$defs/PipetteSample"
+            },
+            "minItems": 1,
+            "title": "Samples",
+            "type": "array"
+          },
+          "evaluate_targets_ul": {
+            "items": {
+              "anyOf": [
+                {
+                  "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "title": "Evaluate Targets Ul",
+            "type": "array"
+          },
+          "domain_ul": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CorrectionDomain"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "verification_samples": {
+            "items": {
+              "$ref": "#/$defs/PipetteSample"
+            },
+            "title": "Verification Samples",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "model",
+          "context",
+          "samples"
+        ],
+        "title": "PipetteAnalysis",
+        "type": "object"
+      },
+      "PipetteSample": {
+        "additionalProperties": false,
+        "properties": {
+          "point_id": {
+            "minLength": 1,
+            "title": "Point Id",
+            "type": "string"
+          },
+          "target_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Target Ul"
+          },
+          "commanded_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Commanded Ul"
+          },
+          "observation": {
+            "discriminator": {
+              "mapping": {
+                "mass_density": "#/$defs/MassObservation",
+                "volume": "#/$defs/VolumeObservation"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/VolumeObservation"
+              },
+              {
+                "$ref": "#/$defs/MassObservation"
+              }
+            ],
+            "title": "Observation"
+          }
+        },
+        "required": [
+          "point_id",
+          "target_ul",
+          "commanded_ul",
+          "observation"
+        ],
+        "title": "PipetteSample",
+        "type": "object"
+      },
+      "ResultReference": {
+        "additionalProperties": false,
+        "description": "Exact earlier native occurrence, never latest-by-label or cross-job.",
+        "properties": {
+          "stage_id": {
+            "minLength": 1,
+            "title": "Stage Id",
+            "type": "string"
+          },
+          "action_id": {
+            "minLength": 1,
+            "title": "Action Id",
+            "type": "string"
+          },
+          "source_occurrence_id": {
+            "minLength": 1,
+            "title": "Source Occurrence Id",
+            "type": "string"
+          },
+          "output": {
+            "enum": [
+              "measurements",
+              "result"
+            ],
+            "title": "Output",
+            "type": "string"
+          },
+          "path": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Path",
+            "type": "array"
+          }
+        },
+        "required": [
+          "stage_id",
+          "action_id",
+          "source_occurrence_id",
+          "output"
+        ],
+        "title": "ResultReference",
+        "type": "object"
+      },
+      "ThermalAnalysis": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "thermal",
+            "title": "Kind",
+            "type": "string"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/$defs/ThermalSample"
+            },
+            "minItems": 1,
+            "title": "Samples",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "samples"
+        ],
+        "title": "ThermalAnalysis",
+        "type": "object"
+      },
+      "ThermalSample": {
+        "additionalProperties": false,
+        "properties": {
+          "point_id": {
+            "minLength": 1,
+            "title": "Point Id",
+            "type": "string"
+          },
+          "module": {
+            "enum": [
+              "rc",
+              "oc",
+              "tc"
+            ],
+            "title": "Module",
+            "type": "string"
+          },
+          "zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Zone"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "target_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Target C"
+          },
+          "commanded_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Commanded C"
+          },
+          "controller_reported_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Controller Reported C"
+          },
+          "measured_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Measured C"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          }
+        },
+        "required": [
+          "point_id",
+          "module",
+          "target_c",
+          "commanded_c",
+          "measured_c"
+        ],
+        "title": "ThermalSample",
+        "type": "object"
+      },
+      "VolumeObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "volume",
+            "title": "Kind",
+            "type": "string"
+          },
+          "measured_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Measured Ul"
+          }
+        },
+        "required": [
+          "kind",
+          "measured_ul"
+        ],
+        "title": "VolumeObservation",
+        "type": "object"
+      }
+    },
+    "discriminator": {
+      "mapping": {
+        "pipette": "#/$defs/PipetteAnalysis",
+        "thermal": "#/$defs/ThermalAnalysis"
+      },
+      "propertyName": "kind"
+    },
+    "oneOf": [
+      {
+        "$ref": "#/$defs/PipetteAnalysis"
+      },
+      {
+        "$ref": "#/$defs/ThermalAnalysis"
+      }
+    ]
+  },
+  "analysis_result": {
+    "$defs": {
+      "AffineCorrection": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "affine",
+            "title": "Kind",
+            "type": "string"
+          },
+          "scale": {
+            "title": "Scale",
+            "type": "string"
+          },
+          "offset_ul": {
+            "title": "Offset Ul",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "scale",
+          "offset_ul"
+        ],
+        "title": "AffineCorrection",
+        "type": "object"
+      },
+      "AffineFit": {
+        "additionalProperties": false,
+        "properties": {
+          "response_slope": {
+            "title": "Response Slope",
+            "type": "string"
+          },
+          "response_intercept_ul": {
+            "title": "Response Intercept Ul",
+            "type": "string"
+          },
+          "weighting": {
+            "const": "equal_point_means",
+            "default": "equal_point_means",
+            "title": "Weighting",
+            "type": "string"
+          },
+          "residuals": {
+            "items": {
+              "$ref": "#/$defs/FitResidual"
+            },
+            "title": "Residuals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "response_slope",
+          "response_intercept_ul",
+          "residuals"
+        ],
+        "title": "AffineFit",
+        "type": "object"
+      },
+      "CorrectionDomain": {
+        "additionalProperties": false,
+        "properties": {
+          "minimum_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Minimum Ul"
+          },
+          "maximum_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Maximum Ul"
+          }
+        },
+        "required": [
+          "minimum_ul",
+          "maximum_ul"
+        ],
+        "title": "CorrectionDomain",
+        "type": "object"
+      },
+      "CorrectionEvaluation": {
+        "additionalProperties": false,
+        "properties": {
+          "target_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Target Ul"
+          },
+          "commanded_ul": {
+            "title": "Commanded Ul",
+            "type": "string"
+          },
+          "outside_authored_domain": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Outside Authored Domain"
+          }
+        },
+        "required": [
+          "target_ul",
+          "commanded_ul"
+        ],
+        "title": "CorrectionEvaluation",
+        "type": "object"
+      },
+      "ExactPointCorrection": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "points",
+            "title": "Kind",
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/$defs/PointCorrection"
+            },
+            "title": "Points",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "points"
+        ],
+        "title": "ExactPointCorrection",
+        "type": "object"
+      },
+      "FitResidual": {
+        "additionalProperties": false,
+        "properties": {
+          "point_id": {
+            "title": "Point Id",
+            "type": "string"
+          },
+          "measured_mean_ul": {
+            "title": "Measured Mean Ul",
+            "type": "string"
+          },
+          "predicted_ul": {
+            "title": "Predicted Ul",
+            "type": "string"
+          },
+          "residual_ul": {
+            "title": "Residual Ul",
+            "type": "string"
+          }
+        },
+        "required": [
+          "point_id",
+          "measured_mean_ul",
+          "predicted_ul",
+          "residual_ul"
+        ],
+        "title": "FitResidual",
+        "type": "object"
+      },
+      "MassObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "mass_density",
+            "title": "Kind",
+            "type": "string"
+          },
+          "mass_mg": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Mass Mg"
+          },
+          "density_mg_per_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Density Mg Per Ul"
+          }
+        },
+        "required": [
+          "kind",
+          "mass_mg",
+          "density_mg_per_ul"
+        ],
+        "title": "MassObservation",
+        "type": "object"
+      },
+      "PipetteAnalysis": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "pipette",
+            "title": "Kind",
+            "type": "string"
+          },
+          "model": {
+            "enum": [
+              "descriptive",
+              "exact_point_offset",
+              "affine_inverse_ols"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/$defs/PipetteSample"
+            },
+            "minItems": 1,
+            "title": "Samples",
+            "type": "array"
+          },
+          "evaluate_targets_ul": {
+            "items": {
+              "anyOf": [
+                {
+                  "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "title": "Evaluate Targets Ul",
+            "type": "array"
+          },
+          "domain_ul": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CorrectionDomain"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "verification_samples": {
+            "items": {
+              "$ref": "#/$defs/PipetteSample"
+            },
+            "title": "Verification Samples",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "model",
+          "context",
+          "samples"
+        ],
+        "title": "PipetteAnalysis",
+        "type": "object"
+      },
+      "PipetteSample": {
+        "additionalProperties": false,
+        "properties": {
+          "point_id": {
+            "minLength": 1,
+            "title": "Point Id",
+            "type": "string"
+          },
+          "target_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Target Ul"
+          },
+          "commanded_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Commanded Ul"
+          },
+          "observation": {
+            "discriminator": {
+              "mapping": {
+                "mass_density": "#/$defs/MassObservation",
+                "volume": "#/$defs/VolumeObservation"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/VolumeObservation"
+              },
+              {
+                "$ref": "#/$defs/MassObservation"
+              }
+            ],
+            "title": "Observation"
+          }
+        },
+        "required": [
+          "point_id",
+          "target_ul",
+          "commanded_ul",
+          "observation"
+        ],
+        "title": "PipetteSample",
+        "type": "object"
+      },
+      "PointCorrection": {
+        "additionalProperties": false,
+        "properties": {
+          "target_ul": {
+            "title": "Target Ul",
+            "type": "string"
+          },
+          "commanded_ul": {
+            "title": "Commanded Ul",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_ul",
+          "commanded_ul"
+        ],
+        "title": "PointCorrection",
+        "type": "object"
+      },
+      "PointStatistics": {
+        "additionalProperties": false,
+        "properties": {
+          "point_id": {
+            "title": "Point Id",
+            "type": "string"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "commanded": {
+            "title": "Commanded",
+            "type": "string"
+          },
+          "measured": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Measured",
+            "type": "array"
+          },
+          "mean": {
+            "title": "Mean",
+            "type": "string"
+          },
+          "bias": {
+            "title": "Bias",
+            "type": "string"
+          },
+          "sample_sd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Sd"
+          },
+          "cv_percent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cv Percent"
+          }
+        },
+        "required": [
+          "point_id",
+          "count",
+          "target",
+          "commanded",
+          "measured",
+          "mean",
+          "bias",
+          "sample_sd",
+          "cv_percent"
+        ],
+        "title": "PointStatistics",
+        "type": "object"
+      },
+      "ResultReference": {
+        "additionalProperties": false,
+        "description": "Exact earlier native occurrence, never latest-by-label or cross-job.",
+        "properties": {
+          "stage_id": {
+            "minLength": 1,
+            "title": "Stage Id",
+            "type": "string"
+          },
+          "action_id": {
+            "minLength": 1,
+            "title": "Action Id",
+            "type": "string"
+          },
+          "source_occurrence_id": {
+            "minLength": 1,
+            "title": "Source Occurrence Id",
+            "type": "string"
+          },
+          "output": {
+            "enum": [
+              "measurements",
+              "result"
+            ],
+            "title": "Output",
+            "type": "string"
+          },
+          "path": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Path",
+            "type": "array"
+          }
+        },
+        "required": [
+          "stage_id",
+          "action_id",
+          "source_occurrence_id",
+          "output"
+        ],
+        "title": "ResultReference",
+        "type": "object"
+      },
+      "ThermalAnalysis": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "thermal",
+            "title": "Kind",
+            "type": "string"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/$defs/ThermalSample"
+            },
+            "minItems": 1,
+            "title": "Samples",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "samples"
+        ],
+        "title": "ThermalAnalysis",
+        "type": "object"
+      },
+      "ThermalSample": {
+        "additionalProperties": false,
+        "properties": {
+          "point_id": {
+            "minLength": 1,
+            "title": "Point Id",
+            "type": "string"
+          },
+          "module": {
+            "enum": [
+              "rc",
+              "oc",
+              "tc"
+            ],
+            "title": "Module",
+            "type": "string"
+          },
+          "zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Zone"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "target_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Target C"
+          },
+          "commanded_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Commanded C"
+          },
+          "controller_reported_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Controller Reported C"
+          },
+          "measured_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Measured C"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          }
+        },
+        "required": [
+          "point_id",
+          "module",
+          "target_c",
+          "commanded_c",
+          "measured_c"
+        ],
+        "title": "ThermalSample",
+        "type": "object"
+      },
+      "VolumeObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "volume",
+            "title": "Kind",
+            "type": "string"
+          },
+          "measured_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Measured Ul"
+          }
+        },
+        "required": [
+          "kind",
+          "measured_ul"
+        ],
+        "title": "VolumeObservation",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "ok": {
+        "const": true,
+        "default": true,
+        "title": "Ok",
+        "type": "boolean"
+      },
+      "kind": {
+        "enum": [
+          "pipette",
+          "thermal"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "requested": {
+        "discriminator": {
+          "mapping": {
+            "pipette": "#/$defs/PipetteAnalysis",
+            "thermal": "#/$defs/ThermalAnalysis"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/PipetteAnalysis"
+          },
+          {
+            "$ref": "#/$defs/ThermalAnalysis"
+          }
+        ],
+        "title": "Requested"
+      },
+      "resolved_samples": {
+        "items": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PipetteSample"
+            },
+            {
+              "$ref": "#/$defs/ThermalSample"
+            }
+          ]
+        },
+        "title": "Resolved Samples",
+        "type": "array"
+      },
+      "points": {
+        "items": {
+          "$ref": "#/$defs/PointStatistics"
+        },
+        "title": "Points",
+        "type": "array"
+      },
+      "correction": {
+        "anyOf": [
+          {
+            "discriminator": {
+              "mapping": {
+                "affine": "#/$defs/AffineCorrection",
+                "points": "#/$defs/ExactPointCorrection"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/ExactPointCorrection"
+              },
+              {
+                "$ref": "#/$defs/AffineCorrection"
+              }
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Correction"
+      },
+      "evaluated": {
+        "items": {
+          "$ref": "#/$defs/CorrectionEvaluation"
+        },
+        "title": "Evaluated",
+        "type": "array"
+      },
+      "applied": {
+        "const": false,
+        "default": false,
+        "title": "Applied",
+        "type": "boolean"
+      },
+      "affine_fit": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/AffineFit"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "verification_points": {
+        "items": {
+          "$ref": "#/$defs/PointStatistics"
+        },
+        "title": "Verification Points",
+        "type": "array"
+      },
+      "thermal_application": {
+        "anyOf": [
+          {
+            "const": "source_write_semantics_unresolved",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Thermal Application"
+      }
+    },
+    "required": [
+      "kind",
+      "requested",
+      "resolved_samples",
+      "points",
+      "correction"
+    ],
+    "title": "AnalysisResult",
+    "type": "object"
+  },
+  "action_params": {
+    "$defs": {
+      "AnalysisAction": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "const": "analyze",
+            "title": "Operation",
+            "type": "string"
+          },
+          "analysis": {
+            "discriminator": {
+              "mapping": {
+                "pipette": "#/$defs/PipetteAnalysis",
+                "thermal": "#/$defs/ThermalAnalysis"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/PipetteAnalysis"
+              },
+              {
+                "$ref": "#/$defs/ThermalAnalysis"
+              }
+            ],
+            "title": "Analysis"
+          }
+        },
+        "required": [
+          "operation",
+          "analysis"
+        ],
+        "title": "AnalysisAction",
+        "type": "object"
+      },
+      "CorrectionDomain": {
+        "additionalProperties": false,
+        "properties": {
+          "minimum_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Minimum Ul"
+          },
+          "maximum_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Maximum Ul"
+          }
+        },
+        "required": [
+          "minimum_ul",
+          "maximum_ul"
+        ],
+        "title": "CorrectionDomain",
+        "type": "object"
+      },
+      "HeightApply": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "const": "height_apply",
+            "title": "Operation",
+            "type": "string"
+          },
+          "calculation": {
+            "$ref": "#/$defs/ResultReference"
+          }
+        },
+        "required": [
+          "operation",
+          "calculation"
+        ],
+        "title": "HeightApply",
+        "type": "object"
+      },
+      "HeightCalculate": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "const": "height_calculate",
+            "title": "Operation",
+            "type": "string"
+          },
+          "scope_id": {
+            "minLength": 1,
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "plate": {
+            "enum": [
+              "TC",
+              "MS",
+              "OC",
+              "RC",
+              "STRIP"
+            ],
+            "title": "Plate",
+            "type": "string"
+          },
+          "measured_z": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Measured Z"
+          }
+        },
+        "required": [
+          "operation",
+          "scope_id",
+          "plate",
+          "measured_z"
+        ],
+        "title": "HeightCalculate",
+        "type": "object"
+      },
+      "HeightDecision": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "const": "height_decision",
+            "title": "Operation",
+            "type": "string"
+          },
+          "scope_id": {
+            "minLength": 1,
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "accept",
+              "restore"
+            ],
+            "title": "Decision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation",
+          "scope_id",
+          "decision"
+        ],
+        "title": "HeightDecision",
+        "type": "object"
+      },
+      "MassObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "mass_density",
+            "title": "Kind",
+            "type": "string"
+          },
+          "mass_mg": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Mass Mg"
+          },
+          "density_mg_per_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Density Mg Per Ul"
+          }
+        },
+        "required": [
+          "kind",
+          "mass_mg",
+          "density_mg_per_ul"
+        ],
+        "title": "MassObservation",
+        "type": "object"
+      },
+      "PipetteAnalysis": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "pipette",
+            "title": "Kind",
+            "type": "string"
+          },
+          "model": {
+            "enum": [
+              "descriptive",
+              "exact_point_offset",
+              "affine_inverse_ols"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/$defs/PipetteSample"
+            },
+            "minItems": 1,
+            "title": "Samples",
+            "type": "array"
+          },
+          "evaluate_targets_ul": {
+            "items": {
+              "anyOf": [
+                {
+                  "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "title": "Evaluate Targets Ul",
+            "type": "array"
+          },
+          "domain_ul": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CorrectionDomain"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "verification_samples": {
+            "items": {
+              "$ref": "#/$defs/PipetteSample"
+            },
+            "title": "Verification Samples",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "model",
+          "context",
+          "samples"
+        ],
+        "title": "PipetteAnalysis",
+        "type": "object"
+      },
+      "PipetteSample": {
+        "additionalProperties": false,
+        "properties": {
+          "point_id": {
+            "minLength": 1,
+            "title": "Point Id",
+            "type": "string"
+          },
+          "target_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Target Ul"
+          },
+          "commanded_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Commanded Ul"
+          },
+          "observation": {
+            "discriminator": {
+              "mapping": {
+                "mass_density": "#/$defs/MassObservation",
+                "volume": "#/$defs/VolumeObservation"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/VolumeObservation"
+              },
+              {
+                "$ref": "#/$defs/MassObservation"
+              }
+            ],
+            "title": "Observation"
+          }
+        },
+        "required": [
+          "point_id",
+          "target_ul",
+          "commanded_ul",
+          "observation"
+        ],
+        "title": "PipetteSample",
+        "type": "object"
+      },
+      "ResultReference": {
+        "additionalProperties": false,
+        "description": "Exact earlier native occurrence, never latest-by-label or cross-job.",
+        "properties": {
+          "stage_id": {
+            "minLength": 1,
+            "title": "Stage Id",
+            "type": "string"
+          },
+          "action_id": {
+            "minLength": 1,
+            "title": "Action Id",
+            "type": "string"
+          },
+          "source_occurrence_id": {
+            "minLength": 1,
+            "title": "Source Occurrence Id",
+            "type": "string"
+          },
+          "output": {
+            "enum": [
+              "measurements",
+              "result"
+            ],
+            "title": "Output",
+            "type": "string"
+          },
+          "path": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Path",
+            "type": "array"
+          }
+        },
+        "required": [
+          "stage_id",
+          "action_id",
+          "source_occurrence_id",
+          "output"
+        ],
+        "title": "ResultReference",
+        "type": "object"
+      },
+      "ThermalAnalysis": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "thermal",
+            "title": "Kind",
+            "type": "string"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/$defs/ThermalSample"
+            },
+            "minItems": 1,
+            "title": "Samples",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "samples"
+        ],
+        "title": "ThermalAnalysis",
+        "type": "object"
+      },
+      "ThermalSample": {
+        "additionalProperties": false,
+        "properties": {
+          "point_id": {
+            "minLength": 1,
+            "title": "Point Id",
+            "type": "string"
+          },
+          "module": {
+            "enum": [
+              "rc",
+              "oc",
+              "tc"
+            ],
+            "title": "Module",
+            "type": "string"
+          },
+          "zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Zone"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "target_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Target C"
+          },
+          "commanded_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Commanded C"
+          },
+          "controller_reported_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Controller Reported C"
+          },
+          "measured_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Measured C"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          }
+        },
+        "required": [
+          "point_id",
+          "module",
+          "target_c",
+          "commanded_c",
+          "measured_c"
+        ],
+        "title": "ThermalSample",
+        "type": "object"
+      },
+      "VolumeObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "volume",
+            "title": "Kind",
+            "type": "string"
+          },
+          "measured_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Measured Ul"
+          }
+        },
+        "required": [
+          "kind",
+          "measured_ul"
+        ],
+        "title": "VolumeObservation",
+        "type": "object"
+      }
+    },
+    "discriminator": {
+      "mapping": {
+        "analyze": "#/$defs/AnalysisAction",
+        "height_apply": "#/$defs/HeightApply",
+        "height_calculate": "#/$defs/HeightCalculate",
+        "height_decision": "#/$defs/HeightDecision"
+      },
+      "propertyName": "operation"
+    },
+    "oneOf": [
+      {
+        "$ref": "#/$defs/AnalysisAction"
+      },
+      {
+        "$ref": "#/$defs/HeightCalculate"
+      },
+      {
+        "$ref": "#/$defs/HeightApply"
+      },
+      {
+        "$ref": "#/$defs/HeightDecision"
+      }
+    ]
+  },
+  "action_result": {
+    "$defs": {
+      "AffineCorrection": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "affine",
+            "title": "Kind",
+            "type": "string"
+          },
+          "scale": {
+            "title": "Scale",
+            "type": "string"
+          },
+          "offset_ul": {
+            "title": "Offset Ul",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "scale",
+          "offset_ul"
+        ],
+        "title": "AffineCorrection",
+        "type": "object"
+      },
+      "AffineFit": {
+        "additionalProperties": false,
+        "properties": {
+          "response_slope": {
+            "title": "Response Slope",
+            "type": "string"
+          },
+          "response_intercept_ul": {
+            "title": "Response Intercept Ul",
+            "type": "string"
+          },
+          "weighting": {
+            "const": "equal_point_means",
+            "default": "equal_point_means",
+            "title": "Weighting",
+            "type": "string"
+          },
+          "residuals": {
+            "items": {
+              "$ref": "#/$defs/FitResidual"
+            },
+            "title": "Residuals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "response_slope",
+          "response_intercept_ul",
+          "residuals"
+        ],
+        "title": "AffineFit",
+        "type": "object"
+      },
+      "AnalysisActionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "analysis": {
+            "$ref": "#/$defs/AnalysisResult"
+          }
+        },
+        "required": [
+          "ok",
+          "analysis"
+        ],
+        "title": "AnalysisActionResult",
+        "type": "object"
+      },
+      "AnalysisResult": {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "pipette",
+              "thermal"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "requested": {
+            "discriminator": {
+              "mapping": {
+                "pipette": "#/$defs/PipetteAnalysis",
+                "thermal": "#/$defs/ThermalAnalysis"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/PipetteAnalysis"
+              },
+              {
+                "$ref": "#/$defs/ThermalAnalysis"
+              }
+            ],
+            "title": "Requested"
+          },
+          "resolved_samples": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PipetteSample"
+                },
+                {
+                  "$ref": "#/$defs/ThermalSample"
+                }
+              ]
+            },
+            "title": "Resolved Samples",
+            "type": "array"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/$defs/PointStatistics"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "correction": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "affine": "#/$defs/AffineCorrection",
+                    "points": "#/$defs/ExactPointCorrection"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/ExactPointCorrection"
+                  },
+                  {
+                    "$ref": "#/$defs/AffineCorrection"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correction"
+          },
+          "evaluated": {
+            "items": {
+              "$ref": "#/$defs/CorrectionEvaluation"
+            },
+            "title": "Evaluated",
+            "type": "array"
+          },
+          "applied": {
+            "const": false,
+            "default": false,
+            "title": "Applied",
+            "type": "boolean"
+          },
+          "affine_fit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AffineFit"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "verification_points": {
+            "items": {
+              "$ref": "#/$defs/PointStatistics"
+            },
+            "title": "Verification Points",
+            "type": "array"
+          },
+          "thermal_application": {
+            "anyOf": [
+              {
+                "const": "source_write_semantics_unresolved",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thermal Application"
+          }
+        },
+        "required": [
+          "kind",
+          "requested",
+          "resolved_samples",
+          "points",
+          "correction"
+        ],
+        "title": "AnalysisResult",
+        "type": "object"
+      },
+      "CalibrationComparison": {
+        "properties": {
+          "positions": {
+            "items": {
+              "$ref": "#/$defs/CalibrationComparisonPosition"
+            },
+            "title": "Positions",
+            "type": "array"
+          },
+          "liquid_calibration": {
+            "additionalProperties": true,
+            "title": "Liquid Calibration",
+            "type": "object"
+          },
+          "revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Id"
+          }
+        },
+        "required": [
+          "positions",
+          "liquid_calibration",
+          "revision_id"
+        ],
+        "title": "CalibrationComparison",
+        "type": "object"
+      },
+      "CalibrationComparisonPosition": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "x": {
+            "title": "X",
+            "type": "integer"
+          },
+          "y": {
+            "title": "Y",
+            "type": "integer"
+          },
+          "zLow": {
+            "title": "Zlow",
+            "type": "integer"
+          },
+          "zDelta": {
+            "title": "Zdelta",
+            "type": "integer"
+          },
+          "inc_factor": {
+            "title": "Inc Factor",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "x",
+          "y",
+          "zLow",
+          "zDelta",
+          "inc_factor"
+        ],
+        "title": "CalibrationComparisonPosition",
+        "type": "object"
+      },
+      "CalibrationFailure": {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": false,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "operation": {
+            "title": "Operation",
+            "type": "string"
+          },
+          "unavailable_operand_or_calculation": {
+            "const": true,
+            "title": "Unavailable Operand Or Calculation",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error",
+          "operation",
+          "unavailable_operand_or_calculation"
+        ],
+        "title": "CalibrationFailure",
+        "type": "object"
+      },
+      "CalibrationMeasurement": {
+        "additionalProperties": true,
+        "properties": {
+          "plate": {
+            "title": "Plate",
+            "type": "string"
+          },
+          "measured_raw_z": {
+            "title": "Measured Raw Z",
+            "type": "integer"
+          },
+          "saved_revision_id": {
+            "title": "Saved Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plate",
+          "measured_raw_z",
+          "saved_revision_id"
+        ],
+        "title": "CalibrationMeasurement",
+        "type": "object"
+      },
+      "CalibrationRunResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "schema_version": {
+            "const": "bioxp.calibration_run.v1",
+            "default": "bioxp.calibration_run.v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "saved_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Saved Revision Id"
+          },
+          "active_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Revision Id"
+          },
+          "body_completed": {
+            "title": "Body Completed",
+            "type": "boolean"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "enum": [
+                  "accept",
+                  "restore"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Decision"
+          },
+          "decision_status": {
+            "title": "Decision Status",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "comparison_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Comparison Error"
+          },
+          "finalization_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Finalization Error"
+          },
+          "before": {
+            "$ref": "#/$defs/CalibrationComparison"
+          },
+          "after": {
+            "$ref": "#/$defs/CalibrationComparison"
+          },
+          "measurements": {
+            "items": {
+              "$ref": "#/$defs/CalibrationMeasurement"
+            },
+            "title": "Measurements",
+            "type": "array"
+          }
+        },
+        "required": [
+          "run_id",
+          "saved_revision_id",
+          "active_revision_id",
+          "body_completed",
+          "decision_status",
+          "before",
+          "after"
+        ],
+        "title": "CalibrationRunResponse",
+        "type": "object"
+      },
+      "CalibrationSettingsPatch": {
+        "additionalProperties": false,
+        "properties": {
+          "positions": {
+            "items": {
+              "$ref": "#/$defs/PositionCalibrationPatch"
+            },
+            "minItems": 1,
+            "title": "Positions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "positions"
+        ],
+        "title": "CalibrationSettingsPatch",
+        "type": "object"
+      },
+      "CorrectionDomain": {
+        "additionalProperties": false,
+        "properties": {
+          "minimum_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Minimum Ul"
+          },
+          "maximum_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Maximum Ul"
+          }
+        },
+        "required": [
+          "minimum_ul",
+          "maximum_ul"
+        ],
+        "title": "CorrectionDomain",
+        "type": "object"
+      },
+      "CorrectionEvaluation": {
+        "additionalProperties": false,
+        "properties": {
+          "target_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Target Ul"
+          },
+          "commanded_ul": {
+            "title": "Commanded Ul",
+            "type": "string"
+          },
+          "outside_authored_domain": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Outside Authored Domain"
+          }
+        },
+        "required": [
+          "target_ul",
+          "commanded_ul"
+        ],
+        "title": "CorrectionEvaluation",
+        "type": "object"
+      },
+      "ExactPointCorrection": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "points",
+            "title": "Kind",
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/$defs/PointCorrection"
+            },
+            "title": "Points",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "points"
+        ],
+        "title": "ExactPointCorrection",
+        "type": "object"
+      },
+      "FitResidual": {
+        "additionalProperties": false,
+        "properties": {
+          "point_id": {
+            "title": "Point Id",
+            "type": "string"
+          },
+          "measured_mean_ul": {
+            "title": "Measured Mean Ul",
+            "type": "string"
+          },
+          "predicted_ul": {
+            "title": "Predicted Ul",
+            "type": "string"
+          },
+          "residual_ul": {
+            "title": "Residual Ul",
+            "type": "string"
+          }
+        },
+        "required": [
+          "point_id",
+          "measured_mean_ul",
+          "predicted_ul",
+          "residual_ul"
+        ],
+        "title": "FitResidual",
+        "type": "object"
+      },
+      "HeightAdjustment": {
+        "additionalProperties": false,
+        "properties": {
+          "scope_id": {
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "plate": {
+            "title": "Plate",
+            "type": "string"
+          },
+          "measured_raw_z": {
+            "title": "Measured Raw Z",
+            "type": "integer"
+          },
+          "calculation": {
+            "additionalProperties": true,
+            "title": "Calculation",
+            "type": "object"
+          },
+          "patch": {
+            "$ref": "#/$defs/CalibrationSettingsPatch"
+          },
+          "fluid_reference_revision": {
+            "title": "Fluid Reference Revision",
+            "type": "string"
+          },
+          "applied": {
+            "const": false,
+            "title": "Applied",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "scope_id",
+          "run_id",
+          "plate",
+          "measured_raw_z",
+          "calculation",
+          "patch",
+          "fluid_reference_revision",
+          "applied"
+        ],
+        "title": "HeightAdjustment",
+        "type": "object"
+      },
+      "HeightAppliedResult": {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "applied": {
+            "const": true,
+            "title": "Applied",
+            "type": "boolean"
+          },
+          "saved_revision_id": {
+            "title": "Saved Revision Id",
+            "type": "string"
+          },
+          "active_revision_id": {
+            "title": "Active Revision Id",
+            "type": "string"
+          },
+          "positions": {
+            "items": {
+              "$ref": "#/$defs/PositionCalibrationPatch"
+            },
+            "title": "Positions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ok",
+          "run_id",
+          "applied",
+          "saved_revision_id",
+          "active_revision_id",
+          "positions"
+        ],
+        "title": "HeightAppliedResult",
+        "type": "object"
+      },
+      "HeightCalculatedResult": {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "height_adjustment": {
+            "$ref": "#/$defs/HeightAdjustment"
+          }
+        },
+        "required": [
+          "ok",
+          "height_adjustment"
+        ],
+        "title": "HeightCalculatedResult",
+        "type": "object"
+      },
+      "HeightDecisionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "calibration_run": {
+            "$ref": "#/$defs/CalibrationRunResponse"
+          }
+        },
+        "required": [
+          "ok",
+          "run_id",
+          "calibration_run"
+        ],
+        "title": "HeightDecisionResult",
+        "type": "object"
+      },
+      "MassObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "mass_density",
+            "title": "Kind",
+            "type": "string"
+          },
+          "mass_mg": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Mass Mg"
+          },
+          "density_mg_per_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Density Mg Per Ul"
+          }
+        },
+        "required": [
+          "kind",
+          "mass_mg",
+          "density_mg_per_ul"
+        ],
+        "title": "MassObservation",
+        "type": "object"
+      },
+      "PipetteAnalysis": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "pipette",
+            "title": "Kind",
+            "type": "string"
+          },
+          "model": {
+            "enum": [
+              "descriptive",
+              "exact_point_offset",
+              "affine_inverse_ols"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/$defs/PipetteSample"
+            },
+            "minItems": 1,
+            "title": "Samples",
+            "type": "array"
+          },
+          "evaluate_targets_ul": {
+            "items": {
+              "anyOf": [
+                {
+                  "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "title": "Evaluate Targets Ul",
+            "type": "array"
+          },
+          "domain_ul": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CorrectionDomain"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "verification_samples": {
+            "items": {
+              "$ref": "#/$defs/PipetteSample"
+            },
+            "title": "Verification Samples",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "model",
+          "context",
+          "samples"
+        ],
+        "title": "PipetteAnalysis",
+        "type": "object"
+      },
+      "PipetteSample": {
+        "additionalProperties": false,
+        "properties": {
+          "point_id": {
+            "minLength": 1,
+            "title": "Point Id",
+            "type": "string"
+          },
+          "target_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Target Ul"
+          },
+          "commanded_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Commanded Ul"
+          },
+          "observation": {
+            "discriminator": {
+              "mapping": {
+                "mass_density": "#/$defs/MassObservation",
+                "volume": "#/$defs/VolumeObservation"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/VolumeObservation"
+              },
+              {
+                "$ref": "#/$defs/MassObservation"
+              }
+            ],
+            "title": "Observation"
+          }
+        },
+        "required": [
+          "point_id",
+          "target_ul",
+          "commanded_ul",
+          "observation"
+        ],
+        "title": "PipetteSample",
+        "type": "object"
+      },
+      "PointCorrection": {
+        "additionalProperties": false,
+        "properties": {
+          "target_ul": {
+            "title": "Target Ul",
+            "type": "string"
+          },
+          "commanded_ul": {
+            "title": "Commanded Ul",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_ul",
+          "commanded_ul"
+        ],
+        "title": "PointCorrection",
+        "type": "object"
+      },
+      "PointStatistics": {
+        "additionalProperties": false,
+        "properties": {
+          "point_id": {
+            "title": "Point Id",
+            "type": "string"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "commanded": {
+            "title": "Commanded",
+            "type": "string"
+          },
+          "measured": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Measured",
+            "type": "array"
+          },
+          "mean": {
+            "title": "Mean",
+            "type": "string"
+          },
+          "bias": {
+            "title": "Bias",
+            "type": "string"
+          },
+          "sample_sd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Sd"
+          },
+          "cv_percent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cv Percent"
+          }
+        },
+        "required": [
+          "point_id",
+          "count",
+          "target",
+          "commanded",
+          "measured",
+          "mean",
+          "bias",
+          "sample_sd",
+          "cv_percent"
+        ],
+        "title": "PointStatistics",
+        "type": "object"
+      },
+      "PositionCalibrationPatch": {
+        "additionalProperties": false,
+        "minProperties": 2,
+        "properties": {
+          "name": {
+            "enum": [
+              "LOC_MS",
+              "LOC_OC",
+              "LOC_TC",
+              "LOC_RC",
+              "LOC_BSCS",
+              "LOC_BSC",
+              "WASTE_BIN",
+              "TECANRACK1",
+              "TECANRACK2",
+              "TECANRACK3",
+              "TECANRACK4",
+              "LOC_STRIP1",
+              "LOC_STRIP2",
+              "LOC_STRIP3",
+              "LOC_STRIP4",
+              "LOC_TIP_HOTEL",
+              "LOC_TROUGH",
+              "LOC_OC_COVER",
+              "LOC_OC_COVER_STORAGE",
+              "LOC_RC_COVER",
+              "LOC_RC_COVER_STORAGE",
+              "LOC_P_OC",
+              "LOC_P_OC_PRESS",
+              "LOC_P_TC",
+              "LOC_P_TC_PRESS",
+              "LOC_P_MS",
+              "LOC_P_MS_PRESS",
+              "LOC_P_RC_PRESS",
+              "LOC_PARK",
+              "LOC_GANTRY",
+              "LOC_CHECK_POINT",
+              "CAMERA_OFFSET",
+              "UNKNOWN"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "x": {
+            "maximum": 2147483647,
+            "minimum": -2147483648,
+            "title": "X",
+            "type": "integer"
+          },
+          "y": {
+            "maximum": 2147483647,
+            "minimum": -2147483648,
+            "title": "Y",
+            "type": "integer"
+          },
+          "zLow": {
+            "maximum": 2147483647,
+            "minimum": -2147483648,
+            "title": "Zlow",
+            "type": "integer"
+          },
+          "zDelta": {
+            "maximum": 2147483647,
+            "minimum": -2147483648,
+            "title": "Zdelta",
+            "type": "integer"
+          },
+          "inc_factor": {
+            "maximum": 2147483647,
+            "minimum": -2147483648,
+            "title": "Inc Factor",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "PositionCalibrationPatch",
+        "type": "object"
+      },
+      "ResultReference": {
+        "additionalProperties": false,
+        "description": "Exact earlier native occurrence, never latest-by-label or cross-job.",
+        "properties": {
+          "stage_id": {
+            "minLength": 1,
+            "title": "Stage Id",
+            "type": "string"
+          },
+          "action_id": {
+            "minLength": 1,
+            "title": "Action Id",
+            "type": "string"
+          },
+          "source_occurrence_id": {
+            "minLength": 1,
+            "title": "Source Occurrence Id",
+            "type": "string"
+          },
+          "output": {
+            "enum": [
+              "measurements",
+              "result"
+            ],
+            "title": "Output",
+            "type": "string"
+          },
+          "path": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Path",
+            "type": "array"
+          }
+        },
+        "required": [
+          "stage_id",
+          "action_id",
+          "source_occurrence_id",
+          "output"
+        ],
+        "title": "ResultReference",
+        "type": "object"
+      },
+      "ThermalAnalysis": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "thermal",
+            "title": "Kind",
+            "type": "string"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/$defs/ThermalSample"
+            },
+            "minItems": 1,
+            "title": "Samples",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "samples"
+        ],
+        "title": "ThermalAnalysis",
+        "type": "object"
+      },
+      "ThermalSample": {
+        "additionalProperties": false,
+        "properties": {
+          "point_id": {
+            "minLength": 1,
+            "title": "Point Id",
+            "type": "string"
+          },
+          "module": {
+            "enum": [
+              "rc",
+              "oc",
+              "tc"
+            ],
+            "title": "Module",
+            "type": "string"
+          },
+          "zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Zone"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "target_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Target C"
+          },
+          "commanded_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Commanded C"
+          },
+          "controller_reported_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Controller Reported C"
+          },
+          "measured_c": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Measured C"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          }
+        },
+        "required": [
+          "point_id",
+          "module",
+          "target_c",
+          "commanded_c",
+          "measured_c"
+        ],
+        "title": "ThermalSample",
+        "type": "object"
+      },
+      "VolumeObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "volume",
+            "title": "Kind",
+            "type": "string"
+          },
+          "measured_ul": {
+            "anyOf": [
+              {
+                "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/ResultReference"
+              }
+            ],
+            "title": "Measured Ul"
+          }
+        },
+        "required": [
+          "kind",
+          "measured_ul"
+        ],
+        "title": "VolumeObservation",
+        "type": "object"
+      }
+    },
+    "anyOf": [
+      {
+        "$ref": "#/$defs/HeightCalculatedResult"
+      },
+      {
+        "$ref": "#/$defs/HeightAppliedResult"
+      },
+      {
+        "$ref": "#/$defs/HeightDecisionResult"
+      },
+      {
+        "$ref": "#/$defs/AnalysisActionResult"
+      },
+      {
+        "$ref": "#/$defs/CalibrationFailure"
+      }
+    ]
+  },
+  "result_reference": {
+    "additionalProperties": false,
+    "description": "Exact earlier native occurrence, never latest-by-label or cross-job.",
+    "properties": {
+      "stage_id": {
+        "minLength": 1,
+        "title": "Stage Id",
+        "type": "string"
+      },
+      "action_id": {
+        "minLength": 1,
+        "title": "Action Id",
+        "type": "string"
+      },
+      "source_occurrence_id": {
+        "minLength": 1,
+        "title": "Source Occurrence Id",
+        "type": "string"
+      },
+      "output": {
+        "enum": [
+          "measurements",
+          "result"
+        ],
+        "title": "Output",
+        "type": "string"
+      },
+      "path": {
+        "items": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            }
+          ]
+        },
+        "title": "Path",
+        "type": "array"
+      }
+    },
+    "required": [
+      "stage_id",
+      "action_id",
+      "source_occurrence_id",
+      "output"
+    ],
+    "title": "ResultReference",
+    "type": "object"
+  },
+  "native_kind": "calibration",
+  "thermal_application": "source_write_semantics_unresolved",
+  "review_request": {
+    "additionalProperties": false,
+    "properties": {
+      "idempotency_key": {
+        "maxLength": 256,
+        "minLength": 1,
+        "title": "Idempotency Key",
+        "type": "string"
+      },
+      "command_id": {
+        "minLength": 1,
+        "title": "Command Id",
+        "type": "string"
+      },
+      "expected_ownership_generation": {
+        "minimum": 0,
+        "title": "Expected Ownership Generation",
+        "type": "integer"
+      },
+      "reviewer": {
+        "default": "operator",
+        "maxLength": 120,
+        "minLength": 1,
+        "title": "Reviewer",
+        "type": "string"
+      },
+      "note": {
+        "anyOf": [
+          {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Note"
+      },
+      "stage_id": {
+        "minLength": 1,
+        "title": "Stage Id",
+        "type": "string"
+      },
+      "action_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Action Id"
+      },
+      "decision": {
+        "anyOf": [
+          {
+            "enum": [
+              "ignore",
+              "abort"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Decision"
+      },
+      "source_occurrence_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Source Occurrence Id"
+      },
+      "measurements": {
+        "anyOf": [
+          {
+            "additionalProperties": {
+              "items": {
+                "anyOf": [
+                  {
+                    "pattern": "^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Measurements"
+      }
+    },
+    "required": [
+      "idempotency_key",
+      "command_id",
+      "expected_ownership_generation",
+      "stage_id"
+    ],
+    "title": "ProtocolReviewRequest",
+    "type": "object"
+  }
+}

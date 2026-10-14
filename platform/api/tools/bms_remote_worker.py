@@ -259,6 +259,8 @@ def verify_bundle(attempt_dir: Path) -> dict[str, Any]:
             continue
         if path.is_symlink() or not path.is_file():
             raise RuntimeError(f"bundle file is missing: {relative}")
+        # New immutable directory views declare 0444/0555; retained envelopes
+        # keep their original modes. Hardlink count is not file byte identity.
         mode = record.get("mode", 0o644)
         if type(mode) is not int or not 0 <= mode <= 0o777 or path.stat().st_mode & 0o7777 != mode:
             raise RuntimeError(f"bundle file mode mismatch: {relative}")
@@ -368,11 +370,26 @@ def build_result_manifest(attempt_dir: Path, envelope: dict[str, Any], exit_code
         raise RuntimeError("Invalid shared root generation")
     output_root = Path(str(envelope["output_directory"]))
     artifacts: list[dict[str, Any]] = []
+    existing_directories: set[str] = set()
+    declared_directories: set[str] = set()
     for path in sorted(output_root.rglob("*")):
         if path.is_symlink():
             raise RuntimeError(f"result tree contains a symlink: {path.relative_to(output_root)}")
+        if path.is_dir():
+            existing_directories.add(path.relative_to(output_root).as_posix())
+            continue
         if not path.is_file():
             continue
+        if path.parent.name == ".bms-stage-receipts":
+            # Declarations retain their native directory meaning, including empty
+            # outputs. Only existing stage-declared directories enter the wire.
+            payload = load_json(path)
+            prefix = path.parent.parent.relative_to(output_root)
+            for value in payload.get("outputs", []):
+                relative = safe_relative(value)
+                if value != relative.as_posix() or "\\" in value or "\x00" in value:
+                    raise RuntimeError("unsafe declared result directory")
+                declared_directories.add((prefix / relative).as_posix())
         if path == output_root / RESULT_MANIFEST_FILE:
             continue
         relative = path.relative_to(output_root).as_posix()
@@ -385,7 +402,8 @@ def build_result_manifest(attempt_dir: Path, envelope: dict[str, Any], exit_code
             }
         )
     return {
-        "schema": "bms.remote-result-manifest.v1",
+        "schema": "bms.remote-result-manifest.v2",
+        "directories": sorted(existing_directories & declared_directories),
         "generation": generation,
         "attempt_id": str(envelope["attempt_id"]),
         "job_id": str(envelope["job_id"]),
@@ -569,11 +587,13 @@ def component_retry_control(attempt_dir: Path, *, attempt_id: str, expected_boot
                     "continuation_lease_id": continuation_lease_id}:
                 raise RuntimeError("Retry launch claim conflicts")
             return {**edge, "worker_status": current}
-        if (current.get("state") != "failed" or not current.get("quiescent")) and not (
+        eligible = (current.get("state") == "failed" or
+                    (current.get("state") == "succeeded" and runtime.request(component_id).optional_md_analysis))
+        if (not eligible or not current.get("quiescent")) and not (
                 edge is not None and current.get("state") == "prepared"
                 and current.get("continuation_lease_id") == continuation_lease_id
                 and current.get("supervisor_pid") is None):
-            raise RuntimeError("Retry requires a failed quiescent predecessor")
+            raise RuntimeError("Retry requires a quiescent failed predecessor or successful optional MD analysis root")
         if (attempt_dir / CANCEL_REQUEST_FILE).exists():
             raise RuntimeError("Cancelled attempt cannot retry")
         if edge is None:

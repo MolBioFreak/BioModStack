@@ -168,6 +168,32 @@ async def test_failure_receipt_reaches_native_allowlist_without_success(store, t
         assert len(list((await session.scalars(select(MdReplicaRun))).all())) == 1
 
 
+@pytest.mark.parametrize('root_state', ['completed', 'failed'])
+@pytest.mark.parametrize('change', [None, 'required', 'stage', 'model', 'mode'])
+def test_retry_root_exception_is_exact_optional_md_request(tmp_path, root_state, change):
+    ledger = runtime(tmp_path)
+    payload = dict(model_id='other-model' if change == 'model' else 'molecular_dynamics',
+                   mode='replica' if change == 'mode' else 'analyze', params={})
+    original = ComponentRequest.capture(parent_job_id='root',
+        stage='other-stage' if change == 'stage' else 'md_analysis', child_key='original',
+        payload=payload, required=change == 'required')
+    child = execute_child(ledger, original)
+    publish(ledger, state=root_state)
+    kwargs = retry_generation(ledger)
+    kwargs['replacement'] = ComponentRequest.capture(parent_job_id='root', stage=original.stage,
+        child_key='replacement', payload=payload, required=original.required)
+    if root_state == 'completed' and change is not None:
+        with pytest.raises(ValueError, match='quiescent root'):
+            ledger.retry_component(child, **kwargs)
+        assert ledger.root_state()['state'] == 'completed'
+        assert ledger.retry_status('retry-once') is None
+    else:
+        edge = ledger.retry_component(child, **kwargs)
+        assert edge == ledger.retry_component(child, **kwargs)
+        assert ledger.child_status(child)['status'] == 'failed'
+        assert edge['generation'] == 1
+
+
 def retry_generation(ledger):
     # Typed recorder plan exercises the ledger, not scientific compilation/admission.
     from component_runtime import NativeComponent, NativeArtifactRole, SelectedDependency

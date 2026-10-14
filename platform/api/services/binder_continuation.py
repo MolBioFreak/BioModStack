@@ -64,7 +64,161 @@ async def resolve_candidate_documents(session, designs, candidate_documents):
     return resolved
 
 
+def retained_selection(source, root, designs, *, kind, create, extra=None) -> Path:
+    """Reuse this owner's retained input bytes, not a writable producer inode.
+
+    The namespace binds exact source bytes and ordered producer/selection IDs.
+    Emitted metadata revisions reuse those bodies. Missing or changed retained
+    files mean a fresh snapshot, not a new admission gate.
+    A directory flock serializes preparation without allocating a lock per retry.
+    """
+    import fcntl
+    import hashlib
+    import os
+    from routers.jobs import get_inputs_dir, _resolve_design_structure_path, _candidate_sidecar_paths
+
+    def digest(path):
+        with Path(path).open('rb') as stream:
+            return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+    from routers.jobs import _build_selection_manifest_item, _derive_source_stage_payload
+    rows, metadata = [], []
+    for design in designs:
+        path = _resolve_design_structure_path(design.pdb_path)
+        members = [path, *(_candidate_sidecar_paths(design, path) if kind == 'native' else [])]
+        rows.append({'design_id': design.id, 'job_id': design.job_id,
+                     'members': {str(p.resolve()): digest(p) for p in members}})
+        metadata.append(_build_selection_manifest_item(design, source_path=path,
+                        selection_path=path, selection_entry_mode=None))
+    identity = {'kind': kind, 'source_job_id': source.id, 'root_job_id': root.id,
+                'rows': rows, 'extra': extra}
+    key = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
+    # Only metadata actually emitted by this owner participates. Scores, Job
+    # progress, arbitrary parent params/provenance do not allocate input bodies.
+    metadata_key = hashlib.sha256(json.dumps(
+        [metadata, _derive_source_stage_payload(source, designs)],
+        sort_keys=True, default=str).encode()).hexdigest()
+    selection_root = get_inputs_dir() / 'design_selections' / (
+        'protein_local_redesign' if kind == 'native' else 'binder')
+    selection_root.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(selection_root, os.O_RDONLY)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        # Two deterministic lookups in the existing retained namespace, never a
+        # scan of unrelated selections. Metadata revisions share retained bodies
+        # but get their own immutable manifest/source-identity documents.
+        canonical = selection_root / key
+        revision = selection_root / (key + '-' + metadata_key)
+        donor = None
+        for directory in (revision, canonical):
+            try:
+                manifest = json.loads((directory / 'selection_manifest.json').read_text())
+                retained = manifest.pop('retained_input_binding', {})
+                manifest_hash = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+                if (retained.get('identity_sha256') == key
+                        and manifest_hash == retained.get('manifest_sha256') and retained.get('files')
+                        and all(digest(directory / name) == value for name, value in retained['files'].items())):
+                    if retained.get('metadata_sha256') == metadata_key:
+                        return directory
+                    donor = directory
+            except (OSError, ValueError, KeyError):
+                pass
+        target = revision if canonical.exists() else canonical
+        if target.exists():
+            # Damaged historical input is retained, not overwritten underneath
+            # another consumer. Native preparation still has its old fallback.
+            import uuid
+            target = selection_root / (key + '-' + uuid.uuid4().hex)
+        if donor is None:
+            directory = create()
+        else:
+            import errno
+            import shutil
+            import uuid
+            directory = selection_root / ('.selection-' + uuid.uuid4().hex)
+            directory.mkdir()
+            donor_manifest = json.loads((donor / 'selection_manifest.json').read_text())
+            for name in donor_manifest['retained_input_binding']['files']:
+                if name == 'source_identity.json':
+                    continue
+                src, dst = donor / name, directory / name
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    os.link(src, dst)
+                except OSError as exc:
+                    if exc.errno not in (errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.EMLINK):
+                        raise
+                    shutil.copyfile(src, dst)
+            manifest = donor_manifest
+            manifest.pop('retained_input_binding', None)
+            by_id = {design.id: design for design in designs}
+            for item in manifest['designs']:
+                design = by_id.get(item['design_id'])
+                if design is not None:
+                    item.update(_build_selection_manifest_item(design,
+                        source_path=Path(item['source_pdb_path']),
+                        selection_path=Path(item['selection_pdb_path']),
+                        selection_entry_mode=item.get('selection_entry_mode')))
+            stage = _derive_source_stage_payload(source, designs)
+            for name in ('source_stage_job_id', 'source_stage_family', 'source_stage_mode',
+                         'selected_input_artifact_class', 'selected_input_schema_version'):
+                manifest[name] = stage[name]
+            _rebind_selection_paths(manifest, donor, directory)
+            (directory / 'selection_manifest.json').write_text(json.dumps(manifest))
+        # Rebind only owner-authored path fields, never arbitrary provenance.
+        manifest = json.loads((directory / 'selection_manifest.json').read_text())
+        _rebind_selection_paths(manifest, directory, target)
+        (directory / 'selection_manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True))
+        if kind == 'pdb':
+            _write_source_identity(directory, root.id)
+        directory.rename(target)
+        directory = target
+        receipt = directory / 'selection_manifest.json'
+        manifest = json.loads(receipt.read_text())
+        manifest['retained_input_binding'] = {
+            'identity_sha256': key,
+            'metadata_sha256': metadata_key,
+            'manifest_sha256': hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
+            'files': {p.relative_to(directory).as_posix(): digest(p)
+                      for p in directory.rglob('*') if p.is_file() and p != receipt}}
+        partial = receipt.with_suffix('.json.partial')
+        partial.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+        partial.replace(receipt)
+        return directory
+    finally:
+        os.close(descriptor)
+
+
+def _rebind_selection_paths(manifest: dict, previous: Path, destination: Path) -> None:
+    def rebind(row, name):
+        value = row.get(name)
+        if value and Path(value).is_relative_to(previous):
+            row[name] = str(destination / Path(value).relative_to(previous))
+    rebind(manifest, 'source_selection_manifest_path')
+    for item in manifest['designs']:
+        for name in ('selection_pdb_path', 'native_source_structure_path', 'source_pdb_path'):
+            rebind(item, name)
+
+
 def snapshot_selection(source: Job, root: Job, designs: list[Design], *,
+                       candidate_documents: dict | None = None, native_sources: list | None = None) -> Path:
+    import hashlib
+    from types import SimpleNamespace
+    resolved = candidate_documents or {}
+    inputs = [SimpleNamespace(**{column.key: getattr(design, column.key)
+                                 for column in Design.__table__.columns}) for design in designs]
+    for design in inputs:
+        if design.id in resolved:
+            design.pdb_path = str(resolved[design.id][0])
+    extra = {'documents': {key: (str(value[0]), value[1]) for key, value in resolved.items()},
+             'native': [(str(path), identity, hashlib.sha256(path.read_bytes()).hexdigest())
+                        for path, identity in native_sources or []]}
+    return retained_selection(source, root, inputs, kind='pdb', extra=extra,
+        create=lambda: _snapshot_selection(source, root, designs,
+            candidate_documents=candidate_documents, native_sources=native_sources))
+
+
+def _snapshot_selection(source: Job, root: Job, designs: list[Design], *,
                        candidate_documents: dict | None = None, native_sources: list | None = None) -> Path:
     from routers.jobs import _materialize_antibody_selection
     from types import SimpleNamespace
@@ -101,7 +255,6 @@ def snapshot_selection(source: Job, root: Job, designs: list[Design], *,
             'selection_structure_sha256': hashlib.sha256(destination.read_bytes()).hexdigest()})
     manifest['native_source_count'] = len(native_sources or [])
     manifest['selection_count'] = len(manifest['designs'])
-    rows = []
     for item in manifest['designs']:
         if item['design_id'] in resolved:
             _, identity = resolved[item['design_id']]
@@ -110,6 +263,15 @@ def snapshot_selection(source: Job, root: Job, designs: list[Design], *,
                 shutil.rmtree(directory)
                 raise ValueError('Selected document snapshot differs from its owned artifact')
             item['selected_document'] = identity
+    (directory / 'selection_manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    _write_source_identity(directory, root.id)
+    return directory
+
+
+def _write_source_identity(directory: Path, root_id: str) -> None:
+    manifest = json.loads((directory / 'selection_manifest.json').read_text())
+    rows = []
+    for item in manifest['designs']:
         provenance = item.get('source_design_provenance') or {}
         rows.append({'staged_name': Path(item['selection_pdb_path']).name,
                      'source_path': item['selection_pdb_path'],
@@ -122,10 +284,8 @@ def snapshot_selection(source: Job, root: Job, designs: list[Design], *,
                                                           or provenance.get('primary_target_state'))),
                                      'parent_design_id': item['design_id'],
                                      'source_job_id': item['design_job_id'],
-                                     'lineage_root_job_id': root.id}})
-    (directory / 'selection_manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True))
+                                     'lineage_root_job_id': root_id}})
     (directory / 'source_identity.json').write_text(json.dumps(rows, indent=2, sort_keys=True))
-    return directory
 
 
 MODEL_OPERATIONS = {

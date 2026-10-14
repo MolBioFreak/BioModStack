@@ -200,14 +200,6 @@ def build_start_preflight(
     }
 
 
-def begin_position_hardware_check(position: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Fail closed; physical diagnostics require separately supervised commissioning."""
-    del position, payload
-    raise NotImplementedError(
-        "Mk1D hardware-check activation is disabled pending separately authorized supervised commissioning."
-    )
-
-
 def refresh_position_state(position: str) -> dict[str, Any]:
     host_payload = request_host_agent("POST", f"/ont/positions/{position}/refresh", {"confirm_refresh": True})
     if not isinstance(host_payload, dict):
@@ -1147,11 +1139,6 @@ async def reconcile_instrument_run(run_id: str) -> dict[str, Any]:
         return await _run_response(session, record)
 
 
-async def refresh_instrument_run_status(run_id: str) -> dict[str, Any]:
-    """Backward-compatible name for the bounded reconciliation operation."""
-    return await reconcile_instrument_run(run_id)
-
-
 def _write_all(file_fd: int, content: bytes) -> None:
     view = memoryview(content)
     while view:
@@ -1328,30 +1315,6 @@ async def build_plasmid_qc_handoff(run_id: str, payload: dict[str, Any]) -> dict
             },
             "fake_or_demo_devices": False,
         }
-
-
-async def stop_instrument_run(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    if payload.get("confirm_stop") is not True:
-        raise ValueError("confirm_stop=true is required before stopping a MinKNOW run")
-    async with async_session() as session:
-        record = await _load_run(session, run_id)
-        if not record.minknow_run_id:
-            raise RuntimeError("instrument run has no recorded MinKNOW run ID to stop")
-        # Reject a terminal-state stop before asking the host-agent to do work.
-        _validate_state_edge(record.state, "stopped")
-        host_payload = request_host_agent("POST", f"/ont/runs/{record.minknow_run_id}/stop", {"confirm_stop": True})
-        if not isinstance(host_payload, dict):
-            raise RuntimeError(f"host-agent returned non-object stop payload: {host_payload!r}")
-        state = _normalized_state(host_payload.get("status"), fallback="stopped")
-        await _append_observation(
-            session,
-            record,
-            event_type="stop_observed",
-            state=state,
-            minknow_payload=host_payload,
-        )
-        await session.commit()
-        return await _run_response(session, record)
 
 
 def get_position_protocol_options(position: str) -> dict[str, Any]:

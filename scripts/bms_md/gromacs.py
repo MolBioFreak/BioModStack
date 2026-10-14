@@ -50,6 +50,9 @@ def build_mdrun_command(
         pass
     elif gpu_offload == "none":
         command.extend(["-nb", "cpu", "-pme", "cpu", "-bonded", "cpu", "-update", "cpu"])
+        # CPU-only runs must not select a device that need not exist.
+        gpu_option = command.index("-gpu_id")
+        del command[gpu_option:gpu_option + 2]
     else:
         raise ValueError(f"unsupported gpu_offload mode: {gpu_offload}")
     if checkpoint_interval_minutes is not None:

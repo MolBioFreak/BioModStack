@@ -2,7 +2,7 @@
  * the primary expected-plasmid BAM, and it is intentionally unavailable for
  * malformed or non-local snapshots. */
 process ComparisonPanelAttribution {
-    label 'local_cpu'
+    label 'dorado_cpu'
     publishDir "${params.out_dir}/comparison_panel", mode: 'copy'
     tag 'comparison_panel_attribution'
 
@@ -23,8 +23,8 @@ process ComparisonPanelAttribution {
 
     script:
     def codeRoot = params.code_root ?: projectDir
-    def minMapq = (params.comparison_panel_min_mapq ?: 20) as Integer
-    def minScoreMargin = (params.comparison_panel_min_score_margin ?: 10) as Integer
+    def minMapq = (params.comparison_panel_min_mapq != null ? params.comparison_panel_min_mapq : 20) as Integer
+    def minScoreMargin = (params.comparison_panel_min_score_margin != null ? params.comparison_panel_min_score_margin : 10) as Integer
     """
     set -euo pipefail
     python3 '${codeRoot}/scripts/build_comparison_panel_attribution.py' \\
@@ -36,8 +36,8 @@ process ComparisonPanelAttribution {
       --expected-reference-artifact comparison_panel_expected_reference.fasta \\
       --combined-fasta comparison_panel.fasta --summary comparison_panel_prepare.json \\
       --min-mapq ${minMapq} --min-score-margin ${minScoreMargin}
-    minimap2 -ax '${params.fastq_minimap2_preset ?: 'map-ont'}' comparison_panel.fasta comparison_panel_normalized.fastq | \\
-      samtools sort -o comparison_panel.bam
+    minimap2 -t ${task.cpus} -ax '${params.fastq_minimap2_preset ?: 'map-ont'}' comparison_panel.fasta comparison_panel_normalized.fastq | \\
+      samtools sort -@ ${task.cpus} -o comparison_panel.bam
     samtools index comparison_panel.bam
     python3 '${codeRoot}/scripts/build_comparison_panel_attribution.py' \\
       --snapshot '${snapshot}' --expected-fasta '${expected_reference}' \\

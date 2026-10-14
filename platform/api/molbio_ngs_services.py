@@ -1410,12 +1410,12 @@ async def save_state_revision(
         or binding.binding_state != "acknowledged"
         or binding.global_domain_experiment_revision_id != global_domain_experiment_revision_id
     ):
-        raise GlobalBindingError("exact global Domain Experiment revision is not acknowledged")
+        raise GlobalBindingError("The current experiment revision has not been linked to this NGS workspace.")
     if (
         state.head_generation != expected_head_generation
         or state.current_state_revision_id != parent_revision_id
     ):
-        raise RevisionConflict("state head generation or parent revision changed")
+        raise RevisionConflict("The saved state changed. Reload it before saving.")
 
     now = _now()
     revision = MolBioNGSDomainStateRevision(

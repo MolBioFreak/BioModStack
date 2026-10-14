@@ -41,13 +41,14 @@ def prepare_record(record, *, authority_root, work_root):
         raise ValueError("remote batch identity mismatch")
     validate_v3_input_closure(request, payloads[1], payloads[2])
     staged = work_root / f"{record['ordinal']:04d}_{hashlib.sha256(record['candidate_id'].encode()).hexdigest()[:16]}.pdb"
-    staged.write_bytes(payloads[1])
+    from stage_frustrampnn_parent_candidate import stage_source
+    stage_source(paths[1], staged)
     return grouped.PreparedCandidate(record, paths[0], paths[1], paths[2], staged)
 
 
 def materialize_batch(directories, authority_root):
     from plan_frustrampnn_groups import immutable_write
-    candidates = ordered_candidates([read_candidate(path) for path in directories], lambda item: item[0])
+    candidates = ordered_candidates([(*read_candidate(path), Path(path)) for path in directories], lambda item: item[0])
     if not candidates:
         raise ValueError("remote batch has no candidates")
     first = candidates[0][0]
@@ -55,11 +56,11 @@ def materialize_batch(directories, authority_root):
     size = settings['structures_per_job']
     if not 1 <= len(candidates) <= (size if settings['batching_enabled'] else 1):
         raise ValueError("remote batch cardinality disagrees with settings")
-    ids = [request['candidate_id'] for request, _ in candidates]
-    plan = plan_frustrampnn([request for request, _ in candidates], settings)
+    ids = [request['candidate_id'] for request, _, _ in candidates]
+    plan = plan_frustrampnn([request for request, _, _ in candidates], settings)
     plan.require_groups([ids])
     records = []
-    for ordinal, (request, payloads) in enumerate(candidates):
+    for ordinal, (request, payloads, directory) in enumerate(candidates):
         if any(request[key] != first[key] for key in ('parent_job_id', 'parent_workflow_id', 'requested_settings', 'requested_settings_sha256')):
             raise ValueError("remote batch mixes owners or requested settings")
         record = dict(record_schema_name='bms_frustrampnn_scheduler_record', record_schema_version=2,
@@ -68,6 +69,9 @@ def materialize_batch(directories, authority_root):
             relative = f"inputs/{folder}/{ordinal:04d}/{name}"
             path = authority_root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
+            if kind != 'request' and not path.exists():
+                from stage_frustrampnn_parent_candidate import stage_source
+                stage_source(directory / name, path)
             immutable_write(path, payload)
             record.update({f'{kind}_relative_path': relative, f'{kind}_sha256': hashlib.sha256(payload).hexdigest(), f'{kind}_size_bytes': len(payload)})
         records.append(record)

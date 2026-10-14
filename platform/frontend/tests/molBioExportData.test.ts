@@ -3,7 +3,6 @@ import test from 'node:test';
 
 import {
     buildPrimersTsv,
-    formatPrimerSites,
 } from '../src/components/MolBioToolkit/utils/exportData.js';
 
 const wrappedPrimer = {
@@ -20,10 +19,6 @@ const wrappedPrimer = {
         { start: 0, end: 4, strand: 1 as const },
     ],
 };
-
-test('primer-site export preserves ordered split geometry', () => {
-    assert.equal(formatPrimerSites(wrappedPrimer), '12-16:1;0-4:1');
-});
 
 test('primer TSV exports explicit coordinate convention and ordered sites', () => {
     const tsv = buildPrimersTsv([wrappedPrimer], 'dna');

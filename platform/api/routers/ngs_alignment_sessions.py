@@ -608,7 +608,7 @@ def _is_canonical_fastq(job: Job) -> bool:
         raise OntNgsRouteError(
             status_code=409,
             code="NGS_AUTHORITY_CONFLICT",
-            message="The persisted NGS authority is inconsistent.",
+            message="NGS result validation failed.",
             job_id=str(job.id),
             resource="result",
         ) from exc
@@ -631,7 +631,7 @@ async def require_alignment_job(
         raise OntNgsRouteError(
             status_code=404,
             code="NGS_RESOURCE_NOT_FOUND",
-            message="The governed NGS Job was not found.",
+            message="NGS job not found.",
             job_id=job_id,
             resource="result",
         )
@@ -644,7 +644,7 @@ async def require_alignment_job(
         raise OntNgsRouteError(
             status_code=403,
             code="NGS_CAPABILITY_DENIED",
-            message="The Job-scoped NGS capability is invalid.",
+            message="Access to this job’s NGS results was denied.",
             job_id=job_id,
             resource="result",
         )
@@ -664,7 +664,7 @@ def _http_error(
         return OntNgsRouteError(
             status_code=404,
             code="NGS_RESOURCE_NOT_FOUND",
-            message="The governed NGS resource was not found.",
+            message="NGS resource not found.",
             job_id=job_id,
             resource=resource,
         )
@@ -672,14 +672,14 @@ def _http_error(
         return OntNgsRouteError(
             status_code=409,
             code="NGS_ARTIFACT_INTEGRITY_CONFLICT",
-            message="The governed artifact changed before delivery.",
+            message="Artifact integrity check failed.",
             job_id=job_id,
             resource="artifact",
         )
     return OntNgsRouteError(
         status_code=409,
         code="NGS_AUTHORITY_CONFLICT",
-        message="The persisted NGS authority is inconsistent.",
+        message="NGS result validation failed.",
         job_id=job_id,
         resource=resource,
     )
@@ -762,14 +762,14 @@ def _job_session_authority(job: Job) -> dict[str, Any]:
     return {**authority, "package_artifact_set_sha256": package_digest, "manifest_digests": _job_manifest_digests(job)}
 
 
+def _uses_native_artifact_catalog(job: Job) -> bool:
+    return (str(getattr(job, "model_id", "") or "").lower() == "nanopore"
+            and not _is_canonical_fastq(job) and not is_ont_signal_alignment_job(job))
+
+
 def _job_package_authority(job: Job) -> dict[str, Any]:
-    authority = _job_authority(job)
     params = getattr(job, "params", None)
     params = params if isinstance(params, dict) else {}
-    source_key = {"fastq": "fastq_path", "bam": "bam_path", "pod5": "pod5_dir"}.get(authority["input_mode"])
-    source_path = params.get(source_key) if source_key is not None else None
-    if not isinstance(source_path, str) or not source_path.strip():
-        raise service.AlignmentSessionError("authorized source input path is required")
     provenance = getattr(job, "provenance", None) or {}
     integrity = provenance.get("result_integrity")
     inventory = integrity.get("artifacts") if isinstance(integrity, dict) else None
@@ -777,7 +777,21 @@ def _job_package_authority(job: Job) -> dict[str, Any]:
         observed = canonical_ngs_package_authority(inventory)
         if observed["artifact_set_sha256"] != integrity.get("artifact_set_sha256"):
             raise service.AlignmentSessionError("persisted artifact inventory identity disagrees")
-    return {**authority, "source_input_path": source_path, "published_artifacts": inventory}
+    # Native publication already belongs to this persisted Job/root. Clone,
+    # methylation and pooled outputs do not require unrelated FASTQ-QC metadata.
+    # If an inventory was published, retain its identities rather than resealing.
+    if _uses_native_artifact_catalog(job):
+        input_mode = params.get("ont_input_mode") or params.get("input_mode")
+        source_key = {"fastq": "fastq_path", "bam": "bam_path", "pod5": "pod5_dir"}.get(input_mode or "")
+        return {"native_outputs": True, "published_artifacts": inventory,
+                "source_input_path": params.get(source_key, "") if source_key else ""}
+    authority = _job_authority(job)
+    source_key = {"fastq": "fastq_path", "bam": "bam_path", "pod5": "pod5_dir"}.get(authority["input_mode"])
+    source_path = params.get(source_key) if source_key is not None else None
+    if not isinstance(source_path, str) or not source_path.strip():
+        raise service.AlignmentSessionError("authorized source input path is required")
+    return {**authority, "source_input_path": source_path, "published_artifacts": inventory,
+            "include_native_outputs": True}
 
 
 
@@ -846,7 +860,7 @@ async def rotate_alignment_access(
     job = result.scalar_one_or_none()
     if job is None:
         raise OntNgsRouteError(
-            status_code=404, code="NGS_RESOURCE_NOT_FOUND", message="The governed NGS Job was not found.",
+            status_code=404, code="NGS_RESOURCE_NOT_FOUND", message="NGS job not found.",
             job_id=job_id, resource="rotation",
         )
     if job.model_id != "nanopore" or job.status != "completed":
@@ -895,7 +909,7 @@ async def rotate_alignment_access(
         await session.rollback()
         raise OntNgsRouteError(
             status_code=409, code="NGS_CAPABILITY_ROTATION_CONFLICT",
-            message="Alignment capability authority changed concurrently.",
+            message="The job changed during this request.",
             job_id=job_id, resource="rotation",
         )
     await session.commit()
@@ -928,7 +942,7 @@ async def revoke_alignment_access(
     job = result.scalar_one_or_none()
     if job is None:
         raise OntNgsRouteError(
-            status_code=404, code="NGS_RESOURCE_NOT_FOUND", message="The governed NGS Job was not found.",
+            status_code=404, code="NGS_RESOURCE_NOT_FOUND", message="NGS job not found.",
             job_id=job_id, resource="rotation",
         )
     await _require_ngs_job_principal(request, experiment_session, job)
@@ -962,7 +976,7 @@ async def revoke_alignment_access(
         if isinstance(current_digest, str):
             raise OntNgsRouteError(
                 status_code=409, code="NGS_CAPABILITY_ROTATION_CONFLICT",
-                message="Alignment capability authority changed concurrently.",
+                message="The job changed during this request.",
                 job_id=job_id, resource="rotation",
             )
         if (
@@ -1029,6 +1043,20 @@ def _iter_range(
         snapshot.close()
 
 
+class _ArtifactStreamingResponse(StreamingResponse):
+    """Close the pinned artifact even when disconnect precedes iteration."""
+
+    def __init__(self, snapshot: BinaryIO, *args, **kwargs):
+        self._snapshot = snapshot
+        super().__init__(*args, **kwargs)
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._snapshot.close()
+
+
 async def _serve_artifact(
     path: Path,
     metadata: dict,
@@ -1061,7 +1089,7 @@ async def _serve_artifact(
             return _ngs_error_response(
                 status_code=409,
                 code="NGS_ARTIFACT_INTEGRITY_CONFLICT",
-                message="The governed artifact changed before delivery.",
+                message="Artifact integrity check failed.",
                 job_id=job_id,
                 resource="artifact",
             )
@@ -1113,19 +1141,23 @@ async def _serve_artifact(
             path,
             expected_size=size,
             expected_sha256=digest,
+            # Only called after the existing job-scoped artifact authorization.
+            # Historical writable leaves still take the private snapshot path.
+            retained=True,
         )
     except service.AlignmentSessionError:
         return _ngs_error_response(
             status_code=409,
             code="NGS_ARTIFACT_INTEGRITY_CONFLICT",
-            message="The governed artifact changed before delivery.",
+            message="Artifact integrity check failed.",
             job_id=job_id,
             resource="artifact",
         )
     if request.method == "HEAD":
         snapshot.close()
         return Response(status_code=200, headers=headers)
-    return StreamingResponse(
+    return _ArtifactStreamingResponse(
+        snapshot,
         _iter_range(snapshot, start, end),
         status_code=status_code,
         headers=headers,
@@ -1143,11 +1175,20 @@ async def list_alignment_sessions(
     authorized_job: Job = Depends(require_alignment_job),
 ):
     try:
+        try:
+            authority = _job_session_authority(authorized_job)
+        except service.AlignmentSessionError:
+            if not _uses_native_artifact_catalog(authorized_job):
+                raise
+            # Native publication need not have an ordinary verification session.
+            # Preserve one when present; otherwise the catalog's co-published
+            # IGV references remain available without invented QC evidence.
+            return {"schema": "bms.ngs.alignment-session-list.v1", "job_id": job_id, "sessions": []}
         async with _validated_pinned_result_root(authorized_job) as pinned_root:
             sessions = await run_in_threadpool(
                 service.build_alignment_sessions,
                 job_id,
-                **_job_session_authority(authorized_job),
+                **authority,
                 job_output_dir=pinned_root,
                 pinned_root_descriptor=True,
             )
@@ -1266,9 +1307,12 @@ async def list_ngs_package_artifacts(
         return {
             "job_id": job_id,
             "artifacts": [
-                {key: value for key, value in artifact.items() if key != "relative_path"}
+                {**{key: value for key, value in artifact.items() if key != "relative_path" and not key.startswith("_")},
+                 **({"filename": artifact.get("filename") or Path(str(artifact["relative_path"])).name}
+                    if artifact.get("filename") or artifact.get("relative_path") else {})}
                 for artifact in artifacts
             ],
+            "igv": service.native_igv_references(artifacts),
         }
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
@@ -1349,13 +1393,6 @@ async def get_alignment_session_artifact(
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 
 
-def _presentation_root_for_job(job: Job) -> Path:
-    root = _job_output_dir(job)
-    if not isinstance(root, str) or not root:
-        raise service.AlignmentSessionError("persisted NGS result root is unavailable")
-    return Path(root) / ".alignment-presentations"
-
-
 def _derived_descriptor(metadata: dict[str, Any], url: str) -> dict[str, Any]:
     return {"kind": metadata["kind"], "url": url, "sha256": metadata["sha256"],
             "size_bytes": metadata["size_bytes"], "mime_type": metadata["mime_type"], "range_capable": True}
@@ -1390,11 +1427,6 @@ async def _prepared_presentation(job_id: str, session_id: str, job: Job):
             alignment_pair_sha256=session["alignment_pair_sha256"],
         )
         yield package, root
-
-
-async def _prepare_presentation(job_id: str, session_id: str, job: Job) -> dict[str, Any]:
-    async with _prepared_presentation(job_id, session_id, job) as (package, _pinned_result_root):
-        return package
 
 
 def _presentation_response(job_id: str, session_id: str, package: dict[str, Any]) -> dict[str, Any]:
@@ -1858,36 +1890,3 @@ async def get_alignment_read(
         status_code=404, code="NGS_RESOURCE_NOT_FOUND", message="The governed read was not found.",
         job_id=job_id, resource="read",
     )
-
-
-def _requires_governed_ont_hierarchy(job: Job) -> bool:
-    try:
-        return is_ont_fastq_qc_job(job)
-    except OntNgsCompletionError as exc:
-        raise OntNgsRouteError(
-            status_code=409,
-            code="NGS_AUTHORITY_CONFLICT",
-            message="The persisted NGS authority is inconsistent.",
-            job_id=str(job.id),
-            resource="result",
-        ) from exc
-
-
-async def _validate_rotation_package_authority(job: Job) -> None:
-    if is_ont_signal_alignment_job(job):
-        async with _validated_pinned_result_root(job) as root:
-            descriptors = await run_in_threadpool(
-                service.build_ngs_package_artifacts, str(job.id),
-                **_job_package_authority(job), job_output_dir=root,
-                pinned_root_descriptor=True,
-            )
-            observed = canonical_ngs_package_authority(descriptors)
-            integrity = (job.provenance or {}).get("result_integrity")
-            if not isinstance(integrity, dict) or any(
-                integrity.get(field) != observed[field]
-                for field in ("artifact_set_sha256", "declared_artifact_count",
-                              "present_artifact_count", "unavailable_artifact_count")
-            ):
-                raise service.AlignmentSessionError("current signal-alignment package differs from persisted authority")
-            return
-    await build_ont_fastq_qc_result(job)

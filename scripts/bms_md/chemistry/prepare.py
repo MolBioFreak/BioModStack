@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -177,6 +178,30 @@ def build_preparation_bundle(
         if not published:
             shutil.rmtree(temporary, ignore_errors=True)
         raise
+
+
+def retain_prepared_file(source: Path, destination: Path) -> None:
+    """Retain a verified preparation leaf, never an engine output.
+
+    The bundle writer completion-publishes read-only regular files; GROMACS
+    grompp and OpenMM only read these inputs. Legacy writable bundles and
+    cross-filesystem placements keep independent bytes. Replace the local name
+    atomically so a preparation retry cannot truncate another replica's input.
+    """
+    source = Path(source)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".prepared-", dir=destination.parent) as directory:
+        temporary = Path(directory) / destination.name
+        if not source.is_symlink() and not source.stat().st_mode & 0o222:
+            try:
+                os.link(source, temporary)
+            except OSError as exc:
+                if exc.errno not in {errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.EMLINK}:
+                    raise
+                shutil.copy2(source, temporary)
+        else:
+            shutil.copy2(source, temporary)
+        os.replace(temporary, destination)
 
 
 def verify_preparation_bundle(

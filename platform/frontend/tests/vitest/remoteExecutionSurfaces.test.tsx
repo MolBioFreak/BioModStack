@@ -543,10 +543,19 @@ describe('remote execution operator surfaces', () => {
         const post = vi.spyOn(api, 'post');
 
         expect(() => submitBoltzApiJob({} as never)).toThrow(/Choose Local/);
-        expect(() => submitOntBarcodeBatch('source', {} as never)).toThrow(/Choose Local/);
-        expect(() => submitPooledReferenceAssignment({} as never)).toThrow(/Choose Local/);
         expect(() => submitOntNgsJob('wf-clone', { params: {}, pinned_gpu: 0 })).toThrow(/Controller GPU pins cannot be used on a worker/);
         expect(post).not.toHaveBeenCalled();
+    });
+
+    it('sends explicit domain placement without inheriting the browser worker or vetoing returned products', async () => {
+        window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'vast:old-rental');
+        const post = vi.spyOn(api, 'post').mockResolvedValue(response({}));
+        const barcode = { idempotency_key: 'batch', target_workflow: 'ont_plasmid_qc' as const, mappings: [], execution_target_id: null };
+        await submitOntBarcodeBatch('source', barcode);
+        expect(post).toHaveBeenLastCalledWith('/api/jobs/source/barcode-batches', barcode);
+        const assignment = { idempotency_key: 'assignment', fastq_path: 'inputs/reads.fastq', targets: [], min_mapq: 20, min_alignment_score_margin: 5, execution_target_id: 'vast:new-worker', reference_set_id: 'retained', execution_plan_approval: 'a'.repeat(64) };
+        await submitPooledReferenceAssignment(assignment);
+        expect(post).toHaveBeenLastCalledWith('/api/ont/ngs/pooled-reference-assignment/submit', assignment);
     });
 
     it.each(['manual', 'automatic'] as const)('supported native routes preserve science, explicit Local and saved worker with %s return', async (policy) => {

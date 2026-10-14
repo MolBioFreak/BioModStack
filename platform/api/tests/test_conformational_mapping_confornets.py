@@ -305,11 +305,10 @@ def test_cm4_003_task_dispatch_uses_request_bound_canonical_prep() -> None:
         encoding="utf-8"
     )
 
-    assert "from './confornets_experimental.nf'" in adapter
+    assert "FinalizeConforNetsOutputs(" not in adapter
     assert "PrepCanonicalConforNetsRequest" in adapter
     for process_name in (
         "RunCanonicalConforNets",
-        "FinalizeConforNetsOutputs",
         "BindCanonicalConforNetsOutputLedger",
     ):
         assert process_name in adapter
@@ -318,7 +317,7 @@ def test_cm4_003_task_dispatch_uses_request_bound_canonical_prep() -> None:
         "RunCanonicalConforNets("
     )
     assert adapter.index("RunCanonicalConforNets(") < adapter.index(
-        "FinalizeConforNetsOutputs("
+        "BindCanonicalConforNetsOutputLedger("
     )
     assert "label 'local_cpu'" in adapter
     assert "finalize_confornets_conformational_mapping.py" in adapter

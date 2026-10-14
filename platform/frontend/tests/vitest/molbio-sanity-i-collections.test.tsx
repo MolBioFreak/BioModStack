@@ -10,6 +10,7 @@ const mock = vi.hoisted(() => ({
 }));
 vi.mock('../../src/lib/api', () => ({
     fetchMolBioNgsSummaries: mock.summaries,
+    fetchExecutionTargets: vi.fn().mockResolvedValue({ data: [] }),
     fetchMolBioNgsReferenceRevision: mock.reference,
     fetchMolBioNgsSampleRevision: mock.sample,
     fetchMolBioNgsStateRevision: mock.stateDetail,
@@ -57,7 +58,7 @@ beforeEach(() => {
     vi.clearAllMocks(); mock.commit.mockReset(); mock.createSequence.mockReset(); mock.preview.mockReset(); mock.domain = 'domain-1'; mock.state = 'state-1';
     mock.summaries.mockReset(); mock.reference.mockReset(); mock.sample.mockReset(); mock.stateDetail.mockReset();
     mock.stateDetail.mockResolvedValue({ members: [] });
-    mock.reference.mockImplementation(async (resourceId, revisionId) => ({ ...referenceRow(revisionId), reference_id: resourceId, global_domain_experiment_id: mock.domain }));
+    mock.reference.mockImplementation(async (resourceId, revisionId) => ({ ...referenceRow(revisionId), reference_id: resourceId, global_domain_experiment_id: mock.domain, payload: { contigs: [{ name: 'fixture', length: 4000 }] } }));
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Live transport forbidden in Lane I tests')));

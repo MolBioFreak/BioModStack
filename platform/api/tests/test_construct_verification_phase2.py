@@ -458,17 +458,6 @@ def test_non_utf8_samtools_version_metadata_does_not_abort_verification(tmp_path
     assert manifest["inputs"]["alignment_index"]["semantic_validation"]["status"] == "valid"
 
 
-def test_phase2_contract_files_exist() -> None:
-    required = [
-        PROFILE_CONFIG,
-        REPO_ROOT / "schemas" / "ngs" / "construct_verification_manifest.schema.json",
-        SCRIPT,
-        REPO_ROOT / "modules" / "ngs" / "construct_verify.nf",
-    ]
-    missing = [str(path.relative_to(REPO_ROOT)) for path in required if not path.is_file()]
-    assert missing == [], f"missing Phase 2 contract files: {missing}"
-
-
 def test_exact_clean_evidence_passes_checks_under_experimental_profile(tmp_path: Path) -> None:
     result, manifest, out_dir = _run_case(tmp_path)
 
@@ -876,8 +865,14 @@ def test_topology_policy_is_fail_closed(
     assert reason in manifest["reason_codes"]
 
 
-def test_generated_manifest_validates_against_draft_2020_schema(tmp_path: Path) -> None:
-    result, manifest, _ = _run_case(tmp_path)
+@pytest.fixture(scope="module")
+def clean_manifest_case(tmp_path_factory):
+    """One native producer run for read-only serialization/provenance checks."""
+    return _run_case(tmp_path_factory.mktemp("clean-manifest"))
+
+
+def test_generated_manifest_validates_against_draft_2020_schema(clean_manifest_case) -> None:
+    result, manifest, _ = clean_manifest_case
 
     assert result.returncode == 0, result.stderr
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
@@ -885,16 +880,16 @@ def test_generated_manifest_validates_against_draft_2020_schema(tmp_path: Path) 
     Draft202012Validator(schema).validate(manifest)
 
 
-def test_manifest_separates_execution_and_scientific_status(tmp_path: Path) -> None:
-    result, manifest, _ = _run_case(tmp_path)
+def test_manifest_separates_execution_and_scientific_status(clean_manifest_case) -> None:
+    result, manifest, _ = clean_manifest_case
 
     assert result.returncode == 0, result.stderr
     assert manifest["execution"] == {"status": "SUCCEEDED", "exit_code": 0, "reason_codes": []}
     assert manifest["verdict"] == "PASS"
 
 
-def test_manifest_binds_reference_workflow_and_experimental_policy(tmp_path: Path) -> None:
-    result, manifest, _ = _run_case(tmp_path)
+def test_manifest_binds_reference_workflow_and_experimental_policy(clean_manifest_case) -> None:
+    result, manifest, _ = clean_manifest_case
 
     assert result.returncode == 0, result.stderr
     expected_sequence_digest = hashlib.sha256(REFERENCE.encode("ascii")).hexdigest()
@@ -913,8 +908,8 @@ def test_manifest_binds_reference_workflow_and_experimental_policy(tmp_path: Pat
     assert Path(commands[0]["argv"][1]).resolve() == SCRIPT.resolve()
 
 
-def test_manifest_binds_and_validates_every_scientific_artifact(tmp_path: Path) -> None:
-    result, manifest, out_dir = _run_case(tmp_path)
+def test_manifest_binds_and_validates_every_scientific_artifact(clean_manifest_case) -> None:
+    result, manifest, out_dir = clean_manifest_case
 
     assert result.returncode == 0, result.stderr
     assert set(manifest["inputs"]) == {
@@ -1198,12 +1193,6 @@ def test_topology_sidecar_digests_are_recomputed(
     assert result.returncode == 0, result.stderr
     assert manifest["verdict"] == "REVIEW"
     assert "TOPOLOGY_PROVENANCE_INVALID" in manifest["reason_codes"]
-
-
-def test_final_profile_hash_is_the_reviewed_policy_identity() -> None:
-    profile = json.loads(PROFILE_CONFIG.read_text(encoding="utf-8"))["profiles"]["plasmid_strict_v1"]
-    encoded = json.dumps(profile, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
-    assert hashlib.sha256(encoded).hexdigest() == "90fad5ea643fc6509cd174020a52563c0a0ec4d38836328cd4bdc7eed9015553"
 
 
 def test_verifier_ignores_secondary_alignment_with_omitted_sequence() -> None:

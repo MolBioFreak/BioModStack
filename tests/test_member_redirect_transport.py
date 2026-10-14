@@ -190,16 +190,15 @@ def test_all_licenses_duplicates_and_collisions_preflight(source, tmp_path):
 def test_interrupted_copy_resume_and_no_partial_publication(source, tmp_path, monkeypatch):
     artifact, handler = source
     entries = members(artifact)
-    copy = layout._copy
-    def interrupt(src, dst):
-        os.write(dst, b'uncommitted copy')
+    symlink = layout.os.symlink
+    def interrupt(*args, **kwargs):
         raise OSError('fixture interruption')
-    monkeypatch.setattr(layout, '_copy', interrupt)
+    monkeypatch.setattr(layout.os, 'symlink', interrupt)
     with pytest.raises(OSError, match='interruption'):
         materialize(entries, tmp_path)
     parent = tmp_path / 'test-fixtures-not-scientific-assets/weights/layouts/esmfold2'
     assert not [p for p in parent.iterdir() if not p.name.startswith('.')]
-    monkeypatch.setattr(layout, '_copy', copy)
+    monkeypatch.setattr(layout.os, 'symlink', symlink)
     result = materialize(entries, tmp_path)
     assert (Path(result['path']) / 'config.json').read_bytes() == PAYLOAD
     assert len(handler.requests) == 1
@@ -214,11 +213,12 @@ def test_published_member_set_and_links_rejected(source, tmp_path, attack):
     if attack == 'extra':
         (root / 'unexpected').write_bytes(b'x')
     elif attack == 'hardlink':
-        os.link(root / 'config.json', tmp_path / 'link')
+        os.link((root / 'config.json').resolve(), tmp_path / 'link')
     else:
         (root / 'config.json').unlink()
         if attack == 'symlink':
-            (root / 'config.json').symlink_to(root / 'nested/model.bin')
+            (tmp_path / 'outside').write_bytes(PAYLOAD)
+            (root / 'config.json').symlink_to(tmp_path / 'outside')
     root.chmod(0o500)
     with pytest.raises(AcquisitionError):
         materialize(entries, tmp_path)

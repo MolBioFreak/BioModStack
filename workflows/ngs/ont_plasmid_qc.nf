@@ -18,20 +18,7 @@ include { FastqDimerAnalysis as Pod5DimerAnalysis; FastqDimerAnalysis as BamDime
 include { ConstructVerify as Pod5ConstructVerify; ConstructVerify as BamConstructVerify; ConstructVerify as InputFastqConstructVerify } from '../../modules/ngs/construct_verify.nf'
 include { ComparisonPanelAttribution as Pod5ComparisonPanelAttribution; ComparisonPanelAttribution as BamComparisonPanelAttribution; ComparisonPanelAttribution as InputComparisonPanelAttribution } from '../../modules/ngs/comparison_panel_attribution.nf'
 
-def reportStage(params, stageName, files) {
-    def jobId = params.containsKey('job_id') ? params.job_id : null
-    if (!jobId) return
-    try {
-        def reportFiles = files.findAll { it != null && it.toString().trim() }
-        if (reportFiles.isEmpty()) return
-        def args = [jobId.toString(), stageName, "complete"] + reportFiles.collect { it.toString() }
-        def proc = (["python3", "${params.code_root}/scripts/stage_reporter.py"] + args).execute()
-        def rc = proc.waitFor()
-        if (rc != 0) throw new IllegalStateException("Stage reporting failed for ${stageName} (exit ${rc})")
-    } catch (Exception e) {
-        throw new IllegalStateException("Stage reporting failed for ${stageName}", e)
-    }
-}
+include { reportStage } from '../../modules/ngs/stage_reporting.nf'
 
 workflow ONT_PLASMID_QC {
     main:
@@ -82,6 +69,10 @@ workflow ONT_PLASMID_QC {
             error("Unsupported --fastq_minimap2_preset '${preset}'. Supported: ${allowed_presets.join(', ')}")
         }
     }
+
+    // Retain input-specific process aliases for selectors and resume identity.
+    def qcSummary = null
+    def comparisonSummary = null
 
     // --- POD5 input: Dorado basecalling + alignment ---
     if (has_pod5) {
@@ -138,25 +129,12 @@ workflow ONT_PLASMID_QC {
                     Pod5DimerCanonicalOutputs.out.breakpoint_call,
                     Pod5DimerCanonicalOutputs.out.secondary_summary,
                 )
-                Pod5PlasmidQC.out.summary.subscribe { _ignored ->
-                    reportStage(params, "fastq_qc", [
-                        "${params.out_dir}/fastq_qc/reads_for_qc.fastq",
-                        "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
-                        "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
-                        "${params.out_dir}/fastq_qc/per_base_support.tsv",
-                        "${params.out_dir}/fastq_qc/qc_manifest.json",
-                        "${params.out_dir}/fastq_qc/igv_report.html",
-                        "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
-                        "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
-                    ])
-                }
+                qcSummary = Pod5PlasmidQC.out.summary
                 if (params.comparison_panel_snapshot && params.comparison_panel_snapshot.toString().trim()) {
                     def comparisonSnapshot = file(params.comparison_panel_snapshot)
                     if (!comparisonSnapshot.exists()) error("Comparison panel snapshot not found")
                     Pod5ComparisonPanelAttribution(Pod5BamToFastqForQC.out.fastq, Channel.of(reference_file), Channel.of(comparisonSnapshot))
-                    Pod5ComparisonPanelAttribution.out.summary.subscribe { _ignored ->
-                        reportStage(params, "comparison_panel", ["${params.out_dir}/comparison_panel/comparison_panel_summary.json", "${params.out_dir}/comparison_panel/comparison_panel.bam", "${params.out_dir}/comparison_panel/comparison_panel.bam.bai"])
-                    }
+                    comparisonSummary = Pod5ComparisonPanelAttribution.out.summary
                 }
             }
         } else {
@@ -222,25 +200,12 @@ workflow ONT_PLASMID_QC {
                 BamDimerCanonicalOutputs.out.breakpoint_call,
                 BamDimerCanonicalOutputs.out.secondary_summary,
             )
-            BamPlasmidQC.out.summary.subscribe { _ignored ->
-                reportStage(params, "fastq_qc", [
-                    "${params.out_dir}/fastq_qc/reads_for_qc.fastq",
-                    "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
-                    "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
-                    "${params.out_dir}/fastq_qc/per_base_support.tsv",
-                    "${params.out_dir}/fastq_qc/qc_manifest.json",
-                    "${params.out_dir}/fastq_qc/igv_report.html",
-                    "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
-                    "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
-                ])
-            }
+            qcSummary = BamPlasmidQC.out.summary
             if (params.comparison_panel_snapshot && params.comparison_panel_snapshot.toString().trim()) {
                 def comparisonSnapshot = file(params.comparison_panel_snapshot)
                 if (!comparisonSnapshot.exists()) error("Comparison panel snapshot not found")
                 BamComparisonPanelAttribution(BamInputToFastqForQC.out.fastq, Channel.of(reference_file), Channel.of(comparisonSnapshot))
-                BamComparisonPanelAttribution.out.summary.subscribe { _ignored ->
-                    reportStage(params, "comparison_panel", ["${params.out_dir}/comparison_panel/comparison_panel_summary.json", "${params.out_dir}/comparison_panel/comparison_panel.bam", "${params.out_dir}/comparison_panel/comparison_panel.bam.bai"])
-                }
+                comparisonSummary = BamComparisonPanelAttribution.out.summary
             }
         }
     }
@@ -283,31 +248,37 @@ workflow ONT_PLASMID_QC {
                 InputFastqDimerCanonicalOutputs.out.breakpoint_call,
                 InputFastqDimerCanonicalOutputs.out.secondary_summary,
             )
-            InputFastqPlasmidQC.out.summary.subscribe { _ignored ->
-                reportStage(params, "fastq_qc", [
-                    "${params.out_dir}/fastq_qc/read_lengths.tsv",
-                    "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
-                    "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
-                    "${params.out_dir}/fastq_qc/fastq_coverage.tsv",
-                    "${params.out_dir}/fastq_qc/per_base_support.tsv",
-                    "${params.out_dir}/fastq_qc/qc_manifest.json",
-                    "${params.out_dir}/fastq_qc/igv_report.html",
-                    "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
-                    "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
-                ])
-            }
+            qcSummary = InputFastqPlasmidQC.out.summary
             if (params.comparison_panel_snapshot && params.comparison_panel_snapshot.toString().trim()) {
                 def comparisonSnapshot = file(params.comparison_panel_snapshot)
                 if (!comparisonSnapshot.exists()) error("Comparison panel snapshot not found")
                 InputComparisonPanelAttribution(Channel.of(fastq_input), Channel.of(reference_file), Channel.of(comparisonSnapshot))
-                InputComparisonPanelAttribution.out.summary.subscribe { _ignored ->
-                    reportStage(params, "comparison_panel", [
-                        "${params.out_dir}/comparison_panel/comparison_panel_summary.json",
-                        "${params.out_dir}/comparison_panel/comparison_panel.bam",
-                        "${params.out_dir}/comparison_panel/comparison_panel.bam.bai",
-                    ])
-                }
+                comparisonSummary = InputComparisonPanelAttribution.out.summary
             }
+        }
+    }
+    if (qcSummary != null) {
+        qcSummary.subscribe { _ignored ->
+            reportStage(params, "fastq_qc", [
+                has_fastq ? "${params.out_dir}/fastq_qc/read_lengths.tsv" : "${params.out_dir}/fastq_qc/reads_for_qc.fastq",
+                "${params.out_dir}/fastq_qc/fastq_qc_summary.tsv",
+                "${params.out_dir}/fastq_qc/fastq_alignment_stats.tsv",
+                has_fastq ? "${params.out_dir}/fastq_qc/fastq_coverage.tsv" : null,
+                "${params.out_dir}/fastq_qc/per_base_support.tsv",
+                "${params.out_dir}/fastq_qc/qc_manifest.json",
+                "${params.out_dir}/fastq_qc/igv_report.html",
+                "${params.out_dir}/fastq_qc/fastq_consensus.fasta",
+                "${params.out_dir}/multimer_qc/dimer_breakpoint_call.tsv",
+            ])
+        }
+    }
+    if (comparisonSummary != null) {
+        comparisonSummary.subscribe { _ignored ->
+            reportStage(params, "comparison_panel", [
+                "${params.out_dir}/comparison_panel/comparison_panel_summary.json",
+                "${params.out_dir}/comparison_panel/comparison_panel.bam",
+                "${params.out_dir}/comparison_panel/comparison_panel.bam.bai",
+            ])
         }
     }
 }

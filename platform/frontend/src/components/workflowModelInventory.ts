@@ -16,7 +16,7 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
     {
         workflowId: 'mutagenesis',
         label: 'Mutagenesis Library',
-        modelTopics: ['boltz2', 'rf3', 'esmfold2'],
+        modelTopics: ['boltz2', 'esmfold2'],
         sourceFiles: [
             'platform/frontend/src/components/JobSubmission.tsx',
             'platform/frontend/src/components/MutagenesisTemplate.tsx',

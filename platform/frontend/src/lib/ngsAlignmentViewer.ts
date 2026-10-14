@@ -1,5 +1,17 @@
 import type { AlignmentLocusSlice, AlignmentPresentation } from './ngsAlignmentSession.js';
 
+export function secureNgsHtml(source: string, csp: string): Blob {
+    const documentNode = new DOMParser().parseFromString(source, 'text/html');
+    const policy = documentNode.createElement('meta');
+    policy.httpEquiv = 'Content-Security-Policy';
+    policy.content = csp;
+    documentNode.head.insertBefore(policy, documentNode.head.firstChild);
+    return new Blob([
+        '<!doctype html>\n',
+        documentNode.documentElement.outerHTML,
+    ], { type: 'text/html;charset=utf-8' });
+}
+
 export type AlignmentViewerMode = 'primary' | 'dimer_candidates';
 
 export interface AlignmentViewerFile {

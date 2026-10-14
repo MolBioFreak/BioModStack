@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import hashlib
+import errno
 import stat
 import sys
 import uuid
@@ -79,8 +80,30 @@ def reconcile_tree(source: Path, destination: Path, authority: dict, *, staging_
             if staging_root.is_symlink():
                 raise ValueError("materialization staging is unsafe")
             staged = staging_root / uuid.uuid4().hex
-            durable_write(staged, payload)
-            os.replace(staged, target)
+            staging_root.mkdir(parents=True, exist_ok=True)
+            donor = source / name
+            # The completed input/result owner freezes these scientific leaves.
+            # Metadata/logs and legacy writable donors remain private snapshots.
+            share = (donor.suffix.lower() in {'.pdb', '.cif', '.mmcif', '.csv', '.npz', '.parquet'} or donor.name in {'frustrampnn_structure_map_v1.json', 'frustrampnn_landscape_v1.json', 'frustrampnn_landscape_v2.json', 'frustrampnn_landscape_v3.json', 'frustrampnn_summary_v1.json', 'frustrampnn_summary_v2.json', 'frustrampnn_summary_v3.json'})
+            linked = False
+            try:
+                if share and not donor.stat().st_mode & 0o222:
+                    try:
+                        os.link(donor, staged, follow_symlinks=False)
+                        linked = True
+                    except OSError as exc:
+                        if exc.errno != errno.EXDEV:
+                            raise
+                if not linked:
+                    durable_write(staged, payload)
+                    if share:
+                        staged.chmod(0o444)
+                # Check the actual publication member, including linked donors.
+                if staged.is_symlink() or staged.read_bytes() != payload:
+                    raise ValueError("materialization source authority conflicts")
+                os.replace(staged, target)
+            finally:
+                staged.unlink(missing_ok=True)
             fd = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
             try:
                 os.fsync(fd)

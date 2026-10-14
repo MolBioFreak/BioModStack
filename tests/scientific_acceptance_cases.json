@@ -996,7 +996,7 @@
           "layer": "API / disposable persistence"
         },
         {
-          "selector": "platform/frontend/tests/vitest/canonicalAnalyticsMounted.test.tsx::published SQLite API bytes reach mounted native scalar table and paired plot",
+          "selector": "platform/frontend/tests/vitest/canonicalAnalyticsMounted.test.tsx::published SQLite API bytes reach the existing Plotly Lab and distributions",
           "layer": "mounted UI"
         }
       ],

@@ -140,6 +140,7 @@ def validate_remote_stage_receipts(*, output_root: Path, job_id: str,
         raise ValueError("remote result manifest job/attempt/success mismatch")
     root = Path(output_root)
     records = {record.relative_path: record for record in manifest.artifacts}
+    directories = set(getattr(manifest, "directories", ()))
     receipt_names = sorted(name for name in records if name.startswith(RECEIPT_DIRECTORY + "/"))
     directory = _confined(root, RECEIPT_DIRECTORY, regular=False)
     actual = sorted(p.relative_to(root).as_posix() for p in directory.rglob("*") if not p.is_dir()) if directory.exists() else []
@@ -170,7 +171,11 @@ def validate_remote_stage_receipts(*, output_root: Path, job_id: str,
         if encoded != canonical_bytes(payload) or name != f"{RECEIPT_DIRECTORY}/{_filename(payload)}":
             raise ValueError("remote stage receipt is not canonical")
         for output in payload["outputs"]:
-            verified_bytes(output)
+            if output in directories:
+                if not _confined(root, output, regular=False).is_dir():
+                    raise ValueError("declared remote stage directory is missing")
+            else:
+                verified_bytes(output)
         receipts.append(payload)
     terminals = {p["stage"] for p in receipts if p["status"] != "start"}
     if any(p["stage"] not in terminals for p in receipts):

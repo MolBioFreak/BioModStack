@@ -60,8 +60,8 @@ def test_explicit_air_speed_conflicting_with_authored_phase_errors():
 
 @pytest.mark.parametrize('field,value,reason', [
     ('retract_distance_mm', 5, 'no Z mm-to-steps conversion'),
-    ('calibration_function', {'kind': 'affine', 'scale': 1, 'offset_ul': 0}, 'does not call correction_at_target'),
-    ('correction_points', [{'target_ul': 20, 'commanded_ul': 22.5}], 'does not call correction_at_target')])
+    ('calibration_function', {'kind': 'affine', 'scale': 1, 'offset_ul': 0}, 'explicitly select selected_correction'),
+    ('correction_points', [{'target_ul': 20, 'commanded_ul': 22.5}], 'explicitly select selected_correction')])
 def test_unmappable_explicit_fields_keep_documented_error(field, value, reason):
     recipe = {'leading_air': {'volume_ul': 20, 'speed_ul_s': 50}}
     with pytest.raises(ValueError, match='no native recipe mapping.*' + reason):
@@ -86,7 +86,7 @@ def test_air_speed_compiles_through_real_schema_and_native_document(source):
     original = deepcopy(inputs)
     result = compile_nodes(node('liquid_recipe', inputs))
     native = actions(result)[0]['params']['recipe']
-    assert native['leading_air']['speed_ul_s'] == native['trailing_air']['speed_ul_s'] == 40
+    assert native['leading_air']['speed_ul_s'] == native['trailing_air']['speed_ul_s'] == '40.00'
     field = result['resolved']['liquids'][0]['fields']['air_gap_aspiration_speed_ul_s']
     assert field['emitted']['status'] == 'emitted' and field['applied']['status'] == 'unknown'
     assert inputs == original

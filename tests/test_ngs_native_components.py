@@ -34,18 +34,12 @@ def test_every_ngs_process_is_registered(native):
         assert_registered_processes(native.PROCESS_CONTRACTS, source.relative_to(ROOT).as_posix())
 
 
-def test_reverse_coverage_detects_an_omitted_process(native):
-    contracts = dict(native.PROCESS_CONTRACTS)
-    del contracts[CLONE_SOURCE + ':ComparePlasmidConsensus']
-    with pytest.raises(AssertionError, match='ComparePlasmidConsensus'):
-        assert_registered_processes(contracts, CLONE_SOURCE)
-
-
-def test_clone_registry_exact_declarations(native):
-    text = (ROOT / CLONE_SOURCE).read_text()
+@pytest.mark.parametrize('source', sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / 'modules/ngs').glob('*.nf') if p.name != 'stage_reporting.nf'))
+def test_ngs_registry_exact_declarations(native, source):
+    text = (ROOT / source).read_text()
     parts = re.split(r'^process\s+(\w+)\s*\{', text, flags=re.MULTILINE)
     for name, body in zip(parts[1::2], parts[2::2]):
-        labels, inputs, outputs, helpers, _ = native.PROCESS_CONTRACTS[CLONE_SOURCE + ':' + name]
+        labels, inputs, outputs, helpers, _ = native.PROCESS_CONTRACTS[source + ':' + name]
         assert tuple(re.findall(r"^\s*label\s+'([^']+)'", body, re.MULTILINE)) == labels
         for section, expected in [('input', inputs), ('output', outputs)]:
             match = re.search(r'^\s*' + section + r':\s*\n(.*?)(?=^\s*(?:input|output|script|when|shell|exec):)',
@@ -84,9 +78,10 @@ def metadata(native, workflow, settings):
     ('wf_clone_validation', True), ('ont_construct_screening', True),
     ('ont_construct_screening', False),
 ])
-@pytest.mark.parametrize('input_mode', ['fastq', 'bam', 'pod5'])
+@pytest.mark.parametrize('input_mode,realign', [
+    ('fastq', False), ('pod5', False), ('bam', False), ('bam', True),
+])
 @pytest.mark.parametrize('run_qc', [False, True])
-@pytest.mark.parametrize('realign', [False, True])
 def test_real_native_graph_matches_plasmid_routes(native, workflow, assembly, input_mode, run_qc, realign):
     settings = {
         {'fastq': 'fastq_path', 'bam': 'bam_path', 'pod5': 'pod5_dir'}[input_mode]: '/input/reads',
@@ -114,9 +109,12 @@ def test_real_native_graph_matches_plasmid_routes(native, workflow, assembly, in
         assert set(graph['FastqPlasmidQC'].depends_on) == {mapped, *reads}
     if assembly:
         assert set(graph['CloneValidationAdapter'].depends_on) == {'RunCloneValidation', mapped}
-        # Preserve the pre-existing nested-runtime admission blocker; a graph
-        # fix must not pretend its external image inventory was qualified.
-        assert any('RunCloneValidation' == args[0] for args, _ in blockers)
+        # WP5 now supplies the selected native runtime closure, not a placeholder
+        # blocker. Selection itself does not claim installed-image qualification.
+        assert not blockers
+        clone_deps = graph['RunCloneValidation'].dependency_ids
+        assert 'runtime_data:ngs/wf-clone-validation/runtime.lock.json' in clone_deps
+        assert len([key for key in clone_deps if key.startswith('image:ngs/wf-clone-validation/images/')]) == 4
     if assembly and run_qc:
         assert set(graph['ComparePlasmidConsensus'].depends_on) == {'CloneValidationAdapter', 'FastqPlasmidQC'}
         assert 'support_tool:scripts/compare_plasmid_consensus.py' in deps
@@ -139,3 +137,22 @@ def test_real_native_graph_matches_plasmid_routes(native, workflow, assembly, in
             assert 'BuildDimerCanonicalOutputs:output:secondary_summary' in source_ids
         if assembly and run_qc:
             assert 'ComparePlasmidConsensus:output:verification_input' in source_ids
+
+
+@pytest.mark.parametrize('reference', [None, '/input/reference.fasta'])
+def test_barcoded_native_selection_does_not_schedule_unused_alignment(native, reference):
+    graph, deps, _, blockers = metadata(native, 'ont_basecall_dna', {
+        'pod5_dir': '/input/pod5', 'barcode_kit': 'SQK-RBK114-96',
+        'reference_fasta': reference, 'dorado_quality_mode': 'hac'})
+    assert set(graph) == {'DoradoPreflight', 'DoradoBasecall', 'DoradoDemux'}
+    assert not blockers
+    assert graph['DoradoDemux'].depends_on == ('DoradoBasecall',)
+    assert len([key for key in deps if key.startswith('weights:')]) == 1
+
+
+def test_comparison_selects_native_tool_image_without_extra_models(native):
+    graph, _, _, _ = metadata(native, 'ont_fastq_qc', {
+        'fastq_path': '/input/reads.fastq', 'reference_fasta': '/input/ref.fa',
+        'comparison_panel_snapshot': '/input/panel.json'})
+    assert 'image:dorado.sif' in graph['ComparisonPanelAttribution'].dependency_ids
+    assert not any(key.startswith('weights:') for key in graph['ComparisonPanelAttribution'].dependency_ids)

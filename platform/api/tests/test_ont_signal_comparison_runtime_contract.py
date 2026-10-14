@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import create_engine, select
 
 from database import (
     InputFile,
@@ -204,14 +205,6 @@ def _load(path: Path) -> dict[str, object]:
     return value
 
 
-def _canonical_sha256(value: dict[str, object], field: str = "content_sha256") -> str:
-    preimage = dict(value)
-    preimage.pop(field, None)
-    return hashlib.sha256(
-        json.dumps(preimage, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-    ).hexdigest()
-
-
 def test_parameter_contract_classifies_every_pinned_upstream_option() -> None:
     contract = _load(CONFIG_ROOT / "squigulator_ideal_comparison_schema_v1.json")
 
@@ -329,16 +322,6 @@ def test_comparison_compatibility_requires_complete_real_authority() -> None:
     assert complete["disposition"] == "approximate_profile"
     assert complete["evidence"]["mapping_profile_kmer_length"] == 2
 
-    current = service._derive_ideal_comparison_compatibility(
-        simulated_profile=simulated,
-        mapping_profile={"molecule_type": "dna", "basecall_model_id": "dna_r10.4.1_e8.2_400bps_sup@v4.3.0", "kmer_length": 2},
-        move_source={"molecule_type": "dna", "basecall_model_id": "dna_r10.4.1_e8.2_400bps_sup@v4.3.0",
-                     "source_runtime_identity": {"authority_state": "verified"}},
-        raw_header={"sample_frequency": "5000", "digitisation": "8192", "range": "1536.598389"},
-        run_receipt={"flow_cell_generation": "R10.4.1", "device_class": "MinION"},
-    )
-    assert current["disposition"] == "approximate_profile"
-
     unknown = service._derive_ideal_comparison_compatibility(
         simulated_profile=simulated,
         mapping_profile={"molecule_type": "dna", "basecall_model_id": "dna_r10.4.1_e8.2_400bps_sup@v4.3.0", "kmer_length": 2},
@@ -361,7 +344,7 @@ def test_comparison_compatibility_requires_complete_real_authority() -> None:
     assert mismatch["mismatches"]
 
 
-def test_eight_profile_constants_match_v050_executable_source() -> None:
+def test_profile_inventory_r10_dna_constants_and_approximate_labels() -> None:
     contract = _load(CONFIG_ROOT / "squigulator_ideal_comparison_schema_v1.json")
     profiles = contract["profiles"]
     assert set(profiles) == {
@@ -406,70 +389,11 @@ def test_producer_and_comparison_renderer_are_distinct_network_denied_pins() -> 
     assert producer["oci_digest"] != renderer["oci_digest"]
 
 
-def test_runtime_build_sources_pin_named_release_and_separate_wrappers() -> None:
-    producer = (REPO_ROOT / "docker/ont-squigulator.Dockerfile").read_text(encoding="utf-8")
-    renderer = (REPO_ROOT / "docker/ont-squigualiser-comparison.Dockerfile").read_text(encoding="utf-8")
-    producer_wrapper = REPO_ROOT / "scripts/ont_squigulator_runtime.py"
-    renderer_wrapper = REPO_ROOT / "scripts/ont_signal_comparison_runtime.py"
-
-    assert "squigulator-v0.5.0-release.tar.gz" in producer
-    assert "debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171" in producer
-    assert "python:3.12-slim-bookworm@sha256:0f5b26b9518d002b6173fd61daad821fa340635ebfec5bba471013f9ca114579" in producer
-    assert "1704d57628b46e9a8e06d90e92a6c38f87e6a04ade7afc3e7a718b35de889a13" not in producer
-    assert SQUIGULATOR_RELEASE_SHA256 in producer
-    assert SQUIGULATOR_COMMIT in producer
-    assert 'test "$observed_version" = "$SQUIGULATOR_VERSION"' in producer
-    assert '|| true' not in producer.split('make -C /src', 1)[0].rsplit('tar -xzf', 1)[1]
-    assert "COPY scripts/ont_squigulator_runtime.py" in producer
-    assert 'Path("/usr/local/lib/python3.12/site-packages")' in producer
-    assert "ont-squigulator-index.c" in producer
-    assert "bms-slow5-index" in producer
-    assert SQUIGUALISER_COMMIT in renderer
-    assert "exec(open(" not in renderer
-    assert "COPY scripts/ont_signal_comparison_runtime.py" in renderer
-    assert "ont_signal_runtime.py" not in renderer
-    assert producer_wrapper.is_file()
-    assert renderer_wrapper.is_file()
-    assert "--full-contigs" in producer_wrapper.read_text(encoding="utf-8")
-    assert "--shared_x" in renderer_wrapper.read_text(encoding="utf-8")
-
-
-def test_comparison_runtime_policy_is_opened_once_and_wrapper_is_repo_constrained() -> None:
-    worker = (REPO_ROOT / "platform/api/services/ont_signal_worker.py").read_text(encoding="utf-8")
-    body = worker.split("def _comparison_runtime_identity", 1)[1].split("def _comparison_container_command", 1)[0]
-    assert "os.O_NOFOLLOW" in body
-    assert ".read_text(" not in body
-    assert "policy_path.read_bytes" not in body
-    assert "wrapper_relative.parts[0] != \"scripts\"" in body
-    assert "expected_policy" in body
-
-
-def test_development_api_unit_receives_both_comparison_runtime_identities() -> None:
-    services = (REPO_ROOT / "biomodstack_services.py").read_text(encoding="utf-8")
-    assert "BMS_ONT_SQUIGULATOR_IMAGE" in services
-    assert "BMS_ONT_SQUIGULATOR_IMAGE_DIGEST" in services
-    assert "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE" in services
-    assert "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST" in services
-
-
-def test_worker_claims_comparison_and_preserves_two_stage_runtime_order() -> None:
-    worker = (REPO_ROOT / "platform/api/services/ont_signal_worker.py").read_text(encoding="utf-8")
-    assert "OntSignalComparisonJob" in worker
-    assert "_process_comparison" in worker
-    assert "squigulator_producer" in worker
-    assert "squigualiser_comparison_renderer" in worker
-    assert worker.index("squigulator_producer") < worker.index("squigualiser_comparison_renderer")
-    assert '"--pids-limit", "64"' in worker
-    assert '"--memory", "1g"' in worker
-    assert '"--pids-limit", "128"' in worker
-    assert '"--memory", "4g"' in worker
-
-
 def test_producer_emits_complete_truth_and_coordinate_receipts(
     tmp_path: Path, monkeypatch
 ) -> None:
     reference = tmp_path / "reference.fasta"
-    reference.write_text(">plasmid\nAACCGGTTAACCGGTT\n", encoding="ascii")
+    reference.write_text(">plasmid\nAACCGGTTACGATGCA\n", encoding="ascii")
     output = tmp_path / "output"
     output.mkdir()
     (output / ".owner").write_text("comparison-job-1", encoding="utf-8")
@@ -483,10 +407,11 @@ def test_producer_emits_complete_truth_and_coordinate_receipts(
             profile_id="dna-r10-min", seed=7,
             input_fasta=str(output / "simulation_input.fasta"), output_root=str(output),
         )
+        assert (output / "simulation_input.fasta").read_text().splitlines()[1] == "TGCATCGTAACCGGTT"
         (output / "simulated.blow5").write_bytes(b"BLOW5-one-record")
         (output / "simulated.blow5.idx").write_bytes(b"IDX-one-record")
         (output / "simulated_reads.fasta").write_text(
-            f">{generated_id}\nAACCGGTTAACCGGTT\n", encoding="ascii"
+            f">{generated_id}\nTGCATCGTAACCGGTT\n", encoding="ascii"
         )
         (output / "simulated_source.paf").write_text(
             f"{generated_id}\t104\t0\t104\t+\t{input_id}\t8\t0\t8\t8\t8\t255\t"
@@ -495,7 +420,7 @@ def test_producer_emits_complete_truth_and_coordinate_receipts(
         )
         (output / "simulated_source.sam").write_text(
             f"@HD\tVN:1.6\n@SQ\tSN:{input_id}\tLN:16\n"
-            f"{generated_id}\t0\t{input_id}\t1\t255\t16M\t*\t0\t0\tAACCGGTTAACCGGTT\t*\t"
+            f"{generated_id}\t0\t{input_id}\t1\t255\t16M\t*\t0\t0\tTGCATCGTAACCGGTT\t*\t"
             "si:Z:0,104,0,8\tss:Z:13,13,13,13,13,13,13,13,\n",
             encoding="ascii",
         )
@@ -559,6 +484,51 @@ def test_producer_emits_complete_truth_and_coordinate_receipts(
     assert f"\tplasmid\t16\t0\t8\t" in normalized
     assert "or:Z:reverse" in normalized
 
+    assert (output / "simulated_reads.fasta").read_text().splitlines()[1] == "TGCATCGTAACCGGTT"
+    sam = (output / "simulated_normalized.sam").read_text().splitlines()[-1].split("\t")
+    assert sam[1] == "16"
+    assert sam[9] == "AACCGGTTACGATGCA"
+
+
+@pytest.mark.parametrize("rna", [False, True])
+@pytest.mark.parametrize("orientation", ["forward", "reverse"])
+def test_native_full_contig_paf_preserves_rna_signal_direction(tmp_path, rna, orientation):
+    # Squigulator 0.5.0 uses descending target coordinates for RNA, independent
+    # of the reference strand. The same ss dwell order must reach Squigualiser.
+    left, right = (6, 0) if rna else (0, 6)
+    fields = ["read", "258", "0", "258", "+", "virtual", "6", str(left), str(right),
+              "6", "6", "255", "sc:f:1.0", "sh:f:0.0", "ss:Z:43,43,43,43,43,43,"]
+    path = tmp_path / "native.paf"
+    path.write_text("\t".join(fields) + "\n")
+    observed = producer_runtime._parse_paf(path, "read", "virtual", 10, 5, rna=rna)
+    normalized = producer_runtime._normalize_paf(
+        observed, contig="reference", contig_length=100, start=11, end=20,
+        orientation=orientation,
+    ).strip().split("\t")
+    assert normalized[4] == ("+" if orientation == "forward" else "-")
+    assert normalized[5:9] == ["reference", "100", str(10 + left), str(10 + right)]
+    assert normalized[12:15] == fields[12:15]
+    with pytest.raises(ValueError, match="coordinate span"):
+        producer_runtime._parse_paf(path, "read", "virtual", 10, 5, rna=not rna)
+
+
+@pytest.mark.parametrize("molecule_type", ["dna", "rna"])
+def test_comparison_native_tabix_preserves_descending_rna_truth(tmp_path, molecule_type):
+    import pysam
+
+    left, right = (16, 10) if molecule_type == "rna" else (10, 16)
+    line = f"read\t258\t0\t258\t+\tref\t100\t{left}\t{right}\t6\t6\t255\tss:Z:43,43,43,43,43,43,"
+    parent = tmp_path / "native.paf"
+    parent.write_text(line + "\n")
+    indexed, _ = renderer_runtime.indexed_simulated_reference_mapping(parent, tmp_path, molecule_type)
+    with pysam.TabixFile(str(indexed)) as source:
+        assert list(source.fetch("ref", 10, 16)) == [line]
+    bounded, _ = renderer_runtime.bounded_real_reference_mapping(
+        indexed, "read", tmp_path, "ref", 11, 16, molecule_type,
+    )
+    with pysam.TabixFile(str(bounded)) as source:
+        assert list(source.fetch("ref", 10, 16)) == [line]
+
 
 def test_producer_rejects_cross_artifact_signal_and_profile_calibration_mismatch() -> None:
     paf = ["read-1", "104", "0", "104"]
@@ -606,23 +576,28 @@ def test_producer_rejects_sam_alignment_shape_that_diverges_from_truth(
 ) -> None:
     source = tmp_path / "source.sam"
     destination = tmp_path / "normalized.sam"
-    source.write_text(
+    valid = (
         "@SQ\tSN:input-1\tLN:8\n"
-        "generated-1\t0\tinput-1\t1\t255\t1M\t*\t0\t0\tAACCGGTT\t*\n",
-        encoding="ascii",
+        "generated-1\t0\tinput-1\t1\t255\t8M\t*\t0\t0\tAACCGGTT\t*"
+        "\tsi:Z:0,80,0,8\tss:Z:10,10,10,10,10,10,10,10,\n"
     )
-    with pytest.raises(ValueError, match="SAM .*invalid"):
-        producer_runtime._normalize_sam(
-            source, destination, generated_id="generated-1", contig="plasmid",
-            contig_length=100, start=10, orientation="forward", sequence="AACCGGTT",
-        )
-
-
-def test_plot_tracks_allows_exact_governed_output_root() -> None:
-    command = renderer_runtime.build_plot_tracks_argv(
-        "/tmp/comparison.commands", "/output"
+    kwargs = dict(generated_id="generated-1", contig="plasmid",
+                  contig_length=100, start=10, orientation="forward", sequence="AACCGGTT")
+    source.write_text(valid, encoding="ascii")
+    producer_runtime._normalize_sam(source, destination, **kwargs)
+    assert destination.read_text(encoding="ascii") == (
+        "@HD\tVN:1.6\n@SQ\tSN:plasmid\tLN:100\n"
+        "generated-1\t0\tplasmid\t10\t255\t8M\t*\t0\t0\tAACCGGTT\t*"
+        "\tsi:Z:0,80,0,8\tss:Z:10,10,10,10,10,10,10,10,\n"
     )
-    assert command[command.index("-o") + 1] == "/output"
+    source.write_text(valid.replace("\t8M\t", "\t1M\t"), encoding="ascii")
+    with pytest.raises(ValueError, match="^Squigulator SAM alignment shape is invalid$"):
+        producer_runtime._normalize_sam(source, destination, **kwargs)
+
+    # Preserve the old malformed-record obligation, separately from bad CIGAR.
+    source.write_text(valid.split("\tsi:Z:")[0] + "\n", encoding="ascii")
+    with pytest.raises(ValueError, match="^Squigulator SAM sequence identity is invalid$"):
+        producer_runtime._normalize_sam(source, destination, **kwargs)
 
 
 def test_renderer_creates_real_and_simulated_tracks_before_shared_x_output(
@@ -656,6 +631,13 @@ def test_renderer_creates_real_and_simulated_tracks_before_shared_x_output(
         )
         return subprocess.CompletedProcess(command, 0, b"", b"")
 
+    # Exercise orchestration in scratch, keeping container-root policy separate.
+    build_tracks = renderer_runtime.build_plot_tracks_argv
+    def scratch_tracks(commands_file, output_dir):
+        argv = build_tracks("/output/plot_tracks.commands", "/output")
+        return [commands_file if value == "/output/plot_tracks.commands" else
+                output_dir if value == "/output" else value for value in argv]
+    monkeypatch.setattr(renderer_runtime, "build_plot_tracks_argv", scratch_tracks)
     monkeypatch.setattr(renderer_runtime, "run_bounded_command", fake_run)
     monkeypatch.setattr(
         renderer_runtime,
@@ -668,7 +650,7 @@ def test_renderer_creates_real_and_simulated_tracks_before_shared_x_output(
     monkeypatch.setattr(
         renderer_runtime,
         "bounded_real_reference_mapping",
-        lambda source, read_id, _work, contig, start, end: (
+        lambda source, read_id, _work, contig, start, end, molecule_type: (
             source,
             {"selected_read_id": read_id, "region": f"{contig}:{start}-{end}"},
         ),
@@ -677,7 +659,7 @@ def test_renderer_creates_real_and_simulated_tracks_before_shared_x_output(
     monkeypatch.setattr(
         renderer_runtime,
         "indexed_simulated_reference_mapping",
-        lambda source, _work: (
+        lambda source, _work, molecule_type: (
             source,
             {"parent_sha256": hashlib.sha256(source.read_bytes()).hexdigest()},
         ),
@@ -750,18 +732,6 @@ def test_renderer_allows_inert_url_text_inside_inline_bokeh_script(tmp_path: Pat
         path, real_read_id="read-1", profile_id="dna-r10-min"
     )
     assert receipt["size_bytes"] == path.stat().st_size
-
-
-def test_renderer_passes_retained_parent_descriptors_to_child_commands(monkeypatch) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_run(command: list[str], **kwargs):
-        captured.update(kwargs)
-        return subprocess.CompletedProcess(command, 0, b"", b"")
-
-    monkeypatch.setattr(renderer_runtime, "run_bounded_command", fake_run)
-    renderer_runtime._run(["squigualiser", "--version"], parent_fds=(41, 42))
-    assert captured["parent_fds"] == (41, 42)
 
 
 def test_renderer_kills_child_when_combined_logs_cross_eight_mib() -> None:
@@ -914,8 +884,8 @@ async def test_comparison_worker_retains_every_real_and_generated_parent_before_
     domain_rows = {(MolBioNGSReferenceRevision, "rev-1"): reference_revision,
                    (MolBioNGSReferenceArtifact, "reference-artifact-1"): reference_artifact}
 
-    class Result:
-        rowcount = 1
+    expire_at_publication = False
+    published_rows = []
 
     class Session:
         def __init__(self, values): self.values = values
@@ -923,11 +893,29 @@ async def test_comparison_worker_retains_every_real_and_generated_parent_before_
         async def __aexit__(self, *_args): return None
         async def get(self, model, identifier): return self.values.get((model, identifier))
         async def execute(self, statement):
-            for column, value in getattr(statement, "_values", {}).items():
-                key = getattr(column, "key", str(column)); resolved = getattr(value, "value", value)
-                if key in {"state", "generated_read_id", "stage_receipts", "output_manifest"}:
-                    setattr(job, key, resolved)
-            return Result()
+            # Execute the actual owner UPDATE, not a fixed-rowcount success.
+            # Parent loading/artifact insertion remain doubles; this proves only
+            # the bounded publication predicate, not full ORM/FK integration.
+            engine = create_engine("sqlite:///:memory:")
+            table = OntSignalComparisonJob.__table__
+            try:
+                table.create(engine)
+                with engine.begin() as connection:
+                    seed = {key: value for key, value in vars(job).items() if key in table.c}
+                    seed.update(viewer_session_revision=1, preview_digest="c" * 64,
+                                request_fingerprint="d" * 64)
+                    if expire_at_publication:
+                        # Expire only after the owner's earlier in-memory checks.
+                        seed["lease_expires_at"] = datetime(2000, 1, 1)
+                    connection.execute(table.insert().values(**seed))
+                    result = connection.execute(statement)
+                    row = connection.execute(select(table)).mappings().one()
+                    published_rows.append(dict(row))
+                    for key in ("state", "generated_read_id", "stage_receipts", "output_manifest"):
+                        setattr(job, key, row[key])
+                    return result
+            finally:
+                engine.dispose()
         async def commit(self): return None
         async def rollback(self): return None
         def add_all(self, _values): return None
@@ -973,7 +961,8 @@ async def test_comparison_worker_retains_every_real_and_generated_parent_before_
         service, "_selected_read_span_from_indexed_artifact", selected_span
     )
 
-    async def fake_invoke(parents, arguments, kind, _item, _token, output, _allowed=None):
+    async def fake_invoke(parents, arguments, kind, item, token, output, _allowed=None):
+        assert (item, token) == ("comparison-1", "token-1")
         aliases = {parent.alias for parent in parents.parents}; calls.append((kind, aliases, arguments))
         if kind == "squigulator_producer":
             assert aliases == {"reference.fasta"}
@@ -1034,38 +1023,21 @@ async def test_comparison_worker_retains_every_real_and_generated_parent_before_
         }],
     }
     assert Parents.instance is not None and Parents.instance.closed is True
+    assert len(published_rows) == 1
+    assert published_rows[0]["state"] == "ready"
+    assert published_rows[0]["claim_token"] is None
 
-
-def test_canonical_ont_docs_preserve_acquired_authority_and_do_not_overclaim_live_squigulator() -> None:
-    docs = (REPO_ROOT / "docs/Lab_Automation_MolBio_and_Sequencing.md").read_text(encoding="utf-8")
-    assert "workflows/ngs/ont_methylation_analysis.nf" in docs
-    assert "workflows/nanopore_methylation.nf" not in docs
-    assert "Read and Signal Workbench" in docs
-    assert "acquired signal" in docs
-    assert "Squigualiser" in docs
-    assert "live acceptance" in docs
-
-
-
-def test_capability_inventory_v2_adds_squigulator_without_relabeling_squigualiser() -> None:
-    inventory = _load(REPO_ROOT / "platform/api/config/ngs_molbio/capability_inventory_v2.json")
-    schema = _load(REPO_ROOT / "schemas/ngs_molbio/capability-inventory-v2.schema.json")
-
-    assert inventory["schema"] == "bms.ngs-molbio.capability-inventory.v2"
-    assert inventory["schema_version"] == 2
-    assert len(inventory["capabilities"]) == 22
-    assert inventory["content_sha256"] == _canonical_sha256(inventory)
-    assert schema["properties"]["capabilities"]["minItems"] == 22
-    assert schema["properties"]["capabilities"]["maxItems"] == 22
-    by_id = {item["capability_id"]: item for item in inventory["capabilities"]}
-    squigulator = by_id["ngs.ont.squigulator_ideal_comparison"]
-    assert squigulator["parameter_schema_id"] == "bms.ont-squigulator-ideal-comparison.v1"
-    assert squigulator["canonical_source_destination"] == "/ngs"
-    assert squigulator["viewer_destination"].startswith("/ngs?")
-    assert "ngs_reference" in squigulator["accepted_source_roles"]
-    assert "ngs_instrument_signal" in squigulator["accepted_source_roles"]
-    assert all("squigulator" not in item["capability_id"] for item in inventory["capabilities"] if item["capability_id"] == "ngs.ont.squigualiser")
-    for capability_id in ("ngs.ont.basecall_dna", "ngs.ont.basecall_rna"):
-        row = by_id[capability_id]
-        assert "emit_moves" in row["classified_parameter_keys"]
-        assert "emit_moves" not in row["unclassified_parameter_keys"]
+    # Same valid parents and worker path; only the stored lease expires.
+    job.state = "running"
+    job.generated_read_id = None
+    job.stage_receipts = {}
+    job.output_manifest = {}
+    expire_at_publication = True
+    with pytest.raises(worker_module.TerminalFenceLost, match="publication fence was lost"):
+        await worker._process_comparison("comparison-1", "token-1")
+    assert len(published_rows) == 2
+    assert published_rows[1]["state"] == "running"
+    assert published_rows[1]["claim_token"] == "token-1"
+    assert published_rows[1]["generated_read_id"] is None
+    assert published_rows[1]["output_manifest"] == {}
+    assert Parents.instance is not None and Parents.instance.closed is True

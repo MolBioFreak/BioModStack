@@ -64,6 +64,10 @@ def test_runner_preserves_test_execution_state(tmp_path, monkeypatch, exit_code,
         if argv[:2] == [sys.executable, '-c']:
             return subprocess.CompletedProcess(argv, 0, json.dumps({'version': 'test-version'}), '')
         if argv[:3] == [sys.executable, '-m', 'pytest']:
+            assert argv == [sys.executable, '-m', 'pytest', '-q',
+                            '--confcutdir=tests/plasmid', 'tests/plasmid',
+                            f'--junitxml={out / "junit.xml"}']
+            assert Path(kwargs['cwd']).resolve() == ROOT
             if counts is not None:
                 names = ('tests', 'failures', 'errors', 'skipped')
                 attrs = ' '.join(f'{name}="{value}"' for name, value in zip(names, counts))

@@ -233,6 +233,48 @@ def _register_artifact(
     return artifacts[artifact_id]
 
 
+def _native_metrics_pair(root: Path, stage_id: str, structure: Path) -> tuple[Path, dict[str, Any]] | None:
+    """Read one exact writer companion, never the first sibling in a directory.
+
+    ESM's run_esmfold2_inference writes sample_id.cif / sample_id.metrics.json
+    and repeats that identity in metrics and manifest.samples. Older single
+    output metadata without those fields remains readable by the exact stem.
+    Protenix's pinned dumper uses the same basename and rank for CIF/summary.
+    Missing optional evidence affects confidence only, not structure usability.
+    """
+    try:
+        if stage_id == "esmfold2":
+            metrics_name = structure.stem + ".metrics.json"
+        else:
+            from scripts.write_structure_producer_manifest import protenix_confidence_names
+            metrics_name = protenix_confidence_names(structure.name)["metrics"]
+        path = _contained_file(root, structure.parent / metrics_name)
+        payload = _read_json(path)
+        if payload is None:
+            return None
+        if stage_id == "esmfold2":
+            expected = {"sample_id": structure.stem, "cif": structure.name}
+            if any(key in payload and payload[key] != value for key, value in expected.items()):
+                return None
+            manifest_path = structure.parent / "manifest.json"
+            if manifest_path.exists():
+                manifest = _read_json(_contained_file(root, manifest_path))
+                rows = manifest.get("samples") if manifest else None
+                if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                    return None
+                # A contradictory/duplicate identity cannot be bypassed by a
+                # filename match. Other samples need not have confidence.
+                matches = [row for row in rows if row.get("cif") == structure.name
+                           or row.get("sample_id") == structure.stem
+                           or row.get("metrics") == metrics_name]
+                if len(matches) != 1 or any(matches[0].get(key) != value
+                        for key, value in {**expected, "metrics": metrics_name}.items()):
+                    return None
+        return path, payload
+    except (OSError, ValueError):
+        return None
+
+
 def _companion_artifacts(
     *,
     job_id: str,
@@ -243,33 +285,34 @@ def _companion_artifacts(
     artifacts: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     result: dict[str, Any] = {}
-    if stage_id == "esmfold2":
-        metrics_paths = sorted(structure_path.parent.glob("*.metrics.json"))
-        if metrics_paths:
+    if stage_id in {"esmfold2", "protenix_v2"}:
+        pair = _native_metrics_pair(root, stage_id, structure_path)
+        # Override potentially historical, sibling-derived Design metrics even
+        # when optional metadata is absent. The structure stays in the surface.
+        result.update(metrics={}, confidence_status="unavailable",
+                      confidence_reason="missing_or_ambiguous_sample_metadata")
+        result["producer_sample_id"] = structure_path.stem
+        if stage_id == "protenix_v2":
+            result["sample_index"] = _sample_index(structure_path.name)
+        result["sample_index_semantics"] = (
+            "producer_suffix_not_generation_index" if stage_id == "protenix_v2"
+            else "producer_sample_id")
+        if pair is not None:
+            metrics_path, payload = pair
             artifact = _register_artifact(
-                job_id=job_id,
-                root=root,
-                raw_path=metrics_paths[0],
-                kind="metrics",
-                label="ESMFold2 metrics",
+                job_id=job_id, root=root, raw_path=metrics_path, kind="metrics",
+                label="ESMFold2 metrics" if stage_id == "esmfold2" else "Protenix V2 confidence",
                 artifacts=artifacts,
             )
-            result["metrics_artifact"] = artifact["artifact_id"]
-            result["metrics"] = _compact_metrics(_read_json(metrics_paths[0]) or {})
-    elif stage_id == "protenix_v2":
-        sample = _sample_index(name)
-        confidence_paths = sorted(structure_path.parent.glob(f"*_summary_confidence_sample_{sample}.json")) if sample is not None else []
-        if confidence_paths:
-            confidence_artifact = _register_artifact(
-                job_id=job_id,
-                root=root,
-                raw_path=confidence_paths[0],
-                kind="metrics",
-                label="Protenix V2 confidence",
-                artifacts=artifacts,
-            )
-            result["confidence_artifact"] = confidence_artifact["artifact_id"]
-            result["metrics"] = _compact_metrics(_read_json(confidence_paths[0]) or {})
+            key = "metrics_artifact" if stage_id == "esmfold2" else "confidence_artifact"
+            result[key] = artifact["artifact_id"]
+            result.update(metrics=_compact_metrics(payload), confidence_status="available",
+                          confidence_reason=None)
+            if stage_id == "protenix_v2" and "disorder" in payload:
+                # Raw zero stays in metrics and the downloadable summary; it is
+                # not an estimated disorder fraction in this pinned producer.
+                result["metric_interpretations"] = {"disorder": "producer_placeholder_not_estimated"}
+    if stage_id == "protenix_v2":
         msa_path = structure_path.parent / "msa_report.json"
         if msa_path.is_file():
             msa_artifact = _register_artifact(
@@ -362,7 +405,13 @@ def build_protein_local_redesign_result_surface(job: Any, designs: Iterable[Any]
         stage_items[stage_id].append(item)
 
         json_path = getattr(design, "json_path", None)
-        if isinstance(json_path, str) and json_path.strip() and Path(json_path).is_file():
+        if stage_id in {"esmfold2", "protenix_v2"}:
+            # Do not reintroduce an unpaired historical json_path as this
+            # sample's native metadata after resolving the exact companion.
+            paired = companion.get("metrics_artifact") or companion.get("confidence_artifact")
+            if paired is not None:
+                item["native_metadata_artifact"] = paired
+        elif isinstance(json_path, str) and json_path.strip() and Path(json_path).is_file():
             item["native_metadata_artifact"] = _register_artifact(
                 job_id=job_id,
                 root=root,

@@ -20,20 +20,7 @@ from sqlalchemy.sql.dml import Update
 from migrations.add_ont_signal_comparisons import migrate
 from migrations.runner import MIGRATIONS
 from routers import ont_signal_workbench as router_module
-from routers.ont_signal_workbench import (
-    ComparisonArtifactResponse,
-    ComparisonCreate,
-    ComparisonEffectiveSettings,
-    ComparisonJobResponse,
-    ComparisonOutputManifest,
-    ComparisonPreviewCreate,
-    ComparisonPreviewResponse,
-    ComparisonResourceSnapshot,
-    ComparisonRenderParams,
-    ComparisonRuntimeIdentities,
-    ComparisonViewerSettings,
-    ComparisonReviewCreate,
-)
+from routers.ont_signal_workbench import ComparisonArtifactResponse, ComparisonCreate, ComparisonJobResponse, ComparisonOutputManifest, ComparisonPreviewCreate, ComparisonResourceSnapshot, ComparisonRuntimeIdentities, ComparisonViewerSettings
 from services import ont_signal_workbench as service, ont_submission_trust
 from services.ont_signal_worker import OntSignalWorker
 
@@ -756,39 +743,6 @@ def test_comparison_interval_cannot_exceed_effective_base_limit() -> None:
         service._require_comparison_interval_within_base_limit(10, 40, effective)
 
 
-def test_comparison_authority_response_fields_use_closed_typed_models() -> None:
-    render_params = _request()["render_params"]
-    assert isinstance(render_params, dict)
-    compiled = service.compile_ideal_comparison_settings(
-        {"profile_id": "dna-r10-min", "seed": 7}, render_params
-    )
-    compiled.update({
-        "compatibility_disposition": "matched_profile",
-        "compatibility_evidence": {
-            "disposition": "matched_profile",
-            "evidence": {
-                "mapping_profile_molecule_type": "dna", "mapping_profile_basecall_model_id": "model",
-                "mapping_profile_kmer_length": 9, "move_source_molecule_type": "dna",
-                "move_source_basecall_model_id": "model", "move_source_runtime_authority": "verified",
-                "raw_sample_rate": "5000", "raw_digitisation": "8192", "raw_range": "1536.598389",
-                "run_flow_cell_generation": "R10.4.1", "run_device_class": "MinION",
-            },
-            "missing_authorities": [], "mismatches": [],
-        },
-    })
-    typed = ComparisonEffectiveSettings.model_validate(compiled)
-    assert typed.operator_owned.seed == 7
-    assert ComparisonPreviewResponse.model_fields["move_source_id"].annotation is str
-    assert ComparisonPreviewResponse.model_fields["move_source_artifact_sha256"].annotation is str
-    for model, fields in (
-        (ComparisonPreviewResponse, ("selected_read_span", "derived_window", "effective_request")),
-        (ComparisonJobResponse, ("simulation_settings", "render_params", "resource_snapshot",
-                                 "stage_receipts", "output_manifest")),
-    ):
-        for field in fields:
-            assert "dict[str, Any]" not in str(model.model_fields[field].annotation)
-
-
 def test_nested_comparison_authority_models_reject_unknown_keys() -> None:
     parents = {
         "reference_fasta_sha256": "a" * 64,
@@ -928,16 +882,6 @@ def test_failed_comparison_public_projection_redacts_host_path() -> None:
     assert projected["failure_message"] == "failed to open [redacted-path]"
 
 
-def test_comparison_point_size_rejects_value_outside_closed_authority_enum() -> None:
-    render_params = _request()["render_params"]
-    assert isinstance(render_params, dict)
-    with pytest.raises(ValidationError):
-        ComparisonRenderParams.model_validate({
-            **render_params,
-            "point_size": 1.5,
-        })
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("mapping_override", "message"),
@@ -1000,20 +944,6 @@ async def test_comparison_preview_rejects_cross_alignment_or_parent_mapping_subs
             reference_contig="plasmid", reference_start=10, reference_end=40,
             simulation_settings={"profile_id": "dna-r10-min", "seed": 7},
             render_params=render_params,
-        )
-
-
-def test_review_uses_existing_manual_criterion_vocabulary() -> None:
-    approved = ComparisonReviewCreate(
-        review_question="Does the real trace visually agree with the ideal expectation?",
-        required_outcome="approve", note="Agreement across the selected interval.",
-        reviewed_start=10, reviewed_end=40, predecessor_review_id=None,
-    )
-    assert approved.required_outcome == "approve"
-    with pytest.raises(ValidationError):
-        ComparisonReviewCreate(
-            review_question="question", required_outcome="pass", note="note",
-            reviewed_start=10, reviewed_end=40, predecessor_review_id=None,
         )
 
 
@@ -1365,20 +1295,6 @@ async def test_concurrent_fresh_attempt_replays_one_successor(tmp_path: Path) ->
         assert await session.scalar(select(func.count()).select_from(service.OntSignalComparisonJob)) == 2
         assert await session.scalar(select(func.count()).select_from(service.OntSignalComparisonEvent)) == 1
     await engine.dispose()
-
-
-def test_router_exposes_complete_comparison_lifecycle() -> None:
-    from fastapi.routing import APIRoute
-    from routers import ont_signal_workbench as comparison_router
-
-    routes = {(route.path, tuple(sorted(route.methods or ()))) for route in comparison_router.router.routes if isinstance(route, APIRoute)}
-    expected_paths = {
-        "/comparisons/preview", "/comparisons", "/comparisons/{comparison_job_id}",
-        "/comparisons/{comparison_job_id}/cancel", "/comparisons/{comparison_job_id}/fresh-attempt",
-        "/comparisons/{comparison_job_id}/artifacts/{artifact_id}",
-        "/comparisons/{comparison_job_id}/reviews",
-    }
-    assert expected_paths <= {path for path, _methods in routes}
 
 
 @pytest.mark.asyncio

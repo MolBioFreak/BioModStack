@@ -28,7 +28,7 @@ test('published ESMFold2 scalars reach the dashboard with missingness and zero i
     expect(host.textContent).toContain('plddt / model_token_mean / fraction');
     expect(host.textContent).toContain('ptm / model / dimensionless');
     expect(host.textContent).toContain('missing_native_scalar');
-    expect(host.querySelector('[aria-label="Plotly Lab"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Custom charts"]')).not.toBeNull();
     await change(host, '2D X metric', 'iptm');
     for (const metric of ['plddt', 'ptm']) {
         await change(host, '2D Y metric', metric);

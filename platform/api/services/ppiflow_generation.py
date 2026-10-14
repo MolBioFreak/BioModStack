@@ -215,6 +215,7 @@ def materialize_ppiflow_generation_request(mode: str, params: dict, directory: s
             authorize_source(source)
         dest = inputs / name
         shutil.copyfile(source, dest)
+        dest.chmod(0o444)
         relative = dest.relative_to(root).as_posix()
         bindings.append({"role": role, "original_path": str(source), "path": relative,
                          "sha256": _digest(dest), "size": dest.stat().st_size})
@@ -260,6 +261,26 @@ def materialize_ppiflow_generation_request(mode: str, params: dict, directory: s
     return {"ppiflow_generation_request": str(root.resolve())}
 
 
+def _retain_prepared_input(source, destination):
+    """A verified custody leaf; new owners have independent retained names."""
+    import errno
+    import os
+    import shutil
+    # New snapshots are frozen by their producer. Historical writable custody
+    # remains independent; never chmod or overwrite a shared donor inode.
+    source = Path(source).resolve(strict=True)
+    if not source.stat().st_mode & 0o222:
+        try:
+            os.link(source, destination)
+            return str(destination)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+    shutil.copyfile(source, destination)
+    Path(destination).chmod(0o444)  # This newly copied inode belongs only here.
+    return str(destination)
+
+
 def prepare_ppiflow_generation_request(mode: str, params: dict, directory: str | Path,
                                        *, allowed_roots, source_identity=None,
                                        requested_settings=None, retain_prepared: bool = False) -> dict:
@@ -274,12 +295,15 @@ def prepare_ppiflow_generation_request(mode: str, params: dict, directory: str |
         return materialize_ppiflow_generation_request(mode, science, destination,
             source_identity=source_identity, requested_settings=requested_settings,
             authorize_source=lambda path: _contained(path, roots))
-    read_prepared_ppiflow_generation_request(mode, science, retained, allowed_roots=roots)
+    prepared = read_prepared_ppiflow_generation_request(mode, science, retained, allowed_roots=roots)
     if retain_prepared:
         return {'ppiflow_generation_request': str(Path(retained).resolve())}
     if Path(retained).resolve() != destination.resolve():
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(retained, destination)
+        leaves = {str((Path(retained) / row["path"]).resolve()) for row in prepared["source_bindings"]}
+        shutil.copytree(retained, destination, copy_function=lambda src, dst:
+                        _retain_prepared_input(src, dst) if str(Path(src).resolve()) in leaves
+                        else shutil.copyfile(src, dst))
         # Check the copied bytes, never reopen the external original source.
         read_prepared_ppiflow_generation_request(mode, science, destination, allowed_roots=roots)
     return {'ppiflow_generation_request': str(destination.resolve())}

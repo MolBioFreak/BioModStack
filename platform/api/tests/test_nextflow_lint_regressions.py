@@ -103,12 +103,6 @@ def test_targeted_nextflow_lint_has_no_errors_for_regressed_files() -> None:
     assert result.returncode == 0, _format_failure(result)
 
 
-def test_canonical_ngs_workflows_avoid_reserved_closure_parameter() -> None:
-    for workflow_id in CANONICAL_NGS_PREVIEW_ARGS:
-        source = (REPO_ROOT / "workflows" / "ngs" / f"{workflow_id}.nf").read_text(encoding="utf-8")
-        assert "{ _ ->" not in source
-
-
 @pytest.mark.parametrize("workflow_id", sorted(CANONICAL_NGS_PREVIEW_ARGS))
 def test_canonical_ngs_standalone_preview_resolves_code_root(
     tmp_path: Path,

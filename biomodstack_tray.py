@@ -269,7 +269,12 @@ def backup_database():
     backup_path = backup_dir / f"biomodstack_backup_{timestamp}.db"
     
     try:
-        shutil.copy2(DB_PATH, backup_path)
+        # Load the stdlib leaf, not services.__init__ (API/science imports).
+        import runpy
+        copy_sqlite_database = runpy.run_path(
+            str(API_ROOT / "services" / "sqlite_backup.py")
+        )["copy_sqlite_database"]
+        copy_sqlite_database(DB_PATH, backup_path)
         size_mb = backup_path.stat().st_size / (1024 * 1024)
         show_notification(
             "Backup Complete",

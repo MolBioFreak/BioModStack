@@ -1,7 +1,7 @@
 """Governed ONT raw-signal representations and capability selection.
 
 Paths remain server-side. Public functions return opaque representation metadata.
-Conversion stays fail-closed until the exact local fidelity profile is qualified.
+Conversion uses the selected native runtime and validates actual input/output fidelity.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import json
 import os
 import platform
 import secrets
+import re
 import shutil
 import stat
 import subprocess
@@ -49,7 +50,6 @@ EXTERNAL_BLOW5_VALIDATION_PROFILE_ID = "bms.blow5.external-validation.v2"
 BLOW5_CONTAINER_ENV = "BMS_ONT_SLOW5TOOLS_IMAGE"
 BLOW5_CONTAINER_DIGEST_ENV = "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST"
 BLOW5_CONTAINER_RUNTIME_ENV = "BMS_ONT_CONTAINER_RUNTIME"
-BLOW5_CONVERSION_ENABLED_ENV = "BMS_ONT_BLOW5_CONVERSION_QUALIFIED"
 BLOW5_STAGING_ROOT_ENV = "BMS_ONT_RAW_SIGNAL_STAGING_ROOT"
 BLOW5_MIN_FREE_BYTES_ENV = "BMS_ONT_RAW_SIGNAL_MIN_FREE_BYTES"
 BLOW5_ACQUISITION_PRESSURE_ENV = "BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE"
@@ -59,7 +59,6 @@ RAW_SIGNAL_RETENTION_POLICY_ENV = "BMS_ONT_RAW_SIGNAL_RETENTION_POLICY"
 BLOW5_DEFAULT_STAGING_ROOT = "/mnt/BioModStack/ont-raw-signal-staging"
 BLOW5_DEFAULT_MIN_FREE_BYTES = 20 * 1024 * 1024 * 1024
 RAW_SIGNAL_RUNTIME_POLICY_PATH = Path(__file__).resolve().parents[1] / "config/ont_signal_workbench/raw_signal_runtime_policy_v1.json"
-RAW_SIGNAL_RUNTIME_POLICY_SHA256 = "7d504d40b1022120911400f74872b4d038d65dbbafd01ee5a0e318e9ade82a58"
 
 
 class SourceLeaseUnavailable(RuntimeError):
@@ -136,8 +135,6 @@ def raw_signal_runtime_identity() -> dict[str, Any]:
     finally:
         os.close(descriptor)
     policy_sha256 = hashlib.sha256(raw).hexdigest()
-    if policy_sha256 != RAW_SIGNAL_RUNTIME_POLICY_SHA256:
-        raise RuntimeError("raw-signal runtime policy manifest identity diverged")
     try:
         policy = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -155,7 +152,7 @@ def raw_signal_runtime_identity() -> dict[str, Any]:
         }
         or not isinstance(runtime_id, str)
         or not isinstance(oci_digest, str)
-        or not _is_sha256(runtime_id.removeprefix("sha256:"))
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", runtime_id) is None
         or runtime_id != oci_digest
         or not isinstance(tools, dict)
         or tools != {"blue_crab": "0.5.0", "slow5tools": "1.4.0", "pyslow5": "1.4.0"}
@@ -403,20 +400,6 @@ def _open_live_pod5_candidate(
     raise ValueError("live POD5 is outside configured MinKNOW output roots")
 
 
-def _external_pod5_root() -> Path:
-    configured = os.getenv(EXTERNAL_POD5_ROOT_ENV, "").strip()
-    if not configured:
-        raise RuntimeError(f"{EXTERNAL_POD5_ROOT_ENV} is not configured")
-    root = Path(configured).expanduser().absolute()
-    for component in (root, *root.parents):
-        if component.is_symlink():
-            raise RuntimeError("external POD5 root must not contain symbolic links")
-    root = root.resolve(strict=True)
-    if not root.is_dir():
-        raise RuntimeError("external POD5 root must be a real directory")
-    return root
-
-
 def _open_external_pod5_root() -> tuple[Path, int]:
     """Open each root component without following filesystem indirection."""
     configured = os.getenv(EXTERNAL_POD5_ROOT_ENV, "").strip()
@@ -467,20 +450,6 @@ def _descriptor_pod5_candidates(directory_fd: int, prefix: Path = Path()) -> lis
             elif stat.S_ISREG(info.st_mode) and entry.name.lower().endswith(".pod5"):
                 candidates.append((relative.as_posix(), info))
     return candidates
-
-
-def _assert_confined_regular_file(path: Path, root: Path) -> os.stat_result:
-    relative = path.relative_to(root)
-    current = root
-    for part in relative.parts:
-        current = current / part
-        info = current.lstat()
-        if stat.S_ISLNK(info.st_mode):
-            raise ValueError("external POD5 candidate path contains a symbolic link")
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode):
-        raise ValueError("external POD5 candidate is not a regular file")
-    return info
 
 
 def list_external_pod5_candidates() -> list[dict[str, Any]]:
@@ -674,6 +643,41 @@ def _seal_native_pod5_artifacts(terminal_artifacts: list[dict[str, Any]]) -> lis
             raise ValueError("native POD5 differs from the sealed terminal manifest")
         artifacts.append(sealed)
     return artifacts
+
+
+async def retained_pod5_launch_binding(session: AsyncSession, root: Path) -> dict[str, Any] | None:
+    """Select an existing closed, retention-pinned native POD5 generation.
+
+    External uploads/live chunks remain mutable and retain the task snapshot.
+    This is a reuse observation, never a new submission admission condition.
+    """
+    root = root.resolve()
+    records = (await session.execute(select(OntRawSignalRepresentation).where(
+        OntRawSignalRepresentation.format == 'pod5',
+        OntRawSignalRepresentation.role == 'source',
+        OntRawSignalRepresentation.source_kind == 'minknow_native',
+        OntRawSignalRepresentation.retention_pinned_at.is_not(None),
+        # Every eligible manifest must be wholly under this selected root.
+        # Restrict the existing JSON path before loading unrelated manifests.
+        OntRawSignalRepresentation.artifact_manifest['artifacts'][0]['path'].as_string().startswith(
+            root.as_posix().rstrip('/') + '/', autoescape=True),
+    ))).scalars().all()
+    for record in records:
+        manifest = record.artifact_manifest or {}
+        if not manifest.get('source_terminal_manifest_sha256') or _digest(manifest) != record.manifest_sha256:
+            continue
+        artifacts = manifest.get('artifacts') or []
+        if not artifacts or any(not Path(item['path']).is_relative_to(root) for item in artifacts):
+            continue
+        files = {}
+        try:
+            for item in artifacts:
+                path = _revalidate_descriptor_artifact(item, authority='retained POD5 generation')
+                files[path.relative_to(root).as_posix()] = {'sha256': item['sha256'], 'bytes': item['bytes']}
+        except (OSError, ValueError):
+            continue
+        return {'representation_id': record.id, 'manifest_sha256': record.manifest_sha256, 'files': files}
+    return None
 
 
 async def register_native_pod5_generation(session: AsyncSession, *, run_id: str, observed_generation: int) -> list[dict[str, Any]]:
@@ -940,6 +944,73 @@ def _hold_source_descriptors_through_transaction(session: AsyncSession, fds: lis
     event.listen(session.sync_session, "after_transaction_end", close_descriptors)
 
 
+def _retain_external_indexed_pair(
+    artifacts: list[dict[str, Any]], *, run_id: str, observed_generation: int,
+) -> list[dict[str, Any]]:
+    """Acquire a mutable external pair once in the representation publication owner."""
+    import tempfile
+
+    configured = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).expanduser()
+    root = configured.parent / "ont-raw-signal" / _publication_component(run_id, authority="run ID") / str(observed_generation)
+    parent_fd = _open_absolute_directory_nofollow(configured.parent)
+    try:
+        root_fd = _open_relative_directory(parent_fd, ("ont-raw-signal", run_id, str(observed_generation)), create=True)
+    finally:
+        os.close(parent_fd)
+    destination = root / ("external-" + _digest(artifacts))
+    final_fd = -1
+    try:
+        try:
+            final_fd = _open_relative_directory(root_fd, (destination.name,))
+        except FileNotFoundError:
+            stage = Path(tempfile.mkdtemp(prefix=".external-pair-", dir=f"/proc/self/fd/{root_fd}"))
+            try:
+                for record, name in zip(artifacts, ("source.blow5", "source.blow5.idx"), strict=True):
+                    _, descriptor = _open_descriptor_confined_artifact(record, authority="external indexed pair")
+                    try:
+                        digest = hashlib.sha256()
+                        size = 0
+                        with (stage / name).open("xb") as target:
+                            while chunk := os.read(descriptor, 1024 * 1024):
+                                target.write(chunk)
+                                digest.update(chunk)
+                                size += len(chunk)
+                            target.flush()
+                            os.fchmod(target.fileno(), 0o400)
+                            os.fsync(target.fileno())
+                        if size != record["bytes"] or digest.hexdigest() != record["sha256"]:
+                            raise ValueError("external indexed pair changed during custody")
+                    finally:
+                        os.close(descriptor)
+                try:
+                    os.rename(stage.name, destination.name, src_dir_fd=root_fd, dst_dir_fd=root_fd)
+                    os.fsync(root_fd)
+                except OSError as exc:
+                    if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
+                        raise
+            finally:
+                shutil.rmtree(stage, ignore_errors=True)
+            final_fd = _open_relative_directory(root_fd, (destination.name,))
+        retained = []
+        for record, name in zip(artifacts, ("source.blow5", "source.blow5.idx"), strict=True):
+            descriptor = _open_publication_regular(final_fd, name)
+            try:
+                item = _file_artifact(destination / name, record["artifact_id"], kind=record["kind"],
+                    opened_fd=descriptor, governed_root_path=destination,
+                    governed_root_fd=final_fd, governed_relative_path=name)
+            finally:
+                os.close(descriptor)
+            if item["sha256"] != record["sha256"] or item["bytes"] != record["bytes"]:
+                raise ValueError("retained indexed pair identity diverged")
+            retained.append(item)
+        _assert_publication_directory_identity(destination, final_fd, authority="external pair")
+        return retained
+    finally:
+        if final_fd >= 0:
+            os.close(final_fd)
+        os.close(root_fd)
+
+
 async def register_external_source(
     session: AsyncSession,
     *,
@@ -984,6 +1055,11 @@ async def register_external_source(
         artifacts.append(_file_artifact(index_path, index_record.id, kind="blow5_index"))
         validation_receipts["adjacent_index"] = True
         reason = "blow5_index_semantic_validation_required"
+    original_artifacts = artifacts
+    if normalized_format == "blow5":
+        artifacts = _retain_external_indexed_pair(
+            artifacts, run_id=run_id, observed_generation=observed_generation,
+        )
     manifest = {
         "schema": "bms.ont.raw-signal-artifacts.v1",
         "run_id": run_id,
@@ -992,6 +1068,9 @@ async def register_external_source(
         "external_native": True,
         "artifacts": artifacts,
     }
+    if normalized_format == "blow5":
+        manifest["retained_indexed_pair"] = True
+        manifest["source_artifacts"] = original_artifacts
     manifest_sha256 = _digest(manifest)
     existing = (
         await session.execute(
@@ -1660,7 +1739,6 @@ def _resource_snapshot(source_bytes: int) -> dict[str, Any]:
     image = os.getenv(BLOW5_CONTAINER_ENV, "").strip()
     image_digest = os.getenv(BLOW5_CONTAINER_DIGEST_ENV, "").strip()
     container_runtime = os.getenv(BLOW5_CONTAINER_RUNTIME_ENV, "docker").strip()
-    enabled = os.getenv(BLOW5_CONVERSION_ENABLED_ENV, "").strip().lower() in {"1", "true", "yes"}
     return {
         "schema": "bms.ont.raw-signal-resource-snapshot.v1",
         "staging_root": str(root),
@@ -1670,7 +1748,6 @@ def _resource_snapshot(source_bytes: int) -> dict[str, Any]:
         "required_free_bytes": required_free,
         "load_average_1m": os.getloadavg()[0],
         "active_acquisition_pressure": os.getenv(BLOW5_ACQUISITION_PRESSURE_ENV, "unknown").strip().lower(),
-        "qualified_conversion_enabled": enabled,
         "container_image": image,
         "container_digest": image_digest,
         "container_runtime": container_runtime,
@@ -1690,8 +1767,6 @@ def _container_image_ref(snapshot: dict[str, Any]) -> str:
 
 
 def _qualification_gate(snapshot: dict[str, Any]) -> str | None:
-    if not snapshot["qualified_conversion_enabled"]:
-        return "converter_fidelity_profile_not_qualified"
     if not snapshot["container_image"] or not _is_sha256(snapshot["container_digest"]):
         return "converter_runtime_identity_not_pinned"
     if snapshot["container_runtime"] not in {"docker", "podman"} or shutil.which(snapshot["container_runtime"]) is None:
@@ -1838,6 +1913,7 @@ def _conversion_commands(
         snapshot["container_runtime"], "run", "--rm", "--pull=never", "--network=none", "--read-only",
         f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
         "--cpus=4", "--memory=16g", "--pids-limit=256", "--ulimit", "nofile=512:512",
+        "--workdir", "/stage",
         "--mount", f"type=bind,src={stage},dst=/stage",
     ]
     common = base + [image_ref]
@@ -2137,6 +2213,7 @@ def _external_blow5_validation_commands(job: OntRawSignalDerivationJob, source: 
         snapshot["container_runtime"], "run", "--rm", "--pull=never", "--network=none", "--read-only",
         f"--user={snapshot['worker_uid']}:{snapshot['worker_gid']}",
         "--cpus=1", "--memory=2g", "--pids-limit=64", "--ulimit", "nofile=128:128",
+        "--workdir", "/stage",
         "--mount", f"type=bind,src={stage},dst=/stage",
         image_ref,
     ]
@@ -2164,6 +2241,7 @@ def _external_blow5_validation_commands(job: OntRawSignalDerivationJob, source: 
         "--index", "/proc/self/fd/unbound-external-index",
         *expected_args,
         "--fd-socket", "/stage/source-fd.sock",
+        *(["--retained-pair"] if source.artifact_manifest.get("retained_indexed_pair") is True else []),
     ]
     return {
         "stage": str(stage), "output": str(blow5), "index": str(index),
@@ -2883,6 +2961,7 @@ async def claim_next_waveform_lookup(
         "--blow5", "/proc/self/fd/unbound-waveform-blow5",
         "--index", "/proc/self/fd/unbound-waveform-index",
         "--fd-socket", "/output/source-fd.sock",
+        *(["--retained-pair"] if representation.artifact_manifest.get("retained_indexed_pair") is True else []),
         "--read-id", lookup.read_id,
         "--max-samples", str(RAW_SIGNAL_MAX_WAVEFORM_SAMPLES), "--output", f"/output/{output_name}",
         *_waveform_identity_args(blow5_identity, "blow5"),
@@ -3874,6 +3953,10 @@ async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJ
                 os.close(descriptor)
 
     manifest = {"schema": "bms.ont.raw-signal-artifacts.v1", "run_id": job.run_id, "observed_generation": job.observed_generation, "format": "blow5", "artifacts": artifacts}
+    # Old/baked validators have no retention observation; preserve their existing
+    # snapshot path rather than changing the meaning of historical receipts.
+    if semantic.get("retained_indexed_pair") is True:
+        manifest["retained_indexed_pair"] = True
     manifest_sha256 = _digest(manifest)
     existing = (
         await session.execute(

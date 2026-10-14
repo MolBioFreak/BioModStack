@@ -7,7 +7,55 @@ from __future__ import annotations
 
 import copy
 import json
+import errno
+import os
+import stat
+import tempfile
 from pathlib import Path
+
+
+def _publish_alignment(target: Path, data: bytes, *, retained_source: Path | None = None) -> None:
+    """Publish a private name for a completed alignment, never a writable alias.
+
+    Only this owner's completed operation files are supplied as retained_source.
+    External/user/cache files retain the existing independent acquisition. Each
+    replacement uses a new inode/name, so retry cannot truncate a sibling seal.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=f'.{target.name}.', dir=target.parent)
+    temporary = Path(name)
+    try:
+        os.close(fd)
+        linked = False
+        if retained_source is not None:
+            source = retained_source.resolve()
+            mode = source.stat().st_mode
+            if stat.S_ISREG(mode) and not mode & 0o222:
+                temporary.unlink()
+                try:
+                    os.link(source, temporary)
+                    linked = True
+                except OSError as exc:
+                    if exc.errno != errno.EXDEV:
+                        raise
+                # Retain exact validated bytes if a legacy source changed.
+                if linked and temporary.read_bytes() != data:
+                    temporary.unlink()
+                    linked = False
+        if not linked:
+            with temporary.open('wb') as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            temporary.chmod(0o444)
+        os.replace(temporary, target)
+        directory_fd = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 from biomodstack_msa_handoff import digest
 from biomodstack_boltz_msa import a3m_rows, validate_boltz_msa, write_paired_csv
@@ -157,7 +205,7 @@ def native_alignments(result: dict, sequences: list[str], destination: Path, *, 
         data = validate_a3m(source, sequences[index])
         destination.mkdir(parents=True, exist_ok=True)
         target = destination / f'chain-{index}-{role}.a3m'
-        target.write_bytes(data)
+        _publish_alignment(target, data)
         paths[index, role] = target.resolve()
     if any((index, 'unpaired') not in paths for index in range(len(sequences))):
         raise ValueError('Provider result lacks an unpaired alignment for a requested chain')
@@ -171,9 +219,19 @@ def native_alignments(result: dict, sequences: list[str], destination: Path, *, 
         outputs = []
         for index in range(len(sequences)):
             target = destination / f'chain-{index}.csv'
-            write_paired_csv(target, paths[index, 'unpaired'].read_bytes(),
-                             paths[index, 'paired'].read_bytes(),
-                             deduplicates_paired=model_id == 'boltz_cp_experimental')
+            fd, name = tempfile.mkstemp(prefix=f'.{target.stem}.', suffix='.csv', dir=destination)
+            os.close(fd)
+            temporary = Path(name)
+            try:
+                write_paired_csv(temporary, paths[index, 'unpaired'].read_bytes(),
+                                 paths[index, 'paired'].read_bytes(),
+                                 deduplicates_paired=model_id == 'boltz_cp_experimental')
+                with temporary.open('rb') as stream:
+                    os.fsync(stream.fileno())
+                temporary.chmod(0o444)
+                os.replace(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
             outputs.append(target.resolve())
         (destination / 'pairing-groups.json').write_text(json.dumps({
             'schema': 'bms.boltz-row-groups.v1', 'key_semantics': 'provider-paired-row-index-not-taxonomy',
@@ -226,7 +284,8 @@ def prepare_launch_msa(model_id: str, params: dict, destination: Path, *, native
     if model_id == 'boltz2' and (roster is not None or native_invocation is not None
             or effective.get('complex_json_path') or effective.get('sequence_batch_json_path')
             or ':' in str(effective.get('sequence_input') or effective.get('sequence') or '')):
-        return prepare_boltz_roster(effective, destination, roster=roster)
+        return prepare_boltz_roster(effective, destination, roster=roster,
+            native_parameters=native_invocation.native_parameters if native_invocation is not None else None)
     components = effective.get('complex_components')
     if isinstance(components, str):
         components = json.loads(components)
@@ -391,8 +450,10 @@ def _seal_native_alignment(protein, root):
     sha = digest(data)
     relative = f'alignments/{sha}' + ('.csv' if source.suffix.lower() == '.csv' else '.a3m')
     target = root / relative
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
+    # Only completed alignments from this preparation's operation owner are
+    # shared. Supplied alignments (including read-only uploads) keep custody.
+    retained = source if source.resolve().is_relative_to((root / 'operations').resolve()) else None
+    _publish_alignment(target, data, retained_source=retained)
     return {'mode': 'artifact', 'path': relative, 'sha256': sha, 'size_bytes': len(data),
             'format': 'csv' if relative.endswith('.csv') else 'a3m',
             'sequence_sha256': digest(protein['sequence'].encode())}
@@ -455,7 +516,7 @@ def _boltz_task_proteins(task, params):
              'msa': params.get('msa_path')} for i, s in enumerate(sequence.split(':'))]
 
 
-def prepare_boltz_roster(params, destination, *, roster=None):
+def prepare_boltz_roster(params, destination, *, roster=None, native_parameters=None):
     """Seal ordered task/chain artifacts; keep native input documents immutable."""
     import re
     tasks = copy.deepcopy(roster if roster is not None else _boltz_roster(params))
@@ -477,8 +538,8 @@ def prepare_boltz_roster(params, destination, *, roster=None):
         sealed.append({'name': task['name'], 'task_index': task_index, 'native_task': task,
                        'chains': chains, 'provenance': receipt})
     manifest = {'schema': 'bms.boltz-msa-inputs.v1', 'tasks': sealed,
-                'settings': {k: v for k, v in params.items() if k.startswith(('msa_', 'colabfold_', 'boltz_'))
-                             and not k.endswith(('_path', '_dir'))}}
+                # Request-only defaults stay in provenance, not compiled science.
+                'settings': boltz_msa_settings(params if native_parameters is None else native_parameters)}
     destination.mkdir(parents=True, exist_ok=True)
     path = destination / 'msa-inputs.json'
     path.write_text(json.dumps(manifest, sort_keys=True, indent=2))
@@ -486,11 +547,17 @@ def prepare_boltz_roster(params, destination, *, roster=None):
             'boltz_prepared_msa_sha256': digest(path.read_bytes())}
 
 
-def fold_cp_msa_settings(params):
+def boltz_msa_settings(params):
+    """Scientific MSA settings, excluding existing launch-only transport bindings."""
     from component_runtime import _LAUNCH_BINDING_KEYS
     return {k: v for k, v in params.items()
             if k.startswith(('msa_', 'colabfold_', 'boltz_'))
             and not k.endswith(('_path', '_dir')) and k not in _LAUNCH_BINDING_KEYS}
+
+
+def fold_cp_msa_settings(params):
+    return boltz_msa_settings(params)
+
 
 def _fold_cp_native_config(source: Path) -> tuple[Path, Path]:
     """Fold-CP executes exactly one top-level YAML, even for directory input."""

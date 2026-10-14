@@ -248,7 +248,9 @@ async def test_public_remote_first_projection_pause_resume_http(store,retained,m
     monkeypatch.setattr(worker.subprocess,'Popen',lambda *args,**kwargs:spawns.append(args[0]))
     target=ExecutionTarget(id='vast:fixture',provider='vast',provider_instance_id='fixture',
         state='ready',active=True,host='inert.invalid',port=22,username='inert',remote_root=str(attempt),
-        host_key_sha256='d'*64,leased_job_id='parent',lease_acquired_at=epoch)
+        host_key_sha256='d'*64,leased_job_id='parent',lease_acquired_at=epoch,
+        capabilities={'gpu_count':1}, provider_metadata={'inventory':dict(status='complete',
+            present=True,running=True,checked_at=epoch.isoformat())})
     remote_receipt=dict(boot_id=boot,source_revision='a'*40,source_tree='b'*40,execution_envelope_sha256='e'*64,
         lease_acquired_at=epoch.isoformat(),component_context_identity=dict(root_job_id='parent',target_id='vast:fixture',
         attempt_id='attempt',lease_id='original-lease'))
@@ -256,7 +258,7 @@ async def test_public_remote_first_projection_pause_resume_http(store,retained,m
     parent=Job(id='parent',name='MD',model_id='molecular_dynamics',mode='simulate',status='running',queue_status='running',
         execution_target_id=target.id,remote_attempt_id='attempt',remote_state='running',
         execution_source_revision='a'*40,execution_source_tree='b'*40,execution_bundle_sha256='e'*64,
-        output_dir=str(output),params={},provenance={'remote_execution_receipt':remote_receipt,
+        output_dir=str(output),params={},vram_estimate_mb=8000,provenance={'remote_execution_receipt':remote_receipt,
             'remote_execution_assignment':{'resources':resources}})
     remote_receipt['component_context_identity'].update(source_identity=runtime.source_identity,
         plan_sha256=runtime.plan_sha256, artifact_root=str(runtime.artifact_root))
@@ -275,6 +277,13 @@ async def test_public_remote_first_projection_pause_resume_http(store,retained,m
     monkeypatch.setattr(targets,'get_ready_target',ready)
     async def admit(*args,**kwargs): return admission
     monkeypatch.setattr(targets,'admit_target_resources',admit)
+    from services import gpu_orchestrator as scheduler
+    monkeypatch.setattr(scheduler,'read_scheduler_config',lambda:{'global':{
+        'target_vram_fill':.75,'vram_safety_margin_mb':0,'busy_threshold':.95,'cooldown_ms':0}})
+    async def telemetry(target):
+        return dict(available=True,gpus=[dict(index=0,uuid='inert-physical-GPU',
+            memory_total_mb=48000,memory_used_mb=0,utilization=0)])
+    monkeypatch.setattr(targets,'remote_target_telemetry',telemetry)
     dispatched=[];lost=[lost_response]
     async def transport(conn,argv,**kwargs):
         dispatched.append(argv[0]); fields=dict(zip(argv[1::2],argv[2::2]))
@@ -313,21 +322,33 @@ async def test_public_remote_first_projection_pause_resume_http(store,retained,m
     assert dispatched==['md-pause'] and transfers
     assert Path(observation['md_checkpoints'][child]['local_output_dir'],'production/production.cpt').read_bytes()==Path(value['md_resume_checkpoint']).read_bytes()
     await session.refresh(target);assert target.leased_job_id is None
+    peer=Job(id='peer',name='peer',model_id='cpu-only',mode='run',params={},status='queued',
+        queue_status='queued',paused=False,execution_target_id=target.id,vram_estimate_mb=8000)
+    session.add(peer);await session.commit()
+    assert await scheduler._claim_remote_job(session,peer,gpu_id=0,vram_estimate_mb=8000)
+    peer_claim=dict(peer.provenance)
     from services.remote_execution.transport import RemoteTransportError
     command=dict(expected_state_version=run.state_version,idempotency_key='resume-one')
     if lost_response:
         with pytest.raises(RemoteTransportError,match='response lost'):
             await client.post('/api/molecular-dynamics/runs/parent/resume',json=command)
         assert parent.remote_state=='md_resume_uncertain'
-        await session.refresh(target);assert target.leased_job_id=='parent'
+        await session.refresh(parent)
+        retained_assignment=dict(parent.provenance['remote_execution_assignment'])
+        assert retained_assignment['lease_id'] and retained_assignment['released_at'] is None
     result=await client.post('/api/molecular-dynamics/runs/parent/resume',json=command)
     assert result.status_code==200,result.text
     segment_id=result.json()['segment_ids'][0]
     assert len(spawns)==1
+    assert (await session.get(Job,'peer',populate_existing=True)).provenance==peer_claim
     await client.aclose()
     assert runtime.root_state()['continuation_edge']['md_resume'][child]['md_resume_segment_id']==segment_id
     assert parent.remote_state=='running' and parent.remote_attempt_id=='attempt'
-    await session.refresh(target);assert target.leased_job_id=='parent'
+    await session.refresh(parent)
+    assignment=parent.provenance['remote_execution_assignment']
+    assert assignment['lease_id'] and assignment['released_at'] is None
+    if lost_response: assert assignment==retained_assignment
+    await session.refresh(target);assert target.leased_job_id is None
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('changed', ['checkpoint', 'output', 'request', 'snapshot'])
