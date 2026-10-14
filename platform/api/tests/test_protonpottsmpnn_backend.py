@@ -181,7 +181,14 @@ async def test_actual_pipeline_result_publication_and_readback(admission, target
     assert await publication.publish_native_results(job, output, admission) == 0
     await admission.commit()
     from routers.protonpottsmpnn import get_results
-    assert await get_results(job.id, admission) == document
+    result = await get_results(job.id, admission)
+    from services.binder_selected_round import resolve_ref
+    for record in result['designs']:
+        ref = record.pop('candidate_ref')
+        resolved = await resolve_ref(admission, job, ref, snapshot=False)
+        assert resolved['sequence'] == record['native']['canonical_sequence']
+        assert resolved['binder_chains'] == [record['native']['binder_chain']]
+    assert result == document
     assert list(await admission.scalars(select(Design).where(Design.job_id == job.id))) == []
     artifacts = list(await admission.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job.id)))
     assert {row.logical_path for row in artifacts} == {native.DIRECTORY+'/'+p for p in document['artifacts']}
@@ -227,8 +234,14 @@ async def test_native_publication_real_artifact_rows_exact_endpoint_shape_no_fak
     await admission.commit()
     target.unlink()
     from routers.protonpottsmpnn import get_results
-    assert await get_results(job.id, admission) == document
-    assert await native.read_result(admission, job.id) == document
+    result = await get_results(job.id, admission)
+    assert await native.read_result(admission, job.id) == result
+    ref = result['designs'][0].pop('candidate_ref')
+    assert result == document  # Native scientific document otherwise unchanged.
+    manifest = await admission.scalar(select(JobArtifact).where(JobArtifact.owner_job_id == job.id,
+        JobArtifact.logical_path == native.DIRECTORY + '/manifest.json'))
+    assert ref == {'kind': 'native_sequence', 'job_id': job.id,
+                   'publication_ref': manifest.id, 'native_output_id': 'source:criteria:sample'}
     assert list(await admission.scalars(select(Design).where(Design.job_id == job.id))) == []
     artifacts = list(await admission.scalars(select(JobArtifact).where(JobArtifact.owner_job_id == job.id)))
     assert len(artifacts) == 1

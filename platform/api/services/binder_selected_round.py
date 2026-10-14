@@ -125,6 +125,28 @@ async def native_sequences(session, owner):
     return artifact, result['designs']
 
 
+def retained_candidate_directory(root, ref):
+    """Recover an exact prior source snapshot after producer cleanup."""
+    for previous in rounds.progress_of(root).get(KEY, []):
+        rows = list(previous.get('selection', {}).get('resolved', []))
+        rows += list(previous.get('resolved_outputs', {}).values())
+        for row in rows:
+            if row.get('ref') != ref or not row.get('selection_dir'):
+                continue
+            directory = Path(row['selection_dir'])
+            try:
+                manifest = json.loads((directory / 'selection_manifest.json').read_text())
+                binding = manifest.pop('retained_input_binding')
+                if hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest() != binding['manifest_sha256']:
+                    continue
+                if all(hashlib.sha256((directory / name).read_bytes()).hexdigest() == sha
+                       for name, sha in binding['files'].items()):
+                    return directory
+            except (OSError, ValueError, KeyError):
+                continue
+    raise FileNotFoundError('Exact retained candidate source is unavailable')
+
+
 async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb"):
     from services.binder_continuation import resolve_root, resolve_selection, resolve_candidate_documents, snapshot_selection
     from services.binder_round_inputs import candidate_roles
@@ -167,7 +189,10 @@ async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb")
             target = declared.get('target_chains') or target
         row.update(binder_chains=binder, target_chains=target, artifact_class=design.artifact_class)
         if snapshot:
-            directory = snapshot_selection(owner, root, designs, candidate_documents=documents, output_format=output_format)
+            try:
+                directory = snapshot_selection(owner, root, designs, candidate_documents=documents, output_format=output_format)
+            except FileNotFoundError:
+                directory = retained_candidate_directory(root, ref)
             row['selection_dir'] = str(directory)
             manifest = json.loads((directory / 'selection_manifest.json').read_text())
             row['path'] = manifest['designs'][0]['selection_pdb_path']
@@ -187,6 +212,22 @@ async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb")
             directory = snapshot_selection(owner, root, [], native_sources=[(path, identity)], output_format=output_format)
             row['selection_dir'] = str(directory)
             row['path'] = json.loads((directory / 'selection_manifest.json').read_text())['designs'][0]['selection_pdb_path']
+    elif ref['kind'] == 'native_observation' and owner.model_id == 'boltzgen':
+        from services.boltzgen_candidate_publication import read_published_generation_page
+        match, offset = None, 0
+        while True:
+            page = await read_published_generation_page(owner, session, offset=offset, limit=1000)
+            for record in page['records']:
+                if record.get('candidate_ref') == ref:
+                    if match is not None:
+                        raise ValueError('Native observation identity is ambiguous')
+                    match = record
+            offset += len(page['records'])
+            if offset >= page['total'] or not page['records']:
+                break
+        if match is None:
+            raise ValueError('Selected observation is outside the registered native publication')
+        row.update(binder_chains=[], target_chains=[], native_record=match)
     elif ref['kind'] == 'native_observation' and owner.model_id == 'bindcraft2':
         from services.bindcraft2_publication import read_published_native_results
         from services.bindcraft2_native_results import _rows
@@ -212,7 +253,7 @@ async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb")
                    publication_sha256=artifact.sha256)
         # A body-less observation stays selectable/rankable. No Design or pose
         # is synthesized; an actual downstream model still owns its input needs.
-    else:
+    elif owner.model_id == 'protonpottsmpnn':
         artifact, outputs = await native_sequences(session, owner)
         if ref['publication_ref'] != artifact.id:
             raise ValueError('Selected native publication differs from registered owner')
@@ -223,6 +264,8 @@ async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb")
         native = output['native']
         row.update(sequence=native.get('canonical_sequence'), binder_chains=[native['binder_chain']],
                    target_chains=prior.get('target_chains', []), publication_sha256=artifact.sha256)
+    else:
+        raise ValueError('No native sequence/observation record contract for this producer')
     # Target bindings are frozen independently of generated coordinates. This
     # preserves CSV source membership and prior target branches across requeue.
     if prior.get('target_binding'):
@@ -230,7 +273,10 @@ async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb")
     elif prior.get('independent_targets'):
         targets = deepcopy(prior['independent_targets'])
     else:
-        targets = await declared_targets(owner, session)
+        try:
+            targets = await declared_targets(owner, session)
+        except (ValueError, OSError) as exc:
+            targets = [{'owner_job_id': owner.id, 'unavailable_reason': str(exc)}]
         identity = ref.get('design_id')
         targets = [t for t in targets if not t.get('source_design_ids') or identity in t['source_design_ids']]
     if snapshot:
@@ -240,14 +286,25 @@ async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb")
                 from paths import resolve_runtime_data_path
                 try:
                     path = resolve_runtime_data_path(target['target_path'])
-                    ids = chains(target.get('chains') or row.get('target_chains'))
-                    if ids:
-                        target['components'] = source_components(path, ids, 'target')
-                        target['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+                    ids = chains(target.get('chains'))
+                    from services.binder_diagnostic_selection import independent_structure_components
+                    target['components'] = independent_structure_components(path, ids)
+                    target['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
                 except (ValueError, OSError) as exc:
                     # Target availability is relevant only to a consumer that
                     # actually requests it, never a gate on selected redesign.
                     target['unavailable_reason'] = str(exc)
+    if snapshot and not any(t.get('components') for t in targets):
+        # Same exact candidate's retained independent inputs survive cleanup.
+        # This is custody reuse, not extraction from its generated pose.
+        for previous in rounds.progress_of(root).get(KEY, []):
+            retained_rows = list(previous.get('selection', {}).get('resolved', []))
+            retained_rows += list(previous.get('resolved_outputs', {}).values())
+            match = next((r for r in retained_rows if r.get('ref') == ref
+                          and any(t.get('components') for t in r.get('targets', []))), None)
+            if match:
+                targets = deepcopy(match['targets'])
+                break
     row['targets'] = targets
     return row
 
@@ -289,14 +346,14 @@ def prediction_request(root, row, target, model, params, placement):
     for role, group in [('binder', binder), ('target', targets)]:
         for component in group:
             label = chr(65 + len(components)) if len(components) < 26 else f'C{len(components)}'
-            components.append({**{k:v for k,v in component.items() if k != 'source_residues'}, 'id': label})
+            components.append({**{k:v for k,v in component.items() if k not in {'source_residues', 'source'}}, 'id': label})
             mapping.append({'id': label, 'source_chain': component['id'], 'role': role,
                             'sequence': component.get('sequence')})
     ref = row['ref']
     params = deepcopy(params)
     params.update(complex_components=components,
         sequence=''.join(c['sequence'] for c in binder) if model == 'esmfold2' else ':'.join(c.get('sequence', '') for c in components if c.get('type') == 'protein'),
-        sequence_name=ref.get('design_id') or ref.get('native_output_id') or ref.get('artifact_id'),
+        sequence_name=ref.get('design_id') or ref.get('native_output_id') or ref.get('native_record_id') or ref.get('artifact_id'),
         lineage_root_job_id=root.id, iteration_source_root_job_id=root.id,
         iteration_source_job_id=row['owner_job_id'], source_stage_job_id=row['owner_job_id'],
         selection_source_job_id=row['owner_job_id'], source_selection_count=1,
@@ -309,6 +366,48 @@ def prediction_request(root, row, target, model, params, placement):
     return child, {'target_binding': target, 'input_components': mapping,
                    'binder_chains': [m['id'] for m in mapping if m['role'] == 'binder'],
                    'target_chains': [m['id'] for m in mapping if m['role'] == 'target']}
+
+
+def structural_selection(row, root_id):
+    """Derive PDB only for its consuming branch, from retained exact bytes.
+
+    The native snapshot remains independent, including an alternate/MODEL choice.
+    Conversion failure belongs to this branch, not sibling native consumers.
+    """
+    import tempfile
+    from paths import resolve_runtime_data_path
+    from services.binder_continuation import _write_source_identity
+    source = Path(row['selection_dir'])
+    manifest = json.loads((source / 'selection_manifest.json').read_text())
+    if all(Path(item['selection_pdb_path']).suffix.lower() == '.pdb' for item in manifest['designs']):
+        return source
+    directory = Path(tempfile.mkdtemp(prefix='pdb-branch-', dir=source.parent))
+    try:
+        for index, item in enumerate(manifest['designs']):
+            original = resolve_runtime_data_path(item.get('native_source_structure_path') or item['selection_pdb_path'])
+            raw = original.read_bytes()
+            expected = item.get('native_source_structure_sha256') or item['selection_structure_sha256']
+            if hashlib.sha256(raw).hexdigest() != expected:
+                raise ValueError('Retained source bytes changed')
+            destination = directory / str(index)
+            destination.mkdir()
+            selected = Path(item['selection_pdb_path'])
+            if hashlib.sha256(selected.read_bytes()).hexdigest() != item['selection_structure_sha256']:
+                raise ValueError('Retained selected-model bytes changed')
+            from routers.jobs import _cif_selection_pdb
+            consumed = _cif_selection_pdb(selected, destination / 'derived.pdb')
+            item['native_source_structure_path'] = str(original)
+            item['native_source_structure_sha256'] = expected
+            item['selection_pdb_path'] = str(consumed)
+            item['selection_structure_sha256'] = hashlib.sha256(consumed.read_bytes()).hexdigest()
+        manifest['source_selection_manifest_path'] = str(directory / 'selection_manifest.json')
+        (directory / 'selection_manifest.json').write_text(json.dumps(manifest, sort_keys=True))
+        _write_source_identity(directory, root_id)
+        return directory
+    except Exception:
+        import shutil
+        shutil.rmtree(directory)
+        raise
 
 
 def role_defaults(model, params, explicit, row):
@@ -344,9 +443,7 @@ async def plan(session, root, retained):
                     key = digest(ref)
                     if key not in retained['resolved_outputs']:
                         try:
-                            representation = 'pdb' if any(s.input.stage_id == stage.input.stage_id and s.kind != 'prediction'
-                                for s in request.round_plan.stages) else 'native'
-                            retained['resolved_outputs'][key] = await resolve_ref(session, root, ref, output_format=representation)
+                            retained['resolved_outputs'][key] = await resolve_ref(session, root, ref, output_format='native')
                             retained['errors'].pop(key, None)
                         except (ValueError, OSError, HTTPException) as exc:
                             retained['errors'][key] = str(exc.detail if isinstance(exc, HTTPException) else exc)
@@ -374,7 +471,8 @@ async def plan(session, root, retained):
                                     raise ValueError('This native model requires a structure; the selected output is sequence-only')
                                 operation = {'binder_refinement': 'refine', 'caliby_binder': 'caliby'}.get(model, model)
                                 owner = await session.get(Job, row['owner_job_id'])
-                                directory = Path(row['selection_dir'])
+                                directory = (Path(row['selection_dir']) if model == 'protonpottsmpnn'
+                                             else structural_selection(row, root.id))
                                 explicit_stage = next(s for s in retained.get('submitted_request', retained['request'])['round_plan']['stages'] if s['id'] == stage.id)
                                 explicit = (explicit_stage['params'] if stage.kind == 'maturation' else
                                     next(m['params'] for m in explicit_stage['models'] if m['model_id'] == model))
@@ -382,7 +480,8 @@ async def plan(session, root, retained):
                                 if (model == 'binder_refinement' and params.get('ppiflow_task') == 'protein_binder_partial'
                                         and 'ppiflow_input_model' not in explicit):
                                     from scripts.run_ppiflow_protein_partial import prepared_model
-                                    params['ppiflow_input_model'] = prepared_model(row['path'])
+                                    prepared = json.loads((directory / 'selection_manifest.json').read_text())
+                                    params['ppiflow_input_model'] = prepared_model(prepared['designs'][0]['selection_pdb_path'])
                                 base = model_request(operation=operation, params=params, source=owner,
                                     root=root, selection_dir=directory, execution_target_id=request.execution_target_id)
                                 child = individual_model_requests(base, operation, directory)[0]
@@ -452,9 +551,7 @@ async def submit(session, experiments, request):
     else:
         normalized = normalize(request)
         refs = await selection_refs(session, source, request)
-        representation = 'pdb' if any(s.input.selected and s.kind != 'prediction'
-            for s in normalized.round_plan.stages) else 'native'
-        resolved = [await resolve_ref(session, root, ref, output_format=representation) for ref in refs]
+        resolved = [await resolve_ref(session, root, ref, output_format='native') for ref in refs]
         identity = str(uuid.uuid4())
         retained = {'round_id': identity, 'root_job_id': root.id, 'source_job_id': source.id,
             'submitted_request': request.model_dump(mode='json'),

@@ -197,6 +197,11 @@ async def test_native_sequence_publication_fans_out_without_fake_designs(selecte
     assert len(returned['steps']) == 5, returned
     assert not list(await session.scalars(select(Design).where(Design.job_id == producer.id)))
     native_refs = returned['steps'][0]['outputs']
+    from routers.protonpottsmpnn import router as native_router
+    client._transport.app.include_router(native_router, prefix='/api/jobs')
+    readback = await client.get(f'/api/jobs/{producer.id}/protonpottsmpnn/results')
+    assert readback.status_code == 200, readback.text
+    assert [r['candidate_ref'] for r in readback.json()['designs']] == native_refs
     assert len(native_refs) == 2
     assert all(r['kind'] == 'native_sequence' for r in native_refs)
     for step in returned['steps'][1:]:

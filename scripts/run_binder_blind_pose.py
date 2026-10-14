@@ -36,6 +36,8 @@ def _source(path: Path, chain_ids: list[str], *, role: str,
                   'label_seq_id', 'label_comp_id', 'pdbx_PDB_model_num')
         if not count or any(len(column(field)) != count for field in fields):
             raise ValueError('CIF lacks an unambiguous atom_site sequence identity')
+        if len(set(column('pdbx_PDB_model_num'))) != 1:
+            raise ValueError('Selected CIF has multiple structural models')
         residues = {chain: {} for chain in chain_ids}
         instances = {chain: set() for chain in chain_ids}
         for i in range(count):
@@ -44,8 +46,6 @@ def _source(path: Path, chain_ids: list[str], *, role: str,
             chain = column('auth_asym_id')[i]
             if chain not in residues:
                 continue
-            if column('pdbx_PDB_model_num')[i] != '1':
-                raise ValueError('Selected CIF has multiple structural models')
             position = (column('label_asym_id')[i], column('label_seq_id')[i])
             instances[chain].add(position[0])
             if position[1] in {'.', '?'}:

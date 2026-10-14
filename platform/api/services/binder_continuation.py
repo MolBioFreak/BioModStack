@@ -169,7 +169,7 @@ def retained_selection(source, root, designs, *, kind, create, extra=None) -> Pa
         manifest = json.loads((directory / 'selection_manifest.json').read_text())
         _rebind_selection_paths(manifest, directory, target)
         (directory / 'selection_manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True))
-        if kind == 'pdb':
+        if kind == 'pdb' or (directory / 'source_identity.json').exists():
             _write_source_identity(directory, root.id)
         directory.rename(target)
         directory = target
@@ -211,8 +211,11 @@ def snapshot_selection(source: Job, root: Job, designs: list[Design], *,
     for design in inputs:
         if design.id in resolved:
             design.pdb_path = str(resolved[design.id][0])
+    for path, identity in native_sources or []:
+        if path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() != identity['artifact_sha256']:
+            raise ValueError('Selected native bytes changed')
     extra = {'output_format': output_format, 'documents': {key: (str(value[0]), value[1]) for key, value in resolved.items()},
-             'native': [(str(path), identity, hashlib.sha256(path.read_bytes()).hexdigest())
+             'native': [(str(path), identity, identity['artifact_sha256'])
                         for path, identity in native_sources or []]}
     return retained_selection(source, root, inputs, kind=output_format, extra=extra,
         create=lambda: _snapshot_selection(source, root, designs,
@@ -273,6 +276,9 @@ def _snapshot_selection(source: Job, root: Job, designs: list[Design], *,
                 shutil.rmtree(directory)
                 raise ValueError('Selected document snapshot differs from its owned artifact')
             item['selected_document'] = identity
+    for item in manifest['designs']:
+        item.setdefault('selection_structure_sha256',
+            hashlib.sha256(Path(item['selection_pdb_path']).read_bytes()).hexdigest())
     # The exact document remains retained; a selected MODEL is a separately
     # recorded derivative, prepared by the existing source representation owner.
     for item in manifest['designs']:
