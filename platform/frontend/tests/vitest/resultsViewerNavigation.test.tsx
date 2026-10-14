@@ -171,7 +171,9 @@ test.each([null, 'context'])('Results MD handoff preserves explicit destination 
     const source = { ...job, id: sourceId, params: { launch_context_id: 'source-not-destination' } };
     const candidate = { ...design(designId, 'boltz2'), job_id: sourceId };
     await setup(`/designs/${sourceId}?design_id=${designId}${destination ? `&launch_context_id=${destination}` : ''}`, false, [candidate], source);
-    await act(async () => renderer!.root.findByType(BinderSelectedControls).props.onStartMD(designId));
+    const mdButton = renderer!.root.findAllByType('button').find(button => text(button) === 'Use as MD starting structure')!;
+    expect(mdButton).toBeDefined();
+    await act(async () => mdButton.props.onClick());
     await flush();
     const location = renderer!.root.findAllByType('span').find(node => node.props['data-location'])!.props['data-location'];
     const url = new URL(location, 'http://test');
@@ -184,15 +186,47 @@ test.each([null, 'context'])('Results MD handoff preserves explicit destination 
     expect(url.searchParams.has('artifact_id')).toBe(false); // Existing MD seam explicitly uses Design primary.
 });
 
+test.each([
+    ['bindcraft2', 'campaign', {}],
+    ['boltzgen', 'protein_binder', {}],
+    ['boltzgen', 'nanobody_binder', {}],
+    ['boltzgen', 'peptide_binder', {}],
+    ['ppiflow', 'protein_binder', {}],
+    ['ppiflow', 'antibody_binder', {}],
+    ['ppiflow', 'nanobody_binder', {}],
+    ['rfantibody', 'design', {}],
+    ['rfantibody2', 'design', {}],
+    ['esmfold2', 'blind_pose', {}],
+    ['ligandmpnn', 'interface_context', {}],
+    ['binder_refinement', 'refine', {}],
+    ['fampnn', 'binder_design', {}],
+    ['esmfold2', 'blind_pose', { binder_round_step: { root_job_id: 'root' } }],
+    ['boltz2', 'complex', { binder_round_request: {} }],
+])('mounted binder Results %s/%s has no MD entry, with implicit and exact candidate selection', async (model_id, mode, provenance) => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ requested_settings: {}, effective_settings: {}, arms: [], rows: [], accounting: {}, total: 0 }) })));
+    try {
+        for (const exact of [false, true]) {
+            await setup(`/designs/parent${exact ? '?design_id=candidate' : ''}`, false, [design('candidate', model_id)], { ...job, model_id, mode, provenance } as typeof job);
+            expect(text(renderer!.root)).toContain('TEST mixed models');
+            expect(text(renderer!.root)).not.toContain('Use as MD starting structure');
+            expect(text(renderer!.root)).not.toContain('Use as GROMACS MD starting structure');
+            expect(renderer!.root.findAllByType(BinderSelectedControls).every(control => !('onStartMD' in control.props))).toBe(true);
+            await act(async () => renderer!.unmount()); client.clear();
+        }
+    } finally { vi.unstubAllGlobals(); }
+});
+
 const returnUri = '/projects/p/experiments/g/domains/d?workspace=protein&section=results';
 const setup = async (entry: string, children = false, suppliedRows = rows, selectedJob = job, extraJobs: typeof job[] = []) => {
     calls.length = 0;
+    window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener() {}, removeEventListener() {} });
     api.defaults.adapter = async config => {
         const url = String(config.url); const params = config.params ?? {};
         calls.push({ url, params });
         let data: unknown;
         const jobs = (children ? [{ ...selectedJob, design_count: 0 }, { ...selectedJob, id: 'child', parent_job_id: 'parent' }] : [selectedJob]).concat(extraJobs);
         if (url === '/api/jobs') data = { jobs, total: jobs.length };
+        else if (url.endsWith('/generation-results')) data = { records: [], total: 0, offset: 0, limit: 100, publication: {}, receipt: {} };
         else if (url.endsWith('/workflow-results')) data = { job: selectedJob, composition: { sha256: 'c'.repeat(64) }, tabs: [], source: { artifacts: [{ artifact_id: 'source', label: 'Source structure', content_url: '/api/jobs/parent/workflow-results/artifacts/source', bytes: 100 }] }, artifacts: [], receipt: { schema_version: 1, validator_summaries: [{ validator: 'esmfold2', state: 'complete' }] }, counts: { persisted_design_rows: suppliedRows.length } };
         else if (url.startsWith('/api/jobs/') && !url.includes('/backbones')) data = jobs.find(item => item.id === url.split('/').pop()) ?? job;
         else if (url === '/api/models/frustrampnn/integration') data = { model_id: 'frustrampnn', enabled: false };

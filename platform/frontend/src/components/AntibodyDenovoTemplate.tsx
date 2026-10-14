@@ -2703,7 +2703,6 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                     </p>
                 )}
             </div>
-            <p className="text-sm text-[var(--text-secondary)]">Optional selected-candidate physics: use “Use as MD starting structure” in candidate results, then select GROMACS in the existing MD launcher. Native BC2 relaxation is separate.</p>
         </div>
     ) : null;
 

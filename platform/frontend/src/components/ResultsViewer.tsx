@@ -5368,8 +5368,7 @@ function ResultsViewerContent() {
             launchContextId={destinationLaunchContextId}
             candidateDocuments={{ ...readBinderCandidateDocuments(activeJob.id), ...(exactArtifactId && requestedDesignId ? { [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } } : {}) }}
             inspectDesignId={exactArtifactId ? requestedDesignId : undefined}
-            onOpenJob={handleSelectJob}
-            onStartMD={designId => navigate(mdRoute(activeJob.id, designId))} />
+            onOpenJob={handleSelectJob} />
         {selectedDesignIds.length > 0 && !((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
             || (activeJob.model_id === 'ligandmpnn' && activeJob.mode === 'interface_context')) && <BlindPoseSelectedControls
             key={activeJob.id}
@@ -5405,7 +5404,12 @@ function ResultsViewerContent() {
                         <div className="mt-3">{resultModelSelector}</div>
                         {activeJob && (
                             <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-300">
-                                {selectedDesign && activeJob.status === 'completed' && (!isNativeBinderGeneration(activeJob) || requestedDesignId === selectedDesign.id) && (
+                                {selectedDesign && activeJob.status === 'completed'
+                                    && activeJob.model_id !== 'bindcraft2' && !isNativeBinderGeneration(activeJob)
+                                    && !isAntibodyContext && !hasExplicitBinderTargetRoles(activeJob)
+                                    && !activeJob.mode.includes('binder') && !activeJob.model_id.includes('binder')
+                                    && !['blind_pose', 'interface_context'].includes(activeJob.mode)
+                                    && !activeJob.provenance?.binder_round_request && !activeJob.provenance?.binder_round_step && (
                                     <button
                                         type="button"
                                         onClick={() => navigate(mdRoute(activeJob.id, selectedDesign.id))}

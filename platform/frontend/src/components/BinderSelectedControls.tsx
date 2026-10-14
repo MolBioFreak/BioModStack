@@ -33,14 +33,13 @@ interface Props {
     selectedDesignIds: string[];
     selectedNativeSources?: NativeCandidateSource[];
     onOpenJob: (id: string) => void;
-    onStartMD: (designId: string) => void;
     candidateDocuments?: CandidateDocuments;
     launchContextId?: string | null;
     inspectDesignId?: string;
 }
 
 /** Reuse global model parameter metadata and native FrustraMPNN settings. */
-export default function BinderSelectedControls({ sourceJobId, selectedDesignIds, selectedNativeSources = [], onOpenJob, onStartMD, candidateDocuments, launchContextId, inspectDesignId }: Props) {
+export default function BinderSelectedControls({ sourceJobId, selectedDesignIds, selectedNativeSources = [], onOpenJob, candidateDocuments, launchContextId, inspectDesignId }: Props) {
     const [section, setSection] = useState('sources');
     const [inspectId, setInspectId] = useState<string | null>(inspectDesignId ?? null);
     useEffect(() => { if (inspectDesignId) { setInspectId(inspectDesignId); setSection('sources'); } }, [inspectDesignId]);
@@ -190,11 +189,10 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
                         && Object.keys(documentSelections[id]).length > 0 && <option value={JSON.stringify(documentSelections[id])}>{documentSelections[id].target_state ?? 'Selected state'} · {documentSelections[id].artifact_id ?? 'Producer-bound document'}</option>}
                 </select></label>
                 <button type="button" onClick={() => setInspectId(id)}>Inspect exact source {id}</button>
-                <button type="button" onClick={() => onStartMD(id)}>Use as GROMACS MD starting structure</button></li>)}</ul>
+                </li>)}</ul>
             <ul>{selectedNativeSources.map(source => <li key={nativeSourceKey(source)}>{source.document?.logical_path ?? source.artifact_id} · Source Job {source.job_id} · Exact artifact {source.artifact_id} · {source.document?.target_state ?? 'Native state'}
                 <button type="button" onClick={() => setInspectId(nativeSourceKey(source))}>Inspect exact native source {source.artifact_id}</button>
             </li>)}</ul>
-            <p>GROMACS uses its separate Design starting-structure handoff; this document choice applies to the selected operation.</p>
             {sourceError && <p>Document inventory unavailable: {sourceError}. Primary selection and submitted exact identities remain available.</p>}
         </details>
         {inspectionDocument && <section aria-label="Exact selected source inspection">

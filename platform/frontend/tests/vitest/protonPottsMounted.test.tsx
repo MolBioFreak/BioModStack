@@ -63,7 +63,7 @@ it('edits every native criterion, typed map/list/sweep values, checkpoint option
     expect(tree.root.findAllByType('textarea')).toHaveLength(0);
 });
 it('launches pH redesign from agnostic selections with exact documents, global settings, Project and explicit placement', async () => {
-    await mount(<BinderSelectedControls sourceJobId="source" selectedDesignIds={['bc2', 'other-source']} selectedNativeSources={[{ job_id: 'ppiflow', artifact_id: 'complex' }]} candidateDocuments={{ bc2: { artifact_id: 'state-B' } }} launchContextId="project-destination" onOpenJob={() => {}} onStartMD={() => {}} />);
+    await mount(<BinderSelectedControls sourceJobId="source" selectedDesignIds={['bc2', 'other-source']} selectedNativeSources={[{ job_id: 'ppiflow', artifact_id: 'complex' }]} candidateDocuments={{ bc2: { artifact_id: 'state-B' } }} launchContextId="project-destination" onOpenJob={() => {}} />);
     await edit('Binder continuation operation', 'protonpottsmpnn'); await flush(); await edit('binder_chain', 'binder-1'); await edit('criteria.0.temperature', '0');
     await act(async () => button('Vast · Fixture worker').props.onClick()); await act(async () => button('Run selected operation').props.onClick());
     expect(posted[0].body).toMatchObject({ operation: 'protonpottsmpnn', design_ids: ['bc2', 'other-source'], native_sources: [{ job_id: 'ppiflow', artifact_id: 'complex' }], candidate_documents: { bc2: { artifact_id: 'state-B' } }, execution_target_id: 'worker', launch_context_id: 'project-destination', params: { ...nativeRequest.options, binder_chain: 'binder-1', criteria: [{ ...nativeRequest.options.criteria[0], temperature: 0 }] } });

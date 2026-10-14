@@ -75,7 +75,7 @@ it('submits restored mixed or native-only sources through the editable existing 
     await close();
     for (const designIds of [['accepted-design'], []]) {
         client = new QueryClient();
-        await act(async () => { tree = create(<QueryClientProvider client={client}><BinderSelectedControls sourceJobId="job" selectedDesignIds={designIds} selectedNativeSources={readBinderNativeSources('job')} onOpenJob={() => {}} onStartMD={() => {}} /></QueryClientProvider>); });
+        await act(async () => { tree = create(<QueryClientProvider client={client}><BinderSelectedControls sourceJobId="job" selectedDesignIds={designIds} selectedNativeSources={readBinderNativeSources('job')} onOpenJob={() => {}} /></QueryClientProvider>); });
         await flush();
         await act(async () => tree.root.findAllByType('input').find(n => n.props.type === 'number')!.props.onChange({ target: { value: '7' } }));
         expect(button('Run selected operation').props.disabled).toBe(false);
@@ -90,7 +90,7 @@ it('inspects only the chosen registered source and reports missing download with
     vi.stubGlobal('fetch', fetcher);
     for (const available of [true, false]) {
         client = new QueryClient();
-        await act(async () => { tree = create(<QueryClientProvider client={client}><BinderSelectedControls sourceJobId="job" selectedDesignIds={[]} selectedNativeSources={[{ job_id: 'job', artifact_id: 'alternate', document: available ? doc('alternate') : undefined }]} onOpenJob={() => {}} onStartMD={() => {}} /></QueryClientProvider>); });
+        await act(async () => { tree = create(<QueryClientProvider client={client}><BinderSelectedControls sourceJobId="job" selectedDesignIds={[]} selectedNativeSources={[{ job_id: 'job', artifact_id: 'alternate', document: available ? doc('alternate') : undefined }]} onOpenJob={() => {}} /></QueryClientProvider>); });
         await flush();
         await act(async () => button('Inspect exact native source alternate').props.onClick());
         await flush();
