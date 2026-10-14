@@ -2,9 +2,9 @@ id: binder_refinement
 name: Selected binder refinement
 version: 1.0.0
 category: sequence_design
-description: Independent selected repack, anchor analysis, native antibody/nanobody
-  partial flow and explicit FA-MPNN redesign. Native limitations remain; unselected
-  operations do not run.
+description: Independent repack, anchors, protein/antibody/nanobody native partial
+  flow and explicitly chosen legacy FA-MPNN redesign. Protein emits masked backbones;
+  no implicit sequence designer.
 container: pyrosetta_tools.sif
 inputs:
 - pdb
@@ -14,9 +14,9 @@ outputs:
 modes:
 - id: refine
   name: Selected binder refinement
-  description: Independent selected repack, anchor analysis, native antibody/nanobody
-    partial flow and explicit FA-MPNN redesign. Native limitations remain; unselected
-    operations do not run.
+  description: Independent repack, anchors, protein/antibody/nanobody native partial
+    flow and explicitly chosen legacy FA-MPNN redesign. Protein emits masked backbones;
+    no implicit sequence designer.
   params:
   - pdb_paths
   - source_identity_json
@@ -55,6 +55,25 @@ modes:
   - fampnn_fix_target_sidechains
   - fampnn_batch_size
   - seqs_per_design
+  - ppiflow_task
+  - ppiflow_input_model
+  - ppiflow_fixed_positions
+  - ppiflow_protein_interface_dist
+  - ppiflow_protein_sample_hotspot_rate_min
+  - ppiflow_protein_sample_hotspot_rate_max
+  - ppiflow_protein_t_method
+  - ppiflow_protein_alpha_t
+  - ppiflow_protein_rotation_corrupt
+  - ppiflow_protein_rotation_sample_schedule
+  - ppiflow_protein_rotation_exp_rate
+  - ppiflow_protein_translation_corrupt
+  - ppiflow_protein_translation_var_scale
+  - ppiflow_protein_self_condition
+  - ppiflow_protein_starting_at_hotspot_center
+  - ppiflow_protein_dataset_seed
+  - ppiflow_protein_samples_batch_size
+  - ppiflow_protein_samples_min_hotspots
+  - ppiflow_protein_cache_num_res
 params:
 - name: pdb_paths
   type: string
@@ -82,7 +101,7 @@ params:
   default: false
 - name: maturation_flow_enabled
   type: boolean
-  description: Run native antibody/nanobody PPIFlow partial flow.
+  description: Run the selected native PPIFlow partial task.
   default: false
 - name: maturation_redesign_enabled
   type: boolean
@@ -92,6 +111,10 @@ params:
   type: string
   description: Native antibody format for PPIFlow checkpoint selection.
   default: standard-fv
+  applicability:
+    field: ppiflow_task
+    operator: not_equals
+    value: protein_binder_partial
 - name: ppiflow_region_mode
   type: string
   description: Native movable-region mode.
@@ -101,10 +124,18 @@ params:
   - all_cdrs
   - framework_only
   - all_antibody
+  applicability:
+    field: ppiflow_task
+    operator: not_equals
+    value: protein_binder_partial
 - name: ppiflow_selected_loops
   type: string
   description: Selected native CDR loops, where applicable.
   default: ''
+  applicability:
+    field: ppiflow_task
+    operator: not_equals
+    value: protein_binder_partial
 - name: maturation_anchor_threshold
   type: number
   description: Existing anchor energy threshold (REU).
@@ -123,33 +154,68 @@ params:
   default: false
 - name: ppiflow_start_t
   type: number
-  description: Native partial-flow start t.
-  default: 0.8
+  description: Protein default .15 (native randomized time transform with max_t=start_t+.02);
+    antibody default .8. Higher t retains more seed geometry.
+  protein_native_cli: start_t
+  protein_default: 0.15
+  defaults_by_task:
+    protein_binder_partial: 0.15
+    antibody_partial: 0.8
+    nanobody_partial: 0.8
+  ui_control: number
+  group: PPIFlow partial-flow science
 - name: ppiflow_samples_per_target
   type: integer
-  description: Native samples per selected complex.
-  default: 1
+  description: 'Native samples per selected complex: protein default 100; historical
+    antibody default 1. Expanded once by native dataset.'
+  protein_native_cli: samples_per_target
+  protein_default: 100
+  defaults_by_task:
+    protein_binder_partial: 100
+    antibody_partial: 1
+    nanobody_partial: 1
+  ui_control: number
+  group: PPIFlow partial-flow science
 - name: ppiflow_retry_limit
   type: integer
   description: Native sampling retry limit.
   default: 10
+  applicability:
+    field: ppiflow_task
+    operator: not_equals
+    value: protein_binder_partial
 - name: ppiflow_checkpoint
   type: string
   description: Native checkpoint selection.
-  default: antibody
+  defaults_by_task:
+    protein_binder_partial: binder
+    antibody_partial: antibody
+    nanobody_partial: nanobody
 - name: ppiflow_heavy_chain
   type: string
   description: Explicit native heavy chain; omitted uses first selected binder chain.
+  applicability:
+    field: ppiflow_task
+    operator: not_equals
+    value: protein_binder_partial
 - name: ppiflow_light_chain
   type: string
   description: Explicit native light chain; omitted uses second selected binder chain
     if present.
+  applicability:
+    field: ppiflow_task
+    operator: not_equals
+    value: protein_binder_partial
 - name: ppiflow_antigen_chain
   type: string
   description: Explicit native antigen chain; must agree with selected target role.
 - name: epitope_residues
   type: string
   description: Explicit native hotspot residues.
+  protein_native_cli: specified_hotspots
+  protein_default: null
+  ui_control: residue
+  group: PPIFlow partial-flow science
 - name: fampnn_temperature
   type: number
   description: Native FA-MPNN sampling temperature.
@@ -187,10 +253,18 @@ params:
   type: object
   description: Explicit loop-to-position mapping for native mask preparation.
   default: {}
+  applicability:
+    field: ppiflow_task
+    operator: not_equals
+    value: protein_binder_partial
 - name: manual_cdr_definitions
   type: array
   description: Explicit native manual CDR definitions.
   default: []
+  applicability:
+    field: ppiflow_task
+    operator: not_equals
+    value: protein_binder_partial
 - name: fixed_positions
   type: string
   description: Existing generic author-residue sequence mask, e.g. A:1-10,A:50.
@@ -208,6 +282,217 @@ params:
   description: Number of native FA-MPNN sequences per selected structure.
   minimum: 1
   default: 1
+- name: ppiflow_task
+  type: string
+  description: Explicit native partial task. Omitted retains historical antibody/framework
+    selection.
+  enum:
+  - protein_binder_partial
+  - antibody_partial
+  - nanobody_partial
+  ui_control: select
+- name: ppiflow_input_model
+  type: integer
+  default: 1
+  description: Selected PDB MODEL serial; source owner preserves original model custody.
+  ui_control: number
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+- name: ppiflow_fixed_positions
+  type: string
+  description: Protein fixed author residue mask; e.g. B12,B:20A,B30-35.
+  protein_native_cli: fixed_positions
+  ui_control: residue
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_interface_dist
+  type: number
+  default: 6.0
+  description: Automatic interface cutoff in angstrom.
+  ui_control: number
+  protein_native_cli: interface_dist
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_sample_hotspot_rate_min
+  type: number
+  default: 0.2
+  description: Minimum hotspot sampling fraction; explicit hotspots require native
+    default rates.
+  ui_control: number
+  protein_native_cli: sample_hotspot_rate_min
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_sample_hotspot_rate_max
+  type: number
+  default: 0.5
+  description: Maximum hotspot sampling fraction.
+  ui_control: number
+  protein_native_cli: sample_hotspot_rate_max
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_t_method
+  type: string
+  default: uniform
+  description: Native randomized time distribution, not fixed time.
+  ui_control: select
+  protein_native_path: interpolant.t_method
+  enum:
+  - uniform
+  - beta
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_alpha_t
+  type: number
+  default: 3.0
+  description: Native beta time-distribution shape.
+  ui_control: number
+  protein_native_path: interpolant.alpha_t
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_rotation_corrupt
+  type: boolean
+  default: true
+  description: Corrupt seed rotations.
+  ui_control: checkbox
+  protein_native_path: interpolant.rots.corrupt
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_rotation_sample_schedule
+  type: string
+  default: exp
+  description: Native rotation schedule.
+  ui_control: select
+  protein_native_path: interpolant.rots.sample_schedule
+  enum:
+  - linear
+  - exp
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_rotation_exp_rate
+  type: number
+  default: 10.0
+  description: Rotation exponential schedule rate.
+  ui_control: number
+  protein_native_path: interpolant.rots.exp_rate
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_translation_corrupt
+  type: boolean
+  default: true
+  description: Corrupt seed translations.
+  ui_control: checkbox
+  protein_native_path: interpolant.trans.corrupt
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_translation_var_scale
+  type: number
+  default: 10.0
+  description: Native translation noise scale.
+  ui_control: number
+  protein_native_path: interpolant.trans.var_scale
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_self_condition
+  type: boolean
+  default: true
+  description: Native self-conditioning.
+  ui_control: checkbox
+  protein_native_path: interpolant.self_condition
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_starting_at_hotspot_center
+  type: boolean
+  default: false
+  description: Initialize noise offset at hotspot center.
+  ui_control: checkbox
+  protein_native_path: interpolant.starting_at_hotspot_center
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_dataset_seed
+  type: integer
+  default: 123
+  description: Dataset RNG seed only; not full-run determinism.
+  ui_control: number
+  protein_native_path: ppi_dataset.seed
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_samples_batch_size
+  type: integer
+  default: 1
+  description: Native sample batching.
+  ui_control: number
+  protein_native_path: ppi_dataset.samples_batch_size
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_samples_min_hotspots
+  type: integer
+  default: 3
+  description: Native minimum hotspot count.
+  ui_control: number
+  protein_native_path: ppi_dataset.samples_min_hotspots
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
+- name: ppiflow_protein_cache_num_res
+  type: integer
+  default: 0
+  description: Native feature cache residue threshold.
+  ui_control: number
+  protein_native_path: ppi_dataset.cache_num_res
+  applicability:
+    field: ppiflow_task
+    operator: equals
+    value: protein_binder_partial
+  group: PPIFlow partial-flow science
 enabled: true
 experimental: true
 public_launch: true

@@ -244,6 +244,11 @@ PROCESS_CONTRACTS = {
 
 # Binder selected leaves reuse these exact native process declarations.
 PROCESS_CONTRACTS.update({
+    'modules/ppiflow.nf:RunProteinPartialFlow': (
+        ('gpu', 'PPIFlow'),
+        ('tuple val(meta), path(original_complex_pdb), path(complex_pdb), path(anchors_json), path(ppiflow_positions), path(cdr_positions), path(cdr_positions_by_loop_json)',),
+        ("tuple val(meta), path('ppiflow_backbones'), path('ppiflow_backbones_manifest.json'), emit: backbones", 'tuple val(meta), path("${meta.id}_ppiflow_accounting.json"), emit: accounting'),
+        ('scripts/run_ppiflow_protein_partial.py', 'scripts/run_ppiflow_generation.py', 'scripts/publish_binder_refinement.py', 'platform/api/config/models/binder_refinement.yaml'), ()),
     'modules/ppiflow.nf:RunPPIFlowGeneration': (
         ('gpu', 'PPIFlow'), ("path generation_request, stageAs: 'generation_request'",),
         ("path 'ppiflow_generation', emit: native_results",),
@@ -469,7 +474,7 @@ class _NativeAnnotations:
             if label in LABEL_ASSETS:
                 image, selector, weights, weight_selector = LABEL_ASSETS[label]
                 deps.append(self.asset('image', image, 'nextflow.config:process.withLabel.' + label, selector))
-                if weights and native_name not in {'RunPPIFlowGeneration', 'RunBoltz', 'RunShapeBoltzValidator', 'DoradoBasecall', 'PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets'}:
+                if weights and native_name not in {'RunProteinPartialFlow', 'RunPPIFlowGeneration', 'RunBoltz', 'RunShapeBoltzValidator', 'DoradoBasecall', 'PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets'}:
                     deps.append(self.asset('weights', weights, authority, weight_selector))
         for helper in helpers:
             deps.append(self.asset('support_tool', helper, authority))
@@ -1061,7 +1066,14 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             prepared = a.chain(['PrepareBinderRefinementRegions'])
         after = prepared if repack else ()
         if flow:
-            after = a.chain(['RunPartialFlow'], prepared)
+            if p.get('ppiflow_task') == 'protein_binder_partial':
+                from component_runtime import SelectedDependency
+                key = 'weights:ppiflow/binder.ckpt'
+                dependencies[key] = SelectedDependency(key, 'weights', 'ppiflow/binder.ckpt',
+                    'modules/ppiflow.nf:RunProteinPartialFlow', selector='ppiflow_weights_dir', selector_subpath='binder.ckpt')
+                after = (a.stage('RunProteinPartialFlow', prepared, extra=(key,)),)
+            else:
+                after = a.chain(['RunPartialFlow'], prepared)
         if redesign:
             after = a.chain(['PrepareBinderRedesign', 'RunMaturationFAMPNN'],
                             tuple(dict.fromkeys((*after, *prepared))))

@@ -60,7 +60,7 @@ process IdentifyAnchorResidues {
     tuple val(meta), path("${meta.id}_rotamer_enrichment.json"), emit: rotamer_enrichment
 
     script:
-    def frameworkType = params.get('framework_type')
+    def frameworkType = params.get('ppiflow_task') == 'nanobody_partial' ? 'nanobody' : params.get('framework_type')
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
     def antibodyChains = params.get('binder_chains') ?: params.antibody_chains ?: defaultAntibodyChains
     def antigenChains = params.get('target_chains') ?: params.antigen_chains ?: ''
@@ -71,7 +71,7 @@ process IdentifyAnchorResidues {
     // Without a selected flow operation there is no movable backbone region to
     // exclude from generic anchor analysis. Legacy antibody preparation retains
     // its original region semantics.
-    def skipRegions = ((params.get('binder_chains') != null && params.get('maturation_flow_enabled') != true) || (params.get('maturation_flow_enabled') == false && params.get('maturation_redesign_enabled') != true && params.get('maturation_anchors_enabled') == false)) ? '--skip_region_resolution' : ''
+    def skipRegions = (params.get('ppiflow_task') == 'protein_binder_partial' || (params.get('binder_chains') != null && params.get('maturation_flow_enabled') != true) || (params.get('maturation_flow_enabled') == false && params.get('maturation_redesign_enabled') != true && params.get('maturation_anchors_enabled') == false)) ? '--skip_region_resolution' : ''
     def requireAnchors = params.ppiflow_require_anchors != null ? params.ppiflow_require_anchors : true
     def rotamerShellDistance = paramValueOrDefault(params, 'ppiflow_rotamer_shell_distance', paramValueOrDefault(params, 'ppiflow_rotamer_shell_cutoff', 20.0))
     def relaxAntibodyBackboneShell = paramValueOrDefault(params, 'ppiflow_relax_antibody_backbone_shell', false)
@@ -141,6 +141,35 @@ PY
     """
 }
 
+process RunProteinPartialFlow {
+    label 'gpu'
+    label 'PPIFlow'
+    publishDir "${params.out_dir}/run/ppiflow/sample_identity", mode: 'copy', pattern: '*_ppiflow_accounting.json'
+    publishDir "${params.out_dir}/run/ppiflow/protein_receipts/${meta.id}", mode: 'copy', pattern: 'protein_partial/*json'
+    input:
+    tuple val(meta), path(original_complex_pdb), path(complex_pdb), path(anchors_json), path(ppiflow_positions), path(cdr_positions), path(cdr_positions_by_loop_json)
+    output:
+    tuple val(meta), path('ppiflow_backbones'), path('ppiflow_backbones_manifest.json'), emit: backbones
+    tuple val(meta), path("${meta.id}_ppiflow_accounting.json"), emit: accounting
+    script:
+    def settings = params.findAll { key, value -> key.toString().startsWith('ppiflow_protein_') || key in ['ppiflow_start_t', 'ppiflow_samples_per_target', 'ppiflow_input_model', 'ppiflow_fixed_positions', 'ppiflow_checkpoint_path', 'binder_chains', 'target_chains', 'epitope_residues'] }
+    def encoded = groovy.json.JsonOutput.toJson(settings).bytes.encodeBase64().toString()
+    def sourceEncoded = groovy.json.JsonOutput.toJson(meta).bytes.encodeBase64().toString()
+    """
+    set -euo pipefail
+    export HOME="\$PWD"
+    export XDG_CACHE_HOME="\$PWD/.cache"
+    export TORCH_EXTENSIONS_DIR="\${XDG_CACHE_HOME}/torch_extensions"
+    export TRITON_CACHE_DIR="\${XDG_CACHE_HOME}/triton"
+    python3 -c 'import base64;open("protein_settings.json","wb").write(base64.b64decode("${encoded}"))'
+    python3 -c 'import base64;open("protein_source.json","wb").write(base64.b64decode("${sourceEncoded}"))'
+    python3 '${params.code_root}/scripts/run_ppiflow_protein_partial.py' \\
+        --pdb '${complex_pdb}' --settings protein_settings.json --anchors '${anchors_json}' \\
+        --output protein_partial --prefix '${meta.id}' --source-meta protein_source.json \\
+        --publication-dir '${params.out_dir}/collected/binder_refinement/published'
+    """
+}
+
 process RunPartialFlow {
     label 'gpu'
     label 'PPIFlow'
@@ -156,7 +185,7 @@ process RunPartialFlow {
     tuple val(meta), path("${meta.id}_ppiflow_accounting.json"), emit: accounting
 
     script:
-    def frameworkType = params.get('framework_type')
+    def frameworkType = params.get('ppiflow_task') == 'nanobody_partial' ? 'nanobody' : params.get('framework_type')
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
     def antibodyChains = params.get('binder_chains') ?: params.antibody_chains ?: defaultAntibodyChains
     def antibodyList = antibodyChains.toString().split(',')*.trim().findAll { it }
@@ -302,7 +331,7 @@ process PrepMaturationRedesign {
     tuple val(meta), path("fampnn_input/*.pdb"), path("fampnn.csv"), path("fampnn_transport"), emit: prep
 
     script:
-    def frameworkType = params.get('framework_type')
+    def frameworkType = params.get('ppiflow_task') == 'nanobody_partial' ? 'nanobody' : params.get('framework_type')
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
     def antibodyChains = params.get('binder_chains') ?: params.antibody_chains ?: defaultAntibodyChains
     def designModeRaw = params.maturation_design_mode ?: 'inherit'
@@ -480,7 +509,7 @@ process ScoreMaturationImprovement {
 
     script:
     def scientificContractArg = maturationScientificContractArg(params)
-    def frameworkType = params.get('framework_type')
+    def frameworkType = params.get('ppiflow_task') == 'nanobody_partial' ? 'nanobody' : params.get('framework_type')
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
     def antibodyChains = params.antibody_chains ?: (scientificContractArg ? '' : defaultAntibodyChains)
     def antigenChains = params.antigen_chains ?: ''
@@ -526,7 +555,7 @@ process ScorePartialFlowImprovement {
 
     script:
     def scientificContractArg = maturationScientificContractArg(params)
-    def frameworkType = params.get('framework_type')
+    def frameworkType = params.get('ppiflow_task') == 'nanobody_partial' ? 'nanobody' : params.get('framework_type')
     def defaultAntibodyChains = frameworkType == 'nanobody' ? 'H' : 'H,L'
     def antibodyChains = params.antibody_chains ?: (scientificContractArg ? '' : defaultAntibodyChains)
     def antigenChains = params.antigen_chains ?: ''

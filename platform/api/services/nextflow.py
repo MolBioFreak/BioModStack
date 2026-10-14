@@ -5576,7 +5576,15 @@ def compile_nextflow_invocation(
             # active stages or defaults. Use their one model-owned definition.
             for field in definition.params:
                 if field.default is not None:
+                    protein = params.get('ppiflow_task') == 'protein_binder_partial'
+                    if field.name.startswith('ppiflow_protein_') and not protein:
+                        continue
+                    if protein and (field.name in {'framework_type', 'cdr_positions_by_loop', 'manual_cdr_definitions'} or field.name.startswith(('ppiflow_region', 'ppiflow_selected', 'ppiflow_retry'))):
+                        continue
                     params.setdefault(field.name, deepcopy(field.default))
+            if model_id == 'binder_refinement':
+                from services.ppiflow_partial import apply_partial_defaults
+                apply_partial_defaults(params)
     if model_id in {'fampnn', 'proteinmpnn'} and not is_generic_sequence_command:
         raise ValueError('Unsupported public sequence-design model/mode')
     if is_generic_sequence_command:
