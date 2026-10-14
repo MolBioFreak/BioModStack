@@ -39,7 +39,7 @@ export const candidateKey = (ref: CandidateRef) => JSON.stringify(ref.kind === '
 /** Drop optional display metadata before strict CandidateRef transport. */
 export function candidateIdentity(ref: CandidateRef): CandidateRef {
     const base = { kind: ref.kind, job_id: ref.job_id };
-    if (ref.kind === 'design') return { ...base, kind: ref.kind, design_id: ref.design_id, ...(ref.document ? { document: ref.document } : {}) };
+    if (ref.kind === 'design') return { ...base, kind: ref.kind, design_id: ref.design_id, ...(ref.document ? { document: { ...(ref.document.artifact_id != null ? { artifact_id: ref.document.artifact_id } : {}), ...(ref.document.target_state != null ? { target_state: ref.document.target_state } : {}), ...(ref.document.model != null ? { model: ref.document.model } : {}) } } : {}) };
     if (ref.kind === 'native_document') return { ...base, kind: ref.kind, artifact_id: ref.artifact_id, ...(ref.target_state != null ? { target_state: ref.target_state } : {}), ...(ref.model != null ? { model: ref.model } : {}) };
     if (ref.kind === 'native_sequence') return { ...base, kind: ref.kind, publication_ref: ref.publication_ref, native_output_id: ref.native_output_id };
     return { ...base, kind: ref.kind, publication_ref: ref.publication_ref, native_record_id: ref.native_record_id };

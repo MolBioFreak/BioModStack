@@ -1,8 +1,10 @@
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchCalibyNativeResults, fetchLigandMPNNDesignResults } from '../lib/api';
 import type { Job } from '../lib/api';
 import MolstarViewer from './MolstarViewer';
+import { NativeBinderGenerationResults, type NativeWorkbenchAdapter } from './NativeBinderGenerationResults';
+import type { CandidateRef } from '../lib/binderSelectedRound';
 const ProtonPottsResults = lazy(() => import('./ProtonPottsResults'));
 
 // These are separate native documents, not a common scientific score/Design model.
@@ -22,7 +24,7 @@ export interface CalibyNativeResults {
     schema: 'bms.caliby-native-results.v1'; task: 'ensemble_design' | 'sidechain_pack';
     request: { requested: CalibySettings; effective: CalibySettings; sources: NativeValue[] };
     effective_sampling: Record<string, NativeValue>; runtime: Record<string, NativeValue>;
-    records: { record_id: string; operation: 'ensemble_design' | 'sidechain_pack';
+    records: { candidate_ref?: CandidateRef; record_id: string; operation: 'ensemble_design' | 'sidechain_pack';
         native: { example_id: string; out_pdb: string; seq?: string | null; input_seq?: string | null; U?: number | null; [key: string]: NativeValue | undefined };
         source: { state_id: string; ensemble_id?: string; primary?: boolean; conditioning_states?: CalibyState[] } | null;
         structure_path: string; structure?: NativeFile;
@@ -41,7 +43,7 @@ export interface LigandMPNNDesignResults {
     request: { contract: 'ligandmpnn_design.v1'; model_type: 'ligand_mpnn'; mode: string; options: LigandMPNNOptions;
         annotations: Record<string, NativeValue>; write_fasta: boolean; write_structures: boolean };
     foundry_version: string; checkpoint_path: string; is_legacy_weights: boolean; source_sha256: string;
-    records: { producer: { name: string; batch_idx: number; design_idx: number }; source_sha256: string;
+    records: { candidate_ref?: CandidateRef; producer: { name: string; batch_idx: number; design_idx: number }; source_sha256: string;
         native_input: LigandMPNNOptions & { name: string; structure_path: string };
         native_output: { model_type: 'ligand_mpnn'; batch_idx: number; design_idx: number;
             designed_sequence?: string | null; sequence_recovery?: number | null; ligand_interface_sequence_recovery?: number | null;
@@ -82,25 +84,38 @@ export default function NativeSequenceResults({ job, launchContextId }: { job: P
 function StructureSequenceResults({ job }: { job: Pick<Job, 'id' | 'model_id' | 'mode' | 'status'> }) {
     const kind = nativeSequenceResultKind(job);
     const [viewed, setViewed] = useState<NativeFile | null>(null);
-    const [page, setPage] = useState(0);
+
     const query = useQuery<CalibyNativeResults | LigandMPNNDesignResults>({
         queryKey: ['native-sequence-results', kind, job.id],
         queryFn: () => kind === 'caliby' ? fetchCalibyNativeResults(job.id) : fetchLigandMPNNDesignResults(job.id),
         enabled: kind !== null, retry: false,
         refetchInterval: job.status === 'running' || job.status === 'queued' ? 2000 : false,
     });
-    if (!kind) return null;
+
     const data = query.data;
     const caliby = data && !('contract' in data) ? data : undefined;
     const ligand = data && 'contract' in data ? data : undefined;
     const count = data?.records.length ?? 0;
     const directory = kind === 'caliby' ? 'caliby_native' : 'ligandmpnn_design';
-    const resolveFile = (file: NativeFile): NativeFile => {
-        // Exact native-relative or explicitly Job-relative identity, never a basename join.
-        const handle = data?.artifacts?.find(item => item.relative_path === file.path
-            || item.relative_path === `${directory}/${file.path}`);
-        return handle ? { ...file, ...handle, path: file.path } : file;
-    };
+    const adapter = useMemo<NativeWorkbenchAdapter | undefined>(() => {
+        if (!data) return undefined;
+        const resolveFile = (file: NativeFile): NativeFile => {
+            const handle = data.artifacts?.find(item => item.relative_path === file.path || item.relative_path === `${directory}/${file.path}`);
+            return handle ? { ...file, ...handle, path: file.path } : file;
+        };
+        const rows = caliby ? caliby.records.map(row => ({
+            candidate_key: row.record_id, candidate_ref: row.candidate_ref, native_record: row,
+            metrics: row.native, files: [resolveFile(row.structure ?? { path: row.structure_path, kind: 'structure' })],
+        })) : ligand!.records.map(row => ({
+            candidate_key: JSON.stringify(row.producer), candidate_ref: row.candidate_ref, native_record: row,
+            metrics: row.native_output, files: row.artifacts.map(resolveFile),
+        }));
+        return { key: kind!, title: kind === 'caliby' ? 'Caliby native records' : 'LigandMPNN native records',
+            label: row => String(row.candidate_key), recordLabel: 'Native records',
+            fetchPage: async offset => ({ records: rows.slice(offset, offset + 100), offset, limit: 100, total: rows.length, receipt: {}, publication: {} }),
+            inspect: row => <div className="space-y-3"><Values value={row.native_record} /><Files files={row.files as NativeFile[]} onView={setViewed} /></div>,
+        };
+    }, [data, caliby, ligand, directory, kind]);
     return <section aria-label="Native sequence results" className="space-y-4 rounded-xl border border-slate-700 bg-slate-900/50 p-5 text-slate-200">
         <h2 className="text-xl font-semibold">{kind === 'caliby' ? job.mode === 'sidechain_pack' ? 'Caliby fixed-sequence packing' : 'Caliby ensemble design' : 'LigandMPNN sequence design'}</h2>
         <p className="text-sm text-slate-400">{kind === 'caliby' ? job.mode === 'sidechain_pack' ? 'Native side-chain packing preserves amino-acid identity; sequence-design energies are not packing outputs.' : 'Native ensemble records retain their emitted primary/group/state identity. Conditioning states are not additional generated structures.' : 'Ordinary native sequence design with supplied structural context, separate from interface-context diagnostics.'}</p>
@@ -122,21 +137,7 @@ function StructureSequenceResults({ job }: { job: Pick<Job, 'id' | 'model_id' | 
                 {!ligand.request.write_structures && <p>Structure writing was off. Native sequence records remain available.</p>}
             </div>}
             <Files files={(data.artifacts ?? []).map(file => ({ ...file, path: file.relative_path }))} onView={setViewed} />
-            {caliby?.records.slice(page * 10, page * 10 + 10).map(row => <article key={row.record_id} className="space-y-3 rounded border border-slate-700 p-4">
-                <h3 className="font-semibold">Record {row.record_id} · {row.native.example_id}</h3>
-                <Values value={row.source} />
-                <h4 className="font-medium">Native {row.operation === 'sidechain_pack' ? 'packing output' : 'sequence and measurements'}</h4>
-                <Values value={row.native} />
-                <Files files={[resolveFile(row.structure ?? { path: row.structure_path, kind: 'structure' })]} onView={setViewed} />
-            </article>)}
-            {ligand?.records.slice(page * 10, page * 10 + 10).map(row => <article key={JSON.stringify(row.producer)} className="space-y-3 rounded border border-slate-700 p-4">
-                <h3 className="font-semibold">{row.producer.name} · batch {row.producer.batch_idx} · design {row.producer.design_idx}</h3>
-                <h4 className="font-medium">Native sequence and measurements</h4><Values value={row.native_output} />
-                <Receipt title="Effective native input settings" value={row.native_input} />
-                <Receipt title="Source SHA256" value={row.source_sha256} />
-                <Files files={row.artifacts.map(resolveFile)} onView={setViewed} />
-            </article>)}
-            {count > 10 && <nav aria-label="Native records pages" className="flex gap-4"><button type="button" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button><span>Page {page + 1} of {Math.ceil(count / 10)}</span><button type="button" disabled={(page + 1) * 10 >= count} onClick={() => setPage(page + 1)}>Next</button></nav>}
+            {adapter && <NativeBinderGenerationResults jobId={job.id} status={job.status} adapter={adapter} />}
         </>}
         {viewed?.download_url && <MolstarViewer structureUrl={viewed.stream_url ?? viewed.download_url} format="cif" label={viewed.path} artifactJobId={job.id} height={560} />}
     </section>;

@@ -53,8 +53,8 @@ export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNative
     const owners = useQueries({ queries: selectedDesignIds.map(id => ({ queryKey: ['binder-candidate-owner', id], queryFn: () => fetchDesignById(id).then(response => response.data.job_id), staleTime: Infinity })) });
     const documents = candidateDocuments ?? readBinderCandidateDocuments(sourceJobId);
     const selection = uniqueCandidates([
-        ...selectedDesignIds.map((design_id, index) => ({ kind: 'design' as const, job_id: owners[index]?.data ?? sourceJobId, design_id, ...(documents[design_id] ? { document: documents[design_id] } : {}) })),
-        ...selectedNativeSources.map(source => ({ kind: 'native_document' as const, job_id: source.job_id, artifact_id: source.artifact_id, ...(source.document?.target_state != null ? { target_state: source.document.target_state } : {}) })), ...extra,
+        ...selectedDesignIds.map((design_id, index) => ({ kind: 'design' as const, job_id: owners[index]?.data ?? sourceJobId, design_id, ...(documents[design_id] ? { document: documents[design_id] } : {}) })).filter(ref => !extra.some(exact => exact.kind === 'design' && exact.job_id === ref.job_id && exact.design_id === ref.design_id && exact.document?.artifact_id === ref.document?.artifact_id && exact.document?.target_state === ref.document?.target_state)),
+        ...selectedNativeSources.filter(source => !extra.some(ref => ref.kind === 'native_document' && ref.job_id === source.job_id && ref.artifact_id === source.artifact_id)).map(source => ({ kind: 'native_document' as const, job_id: source.job_id, artifact_id: source.artifact_id, ...(source.document?.target_state != null ? { target_state: source.document.target_state } : {}) })), ...extra,
     ]);
     const activeStages = draft.stages.filter(item => item.enabled).map(item => item.stage.kind === 'prediction' ? { ...item.stage, models: item.stage.models.map(model => ({ ...model, params: roundStageParams(model.model_id, model.params) })) } : item.stage);
     const intent = { operation: 'round' as const, source_job_id: sourceJobId, selection: { candidate_refs: selection }, round_plan: { schema_version: 1 as const, stages: activeStages }, execution_target_id: draft.target, execution_policy: draft.policy ?? newJobExecutionPolicy(), ...(launchContextId !== undefined ? { launch_context_id: launchContextId } : {}) };
@@ -96,7 +96,11 @@ export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNative
     const activeEditor = draft.stages.find(item => item.stage.id === editing?.stage);
     const editorParams = activeEditor?.stage.kind === 'maturation' ? activeEditor.stage.params : activeEditor?.stage.models.find(model => model.model_id === editing?.model)?.params;
     const round = rounds.data?.find(item => item.round_id === roundId) ?? rounds.data?.at(-1);
-    const toggleOutput = (ref: CandidateRef, checked: boolean) => setExtra(previous => checked ? uniqueCandidates([...previous, ref]) : previous.filter(item => candidateKey(item) !== candidateKey(ref)));
+    const toggleOutput = (ref: CandidateRef, checked: boolean) => {
+        const refs = checked ? uniqueCandidates([...extra, ref]) : extra.filter(item => candidateKey(item) !== candidateKey(ref));
+        setExtra(refs); writeRoundStorage(sourceJobId, 'selection', refs);
+        window.dispatchEvent(new CustomEvent('bms:binder-round-selection', { detail: { jobId: sourceJobId, refs } }));
+    };
     const retry = async () => {
         if (!round) return;
         setBusy(true); setError('');

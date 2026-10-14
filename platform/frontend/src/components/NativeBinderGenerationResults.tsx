@@ -7,7 +7,7 @@ import { fetchNativeBinderGeneration, nativeCandidateRoute, nativeGenerationMetr
 
 import { readBinderSelection, writeBinderSelection, readBinderNativeSources, writeBinderNativeSources, type NativeCandidateSource } from '../lib/binderContinuation';
 import { BinderCandidateSets } from './BinderCandidateSets';
-import { candidateKey, readRoundStorage, writeRoundStorage, type CandidateRef } from '../lib/binderSelectedRound';
+import { candidateKey, candidateIdentity, uniqueCandidates, readRoundStorage, writeRoundStorage, type CandidateRef } from '../lib/binderSelectedRound';
 import { continuationHref } from '../lib/deNovoContinuation';
 import type { CohortInitialMetrics } from './CohortAnalytics';
 import { CohortMetricPicker } from './CohortMetricPicker';
@@ -108,6 +108,16 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     }, [query.hasNextPage, query.isFetching, query.isFetchNextPageError, query.fetchNextPage, query.data?.pages.length]);
     const page = query.data?.pages[0];
     const rows = useMemo(() => query.data?.pages.flatMap(part => part.records) ?? [], [query.data]);
+    useEffect(() => {
+        const inventory = readRoundStorage<Record<string, NativeCandidateSource>>(jobId, 'native-documents', {});
+        for (const item of rows) {
+            const ref = item.candidate_ref;
+            if (ref?.kind !== 'native_document') continue;
+            const document = item.structures?.find(doc => doc.artifact_id === ref.artifact_id && (ref.target_state == null || doc.target_state === ref.target_state));
+            if (document) inventory[candidateKey(ref)] = { job_id: ref.job_id, artifact_id: ref.artifact_id, document };
+        }
+        writeRoundStorage(jobId, 'native-documents', inventory);
+    }, [jobId, rows]);
     const cohort = useMemo<CohortRow[]>(() => rows.map((item, i) => ({ id: rowKey(item, i), label: `Candidate ${i + 1}`, values: values(item) })), [rows]);
     const keys = useMemo(() => metricKeys(cohort), [cohort]);
     const numericKeys = useMemo(() => numericMetricKeys(cohort), [cohort]);
@@ -133,10 +143,10 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         setSavedSources(unique); writeBinderNativeSources(jobId, unique); onSelectedNativeSourcesChange?.(unique);
     };
     const selectionId = (item: NativeGenerationRecord) => rowKey(item, rows.indexOf(item));
-    const matchesRef = (item: NativeGenerationRecord, ref: CandidateRef) => ref.job_id === jobId && (ref.kind === 'design' ? ref.design_id === item.design_id
+    const matchesRef = (item: NativeGenerationRecord, ref: CandidateRef) => item.candidate_ref && candidateKey(item.candidate_ref) === candidateKey(ref) || ref.job_id === jobId && (ref.kind === 'design' ? ref.design_id === item.design_id
         : ref.kind === 'native_document' ? item.structures?.some(doc => doc.artifact_id === ref.artifact_id)
         : item.candidate_ref ? candidateKey(item.candidate_ref as CandidateRef) === candidateKey(ref) : false);
-    const selection = Array.from(new Set([...(selectedRecordIds ?? nativeSelected), ...rows.filter(item => (item.design_id && selectedDesignIds.includes(item.design_id)) || savedRefs.some(ref => matchesRef(item, ref)) || nativeSources.some(source => source.job_id === jobId && item.structures?.some(doc => doc.artifact_id === source.artifact_id))).map(selectionId)]));
+    const selection = Array.from(new Set([...(selectedRecordIds ?? nativeSelected).filter(id => !rows.some(item => selectionId(item) === id && item.candidate_ref)), ...rows.filter(item => (item.design_id && selectedDesignIds.includes(item.design_id)) || savedRefs.some(ref => matchesRef(item, ref)) || nativeSources.some(source => source.job_id === jobId && item.structures?.some(doc => doc.artifact_id === source.artifact_id))).map(selectionId)]));
     const tableKeys = columns ?? (preferred.length ? preferred : keys.slice(0, 6));
     const byId = useMemo(() => new Map(cohort.map((entry, index) => [entry.id, rows[index]])), [cohort, rows]);
     const selectedSet = useMemo(() => new Set(selection), [selection]);
@@ -210,12 +220,13 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         onSelectedRecordIdsChange?.(next);
         const recordSelection = next.filter(id => !rows.some(item => selectionId(item) === id && item.design_id));
         setNativeSelected(recordSelection); writeBinderSelection(selectionScope, recordSelection);
-        const changedDesignIds = rows.filter(item => ids.includes(selectionId(item)) && item.design_id).map(item => item.design_id!);
+        const changedDesignIds = rows.filter(item => ids.includes(selectionId(item)) && item.design_id && (!checked || !item.candidate_ref)).map(item => item.design_id!);
         onSelectedDesignIdsChange?.(checked ? Array.from(new Set([...selectedDesignIds, ...changedDesignIds])) : selectedDesignIds.filter(id => !changedDesignIds.includes(id)));
-        const affected = rows.filter(item => ids.includes(selectionId(item)) && !item.design_id);
+        const affected = rows.filter(item => ids.includes(selectionId(item)) && (!item.design_id || item.candidate_ref));
         const remaining = nativeSources.filter(source => !affected.some(item => item.structures?.some(doc => source.job_id === jobId && doc.artifact_id === source.artifact_id)));
         // A sole document is unambiguous. Multiple states require an explicit document choice.
         const added = checked ? affected.flatMap(item => {
+            if (item.candidate_ref) return [];
             const chosen = nativeSources.filter(source => item.structures?.some(doc => source.job_id === jobId && doc.artifact_id === source.artifact_id));
             if (chosen.length) return chosen;
             const primary = item.structures?.find(doc => doc.primary) ?? (item.structures?.length === 1 ? item.structures[0] : undefined);
@@ -225,8 +236,8 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         const suppliedRefs = affected.flatMap(item => { const ref = item.candidate_ref as CandidateRef | undefined; return ref?.kind && ref.job_id ? [ref] : []; });
         if (suppliedRefs.length) {
             const previous = readRoundStorage<CandidateRef[]>(jobId, 'selection', []);
-            const affectedKeys = new Set(suppliedRefs.map(ref => JSON.stringify(ref)));
-            const refs = [...previous.filter(ref => !affectedKeys.has(JSON.stringify(ref))), ...(checked ? suppliedRefs : [])];
+            const affectedKeys = new Set(suppliedRefs.map(candidateKey));
+            const refs = uniqueCandidates([...previous.filter(ref => !affectedKeys.has(candidateKey(ref))), ...(checked ? suppliedRefs : [])]);
             writeRoundStorage(jobId, 'selection', refs);
             window.dispatchEvent(new CustomEvent('bms:binder-round-selection', { detail: { jobId, refs } }));
         }
@@ -245,6 +256,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const headlineKeys = (initialMetrics?.headline?.length ? initialMetrics.headline : adapter ? ['duration_seconds', ...numericKeys] : ['seq_length', 'dsasa', ...numericKeys]).filter((key, i, all) => numericKeys.includes(key) && all.indexOf(key) === i).slice(0, 2);
     const headlineMetrics = headlineKeys.map(key => ({ key, ...summarizeMetric(matched, key) }));
     const candidateRef = (item: NativeGenerationRecord): CandidateRef | undefined => {
+        if (item.candidate_ref) return candidateIdentity(item.candidate_ref);
         if (item.design_id) return { kind: 'design', job_id: jobId, design_id: item.design_id };
         const selected = nativeSources.find(source => source.job_id === jobId && item.structures?.some(doc => doc.artifact_id === source.artifact_id));
         const exact = selected?.document ?? item.structures?.find(doc => doc.primary) ?? (item.structures?.length === 1 ? item.structures[0] : undefined);

@@ -7,7 +7,7 @@ export interface NativeGenerationDocument {
     artifact_id: string; target_state?: string | null; logical_path?: string; download_url?: string; primary?: boolean; sha256?: string;
 }
 export interface NativeGenerationRecord extends Record<string, unknown> {
-    candidate_key?: string; design_id?: string; structures?: NativeGenerationDocument[];
+    candidate_ref?: import('./binderSelectedRound').CandidateRef; candidate_key?: string; design_id?: string; structures?: NativeGenerationDocument[];
 }
 export interface NativeGenerationPage {
     receipt: Record<string, unknown>; records: NativeGenerationRecord[];

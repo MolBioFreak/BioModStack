@@ -63,6 +63,8 @@ import { continuationHref } from '../lib/deNovoContinuation';
 import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { CandidateRoundProgress } from './CandidateRoundProgress';
 import { ProteinDesignPanel } from './ProteinDesignWorkflow';
+import { readRoundStorage, type CandidateRef } from '../lib/binderSelectedRound';
+import { RFantibodyCandidateResults } from './RFantibodyCandidateResults';
 import NativeSequenceResults, { nativeSequenceResultKind } from './NativeSequenceResults';
 import { isNativeBinderGeneration, nativeCandidateRoute } from '../lib/nativeBinderResults';
 import { fetchRFD3Generation, fetchRFD3LocalRedesign } from '../lib/api';
@@ -1815,6 +1817,7 @@ function ResultsViewerContent() {
     const [debouncedJobSelectorSearch, setDebouncedJobSelectorSearch] = useState('');
     const [showOverviewAnalysisMenu, setShowOverviewAnalysisMenu] = useState(false);
     const [activeTab, setActiveTab] = useState<TabId>('overview');
+    const [rfWorkbenchJob, setRfWorkbenchJob] = useState<string>();
     const requestedDesignId = new URLSearchParams(location.search).get('design_id')?.trim() ?? '';
     const destinationLaunchContextId = new URLSearchParams(location.search).get('launch_context_id');
     const exactArtifactId = new URLSearchParams(location.search).get('artifact_id');
@@ -1846,7 +1849,9 @@ function ResultsViewerContent() {
     useEffect(() => {
         if (!requestedDesignId || !exactArtifactId) return;
         writeBinderCandidateDocuments(selectedJobId, { ...readBinderCandidateDocuments(selectedJobId), [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } });
-        setSelectedDesignIds(ids => ids.includes(requestedDesignId) ? ids : [...ids, requestedDesignId]);
+        const boundSelection = readRoundStorage<CandidateRef[]>(selectedJobId, 'selection', []);
+        if (!boundSelection.some(ref => ref.kind === 'design' && ref.job_id === selectedJobId && ref.design_id === requestedDesignId && ref.document?.artifact_id === exactArtifactId && (ref.document?.target_state ?? null) === exactTargetState))
+            setSelectedDesignIds(ids => ids.includes(requestedDesignId) ? ids : [...ids, requestedDesignId]);
     }, [selectedJobId, requestedDesignId, exactArtifactId, exactTargetState, setSelectedDesignIds]);
     useEffect(() => {
         const syncDocumentRoute = (event: Event) => {
@@ -5359,14 +5364,15 @@ function ResultsViewerContent() {
 
     const showResultFamily = !!activeJob && (
         ['bindcraft2', 'boltzgen', 'ppiflow', 'rfantibody', 'template_antibody_denovo', 'binder_refinement'].includes(activeJob.model_id)
-        || isRFD3GenerationResultJob(activeJob) || isRFD3LocalRedesignResultJob(activeJob)
+        || !!nativeSequenceResultKind(activeJob) || isRFD3GenerationResultJob(activeJob) || isRFD3LocalRedesignResultJob(activeJob)
         || !!(activeJob.lineage_root_job_id || activeJob.selection_source_job_id || activeJob.source_stage_job_id
             || activeJob.params?.lineage_root_job_id || activeJob.params?.iteration_source_root_job_id));
+    const selectedCandidateDocuments = activeJob ? { ...readBinderCandidateDocuments(activeJob.id), ...(exactArtifactId && requestedDesignId ? { [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } } : {}) } : {};
     const selectedCandidateControls = activeJob && <>
         <BinderSelectedControls key={`binder-${activeJob.id}`}
             sourceJobId={activeJob.id} selectedDesignIds={selectedDesignIds} selectedNativeSources={selectedNativeSources}
             launchContextId={destinationLaunchContextId}
-            candidateDocuments={{ ...readBinderCandidateDocuments(activeJob.id), ...(exactArtifactId && requestedDesignId ? { [requestedDesignId]: { artifact_id: exactArtifactId, ...(exactTargetState !== null ? { target_state: exactTargetState } : {}) } } : {}) }}
+            candidateDocuments={selectedCandidateDocuments}
             inspectDesignId={exactArtifactId ? requestedDesignId : undefined}
             onLegacyFullLoop={() => openPipelineReorchestration()}
             onClearSelection={() => { setSelectedDesignIds([]); setSelectedNativeSources([]); }}
@@ -5581,7 +5587,7 @@ function ResultsViewerContent() {
                     onCompareJobs={ids => setComparison({ jobId: selectedJobId, ids })} />}
                 {showResultFamily && <BinderResultComparison key={`comparison-${selectedJobId}`}
                     jobId={selectedJobId} jobIds={comparison?.jobId === selectedJobId ? comparison.ids : undefined}
-                    selectedDesignIds={selectedDesignIds} {...{ selectedNativeSources }} launchContextId={destinationLaunchContextId} />}
+                    selectedDesignIds={selectedDesignIds} {...{ selectedNativeSources, candidateDocuments: selectedCandidateDocuments }} launchContextId={destinationLaunchContextId} />}
                 {activeJob && isProteinLocalRedesignResultJob(activeJob) && !isRFD3LocalRedesignResultJob(activeJob) && (
                     <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                 )}
@@ -5600,11 +5606,17 @@ function ResultsViewerContent() {
                         launchContextId={destinationLaunchContextId}
                             sourceModelId={activeJob.model_id} sourceParams={activeJob.params}
                         selectedDesignIds={selectedDesignIds} resultJob={activeJob} onOpenJob={handleSelectJob} />}
+                {activeJob?.model_id === 'rfantibody' && (rfWorkbenchJob === activeJob.id || !!requestedDesignId) && <button type="button" onClick={() => { setRfWorkbenchJob(undefined); const query = new URLSearchParams(location.search); ['design_id', 'artifact_id', 'target_state'].forEach(key => query.delete(key)); navigate(`/designs/${activeJob.id}?${query}`); }}>Back to RFantibody candidates</button>}
                 {activeJob && (
                     isShapeResultJob(activeJob) ? (
                         <ShapeResultsWorkspace key={activeJob.id} job={activeJob} />
+                    ) : activeJob.model_id === 'rfantibody' && rfWorkbenchJob !== activeJob.id && !requestedDesignId ? (
+                        <><RFantibodyCandidateResults jobId={activeJob.id} status={activeJob.status} launchContextId={destinationLaunchContextId}
+                            selectedDesignIds={selectedDesignIds} onSelectedDesignIdsChange={setSelectedDesignIds}
+                            selectedNativeSources={selectedNativeSources} onSelectedNativeSourcesChange={setSelectedNativeSources}
+                            onOpenWorkbench={(id, document) => { setSelectedDesignId(id); setActiveTab('structure'); setRfWorkbenchJob(activeJob.id); if (document?.artifact_id) navigate(nativeCandidateRoute(activeJob.id, id, { ...document, artifact_id: document.artifact_id }, destinationLaunchContextId)); }} />{selectedCandidateControls}</>
                     ) : nativeSequenceResultKind(activeJob) ? (
-                        <NativeSequenceResults key={activeJob.id} job={activeJob} launchContextId={destinationLaunchContextId} />
+                        <><NativeSequenceResults key={activeJob.id} job={activeJob} launchContextId={destinationLaunchContextId} />{selectedCandidateControls}</>
                     ) : activeJob.model_id === 'bindcraft2' ? (
                         <>
                             <BindCraft2JobResults key={selectedJobId} jobId={selectedJobId} status={activeJob.status}
