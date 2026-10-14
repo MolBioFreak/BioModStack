@@ -69,6 +69,8 @@ async def binder_evidence(session: AsyncSession, job: Job, *, offset: int, limit
             sources = list((await session.scalars(source_query.order_by(Design.id).offset(offset).limit(limit))).all())
         envelope = {"schema_version": 1, "job_id": job.id, "offset": offset,
                     "limit": limit, "total": total, "records": []}
+        from services.binder_selected_round import read_selected
+        envelope["selected_rounds"] = await read_selected(session, job)
         if source_design_id is not None:
             envelope["source_design_id"] = source_design_id
         if not sources:

@@ -95,6 +95,130 @@ class BinderRoundRequest(BaseModel):
         return self.prediction if isinstance(self.prediction, list) else [self.prediction]
 
 
+class CandidateDocumentReference(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    artifact_id: str = Field(min_length=1)
+    target_state: str | None = None
+    model: int | None = None
+
+
+class CandidateRef(BaseModel):
+    """Exact existing candidate identity; native sequences are not Designs."""
+    model_config = ConfigDict(extra='forbid')
+    kind: Literal['design', 'native_document', 'native_sequence', 'native_observation']
+    job_id: str
+    design_id: str | None = None
+    document: CandidateDocumentReference | None = None
+    artifact_id: str | None = None
+    target_state: str | None = None
+    model: int | None = None
+    publication_ref: str | None = None
+    native_output_id: str | None = None
+    native_record_id: str | None = None
+
+    @model_validator(mode='after')
+    def identity_fields(self):
+        fields = {'design': {'design_id', 'document'},
+                  'native_document': {'artifact_id', 'target_state', 'model'},
+                  'native_sequence': {'publication_ref', 'native_output_id'},
+                  'native_observation': {'publication_ref', 'native_record_id'}}[self.kind]
+        required = fields - {'document', 'target_state', 'model'}
+        if any(not getattr(self, key) for key in required):
+            raise ValueError('Candidate reference is missing its exact identity')
+        if any(getattr(self, key) is not None for key in set(type(self).model_fields) - fields - {'kind', 'job_id'}):
+            raise ValueError('Candidate reference mixes identity kinds')
+        return self
+
+
+class SelectedRoundInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    selected: Literal[True] | None = None
+    stage_id: str | None = None
+
+    @model_validator(mode='after')
+    def one_source(self):
+        if (self.selected is not None) == (self.stage_id is not None):
+            raise ValueError('Choose selected or an earlier stage')
+        return self
+
+
+class SelectedRoundModel(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    model_id: str
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class SelectedRoundStage(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    id: str = Field(min_length=1)
+    input: SelectedRoundInput
+    kind: Literal['sequence_design', 'maturation', 'prediction']
+    models: list[SelectedRoundModel] = Field(default_factory=list)
+    model_id: Literal['binder_refinement'] | None = None
+    mode: Literal['refine'] | None = None
+    params: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode='after')
+    def invocation(self):
+        if self.kind == 'maturation':
+            if self.models or self.model_id != 'binder_refinement' or self.mode != 'refine':
+                raise ValueError('Maturation uses binder_refinement/refine')
+        else:
+            allowed = ({'proteinmpnn', 'fampnn', 'caliby_binder', 'protonpottsmpnn'}
+                       if self.kind == 'sequence_design' else {'protenix', 'boltz2', 'esmfold2'})
+            if not self.models or self.model_id or self.mode or self.params:
+                raise ValueError('Design/prediction stages use models')
+            if any(m.model_id not in allowed for m in self.models) or len({m.model_id for m in self.models}) != len(self.models):
+                raise ValueError('Stage models must be supported and unique')
+        return self
+
+
+class SelectedRoundPlan(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    schema_version: Literal[1] = 1
+    stages: list[SelectedRoundStage] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def dependencies(self):
+        seen = set()
+        for stage in self.stages:
+            if stage.id in seen or (stage.input.stage_id is not None and stage.input.stage_id not in seen):
+                raise ValueError('Stage IDs must be unique and dependencies must name an earlier stage')
+            seen.add(stage.id)
+        return self
+
+
+class SelectedRoundSelection(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    candidate_refs: list[CandidateRef] | None = None
+    saved_set_id: str | None = None
+    revision: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode='after')
+    def selector(self):
+        if self.candidate_refs is not None:
+            if not self.candidate_refs or self.saved_set_id is not None or self.revision is not None:
+                raise ValueError('Use exact candidate refs or a saved revision')
+        elif not self.saved_set_id or self.revision is None:
+            raise ValueError('Saved selection requires its exact revision')
+        return self
+
+
+class SelectedRoundRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    operation: Literal['round']
+    source_job_id: str
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    selection: SelectedRoundSelection | None = None
+    design_ids: list[str] = Field(default_factory=list)
+    native_sources: list[dict[str, str]] = Field(default_factory=list)
+    candidate_documents: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    round_plan: SelectedRoundPlan
+    execution_target_id: str | None = None
+    launch_context_id: str | None = None
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
+
+
 class BinderRoundStepReference(BaseModel):
     """Opaque retained preparation, not caller-authored scientific lineage."""
     model_config = ConfigDict(extra='forbid')

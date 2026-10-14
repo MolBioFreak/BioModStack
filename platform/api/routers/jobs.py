@@ -814,6 +814,9 @@ class OpenStageGateRequest(BaseModel):
     payload: Dict[str, Any] = Field(default_factory=dict)
 
 
+from schemas import CandidateRef
+
+
 class SaveReviewFilterSetRequest(BaseModel):
     """Persist a named frozen review dataset on the parent job."""
     name: Optional[str] = None
@@ -821,6 +824,10 @@ class SaveReviewFilterSetRequest(BaseModel):
     source_total_count: Optional[int] = None
     design_ids: List[str] = Field(default_factory=list)
     filter_state: Dict[str, Any] = Field(default_factory=dict)
+    candidate_refs: list[CandidateRef] = Field(default_factory=list)
+    revision: int = Field(default=1, ge=1)
+    ranking: Dict[str, Any] = Field(default_factory=dict)
+    final_designation: Dict[str, Any] | None = None
 
 
 class SavedReviewFilterSet(BaseModel):
@@ -832,6 +839,10 @@ class SavedReviewFilterSet(BaseModel):
     source_total_count: Optional[int] = None
     design_ids: List[str] = Field(default_factory=list)
     filter_state: Dict[str, Any] = Field(default_factory=dict)
+    candidate_refs: list[CandidateRef] = Field(default_factory=list)
+    revision: int = Field(default=1, ge=1)
+    ranking: Dict[str, Any] = Field(default_factory=dict)
+    final_designation: Dict[str, Any] | None = None
 
 
 class SaveReviewFilterSetResponse(BaseModel):
@@ -10281,6 +10292,15 @@ async def save_review_filter_set(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    if request.candidate_refs:
+        from services.binder_continuation import resolve_root
+        from services.binder_selected_round import resolve_ref
+        _, root = await resolve_root(session, job.id)
+        try:
+            for ref in request.candidate_refs:
+                await resolve_ref(session, root, ref, snapshot=False)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, str(exc)) from exc
     filter_sets = _saved_review_filter_entries(job)
 
     filter_name = str(request.name or "").strip() or f"Saved dataset {len(filter_sets) + 1}"
@@ -10292,6 +10312,9 @@ async def save_review_filter_set(
         "source_total_count": request.source_total_count,
         "design_ids": _normalize_design_ids(request.design_ids),
         "filter_state": dict(request.filter_state or {}),
+        "candidate_refs": [r.model_dump(mode="json", exclude_none=True) for r in request.candidate_refs],
+        "revision": request.revision, "ranking": dict(request.ranking),
+        "final_designation": request.final_designation,
     }
     filter_sets.insert(0, saved_entry)
     _persist_saved_review_filter_entries(job, filter_sets)

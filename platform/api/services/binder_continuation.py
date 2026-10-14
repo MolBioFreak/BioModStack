@@ -201,7 +201,8 @@ def _rebind_selection_paths(manifest: dict, previous: Path, destination: Path) -
 
 
 def snapshot_selection(source: Job, root: Job, designs: list[Design], *,
-                       candidate_documents: dict | None = None, native_sources: list | None = None) -> Path:
+                       candidate_documents: dict | None = None, native_sources: list | None = None,
+                       output_format: str = 'pdb') -> Path:
     import hashlib
     from types import SimpleNamespace
     resolved = candidate_documents or {}
@@ -210,16 +211,17 @@ def snapshot_selection(source: Job, root: Job, designs: list[Design], *,
     for design in inputs:
         if design.id in resolved:
             design.pdb_path = str(resolved[design.id][0])
-    extra = {'documents': {key: (str(value[0]), value[1]) for key, value in resolved.items()},
+    extra = {'output_format': output_format, 'documents': {key: (str(value[0]), value[1]) for key, value in resolved.items()},
              'native': [(str(path), identity, hashlib.sha256(path.read_bytes()).hexdigest())
                         for path, identity in native_sources or []]}
-    return retained_selection(source, root, inputs, kind='pdb', extra=extra,
+    return retained_selection(source, root, inputs, kind=output_format, extra=extra,
         create=lambda: _snapshot_selection(source, root, designs,
-            candidate_documents=candidate_documents, native_sources=native_sources))
+            candidate_documents=candidate_documents, native_sources=native_sources, output_format=output_format))
 
 
 def _snapshot_selection(source: Job, root: Job, designs: list[Design], *,
-                       candidate_documents: dict | None = None, native_sources: list | None = None) -> Path:
+                       candidate_documents: dict | None = None, native_sources: list | None = None,
+                       output_format: str = 'pdb') -> Path:
     from routers.jobs import _materialize_antibody_selection
     from types import SimpleNamespace
     import hashlib
@@ -232,7 +234,11 @@ def _snapshot_selection(source: Job, root: Job, designs: list[Design], *,
     for design in inputs:
         if design.id in resolved:
             design.pdb_path = str(resolved[design.id][0])
-    directory = _materialize_antibody_selection(root, source, inputs, 'selected', namespace='binder')
+    if output_format == 'native':
+        from routers.jobs import _materialize_protein_local_selection
+        directory = _materialize_protein_local_selection(root, source, inputs, 'selected')
+    else:
+        directory = _materialize_antibody_selection(root, source, inputs, 'selected', namespace='binder')
     manifest = json.loads((directory / 'selection_manifest.json').read_text())
     for selection in native_sources or []:
         from routers.jobs import _cif_selection_pdb
@@ -245,10 +251,14 @@ def _snapshot_selection(source: Job, root: Job, designs: list[Design], *,
         if hashlib.sha256(native_path.read_bytes()).hexdigest() != identity['artifact_sha256']:
             shutil.rmtree(directory)
             raise ValueError('Selected native snapshot differs from its owned artifact')
-        if native_path != destination:
+        if output_format == 'native':
+            destination = native_path
+        elif native_path != destination:
             _cif_selection_pdb(native_path, destination)
         manifest['designs'].append({'design_id': None, 'selection_id': key,
             'design_job_id': identity['owner_job_id'], 'selection_pdb_path': str(destination),
+            'native_source_structure_path': str(native_path),
+            'native_source_structure_sha256': identity['artifact_sha256'],
             'source_structure_path': str(path), 'selected_document': identity,
             'native_source': {'job_id': identity['owner_job_id'], 'artifact_id': key},
             'source_design_provenance': {},
@@ -263,6 +273,24 @@ def _snapshot_selection(source: Job, root: Job, designs: list[Design], *,
                 shutil.rmtree(directory)
                 raise ValueError('Selected document snapshot differs from its owned artifact')
             item['selected_document'] = identity
+    # The exact document remains retained; a selected MODEL is a separately
+    # recorded derivative, prepared by the existing source representation owner.
+    for item in manifest['designs']:
+        model = (item.get('selected_document') or {}).get('model')
+        if model is None:
+            continue
+        from services.binder_source_materialization import materialize_source_bytes
+        from paths import resolve_allowed_path
+        original = Path(item.get('native_source_structure_path') or item['selection_pdb_path'])
+        derivative = directory / ('model-' + str(item.get('selection_id') or item['design_id']))
+        derivative.mkdir()
+        prepared = materialize_source_bytes(original.read_bytes(), original.suffix, derivative,
+                                             output_format=output_format, model_number=model)
+        item['native_source_structure_path'] = str(original)
+        item['native_source_structure_sha256'] = hashlib.sha256(original.read_bytes()).hexdigest()
+        item['selection_pdb_path'] = str(resolve_allowed_path(prepared['path']))
+        item['selection_structure_sha256'] = prepared['sha256']
+        item['selected_model'] = model
     (directory / 'selection_manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True))
     _write_source_identity(directory, root.id)
     return directory

@@ -55,7 +55,7 @@ def save(root, progress):
     root.provenance = {**(root.provenance or {}), PROGRESS: deepcopy(progress)}
 
 
-async def read_round(session, root_id):
+async def read_round(session, root_id, *, round_id=None):
     root = await session.get(Job, root_id)
     if root is None:
         raise HTTPException(404, 'Binder round Job not found')
@@ -76,6 +76,8 @@ async def read_round(session, root_id):
         step_id = child.provenance[STEP]['step_id']
         if step_id in result['steps']:
             result['steps'][step_id].update(job_id=child.id, state=child.status)
+    from services.binder_selected_round import read_selected
+    result['selected_rounds'] = await read_selected(session, root, round_id=round_id)
     return result
 
 
@@ -87,6 +89,9 @@ async def bind_step(session, request, preallocated_id=None, *, project_bound=Fal
     root = await lock_root(session, reference.root_job_id)
     progress = progress_of(root)
     step = progress['steps'].get(reference.step_id)
+    if step is None:
+        step = next((r['steps'][reference.step_id] for r in progress.get('selected_rounds', [])
+                     if reference.step_id in r['steps']), None)
     if step is None:
         raise HTTPException(409, 'Binder round preparation is unavailable')
     expected = JobCreate.model_validate(step['request']).model_dump(mode='json')
@@ -109,7 +114,7 @@ async def bind_step(session, request, preallocated_id=None, *, project_bound=Fal
         Job.provenance[STEP]['step_id'].as_string() == reference.step_id))
     if existing is not None:
         return step['metadata'], existing.id, existing
-    if root.status == 'cancelled':
+    if root.status == 'cancelled' and not step['metadata'].get('round_id'):
         raise HTTPException(409, 'Binder round was cancelled')
     return step['metadata'], preallocated_id if isinstance(preallocated_id, str) else reference.step_id, None
 
@@ -125,6 +130,8 @@ async def _plan(session, root, progress, request, *, retry=False):
             Job.provenance[STEP]['root_job_id'].as_string() == root.id,
             Job.provenance[STEP]['stage'].as_string() == 'sequence_design', Job.status == 'completed')):
         metadata = child.provenance[STEP]
+        if metadata.get('round_id'):
+            continue
         for design in await session.scalars(select(Design).where(Design.job_id == child.id).order_by(Design.id)):
             sources.append((child, design, metadata['backbone_design_id'], metadata))
     general = isinstance(request, SequenceDesignRequest)
@@ -336,6 +343,18 @@ async def recover_rounds(session_factory, experiment_session_factory):
             schedule_viewer_minimum_analyses_for_job(child_id)
         except Exception:
             logger.exception('Binder prediction analysis recovery failed for %s', child_id)
+    async with session_factory() as session:
+        selected = [(job.id, r['round_id']) for job in await session.scalars(select(Job).where(
+            Job.provenance[PROGRESS]['selected_rounds'].as_string().is_not(None)))
+            for r in progress_of(job).get('selected_rounds', [])
+            if r['state'] not in {'completed', 'completed_with_errors'}]
+    from services.binder_selected_round import reconcile
+    for root_id, round_id in selected:
+        try:
+            async with session_factory() as session, experiment_session_factory() as experiments:
+                await reconcile(session, experiments, root_id, round_id)
+        except Exception:
+            logger.exception('Selected binder round recovery failed for %s', round_id)
     for root_id in roots:
         try:
             async with session_factory() as session, experiment_session_factory() as experiments:
