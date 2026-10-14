@@ -25,6 +25,7 @@ const originalAdapter = api.defaults.adapter;
 let tree: ReactTestRenderer;
 let client: QueryClient;
 let requests: any[];
+let mountedRows: NativeGenerationRecord[];
 let blobs: Map<string, Blob>;
 const changes = vi.fn();
 const text = (node: any): string => typeof node === 'string' ? node : (node.children ?? []).map(text).join('');
@@ -34,7 +35,11 @@ const click = async (label: string) => { await act(async () => button(label).pro
 const change = async (label: string, value: string | boolean) => { await act(async () => { const field = control(label); field.props.onChange(field.type === CohortMetricPicker ? value : { target: typeof value === 'boolean' ? { checked: value } : { value } }); }); };
 const flush = async () => { for (let i = 0; i < 10; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); };
 const tableRows = () => control('Candidate data table').findByType('tbody').findAllByType('tr');
-const visibleIds = () => tableRows().map(row => text(row.findAllByType('button')[0]));
+const visibleIds = () => tableRows().map(row => {
+    const label = text(row.findAllByType('button')[0]);
+    expect(label).toMatch(/^Candidate \d+$/);
+    return mountedRows[Number(label.slice('Candidate '.length)) - 1].candidate_key;
+});
 const cohortIds = () => tree.root.findByType(CohortAnalytics).props.rows.map((row: any) => row.id);
 const scatter = () => tree.root.findAllByType(Plot).find(node => node.props.data[0]?.type === 'scatter')!;
 function Harness(props: Partial<Props>) {
@@ -46,7 +51,9 @@ function response(config: any, rows: NativeGenerationRecord[]) {
     return { config, status: 200, statusText: 'OK', headers: {}, data: { records: rows.slice(offset, offset + limit), total: rows.length, offset, limit, receipt: { test_only: true }, publication: { source: 'test-only' }, artifacts: [] } };
 }
 async function mount(rows = fixture(), props: Partial<Props> = {}, transport?: (config: any) => Promise<any>) {
+    mountedRows = rows;
     api.defaults.adapter = async config => {
+        if (config.method === 'get' && ['/api/jobs/cohort-job', '/api/jobs/new-job'].includes(String(config.url))) return { config, status: 200, statusText: 'OK', headers: {}, data: { id: config.url!.split('/').at(-1), saved_selection_sets: [] } };
         if (config.method === 'get' && config.url?.endsWith('/round')) return { config, status: 200, statusText: 'OK', headers: {}, data: { job_id: props.jobId ?? 'cohort-job', state: 'not_requested', steps: {}, errors: {} } };
         if (config.method === 'get' && config.url?.endsWith('/binder-evidence')) return { config, status: 200, statusText: 'OK', headers: {}, data: { schema_version: 1, job_id: props.jobId ?? 'cohort-job', offset: 0, limit: 100, total: 0, records: [] } };
         requests.push(config);
@@ -56,6 +63,7 @@ async function mount(rows = fixture(), props: Partial<Props> = {}, transport?: (
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     await act(async () => { tree = create(<QueryClientProvider client={client}><Harness {...props} /></QueryClientProvider>); });
     await flush();
+    if (button('Dashboard')) { await click('Dashboard'); await flush(); await click('Custom charts'); await flush(); }
 }
 async function exported(label: string): Promise<string> {
     const link = tree.root.findAllByType('a').find(node => text(node) === label)!;
@@ -64,7 +72,7 @@ async function exported(label: string): Promise<string> {
     return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsText(blob!); });
 }
 beforeEach(() => {
-    sessionStorage.clear();
+    sessionStorage.clear(); localStorage.clear(); window.history.replaceState({}, '', '/');
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     requests = []; blobs = new Map(); changes.mockClear();
     vi.spyOn(URL, 'createObjectURL').mockImplementation(blob => { const url = `blob:test-${blobs.size}`; blobs.set(url, blob as Blob); return url; });
@@ -214,6 +222,7 @@ it('does not let a delayed previous-job page populate the new job', async () => 
     });
     expect(cohortIds()).toHaveLength(1000);
     await act(async () => tree.update(<QueryClientProvider client={client}><Harness jobId="new-job" /></QueryClientProvider>)); await flush();
+    await click('Dashboard'); await flush();
     expect(pending.signal.aborted).toBe(true); expect(cohortIds()).toEqual(['new-job-only']);
     await act(async () => finish(response(pending, old))); await flush();
     expect(cohortIds()).toEqual(['new-job-only']); expect(JSON.parse(await exported('Native JSON'))).toEqual(fresh);
@@ -237,6 +246,7 @@ it('recovers an initial read failure only through GET retry without inventing an
     expect(tree.root.findAllByType(CohortAnalytics)).toHaveLength(0);
     expect(tree.root.findAllByType(StructureWorkbench)).toHaveLength(0);
     fail = false; await click('Retry native readback'); await flush();
+    await click('Dashboard'); await flush();
     expect(cohortIds()).toHaveLength(1205);
     expect(requests.map(config => config.params.offset)).toEqual([0, 0, 1000]);
     expect(changes).not.toHaveBeenCalled();
@@ -283,7 +293,7 @@ it('projects BoltzGen verified native scalars without turning disposition criter
     expect((await exported('Metrics CSV')).split('\r\n')[0]).toContain('"design_ptm","affinity_probability","filter_rmsd"');
     expect(await exported('Metrics CSV')).toContain('"Not reported"');
     expect(JSON.parse(await exported('Native JSON'))).toEqual(rows);
-    await click('selected-cif');
+    await click('Candidate 1');
     expect(tree.root.findByType(StructureWorkbench).props).toMatchObject({ structureUrl: '/api/files/selected-cif.cif', structureDocumentId: 'native-cif', structureContentSha256: 'c'.repeat(64), format: 'cif' });
     expect(text(control('Candidate structure inspector'))).toContain('Filter RMSD (angstrom)');
     expect(changes).not.toHaveBeenCalled();
@@ -300,6 +310,6 @@ it('keeps no-metric historical records inspectable and exportable with no invent
     expect(visibleIds()).toEqual(['historical-only']); expect(text(tree.root)).toContain('No finite numeric observations');
     expect(tree.root.findAllByType(Plot)).toHaveLength(0);
     expect(JSON.parse(await exported('Native JSON'))).toEqual(rows);
-    await click('historical-only'); expect(text(tree.root)).toContain('No downloadable native structure was published');
+    await click('Candidate 1'); expect(text(tree.root)).toContain('No downloadable native structure was published');
     expect(changes).not.toHaveBeenCalled();
 });

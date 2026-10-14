@@ -25,13 +25,22 @@ const monomer = { binder_chains: 'A', target_chains: '', artifact_id: 'monomer',
 const records = Array.from({ length: 32 }, (_, i) => ({ candidate_key: `producer:${i}`, ...(i === 0 ? { design_id: 'design' } : {}), metrics: { score: i, outcome: i % 2 ? 'rejected' : 'passed', rank: i === 0 ? 1 : null }, structures: i === 0 ? [doc, monomer] : [{ ...doc, artifact_id: `native-${i}`, download_url: `/exact/${i}.pdb` }] }));
 const text = (node: any): string => typeof node === 'string' ? node : (node.children ?? []).map(text).join('');
 const button = (label: string) => tree!.root.findAllByType('button').find(node => text(node) === label)!;
-const flush = async () => { for (let i = 0; i < 15; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); }); };
+const flush = async () => {
+    const deadline = Date.now() + 5000;
+    do {
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+        if (!client?.isFetching() && !client?.isMutating()) return;
+    } while (Date.now() < deadline);
+    throw new Error('Results queries did not settle within 5s');
+};
 const click = async (label: string) => { expect(button(label), `${label}: ${text(tree!.root)}; calls=${calls.map(call => call.url).join(',')}`).toBeTruthy(); await act(async () => button(label).props.onClick()); await flush(); };
 const change = async (label: string, value: string | boolean) => { await act(async () => tree!.root.findByProps({ 'aria-label': label }).props.onChange({ target: typeof value === 'boolean' ? { checked: value } : { value } })); await flush(); };
 async function mount() {
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     await act(async () => { tree = create(<MemoryRouter initialEntries={['/designs/parent']}><QueryClientProvider client={client}><ThemeProvider><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></ThemeProvider></QueryClientProvider></MemoryRouter>); });
-    await flush();
+    const deadline = Date.now() + 10000;
+    while (!tree!.root.findAllByProps({ 'aria-label': 'Candidate data table' }).length && Date.now() < deadline) await flush();
+    expect(tree!.root.findAllByProps({ 'aria-label': 'Candidate data table' })).toHaveLength(1);
 }
 async function close() { await act(async () => tree?.unmount()); tree = undefined; client?.clear(); }
 beforeEach(() => {
@@ -41,9 +50,11 @@ beforeEach(() => {
     api.defaults.adapter = async config => {
         const url = String(config.url), params = config.params ?? {}, body = config.data ? JSON.parse(config.data) : undefined;
         calls.push({ url, body });
-        let data: any = [];
+        let data: any;
         if (url === '/api/jobs') data = { jobs: [job], total: 1 };
         else if (url === '/api/jobs/parent') data = { ...job, saved_selection_sets: sets };
+        else if (url === '/api/execution-targets') data = [];
+        else if (url === '/api/designs/by-job/parent/backbone-summary') data = { backbones: [] };
         else if (url === '/api/designs') data = { designs: [], total: 0, model_counts: {} };
         else if (url.endsWith('/generation-results')) data = { records: records.slice(params.offset, params.offset + params.limit), total: records.length, offset: params.offset, limit: params.limit, receipt: {}, publication: {}, artifacts: [] };
         else if (url.endsWith('/binder-evidence')) data = { records: [], total: 0, offset: 0, limit: 100 };
@@ -66,11 +77,13 @@ beforeEach(() => {
             if (!existing) rounds = [...rounds, round];
             data = { operation: 'round', source_job_id: 'parent', root_job_id: 'parent', round_id: round.round_id, state: round.state, launched_jobs: [], round };
         } else if (url.endsWith('/review-filter-sets')) { const saved = { ...body, id: `set-${sets.length}`, revision: 1 }; sets = [...sets, saved]; data = { filter_set: saved, filter_sets: sets }; }
+        else throw new Error(`Unexpected transport fixture request ${config.method} ${url}`);
         return { config, data, status: 200, statusText: 'OK', headers: {} };
     };
 });
 afterEach(async () => { await close(); api.defaults.adapter = original; vi.unstubAllGlobals(); localStorage.clear(); sessionStorage.clear(); });
 
+// Full parent/editor/reload journeys exceed the default 5s even with settled queries.
 it('actual Results parent serializes independent stages and preserves null/false/zero/clear across cold draft reload; three rounds read back all fixture samples', async () => {
     writeBinderSelection('parent', ['design']);
     writeBinderNativeSources('parent', [{ job_id: 'parent', artifact_id: 'native-31' }]);
@@ -112,7 +125,7 @@ it('actual Results parent serializes independent stages and preserves null/false
     expect(new Set(posts.map(post => post.idempotency_key)).size).toBe(3);
     expect(posts[2].selection.candidate_refs.at(-1)).toEqual({ kind: 'native_sequence', job_id: 'fixture-child', publication_ref: 'fixture-publication', native_output_id: 'sample-32' });
     expect(tree!.root.findByProps({ 'aria-label': 'Returned round' }).findAllByType('option')).toHaveLength(3);
-});
+}, 30000);
 
 it('actual native Results preserves cross-page mixed selection, exact complex/binder inspection and backend frozen ranking/final sets', async () => {
     await mount();
@@ -143,7 +156,7 @@ it('actual native Results preserves cross-page mixed selection, exact complex/bi
     expect(sets.at(-1)).toMatchObject({ name: 'Mixed native set', final_designation: { designated: true } });
     expect(sets.at(-1).candidate_refs).toHaveLength(2);
     expect(calls.filter(call => call.url === '/api/jobs/parent').length).toBeGreaterThan(1);
-});
+}, 30000);
 
 it('keeps the same idempotent intent after lost transport and reload, and preserves repeated design instances', async () => {
     writeBinderSelection('parent', ['design']);
@@ -162,7 +175,7 @@ it('keeps the same idempotent intent after lost transport and reload, and preser
     expect(posts).toHaveLength(2); expect(posts[1]).toEqual(posts[0]);
     expect(posts[0].round_plan.stages.map((stage: any) => stage.id)).toEqual(['before', 'after']);
     expect(rounds).toHaveLength(1);
-});
+}, 30000);
 
 it('protein recipe visibly orders flow then intentionally chosen designers then predictors without a hidden designer', async () => {
     writeBinderSelection('parent', ['design']); await mount(); await click('Next round (1)'); await click('Add protein flow → design → predict');
@@ -174,7 +187,7 @@ it('protein recipe visibly orders flow then intentionally chosen designers then 
     expect(stages.map((stage: any) => stage.kind)).toEqual(['maturation', 'sequence_design', 'prediction']);
     expect(stages[0].params).toEqual({ ppiflow_task: 'protein_binder_partial', maturation_flow_enabled: true, maturation_redesign_enabled: false });
     expect(stages[1].models.map((model: any) => model.model_id)).toEqual(['proteinmpnn', 'caliby_binder']);
-});
+}, 30000);
 
 it('keeps task-owned protein and antibody defaults and edited drafts separate without null-default hydration', async () => {
     writeBinderSelection('parent', ['design']); await mount(); await click('Next round (1)'); await click('Add protein flow → design → predict'); await click('PPIFlow settings');
@@ -188,7 +201,7 @@ it('keeps task-owned protein and antibody defaults and edited drafts separate wi
     await task('protein_binder_partial'); expect(start().props.value).toBe(0.22);
     await click('Back to round'); await close(); await mount(); await click('Next round (1)'); await click('PPIFlow settings');
     expect(start().props.value).toBe(0.22); await task('antibody_partial'); expect(start().props.value).toBe(0.6);
-});
+}, 30000);
 
 it('approved role initialization uses the exact producer document and preserves explicit clears through reload', async () => {
     writeBinderSelection('parent', ['design']);
@@ -205,7 +218,7 @@ it('approved role initialization uses the exact producer document and preserves 
     expect(declaredBinderRoleDefaults([monomer], fields)).toEqual({ design_chain: 'A', target_chain: '' });
     expect(declaredBinderRoleDefaults([doc, monomer], fields)).toEqual({});
     expect(declaredBinderRoleDefaults([doc, undefined], fields)).toEqual({});
-});
+}, 30000);
 
 it('selected-round remote transport uses the actual shared prepared review and canonical Job submission', async () => {
     const prepared = { name: 'transport-only prepared', model_id: 'boltz2', mode: 'complex', execution_target_id: 'vast:fixture', launch_context_id: 'prepared-project', params: { sequence: 'ACDE' } };
@@ -227,4 +240,4 @@ it('selected-round remote transport uses the actual shared prepared review and c
         expect(post.mock.calls.find(call => call[0] === '/api/jobs')?.[1]).toMatchObject({ ...prepared, execution_plan_approval: preview.approval_digest });
         expect(await pending).toMatchObject({ round_id: 'fixture-remote-round', launched_jobs: [{ id: 'fixture-remote' }] });
     } finally { post.mockRestore(); document.body.replaceChildren(); }
-});
+}, 30000);

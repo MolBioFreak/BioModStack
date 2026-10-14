@@ -57,7 +57,12 @@ test('BC2 native records supplement the mounted Design selection and comparison 
     try {
         await setup('/designs/parent?launch_context_id=context', false, [design('bc2-1', 'bindcraft2'), design('bc2-2', 'bindcraft2')], { ...job, model_id: 'bindcraft2', mode: 'campaign', design_count: 2 });
         expect(renderer!.root.findByType(BindCraft2NativeActions).props.launchContextId).toBe('context');
-        expect(text(renderer!.root)).toContain('native-evidence');
+        const readback = renderer!.root.findAllByType('details').find(node => text(node.findByType('summary')) === 'Selected record: complete native readback')!;
+        await act(async () => readback.props.onToggle({ currentTarget: { open: true } }));
+        expect(text(readback)).toContain('native-evidence');
+        const settings = renderer!.root.findAllByType('details').find(node => text(node.findByType('summary')) === 'Native campaign settings')!;
+        expect(paths).not.toContain('/api/models/bindcraft2/campaign/jobs/parent/settings');
+        await act(async () => settings.props.onToggle({ currentTarget: { open: true } })); await flush();
         expect(paths).toContain('/api/models/bindcraft2/campaign/jobs/parent/settings');
         await act(async () => renderer!.root.findByProps({ 'aria-label': 'Native records' }).props.onChange({ target: { value: 'retained' } }));
         await flush();
@@ -221,7 +226,7 @@ const setup = async (entry: string, children = false, suppliedRows = rows, selec
     calls.length = 0;
     window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener() {}, removeEventListener() {} });
     api.defaults.adapter = async config => {
-        const url = String(config.url); const params = config.params ?? {};
+        const url = String(config.url); const params = url === '/api/designs/query' && config.method === 'post' ? JSON.parse(String(config.data)) : config.params ?? {};
         calls.push({ url, params });
         let data: unknown;
         const jobs = (children ? [{ ...selectedJob, design_count: 0 }, { ...selectedJob, id: 'child', parent_job_id: 'parent' }] : [selectedJob]).concat(extraJobs);
@@ -231,7 +236,7 @@ const setup = async (entry: string, children = false, suppliedRows = rows, selec
         else if (url.startsWith('/api/jobs/') && !url.includes('/backbones')) data = jobs.find(item => item.id === url.split('/').pop()) ?? job;
         else if (url === '/api/models/frustrampnn/integration') data = { model_id: 'frustrampnn', enabled: false };
         else if (url === '/api/launch-contexts/context') data = { schema: 'bms.launch-context.v1', launch_context_id: 'context', project_id: 'p', global_experiment_id: 'g', domain_experiment_id: 'd', workflow_id: null, workflow_revision_id: null, pinned_gpu: null, return_uri: returnUri, source_receipt_id: 'r', state: 'issued', issued_at: '2026-08-09T00:00:00Z', expires_at: '2026-08-09T00:30:00Z' };
-        else if (url === '/api/designs') {
+        else if ((url === '/api/designs' && config.method === 'get') || (url === '/api/designs/query' && config.method === 'post')) {
             const modelOf = (row: typeof suppliedRows[number]) => (row.provenance as Record<string, unknown>).producer_model_id;
             let selected = params.model_id ? suppliedRows.filter(row => modelOf(row) === params.model_id) : suppliedRows;
             if (extraJobs.length) selected = selected.filter(row => row.job_id === params.job_id);
@@ -250,12 +255,12 @@ const setup = async (entry: string, children = false, suppliedRows = rows, selec
     await act(async () => { renderer = create(<MemoryRouter initialEntries={[entry]}><QueryClientProvider client={client}><ThemeProvider><Location /><ProjectReturnBanner /><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></ThemeProvider></QueryClientProvider></MemoryRouter>); });
     await flush();
 };
-afterEach(async () => { await act(async () => renderer?.unmount()); client?.clear(); api.defaults.adapter = original; sessionStorage.clear(); });
+afterEach(async () => { await act(async () => renderer?.unmount()); client?.clear(); api.defaults.adapter = original; sessionStorage.clear(); localStorage.clear(); });
 
 test('mounted off-first-page model scopes on server without a bulk load and survives switching', async () => {
     await setup('/designs/parent?result_model=protenix&launch_context_id=context');
-    expect(calls.some(call => call.url === '/api/designs' && call.params.model_id === 'protenix')).toBe(true);
-    expect(calls.filter(call => call.url === '/api/designs').every(call => call.params.limit < 500)).toBe(true);
+    expect(calls.some(call => call.url === '/api/designs/query' && call.params.model_id === 'protenix')).toBe(true);
+    expect(calls.filter(call => call.url === '/api/designs' || call.url === '/api/designs/query').every(call => call.params.limit < 500)).toBe(true);
     const modelNav = renderer!.root.findByProps({ 'aria-label': 'Workflow model results' });
     expect(modelNav.findAllByType('button').find(button => text(button) === 'Protenix')?.props['aria-pressed']).toBe(true);
     const link = renderer!.root.findAllByType('a').find(item => item.props['aria-label'] === 'Return to Project context');
@@ -363,7 +368,7 @@ test.each(plrModels)('PLR %s opens the exact producer-scoped Design without conf
     const nav = renderer!.root.findByProps({ 'aria-label': 'Workflow model results' });
     expect(nav.findAllByType('button').map(text)).toEqual(expect.arrayContaining(['All results', ...plrModels.map(([, modelLabel]) => modelLabel)]));
     expect(nav.findAllByType('button').find(button => text(button) === label)?.props['aria-pressed']).toBe(true);
-    expect(calls.filter(call => call.url === '/api/designs').every(call => call.params.model_id === model)).toBe(true);
+    expect(calls.filter(call => call.url === '/api/designs' || call.url === '/api/designs/query').every(call => call.params.model_id === model)).toBe(true);
     const pane = renderer!.root.findByType(StructureViewerPane);
     expect(pane.props.selectedDesignId).toBe(`${model}-0`);
     expect(pane.props.selectedDesign.provenance.model_id).toBe('protein_modification_experimental');

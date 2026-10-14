@@ -7,10 +7,12 @@ import Plot from 'react-plotly.js';
 import { BindCraft2JobResults } from '../../src/components/BindCraft2JobResults';
 import { CohortAnalytics } from '../../src/components/CohortAnalytics';
 import { StructureWorkbench } from '../../src/structureViewer/StructureWorkbench';
+import { api } from '../../src/lib/api';
 import { bc2Record, csvNumber } from '../../src/lib/bindcraft2Results';
 
 vi.mock('react-plotly.js', () => ({ default: () => <div data-plot-renderer /> }));
 vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: (props: any) => <div data-structure-url={props.structureUrl} /> }));
+const originalAdapter = api.defaults.adapter;
 let tree: ReactTestRenderer, client: QueryClient;
 let reads: URL[], blobs: Map<string, Blob>;
 const text = (node: any): string => typeof node === 'string' ? node : (node.children ?? []).map(text).join('');
@@ -25,6 +27,10 @@ const fixture = (count: number) => Array.from({ length: count }, (_, i) => ({ de
     analytics: { duration_seconds: 90 + i, compiled: i === 0, trace_available: true,
         phase_metrics: { screen: { 'human_EGFR.iptm': { first: 0, last: i / 1000, min: 0, max: (i + 1) / 1000, samples: 50 } } } } }));
 async function mount(rows = fixture(100), options: { failOffset?: number; missingTrace?: boolean; props?: Record<string, unknown>; traceTotal?: number } = {}) {
+    api.defaults.adapter = async config => {
+        if (config.method !== 'get' || config.url !== '/api/jobs/bc2-job') throw new Error(`Unexpected ${config.method} ${config.url}`);
+        return { config, status: 200, statusText: 'OK', headers: {}, data: { id: 'bc2-job', saved_selection_sets: [] } };
+    };
     vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
         const url = new URL(input, 'http://test'); reads.push(url);
         if (url.pathname.endsWith('/trajectory')) {
@@ -38,24 +44,28 @@ async function mount(rows = fixture(100), options: { failOffset?: number; missin
         const offset = Number(url.searchParams.get('offset')), limit = Number(url.searchParams.get('limit'));
         expect(limit).toBe(100);
         if (offset === options.failOffset) return { ok: false, status: 503 };
-        return { ok: true, json: async () => ({ schema: 'bindcraft2.native-readback.v1', arm: url.searchParams.get('arm'), stage: url.searchParams.get('stage'), offset, limit, total: rows.length,
-            accounting: { emitted_trajectories: rows.length, scored_draws: 0, retained_sequences: 0 }, arms: [{ name: null }, { name: 'alternate' }], metadata: {}, artifacts: [], rows: rows.slice(offset, offset + limit),
+        const stageRows = rows.filter(row => row.stage === url.searchParams.get('stage'));
+        return { ok: true, json: async () => ({ schema: 'bindcraft2.native-readback.v1', arm: url.searchParams.get('arm'), stage: url.searchParams.get('stage'), offset, limit, total: stageRows.length,
+            accounting: { emitted_trajectories: rows.length, scored_draws: 0, retained_sequences: 0 }, arms: [{ name: null }, { name: 'alternate' }], metadata: {}, artifacts: [], rows: stageRows.slice(offset, offset + limit),
             analytics: { trajectory_count: rows.length, termination_counts: {}, timing_seconds: { samples: rows.length, median: 90, total: 9000 }, complete: true, warnings: [] } }) };
     }));
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     await act(async () => { tree = create(<QueryClientProvider client={client}><BindCraft2JobResults jobId="bc2-job" {...options.props} /></QueryClientProvider>); });
     await flush();
+    // Scored sequences are now the landing default; select the population under test.
+    if (control('Native records').props.value !== rows[0]?.stage) { await change('Native records', rows[0]?.stage ?? 'trajectory'); await flush(); }
+    await click('Dashboard'); await flush();
 }
 async function exported() {
     const link = tree.root.findAllByType('a').find(node => text(node) === 'Native JSON')!;
     return new Promise<any[]>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(JSON.parse(String(reader.result))); reader.onerror = reject; reader.readAsText(blobs.get(link.props.href)!); });
 }
 beforeEach(() => {
-    reads = []; blobs = new Map();
+    reads = []; blobs = new Map(); localStorage.clear(); sessionStorage.clear(); window.history.replaceState({}, '', '/');
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     vi.spyOn(URL, 'createObjectURL').mockImplementation(blob => { const url = `blob:test-${blobs.size}`; blobs.set(url, blob as Blob); return url; });
 });
-afterEach(async () => { await act(async () => tree?.unmount()); client?.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(async () => { await act(async () => tree?.unmount()); client?.clear(); api.defaults.adapter = originalAdapter; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 it('lands a 100-trajectory zero-yield result on shared plots, not settings or empty downstream workspaces', async () => {
     await mount();
@@ -64,7 +74,7 @@ it('lands a 100-trajectory zero-yield result on shared plots, not settings or em
     expect(tree.root.findAllByType(Plot).length).toBeGreaterThan(1);
     expect(text(tree.toJSON())).toContain('0 retained sequences');
     expect(text(tree.toJSON())).not.toContain('Final i_pTM');
-    expect(reads).toHaveLength(1);
+    expect(reads.filter(url => url.pathname.endsWith('/bindcraft2-results'))).toHaveLength(2);
     expect(tree.root.findAllByType(StructureWorkbench)).toHaveLength(0);
     const summary = tree.root.findAllByType('summary').find(node => text(node) === 'Native campaign settings')!;
     expect(summary.parent?.props.open).not.toBe(true);
@@ -91,14 +101,14 @@ it('prefers exact recorded iPTM over coldspot and iptm_loss, retaining operator 
     await change('Distribution metric', screen);
     await change('Search candidates', 'nothing matches');
     await change('Search candidates', '');
-    await click('Trajectory 1'); await flush(); await click('Custom charts');
+    await click('Candidate 1'); await flush(); await click('Custom charts');
     expect(control('X metric').props.value).toBe('seq_length');
     expect(control('Y metric').props.value).toBe(refine);
     expect(control('Distribution metric').props.value).toBe(screen);
 });
 it('fills three pages; table, plots, outcomes, cross-page selection and native JSON use one filtered cohort', async () => {
     const rows = fixture(205); await mount(rows);
-    expect(reads.map(url => url.searchParams.get('offset'))).toEqual(['0', '100', '200']);
+    expect(reads.filter(url => url.pathname.endsWith('/bindcraft2-results')).map(url => [url.searchParams.get('stage'), url.searchParams.get('offset')])).toEqual([['draw', '0'], ['trajectory', '0'], ['trajectory', '100'], ['trajectory', '200']]);
     expect(tree.root.findByType(CohortAnalytics).props.rows).toHaveLength(205);
     await click('Select all matching (205)');
     await click('Next native records'); await change('Select this page', false);
@@ -108,7 +118,8 @@ it('fills three pages; table, plots, outcomes, cross-page selection and native J
     expect(tree.root.findByType(CohortAnalytics).props.rows).toHaveLength(1);
     expect(text(control('Native outcomes in view'))).toContain('Screening 1');
     await change('Export scope', 'filtered'); expect(await exported()).toEqual([rows[204]]);
-    expect(reads).toHaveLength(3);
+    expect(reads.filter(url => url.pathname.endsWith('/bindcraft2-results'))).toHaveLength(4);
+    expect(reads.filter(url => url.pathname.endsWith('/trajectory')).map(url => url.searchParams.get('design'))).toEqual(['exact/design-0']);
 });
 it('preserves axes/search/selection when a plotted trajectory opens its exact paginated phase trace and returns', async () => {
     await mount(fixture(205), { traceTotal: 1005 }); await click('Custom charts');
@@ -116,13 +127,13 @@ it('preserves axes/search/selection when a plotted trajectory opens its exact pa
     await change('Y metric', 'screen · human_EGFR.iptm · peak recorded');
     const scatter = tree.root.findAllByType(Plot).find(node => node.props.data[0]?.type === 'scatter')!;
     await act(async () => scatter.props.onClick({ points: [{ customdata: scatter.props.data[0].customdata[0] }] })); await flush();
-    expect(reads.filter(url => url.pathname.endsWith('/trajectory')).map(url => [url.searchParams.get('design'), url.searchParams.get('offset')])).toEqual([['exact/design-204', '0'], ['exact/design-204', '1000']]);
+    expect(reads.filter(url => url.pathname.endsWith('/trajectory')).map(url => [url.searchParams.get('design'), url.searchParams.get('offset')])).toEqual([['exact/design-0', '0'], ['exact/design-0', '1000'], ['exact/design-204', '0'], ['exact/design-204', '1000']]);
     expect(text(control('Native trajectory detail'))).toContain('1005 of 1005 recorded updates');
     expect(text(control('Native trajectory detail'))).toContain('not the final acceptance scores');
     await click('Custom charts');
     expect(control('Search candidates').props.value).toBe('exact/design-204');
     expect(control('Y metric').props.value).toBe('screen · human_EGFR.iptm · peak recorded');
-    expect(control('Select Trajectory 205').props.checked).toBe(true);
+    expect(control('Select Candidate 205').props.checked).toBe(true);
 });
 it('retains earlier pages and labels incomplete read statistics/exports honestly', async () => {
     await mount(fixture(205), { failOffset: 100 });
@@ -133,9 +144,10 @@ it('retains earlier pages and labels incomplete read statistics/exports honestly
 });
 it('keeps missing traces and unknown numeric observations missing', async () => {
     const rows = fixture(1); rows[0].analytics.trace_available = false;
-    await mount(rows); await click('Trajectory 1'); await flush();
+    await mount(rows); await click('Candidate 1'); await flush();
     expect(text(control('Native trajectory detail'))).toContain('No recorded loss trace');
-    expect(reads).toHaveLength(1);
+    expect(reads.filter(url => url.pathname.endsWith('/bindcraft2-results'))).toHaveLength(2);
+    expect(reads.filter(url => url.pathname.endsWith('/trajectory'))).toHaveLength(0);
     expect(csvNumber('')).toBeUndefined(); expect(csvNumber(false)).toBeUndefined(); expect(csvNumber('0')).toBe(0);
     const record = bc2Record({ design: 'x', values: { length: '', score: 'not numeric' } }, { arm: null, stage: 'trajectory' });
     expect(record.design_id).toBeUndefined(); expect(record.structures).toEqual([]);
@@ -146,7 +158,7 @@ it('retained outputs use the full shared workbench and exact alternate document,
         structures: [{ artifact_id: 'primary', target_state: 'A', logical_path: 'a.pdb', download_url: '/exact/a.pdb', primary: true },
             { artifact_id: 'alternate', target_state: 'B', logical_path: 'b.cif', download_url: '/exact/b.cif' }] }];
     await mount(rows, { props: { selectedDesignId: 'real-design', artifactId: 'alternate', targetState: 'B' } });
-    expect(reads[0].searchParams.get('stage')).toBe('retained');
+    expect(reads.filter(url => url.pathname.endsWith('/bindcraft2-results')).map(url => url.searchParams.get('stage'))).toEqual(['retained']);
     const viewer = tree.root.findByType(StructureWorkbench);
     expect(viewer.props.structureUrl).toBe('/exact/b.cif'); expect(viewer.props.format).toBe('cif');
     expect(text(control('Native trajectory detail'))).toContain('ACDE');
@@ -156,7 +168,7 @@ it('native arm and stage remain distinct transport and selection scopes', async 
     await mount(fixture(2)); await click('Select all matching (2)');
     await change('Campaign arm', 'alternate'); await flush();
     expect(reads.at(-1)?.searchParams.get('arm')).toBe('alternate');
-    expect(control('Select Trajectory 1').props.checked).toBe(false);
+    expect(control('Select Candidate 1').props.checked).toBe(false);
     await change('Native records', 'draw'); await flush();
     expect(reads.at(-1)?.searchParams.get('stage')).toBe('draw');
 });
