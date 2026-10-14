@@ -28,8 +28,9 @@ async def resolve_native_source(session, job_id: str, artifact_id: str) -> tuple
             or artifact.media_type not in {'chemical/x-pdb', 'chemical/x-mmcif'}):
         raise HTTPException(404, 'Selected native structure not found')
     expected = Path(receipt['root']) / receipt.get('campaign_root', '.') / name
-    if (Path(artifact.storage_path) != expected or Path(name).is_absolute() or '..' in Path(name).parts
-            or not owner.output_dir or Path(owner.output_dir).absolute() != Path(receipt['root'])):
+    from services.binder_publication_roots import publication_root
+    publication_root(owner, receipt['root'])
+    if (Path(artifact.storage_path) != expected or Path(name).is_absolute() or '..' in Path(name).parts):
         raise ValueError('Selected native artifact path changed')
     document = (artifact.provenance or {}).get('native_document')
     if document is None:

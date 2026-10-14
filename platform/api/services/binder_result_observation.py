@@ -8,15 +8,17 @@ from pathlib import Path
 
 
 async def observe_retained_binder_results(session, job, output_path, *, commit=False) -> dict:
-    root = Path(output_path).absolute()
-    if not job.output_dir or Path(job.output_dir).absolute() != root:
-        raise ValueError('Retained binder output root differs from Job owner')
+    from services.binder_retained_publication import ROOTS
+    from services.result_state_integrity import _sequence_native_publication_owner
+    from services.binder_publication_roots import publication_root
+    sequence_owner = _sequence_native_publication_owner(job)
     result = {'job_id': job.id, 'model_id': job.model_id, 'available': False,
               'publication_ref': None, 'document_count': 0, 'native_record_count': 0}
+    if job.model_id != 'bindcraft2' and job.model_id not in ROOTS and sequence_owner is None:
+        return result
+    root = publication_root(job, output_path)
     if not root.is_dir():
         return result
-    from services.result_state_integrity import _sequence_native_publication_owner
-    sequence_owner = _sequence_native_publication_owner(job)
     if sequence_owner is not None:
         if not (root / sequence_owner.DIRECTORY).is_dir():
             return result

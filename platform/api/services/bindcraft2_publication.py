@@ -72,7 +72,8 @@ def native_campaign_root(job: Job, root: Path, campaign_root: Path | None = None
         if previous is not None:
             campaign_root = root / previous.get("campaign_root", ".")
         elif (job.params or {}).get("bc2_campaign_dir"):
-            campaign_root = Path(job.params["bc2_campaign_dir"]) / "campaign"
+            from services.binder_publication_roots import relocate_native_path
+            campaign_root = relocate_native_path(job, root, Path(job.params["bc2_campaign_dir"]) / "campaign")
         else:
             campaign_root = root
     campaign_root = Path(campaign_root)
@@ -310,8 +311,8 @@ async def publish_native_results(job: Job, root: Path, session, *, commit: bool 
     root = Path(root).absolute()
     if not root.is_dir() or root.is_symlink():
         raise PublicationError("missing or unsafe native root")
-    if not job.output_dir or Path(job.output_dir).absolute() != root:
-        raise PublicationError("native root differs from persisted job output directory")
+    from services.binder_publication_roots import publication_root
+    publication_root(job, root)
     owned_root = root
     root = native_campaign_root(job, owned_root, campaign_root)
     previous = (job.provenance or {}).get("bindcraft2_native_publication")
@@ -397,7 +398,9 @@ async def read_published_native_results(job: Job, session) -> tuple[NativePublic
     if not isinstance(receipt, dict) or receipt.get("schema") != _SCHEMA:
         raise PublicationError("BC2 publication missing")
     root = Path(receipt["root"])
-    if root.is_symlink() or not root.is_dir() or not job.output_dir or Path(job.output_dir).absolute() != root:
+    from services.binder_publication_roots import publication_root
+    publication_root(job, root)
+    if not root.is_dir():
         raise PublicationError("BC2 published root is unavailable or changed")
     root = native_campaign_root(job, root)
     if receipt["attempt"] != (job.retry_count or 0) or receipt["remote_attempt_id"] != job.remote_attempt_id:
@@ -446,7 +449,9 @@ async def verify_selected_native_designs(job: Job, session, designs) -> None:
     if job.model_id != "bindcraft2" or not isinstance(receipt, dict) or receipt.get("schema") != _SCHEMA:
         raise PublicationError("BC2 publication missing")
     root = Path(receipt["root"])
-    if root.is_symlink() or not root.is_dir() or not job.output_dir or Path(job.output_dir).absolute() != root:
+    from services.binder_publication_roots import publication_root
+    publication_root(job, root)
+    if not root.is_dir():
         raise PublicationError("BC2 published root is unavailable or changed")
     root = native_campaign_root(job, root)
     if receipt["attempt"] != (job.retry_count or 0) or receipt["remote_attempt_id"] != job.remote_attempt_id:

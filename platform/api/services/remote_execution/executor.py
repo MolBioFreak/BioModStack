@@ -2828,7 +2828,9 @@ async def _project_remote_diagnostics(session, job, status, manifest, destinatio
     # no success finalizer, scientific retry, or terminal lifecycle transition.
     from services.binder_result_observation import observe_retained_binder_results
 
-    await observe_retained_binder_results(session, job, native_output, commit=False)
+    from services.binder_publication_roots import receiving_native_root
+    with receiving_native_root(job, native_output):
+        await observe_retained_binder_results(session, job, native_output, commit=False)
     if (relative / '.bms-components.json').as_posix() not in {
             artifact.relative_path for artifact in manifest.artifacts}:
         return  # A pre-runtime failure can seal logs without executed children.
