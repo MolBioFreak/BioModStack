@@ -59,6 +59,7 @@ class NativeDocument:
     structure_variant: str | None = None  # native or relaxed
     binder_chains: str | None = None
     target_chains: str | None = None
+    producer_design: str | None = None  # exact _bindcraft.design, not a filename alias
 
 
 @dataclass(frozen=True)
@@ -199,11 +200,11 @@ def _attempts(folder: Path) -> dict[str, NativeAttempt]:
     return attempts
 
 
-def _cif_metadata(path: Path) -> dict[str, str]:
+def _cif_metadata(path: Path, content: bytes | None = None) -> dict[str, str]:
     # Native write_structure emits a scalar _bindcraft category in the model block.
     # Only producer-stamped fields are interpreted; other mmCIF data is untouched.
     metadata = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in (content.decode("utf-8") if content is not None else path.read_text(encoding="utf-8")).splitlines():
         if line.startswith("_bindcraft."):
             parts = shlex.split(line, comments=False)
             if len(parts) != 2 or parts[0] in metadata:
@@ -212,7 +213,7 @@ def _cif_metadata(path: Path) -> dict[str, str]:
     return {key.removeprefix("_bindcraft."): value for key, value in metadata.items()}
 
 
-def _documents(root: Path, arm_root: Path, retained: tuple[NativeRow, ...]) -> tuple[NativeDocument, ...]:
+def _documents(root: Path, arm_root: Path, retained: tuple[NativeRow, ...], observations=None) -> tuple[NativeDocument, ...]:
     documents = []
     retained_by_name = {row.design: row for row in retained}
     for stage in ("1_Trajectories", "2_Refolded", "3_Ranked", "trajectories", "refolded", "accepted"):
@@ -225,9 +226,14 @@ def _documents(root: Path, arm_root: Path, retained: tuple[NativeRow, ...]) -> t
             if path.is_symlink():
                 raise NativeResultError(f"unsafe native artifact: {path}")
             if path.is_file() and path.suffix.lower() in (".cif", ".mmcif", ".pdb", ".ent"):
+                content = path.read_bytes()
+                digest = hashlib.sha256(content).hexdigest()
+                if observations is not None:
+                    observations[path.relative_to(root).as_posix()] = {'sha256': digest, 'bytes': len(content)}
                 retained_design = attempt_sha = state = primary = variant = binder = target = None
-                if stage in ("3_Ranked", "accepted", "2_Refolded") and path.suffix.lower() in (".cif", ".mmcif"):
-                    stamp = _cif_metadata(path)
+                design = None
+                if path.suffix.lower() in (".cif", ".mmcif"):
+                    stamp = _cif_metadata(path, content)
                     # State/chain annotations are useful even when the retained
                     # association is absent; they alone never create a Design.
                     state = stamp.get("bms_target_state") or None
@@ -236,6 +242,14 @@ def _documents(root: Path, arm_root: Path, retained: tuple[NativeRow, ...]) -> t
                     binder = stamp.get("binder_chains") or None
                     target = stamp.get("target_chains") or None
                     design = stamp.get("design")
+                    # Pinned trajectory writer has no design stamp: its exact
+                    # directory/file pair identifies the trajectory, not arbitrary
+                    # suffix normalization of unrelated native documents.
+                    if (not design and stage == "1_Trajectories"
+                            and stamp.get("stage") == "trajectory"
+                            and path.parent.parent == folder
+                            and path.name == path.parent.name + "_trajectory.cif"):
+                        design = path.parent.name
                     if design in retained_by_name:
                         row = retained_by_name[design]
                         stamped_candidate = stamp.get("bms_scored_candidate")
@@ -258,9 +272,9 @@ def _documents(root: Path, arm_root: Path, retained: tuple[NativeRow, ...]) -> t
                                     raise NativeResultError(f"contradictory native CIF location: {path}")
                     elif stage in ("3_Ranked", "accepted") and retained and (stamp.get("bms_scored_candidate") or stamp.get("bms_attempt_sha256")):
                         raise NativeResultError(f"orphan producer-stamped CIF: {path}")
-                documents.append(NativeDocument(str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest(),
+                documents.append(NativeDocument(str(path.relative_to(root)), digest,
                                                 path.suffix.lower().lstrip("."), retained_design, attempt_sha,
-                                                state, primary, variant, binder, target))
+                                                state, primary, variant, binder, target, design))
     return tuple(documents)
 
 def _is_number(value: str) -> bool:
@@ -271,7 +285,7 @@ def _is_number(value: str) -> bool:
     return True
 
 
-def _arm(root: Path, folder: Path, name: str | None) -> NativeArm:
+def _arm(root: Path, folder: Path, name: str | None, observations=None) -> NativeArm:
     modern = any((folder / stage).exists() for stage in ("1_Trajectories", "2_Refolded", "3_Ranked"))
     def table(stage: str, legacy: str, filename: str) -> Path:
         return folder / stage / filename if modern else folder / legacy
@@ -364,10 +378,10 @@ def _arm(root: Path, folder: Path, name: str | None) -> NativeArm:
     if claimed is not None and (type(claimed) is not int or claimed < 0 or claimed < len(trajectories)):
         raise NativeResultError(f"invalid claimed trajectory count: {folder}")
     return NativeArm(name, claimed, trajectories, draws, retained,
-                     _documents(root, folder, retained), _json(folder / "campaign_metadata.json"),
+                     _documents(root, folder, retained, observations), _json(folder / "campaign_metadata.json"),
                      tuple(attempts.values()))
 
-def read_native_publication(root: Path) -> NativePublication:
+def read_native_publication(root: Path, *, observations=None) -> NativePublication:
     """Read a stable/sealed native output directory; caller verifies ownership.
 
     Sweep arms are identified by the emitted sweep.csv `arm` column, not by
@@ -379,7 +393,7 @@ def read_native_publication(root: Path) -> NativePublication:
         raise NativeResultError(f"invalid native campaign root: {root}")
     sweep = root / "sweep.csv"
     if not sweep.exists():
-        return NativePublication((_arm(root, root, None),))
+        return NativePublication((_arm(root, root, None, observations),))
     if sweep.is_symlink():
         raise NativeResultError(f"unsafe sweep table: {sweep}")
     with sweep.open(newline="", encoding="utf-8") as stream:
@@ -391,7 +405,7 @@ def read_native_publication(root: Path) -> NativePublication:
         raise NativeResultError("invalid sweep arm identities")
     if any((root / arm).is_symlink() or not (root / arm).is_dir() for arm in arms):
         raise NativeResultError("missing or unsafe sweep arm directory")
-    return NativePublication(tuple(_arm(root, root / arm, arm) for arm in arms if arm is not None))
+    return NativePublication(tuple(_arm(root, root / arm, arm, observations) for arm in arms if arm is not None))
 
 
 # These are recorded optimizer updates, not the native selected/re-predicted
@@ -506,7 +520,7 @@ def native_result_page(publication: NativePublication, *, arm: str | None = None
                 "retained_design": item.retained_design, "attempt_sha256": item.attempt_sha256,
                 "target_state": item.target_state, "primary_target_state": item.primary_target_state,
                 "structure_variant": item.structure_variant, "binder_chains": item.binder_chains,
-                "target_chains": item.target_chains}
+                "target_chains": item.target_chains, "producer_design": item.producer_design}
 
     return {"schema": "bindcraft2.native-readback.v1", "arm": arm, "stage": stage,
             "offset": offset, "limit": limit, "total": len(rows),

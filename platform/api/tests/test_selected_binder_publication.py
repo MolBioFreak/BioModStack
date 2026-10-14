@@ -161,6 +161,9 @@ async def test_finalizer_terminal_identity_metrics_replay_and_later_selection(tm
             assert row.plddt_overall is None and row.residue_plddt is None
             assert row.iptm is None and row.passed_screen is None
             assert row.artifact_class != 'validated_binder_complex'
+            if producer in {'ppiflow', 'fampnn'}:
+                assert row.artifact_class == ('backbone_complex' if producer == 'ppiflow' else 'sequence_designed_complex')
+                assert row.artifact_schema_version == 1
             if model == 'caliby_binder':
                 assert row.confidence_metrics['caliby']['caliby_potts_energy'] == -3.25
                 assert row.confidence_metrics['caliby']['sequence'] == 'A'

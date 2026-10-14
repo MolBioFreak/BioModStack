@@ -3112,9 +3112,10 @@ def _extract_chain_records_from_structure(path: Path) -> Dict[str, List[Dict[str
 
 def _cif_selection_pdb(source: Path, destination: Path) -> Path:
     """Materialize only representable CIF coordinates for a PDB-only consumer."""
-    from Bio.PDB import MMCIFParser, PDBIO
+    from Bio.PDB import PDBIO
     from Bio.PDB.PDBParser import PDBParser
-    structure = MMCIFParser(QUIET=True).get_structure('selected', str(source))
+    from services.md.starting_structures import _parse_mmcif_structure
+    structure = _parse_mmcif_structure(source.read_bytes())
     def identity(model):
         return [(chain.id, residue.id, residue.resname,
                  tuple((atom.id, atom.coord.tolist()) for atom in residue))

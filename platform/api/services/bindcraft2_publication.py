@@ -107,7 +107,7 @@ def _regular(root: Path, relative: str, *, byte_range=None) -> tuple[Path, bytes
     return path, path.read_bytes()
 
 
-def _inventory(root: Path, publication: NativePublication, *, legacy: bool = False) -> dict[str, dict]:
+def _inventory(root: Path, publication: NativePublication, *, legacy: bool = False, observations=None) -> dict[str, dict]:
     names = {"sweep.csv"} if (root / "sweep.csv").exists() else set()
 
     def collect(directory: Path) -> None:
@@ -147,8 +147,17 @@ def _inventory(root: Path, publication: NativePublication, *, legacy: bool = Fal
         names.update(doc.path for doc in arm.documents)
     inventory = {}
     for name in sorted(names):
-        path, content = _regular(root, name)
-        inventory[name] = {"sha256": hashlib.sha256(content).hexdigest(), "bytes": len(content),
+        if observations is not None and name in observations:
+            # Reader already hashed these exact bytes in this call. Recheck path
+            # containment/type without rereading bodies or retaining all CIFs.
+            path, _ = _regular(root, name, byte_range=(0, 0))
+            observed = observations[name]
+            if path.stat().st_size != observed['bytes']:
+                raise PublicationError('Native document changed during inventory')
+        else:
+            path, content = _regular(root, name)
+            observed = {'sha256': hashlib.sha256(content).hexdigest(), 'bytes': len(content)}
+        inventory[name] = {**observed,
                            "media_type": "chemical/x-mmcif" if path.suffix.lower() in (".cif", ".mmcif") else
                            "chemical/x-pdb" if path.suffix.lower() in (".pdb", ".ent") else
                            "text/csv" if path.suffix.lower() == ".csv" else
@@ -157,12 +166,22 @@ def _inventory(root: Path, publication: NativePublication, *, legacy: bool = Fal
     return inventory
 
 
-def _native_document_identity(arm, document) -> dict:
+def _native_row_index(arm) -> dict:
     from dataclasses import asdict
-    # Filename-associated observations are not producer-qualified Design joins.
-    return {**asdict(document), "arm": arm.name, "row_association": "native_filename",
-            "native_rows": [asdict(row) for row in (*arm.trajectories, *arm.draws, *arm.retained)
-                            if row.design == Path(document.path).stem]}
+    rows = {}
+    for row in (*arm.trajectories, *arm.draws, *arm.retained):
+        rows.setdefault(row.design, []).append(asdict(row))
+    return rows
+
+
+def _native_document_identity(arm, document, row_index=None) -> dict:
+    from dataclasses import asdict
+    # The native stamp binds trajectory and independent monomer documents even
+    # when filenames have producer suffixes. This does not promote observations.
+    identity = document.producer_design or Path(document.path).stem
+    return {**asdict(document), "arm": arm.name,
+            "row_association": "producer_design" if document.producer_design else "native_filename",
+            "native_rows": (row_index if row_index is not None else _native_row_index(arm)).get(identity, [])}
 
 
 def _summary(publication: NativePublication) -> list[dict]:
@@ -280,7 +299,7 @@ async def _verify_designs(job: Job, session, bindings: list[dict], root: Path) -
 
 
 async def publish_native_results(job: Job, root: Path, session, *, commit: bool = False,
-                                 campaign_root: Path | None = None) -> int:
+                                 campaign_root: Path | None = None, observations_only: bool = False) -> int:
     """Publish native artifacts and exact producer-joined CIF Designs atomically.
 
     Unjoined rows and valid zero-yield campaigns remain native observations.
@@ -297,12 +316,17 @@ async def publish_native_results(job: Job, root: Path, session, *, commit: bool 
     root = native_campaign_root(job, owned_root, campaign_root)
     previous = (job.provenance or {}).get("bindcraft2_native_publication")
     legacy = previous is not None and "inventory_version" not in previous
-    publication = read_native_publication(root)
-    inventory = _inventory(root, publication, legacy=legacy)
-    if not inventory or not any(name.endswith(("!_Trajectories.csv", "trajectories.csv", ".campaign_state.json"))
-                                for name in inventory):
+    observations_only = previous.get("observations_only", False) if previous is not None else observations_only
+    observations = {}  # request-local hashes, never a cross-request verification cache
+    publication = read_native_publication(root, observations=observations)
+    inventory = _inventory(root, publication, legacy=legacy, observations=observations)
+    if not inventory or not (observations_only or any(
+            name.endswith(("!_Trajectories.csv", "trajectories.csv", ".campaign_state.json"))
+            for name in inventory)):
         raise PublicationError("BC2 campaign has no native execution evidence")
     receipt = _receipt(job, owned_root, inventory, publication)
+    if observations_only:
+        receipt["observations_only"] = True
     if not legacy:
         receipt.update(campaign_root=root.relative_to(owned_root).as_posix(), inventory_version=2)
     source = await _publication_source(job, session, previous)
@@ -315,8 +339,10 @@ async def publish_native_results(job: Job, root: Path, session, *, commit: bool 
         designs = (await session.scalars(select(Design).where(Design.job_id == job.id))).all()
     if previous is None and designs:
         raise PublicationError("BC2 Designs exist without native publication receipt")
-    document_identity = {doc.path: _native_document_identity(arm, doc)
-                         for arm in publication.arms for doc in arm.documents}
+    document_identity = {}
+    for arm in publication.arms:
+        row_index = _native_row_index(arm)
+        document_identity.update({doc.path: _native_document_identity(arm, doc, row_index) for doc in arm.documents})
     attempt = receipt["attempt"]
     owned = {a.logical_path: a for a in existing if a.attempt == attempt}
     if any(a.logical_path.startswith("bindcraft2/native/") and a.attempt != attempt for a in existing):
@@ -344,7 +370,7 @@ async def publish_native_results(job: Job, root: Path, session, *, commit: bool 
     if previous is not None and {name for name in owned if name.startswith("bindcraft2/native/")} != {
         "bindcraft2/native/" + name for name in inventory}:
         raise PublicationError("BC2 registered artifact inventory changed")
-    receipt["candidates"] = _candidate_bindings(publication, owned, job.id, source=source)
+    receipt["candidates"] = [] if observations_only else _candidate_bindings(publication, owned, job.id, source=source)
     if previous is not None and previous != receipt:
         raise PublicationError("BC2 native publication replay changed")
     if previous is not None:
@@ -383,8 +409,9 @@ async def read_published_native_results(job: Job, session) -> tuple[NativePublic
                   if a.logical_path.startswith("bindcraft2/native/")}
     if set(registered) != set(receipt["files"]):
         raise PublicationError("BC2 registered artifact inventory changed")
-    publication = read_native_publication(root)
-    inventory = _inventory(root, publication, legacy="inventory_version" not in receipt)
+    observations = {}
+    publication = read_native_publication(root, observations=observations)
+    inventory = _inventory(root, publication, legacy="inventory_version" not in receipt, observations=observations)
     if inventory != receipt["files"]:
         raise PublicationError("BC2 published bytes or native inventory changed")
     if _summary(publication) != receipt["arms"]:
@@ -396,16 +423,20 @@ async def read_published_native_results(job: Job, session) -> tuple[NativePublic
         if (row.sha256 != expected["sha256"] or row.bytes != expected["bytes"]
                 or row.storage_path != str(root / name) or row.media_type != expected["media_type"]):
             raise PublicationError("BC2 published bytes or artifact receipt changed")
-    if receipt.get("candidates") != _candidate_bindings(publication, {
-            "bindcraft2/native/" + name: row for name, row in registered.items()}, job.id, source=receipt.get("source")):
+    expected_candidates = [] if receipt.get("observations_only") else _candidate_bindings(publication, {
+            "bindcraft2/native/" + name: row for name, row in registered.items()}, job.id, source=receipt.get("source"))
+    if receipt.get("candidates") != expected_candidates:
         raise PublicationError("BC2 candidate artifact bindings changed")
     await _verify_designs(job, session, receipt["candidates"], root)
     # Readback handles are derived from the verified registry, not persisted
     # candidate bindings: saved rejected structures remain native artifacts.
-    native_documents = [{**_native_document_identity(arm, document),
-                         "artifact_id": registered[document.path].id, "job_id": job.id,
-                         "logical_path": registered[document.path].logical_path}
-                        for arm in publication.arms for document in arm.documents]
+    native_documents = []
+    for arm in publication.arms:
+        row_index = _native_row_index(arm)
+        native_documents.extend({**_native_document_identity(arm, document, row_index),
+                                 "artifact_id": registered[document.path].id, "job_id": job.id,
+                                 "logical_path": registered[document.path].logical_path}
+                                for document in arm.documents)
     return publication, {**receipt, "native_documents": native_documents}
 
 
@@ -466,12 +497,18 @@ def native_workbench_page(page: dict, receipt: dict) -> dict:
     candidates = [binding for binding in receipt.get("candidates", [])
                   if generation or binding["arm"] == page["arm"]]
     generation_bindings = {item["candidate_key"]: item for item in candidates} if generation else {}
+    documents = {doc["path"]: doc for doc in receipt.get("native_documents", [])}
+    documents_by_row = {}
+    for doc in documents.values():
+        for native in doc["native_rows"]:
+            documents_by_row.setdefault((doc["arm"], native["stage"], native["design"]), []).append(doc)
+    retained_bindings = {item.get("retained_design"): item for item in candidates}
     rows = []
     for source in page["rows"]:
         row = dict(source)
         binding = (generation_bindings.get(row.get("candidate_key", row.get("candidate_id")))
-                   if generation else next((item for item in candidates
-                   if page["stage"] == "retained" and item["retained_design"] == row.get("design")), None))
+                   if generation else retained_bindings.get(row.get("design"))
+                   if page["stage"] == "retained" else None)
         if binding:
             row["design_id"] = binding["design_id"]
             row["structures"] = [{**structure,
@@ -480,12 +517,17 @@ def native_workbench_page(page: dict, receipt: dict) -> dict:
         if not binding and page["stage"] in {"trajectory", "draw"}:
             row["structures"] = [{**doc, "download_url": downloads.get(doc["path"]),
                                   "native_source": {"job_id": doc["job_id"], "artifact_id": doc["artifact_id"]}}
-                for doc in receipt.get("native_documents", []) if doc["arm"] == page["arm"]
-                and any(native["stage"] == page["stage"] and native["design"] == row.get("design")
-                        for native in doc["native_rows"])]
+                for doc in documents_by_row.get((page["arm"], page["stage"], row.get("design")), [])]
+        if binding and not generation:
+            # Ranked and scored IDs differ. Follow the producer's explicit join,
+            # retaining independent monomers as separate, document-local evidence.
+            known = {s["artifact_id"] for s in row["structures"]}
+            row["structures"].extend({**doc, "download_url": downloads.get(doc["path"]),
+                "native_source": {"job_id": doc["job_id"], "artifact_id": doc["artifact_id"]}}
+                for doc in documents_by_row.get((page["arm"], "draw", binding["scored_design"]), [])
+                if doc["artifact_id"] not in known)
         if page["stage"] == "document":
-            document = next((doc for doc in receipt.get("native_documents", [])
-                             if doc["path"] == row["path"]), None)
+            document = documents.get(row["path"])
             if document:
                 row["structures"] = [{**document, "download_url": downloads.get(row["path"]),
                     "native_source": {"job_id": document["job_id"], "artifact_id": document["artifact_id"]}}]
@@ -494,8 +536,8 @@ def native_workbench_page(page: dict, receipt: dict) -> dict:
     prefix = f'{page["arm"]}/' if page["arm"] else ""
     return {**page, "rows": rows, "artifacts": [
         {"path": name, **entry, "download_url": downloads.get(name),
-         **next(({"artifact_id": doc["artifact_id"], "job_id": doc["job_id"]}
-                 for doc in receipt.get("native_documents", []) if doc["path"] == name), {})}
+         **({"artifact_id": documents[name]["artifact_id"], "job_id": documents[name]["job_id"]}
+            if name in documents else {})}
         for name, entry in receipt["files"].items()
         if not prefix or name.startswith(prefix) or "/" not in name
     ]}
