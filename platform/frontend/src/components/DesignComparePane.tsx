@@ -1,6 +1,8 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchDesignById, fetchDesignResidueMetrics } from '../lib/api';
+import { fetchDesignById, fetchDesignResidueMetrics, fetchNativeStructureDocument, fetchNativeResidueMetrics } from '../lib/api';
+import type { CandidateDocuments } from '../lib/binderDiagnosticSelection';
+import type { NativeCandidateSource } from '../lib/binderContinuation';
 import { parseScientificNativeMetric } from '../lib/scientificViewerIdentity';
 import { comparisonChain, comparisonProfiles, type ComparisonProfile } from './nativeComparisonProfiles';
 import { useThemeColors } from './useThemeColors';
@@ -10,23 +12,40 @@ interface Design { id: string; name: string; plddt_overall: number | null }
 interface DesignComparePaneProps {
     designs: Design[]; preSelectedId?: string; selectedDesignIds?: string[];
     onSelectedDesignIdsChange?: (ids: string[]) => void;
+    candidateDocuments?: CandidateDocuments;
+    selectedNativeSources?: NativeCandidateSource[];
 }
 
-export function DesignComparePane({ designs, preSelectedId, selectedDesignIds, onSelectedDesignIdsChange }: DesignComparePaneProps) {
+export function DesignComparePane({ designs, preSelectedId, selectedDesignIds, onSelectedDesignIdsChange, candidateDocuments = {}, selectedNativeSources = [] }: DesignComparePaneProps) {
     const colors = useThemeColors();
     const label = (id: string, fallback = '') => { const i = designs.findIndex(item => item.id === id); const name = (i >= 0 ? designs[i].name : fallback) || ''; return name && name.length <= 48 && !/[a-f0-9]{12}/i.test(name) ? name : `Candidate ${i >= 0 ? i + 1 : selectedIds.indexOf(id) + 1}`; };
     const [localIds, setLocalIds] = useState<string[]>(preSelectedId ? [preSelectedId] : designs.slice(0, 3).map(d => d.id));
     const [chain, setChain] = useState('');
     const selectedIds = selectedDesignIds ?? localIds;
     const metrics = useQuery({
-        queryKey: ['native-comparison-profiles', [...selectedIds].sort()],
-        queryFn: () => Promise.all(selectedIds.map(async (id): Promise<ComparisonProfile> => {
-            try {
-                const [design, raw] = await Promise.all([fetchDesignById(id), fetchDesignResidueMetrics(id)]);
-                return { id, name: label(id, design.data.name), metric: parseScientificNativeMetric(raw.data,
-                    design.data.id === id ? design.data.scientific_structure_document : null, 'residue_plddt', id) };
-            } catch { return { id, name: label(id), metric: { status: 'unavailable', reason: 'Native readback failed' } }; }
-        })), enabled: selectedIds.length > 0, staleTime: 300000,
+        queryKey: ['native-comparison-profiles', [...selectedIds].sort().map(id => [id, candidateDocuments[id]]),
+            selectedNativeSources.map(source => [source.job_id, source.artifact_id, source.document?.target_state])],
+        queryFn: () => Promise.all([
+            ...selectedIds.map(async (id): Promise<ComparisonProfile> => {
+                try {
+                    const selected = candidateDocuments[id];
+                    const [design, raw] = await Promise.all([fetchDesignById(id, undefined, selected), fetchDesignResidueMetrics(id, selected)]);
+                    return { id, name: label(id, design.data.name), metric: parseScientificNativeMetric(raw.data,
+                        design.data.id === id ? design.data.scientific_structure_document : null, 'residue_plddt', id) };
+                } catch { return { id, name: label(id), metric: { status: 'unavailable', reason: 'Native readback failed' } }; }
+            }),
+            ...selectedNativeSources.map(async (source, index): Promise<ComparisonProfile> => {
+                // Native identity stays artifact-scoped; it is not an ORM Design ID.
+                const id = `native:${source.job_id}:${source.artifact_id}`, name = `Native candidate ${index + 1}`;
+                try {
+                    const [metadata, raw] = await Promise.all([
+                        fetchNativeStructureDocument(source.job_id, source.artifact_id, source.document?.target_state),
+                        fetchNativeResidueMetrics(source.job_id, source.artifact_id, source.document?.target_state),
+                    ]);
+                    return { id, name, metric: parseScientificNativeMetric(raw.data, metadata.data.document, 'residue_plddt', id, source) };
+                } catch { return { id, name, metric: { status: 'unavailable', reason: 'Native readback failed' } }; }
+            }),
+        ]), enabled: selectedIds.length + selectedNativeSources.length > 0, staleTime: 300000,
     });
     const profiles = metrics.data ?? [];
     const chains = [...new Set(profiles.flatMap(p => p.metric.status === 'ok' ? p.metric.residues.map(comparisonChain) : []))];
@@ -59,8 +78,8 @@ export function DesignComparePane({ designs, preSelectedId, selectedDesignIds, o
             config={{ responsive: true, displaylogo: false, toImageButtonOptions: { format: 'svg', filename: 'native-confidence-comparison' } }}
             useResizeHandler style={{ width: '100%', minWidth: 0 }} /> </Suspense> : <p>Native confidence unavailable for this selection. Retained rows remain below.</p>}
         <a className="underline" download="native-confidence-comparison.json" href={`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify({ correspondence: 'exact published identity labels; no alignment', profiles, chain }, null, 2))}`}>Export native values and identities</a>
-        <details><summary className="text-sm">Profile sources</summary><div className="overflow-auto"><table className="w-full text-sm text-left"><thead><tr><th>Design / document</th><th>Native scope / units</th><th>Displayed points</th><th>Shared labels / unmatched</th><th>Availability</th></tr></thead>
-            <tbody>{selectedIds.map(id => {
+        <details><summary className="text-sm">Profile sources</summary><div className="overflow-auto"><table className="w-full text-sm text-left"><thead><tr><th>Candidate / document</th><th>Native scope / units</th><th>Displayed points</th><th>Shared labels / unmatched</th><th>Availability</th></tr></thead>
+            <tbody>{profiles.map(({ id }) => {
                 const row = chart.rows.find(p => p.id === id);
                 return <tr key={id}><td className="p-2">{designs.find(d => d.id === id)?.name ?? profiles.find(p => p.id === id)?.name} ({id})<br />{row?.metric.status === 'ok' ? row.metric.document.documentId : '—'}</td>
                     <td>{row?.metric.status === 'ok' ? `${row.metric.confidenceSource?.scope ?? row.metric.metric} / fraction` : 'Unavailable'}</td>

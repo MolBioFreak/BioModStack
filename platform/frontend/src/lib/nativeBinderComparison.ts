@@ -99,10 +99,11 @@ export function nativeComparisonLabel(row: NativeGenerationRecord, ordinal: numb
     return `Candidate ${ordinal + 1}`;
 }
 const BC2_LABELS: Record<string, string> = {
-    i_pTM: 'iPTM', pTM: 'pTM', pLDDT: 'Complex pLDDT', Unbound_Binder_pLDDT: 'Binder pLDDT',
+    i_pTM: 'iPTM', pTM: 'pTM', pLDDT: 'Binder pLDDT in complex', Unbound_Binder_pLDDT: 'Binder-alone pLDDT',
+    Target_pLDDT: 'Target pLDDT', i_pAE: 'Interface PAE / 31',
     i_pDAE: 'Interface confidence (iPDae)', Binder_RMSD: 'Binder RMSD', Interface_BuriedArea: 'Buried area', seq_length: 'Sequence length',
 };
-const BC2_UNITS: Record<string, string> = { i_pTM: 'fraction', pTM: 'fraction', pLDDT: 'fraction', Unbound_Binder_pLDDT: 'fraction', i_pDAE: 'fraction', Binder_RMSD: 'angstrom', Interface_BuriedArea: 'angstrom_squared', seq_length: 'residues' };
+const BC2_UNITS: Record<string, string> = { i_pTM: 'fraction', pTM: 'fraction', pLDDT: 'fraction', Target_pLDDT: 'fraction', Unbound_Binder_pLDDT: 'fraction', i_pAE: 'dimensionless', i_pDAE: 'fraction', Binder_RMSD: 'angstrom', Interface_BuriedArea: 'angstrom_squared', seq_length: 'residues' };
 export function nativeComparisonMetric(set: NativeComparisonSet, row: NativeGenerationRecord, key: string) {
     const unit = nativeGenerationMetricUnit(row, key) ?? (set.job.model_id === 'bindcraft2' ? BC2_UNITS[key] : undefined);
     const native = row.native_record && typeof row.native_record === 'object' ? row.native_record as Record<string, unknown> : {};

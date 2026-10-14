@@ -6,7 +6,10 @@ import { ThemeProvider } from '../../src/components/ThemeProvider';
 import { NativeBinderComparison } from '../../src/components/NativeBinderComparison';
 import { BinderResultComparison } from '../../src/components/BinderResultComparison';
 import { readNativeComparison, nativeComparisonSelection, nativeComparisonValues, nativeComparisonKey } from '../../src/lib/nativeBinderComparison';
-import { api } from '../../src/lib/api';
+import { api, downloadDesignPdb } from '../../src/lib/api';
+import { DesignComparePane } from '../../src/components/DesignComparePane';
+import { parseScientificNativeMetric } from '../../src/lib/scientificViewerIdentity';
+import { esmfold2Fixture } from '../fixtures/scientificViewerEsmfold2Fixture';
 vi.mock('react-plotly.js', () => ({ default: (props: any) => <div data-comparison-plot data-traces={JSON.stringify(props.data)} /> }));
 
 // Explicitly inert native-shaped records: no model or runtime is executed.
@@ -110,4 +113,79 @@ it('keeps comparison demand-loaded and passes native selection and nonrecursive 
     const saved = JSON.parse(localStorage.getItem('binder-result-comparison::a')!);
     expect(saved.native).toEqual([{ job_id: 'a', artifact_id: 'a-draw-1' }]);
     expect(saved.designs).toEqual(['a-design-0']);
+});
+
+// Shared native wire-shaped fixtures only; no model inference or measured biology.
+const nativeSource = { job_id: 'a', artifact_id: 'native-qa' };
+function profileWire(id: string, artifact: string, native = false) {
+    const value: any = esmfold2Fixture(id).confidence;
+    value.document.documentId = `artifact:${artifact}`;
+    value.axis.producer_version = 'inert-native-profile';
+    if (native) {
+        value.design_id = null;
+        value.producer_binding.candidate_id = artifact;
+        value.axis.candidate_id = artifact;
+    }
+    return value;
+}
+it('accepts null Design identity only in the selected exact native artifact context', () => {
+    const id = 'native:a:native-qa', wire = profileWire(id, 'native-qa', true);
+    const parsed = parseScientificNativeMetric(wire, wire.document, 'residue_plddt', id, nativeSource);
+    expect(parsed.status).toBe('ok');
+    if (parsed.status !== 'ok') throw Error('fixture not received');
+    expect(parsed.values).toEqual([.005, .8, .4]);
+    expect(parsed.residues[0].insertionCode).toBe('A');
+    expect(parseScientificNativeMetric(wire, wire.document, 'residue_plddt', id).status).toBe('unavailable');
+    for (const source of [{ job_id: 'foreign', artifact_id: 'native-qa' }, { job_id: 'a', artifact_id: 'foreign' }]) {
+        expect(parseScientificNativeMetric(wire, wire.document, 'residue_plddt', id, source).status).toBe('unavailable');
+    }
+    for (const change of ['hash', 'document', 'binding', 'design']) {
+        const altered = structuredClone(wire);
+        if (change === 'hash') altered.axis.source_sha256 = 'b'.repeat(64);
+        if (change === 'document') altered.document.documentId = 'primary';
+        if (change === 'binding') { altered.producer_binding.candidate_id = 'foreign'; altered.axis.candidate_id = 'foreign'; }
+        if (change === 'design') altered.design_id = id;
+        expect(parseScientificNativeMetric(altered, wire.document, 'residue_plddt', id, nativeSource).status).toBe('unavailable');
+    }
+});
+it('compares exact alternate Design and native QA profiles without borrowing primary confidence', async () => {
+    const selected = { artifact_id: 'alternate-qa', target_state: 'open' };
+    const native = { ...nativeSource, document: { target_state: 'open' } } as any;
+    const designWire = profileWire('a-design-0', 'alternate-qa'), nativeWire = profileWire('native:a:native-qa', 'native-qa', true);
+    api.defaults.adapter = async config => {
+        const url = String(config.url); apiCalls.push({ url, params: config.params });
+        let data: unknown;
+        if (url === '/api/designs/a-design-0') data = { ...design('a'), scientific_structure_document: designWire.document };
+        else if (url === '/api/designs/a-design-0/residue-metrics') data = designWire;
+        else if (url === '/api/designs/native/a/native-qa/document') data = { status: 'ok', document: nativeWire.document, candidate_ref: { kind: 'native_document', ...nativeSource } };
+        else if (url === '/api/designs/native/a/native-qa/residue-metrics') data = nativeWire;
+        else throw Error(`Unexpected profile request ${url}`);
+        return { config, data, status: 200, statusText: 'OK', headers: {} };
+    };
+    await mount(<DesignComparePane designs={[design('a') as any]} selectedDesignIds={['a-design-0']} candidateDocuments={{ 'a-design-0': selected }} selectedNativeSources={[native]} />);
+    const profiles = () => JSON.parse(decodeURIComponent(renderer!.root.findByProps({ download: 'native-confidence-comparison.json' }).props.href.split(',').slice(1).join(','))).profiles;
+    expect(profiles()).toHaveLength(2);
+    expect(profiles().map((p: any) => p.metric.status)).toEqual(['ok', 'ok']);
+    expect(profiles().map((p: any) => p.metric.document.documentId)).toEqual(['artifact:alternate-qa', 'artifact:native-qa']);
+    expect(apiCalls.filter(c => c.url.startsWith('/api/designs/a-design-0')).every(c => c.params.artifact_id === 'alternate-qa' && c.params.target_state === 'open')).toBe(true);
+    expect(apiCalls.filter(c => c.url.startsWith('/api/designs/native/')).every(c => c.params.target_state === 'open')).toBe(true);
+    const traces = JSON.parse(renderer!.root.findByProps({ 'data-comparison-plot': true }).props['data-traces']);
+    expect(traces).toHaveLength(6);
+    expect(traces[0].y).toEqual([.5]);
+    expect(traces[1].y).toEqual([80]);
+    await act(async () => renderer!.root.findByProps({ 'aria-label': 'Comparison chain' }).props.onChange({ target: { value: 'B' } }));
+    expect(JSON.parse(renderer!.root.findByProps({ 'data-comparison-plot': true }).props['data-traces'])).toHaveLength(2);
+    const expectedDownload = new URL(downloadDesignPdb('a-design-0', selected), 'http://fixture');
+    expect(expectedDownload.searchParams.get('artifact_id')).toBe('alternate-qa');
+    expect(expectedDownload.searchParams.get('target_state')).toBe('open');
+    // A different exact document without QA must not keep the previously cached vector.
+    api.defaults.adapter = async config => ({ config, status: 200, statusText: 'OK', headers: {}, data: String(config.url).endsWith('/residue-metrics')
+        ? { schema_name: 'core_protein_viewer_metric', schema_version: 1, contract_revision: 1, design_id: 'a-design-0', design_name: 'No QA', metric: 'residue_plddt', status: 'unavailable', reason: 'native_qa_absent',
+            ...Object.fromEntries(['document','artifact_sha256','producer_binding','row_axis','column_axis','native_shape','native_row_positions','native_column_positions','sampled_row_indices','sampled_column_indices','pae_matrix','size'].map(key => [key, null])) }
+        : { ...design('a'), scientific_structure_document: { ...designWire.document, documentId: 'artifact:scored-no-qa' } } });
+    await act(async () => renderer!.update(<ThemeProvider><QueryClientProvider client={client!}><DesignComparePane designs={[design('a') as any]} selectedDesignIds={['a-design-0']} candidateDocuments={{ 'a-design-0': { artifact_id: 'scored-no-qa' } }} /></QueryClientProvider></ThemeProvider>));
+    await flush();
+    expect(profiles()).toHaveLength(1);
+    expect(profiles()[0].metric).toEqual({ status: 'unavailable', reason: 'native_qa_absent' });
+    expect(renderer!.root.findAllByProps({ 'data-comparison-plot': true })).toHaveLength(0);
 });
