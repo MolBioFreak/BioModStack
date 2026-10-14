@@ -1,27 +1,13 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { fetchJobs, fetchBatchAnalytics, fetchJobDesignMetrics } from '../lib/api';
 import { ScientificAnalytics } from './ScientificAnalytics';
 import type { ScientificPoint } from '../lib/scientificAnalytics';
 import type { Job } from '../lib/api';
 import { isNgsJob } from '../lib/ngsResultRouting';
-const BC2Results = lazy(() => import('./BindCraft2JobResults').then(m => ({ default: m.BindCraft2JobResults })));
-import { isNativeBinderGeneration } from '../lib/nativeBinderResults';
 import { fetchJobById } from '../lib/api';
-const NativeResults = lazy(() => import('./NativeBinderGenerationResults').then(m => ({ default: m.NativeBinderGenerationResults })));
-
-function NativeObservations({ jobId, launchContextId }: { jobId: string; launchContextId?: string | null }) {
-    const [open, setOpen] = useState(false);
-    const job = useQuery({ queryKey: ['job', jobId], queryFn: () => fetchJobById(jobId), enabled: open });
-    return <div className="rounded border border-[var(--border-color)] p-2">
-        <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>Native observations · {jobId}</button>
-        {open && <Suspense fallback={<p>Loading native observations…</p>}>
-            {job.isError ? <p>Native job could not be loaded.</p> : job.isPending ? <p>Loading job…</p>
-                : job.data.data.model_id === 'bindcraft2' ? <BC2Results jobId={jobId} launchContextId={launchContextId} /> : isNativeBinderGeneration(job.data.data) ? <NativeResults jobId={jobId} launchContextId={launchContextId} />
-                    : <p>Use canonical metrics or candidate confidence for this result type.</p>}
-        </Suspense>}
-    </div>;
-}
+import { hasNativeComparison } from '../lib/nativeBinderComparison';
+const NativeBinderComparison = lazy(() => import('./NativeBinderComparison').then(module => ({ default: module.NativeBinderComparison })));
 
 interface BatchComparePaneProps {
     initialJobId?: string;
@@ -63,11 +49,13 @@ export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeM
 
     const comparison = batchData?.data;
     const useNative = nativeMetrics || !!comparison?.scientific_cohorts?.length;
+    const sourceQueries = useQueries({ queries: selectedJobIds.map(id => ({ queryKey: ['native-comparison-job', id], queryFn: () => fetchJobById(id), enabled: useNative, staleTime: 60000 })) });
+    const canonicalJobIds = sourceQueries.flatMap(query => query.data && !hasNativeComparison(query.data.data) ? [query.data.data.id] : []);
     const points = useQuery({
-        queryKey: ['comparison-native-points', selectedJobIds],
-        queryFn: async () => (await Promise.all(selectedJobIds.map(id => fetchJobDesignMetrics(id, false))))
+        queryKey: ['comparison-native-points', canonicalJobIds],
+        queryFn: async () => (await Promise.all(canonicalJobIds.map(id => fetchJobDesignMetrics(id, false))))
             .flatMap(response => response.data).filter((point): point is ScientificPoint => point.contract_revision === 1),
-        enabled: useNative && selectedJobIds.length > 0,
+        enabled: useNative && canonicalJobIds.length > 0,
     });
 
     const toggleJob = (id: string) => {
@@ -144,22 +132,21 @@ export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeM
                     <div className="h-full flex items-center justify-center">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
                     </div>
-                ) : comparison ? (
+                ) : comparison || nativeMetrics ? (
                     <div className="space-y-8">
                         {useNative && <>
-                            <p>Native measurements stay in their producer cohorts; parent and descendant jobs are not pooled. Missing measurements are not zero. Open native observations to compare original record sets without turning them into Designs.</p>
-                            {selectedJobIds.map(id => <NativeObservations key={id} jobId={id} launchContextId={launchContextId} />)}
-                            {points.isError ? <p role="alert">Native comparison measurements could not be loaded.</p>
+                            <Suspense fallback={<p>Loading native comparison…</p>}><NativeBinderComparison jobIds={selectedJobIds} launchContextId={launchContextId} /></Suspense>
+                            {canonicalJobIds.length > 0 && (points.isError ? <p role="alert">Native comparison measurements could not be loaded.</p>
                                 : points.isPending ? <p>Loading native measurements…</p>
                                 : points.data.length ? <>
-                                    <ScientificAnalytics points={points.data} cohorts={comparison.scientific_cohorts ?? []} />
+                                    <ScientificAnalytics points={points.data} cohorts={comparison?.scientific_cohorts ?? []} />
                                     <details><summary>Retained native records and producer scopes</summary><div className="overflow-auto"><table className="text-left text-xs"><thead><tr><th>Design / owning Job</th><th>Producer version / scope / unit</th><th>Availability</th></tr></thead><tbody>
                                         {points.data.map(point => <tr key={`${point.source_job_id}:${point.id}`}><td className="p-2">{point.name} ({point.id})<br />{point.source_job_id}</td>
                                             <td>{[...new Set(Object.values(point.metric_descriptors).map(d => `${d.producer_version} / ${d.scope} / ${d.unit}`))].join('; ') || 'Unavailable'}</td>
                                             <td>{point.publication_state?.reason_code ?? (Object.keys(point.metric_states).length ? `${Object.values(point.metric_states).filter(s => s.state === 'ok').length} observed measurements` : 'Measurements unavailable')}</td></tr>)}
                                     </tbody></table></div></details>
                                 </>
-                                : <p>No canonical native measurements reported for this selection.</p>}
+                                : <p>No canonical native measurements reported for this selection.</p>)}
                         </>}
                         {!useNative && <>
                         {/* Summary Table */}

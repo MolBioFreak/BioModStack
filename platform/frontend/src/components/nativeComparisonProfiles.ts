@@ -17,7 +17,7 @@ export function comparisonProfiles(profiles: ComparisonProfile[], chain: string)
             const indices = metric.residues.flatMap((ref, i) => comparisonChain(ref) === chainId ? [i] : []);
             const keys = indices.map(i => comparisonKey(metric.residues[i]));
             keys.forEach((key, j) => categories.set(key, comparisonLabel(metric.residues[indices[j]])));
-            return { id: profile.id, chain: chainId, name: `${profile.name} (${profile.id}) · ${chainId} · ${metric.metric}`,
+            return { id: profile.id, chain: chainId, name: `${profile.name} · ${chainId}`,
                 x: keys, y: indices.map(i => metric.values[i] * 100),
                 text: indices.map(i => `${comparisonLabel(metric.residues[i])}<br>Native ${metric.values[i]} fraction<br>Document ${metric.document.documentId}`),
             };

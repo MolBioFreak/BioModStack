@@ -36,6 +36,7 @@ export default defineConfig({
             './tests/vitest/ui-integrationReceivingMounted.test.tsx',
             './tests/vitest/binderProjectAuthoringCompletionMounted.test.tsx',
             './tests/vitest/binderResultFamily.test.tsx',
+            './tests/vitest/binderNativeComparisonMounted.test.tsx',
             './tests/vitest/bindcraft2ResultsDashboardMounted.test.tsx',
             './tests/vitest/binderEvidencePollingMounted.test.tsx',
             './tests/vitest/nativeGenerationWorkbenchMounted.test.tsx',
