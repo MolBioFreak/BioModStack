@@ -21,7 +21,7 @@ import run_ppiflow_generation as observation
 from test_ppiflow_target_producer_mapping import native, native_io, tensor, definitions, runner, torch
 
 
-def actual_dataset_row(native, features, sample=0):
+def actual_dataset_row(native, features, sample=0, motif=None):
     tree = ast.parse((native / 'data/datasets_binder_partial.py').read_text())
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'PpiTestPartialDataset')
     method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == '__getitem__')
@@ -34,7 +34,7 @@ def actual_dataset_row(native, features, sample=0):
     obj.setup_binder_mask = lambda feats: (feats['chain_idx'] == 1).view(type(tensor([])))
     obj.setup_target_hotspots = lambda feats: tensor(np.zeros(len(feats['chain_idx'])))
     obj.post_process_feats = lambda feats: feats
-    obj._dataset_cfg = obj.dataset_cfg = types.SimpleNamespace(motif=None, scaffold_contig=None)
+    obj._dataset_cfg = obj.dataset_cfg = types.SimpleNamespace(motif=motif, scaffold_contig=None)
     return obj[0]
 
 
@@ -88,7 +88,7 @@ def test_real_native_parser_and_config(native, tmp_path):
     assert not hasattr(args, 'retry_Limit')
     cfg = yaml.safe_load(Path(args.config).read_text())
     assert cfg['model']['seq_decoder']['use'] is False
-    assert receipt['explicit_hotspot_chain2_correction'] == 'not_applied_pending_approval'
+    assert receipt['explicit_hotspot_chain2_correction'] == 'approved_explicit_binder_chain_assignment'
 
 
 def test_actual_native_writer_identity_and_relocation(native_io, tmp_path, monkeypatch):
@@ -120,11 +120,14 @@ def test_protein_instrumentation_is_writer_only(native):
     source = (native / 'models/flow_module_binder_partial.py').read_text()
     code = partial.instrument(source, 'native-producer')
     assert code
-    assert 'chain2_id' not in Path(partial.__file__).read_text()
+    def names(compiled):
+        return set(compiled.co_names).union(*(names(c) for c in compiled.co_consts if isinstance(c, types.CodeType)))
+    assert 'write_sample' in names(code)
+    assert 'correct_hotspot_source' not in names(code)
 
 
-@pytest.mark.parametrize('samples,fail_after_one,expected', [(2, False, 2), (0, False, 0), (2, True, 1)])
-def test_actual_nextflow_module_shell_with_inert_science(native, tmp_path, samples, fail_after_one, expected):
+@pytest.mark.parametrize('samples,fail_after_one,expected,redesign,anchors', [(2, False, 2, False, False), (0, False, 0, False, False), (2, True, 1, False, False), (2, False, 4, True, False), (2, False, 4, True, True)])
+def test_actual_nextflow_module_shell_with_inert_science(native, tmp_path, samples, fail_after_one, expected, redesign, anchors):
     executable = shutil.which('nextflow')
     jar = Path.home() / '.nextflow/framework/25.10.1/nextflow-25.10.1-one.jar'
     command = ['java', '-jar', str(jar)] if jar.is_file() else [executable]
@@ -138,6 +141,13 @@ if len(sys.argv) > 1 and sys.argv[1].endswith('/run_ppiflow_protein_partial.py')
     sys.path.insert(0, {str(ROOT / 'tests')!r})
     from ppiflow_partial_inert_leaves import run_adapter
     run_adapter(sys.argv[1], sys.argv[2:], {str(native)!r})
+elif len(sys.argv)>1 and sys.argv[1].endswith(('/prep_fampnn_designs.py','/prep_fampnn_constraints_generic.py','/analyse_fampnn.py','/prepare_ppiflow_maturation.py')):
+    sys.path[:0] = [{str(ROOT/'tests')!r}, {str(ROOT/'scripts')!r}]
+    from ppiflow_inline_inert_leaves import native_inline, inert_preparation, inert_analysis, inert_anchors
+    if sys.argv[1].endswith('/prep_fampnn_designs.py'): inert_preparation(sys.argv[2:])
+    elif sys.argv[1].endswith('/analyse_fampnn.py'): inert_analysis(sys.argv[2:])
+    elif sys.argv[1].endswith('/prepare_ppiflow_maturation.py'): inert_anchors(sys.argv[2:])
+    else: native_inline(sys.argv[2:])
 else:
     os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])
 ''')
@@ -149,15 +159,23 @@ else:
     portable = tmp_path / 'portable'
     for relative in ['workflows/binder_refinement.nf', 'modules/ppiflow.nf',
                      'scripts/run_ppiflow_protein_partial.py', 'scripts/run_ppiflow_generation.py',
-                     'scripts/publish_binder_refinement.py', 'platform/api/config/models/binder_refinement.yaml']:
+                     'scripts/publish_binder_refinement.py', 'platform/api/config/models/binder_refinement.yaml',
+                     'scripts/prep_binder_fampnn_constraints.py', 'scripts/prep_fampnn_designs.py', 'scripts/prepare_ppiflow_maturation.py',
+                     'scripts/prep_fampnn_constraints_generic.py', 'scripts/fampnn_native_binding.py', 'scripts/analyse_fampnn.py']:
         dest = portable / relative
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, dest)
     params = {'pdb_paths': str(source), 'code_root': str(portable), 'out_dir': str(tmp_path / 'out'),
               'binder_chains': 'R', 'target_chains': 'r', 'ppiflow_task': 'protein_binder_partial',
               'maturation_flow_enabled': True, 'maturation_repack_enabled': False,
-              'maturation_anchors_enabled': False, 'maturation_redesign_enabled': False,
+              'maturation_anchors_enabled': anchors, 'maturation_redesign_enabled': redesign,
+              'seqs_per_design': 2, 'fixed_positions': 'R:19B', 'epitope_residues': 'r19A',
               'ppiflow_samples_per_target': samples, 'ppiflow_start_t': .15}
+    # Source conversion selected model 99 and wrote MODEL 7, not original 99 or implicit1.
+    source.write_text('MODEL        7\n'+pdb_text()+'ENDMDL\n')
+    identity=tmp_path/'identity.json'
+    identity.write_text(json.dumps([{'staged_name':source.name,'prepared_pdb_model':7,'source_meta':{'model':99}}]))
+    params['source_identity_json']=str(identity)
     param_file = tmp_path / 'params.json'; param_file.write_text(json.dumps(params))
     env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ['PATH'], NXF_OFFLINE='true',
                BMS_INERT_FAIL_AFTER_ONE='1' if fail_after_one else '0')
@@ -168,12 +186,39 @@ else:
     assert (result.returncode != 0) == fail_after_one, result.stdout + result.stderr
     trace = (tmp_path / 'trace.txt').read_text()
     assert 'RunProteinPartialFlow' in trace
-    assert 'RunMaturationFAMPNN' not in trace and 'IdentifyAnchorResidues' not in trace
+    assert ('RunMaturationFAMPNN' in trace) == redesign
+    assert ('IdentifyAnchorResidues' in trace) == anchors
     outputs = list((tmp_path / 'out/collected/binder_refinement').rglob('generator_*.json'))
-    assert len(outputs) == expected
+    if redesign:
+        # Retained parent backbones plus explicitly requested descendants.
+        designed=[json.loads(p.read_text()) for p in outputs if json.loads(p.read_text()).get('terminal_producer')=='fampnn']
+        assert len(designed)==expected
+        for row in designed:
+            assert row['artifact_class']=='sequence_designed_complex'
+            assert row['sequence_semantics']=='native_fampnn_output'
+            assert row['source_residue_mapping']
+            assert row['parent_artifact_class']=='backbone_complex'
+            assert row['parent_native_output_id'].startswith('source:sample:')
+            assert row['native_output_id'].startswith(row['native_input_id']+'_sample')
+            assert 'sample_index' not in row
+            assert row['sha256']
+            assert row['binder_chains'] and row['target_chains']
+            assert row['chain_roles_namespace']=='output'
+            assert list(row['designed_chain_sequences'].values())==['RL' if anchors else 'RA']
+        masks=[json.loads(p.read_text()) for p in (tmp_path/'work').rglob('native_masks.json')]
+        assert masks
+        for rows in masks:
+            for row in rows:
+                assert row['fixed_sequence']==[[1,1,0,1]]
+        outputs=[p for p in outputs if json.loads(p.read_text()).get('terminal_producer')!='fampnn']
+        assert len(outputs)==samples
+    else:
+        assert len(outputs) == expected
     for output in outputs:
         row = json.loads(output.read_text())
         assert row['artifact_class'] == 'backbone_complex'
         assert row['sequence_semantics'] == 'movable_positions_masked_alanine'
         assert len(row['residue_mapping']) == 4
         assert row['native_output_id'].startswith('source:sample:')
+        assert row['effective_settings']['ppiflow_input_model']==(1 if anchors else 7)
+        assert all(r['source']['model']==(1 if anchors else 7) for r in row['residue_mapping'])

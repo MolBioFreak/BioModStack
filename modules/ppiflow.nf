@@ -153,6 +153,12 @@ process RunProteinPartialFlow {
     tuple val(meta), path("${meta.id}_ppiflow_accounting.json"), emit: accounting
     script:
     def settings = params.findAll { key, value -> key.toString().startsWith('ppiflow_protein_') || key in ['ppiflow_start_t', 'ppiflow_samples_per_target', 'ppiflow_input_model', 'ppiflow_fixed_positions', 'ppiflow_checkpoint_path', 'binder_chains', 'target_chains', 'epitope_residues'] }
+    if (meta.prepared_pdb_model != null) settings.ppiflow_input_model = meta.prepared_pdb_model
+    // Repacking/anchor preparation exports a new PDB. Resolve its actual MODEL
+    // from those bytes, not the serial in the selected pre-conversion document.
+    if (params.get('maturation_repack_enabled') == true || params.get('maturation_anchors_enabled') == true) {
+        settings.remove('ppiflow_input_model')
+    }
     def encoded = groovy.json.JsonOutput.toJson(settings).bytes.encodeBase64().toString()
     def sourceEncoded = groovy.json.JsonOutput.toJson(meta).bytes.encodeBase64().toString()
     """
@@ -426,6 +432,10 @@ process RunMaturationFAMPNN {
     # PyTorch >=2.6 defaults torch.load(..., weights_only=True), which breaks
     # legacy FAMPNN checkpoints saved with OmegaConf/defaultdict metadata.
     nativeCommand=("\${PYTHON_BIN}" /app/fampnn/fampnn/inference/seq_design.py)
+    if [ "${meta.binder_refinement ?: false}" = "true" ]; then
+        nativeCommand=("\${PYTHON_BIN}" "${params.code_root}/scripts/prep_fampnn_constraints_generic.py"
+            --native-script /app/fampnn/fampnn/inference/seq_design.py --)
+    fi
     if [ "${params.get('core_protein_scientific_contract') ?: ''}" = "1" ]; then
         cp ${transport_dir}/*.comparison.json ./
         nativeCommand=("\${PYTHON_BIN}" "${params.code_root}/scripts/maturation_native_adapter.py"
@@ -452,6 +462,7 @@ process RunMaturationFAMPNN {
         base_name=\$(basename "\$file")
         new_name=\$(echo "\$base_name" | sed 's/sample/seq_/')
         cp -L -l --remove-destination "\$file" "results/\$new_name"
+        if [ -f "\$file.fa_binding.json" ]; then cp "\$file.fa_binding.json" "results/\$new_name.fa_binding"; fi
         if [ "${params.get('core_protein_scientific_contract') ?: ''}" = "1" ]; then
             cp "\$file.comparison.json" "results/\$new_name.comparison.json"
         fi
@@ -462,6 +473,15 @@ process RunMaturationFAMPNN {
         --chain_id "${analysisChain}" \\
         --ignore_cbeta \\
         --out_dir results
+
+    if [ "${meta.binder_refinement ?: false}" = "true" ]; then
+        "\${PYTHON_BIN}" - <<'PY'
+import json, sys
+sys.path.insert(0, '${params.code_root}/scripts')
+from prep_binder_fampnn_constraints import annotate_inline
+annotate_inline('results', '${transport_dir}')
+PY
+    fi
 
     # Native writers and analysis have returned before these retained names.
     publish_closed_structure() {

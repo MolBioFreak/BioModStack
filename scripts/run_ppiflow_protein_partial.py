@@ -2,8 +2,8 @@
 """Pinned protein partial sampler adapter; no inference imports until main.
 
 The selected pair is a representable derivative with explicit author mapping.
-The native hotspot preprocessing bug is deliberately NOT repaired here pending
-approval. Writer observation never changes native tensors, masks or PDB bytes.
+The approved pinned hotspot repair supplies the explicit binder chain only.
+Writer observation never changes native tensors, masks or PDB bytes.
 """
 import argparse
 import ast
@@ -23,9 +23,32 @@ def scalar(value):
     return value.tolist() if hasattr(value, 'tolist') else value
 
 
-def prepare_pair(source, destination, binder, target, model=1):
+def correct_hotspot_source(source):
+    """One approved repair at the pinned explicit-hotspot receiver boundary."""
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == 'preprocess_csv_and_pkl':
+            for branch in node.body:
+                if isinstance(branch, ast.If) and ast.unparse(branch.test) == 'args.specified_hotspots is not None':
+                    branch.body.extend(ast.parse('input_info["chain2_id"] = args.binder_chain').body)
+    return ast.unparse(ast.fix_missing_locations(tree))
+
+
+def prepared_model(source, selected=None):
+    """Resolve MODEL in the prepared bytes, never original CIF model numbering."""
+    serials = list(dict.fromkeys(int(s[10:14]) for s in Path(source).read_text().splitlines()
+                                if s.startswith('MODEL '))) or [1]
+    if selected is not None:
+        return int(selected)
+    if len(serials) != 1:
+        raise ValueError('Select a prepared PDB MODEL serial for this multi-model input')
+    return serials[0]
+
+
+def prepare_pair(source, destination, binder, target, model=None):
     if len(binder) != 1 or len(target) != 1 or binder == target:
         raise ValueError('Native protein partial flow requires one distinct binder and target chain')
+    model = prepared_model(source, model)
     raw = Path(source).read_bytes()
     lines, mapping, lookup = [], [], {}
     current = 1
@@ -186,10 +209,11 @@ def prepare(settings, pdb, output, native_root='/app/ppiflow'):
     root, output = Path(native_root), Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     pair = output / 'selected_pair.pdb'
-    mapping = prepare_pair(pdb, pair, settings['binder_chains'], settings['target_chains'], settings.get('ppiflow_input_model', 1))
+    mapping = prepare_pair(pdb, pair, settings['binder_chains'], settings['target_chains'], settings.get('ppiflow_input_model'))
     config = yaml.safe_load((root / 'configs/inference_binder_partial.yaml').read_text())
     contract = yaml.safe_load((Path(__file__).resolve().parents[1] / 'platform/api/config/models/binder_refinement.yaml').read_text())
     settings = dict(settings)
+    settings['ppiflow_input_model'] = mapping['model']
     for field in contract['params']:
         if field.get('protein_native_cli') or field.get('protein_native_path'):
             default = field.get('protein_default', field.get('default'))
@@ -206,7 +230,11 @@ def prepare(settings, pdb, output, native_root='/app/ppiflow'):
         value = settings.get(field['name'], field.get('protein_default', field.get('default')))
         if value is None:
             continue
-        if field['name'] == 'ppiflow_fixed_positions':
+        if field['name'] == 'ppiflow_protein_scaffold_contig':
+            region, delta = value.rsplit(',', 1)
+            residues = map_mask(region, mapping, 'binder').split(',')
+            value = f'{residues[0]}-{residues[-1][1:]},{int(delta)}'
+        elif field['name'] == 'ppiflow_fixed_positions':
             value = map_mask(value, mapping, 'binder')
         elif field['name'] == 'epitope_residues':
             value = map_mask(value, mapping, 'target')
@@ -224,7 +252,7 @@ def prepare(settings, pdb, output, native_root='/app/ppiflow'):
     receipt = {'settings': settings, 'correspondence': mapping, 'argv': argv,
                'native_source_revision': '000ce45a4411e7b97c1523a22c0f1bece7ede5fc',
                'inference_qualification': 'not_established_by_adapter_tests',
-               'explicit_hotspot_chain2_correction': 'not_applied_pending_approval'}
+               'explicit_hotspot_chain2_correction': 'approved_explicit_binder_chain_assignment'}
     (output / 'request_receipt.json').write_text(json.dumps(receipt, indent=2))
     return receipt
 
@@ -272,6 +300,9 @@ def main():
     sys.meta_path[:0] = [Loader(), observer]
     sys.path.insert(0, '/app/ppiflow')
     sys.argv = receipt['argv']
+    patched = Path(args.output).resolve() / 'sample_binder_partial.py'
+    patched.write_text(correct_hotspot_source(Path(sys.argv[0]).read_text()))
+    sys.argv[0] = str(patched)
     try:
         runpy.run_path(sys.argv[0], run_name='__main__')
     finally:

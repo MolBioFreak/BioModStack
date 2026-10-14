@@ -77,8 +77,9 @@ def run_adapter(script, args, native_root):
                              'binder_motif_mask': tensor(np.zeros((1, count)))}
                     from test_ppiflow_protein_partial import actual_dataset_row
                     features = {key: value[0] for key, value in batch.items() if key not in {'pdb_name', 'sample_ids'}}
-                    features['binder_motif_mask'] = tensor(np.zeros(count))
-                    row = actual_dataset_row(root, features, sample)
+                    fixed = {int(x[1:]) for x in (cli.fixed_positions or '').split(',') if x}
+                    features['binder_motif_mask'] = tensor([int(c == 1 and n in fixed) for c,n in zip(chains,numbers)])
+                    row = actual_dataset_row(root, features, sample, motif=bool(fixed))
                     batch = {key: [value] if isinstance(value, str) else tensor([value]) for key, value in row.items()}
                     producer['test_step'](module, batch, sample)
                     if os.environ.get('BMS_INERT_FAIL_AFTER_ONE') == '1':
@@ -91,7 +92,7 @@ def run_adapter(script, args, native_root):
                'Dict': dict, 'Any': object, 'OmegaConf': types.SimpleNamespace(create=lambda x: x),
                'Experiment': InertExperiment, 'process_file': process_file,
                'get_residue_pairs_within_distance': lambda *a, **kw: ([], [1], [1])}
-        definitions(root / 'sample_binder_partial.py', {'ConfigManager', 'get_parser', 'get_motif_residues', 'preprocess_csv_and_pkl', 'run_pipeline'}, env)
+        definitions(Path(path), {'ConfigManager', 'get_parser', 'get_motif_residues', 'preprocess_csv_and_pkl', 'run_pipeline'}, env)
         parser = env['get_parser']
         parsed = parser().parse_args(sys.argv[1:])
         env['run_pipeline'](parsed)
