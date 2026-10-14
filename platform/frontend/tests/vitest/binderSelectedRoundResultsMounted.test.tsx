@@ -7,6 +7,7 @@ import { api } from '../../src/lib/api';
 import { ResultsViewer } from '../../src/components/ResultsViewer';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
 import { writeBinderSelection, writeBinderNativeSources } from '../../src/lib/binderContinuation';
+import { declaredBinderRoleDefaults } from '../../src/lib/binderSourceRoles';
 import { submitSelectedRound, writeRoundStorage } from '../../src/lib/binderSelectedRound';
 
 // TRANSPORT FIXTURE ONLY: actual Results parent, readers, composer, native editors,
@@ -19,8 +20,8 @@ const original = api.defaults.adapter;
 const calls: Array<{ url: string; body: any }> = [];
 let rounds: any[] = [], sets: any[] = [];
 const job = { id: 'parent', name: 'TRANSPORT FIXTURE binder', model_id: 'ppiflow', mode: 'protein_binder', status: 'completed', params: {}, design_count: 1, created_at: '2026-09-01T00:00:00Z' };
-const doc = { artifact_id: 'complex', primary: true, target_state: 'complex', logical_path: 'exact/complex.pdb', download_url: '/exact/complex.pdb' };
-const monomer = { artifact_id: 'monomer', target_state: 'binder', logical_path: 'exact/binder.cif', download_url: '/exact/binder.cif' };
+const doc = { binder_chains: 'B', target_chains: 'A', artifact_id: 'complex', primary: true, target_state: 'complex', logical_path: 'exact/complex.pdb', download_url: '/exact/complex.pdb' };
+const monomer = { binder_chains: 'A', target_chains: '', artifact_id: 'monomer', target_state: 'binder', logical_path: 'exact/binder.cif', download_url: '/exact/binder.cif' };
 const records = Array.from({ length: 32 }, (_, i) => ({ candidate_key: `producer:${i}`, ...(i === 0 ? { design_id: 'design' } : {}), metrics: { score: i, outcome: i % 2 ? 'rejected' : 'passed', rank: i === 0 ? 1 : null }, structures: i === 0 ? [doc, monomer] : [{ ...doc, artifact_id: `native-${i}`, download_url: `/exact/${i}.pdb` }] }));
 const text = (node: any): string => typeof node === 'string' ? node : (node.children ?? []).map(text).join('');
 const button = (label: string) => tree!.root.findAllByType('button').find(node => text(node) === label)!;
@@ -51,6 +52,9 @@ beforeEach(() => {
         else if (url.includes('/integration')) data = { enabled: false };
         else if (url.startsWith('/api/models/')) data = { id: url.split('/').at(-1), params: [
             { name: 'ppiflow_task', label: 'Task', type: 'string', enum: ['protein_binder_partial', 'antibody_partial', 'nanobody_partial'], default: 'antibody_partial' },
+            { name: 'ppiflow_start_t', label: 'Start time', type: 'number', default: null, defaults_by_task: { protein_binder_partial: 0.15, antibody_partial: 0.8, nanobody_partial: 0.8 } },
+            { name: 'design_chain', label: 'Design chain', type: 'string', default: 'A' },
+            { name: 'target_chain', label: 'Target chain', type: 'string', default: 'B' },
             { name: 'enabled', label: 'Enabled', type: 'boolean', default: true },
             { name: 'samples', label: 'Samples', type: 'integer', default: 5, nullable: true, minimum: 0 },
             { name: 'fixed_positions', label: 'Fixed positions', type: 'string', default: 'A:1' },
@@ -158,6 +162,49 @@ it('keeps the same idempotent intent after lost transport and reload, and preser
     expect(posts).toHaveLength(2); expect(posts[1]).toEqual(posts[0]);
     expect(posts[0].round_plan.stages.map((stage: any) => stage.id)).toEqual(['before', 'after']);
     expect(rounds).toHaveLength(1);
+});
+
+it('protein recipe visibly orders flow then intentionally chosen designers then predictors without a hidden designer', async () => {
+    writeBinderSelection('parent', ['design']); await mount(); await click('Next round (1)'); await click('Add protein flow → design → predict');
+    expect(tree!.root.findByProps({ 'aria-label': 'Stage 2 FA-MPNN' }).props.checked).toBe(false);
+    expect(tree!.root.findByProps({ 'aria-label': 'Stage 2 ProteinMPNN' }).props.checked).toBe(false);
+    await change('Stage 2 ProteinMPNN', true); await change('Stage 2 Caliby', true); await change('Stage 3 Protenix', true);
+    await click('Queue round');
+    const stages = calls.filter(call => call.url === '/api/binder-continuation/selected').at(-1)!.body.round_plan.stages;
+    expect(stages.map((stage: any) => stage.kind)).toEqual(['maturation', 'sequence_design', 'prediction']);
+    expect(stages[0].params).toEqual({ ppiflow_task: 'protein_binder_partial', maturation_flow_enabled: true, maturation_redesign_enabled: false });
+    expect(stages[1].models.map((model: any) => model.model_id)).toEqual(['proteinmpnn', 'caliby_binder']);
+});
+
+it('keeps task-owned protein and antibody defaults and edited drafts separate without null-default hydration', async () => {
+    writeBinderSelection('parent', ['design']); await mount(); await click('Next round (1)'); await click('Add protein flow → design → predict'); await click('PPIFlow settings');
+    const parameter = (name: string) => tree!.root.findAll(node => typeof node.type === 'function' && node.props.param?.name === name).at(-1)!;
+    const start = () => parameter('ppiflow_start_t').findByType('input');
+    const task = async (value: string) => { await act(async () => parameter('ppiflow_task').findByType('select').props.onChange({ target: { value } })); };
+    expect(start().props.value).toBe(0.15);
+    await act(async () => start().props.onChange({ target: { value: '0.22' } }));
+    await task('antibody_partial'); expect(start().props.value).toBe(0.8);
+    await act(async () => start().props.onChange({ target: { value: '0.6' } }));
+    await task('protein_binder_partial'); expect(start().props.value).toBe(0.22);
+    await click('Back to round'); await close(); await mount(); await click('Next round (1)'); await click('PPIFlow settings');
+    expect(start().props.value).toBe(0.22); await task('antibody_partial'); expect(start().props.value).toBe(0.6);
+});
+
+it('approved role initialization uses the exact producer document and preserves explicit clears through reload', async () => {
+    writeBinderSelection('parent', ['design']);
+    await mount(); await click('Next round (1)'); await click('Add Sequence design'); await change('Stage 1 FA-MPNN', true); await click('FA-MPNN settings');
+    const field = (name: string) => tree!.root.findAll(node => typeof node.type === 'function' && node.props.param?.name === name).at(-1)!.findByType('input');
+    expect(field('design_chain').props.value).toBe('B');
+    expect(field('target_chain').props.value).toBe('A');
+    await act(async () => field('design_chain').props.onChange({ target: { value: '' } }));
+    await click('Back to round'); await close(); await mount(); await click('Next round (1)'); await click('FA-MPNN settings');
+    expect(field('design_chain').props.value).toBe(''); expect(field('target_chain').props.value).toBe('A');
+    await click('Back to round'); await click('Queue round');
+    expect(calls.filter(call => call.url === '/api/binder-continuation/selected').at(-1)!.body.round_plan.stages[0].models[0].params).toMatchObject({ design_chain: '', target_chain: 'A' });
+    const fields = [{ name: 'design_chain' }, { name: 'target_chain' }];
+    expect(declaredBinderRoleDefaults([monomer], fields)).toEqual({ design_chain: 'A', target_chain: '' });
+    expect(declaredBinderRoleDefaults([doc, monomer], fields)).toEqual({});
+    expect(declaredBinderRoleDefaults([doc, undefined], fields)).toEqual({});
 });
 
 it('selected-round remote transport uses the actual shared prepared review and canonical Job submission', async () => {

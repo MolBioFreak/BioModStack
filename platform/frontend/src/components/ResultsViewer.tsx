@@ -5581,7 +5581,7 @@ function ResultsViewerContent() {
                     onCompareJobs={ids => setComparison({ jobId: selectedJobId, ids })} />}
                 {showResultFamily && <BinderResultComparison key={`comparison-${selectedJobId}`}
                     jobId={selectedJobId} jobIds={comparison?.jobId === selectedJobId ? comparison.ids : undefined}
-                    selectedDesignIds={selectedDesignIds} launchContextId={destinationLaunchContextId} />}
+                    selectedDesignIds={selectedDesignIds} {...{ selectedNativeSources }} launchContextId={destinationLaunchContextId} />}
                 {activeJob && isProteinLocalRedesignResultJob(activeJob) && !isRFD3LocalRedesignResultJob(activeJob) && (
                     <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                 )}

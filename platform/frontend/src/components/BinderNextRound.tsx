@@ -60,6 +60,13 @@ export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNative
     const intent = { operation: 'round' as const, source_job_id: sourceJobId, selection: { candidate_refs: selection }, round_plan: { schema_version: 1 as const, stages: activeStages }, execution_target_id: draft.target, execution_policy: draft.policy ?? newJobExecutionPolicy(), ...(launchContextId !== undefined ? { launch_context_id: launchContextId } : {}) };
     const changeStage = (id: string, update: (stage: DraftStage) => DraftStage) => setDraft(previous => ({ ...previous, stages: previous.stages.map(item => item.stage.id === id ? update(item) : item) }));
     const addStage = (kind: SelectedRoundStage['kind']) => setDraft(previous => ({ ...previous, stages: [...previous.stages, newStage(kind, previous.stages.filter(item => item.enabled).at(-1)?.stage.id)] }));
+    const addProteinRecipe = () => setDraft(previous => {
+        const flow = newStage('maturation', previous.stages.filter(item => item.enabled).at(-1)?.stage.id);
+        if (flow.stage.kind === 'maturation') flow.stage.params = { ppiflow_task: 'protein_binder_partial', maturation_flow_enabled: true, maturation_redesign_enabled: false };
+        const design = newStage('sequence_design', flow.stage.id);
+        const prediction = newStage('prediction', design.stage.id);
+        return { ...previous, stages: [...previous.stages, flow, design, prediction] };
+    });
     const run = async () => {
         setBusy(true); setError('');
         const fingerprint = JSON.stringify(intent);
@@ -104,6 +111,7 @@ export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNative
             <h3 className="font-semibold">Next round</h3>
             <p>Choose stages in order. Models within a stage branch over the same inputs. Inactive drafts are retained, not submitted.</p>
             <p>Protein maturation recipe: flow → chosen designer(s) → blind predictor(s). Flow-only backbones remain available for later design.</p>
+            <button type="button" className={control} onClick={addProteinRecipe}>Add protein flow → design → predict</button>
             <div className="flex flex-wrap gap-2">{(['maturation', 'sequence_design', 'prediction'] as const).map(kind => <button type="button" className={control} key={kind} onClick={() => addStage(kind)}>Add {names[kind]}</button>)}</div>
             {draft.stages.map((item, index) => <fieldset key={item.stage.id} className="space-y-2 rounded border border-[var(--border-color)] p-3"><legend>{index + 1}. {names[item.stage.kind]}</legend>
                 <label><input type="checkbox" checked={item.enabled} onChange={event => changeStage(item.stage.id, value => ({ ...value, enabled: event.target.checked }))} />Include stage {index + 1}</label>
@@ -119,7 +127,7 @@ export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNative
                     })} />{labels[model]}</label>{chosen && <button type="button" className={control} onClick={() => setEditing({ stage: item.stage.id, model })}>{labels[model]} settings</button>}</div>;
                 })}</div>}
             </fieldset>)}
-            {editing && activeEditor && editorParams && <section key={`${editing.stage}:${editing.model}`} aria-label="Stage native editor"><h4>{names[activeEditor.stage.kind]} · {labels[editing.model]}</h4><button type="button" className={control} onClick={() => setEditing(undefined)}>Back to round</button>{renderEditor({ operation: operations[editing.model], candidateRefs: selection, params: editorParams, onChange: params => updateEditor(editing.stage, editing.model, params) })}</section>}
+            {editing && activeEditor && editorParams && <section key={`${editing.stage}:${editing.model}`} aria-label="Stage native editor"><h4>{names[activeEditor.stage.kind]} · {labels[editing.model]}</h4>{'stage_id' in activeEditor.stage.input && <p>Inputs and declared chain roles come from the earlier stage’s actual outputs. Source-stage chain letters are not copied. Explicit role overrides remain editable.</p>}<button type="button" className={control} onClick={() => setEditing(undefined)}>Back to round</button>{renderEditor({ operation: operations[editing.model], candidateRefs: 'selected' in activeEditor.stage.input ? selection : [], params: editorParams, onChange: params => updateEditor(editing.stage, editing.model, params) })}</section>}
             <ExecutionTargetPicker value={draft.target} onChange={target => setDraft(previous => ({ ...previous, target }))} disabled={busy} />
             <ExecutionPolicyControl initialPolicy={draft.policy ?? newJobExecutionPolicy()} onChange={policy => setDraft(previous => ({ ...previous, policy }))} />
             <details><summary>Review exact request</summary><BindCraft2SettingsReadback value={intent} /></details>

@@ -14,6 +14,7 @@ import { EpitopeSelector } from './EpitopeSelector';
 import { parseBC2Document, type BC2Document } from '../lib/bindcraft2StructureInputs';
 import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
 import { blindFixedParameters, roundParameterIsBound } from '../lib/binderRound';
+import { declaredBinderRoleDefaults, type DeclaredDocumentRoles } from '../lib/binderSourceRoles';
 import { nativeParameterDisplay } from '../lib/nativeBinderAuthoring';
 import { ParamField } from './ModelParameterField';
 import { SequenceDesignerSettings } from './SequenceDesignerSettings';
@@ -24,6 +25,7 @@ import { hydrateFrustraMpnnSettings } from './frustrampnn/frustraMpnnSettingsSta
 
 const models = { refine: 'binder_refinement', caliby: 'caliby_binder', fampnn: 'fampnn', proteinmpnn: 'proteinmpnn', protonpottsmpnn: 'protonpottsmpnn', predict_boltz2: 'boltz2', predict_protenix: 'protenix', predict_esmfold2: 'esmfold2' } as const;
 const modes = { refine: 'refine', caliby: 'design', fampnn: 'binder_design', proteinmpnn: 'design', protonpottsmpnn: 'redesign', predict_boltz2: 'complex', predict_protenix: 'complex', predict_esmfold2: 'predict' } as const;
+const roleFields = new Set(['binder_chains', 'design_chain', 'target_chains', 'target_chain']);
 const systemInputs = new Set(['pdb_paths', 'source_identity_json', 'selected_input_dir', 'selected_input_manifest', 'input_pdb', 'sequence', 'sequence_name']);
 const modelFields = (model: UntypedApiValue, operation: Exclude<BinderOperation, 'frustrampnn'>) => {
     const mode = model?.modes?.find((item: UntypedApiValue) => item.id === modes[operation]);
@@ -96,6 +98,7 @@ export function BinderOperationEditor({ sourceJobId, selectedDesignIds, selected
     }, [sourceJobId, selectedKey]);
     const [legacyOperation, setOperation] = useState<BinderOperation>('refine');
     const operation = editor?.operation ?? legacyOperation;
+    const touchedRoles = useRef<Record<string, Set<string>>>({ [operation]: new Set(Object.keys(editor?.params ?? {})) });
     const [model, setModel] = useState<UntypedApiValue | null>(null);
     const [settings, setSettings] = useState<Record<string, Record<string, UntypedApiValue>>>({});
     const [frustra, setFrustra] = useState(() => hydrateFrustraMpnnSettings(undefined));
@@ -148,7 +151,7 @@ export function BinderOperationEditor({ sourceJobId, selectedDesignIds, selected
             if (!current) return;
             setModel(data);
             const defaults = Object.fromEntries(modelFields(data, operation)
-                .filter((p: UntypedApiValue) => p.default !== undefined)
+                .filter((p: UntypedApiValue) => p.default !== undefined && !roleFields.has(p.name) && !(p.defaults_by_task && p.default === null))
                 .map((p: UntypedApiValue) => [p.name, editorRef.current && operation.startsWith('predict_') && blindFixedParameters.has(p.name) ? false : p.default]));
             if (editorRef.current) editorRef.current.onChange({ ...defaults, ...editorRef.current.params });
             else setSettings(previous => ({ ...previous, [operation]: { ...defaults, ...previous[operation] } }));
@@ -156,8 +159,31 @@ export function BinderOperationEditor({ sourceJobId, selectedDesignIds, selected
         return () => { current = false; };
     }, [operation]);
     const params = editor?.params ?? settings[operation] ?? {};
-    const updateParam = (key: string, value: UntypedApiValue) => editor ? editor.onChange({ ...params, [key]: value }) : setSettings(previous => ({ ...previous, [operation]: { ...previous[operation], [key]: value } }));
-    const displayParameter = (param: UntypedApiValue) => Object.hasOwn(params, param.name) && params[param.name] === null
+    const updateParam = (key: string, value: UntypedApiValue) => {
+        (touchedRoles.current[operation] ??= new Set()).add(key);
+        if (editor) editor.onChange({ ...params, [key]: value });
+        else setSettings(previous => ({ ...previous, [operation]: { ...previous[operation], [key]: value } }));
+    };
+    const roleDocuments = [
+        ...selectedDesignIds.map(id => {
+            const selector = documentSelections[id];
+            const inventory = sourceRows[id]?.documents ?? [];
+            const exact = selector ? inventory.filter(doc => (!selector.artifact_id || doc.artifact_id === selector.artifact_id) && (selector.target_state === undefined || doc.target_state === selector.target_state)) : inventory.filter(doc => doc.primary);
+            const document = exact.length === 1 ? exact[0] : !selector && inventory.length === 1 ? inventory[0] : undefined;
+            return document as DeclaredDocumentRoles | undefined;
+        }),
+        ...selectedNativeSources.map(source => source.document as DeclaredDocumentRoles | undefined),
+    ];
+    const declaredRoleKey = JSON.stringify(operation === 'frustrampnn' ? {} : declaredBinderRoleDefaults(roleDocuments, modelFields(model, operation)));
+    useEffect(() => {
+        const declared = JSON.parse(declaredRoleKey) as Record<string, string | string[]>;
+        const current = editorRef.current?.params ?? settings[operation] ?? {};
+        const updates = Object.fromEntries(Object.entries(declared).filter(([key, value]) => !touchedRoles.current[operation]?.has(key) && JSON.stringify(current[key]) !== JSON.stringify(value)));
+        if (!Object.keys(updates).length) return;
+        if (editorRef.current) editorRef.current.onChange({ ...current, ...updates });
+        else setSettings(previous => ({ ...previous, [operation]: { ...previous[operation], ...updates } }));
+    }, [declaredRoleKey, operation]);
+    const displayParameter = (param: UntypedApiValue) => (roleFields.has(param.name) && !Object.hasOwn(params, param.name)) || (Object.hasOwn(params, param.name) && params[param.name] === null)
         ? { ...param, default: undefined }
         : param.defaults_by_task && params.ppiflow_task && !Object.hasOwn(params, param.name)
             ? { ...param, default: param.defaults_by_task[params.ppiflow_task] ?? param.default } : param;
@@ -214,10 +240,10 @@ export function BinderOperationEditor({ sourceJobId, selectedDesignIds, selected
             {inspectionDocument.format !== 'fasta' && <EpitopeMolstarViewer pdbData={inspectedModel?.content ?? inspectionDocument.content} format={inspectionDocument.format} documentId={`${firstSelectedId}:${inspectedDocument?.artifact_id ?? 'primary'}:${inspectedModel?.number ?? 'all-models'}`} defaultFullView selectedResidues={inspectionResidues} onResidueClick={residue => setInspectionResidues(current => { const next = new Set(current); if (next.has(residue)) next.delete(residue); else next.add(residue); return next; })} />}
             {inspectionDocument.models.length > 1 && <label>Inspected model<select aria-label="Inspected model" value={inspectionModel ?? ''} onChange={event => { setInspectionModel(Number(event.target.value)); setInspectionResidues(new Set()); }}><option value="" disabled>Choose a model for residue inspection</option>{inspectionDocument.models.map(model => <option key={model.number} value={model.number}>{model.number}</option>)}</select></label>}
             <EpitopeSelector chains={inspectedModel?.chains ?? []} selectedResidues={inspectionResidues} onSelectionChange={setInspectionResidues} selectedLabel="Inspected author residues" />
-            {fields.some((field: UntypedApiValue) => field.name === 'fixed_positions') && <button type="button" onClick={() => {
+            {fields.filter((field: UntypedApiValue) => ['fixed_positions', 'ppiflow_fixed_positions', 'epitope_residues'].includes(field.name)).map((field: UntypedApiValue) => <button key={field.name} type="button" onClick={() => {
                 const positions = (inspectedModel?.chains ?? []).flatMap(chain => chain.residues.filter(residue => inspectionResidues.has(`${chain.id}${residue.resNum}${residue.iCode || ''}`)).map(residue => `${chain.id}:${residue.resNum}${residue.iCode || ''}`));
-                updateParam('fixed_positions', positions.join(','));
-            }}>Use inspected author residues as fixed positions</button>}
+                updateParam(field.name, positions.join(','));
+            }}>Use inspected author residues as {field.label || field.name.replaceAll('_', ' ')}</button>)}
             <p>Native masks remain explicit settings. No CDR, interface or chain-role inference is performed.</p>
         </section>}
         {inspectionError && operation !== 'frustrampnn' && <p>Source inspection unavailable: {inspectionError}</p>}
@@ -239,7 +265,7 @@ export function BinderOperationEditor({ sourceJobId, selectedDesignIds, selected
         </> : operation === 'protonpottsmpnn' ? <Suspense fallback={<p>Loading native redesign settings…</p>}><ProtonPottsSettings selected parameters={fields.filter((p: UntypedApiValue) => p.name !== 'target_pdb')} values={params} onChange={updateParam}
             renderScalar={param => <ParamField key={param.name} param={displayParameter(param)} params={params} updateParam={updateParam} setShowFileBrowser={setFileField} setActiveSequenceField={setSequenceField} setShowSequenceManager={setShowSequences} ligandPresets={[]} />} /></Suspense> : <>
             {!model && !error && <p role="status">Loading model settings…</p>}
-            <SequenceDesignerSettings fields={fields} renderField={(param: UntypedApiValue) => editor && operation.startsWith('predict_') && blindFixedParameters.has(param.name) ? <p key={param.name}>{param.label || param.name}: off · blind prediction uses the current sequence and independent target, not this pose.</p> : param.name === 'manual_cdr_definitions' ? <section key={param.name} aria-label="Manual native CDR definitions">
+            <SequenceDesignerSettings fields={fields} renderField={(param: UntypedApiValue) => param.read_only ? <p key={param.name}>{param.label || param.name}: {String(Object.hasOwn(params, param.name) ? params[param.name] : displayParameter(param).default ?? 'Not specified')} · profile fixed{param.unavailable_reason ? ` · ${param.unavailable_reason}` : ''}</p> : editor && operation.startsWith('predict_') && blindFixedParameters.has(param.name) ? <p key={param.name}>{param.label || param.name}: off · blind prediction uses the current sequence and independent target, not this pose.</p> : param.name === 'manual_cdr_definitions' ? <section key={param.name} aria-label="Manual native CDR definitions">
                 <h4>Manual native CDR definitions</h4><p>Assign author residues from the inspected source; no automatic region inference.</p>
                 <label>CDR source chain<select aria-label="CDR source chain" value={cdrChain} onChange={event => setCdrChain(event.target.value)}><option value="">First inspected chain</option>{inspectedModel?.chains.map(chain => <option key={chain.id} value={chain.id}>{chain.id}</option>)}</select></label>
                 <CDRRangeSelector activeChain={cdrChain || undefined} chains={inspectedModel?.chains ?? []} cdrDefinitions={(Array.isArray(params[param.name]) ? params[param.name] : []).map((row: UntypedApiValue) => ({ ...row, residues: new Set<string>(row.residues ?? []) }))}
