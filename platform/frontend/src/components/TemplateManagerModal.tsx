@@ -52,6 +52,7 @@ export function TemplateManagerModal({
     const [mode, setMode] = useState<'list' | 'edit'>('list');
     const [editingTemplate, setEditingTemplate] = useState<UserTemplate | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
+    const [allWorkflows, setAllWorkflows] = useState(false);
 
     // Form state
     const [formName, setFormName] = useState('');
@@ -68,6 +69,8 @@ export function TemplateManagerModal({
         // Robot drafts reopen in the BioXP editor, not a scientific model launcher.
         select: (res) => res.data.filter(template => template.mode !== 'bioxp_workflow'),
     });
+
+    const visibleTemplates = templates.filter(template => allWorkflows || !currentModelId || (template.model_id === currentModelId && (!currentMode || template.mode === currentMode)) || (template.params?.denovo_generator === currentModelId && (!currentMode || currentMode === 'campaign')));
 
     // Create mutation
     const createMutation = useMutation({
@@ -122,6 +125,7 @@ export function TemplateManagerModal({
         const opening = isOpen && !wasOpen.current;
         wasOpen.current = isOpen;
         if (opening) {
+            setAllWorkflows(false);
             resetForm();
             setMode(initialIntent === 'browse' ? 'list' : initialIntent === 'save' || (currentParams && Object.keys(currentParams).length > 0) ? 'edit' : 'list');
         }
@@ -215,6 +219,7 @@ export function TemplateManagerModal({
                     </div>
                     <button
                         onClick={handleClose}
+                        aria-label="Close"
                         className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-colors"
                     >
                         ✕
@@ -227,6 +232,7 @@ export function TemplateManagerModal({
                         /* List View */
                         <div className="space-y-4">
                             {/* Search and Add */}
+                            {currentModelId && <label className="text-sm"><input type="checkbox" checked={allWorkflows} onChange={event => setAllWorkflows(event.target.checked)} /> All workflows <span>{allWorkflows ? '' : `· ${currentModelId}${currentMode ? ` / ${currentMode}` : ''}`}</span></label>}
                             <div className="flex gap-3">
                                 <input
                                     type="text"
@@ -250,15 +256,15 @@ export function TemplateManagerModal({
                                 <div className="flex items-center justify-center py-12">
                                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent" />
                                 </div>
-                            ) : templates.length === 0 ? (
+                            ) : visibleTemplates.length === 0 ? (
                                 <div className="text-center py-12 text-slate-500">
                                 <div className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">Empty</div>
-                                    <p>No saved templates yet</p>
+                                    <p>No saved templates in this view</p>
                                     <p className="text-sm mt-1">Configure a job and save it as a template</p>
                                 </div>
                             ) : (
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                    {templates.map((template) => (
+                                    {visibleTemplates.map((template) => (
                                         <div
                                             key={template.id}
                                             className="bg-slate-800/50 border border-slate-700 rounded-lg p-4 hover:border-slate-600 transition-colors group"

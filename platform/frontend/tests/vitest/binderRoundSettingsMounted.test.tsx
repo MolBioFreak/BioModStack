@@ -69,6 +69,9 @@ it('multi-engine round edits independent native settings, saves and freshly load
     const settings = { max_trajectories: 2, trajectory_only: false };
     localStorage.setItem('clonedJobData', JSON.stringify({ model_id: 'bindcraft2', mode: 'campaign', name: 'Multi round', params: { bindcraft2_settings: settings, binder_round_drafts: { proteinmpnn: { mpnn_extra_config: null } } } }));
     await mount(<JobSubmission />);
+    // A generation-only historical clone must opt in before configuring a round.
+    expect(document.querySelector<HTMLInputElement>('[aria-label="Automatic blind complex prediction"]')!.checked).toBe(false);
+    await toggle('Automatic blind complex prediction');
     await edit('seqs_per_design', '5');
     await toggle('Include proteinmpnn in round'); await select('Round sequence designer', 'proteinmpnn');
     await edit('seqs_per_design', '3'); await edit('mpnn_backbone_noise', '0');

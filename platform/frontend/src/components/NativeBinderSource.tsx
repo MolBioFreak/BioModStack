@@ -5,7 +5,7 @@ import { FrameworkBrowser } from './FrameworkBrowser';
 import { StructureWorkbench } from '../structureViewer/StructureWorkbench';
 import { EpitopeSelector } from './EpitopeSelector';
 import { createBC2SourceSession, preparePdbStructureSource, type BC2Document, type BC2Source } from '../lib/bindcraft2StructureInputs';
-import { nativeBinderField, portableNativeSource, ppiflowHotspotsFromSelection, type NativeBinderModel } from '../lib/nativeBinderAuthoring';
+import { boltzgenPositionsFromSelection, fetchBoltzgenSourcePositions, nativeBinderField, portableNativeSource, ppiflowHotspotsFromSelection, type NativeBinderModel } from '../lib/nativeBinderAuthoring';
 import type { ResidueRef } from '../structureViewer/contracts/structureIdentity';
 
 const input = 'w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-sm';
@@ -37,6 +37,7 @@ export function NativeBinderSource({ model, mode, field, label, values, onPatch,
     const [document, setDocument] = useState<BC2Document>();
     const [family, setFamily] = useState<BC2Document>();
     const [error, setError] = useState('');
+    const [readAttempt, setReadAttempt] = useState(0);
     const [busy, setBusy] = useState(false);
     const [library, setLibrary] = useState(false);
     const epoch = useRef(0);
@@ -58,7 +59,7 @@ export function NativeBinderSource({ model, mode, field, label, values, onPatch,
         // A native path is the authoritative document identity. Saved metadata is
         // restored alongside it; editing a mask must not reload the structure.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [inspectedPath, path, field, session, conversionPending, families]);
+    }, [inspectedPath, path, field, session, conversionPending, families, readAttempt]);
     const choose = async (source: BC2Source, modelFamily?: BC2Document, governedPath = false) => {
         const token = ++epoch.current; setBusy(true); setError('');
         try {
@@ -121,7 +122,7 @@ export function NativeBinderSource({ model, mode, field, label, values, onPatch,
     const documentId = path || savedReference?.path || field;
     const selectedModel = document?.models.find(item => item.number === savedReference?.modelNumber) || (document?.models.length === 1 ? document.models[0] : undefined);
     const chains = selectedModel?.chains || [];
-    const selectResidues = (next: ResidueRef[]) => onPatch({ [selectionKey]: next });
+    const selectResidues = (next: ResidueRef[]) => { epoch.current++; setBusy(false); onPatch({ [selectionKey]: next }); };
     const antibodyFramework = role === 'framework_pdb' || model === 'boltzgen' && mode === 'nanobody_binder' && role !== 'target_pdb';
     const isTarget = role === 'target_pdb';
     return <section aria-label={`${label} source`} className="space-y-4 rounded-xl border border-[var(--border-primary)] p-4">
@@ -139,10 +140,10 @@ export function NativeBinderSource({ model, mode, field, label, values, onPatch,
             else setError('This library entry has no structural document. A sequence is not a PPIFlow framework PDB.');
         }} />}</>}
         <label className="block text-xs">Native {label.toLowerCase()} path<input className={input} aria-label={field} placeholder={isTarget ? 'Target structure' : 'Materialized structure path'} value={path} onChange={event => { epoch.current++; onPatch({ [field]: event.target.value, [referenceKey]: null, [selectionKey]: [], [inspectionKey]: { ...inspection, nativeRetained: false } }); }} /></label>
-        {savedReference && <p className="break-all text-xs text-[var(--text-secondary)]">{savedReference.name} · {savedReference.document?.target_state || 'source document'} · {savedReference.document?.artifact_id || savedReference.document?.logical_path || savedReference.path} {savedReference.modelNumber !== undefined && `· model ${savedReference.modelNumber}`}</p>}
-        {savedReference?.materialization && <p className="break-all text-xs" aria-label="Native and derived source identity">Native {savedReference.materialization.native_format}: {savedReference.materialization.native_path} · consumed {savedReference.materialization.format}: {savedReference.materialization.path} · source models {savedReference.materialization.model_numbers.join(', ')} · author chain/residue identities retained</p>}
+        {savedReference && <details className="text-xs text-[var(--text-secondary)]"><summary>{savedReference.name?.split('/').pop() || 'Retained source'} · {refs.length} inspected residues</summary><p className="break-all">{savedReference.name} · {savedReference.document?.target_state || 'source document'} · {savedReference.document?.artifact_id || savedReference.document?.logical_path || savedReference.path} {savedReference.modelNumber !== undefined && `· model ${savedReference.modelNumber}`}</p></details>}
+        {savedReference?.materialization && <details className="text-xs"><summary>Native and derived source identity</summary><p className="break-all" aria-label="Native and derived source identity">Native {savedReference.materialization.native_format}: {savedReference.materialization.native_path} · consumed {savedReference.materialization.format}: {savedReference.materialization.path} · source models {savedReference.materialization.model_numbers.join(', ')} · author chain/residue identities retained</p></details>}
         {busy && <p role="status">Preparing exact source…</p>}
-        {error && <p role="alert" className="text-sm text-amber-500">{error}</p>}
+        {error && <div><p role="alert" className="text-sm text-amber-500">{error}</p>{inspectedPath && !document && <button type="button" onClick={() => setReadAttempt(attempt => attempt + 1)}>Retry exact source</button>}</div>}
         {family && family.models.length > 1 && <label className="block text-sm">Consumed conformation<select aria-label={`${field} model`} className={input} value={savedReference?.modelNumber ?? ''} onChange={event => {
             const number = Number(event.target.value); const selected = family.models.find(item => item.number === number);
             if (selected) void choose({ name: `model-${number}.${family.format}`, file: new File([selected.content], `model-${number}.${family.format}`), derivedFrom: family.source, modelNumber: number }, family);
@@ -164,7 +165,19 @@ export function NativeBinderSource({ model, mode, field, label, values, onPatch,
             {isTarget && model === 'ppiflow' ? <button type="button" className={button} onClick={() => {
                 try { onPatch({ specified_hotspots: ppiflowHotspotsFromSelection(document, documentId, refs, String(values[mode === 'protein_binder' ? 'target_chain' : 'antigen_chain'] || ''), mode) }); setError(''); }
                 catch (error) { setError(errorText(error)); }
-            }}>Use inspected residues as native PPIFlow hotspots</button> : <p className="text-xs text-[var(--text-secondary)]">Inspection uses author numbering. It does not change native masks. BoltzGen chain-local positions must be entered explicitly: this parser does not provide a verified native position map.</p>}
+            }}>Use inspected residues as native PPIFlow hotspots</button> : model === 'boltzgen' && (isTarget || role === 'scaffold_path') ? <button type="button" className={button} disabled={busy} onClick={async () => {
+                const token = ++epoch.current; setBusy(true); setError('');
+                try {
+                    const mapping = await fetchBoltzgenSourcePositions(path);
+                    const scaffoldChain = String(values.scaffold_chain ?? values.boltzgen_scaffold_chain ?? '');
+                    const positions = await boltzgenPositionsFromSelection(document, documentId, refs, mapping, isTarget ? undefined : scaffoldChain);
+                    if (epoch.current !== token) return;
+                    const nativeField = isTarget ? 'target_binding_positions' : 'scaffold_design_ranges';
+                    const key = Object.hasOwn(values, nativeField) || !field.startsWith('boltzgen_') ? nativeField : `boltzgen_${nativeField}`;
+                    latest.current.onPatch({ [key]: positions });
+                } catch (failure) { if (epoch.current === token) setError(errorText(failure)); }
+                finally { if (epoch.current === token) setBusy(false); }
+            }}>Use inspected residues as native BoltzGen {isTarget ? 'binding positions' : 'design positions'}</button> : <p className="text-xs text-[var(--text-secondary)]">Inspection uses author numbering; native masks remain unchanged.</p>}
         </>}
     </section>;
 }

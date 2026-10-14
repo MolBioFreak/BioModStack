@@ -18,6 +18,27 @@ from services.boltzgen_scaffolding import prepare_boltzgen_params_for_launch
 router = APIRouter(prefix="/api/boltzgen", tags=["boltzgen"])
 
 
+class BoltzGenSourcePositionsRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    path: str
+
+
+@router.post('/source-positions')
+def source_positions(request: BoltzGenSourcePositionsRequest) -> dict:
+    from paths import resolve_allowed_path
+    from services.boltzgen_source_positions import boltzgen_source_positions
+    try:
+        path = resolve_allowed_path(request.path)
+    except (ValueError, PermissionError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail='The exact retained source is unavailable; no substitute was loaded.')
+    try:
+        return boltzgen_source_positions(path)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 class BoltzGenPreviewRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

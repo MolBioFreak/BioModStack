@@ -5,10 +5,10 @@ import { FampnnAnalysisControls, hydrateFampnnOverrides, fampnnOverridePayload }
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
-import { completeCurrentLaunchContext, submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, previewBoltzGenDesignSpec, type BoltzGenPreviewResponse, type CDRAnnotationResponse, type RfScreeningScope } from '../lib/api';
+import { EXECUTION_TARGET_STORAGE_KEY, completeCurrentLaunchContext, submitJob, uploadFile, extractChain, annotateFrameworkCdrs, downloadSabdabFramework, launchAntibodyIteration, launchManualMutagenesis, previewBoltzGenDesignSpec, type BoltzGenPreviewResponse, type CDRAnnotationResponse, type RfScreeningScope } from '../lib/api';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getModelByNumber, parsePDBFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
-import { parseBC2Document, preparePdbStructureSource, acquireBC2Source } from '../lib/bindcraft2StructureInputs';
+import { readBC2Source, parseBC2Document, preparePdbStructureSource, acquireBC2Source } from '../lib/bindcraft2StructureInputs';
 import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
@@ -381,7 +381,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         }
     }, [refinementQueryEnabled, refinementState]);
 
-    const restoringSelectionRef = useRef<{ chain: string | null; residues: string[]; modelNumber: number | null } | null>(null);
+    const restoringSelectionRef = useRef<{ chain: string | null; chainDeclared?: boolean; residues: string[]; modelNumber: number | null } | null>(null);
 
     const normalizeProtenixModel = useCallback((model?: string) => {
         void model;
@@ -915,12 +915,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
     const buildFilesApiUrl = useCallback((mode: 'download' | 'pdb', path: string) =>
         `/api/files/${mode}/${encodeURIComponent(path)}`, []);
 
+    const [retainedSourceError, setRetainedSourceError] = useState('');
     const loadPdbFileFromUrl = useCallback(async (url: string, fallbackName: string) => {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const blob = await res.blob();
-        const fileName = fallbackName.toLowerCase().endsWith('.pdb') ? fallbackName : `${fallbackName}.pdb`;
-        return new File([blob], fileName, { type: 'chemical/x-pdb' });
+        const content = await readBC2Source({ url, name: fallbackName });
+        const cif = content.includes('_atom_site.');
+        const extension = cif ? 'cif' : 'pdb';
+        const fileName = /\.(pdb|cif|mmcif)$/i.test(fallbackName) ? fallbackName : `${fallbackName}.${extension}`;
+        return new File([content], fileName, { type: cif ? 'chemical/x-mmcif' : 'chemical/x-pdb' });
     }, []);
 
     const loadSabdabFrameworkFile = useCallback(async (pdbCode: string, fallbackName: string) => {
@@ -1028,18 +1029,17 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
     const queueRestoredSelection = useCallback((saved: Record<string, UntypedApiValue>) => {
         const residues = getSavedResidueSelection(saved);
-        const rawChain = saved.selected_chain || saved.antigen_chains || null;
+        const chainDeclared = Object.hasOwn(saved, 'selected_chain');
+        const rawChain = chainDeclared ? saved.selected_chain : saved.antigen_chains ?? null;
         const chain = typeof rawChain === 'string'
-            ? rawChain.split(',').map((token) => token.trim()).find(Boolean) || null
+            ? rawChain === '' ? '' : rawChain.split(',').map((token) => token.trim()).find(Boolean) || null
             : null;
         const savedModel = getSavedTargetModelNumber(saved);
-        restoringSelectionRef.current = { chain, residues, modelNumber: savedModel };
+        restoringSelectionRef.current = { chain, chainDeclared, residues, modelNumber: savedModel };
         if (savedModel != null) {
             setSelectedTargetModel(savedModel);
         }
-        if (chain) {
-            setSelectedChain(chain);
-        }
+        if (chainDeclared || chain) setSelectedChain(chain);
         setSelectedResidues(new Set(residues));
     }, [getSavedResidueSelection, getSavedTargetModelNumber]);
 
@@ -1047,26 +1047,12 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         const loadToken = targetLoadControllerRef.current.begin();
         const savedSource = saved.target_source as Omit<SelectedTarget, 'file'> | undefined;
         const savedUploadedPath = typeof saved.uploaded_path === 'string' ? saved.uploaded_path : '';
-        const rawPath = (savedSource?.path || savedUploadedPath || saved.target_pdb || '').trim();
+        const rawPath = (Object.hasOwn(saved, 'target_pdb') ? String(saved.target_pdb ?? '') : savedUploadedPath || savedSource?.path || '').trim();
+        setRetainedSourceError('');
         const rcsbMatch = rawPath.match(/(?:^|\/)([a-z0-9]{4})\.pdb$/i);
 
-        let fetchUrl = savedSource?.url || '';
-        let sourceType = savedSource?.type || '';
-        if (fetchUrl.includes('/api/files/download?path=') && rawPath) {
-            fetchUrl = buildFilesApiUrl('download', rawPath);
-        }
-        if (!fetchUrl && rawPath) {
-            if (sourceType === 'rcsb' || rcsbMatch) {
-                const pdbId = (savedSource?.pdbId || rcsbMatch?.[1] || '').toUpperCase();
-                if (pdbId) {
-                    fetchUrl = `/api/rcsb/${pdbId}/file`;
-                    sourceType = 'rcsb';
-                }
-            } else {
-                fetchUrl = buildFilesApiUrl('download', rawPath);
-                sourceType = sourceType || 'preset';
-            }
-        }
+        const fetchUrl = rawPath ? buildFilesApiUrl('download', rawPath) : Object.hasOwn(saved, 'target_pdb') ? '' : savedSource?.url || '';
+        const sourceType = savedSource?.type || 'preset';
 
         if (!rawPath && !fetchUrl) {
             return;
@@ -1086,9 +1072,13 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
         if (!fetchUrl) return;
 
-        const file = await loadPdbFileFromUrl(fetchUrl, sourceName);
-        if (!targetLoadControllerRef.current.isCurrent(loadToken)) return;
-        setTargetPdb(file);
+        try {
+            const file = await loadPdbFileFromUrl(fetchUrl, sourceName);
+            if (!targetLoadControllerRef.current.isCurrent(loadToken)) return;
+            setTargetPdb(file);
+        } catch (error) {
+            if (targetLoadControllerRef.current.isCurrent(loadToken)) setRetainedSourceError(error instanceof Error ? error.message : String(error));
+        }
     }, [buildFilesApiUrl, loadPdbFileFromUrl]);
 
 
@@ -1692,7 +1682,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
 
         setSelectedChain((current) => {
             if (activeModel.chains.length === 0) return null;
-            if (queuedRestore?.chain) return queuedRestore.chain;
+            if (queuedRestore?.chainDeclared || queuedRestore?.chain) return queuedRestore.chain;
             if (!current || !chainIds.includes(current)) {
                 return activeModel.chains.reduce((a, b) => (a.length > b.length ? a : b)).id;
             }
@@ -2883,6 +2873,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                 isOpen={showTemplateManager}
                 onClose={() => setShowTemplateManager(false)}
                 onSelect={(template) => {
+                    if (onLoadTemplate) { onLoadTemplate(template); return; }
                     console.log('[TEMPLATE_LOAD] ======= LOADING TEMPLATE =======');
                     console.log('[TEMPLATE_LOAD] Template name:', template.name);
                     console.log('[TEMPLATE_LOAD] Template id:', template.id);
@@ -3124,7 +3115,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         console.error('[TEMPLATE_LOAD] Error loading template:', err);
                     }
                 }}
-                currentParams={authoringDraft}
+                currentParams={{ ...authoringDraft, execution_target_id: sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) || null }}
                 currentModelId="template_antibody_denovo"
                 currentMode={isRefinementMode ? ANTIBODY_REFINEMENT_PIPELINE_MODE : ANTIBODY_DENOVO_PIPELINE_MODE}
                 baseTemplateId="antibody_denovo"
@@ -3176,13 +3167,14 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                         setIncompatibleTemplate(template);
                         return;
                     }
+                    if (onLoadTemplate) { onLoadTemplate(template); return; }
                     setRetainedDraft(params);
                     setRoundDraft(hydrateBinderRound(params));
                     setJobName(params.job_name ?? template.name);
                     setBc2Settings(params.bindcraft2_settings && typeof params.bindcraft2_settings === 'object' && !Array.isArray(params.bindcraft2_settings)
                         ? params.bindcraft2_settings : {});
                 }}
-                currentParams={templateIntent === 'save' ? { ...authoringDraft, job_name: jobName, denovo_generator: 'bindcraft2', bindcraft2_settings: requestedBc2Settings } : undefined}
+                currentParams={templateIntent === 'save' ? { ...authoringDraft, execution_target_id: sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) || null, job_name: jobName, denovo_generator: 'bindcraft2', bindcraft2_settings: requestedBc2Settings } : undefined}
                 currentModelId="bindcraft2" currentMode="campaign" baseTemplateId="antibody_denovo" initialIntent={templateIntent} />
                 {showTemplateManager && incompatibleTemplate && <div role="alert" className="fixed bottom-4 left-4 right-4 z-[60] rounded-xl border bg-[var(--bg-secondary)] p-4">
                     <p>{incompatibleTemplate.name} belongs to another workflow. The current campaign is unchanged.</p>
@@ -3237,6 +3229,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
             executionControls={<ExecutionTargetPicker workflowRequest={workflowRequest} />}
             submitControls={submitControls} library={!bc2Workspace && library}
         >
+            {retainedSourceError && <p role="status">{retainedSourceError} Saved source identity and settings are retained.</p>}
             {!isRefinementMode && deNovoGenerator === 'rfantibody' && <div hidden={sectionHidden('generation')}>
                 <RFantibodyGeneration settings={qualitySettings} onSettingsChange={setQualitySettings} />
             </div>}

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { NativeSettingsDisclosure } from './NativeSettingsDisclosure';
 import type { BC2Inventory } from './BindCraft2Settings';
 import { BindCraft2ListEditor } from './BindCraft2ListEditor';
-import { BC2InterfaceMask, BC2Number } from './BindCraft2NativeControls';
+import { BC2InterfaceMask, BC2Number, bc2NumericText } from './BindCraft2NativeControls';
 import { bc2Label, BC2_METRIC_HELP, bc2MetricUnit, bc2ParamUnit } from '../lib/bindcraft2ControlMetadata';
 
 type Entry = Record<string, unknown>;
@@ -32,7 +32,7 @@ export function BindCraft2MetricEditor({ kind, inventory, value, inherited, effe
             update(metric, kind === 'filters' && base && Object.hasOwn(base, 'threshold') ? { threshold: base.threshold } : {});
           } else { const copy = { ...entries }; delete copy[metric]; onChange(copy); }
         }} />{bc2Label(metric)} · Override inherited metric</label>
-        {entry && kind === 'filters' && <span className="text-xs tabular-nums text-[var(--text-secondary)]">{entry.threshold === null ? 'Disabled (null)' : `${entry.higher === true ? '≥ ' : entry.higher === false ? '≤ ' : ''}${entry.threshold === undefined ? 'Set threshold' : String(entry.threshold)}`}</span>}
+        {entry && kind === 'filters' && <span className="text-xs tabular-nums text-[var(--text-secondary)]">{entry.threshold === null ? 'Disabled (null)' : `${entry.higher === true ? '≥ ' : entry.higher === false ? '≤ ' : ''}${entry.threshold === undefined ? 'Set threshold' : bc2NumericText(entry.threshold)}`}</span>}
       </div>
       {kind === 'filters' && requested && !Object.hasOwn(requested, 'threshold') && <p className="text-xs">Explicit cutoff required for a filter override. Inherited cutoff is reference only until supplied; remove the override to restore inheritance.</p>}
       <p className="text-xs">{requested ? 'Customized override · remove to restore inheritance' : base ? 'Inherited native metric' : 'Native activation unavailable'}{entry && kind === 'losses' ? weights?.[`weights_${metric}`] === 0 ? ' · Zero contribution' : typeof weights?.[`weights_${metric}`] === 'number' ? ' · Active objective' : ' · Native activation unavailable' : entry && entry.threshold === null ? ' · Disabled (explicit null)' : entry && entry.threshold !== undefined ? ' · Active filter' : ''}</p>

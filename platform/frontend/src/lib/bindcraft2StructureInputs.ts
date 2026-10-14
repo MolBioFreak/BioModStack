@@ -22,9 +22,19 @@ export async function readBC2Source(source: BC2Source, signal?: AbortSignal): Pr
     if (source.file) return source.file.text();
     const url = source.path ? sourceDownloadUrl(source.path) : source.url;
     if (!url) throw new Error('Choose a structure or FASTA source.');
-    const response = await fetch(url, { signal });
-    if (!response.ok) throw new Error(`Could not read ${source.name} (HTTP ${response.status}). Try selecting the source again.`);
-    return response.text();
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) controller.abort();
+    const timer = setTimeout(abort, 30000);
+    try {
+        const response = await fetch(url, { signal: controller.signal });
+        if (!response.ok) throw new Error(`Could not read ${source.name} (HTTP ${response.status}). The exact source remains selected; no substitute was loaded.`);
+        return await response.text();
+    } catch (error) {
+        if (controller.signal.aborted) throw new Error('Source read cancelled or timed out after 30 seconds. The exact source remains selected; retry explicitly.');
+        throw error;
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
 }
 
 export async function acquireBC2Source(source: BC2Source, prepared?: BC2Document): Promise<{ path: string; document: BC2Document }> {

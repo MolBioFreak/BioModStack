@@ -1,19 +1,30 @@
 import { useEffect, useState } from 'react';
 
+export function bc2NumericText(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'number' || typeof value === 'string') return String(value);
+  if (typeof value === 'object' && '$bc2_nonfinite_float' in value) {
+    const token = (value as Record<string, unknown>).$bc2_nonfinite_float;
+    if (['Infinity', '-Infinity', 'NaN'].includes(String(token))) return String(token);
+  }
+  return 'Native value unavailable';
+}
+
 /** A slider is a navigation aid, never the numeric authority. In particular,
  * loading a precise value outside its display range must not clamp the request. */
 export function BC2Number({ label, value, onChange, integer = false, range, unit }: {
   label: string; value: unknown; onChange: (next: number | undefined) => void;
   integer?: boolean; range?: readonly [number, number]; unit?: string;
 }) {
-  const [draft, setDraft] = useState(value == null ? '' : String(value));
-  useEffect(() => setDraft(value == null ? '' : String(value)), [value]);
+  const [draft, setDraft] = useState(typeof value === 'number' && Number.isFinite(value) ? String(value) : '');
+  useEffect(() => setDraft(typeof value === 'number' && Number.isFinite(value) ? String(value) : ''), [value]);
   return <div className="flex min-w-0 items-center gap-3">
     {range && <input className="min-w-16 flex-1 accent-[var(--accent-primary)]" type="range" aria-label={`${label} slider`} min={range[0]} max={range[1]} step={integer ? 1 : 0.01}
       value={typeof value === 'number' ? Math.max(range[0], Math.min(range[1], value)) : range[0]}
       onChange={event => onChange(Number(event.currentTarget.value))} />}
     <input className={range ? '!w-28 shrink-0 tabular-nums' : 'tabular-nums'} type="number" aria-label={label} step={integer ? 1 : 'any'} value={draft}
       onChange={event => { const text = event.currentTarget.value; setDraft(text); if (text === '') onChange(undefined); else if (Number.isFinite(Number(text))) onChange(Number(text)); }} />
+    {value != null && !(typeof value === 'number' && Number.isFinite(value)) && <span className="text-xs">{bc2NumericText(value)} (native value retained; enter a number to override)</span>}
     {value === null && <span className="text-xs">Explicit null / native-derived</span>}
     {unit && <span className="shrink-0 text-xs text-[var(--text-secondary)]">{unit}</span>}
   </div>;
