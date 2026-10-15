@@ -283,9 +283,13 @@ async def resolve_ref(session, root, ref, *, snapshot=True, output_format="pdb")
         from services.binder_round_inputs import source_components, chains
         for target in targets:
             if not target.get('components') and target.get('target_path'):
-                from paths import resolve_runtime_data_path
+                from paths import resolve_allowed_path, resolve_runtime_data_path
                 try:
-                    path = resolve_runtime_data_path(target['target_path'])
+                    target_path = Path(target['target_path'])
+                    # Uploaded inputs use the file API's managed namespace, not cwd.
+                    path = (resolve_allowed_path(str(target_path))
+                            if target_path.parts[:1] == ('inputs',)
+                            else resolve_runtime_data_path(target_path))
                     ids = chains(target.get('chains'))
                     from services.binder_diagnostic_selection import independent_structure_components
                     target['components'] = independent_structure_components(path, ids)
