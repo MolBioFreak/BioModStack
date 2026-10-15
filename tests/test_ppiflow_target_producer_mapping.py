@@ -244,6 +244,9 @@ def test_actual_parser_crop_dataset_writer_and_projection(tmp_path, native, nati
         b_factors=batch_row["hotspot_mask"] + batch_row["target_interface_mask"])
     assert original_path.read_bytes() == path.read_bytes()
     record = json.loads((tmp_path / "result/samples.jsonl").read_text())
+    # publishDir retains the native file too, not just the canonical candidate.
+    # Both selectable documents must carry the actual writer's chain roles.
+    assert json.loads(Path(str(path) + '.sample.json').read_text()) == record
     job = types.SimpleNamespace(id="job", retry_count=0, lineage_root_job_id=None, mode="protein_binder")
     fields = api._generation_design_fields(job, record, types.SimpleNamespace(id="artifact", storage_path=str(path)))
     assert hashlib.sha256(target.read_bytes()).hexdigest() != record["sha256"]

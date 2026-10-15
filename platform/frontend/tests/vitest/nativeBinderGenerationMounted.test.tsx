@@ -1,5 +1,7 @@
 import React, { act } from 'react';
 import { readFileSync } from 'node:fs';
+import { createHash, webcrypto } from 'node:crypto';
+import { api } from '../../src/lib/api';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
@@ -71,6 +73,7 @@ async function mount(model: string, mode: string, params: Record<string, unknown
 async function unmount() { if (root) await act(async () => root!.unmount()); root = undefined; client?.clear(); document.body.replaceChildren(); }
 beforeEach(() => {
     if (!File.prototype.text) Object.defineProperty(File.prototype, 'text', { configurable: true, value: function(this: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsText(this); }); } });
+    vi.stubGlobal('crypto', webcrypto);
     mocks.documents = {};
     mocks.upload.mockImplementation(async (_directory, file) => { const path = `inputs/${file.name}`; mocks.documents[path] = await file.text(); return { data: { path } }; });
     mocks.inventory = {};
@@ -87,7 +90,7 @@ beforeEach(() => {
     }));
     mocks.project = null;
 });
-afterEach(async () => { await unmount(); localStorage.clear(); sessionStorage.clear(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+afterEach(async () => { await unmount(); localStorage.clear(); sessionStorage.clear(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 it.each(['protein_binder', 'antibody_binder', 'nanobody_binder'])('mounted PPIFlow %s emits only its native contract and preserves false/zero/null', async modeName => {
     await mount('ppiflow', modeName, { target_pdb: 'inputs/target.pdb', target_chain: 'a', antigen_chain: 'a', framework_pdb: 'inputs/framework.pdb', heavy_chain: 'H', light_chain: 'L', binder_chain: 'B', self_condition: false, min_t: 0, specified_hotspots: null, legacy_seed: 'must-not-submit' });
@@ -164,9 +167,58 @@ it.each(['protein_binder', 'peptide_binder'])('BoltzGen %s submits independent s
     await mount('boltzgen', modeName, values);
     expect(document.body.textContent).toContain('BoltzGen generation');
     expect(document.querySelectorAll('[data-viewer]').length).toBe(2);
-    expect(document.body.textContent).toContain('does not provide a verified native position map');
+    // Native positions are fetched on explicit adoption, not inferred from the
+    // viewer's author numbering. An unavailable residue mapping keeps masks intact.
+    const post = vi.spyOn(api, 'post').mockImplementation(async (_url, body) => ({ data: {
+        schema_version: 1,
+        source_sha256: createHash('sha256').update((body as { path: string }).path === values.target_pdb ? pdb : framework).digest('hex'),
+        positions: [],
+    } }));
+    for (const [label, residueName, action, path] of [
+        ['Target', 'ALA', 'binding', values.target_pdb],
+        ['Scaffold', 'GLY', 'design', values.scaffold_path],
+    ]) {
+        const source = document.querySelector(`[aria-label="${label} source"]`)!;
+        await click('Sequence', source);
+        const residue = source.querySelector<HTMLElement>(`[title*="${residueName}"]`)!;
+        expect(residue).toBeTruthy(); await act(async () => residue.click());
+        await click(`Use inspected residues as native BoltzGen ${action} positions`, source);
+        await settle();
+        await vi.waitFor(() => expect(source.textContent).toContain('no unique native position'));
+        expect(post).toHaveBeenLastCalledWith('/api/boltzgen/source-positions', { path }, expect.objectContaining({ timeout: 30000 }));
+    }
+    expect(document.querySelector<HTMLInputElement>('[aria-label="target_binding_positions"]')!.value).toBe(values.target_binding_positions);
+    expect(document.querySelector<HTMLInputElement>('[aria-label="scaffold_design_ranges"]')!.value).toBe(values.scaffold_design_ranges);
     await click('Launch Experiment');
-    expect(mocks.submit).toHaveBeenCalledWith({ name: 'Native request', model_id: 'boltzgen', mode: modeName, params: { ...values, num_designs: 10 }, binder_round: hydrateBinderRound().binder_round, execution_target_id: null, source_structure: undefined }, { launchContext: false });
+    expect(mocks.submit).toHaveBeenCalledWith({ name: 'Native request', model_id: 'boltzgen', mode: modeName, params: { ...values, num_designs: 10 }, binder_round: hydrateBinderRound({ binder_round: null }).binder_round, execution_target_id: null, source_structure: undefined }, { launchContext: false });
+});
+
+it.each(['protein_binder', 'peptide_binder'])('BoltzGen %s explicitly adopts verified target and scaffold positions without inventing roles', async modeName => {
+    const values = { target_pdb: 'inputs/target.pdb', target_chains: 'a', target_binding_positions: '', scaffold_path: 'inputs/framework.pdb', scaffold_chain: 'H', scaffold_design_ranges: '', binder_sequence: '' };
+    const post = vi.spyOn(api, 'post').mockImplementation(async (_url, body) => {
+        const target = (body as { path: string }).path === values.target_pdb;
+        // Parser/transport fixture, not native inference evidence. Author residue
+        // numbers differ from the native chain-local positions in this response.
+        return { data: { schema_version: 1, source_sha256: createHash('sha256').update(target ? pdb : framework).digest('hex'), positions: [{ model_number: 1, auth_asym_id: target ? 'a' : 'H', auth_seq_id: target ? 42 : 20, insertion_code: '', native_chain: target ? 'a' : 'H', native_position: 1 }] } };
+    });
+    await mount('boltzgen', modeName, values);
+    expect(post).not.toHaveBeenCalled();
+    for (const [label, residueName, action, field, expected, path] of [
+        ['Target', 'ALA', 'binding', 'target_binding_positions', 'a:1', values.target_pdb],
+        ['Scaffold', 'GLY', 'design', 'scaffold_design_ranges', '1', values.scaffold_path],
+    ]) {
+        const source = document.querySelector(`[aria-label="${label} source"]`)!;
+        await click('Sequence', source);
+        const residue = source.querySelector<HTMLElement>(`[title*="${residueName}"]`)!;
+        expect(residue).toBeTruthy(); await act(async () => residue.click());
+        expect(document.querySelector<HTMLInputElement>(`[aria-label="${field}"]`)!.value).toBe('');
+        await click(`Use inspected residues as native BoltzGen ${action} positions`, source);
+        await settle();
+        await vi.waitFor(() => expect(document.querySelector<HTMLInputElement>(`[aria-label="${field}"]`)!.value).toBe(expected));
+        expect(post).toHaveBeenLastCalledWith('/api/boltzgen/source-positions', { path }, expect.objectContaining({ timeout: 30000 }));
+    }
+    await click('Launch Experiment');
+    expect(mocks.submit).toHaveBeenCalledWith({ name: 'Native request', model_id: 'boltzgen', mode: modeName, params: { ...values, target_binding_positions: 'a:1', scaffold_design_ranges: '1', num_designs: 10, alpha: 0.1 }, binder_round: hydrateBinderRound({ binder_round: null }).binder_round, execution_target_id: null, source_structure: undefined }, { launchContext: false });
 });
 
 it('Project save/reopen retains mode drafts, native null, sources and zero without metadata entering submission', async () => {

@@ -38,6 +38,7 @@ export default defineConfig({
             './tests/vitest/binderResultFamily.test.tsx',
             './tests/vitest/binderNativeComparisonMounted.test.tsx',
             './tests/vitest/binderNativeReceivingMounted.test.tsx',
+            './tests/vitest/binderPresentationMounted.test.tsx',
             './tests/vitest/binderSelectedRoundResultsMounted.test.tsx',
             './tests/vitest/binderAuthoringRepairMounted.test.tsx',
             './tests/vitest/binderAuthoringRepairLeaf.test.tsx',

@@ -211,14 +211,14 @@ export function BinderOperationEditor({ sourceJobId, selectedDesignIds, selected
                 : reason instanceof Error ? reason.message : String(reason));
         } finally { setBusy(false); }
     };
-    return <section aria-label="Selected binder continuation" className="mb-4 text-sm"><BinderWorkflowWorkspace
+    return <section aria-label="Selected binder continuation" className="bms-binder-controls mb-4 min-w-0 text-sm"><BinderWorkflowWorkspace
         title={editor ? 'Native settings' : 'Selected candidate workspace'} sections={(editor ? ['Sources', 'Settings'] : ['Sources', 'Operations', 'Settings', 'Review']).map(label => ({ id: label.toLowerCase(), label }))}
         activeSection={section} onSectionChange={setSection}
         summary={<p>Destination: {launchContextId ? `explicit Project launch context ${launchContextId}` : 'standalone (no Project destination)'}. Source ancestry is unchanged.</p>}>
         {!editor && <h3 className="font-semibold">Continue selected candidates</h3>}
         <p>{selectedCount} selected saved molecules across all pages. Each action starts a separate model-owned round from these exact states; no diagnostic is required.</p>
         <div hidden={section !== 'sources'}><details open className="mt-2"><summary>Selected sources</summary>
-            <ul>{selectedDesignIds.map(id => <li key={id}>{id} · Source Job {sourceRows[id]?.owner ?? sourceJobId}
+            <ul className="space-y-3">{selectedDesignIds.map(id => <li className="space-y-2" key={id}>{id} · Source Job {sourceRows[id]?.owner ?? sourceJobId}
                 <label>Document / state <select aria-label={`Document for ${id}`} value={JSON.stringify(documentSelections[id] ?? {})}
                     onChange={event => chooseDocument(id, event.target.value)}>
                     <option value="{}">Primary document (native default)</option>
@@ -231,7 +231,7 @@ export function BinderOperationEditor({ sourceJobId, selectedDesignIds, selected
                 </select></label>
                 <button type="button" onClick={() => setInspectId(id)}>Inspect exact source {id}</button>
                 </li>)}</ul>
-            <ul>{selectedNativeSources.map(source => <li key={nativeSourceKey(source)}>{source.document?.logical_path ?? source.artifact_id} · Source Job {source.job_id} · Exact artifact {source.artifact_id} · {source.document?.target_state ?? 'Native state'}
+            <ul className="space-y-3">{selectedNativeSources.map(source => <li className="space-y-2" key={nativeSourceKey(source)}>{source.document?.logical_path ?? source.artifact_id} · Source Job {source.job_id} · Exact artifact {source.artifact_id} · {source.document?.target_state ?? 'Native state'}
                 <button type="button" onClick={() => setInspectId(nativeSourceKey(source))}>Inspect exact native source {source.artifact_id}</button>
             </li>)}</ul>
             {sourceError && <p>Document inventory unavailable: {sourceError}. Primary selection and submitted exact identities remain available.</p>}
@@ -314,5 +314,5 @@ export default function BinderSelectedControls(props: BinderSelectedControlsProp
         selectedNativeSources={editor.candidateRefs?.flatMap(ref => ref.kind === 'native_document' ? [props.selectedNativeSources?.find(source => source.job_id === ref.job_id && source.artifact_id === ref.artifact_id) ?? readRoundStorage<Record<string, NativeCandidateSource>>(props.sourceJobId, 'native-documents', {})[candidateKey(ref)] ?? { job_id: ref.job_id, artifact_id: ref.artifact_id }] : []) ?? props.selectedNativeSources}
         candidateDocuments={{ ...props.candidateDocuments, ...Object.fromEntries(editor.candidateRefs?.flatMap(ref => ref.kind === 'design' && ref.document ? [[ref.design_id, ref.document]] : []) ?? []) }}
         editor={editor} />} />
-        <details onToggle={event => setLegacyOpen(event.currentTarget.open)}><summary>Other model operations and source tools</summary>{props.onLegacyFullLoop && <button type="button" onClick={props.onLegacyFullLoop}>Legacy full-loop refinement</button>}{legacyOpen && <BinderOperationEditor {...props} />}</details></>;
+        <details onToggle={event => { if (event.currentTarget.open) setLegacyOpen(true); }}><summary>Other model operations and source tools</summary>{props.onLegacyFullLoop && <button type="button" onClick={props.onLegacyFullLoop}>Legacy full-loop refinement</button>}{legacyOpen && <BinderOperationEditor {...props} />}</details></>;
 }

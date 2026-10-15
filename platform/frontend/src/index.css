@@ -1044,6 +1044,72 @@ textarea:focus {
   outline-color: var(--accent-primary) !important;
 }
 
+/* Own BMS form sizing explicitly rather than relying on the layered reset
+   and inherited third-party styles. A 100% content-box input crosses gutters. */
+.bms-model-parameter :is(input, select, textarea),
+.bms-binder-controls :is(input, select, textarea, button),
+.bms-structure-workbench :is(input, select, textarea, button) {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+.bms-model-parameter,
+.bms-binder-controls {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.bms-binder-controls :is(section, fieldset, details, label) {
+  min-width: 0;
+}
+.bms-binder-controls label:has(> select) {
+  display: block;
+}
+.bms-binder-controls label > select {
+  display: block;
+  width: 100%;
+  margin-top: 0.25rem;
+}
+.bms-binder-controls button {
+  white-space: normal;
+}
+.bms-binder-controls [aria-label="Stage native editor"] {
+  display: grid;
+  gap: 0.75rem;
+}
+.bms-binder-controls [aria-label="Stage native editor"] > button {
+  justify-self: start;
+}
+/* Keep long native source identities readable without widening the page.
+   Tables retain their own explicit horizontal scrolling containers. */
+[aria-label="Native initial-generation results"] {
+  overflow-wrap: anywhere;
+}
+[aria-label="Native initial-generation results"] :is(input, select) {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Result controls own their layout; native selects must not run into labels. */
+.bms-cohort-ranking {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  align-items: end;
+  gap: 1rem;
+  margin-block: 1rem;
+}
+.bms-cohort-ranking > label {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.875rem;
+}
+.bms-cohort-ranking select { width: 100%; }
+.bms-cohort-search > input[type="search"] { flex-basis: 18rem; }
+@media (max-width: 640px) {
+  .bms-cohort-search > input[type="search"] { flex-basis: 100%; width: 100%; }
+}
+
 /* Option elements */
 option {
   background-color: var(--bg-secondary) !important;

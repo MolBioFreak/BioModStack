@@ -29,8 +29,8 @@ it('PPIFlow required copy follows PDB-or-CSV edits while preserving both request
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => pdb })));
     const parameters: any[] = [{ name: 'target_pdb', type: 'file', required: true, display_required: true, required_when: { field: 'input_csv', operator: 'falsy' } }, { name: 'input_csv', type: 'file', required_when: { field: 'target_pdb', operator: 'falsy' } }];
     function Harness() { const [state, set] = useState({ input_csv: 'inputs/table.csv', target_pdb: '' }); values = state; return <><NativeBinderGeneration model="ppiflow" mode="protein_binder" parameters={parameters} values={state} onPatch={patch => set(old => ({ ...old, ...patch }))} /><button onClick={() => set({ input_csv: '', target_pdb: 'inputs/exact.pdb' })}>Choose PDB</button></>; }
-    await mount(<Harness />); expect(document.querySelector('[data-native-required-summary]')!.textContent).not.toContain('Target pdb'); expect(values).toEqual({ input_csv: 'inputs/table.csv', target_pdb: '' });
-    await click('Choose PDB'); expect(document.querySelector('[data-native-required-summary]')!.textContent).toContain('Target pdb'); expect(document.querySelector('[data-native-required-summary]')!.textContent).not.toContain('Input csv');
+    await mount(<Harness />); expect(document.querySelector('[data-native-required-summary]')!.textContent).not.toContain('Target PDB'); expect(values).toEqual({ input_csv: 'inputs/table.csv', target_pdb: '' });
+    await click('Choose PDB'); expect(document.querySelector('[data-native-required-summary]')!.textContent).toContain('Target PDB'); expect(document.querySelector('[data-native-required-summary]')!.textContent).not.toContain('Input csv');
 });
 it('finite, null and native nonfinite thresholds remain readable and serialized unchanged', async () => {
     const inherited = { finite: { threshold: 0, higher: true }, negative: { threshold: { $bc2_nonfinite_float: '-Infinity' }, higher: true }, positive: { threshold: { $bc2_nonfinite_float: 'Infinity' }, higher: false }, missing: { threshold: { $bc2_nonfinite_float: 'NaN' } }, off: { threshold: null } };

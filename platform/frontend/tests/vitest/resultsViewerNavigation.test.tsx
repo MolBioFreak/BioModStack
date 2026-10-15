@@ -5,6 +5,8 @@ import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { afterEach, expect, test, vi } from 'vitest';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
 import StructureViewerPane from '../../src/components/StructureViewerPane';
+import { BinderResultComparison } from '../../src/components/BinderResultComparison';
+import { BatchComparePane } from '../../src/components/BatchComparePane';
 import { DesignComparePane } from '../../src/components/DesignComparePane';
 // GPU canvas is outside this routing test; actual StructureViewerPane remains mounted.
 vi.mock('../../src/components/MolstarViewer', () => ({ default: () => <div data-test-gpu-canvas /> }));
@@ -28,18 +30,22 @@ let renderer: ReactTestRenderer | undefined;
 let client: QueryClient;
 const original = api.defaults.adapter;
 
-test('ResultsViewer mounts both optional selected actions without a selection', async () => {
+test('ResultsViewer demand-mounts optional selected actions and forwards the exact selection', async () => {
     await setup('/designs/parent');
-    const actions = renderer!.root.findByType(BlindPoseSelectedControls);
-    expect(actions.props.sourceJobId).toBe('parent');
-    expect(actions.props.selectedDesignIds).toEqual([]);
-    expect(text(actions)).toContain('Blind pose (experimental)');
-    expect(text(actions)).toContain('LigandMPNN interface context (experimental)');
+    expect(renderer!.root.findAllByType(BlindPoseSelectedControls)).toHaveLength(0);
+    const disclosure = renderer!.root.findAllByType('details').find(node => node.findAllByType('summary').some(summary => text(summary).startsWith('Selected candidate operations')))!;
+    await act(async () => disclosure.props.onToggle({ currentTarget: { open: true } })); await flush();
+    expect(renderer!.root.findAllByType(BlindPoseSelectedControls)).toHaveLength(0);
     const tableTab = renderer!.root.findAllByType('button').find(button => text(button).includes('Data Table'))!;
     await act(async () => tableTab.props.onClick()); await flush();
     const row = renderer!.root.findAllByType('tr').find(candidate => text(candidate).includes('a-0'))!;
     await act(async () => row.findByType('input').props.onChange({ target: { checked: true } }));
-    expect(renderer!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(['a-0']);
+    await flush();
+    const actions = renderer!.root.findByType(BlindPoseSelectedControls);
+    expect(actions.props.sourceJobId).toBe('parent');
+    expect(actions.props.selectedDesignIds).toEqual(['a-0']);
+    expect(text(actions)).toContain('Blind pose (experimental)');
+    expect(text(actions)).toContain('LigandMPNN interface context (experimental)');
 });
 
 test('BC2 native records supplement the mounted Design selection and comparison workbench', async () => {
@@ -49,9 +55,9 @@ test('BC2 native records supplement the mounted Design selection and comparison 
         if (url.endsWith('/settings')) return { ok: true, json: async () => ({ requested_settings: {}, effective_settings: {} }) };
         if (!url.includes('/bindcraft2-results?')) throw new Error(`Unexpected native request ${url}`);
         return { ok: true, json: async () => ({ schema: 'bindcraft2.native-readback.v1', arm: 'arm-A',
-            stage: new URL(url, 'http://test').searchParams.get('stage'), offset: 0, limit: 25, total: 1,
+            stage: new URL(url, 'http://test').searchParams.get('stage'), offset: 0, limit: 25, total: 2,
             arms: [{ name: 'arm-A', accounting: {} }], accounting: {}, metadata: null,
-            rows: [{ design: 'native-evidence', native_score: 0 }],
+            rows: [{ design: 'native-evidence', design_id: 'bc2-1', native_score: 0 }, { design: 'second-native', design_id: 'bc2-2', native_score: 1 }],
         }) };
     }));
     try {
@@ -68,19 +74,37 @@ test('BC2 native records supplement the mounted Design selection and comparison 
         await flush();
         expect(paths.some(path => path.includes('stage=retained'))).toBe(true);
         const button = (label: string) => renderer!.root.findAllByType('button').find(node => text(node).includes(label))!;
-        await act(async () => button('Data Table').props.onClick()); await flush();
-        const row = renderer!.root.findAllByType('tr').find(node => text(node).includes('bc2-1'))!;
+        await act(async () => button('Data table').props.onClick()); await flush();
+        const row = renderer!.root.findAllByType('tr').find(node => text(node).includes('native-evidence'))!;
         await act(async () => row.findByType('input').props.onChange({ target: { checked: true } }));
         expect(renderer!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(['bc2-1']);
-        expect(button('Compare Designs')).toBeDefined();
-        expect(button('Compare Jobs')).toBeDefined();
-        await act(async () => button('Compare Designs').props.onClick()); await flush();
+        await act(async () => button('Compare result sets').props.onClick()); await flush();
+        await act(async () => renderer!.root.findAllByType('button').find(node => text(node) === 'Candidates' && node.props['aria-pressed'] !== undefined)!.props.onClick()); await flush();
         expect(renderer!.root.findByType(DesignComparePane).props.designs.map((row: { id: string }) => row.id)).toEqual(['bc2-1', 'bc2-2']);
         expect(text(renderer!.root)).toContain('native-evidence');
-        await act(async () => button('Data Table').props.onClick()); await flush();
+        await act(async () => button('Return to results').props.onClick()); await flush();
         expect(renderer!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(['bc2-1']);
         expect(calls.some(call => call.url === '/api/designs' && call.params.job_id === 'parent')).toBe(true);
     } finally { vi.unstubAllGlobals(); }
+});
+
+test('new run selections open Runs even after Candidates was selected, without discarding candidates', async () => {
+    await setup('/designs/parent');
+    const mountComparison = (jobIds: string[]) => <MemoryRouter><QueryClientProvider client={client}><ThemeProvider><BinderResultComparison jobId="parent" jobIds={jobIds} selectedDesignIds={['a-0']} /></ThemeProvider></QueryClientProvider></MemoryRouter>;
+    await act(async () => renderer!.update(mountComparison(['parent']))); await flush();
+    const button = (label: string) => renderer!.root.findAllByType('button').find(node => text(node) === label)!;
+    await act(async () => button('Compare result sets').props.onClick()); await flush();
+    await act(async () => button('Candidates').props.onClick()); await flush();
+    expect(renderer!.root.findByType(DesignComparePane).props.selectedDesignIds).toEqual(['a-0']);
+    await act(async () => button('Return to results').props.onClick());
+    await act(async () => renderer!.update(mountComparison(['parent', 'child']))); await flush();
+    expect(button('Runs').props['aria-pressed']).toBe(true);
+    expect(renderer!.root.findByType(BatchComparePane).props.jobIds).toEqual(['parent', 'child']);
+    expect(renderer!.root.findAllByType(DesignComparePane)).toHaveLength(0);
+    await act(async () => button('Candidates').props.onClick()); await flush();
+    expect(renderer!.root.findByType(DesignComparePane).props.selectedDesignIds).toEqual(['a-0']);
+    await act(async () => renderer!.update(mountComparison(['parent', 'child']))); await flush();
+    expect(button('Candidates').props['aria-pressed']).toBe(true);
 });
 
 test('mounted selected actions submit exact independent subsets and read native result', async () => {

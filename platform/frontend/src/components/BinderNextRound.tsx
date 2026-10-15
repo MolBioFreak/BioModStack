@@ -25,7 +25,7 @@ const labels: Record<string, string> = { fampnn: 'FA-MPNN', proteinmpnn: 'Protei
 const operations: Record<string, BinderOperation> = { fampnn: 'fampnn', proteinmpnn: 'proteinmpnn', caliby_binder: 'caliby', protonpottsmpnn: 'protonpottsmpnn', binder_refinement: 'refine', protenix: 'predict_protenix', boltz2: 'predict_boltz2', esmfold2: 'predict_esmfold2' };
 const names = { sequence_design: 'Sequence design', maturation: 'Maturation', prediction: 'Blind prediction' };
 const choices = { sequence_design: ['fampnn', 'proteinmpnn', 'caliby_binder', 'protonpottsmpnn'], prediction: ['protenix', 'boltz2', 'esmfold2'] };
-const control = 'rounded border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-sm';
+const control = 'min-w-0 max-w-full whitespace-normal rounded border border-[var(--border-color)] bg-[var(--bg-primary)] px-3 py-2 text-sm';
 const identity = () => crypto.randomUUID();
 function newStage(kind: SelectedRoundStage['kind'], previous?: string): DraftStage {
     const common = { id: identity(), input: previous ? { stage_id: previous } : { selected: true as const } };
@@ -107,7 +107,7 @@ export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNative
         try { await api.post(`/api/binder-continuation/${encodeURIComponent(sourceJobId)}/round/retry`, {}, { params: { round_id: round.round_id } }); await rounds.refetch(); }
         catch (reason) { setError(String(reason)); } finally { setBusy(false); }
     };
-    return <section aria-label="Selected round workspace" className="space-y-3">
+    return <section aria-label="Selected round workspace" className="bms-binder-controls min-w-0 space-y-3">
         <div className="flex flex-wrap items-center gap-3"><button className={control} type="button" onClick={() => setOpen(value => !value)}>Next round ({selection.length})</button><span>{selection.length} selected across this workflow</span></div>
         <BinderCandidateSets jobId={sourceJobId} candidates={selection} onLoad={refs => { onClearSelection?.(); setExtra(refs); writeRoundStorage(sourceJobId, 'selection', refs); window.dispatchEvent(new CustomEvent('bms:binder-round-selection', { detail: { jobId: sourceJobId, refs, replace: true } })); }} />
         {!!extra.length && <details><summary>Additional selected outputs and saved members ({extra.length})</summary>{extra.map((ref, index) => <div key={candidateKey(ref)}>Candidate {index + 1} · {ref.kind.replaceAll('_', ' ')} <button type="button" onClick={() => toggleOutput(ref, false)}>Remove</button><details><summary>Details</summary><BindCraft2SettingsReadback value={ref} /></details></div>)}</details>}
@@ -118,13 +118,14 @@ export function BinderNextRound({ sourceJobId, selectedDesignIds, selectedNative
             <button type="button" className={control} onClick={addProteinRecipe}>Add protein flow → design → predict</button>
             <div className="flex flex-wrap gap-2">{(['maturation', 'sequence_design', 'prediction'] as const).map(kind => <button type="button" className={control} key={kind} onClick={() => addStage(kind)}>Add {names[kind]}</button>)}</div>
             {draft.stages.map((item, index) => <fieldset key={item.stage.id} className="space-y-2 rounded border border-[var(--border-color)] p-3"><legend>{index + 1}. {names[item.stage.kind]}</legend>
-                <label><input type="checkbox" checked={item.enabled} onChange={event => changeStage(item.stage.id, value => ({ ...value, enabled: event.target.checked }))} />Include stage {index + 1}</label>
-                <label className="ml-3">Input<select aria-label={`Stage ${index + 1} input`} className={control} value={'stage_id' in item.stage.input ? item.stage.input.stage_id : ''} onChange={event => changeStage(item.stage.id, value => ({ ...value, stage: { ...value.stage, input: event.target.value ? { stage_id: event.target.value } : { selected: true } } }))}><option value="">Selected candidates</option>{draft.stages.slice(0, index).map((previous, i) => <option value={previous.stage.id} key={previous.stage.id}>{i + 1}. {names[previous.stage.kind]}{!previous.enabled ? ' (inactive)' : ''}</option>)}</select></label>
-                <button type="button" className={control} disabled={index === 0} onClick={() => setDraft(previous => { const stages = [...previous.stages]; [stages[index - 1], stages[index]] = [stages[index], stages[index - 1]]; return { ...previous, stages }; })}>Move up</button>
+                <label className="flex items-center gap-2"><input type="checkbox" checked={item.enabled} onChange={event => changeStage(item.stage.id, value => ({ ...value, enabled: event.target.checked }))} />Include stage {index + 1}</label>
+                <label className="block">Input<select aria-label={`Stage ${index + 1} input`} className={control} value={'stage_id' in item.stage.input ? item.stage.input.stage_id : ''} onChange={event => changeStage(item.stage.id, value => ({ ...value, stage: { ...value.stage, input: event.target.value ? { stage_id: event.target.value } : { selected: true } } }))}><option value="">Selected candidates</option>{draft.stages.slice(0, index).map((previous, i) => <option value={previous.stage.id} key={previous.stage.id}>{i + 1}. {names[previous.stage.kind]}{!previous.enabled ? ' (inactive)' : ''}</option>)}</select></label>
+                <div className="flex flex-wrap items-center gap-2"><button type="button" className={control} disabled={index === 0} onClick={() => setDraft(previous => { const stages = [...previous.stages]; [stages[index - 1], stages[index]] = [stages[index], stages[index - 1]]; return { ...previous, stages }; })}>Move up</button>
                 <button type="button" className={control} onClick={() => setDraft(previous => ({ ...previous, stages: previous.stages.filter(value => value.stage.id !== item.stage.id) }))}>Remove stage</button>
+                </div>
                 {item.stage.kind === 'maturation' ? <button className={control} type="button" onClick={() => setEditing({ stage: item.stage.id, model: 'binder_refinement' })}>PPIFlow settings</button> : <div className="flex flex-wrap gap-3">{choices[item.stage.kind].map(model => {
                     const chosen = item.stage.kind !== 'maturation' && item.stage.models.some(value => value.model_id === model);
-                    return <div key={model}><label><input type="checkbox" aria-label={`Stage ${index + 1} ${labels[model]}`} checked={chosen} onChange={() => changeStage(item.stage.id, value => {
+                    return <div key={model} className="flex min-h-12 flex-wrap items-center gap-3 rounded border border-[var(--border-color)] px-3 py-2"><label className="flex items-center gap-2"><input type="checkbox" aria-label={`Stage ${index + 1} ${labels[model]}`} checked={chosen} onChange={() => changeStage(item.stage.id, value => {
                         if (value.stage.kind === 'maturation') return value;
                         const selected = value.stage.models.find(branch => branch.model_id === model);
                         return { ...value, drafts: selected ? { ...value.drafts, [model]: selected.params } : value.drafts, stage: { ...value.stage, models: selected ? value.stage.models.filter(branch => branch.model_id !== model) : [...value.stage.models, { model_id: model, params: value.drafts[model] ?? {} }] } };

@@ -46,8 +46,9 @@ function Comparison({ jobId, jobIds, selectedDesignIds, selectedNativeSources, c
     const priorJobSignature = useRef(jobSignature);
     useEffect(() => {
         if (jobIds) {
-            setSelection(previous => ({ ...previous, jobs: jobIds }));
-            if (jobSignature !== priorJobSignature.current) setOpen(true);
+            const changed = jobSignature !== priorJobSignature.current;
+            setSelection(previous => ({ ...previous, jobs: jobIds, view: changed ? 'jobs' : previous.view }));
+            if (changed) setOpen(true);
         }
         priorJobSignature.current = jobSignature;
     }, [jobSignature]);

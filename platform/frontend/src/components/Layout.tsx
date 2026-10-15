@@ -543,9 +543,9 @@ export function Layout({ children }: LayoutProps) {
                         {/* Navigation Links */}
                         <DragScrollRail
                             className={isMobileTopbar
-                                ? 'order-2 min-w-0 w-full overflow-x-auto overscroll-x-contain cursor-grab active:cursor-grabbing select-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
+                                ? 'order-2 min-w-0 w-full'
                                 : 'order-2 min-w-0 w-full overflow-x-auto overscroll-x-contain cursor-grab active:cursor-grabbing select-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:order-3 2xl:order-2 2xl:w-auto 2xl:flex-1 2xl:max-w-full'}
-                            contentClassName="flex w-max items-center gap-1.5 pr-1"
+                            contentClassName={isMobileTopbar ? 'flex w-full flex-wrap items-center gap-1.5' : 'flex w-max items-center gap-1.5 pr-1'}
                             data-bms-primary-nav-rail="true"
                         >
                             <>

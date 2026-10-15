@@ -6,7 +6,7 @@ import { roundParameterIsBound } from '../../src/lib/binderRound';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../../src/lib/api';
 import { ResultsViewer } from '../../src/components/ResultsViewer';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
@@ -83,6 +83,9 @@ function interceptResult(endpoint: string, data: any) {
         ? { config, data, status: 200, statusText: 'OK', headers: {} }
         : prior(config);
 }
+// These multi-round receiving cases deliberately await real query/render settles.
+// Bound the suite above their cumulative waits so teardown cannot overlap a live case.
+describe('integrated native receiving', { timeout: 30_000 }, () => {
 it.each(['ligandmpnn', 'caliby_experimental', 'protonpottsmpnn'])('actual Results parent selects %s initial native publications across pages, saves final/ranked sets and repeats a round without synthetic Designs', async model_id => {
     job = { ...job, model_id, mode: model_id === 'ligandmpnn' ? 'ligand_aware' : model_id === 'protonpottsmpnn' ? 'redesign' : 'ensemble_design' };
     const refs = Array.from({ length: 32 }, (_, i) => ({ ...initialRef(i), label: 'display only' }));
@@ -100,8 +103,9 @@ it.each(['ligandmpnn', 'caliby_experimental', 'protonpottsmpnn'])('actual Result
         interceptResult('/api/jobs/parent/protonpottsmpnn/results', { contract: 'protonpottsmpnn_design.v1', source: {}, request: { contract: 'protonpottsmpnn_design.v1', options: { criteria: [], binder_chain: 'B', seed: 0, engine_options: {} }, source: { requested_path: 'source.pdb', sha256: 'fixture' } }, runtime: {}, artifacts: [],
             designs: refs.map((candidate_ref, i) => ({ candidate_ref, design_id: `criteria0:native${i}`, native_design_id: `native${i}`, criteria_index: 0, native: { ...native, final_potts_energy: i } })) });
     }
+    const selectLabel = (i: number) => `Select ${model_id === 'ligandmpnn' ? JSON.stringify({ name: 'native', batch_idx: 0, design_idx: i }) : model_id === 'caliby_experimental' ? `native-${i}` : `criteria0:native${i}`}`;
     await mount();
-    await change('Select Candidate 1', true); await click('Next native records'); await change('Select Candidate 32', true);
+    await change(selectLabel(0), true); await click('Next native records'); await change(selectLabel(31), true);
     expect(button('Next round (2)')).toBeTruthy();
     const selectedSets = tree!.root.findAll(node => typeof node.type === 'function' && node.props.candidates?.length === 2 && node.props.onLoad)[0];
     await act(async () => selectedSets.findAllByType('button').find(node => text(node) === 'Mark final')!.props.onClick()); await flush();
@@ -126,14 +130,14 @@ it.each(['ligandmpnn', 'caliby_experimental', 'protonpottsmpnn'])('actual Result
     expect(posts[1].body.idempotency_key).not.toBe(posts[0].body.idempotency_key);
     await close(); await mount();
     expect(button('Next round (3)')).toBeTruthy();
-    expect(tree!.root.findByProps({ 'aria-label': 'Select Candidate 1' }).props.checked).toBe(true);
+    expect(tree!.root.findByProps({ 'aria-label': selectLabel(0) }).props.checked).toBe(true);
     expect(calls.some(c => /\/api\/designs\/(criteria|native|producer)/.test(c.url))).toBe(false);
     if (model_id === 'protonpottsmpnn') {
         const extra = tree!.root.findAllByType('details').find(node => node.findAllByType('summary').some(summary => text(summary).startsWith('Additional selected outputs')))!;
         await act(async () => extra.findAllByType('button').find(node => text(node) === 'Remove')!.props.onClick()); await flush();
         const readback = tree!.root.findAll(node => typeof node.type === 'function' && node.props.value?.design_ids && node.props.value?.model_id === 'protenix')[0];
         expect(readback.props.value.design_ids).toEqual(['criteria0:native31']);
-        expect(tree!.root.findByProps({ 'aria-label': 'Select Candidate 1' }).props.checked).toBe(false);
+        expect(tree!.root.findByProps({ 'aria-label': selectLabel(0) }).props.checked).toBe(false);
     }
 });
 it('actual RFantibody Results uses compact all-output selection and exact backend document refs, retaining the real model workbench', async () => {
@@ -146,14 +150,14 @@ it('actual RFantibody Results uses compact all-output selection and exact backen
     await mount();
     expect(text(tree!.root)).toContain('RFantibody candidates');
     expect(tree!.root.findByProps({ 'data-molecule': '/exact/rf-complex.cif' })).toBeTruthy();
-    await change('Select Candidate 1', true); await click('Next native records'); await change('Select Candidate 32', true);
+    await change('Select rf-0', true); await click('Next native records'); await change('Select rf-31', true);
     await click('Next round (2)'); await click('Add Sequence design'); await change('Stage 1 ProteinMPNN', true); await click('Queue round');
     expect(calls.find(c => c.url === '/api/binder-continuation/selected')!.body.selection.candidate_refs).toEqual([rfRefs[0], rfRefs[31]]);
     await click('Open RFantibody model workbench');
     expect(button('Back to RFantibody candidates')).toBeTruthy();
     await click('Back to RFantibody candidates');
     expect(button('Next round (2)')).toBeTruthy();
-    expect(tree!.root.findByProps({ 'aria-label': 'Select Candidate 1' }).props.checked).toBe(true);
+    expect(tree!.root.findByProps({ 'aria-label': 'Select rf-0' }).props.checked).toBe(true);
 });
 
 it('actual parent renders every applicable installed protein registry field, including advanced controls and checkpoint-fixed metadata', async () => {
@@ -200,4 +204,5 @@ it('backend exact native document refs preserve model and declared roles without
     await act(async () => extra.findAllByType('button').find(node => text(node) === 'Remove')!.props.onClick()); await flush();
     expect(button('Next round (0)')).toBeTruthy();
     expect(tree!.root.findByProps({ 'aria-label': 'Select Candidate 1' }).props.checked).toBe(false);
+});
 });

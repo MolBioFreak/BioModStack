@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { nativeParameterLabel } from '../lib/nativeParameterLabel';
 import { SequenceManager } from './SequenceManager';
 import { PresetSelector } from './PresetSelector';
 import { StructureInput } from './StructureInput';
@@ -58,7 +59,7 @@ export function ParamField({
         if (param.preset_type === 'rna') return upper.replace(/T/g, 'U').replace(/[^ACGUN]/g, '');
         return upper.replace(/[^A-Z]/g, '');
     };
-    const label = param.label || param.name;
+    const label = nativeParameterLabel(param);
     const description = compactUiCopy(param.description, 112);
     const value = params[param.name] ?? param.default ?? (param.type === 'boolean' ? false : '');
     const numericValue = (() => {
@@ -145,11 +146,12 @@ export function ParamField({
     };
 
     return (
-        <div className={isWide ? 'col-span-full' : ''}>
+        <div className={`bms-model-parameter min-w-0 ${isWide ? 'col-span-full' : ''}`}>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">
                 {label}
                 {param.required && <span className="text-red-400 ml-1">*</span>}
             </label>
+            {label !== param.name && <details className="mb-2 text-xs text-slate-500"><summary>Parameter key</summary><code className="break-all">{param.name}</code></details>}
             {description && <p className="text-xs text-slate-500 mb-2">{description}</p>}
 
             {param.type === 'boolean' ? (

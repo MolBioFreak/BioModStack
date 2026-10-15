@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from 'react';
+import { nativeParameterLabel } from '../lib/nativeParameterLabel';
 import { BinderWorkflowWorkspace } from './BinderWorkflowWorkspace';
 import { NativeBinderSource } from './NativeBinderSource';
 import { NativeCovalentBonds, NativeDatasetInput, NativeFrameworkIdentity, NativeSequenceTemplate } from './NativeGenerationSpecialControls';
 import { nativeBinderField, nativeParameterKey, nativeParameterDisplay, nativeBinderSection, nativeBinderSections, type NativeBinderModel, type NativeBinderParameter } from '../lib/nativeBinderAuthoring';
 
 const input = 'w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-sm text-[var(--text-primary)]';
-const labelFor = (parameter: NativeBinderParameter) => parameter.label || parameter.name.replace(/^boltzgen_/, '').replaceAll('_', ' ').replace(/^./, letter => letter.toUpperCase());
+const labelFor = nativeParameterLabel;
 const sourceFields = new Set(['target_pdb', 'framework_pdb', 'scaffold_path', 'custom_framework_path', 'input_pdb', 'ligand_pdb']);
 
 function CdrRanges({ value, onChange }: { value: unknown; onChange: (value: string) => void }) {

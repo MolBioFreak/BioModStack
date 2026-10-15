@@ -15,11 +15,18 @@ export function BinderCandidateSets({ jobId, candidates, ranking, filterState = 
     const save = async (final?: boolean) => {
         setBusy(true); setError('');
         try {
-            await saveCandidateSet(jobId, { name: name.trim() || 'Selected candidates', candidate_refs: candidates,
+            const saved = await saveCandidateSet(jobId, { name: name.trim() || 'Selected candidates', candidate_refs: candidates,
                 design_ids: candidates.flatMap(ref => ref.kind === 'design' ? [ref.design_id] : []),
                 filter_state: filterState, ...(ranking !== undefined ? { ranking } : {}),
                 revision: (loaded?.revision ?? 0) + 1,
                 ...(final !== undefined ? { final_designation: { designated: final, ...(loaded ? { supersedes_set_id: loaded.id } : {}) } } : {}) });
+            // The save helper reads the persisted owner back (newest first).
+            // Continue from that revision so Remove final supersedes the set
+            // just designated, rather than the last manually loaded set.
+            const current = saved.find(set => set.name === (name.trim() || 'Selected candidates')
+                && set.revision === (loaded?.revision ?? 0) + 1
+                && !sets.data?.some(previous => previous.id === set.id));
+            if (current) setLoaded({ id: current.id, revision: current.revision ?? 1 });
             const result = await sets.refetch();
             if (result.isError) throw Error('Set saved; readback unavailable.');
         } catch (reason) { setError(String(reason)); }

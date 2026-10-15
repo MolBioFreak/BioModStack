@@ -43,7 +43,7 @@ def write_outputs(root, model, scratch, monkeypatch):
             scratch, native_source, native_io, False)
         publication = root / 'ppiflow_generation'; publication.mkdir()
         shutil.copytree(scratch / 'result/candidates', publication / 'candidates')
-        for name in ('samples.jsonl',):
+        for name in ('samples.jsonl', 'opaque-key_0.pdb', 'opaque-key_0.pdb.sample.json'):
             shutil.copyfile(scratch / 'result' / name, publication / name)
     elif model == 'boltzgen':
         from test_boltzgen_candidate_accounting import published
@@ -186,6 +186,30 @@ async def test_actual_join_offline_retry_sources(store, tmp_path, monkeypatch, m
                     'job_id': job.id, 'artifact_id': artifact.id}, output_format='native')
                 assert Path(selected['path']).read_bytes() == path.read_bytes()
                 assert selected['owner_job_id'] == job.id
+                if model == 'ppiflow':
+                    # Both canonical snapshots AND the retained native filename
+                    # must initialize follow-ons from emitted roles, not R/C.
+                    from services.binder_selected_round import role_defaults, prediction_request
+                    from services.binder_continuation import model_request, individual_model_requests
+                    assert selected['binder_chains'] == ['A']
+                    assert selected['target_chains'] == ['B']
+                    for designer in ('proteinmpnn', 'fampnn'):
+                        defaults = role_defaults(designer, {}, {}, selected)
+                        request = model_request(operation=designer, params=defaults, source=job,
+                            root=job, selection_dir=Path(selected['selection_dir']), execution_target_id=None)
+                        child = individual_model_requests(request, designer, Path(selected['selection_dir']))[0]
+                        assert child.params['design_chain'] == 'A'
+                        if designer == 'fampnn':
+                            assert child.params['target_chain'] == 'B'
+                        assert role_defaults(designer, {'design_chain': 'edited'}, {'design_chain': 'edited'}, selected)['design_chain'] == 'edited'
+                    target = {'name': 'independent-input', 'components': [
+                        {'id': 'R', 'type': 'protein', 'sequence': 'AGS'}]}
+                    for predictor in ('boltz2', 'protenix'):
+                        child, binding = prediction_request(job, selected, target, predictor, {}, None)
+                        assert child.params['sequence'] == 'AA:AGS'
+                        assert binding['input_components'] == [
+                            {'id': 'A', 'source_chain': 'A', 'role': 'binder', 'sequence': 'AA'},
+                            {'id': 'B', 'source_chain': 'R', 'role': 'target', 'sequence': 'AGS'}]
                 if model == 'binder_refinement':
                     assert identity['producer_document']['artifact_class'] == 'backbone_complex'
                 if model in {'fampnn', 'proteinmpnn'}:

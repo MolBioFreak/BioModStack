@@ -135,6 +135,11 @@ it('round belongs only to Generation/Campaign and reflects actual designer and p
 it('unrestricted saved collection browses first and unrelated Load stays open, then deliberately routes separately', async () => {
     mocks.templates = [{ id: 'other', name: 'Other workflow', model_id: 'boltzgen', mode: 'ligand_binder', icon: 'bookmark', color: '#123456', params: { num_designs: 0 } }];
     const load = vi.fn(); await mount(bc2, { onLoadTemplate: load }); await click('Saved campaigns'); await settle();
+    // The saved campaign shelf defaults to its owning workflow. Explicitly
+    // broaden it before exercising cross-workflow navigation.
+    const allWorkflows = [...document.querySelectorAll('label')].find(label => label.textContent?.includes('All workflows'))?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(allWorkflows).toBeTruthy();
+    await act(async () => { if (!allWorkflows!.checked) allWorkflows!.click(); });
     expect(document.body.textContent).toContain('My Templates'); expect(document.body.textContent).toContain('Other workflow'); await click('Load');
     expect(document.body.textContent).toContain('belongs to another workflow'); expect(document.body.textContent).toContain('My Templates'); expect(load).not.toHaveBeenCalled();
     await click('Load in its own workflow'); expect(load).toHaveBeenCalledWith(mocks.templates[0]);
