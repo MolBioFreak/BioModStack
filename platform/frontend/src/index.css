@@ -1044,6 +1044,32 @@ textarea:focus {
   outline-color: var(--accent-primary) !important;
 }
 
+/* Binder surfaces use this legacy token in their border utilities. Without
+   an explicit mapping, Tailwind 4 falls back to currentColor (near-white).
+   Keep the alias local so unrelated workspaces retain their existing styles. */
+.bms-binder-results,
+.bms-binder-controls {
+  --border-color: var(--border-primary);
+}
+
+:is(.bms-binder-results, .bms-binder-controls)
+  :is(button, summary)[class~="border-[var(--border-color)]"]:hover:not(:disabled) {
+  background-color: var(--bg-tertiary);
+  border-color: var(--border-secondary);
+}
+
+.bms-binder-controls button:disabled {
+  opacity: 0.5;
+}
+
+/* Idle borders are grouping, not focus. Keep keyboard focus explicit and
+   outside the control without changing its geometry or selected-state border. */
+:is(.bms-binder-results, .bms-binder-controls)
+  :is(button, summary, input, select, textarea):focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
 /* Own BMS form sizing explicitly rather than relying on the layered reset
    and inherited third-party styles. A 100% content-box input crosses gutters. */
 .bms-model-parameter :is(input, select, textarea),

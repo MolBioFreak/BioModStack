@@ -5394,7 +5394,7 @@ function ResultsViewerContent() {
     // Suspending above this owner reconnects its scope-reset effects on reveal.
     return (
         <Suspense fallback={<p role="status">Loading Results workspace…</p>}>
-        <div className="min-h-screen bg-slate-950 text-slate-200">
+        <div className={`min-h-screen bg-slate-950 text-slate-200 ${showResultFamily ? 'bms-binder-results' : ''}`}>
             {/* Background */}
             <div className="fixed inset-0 pointer-events-none">
                 <div className="absolute top-0 left-0 w-1/2 h-1/2 bg-blue-500/5 rounded-full blur-[150px]" />
