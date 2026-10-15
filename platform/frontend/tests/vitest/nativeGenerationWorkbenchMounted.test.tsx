@@ -46,6 +46,24 @@ async function mount(props: Partial<React.ComponentProps<typeof NativeBinderGene
 }
 afterEach(async () => { await act(async () => tree?.unmount()); client?.clear(); api.defaults.adapter = original; vi.unstubAllGlobals(); });
 
+it('uses page scrolling for candidates and readable measurements below the full-width molecule', async () => {
+    await mount({}, [{ ...records[0], metrics: { seq_length: 80, native_identity: 'unbroken-native-value-'.repeat(20) } }]);
+    const scroll = tree.root.findByProps({ 'aria-label': 'Candidate table horizontal scroll' });
+    expect(scroll.props.className).toBe('overflow-x-auto');
+    expect(tree.root.findByProps({ 'aria-label': 'Native result pages' })).toBeTruthy();
+    const inspector = tree.root.findByProps({ 'aria-label': 'Candidate structure inspector' });
+    expect(inspector.parent!.props.className).toContain('items-start');
+    const molecule = tree.root.findByProps({ 'aria-label': 'Published molecule and measurements' });
+    expect(molecule.props.className).not.toContain('grid-cols');
+    const metrics = tree.root.findByProps({ 'aria-label': 'Native measurements' });
+    expect(metrics.props.className).not.toMatch(/overflow|max-h/);
+    expect(text(metrics)).toContain('unbroken-native-value-'.repeat(20));
+    expect(metrics.findAllByType('dd').every(node => node.props.className.includes('[overflow-wrap:anywhere]'))).toBe(true);
+    expect(tree.root.findByType(StructureWorkbench).props.structureDocumentId).toBe('primary');
+    await act(async () => tree.root.findByProps({ 'aria-label': 'Published document' }).props.onChange({ target: { value: '1' } }));
+    expect(tree.root.findByType(StructureWorkbench).props.structureDocumentId).toBe('alternate');
+});
+
 it('advances read-back revisions and removes the most recently designated final set', async () => {
     const original = api.defaults.adapter;
     const sets: CandidateSet[] = [];
