@@ -271,7 +271,7 @@ async def test_real_bundle_generations_exclude_stale_files(package, local_transp
     assert uploads[upload_count:] == [str(t.source) for t in private]
     assert all(not Path(p).name.startswith('bms-cache-batch-') for p in uploads[upload_count:])
     for name in ('main.nf',):
-        assert (Path(first.remote_source_dir) / name).stat().st_ino == (Path(second.remote_source_dir) / name).stat().st_ino
+        assert (Path(first.remote_source_dir) / name).stat().st_ino != (Path(second.remote_source_dir) / name).stat().st_ino
     upload_count = len(uploads)
     assert second.remote_source_dir == second.remote_attempt_dir + '/materialized/source'
     assert second.remote_runtime_dir == second.remote_attempt_dir + '/materialized/runtime'

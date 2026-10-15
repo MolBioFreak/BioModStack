@@ -932,6 +932,30 @@ class Cache:
             except FileNotFoundError:
                 pass
 
+    def _publish_private(self, source_fd, parent, name, item, mode):
+        """Attempt-owned inode; never borrow a guarded installed-runtime link."""
+        import importlib
+        views = importlib.import_module('.runtime_image_views', runtime_lifecycle().__package__)
+        temporary = '.partial-' + item['sha256'] + '-' + uuid.uuid4().hex
+        fd = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=parent)
+        try:
+            views.allocate_private_file(source_fd, fd, regular(source_fd))
+            # Verify the exact private bytes once, including the copy fallback.
+            if not verified(fd, item):
+                raise ValueError('hash_mismatch')
+            os.fchmod(fd, mode)
+            os.fsync(fd)
+            self.emit(item, 'publishing')
+            os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
+            os.fsync(parent)
+        finally:
+            os.close(fd)
+            try:
+                os.unlink(temporary, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+
     def _publish_immutable(self, source_fd, objects, parent, name, item, mode):
         """Caller holds the content lock; never change the donor inode's mode."""
         if not verified(source_fd, item):
@@ -1075,7 +1099,7 @@ class Cache:
         return {'state': 'ready'}
 
     def extract_source(self, value, destination, *, immutable=False):
-        """Install archive member bodies once; attempts receive private directory views.
+        """Cache archive bodies once; attempts receive independent private inodes.
 
         The default retains old envelope modes. New producers request immutable
         leaves and record those same modes in the existing envelope.
@@ -1192,7 +1216,7 @@ class Cache:
                     if mode & 0o222:
                         self._publish_copy(fd, parent, destination.name, item, mode)
                     else:
-                        self._publish_immutable(fd, objects, parent, destination.name, item, mode)
+                        self._publish_private(fd, parent, destination.name, item, mode)
             finally:
                 os.close(fd)
         self.emit(item, 'ready')
