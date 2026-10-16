@@ -27,7 +27,7 @@ def identity(path):
 
 
 def test_shipped_proot_pin():
-    assert hashlib.sha256(PROOT.read_bytes()).hexdigest() == '5ff4fd4367f2cdf3fcbb8088f5e36eed2070a97fc0e401f97ca30b2f90facd5a'
+    assert hashlib.sha256(PROOT.read_bytes()).hexdigest() == 'dc9012cf46fb1f4d1e168273a22f15077693ebe94cd09fa3247204a726187efd'
 
 
 @pytest.mark.parametrize('call', ['open', 'openat'])

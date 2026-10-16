@@ -3,9 +3,11 @@
   "source_commit": "fe64598e08ca3b4e9884c4cf8ecb83f6dc9720b8",
   "uthash_commit": "e493aa90a2833b4655927598f169c31cfcdf7861",
   "patch_sha256": "24abd8d211a780bdb1f54175f757db02cbf16e63501c354b9a0744f2982fb19c",
-  "artifact_sha256": "5ff4fd4367f2cdf3fcbb8088f5e36eed2070a97fc0e401f97ca30b2f90facd5a",
-  "artifact_size": 1157920,
+  "artifact_sha256": "dc9012cf46fb1f4d1e168273a22f15077693ebe94cd09fa3247204a726187efd",
+  "artifact_size": 1166840,
   "original_englib_sha256": "2a4804ba82e087ca3e99305fce9887227925d2b56aaefcad6474c4cb86b7a157",
   "original_modern_engine_sha256": "a9a3161b733b7114c87fd81e0d50381b5ec2cccad7f2b981257a834b8220cc34",
-  "installed_manifest_sha256": "b1bafbf468885612e118d8e85302f83ce6bba540e795ea4e5c3c49fb08e988ae"
+  "installed_manifest_sha256": "1d632e2163680c4ac6d82a931f706dc82c0d4629bd85ea6ce4068ed6948f28bc",
+  "lazy_patch_sha256": "95d7a5bd3e2e04b6f4f4498a87e14a4b7994234d6b1b8389b1cb26190be14751",
+  "cow_source_sha256": "12982e4be54ed2c2724b9c5bbba12bc41f225c047b67c8847f18c1900e01a07f"
 }

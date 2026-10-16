@@ -421,8 +421,39 @@ def allocate_private_file(source_fd, destination_fd, before):
         raise Error('private allocation source changed')
 
 
-def _clone(source, destination, manifest):
+def _bootstrap_members(rows):
+    """udocker reads auth, shell ELF and OS identification before PRoot starts.
+
+    Resolve those guest paths through the manifest, never host absolute links.
+    The rest of the image stays lazy, including unused architecture probes.
+    """
+    import posixpath
+    names = ['etc/passwd', 'etc/group', 'bin/bash']
+    names += [name for name in rows if name.startswith('etc/') and name.endswith('-release')]
+    result = set()
+    for name in names:
+        for _ in range(40):  # Linux's symlink traversal limit
+            parts = name.split('/')
+            for i in range(len(parts)):
+                prefix = '/'.join(parts[:i + 1])
+                row = rows.get(prefix, {})
+                if row.get('kind') == 'symlink':
+                    target = row['target']
+                    name = posixpath.normpath(posixpath.join(
+                        '/' if target.startswith('/') else '/' + '/'.join(parts[:i]),
+                        target, *parts[i + 1:])).lstrip('/')
+                    break
+            else:
+                row = rows.get(name, {})
+                if row.get('kind') == 'file':
+                    result.add(row.get('hardlink', name))
+                break
+    return result
+
+
+def _clone(source, destination, manifest, *, shared_files=None):
     rows = manifest["original"]
+    bootstrap = _bootstrap_members(rows) if shared_files is not None else set()
     seen, inodes = set(), {}
     link_counts = {}
     for rel, row in rows.items():
@@ -465,7 +496,15 @@ def _clone(source, destination, manifest):
                     raise Error('derived rootfs changed during cloning')
                 out = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 try:
-                    allocate_private_file(src, out, before)
+                    if shared_files is None or rel in bootstrap:
+                        allocate_private_file(src, out, before)
+                    else:
+                        # The transport materializes this stable private inode
+                        # before its first descriptor/content access.
+                        os.ftruncate(out, before.st_size)
+                        if not _same(before, os.fstat(src)):
+                            raise Error('derived rootfs changed during projection')
+                        shared_files.append((target, source / rel))
                 finally:
                     os.close(out)
     if seen != set(rows):
@@ -549,7 +588,7 @@ def prepare_image(store_root, digest, extract=None, *, owner=None, expected_size
 
 
 @contextmanager
-def private_image_view(store_root, digest, workspace_root, extract):
+def private_image_view(store_root, digest, workspace_root, extract, *, shared_files=None):
     """Yield {rootfs, image, image_fd, identity}; retain source FD and lease.
 
     The callback creates destination and must reap its children before returning.
@@ -577,7 +616,10 @@ def private_image_view(store_root, digest, workspace_root, extract):
                 os.mkdir(name, 0o700, dir_fd=parent)
                 private = workspace / name / "rootfs"
                 try:
-                    _clone(derived / "rootfs", private, manifest)
+                    if shared_files is None:
+                        _clone(derived / "rootfs", private, manifest)
+                    else:
+                        _clone(derived / "rootfs", private, manifest, shared_files=shared_files)
                     verify_derivation(derived, identity, verification=verification, full=False)
                     check_source()
                     _check_directory(workspace, parent)

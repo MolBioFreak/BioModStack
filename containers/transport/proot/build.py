@@ -30,11 +30,15 @@ def main():
         run('git', '-C', str(source), 'submodule', 'update', '--init', 'lib/uthash')
         assert subprocess.check_output(['git', '-C', str(source / 'lib/uthash'), 'rev-parse', 'HEAD'], text=True).strip() == UTHASH
         run('git', '-C', str(source), 'apply', str(HERE / 'readonly-open.patch'))
+        assert hashlib.sha256((HERE / 'lazy-files.patch').read_bytes()).hexdigest() == PINS['lazy_patch_sha256']
+        assert hashlib.sha256((HERE / 'cow.c').read_bytes()).hexdigest() == PINS['cow_source_sha256']
+        run('git', '-C', str(source), 'apply', str(HERE / 'lazy-files.patch'))
+        shutil.copyfile(HERE / 'cow.c', source / 'src/extension/cow.c')
         run('docker', 'build', '-t', 'bms-proot-readonly-builder', str(HERE))
         run('docker', 'run', '--rm', '--network=none', '--user', f'{os.getuid()}:{os.getgid()}',
             '-v', f'{source}:/proot', '-w', '/proot/src', 'bms-proot-readonly-builder',
             'make', '-j4', 'HAS_SWIG=', 'HAS_PYTHON_CONFIG=', 'GIT_VERSION=', 'GIT_COMMIT=',
-            'VERSION=udocker-fe64598-bms-readonly-1')
+            'VERSION=udocker-fe64598-bms-lazy-1')
         run('docker', 'run', '--rm', '--network=none', '--user', f'{os.getuid()}:{os.getgid()}',
             '-v', f'{source}:/proot', 'bms-proot-readonly-builder',
             'strip', '--strip-debug', '/proot/src/proot')

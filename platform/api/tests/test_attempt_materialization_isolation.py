@@ -76,7 +76,8 @@ def test_concurrent_attempts_inside_actual_exit_guard(tmp_path, monkeypatch, fal
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(driver, 'canonical_image', lambda *a: (tmp_path / 'image', 'a' * 64))
     @contextmanager
-    def private(*args):
+    def private(*args, shared_files=None):
+        assert shared_files == []
         yield dict(rootfs=rootfs, image_fd=0)
     monkeypatch.setattr(driver.views, 'private_image_view', private)
     monkeypatch.setattr(driver, 'host_system_bindings', lambda _: [])

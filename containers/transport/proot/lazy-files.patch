@@ -1,0 +1,109 @@
+diff --git a/src/GNUmakefile b/src/GNUmakefile
+index 64347ef..4591c2b 100644
+--- a/src/GNUmakefile
++++ b/src/GNUmakefile
+@@ -65,6 +65,7 @@ OBJECTS += \
+ 	ptrace/user.o		\
+ 	ptrace/wait.o		\
+ 	extension/extension.o	\
++	extension/cow.o	\
+ 	extension/kompat/kompat.o \
+ 	extension/fake_id0/fake_id0.o \
+ 	extension/link2symlink/link2symlink.o \
+diff --git a/src/cli/cli.c b/src/cli/cli.c
+index 4e79066..2f57c18 100644
+--- a/src/cli/cli.c
++++ b/src/cli/cli.c
+@@ -475,6 +475,11 @@ int main(int argc, char *const argv[])
+ 		goto error;
+ 
+ 	/* Start the first tracee.  */
++	if (getenv("BMS_PROOT_COW_MAP")) {
++		extern int cow_callback(Extension *, ExtensionEvent, intptr_t, intptr_t);
++		if (initialize_extension(tracee, cow_callback, getenv("BMS_PROOT_COW_MAP")) < 0)
++			goto error;
++	}
+ 	status = launch_process(tracee, &argv[status]);
+ 	if (status < 0) {
+ 		print_execve_help(tracee, tracee->exe, status);
+diff --git a/src/syscall/enter.c b/src/syscall/enter.c
+index 729700e..e692ee8 100644
+--- a/src/syscall/enter.c
++++ b/src/syscall/enter.c
+@@ -502,9 +502,16 @@ int translate_syscall_enter(Tracee *tracee)
+ 		status = translate_sysarg(tracee, SYSARG_2, REGULAR);
+ 		break;
+ 
++	case PR_openat2:
+ 	case PR_openat:
+ 		dirfd = peek_reg(tracee, CURRENT, SYSARG_1);
+ 		flags = peek_reg(tracee, CURRENT, SYSARG_3);
++		if (get_sysnum(tracee, ORIGINAL) == PR_openat2) {
++			uint64_t how_flags;
++			status = read_data(tracee, &how_flags, peek_reg(tracee, CURRENT, SYSARG_3), sizeof(how_flags));
++			if (status < 0) break;
++			flags = how_flags;
++		}
+ 
+ 		status = get_sysarg_path(tracee, path, SYSARG_2);
+ 		if (status < 0)
+diff --git a/src/syscall/seccomp.c b/src/syscall/seccomp.c
+index efbbee1..94dc8d8 100644
+--- a/src/syscall/seccomp.c
++++ b/src/syscall/seccomp.c
+@@ -375,6 +375,7 @@ static FilteredSysnum proot_sysnums[] = {
+ 	{ PR_oldlstat,		0 },
+ 	{ PR_oldstat,		0 },
+ 	{ PR_open,		0 },
++	{ PR_openat2, 0 },
+ 	{ PR_openat,		0 },
+ 	{ PR_pivot_root,	0 },
+ 	{ PR_prctl, 		0 },
+diff --git a/src/syscall/sysnums-i386.h b/src/syscall/sysnums-i386.h
+index c50ae56..3a8f558 100644
+--- a/src/syscall/sysnums-i386.h
++++ b/src/syscall/sysnums-i386.h
+@@ -293,6 +293,7 @@ static const Sysnum sysnums_i386[] = {
+ 	[ 293 ] = PR_inotify_rm_watch,
+ 	[ 294 ] = PR_migrate_pages,
+ 	[ 295 ] = PR_openat,
++	[ 437 ] = PR_openat2,
+ 	[ 296 ] = PR_mkdirat,
+ 	[ 297 ] = PR_mknodat,
+ 	[ 298 ] = PR_fchownat,
+diff --git a/src/syscall/sysnums-x32.h b/src/syscall/sysnums-x32.h
+index 6388229..42354ae 100644
+--- a/src/syscall/sysnums-x32.h
++++ b/src/syscall/sysnums-x32.h
+@@ -228,6 +228,7 @@ static const Sysnum sysnums_x32[] = {
+ 	[ 255 ] = PR_inotify_rm_watch,
+ 	[ 256 ] = PR_migrate_pages,
+ 	[ 257 ] = PR_openat,
++	[ 437 ] = PR_openat2,
+ 	[ 258 ] = PR_mkdirat,
+ 	[ 259 ] = PR_mknodat,
+ 	[ 260 ] = PR_fchownat,
+diff --git a/src/syscall/sysnums-x86_64.h b/src/syscall/sysnums-x86_64.h
+index 333d058..7bc9a8b 100644
+--- a/src/syscall/sysnums-x86_64.h
++++ b/src/syscall/sysnums-x86_64.h
+@@ -259,6 +259,7 @@ static const Sysnum sysnums_x86_64[] = {
+ 	[ 255 ] = PR_inotify_rm_watch,
+ 	[ 256 ] = PR_migrate_pages,
+ 	[ 257 ] = PR_openat,
++	[ 437 ] = PR_openat2,
+ 	[ 258 ] = PR_mkdirat,
+ 	[ 259 ] = PR_mknodat,
+ 	[ 260 ] = PR_fchownat,
+diff --git a/src/syscall/sysnums.list b/src/syscall/sysnums.list
+index 2b6c9b2..f1cae02 100644
+--- a/src/syscall/sysnums.list
++++ b/src/syscall/sysnums.list
+@@ -213,6 +213,7 @@ SYSNUM(olduname)
+ SYSNUM(open)
+ SYSNUM(open_by_handle_at)
+ SYSNUM(openat)
++SYSNUM(openat2)
+ SYSNUM(pause)
+ SYSNUM(pciconfig_iobase)
+ SYSNUM(pciconfig_read)
