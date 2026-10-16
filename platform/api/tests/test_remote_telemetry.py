@@ -37,7 +37,7 @@ async def test_eight_gpu_payload_incremental_fresh_admission_and_expiry(monkeypa
     store = mod.RemoteTelemetry(); worker = target(); state = entry()
     store.entries[mod.identity(worker)] = state
     async def remote(*args, **kwargs):
-        assert kwargs['timeout'] == 6
+        assert kwargs['timeout'] == 15
         assert kwargs['establishment_timeout'] == 30
         assert args[1] == ['python3', '-', '/opt/biomodstack']
         return SimpleNamespace(stdout=json.dumps(fixture()))
@@ -120,6 +120,134 @@ async def test_handshake_time_is_not_observation_age_and_setup_is_independent(mo
     assert state['due'] == 135.0
     # The original freshness window has not increased.
     assert mod.FRESH_SECONDS == 20.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('timeouts', [0, 1, 2, 3, 4])
+@pytest.mark.parametrize('command_stamp', [True, False])
+async def test_collection_initial_plus_three_retries_publish_once(monkeypatch, timeouts, command_stamp):
+    from copy import deepcopy
+    from datetime import timezone
+
+    store = mod.RemoteTelemetry(); worker = target(); state = entry()
+    store.entries[mod.identity(worker)] = state
+    monkeypatch.setattr(mod, 'remote_telemetry', store)
+    clock = [100.0]
+    monkeypatch.setattr(mod.time, 'monotonic', lambda: clock[0])
+    wall = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    class ClockDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return wall
+    monkeypatch.setattr(mod, 'datetime', ClockDateTime)
+
+    async def seed(*args, **kwargs):
+        return SimpleNamespace(stdout=json.dumps(fixture(100)), command_started=100.0)
+    monkeypatch.setattr(mod, 'run_remote', seed)
+    await store.collect(worker, state)
+    before = deepcopy(state)
+    calls = 0
+    async def remote(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        assert kwargs['timeout'] == 15
+        assert kwargs['establishment_timeout'] == 30
+        assert kwargs['input_bytes'] == mod.PROBE
+        # No intermediate failure, counter reset, history or scheduling mutation.
+        assert state == before
+        assert store.sequence == 1
+        current = await targets.remote_target_telemetry(worker)
+        assert current['available'] == (clock[0] - 100 <= mod.FRESH_SECONDS)
+        clock[0] += 15
+        if calls <= timeouts:
+            raise mod.RemoteExecutionTimeout('transient command timeout')
+        return SimpleNamespace(stdout=json.dumps(fixture(110)),
+                               command_started=clock[0] - 1 if command_stamp else None)
+    monkeypatch.setattr(mod, 'run_remote', remote)
+    await store.collect(worker, state)
+    # Three retries AFTER the initial attempt: four attempts maximum.
+    assert calls == min(timeouts + 1, 4)
+    assert store.sequence == 2 and len(state['history']) == 2
+    _, stamp, sample = state['history'][-1]
+    admission = await targets.remote_target_telemetry(worker)
+    if timeouts == 4:
+        assert state['failures'] == 1 and state['raw'] is None
+        assert state['due'] == clock[0] + 20
+        assert sample['error'] == 'Remote telemetry execution timed out'
+        assert not admission['available'] and admission['gpus'] == []
+    else:
+        expected_stamp = clock[0] - (1 if command_stamp else 15)
+        assert stamp == expected_stamp
+        assert (datetime.fromisoformat(sample['observed_at']) - wall).total_seconds() == expected_stamp - 100
+        assert state['raw'] == fixture(110) and state['failures'] == 0
+        assert state['due'] == clock[0] + 10
+        assert sample['cpu']['utilization'] == 50
+        assert sample['network'][0]['rx_bytes_per_second'] == 1024
+        assert admission['available'] and len(admission['gpus']) == 8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['authentication', 'host_identity', 'timeout', 'parse', 'schema', 'oversize'])
+async def test_non_command_timeout_failures_are_not_retried(monkeypatch, failure):
+    from services.remote_execution.transport import RemoteTransportError
+    store = mod.RemoteTelemetry(); worker = target(); state = entry()
+    calls = 0
+    async def remote(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if failure == 'authentication':
+            raise mod.RemoteConnectionError('authentication failed')
+        if failure == 'host_identity':
+            raise RemoteTransportError('host key mismatch')
+        if failure == 'timeout':
+            raise TimeoutError('not a classified command timeout')
+        return SimpleNamespace(stdout={'parse': '{', 'schema': '{}', 'oversize': 'x' * 65537}[failure])
+    monkeypatch.setattr(mod, 'run_remote', remote)
+    await store.collect(worker, state)
+    assert calls == 1 and state['failures'] == 1
+    assert state['raw'] is None and len(state['history']) == 1
+    sample = state['history'][-1][2]
+    assert not sample['available']
+    assert sample['error'] == ('Remote SSH establishment failed or timed out' if failure == 'authentication'
+                               else 'Remote collection failed or timed out')
+
+
+@pytest.mark.asyncio
+async def test_retry_cancellation_preserves_state_and_other_worker_progress(monkeypatch):
+    from copy import deepcopy
+    store = mod.RemoteTelemetry(); worker = target(); state = entry()
+    other = target(); other.id = 'vast:9'; other_state = entry()
+    async def seed(*args, **kwargs):
+        return SimpleNamespace(stdout=json.dumps(fixture()))
+    monkeypatch.setattr(mod, 'run_remote', seed)
+    await store.collect(worker, state)
+    before = deepcopy(state)
+    entered = asyncio.Event(); held = asyncio.Event()
+    calls = 0
+    async def remote(connection, *args, **kwargs):
+        nonlocal calls
+        if connection.target_id == other.id:
+            return SimpleNamespace(stdout=json.dumps(fixture()))
+        calls += 1
+        if calls == 1:
+            raise mod.RemoteExecutionTimeout('retry this collection only')
+        entered.set()
+        await held.wait()
+        pytest.fail('cancelled transport must not return')
+    monkeypatch.setattr(mod, 'run_remote', remote)
+    task = asyncio.create_task(store.collect(worker, state))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        await asyncio.wait_for(store.collect(other, other_state), 1)
+        assert other_state['history'][-1][2]['available']
+        assert state == before
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert calls == 2 and state == before and store.sequence == 2
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 def test_deltas_first_sample_reset_and_unknown():
