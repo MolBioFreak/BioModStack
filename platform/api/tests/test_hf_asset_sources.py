@@ -177,6 +177,45 @@ def test_publish_pinned_inode_and_no_overwrite(configured, monkeypatch, artifact
     assert api.uploads[0][0][1] == f'sha256/{artifact.sha256}/image.sif'
 
 
+def test_source_publish_survives_another_attempt_staging(configured, monkeypatch, tmp_path, capability):
+    import subprocess
+    from services.remote_execution import bundle
+
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+    (repo / 'source.txt').write_text('immutable committed source')
+    subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True)
+    subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Fixture',
+                    '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture'], check=True)
+    revision = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
+    data = tmp_path / 'data'
+    first = tmp_path / 'first'
+    digest = bundle._staged_source_archive(repo, data, revision, first, extract=False)
+    source = first / '.bms-source.tar.gz'
+    entry = SimpleNamespace(source=source, role='source', sha256=digest, size_bytes=source.stat().st_size)
+    monkeypatch.setattr(worker, 'MIN_BYTES', 1)
+    monkeypatch.setenv('BMS_HF_ASSET_ALLOW_PUBLISH', '1')
+    api = Api(entry, False)
+    original_upload = api.batch_bucket_files
+    generations = []
+
+    def upload(bucket, *, add):
+        original_upload(bucket, add=add)
+        before = worker._identity(source.stat())
+        second = tmp_path / 'second'
+        assert bundle._staged_source_archive(repo, data, revision, second, extract=False) == digest
+        # A sibling launch and its cleanup must not change the publisher's generation.
+        (second / '.bms-source.tar.gz').unlink()
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
+        generations.append((before, worker._identity(source.stat())))
+
+    monkeypatch.setattr(api, 'batch_bucket_files', upload)
+    assert worker._prepare(request(entry), broker.configuration(), api, Http(capability), 'token') == capability
+    assert len(api.uploads) == 1
+    assert len(generations) == 1 and generations[0][0] == generations[0][1]
+
+
 @pytest.mark.parametrize('failure', ['missing', 'public', 'owner', 'size', 'quota', 'hash', 'symlink', 'changed', 'uncertain'])
 def test_fail_closed_no_capability(configured, monkeypatch, artifact, capability, failure):
     api, http = Api(artifact), Http(capability)
