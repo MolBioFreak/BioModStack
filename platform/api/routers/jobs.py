@@ -9089,7 +9089,9 @@ async def get_rfd3_generation_artifact(
         raise HTTPException(status_code=409, detail="RFD3 generation artifact hash mismatch")
     headers = {"Content-Encoding": "gzip"} if path.name.endswith(".gz") else None
     media_type = "chemical/x-mmcif" if path.name.endswith(".cif.gz") else str(descriptor.get("media_type"))
-    return FileResponse(str(path), media_type=media_type, filename=path.name, headers=headers)
+    # HTTP clients decode Content-Encoding before saving the attachment.
+    filename = path.name.removesuffix(".gz") if headers else path.name
+    return FileResponse(str(path), media_type=media_type, filename=filename, headers=headers)
 
 
 @router.get("/{job_id}/rfd3-local-redesign")
@@ -9275,7 +9277,7 @@ async def get_rfd3_local_redesign_artifact(
     return FileResponse(
         str(path),
         media_type=response_media_type,
-        filename=path.name,
+        filename=path.name.removesuffix(".gz") if response_headers else path.name,
         headers=response_headers,
     )
 
