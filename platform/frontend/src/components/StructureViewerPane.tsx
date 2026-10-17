@@ -363,6 +363,9 @@ export default function StructureViewerPane({
     // The molecular structure is the primary scientific result. Keep auxiliary
     // metric/export controls collapsed until the operator asks for them.
     const [metricWorkbenchOpen, setMetricWorkbenchOpen] = useState(false);
+    const metricWorkbenchCurrent = useRef(metricWorkbenchOpen);
+    metricWorkbenchCurrent.current = metricWorkbenchOpen;
+    const metricWorkbenchBeforeFullscreen = useRef<boolean | null>(null);
     const [overlayView, setOverlayView] = useState<OverlayView>('metrics');
     const [conforNetsOverlayIds, setConforNetsOverlayIds] = useState<string[]>([]);
     const [focusedMetricSection, setFocusedMetricSection] = useState<StructureViewerSectionId>('summary');
@@ -1608,9 +1611,15 @@ export default function StructureViewerPane({
     // Listen to fullscreen changes
     useEffect(() => {
         const handleFullscreenChange = () => {
-            const fullscreen = document.fullscreenElement === containerRef.current;
+            const fullscreen = Boolean(containerRef.current && document.fullscreenElement === containerRef.current);
             setIsFullscreen(fullscreen);
-            setMetricWorkbenchOpen(!fullscreen);
+            if (fullscreen && metricWorkbenchBeforeFullscreen.current === null) {
+                metricWorkbenchBeforeFullscreen.current = metricWorkbenchCurrent.current;
+                setMetricWorkbenchOpen(false);
+            } else if (!fullscreen && metricWorkbenchBeforeFullscreen.current !== null) {
+                setMetricWorkbenchOpen(metricWorkbenchBeforeFullscreen.current);
+                metricWorkbenchBeforeFullscreen.current = null;
+            }
         };
         document.addEventListener('fullscreenchange', handleFullscreenChange);
         return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
