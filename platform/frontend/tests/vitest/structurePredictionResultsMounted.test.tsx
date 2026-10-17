@@ -269,6 +269,22 @@ it.each(['Charts', 'Structure'])('real Results %s routing separates charts from 
     expect(calls.filter(c => c.method !== 'get').every(c => /plotly-metrics|designs\/query/.test(c.url))).toBe(true);
 });
 
+it('direct Structure link survives pending discovery and keeps confidence below the molecule', async () => {
+    transport();
+    await mount(<MemoryRouter initialEntries={['/designs/job?include_children=false&view=structure&return_to=%2Fdesigns%2Fsource%3Fnative_candidate%3Dexact&return_label=Source%20candidate']}><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></MemoryRouter>);
+    await flush();
+    expect(tree!.root.findAll(n => n.type === 'div' && !!n.props['data-native-url']).length).toBeGreaterThan(0);
+    const details = tree!.root.findAllByType('details').find(n => text(n).startsWith('Prediction details and confidence'))!;
+    expect(details.props.open).toBeUndefined();
+    expect(profilePlot()).toBeUndefined();
+    expect(tree!.root.findAllByType('a').some(n => n.props.href === '/designs/source?native_candidate=exact')).toBe(true);
+    await act(async () => tree!.root.findAllByType('button').find(n => text(n).endsWith('Data Table'))!.props.onClick());
+    await flush();
+    const headers = tree!.root.findAllByType('th').map(text).join(' ');
+    expect(headers).toContain('Output');
+    expect(headers).not.toMatch(/RFD RoG|Frust High|Val RMSD|\bConf\b|\bPAE\b/);
+});
+
 // Inert Boltz wire shape: producer identifiers are not the public Design/document IDs.
 function boltzScalarWire() {
     const source = { candidate_id: 'native-sample', document_id: 'native-sample/model_0.pdb', artifact_sha256: 'a'.repeat(64) };

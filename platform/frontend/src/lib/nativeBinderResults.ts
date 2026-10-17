@@ -5,7 +5,20 @@ export const isNativeBinderGeneration = (job: { model_id: string; mode: string }
     || (job.model_id === 'ppiflow' && ['protein_binder', 'antibody_binder', 'nanobody_binder'].includes(job.mode))));
 export interface NativeGenerationDocument {
     artifact_id: string; target_state?: string | null; logical_path?: string; download_url?: string; primary?: boolean; sha256?: string;
+    binder_chains?: string | string[] | null; target_chains?: string | string[] | null;
 }
+const hasChains = (value: NativeGenerationDocument['binder_chains']) => Array.isArray(value) ? value.length > 0 : typeof value === 'string' && value.trim().length > 0;
+export function nativeDocumentLabel(document: NativeGenerationDocument): string {
+    if (hasChains(document.binder_chains) && hasChains(document.target_chains)) return 'Binder–target complex';
+    if (hasChains(document.binder_chains) && Object.prototype.hasOwnProperty.call(document, 'target_chains') && !hasChains(document.target_chains)) return 'Binder only';
+    return document.target_state || 'Saved structure';
+}
+/** Display preference only: an explicitly requested document is still authoritative. */
+export function uniqueBinderComplex(documents: NativeGenerationDocument[]): NativeGenerationDocument | undefined {
+    const complexes = documents.filter(doc => hasChains(doc.binder_chains) && hasChains(doc.target_chains));
+    return complexes.length === 1 ? complexes[0] : undefined;
+}
+
 export interface NativeGenerationRecord extends Record<string, unknown> {
     candidate_ref?: import('./binderSelectedRound').CandidateRef; candidate_key?: string; design_id?: string; structures?: NativeGenerationDocument[];
 }

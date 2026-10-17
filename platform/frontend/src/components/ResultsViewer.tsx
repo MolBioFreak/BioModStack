@@ -1,11 +1,12 @@
 import type { NativeResults, NativeScalarQuery } from '../lib/scientificAnalytics';
 import { MSA_POLICY } from '../lib/msaPolicy';
+import { predictionDisplayLabel, predictionJobLabel } from '../lib/designFriendlyLabel';
 import { canonicalScalars, scalarCell, scalarEvidence, NativeScalarControls, usePredictionScalars } from './predictionScalarEvidence';
-import { lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Fragment, lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { MaturationEvidence } from './MaturationEvidence';
 import { parseScientificPae } from '../lib/scientificViewerIdentity';
 import { hashKey, useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { Link, useParams, useNavigate, useLocation } from 'react-router-dom';
 
 import { buildFileDownloadUrl, buildFileStreamUrl, fetchJobs, fetchJobById, fetchDesignById, fetchDesigns, exportNativeResults, fetchDesignAnalysis, triggerDesignAnalysis, fetchBackboneSummary, launchAntibodyIteration, launchManualMutagenesis, saveReviewFilterSet, deleteReviewFilterSet, continueProteinLocalReview, fetchChainPairIptm } from '../lib/api';
 import { isNgsJob, ngsResultHref } from '../lib/ngsResultRouting';
@@ -1816,8 +1817,11 @@ function ResultsViewerContent() {
     const [jobSelectorSearch, setJobSelectorSearch] = useState('');
     const [debouncedJobSelectorSearch, setDebouncedJobSelectorSearch] = useState('');
     const [showOverviewAnalysisMenu, setShowOverviewAnalysisMenu] = useState(false);
-    const [activeTab, setActiveTab] = useState<TabId>('overview');
+    const [activeTab, setActiveTab] = useState<TabId>(() => new URLSearchParams(location.search).get('view') === 'structure' ? 'structure' : 'overview');
     const [rfWorkbenchJob, setRfWorkbenchJob] = useState<string>();
+    const returnParams = new URLSearchParams(location.search);
+    const returnTo = returnParams.get('return_to') ?? '';
+    const safeReturnTo = /^\/designs\/[^\\\s?#]+(?:[?#][^\\\r\n]*)?$/.test(returnTo) ? returnTo : null;
     const requestedDesignId = new URLSearchParams(location.search).get('design_id')?.trim() ?? '';
     const exactJobScope = new URLSearchParams(location.search).get('include_children') === 'false';
     const destinationLaunchContextId = new URLSearchParams(location.search).get('launch_context_id');
@@ -2679,10 +2683,10 @@ function ResultsViewerContent() {
         [isPostRFantibodyReview, showPpiflowColumns, tableReviewCapabilities],
     );
     useEffect(() => {
-        if (!visibleReviewTabs.some((tab) => tab.id === activeTab)) {
+        if (selectedDesign && !visibleReviewTabs.some((tab) => tab.id === activeTab)) {
             setActiveTab('overview');
         }
-    }, [activeTab, visibleReviewTabs]);
+    }, [activeTab, visibleReviewTabs, selectedDesign]);
     const selectedDesignLens = useMemo<AnalysisLens | null>(
         () => getAuthoritativeDesignLens(selectedDesign),
         [selectedDesign],
@@ -3205,6 +3209,7 @@ function ResultsViewerContent() {
     }, [currentPage, pageSize, sourceScopedDesigns, useClientSourcePagination]);
     // A validator's producer owns its result semantics, not the enclosing workflow.
     const predictionModelId = String(selectedDesign?.provenance?.producer_model_id ?? activeJob?.model_id ?? '');
+    const predictionDataTable = ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId);
     const tableHasNativeConfidence = ['protenix', 'boltz2', 'boltz_cp_experimental', 'esmfold2', 'esmfold2_experimental'].includes(predictionModelId) || tableDesigns.some(canonicalScalars);
     const legacyTableScalars = usePredictionScalars(tableDesigns, activeTab === 'table' && !nativeResults);
     // Inspection uses the selected detail document; table cells stay page-bound.
@@ -3228,6 +3233,7 @@ function ResultsViewerContent() {
     const nativeTableScalars = (design: Design) => nativeResults
         ? nativePoints.has(design.id) ? scalarEvidence(design, nativePoints.get(design.id)) : {entries: [], reason: 'No native scalar evidence in this read; legacy columns are not substituted.'}
         : legacyTableScalars(design);
+    const predictionColumns = [...new Map(tableDesigns.flatMap(d => nativeTableScalars(d).entries).map(entry => [entry.key, { key: entry.key, label: entry.label, sortable: false }])).values()];
     const visibleDesignIds = useMemo(() => tableDesigns.map((design) => design.id), [tableDesigns]);
     const visibleSelectionRef = useRef<HTMLInputElement | null>(null);
     const tableScrollViewportRef = useRef<HTMLDivElement | null>(null);
@@ -5405,11 +5411,12 @@ function ResultsViewerContent() {
 
             <div className={`relative z-10 px-3 sm:px-4 lg:px-5 xl:px-6 2xl:px-8 ${viewerShellClassName}`}>
                 {/* Header */}
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+                <div className={`flex flex-col md:flex-row justify-between items-start md:items-center gap-4 ${predictionDataTable ? 'mb-2' : 'mb-6'}`}>
                     <div className="min-w-0 max-w-full">
-                        <h1 className="text-3xl font-bold text-white">Results Viewer</h1>
-                        <p className="text-slate-400 text-sm mt-1 [overflow-wrap:anywhere]">
-                            {activeJob ? `${activeJob.name} • ${activeJob.model_id}` : 'Import a dataset or open an existing workflow'}
+                        <h1 className={`${predictionDataTable ? 'text-xl' : 'text-3xl'} font-bold text-white`}>Results Viewer</h1>
+                        {safeReturnTo && <Link className="text-sm text-cyan-300" to={safeReturnTo}>← {returnParams.get('return_label')?.slice(0, 100) || 'Source candidate'}</Link>}
+                        <p className={`text-slate-400 text-sm mt-1 [overflow-wrap:anywhere] ${predictionDataTable ? 'hidden' : ''}`}>
+                            {activeJob ? <span title={activeJob.name}>{predictionDataTable ? predictionJobLabel(activeJob) : activeJob.name} • {activeJob.model_id}</span> : 'Import a dataset or open an existing workflow'}
                         </p>
                         <div className="mt-3">{resultModelSelector}</div>
                         {activeJob && (
@@ -5462,7 +5469,7 @@ function ResultsViewerContent() {
                             >
                                 <div className="min-w-0">
                                     <div className="truncate text-sm font-medium text-white">
-                                        {activeJob ? activeJob.name : 'Select a job...'}
+                                        {activeJob ? <span title={activeJob.name}>{predictionDataTable ? predictionJobLabel(activeJob) : activeJob.name}</span> : 'Select a job...'}
                                     </div>
                                     <div className="truncate text-[11px] text-slate-400">
                                         {activeJob
@@ -5632,7 +5639,7 @@ function ResultsViewerContent() {
                                     const nativeScope = new URLSearchParams(window.location.search).get('native_scope');
                                     if (nativeScope) route.searchParams.set('native_scope', nativeScope);
                                     navigate(`${route.pathname}${route.search}`, { replace: true }); }} />
-                            {selectedCandidateControls}
+                            <SelectedCandidateOperations count={selectedDesignIds.length + selectedNativeSources.length}>{selectedCandidateControls}</SelectedCandidateOperations>
                         </>
                     ) : isNativeBinderGeneration(activeJob) ? (
                         <>
@@ -8045,7 +8052,7 @@ function ResultsViewerContent() {
                                                             queryClient.invalidateQueries({queryKey: ['designs']});
                                                         }}>Retry original live scope</button>
                                                     </p>}
-                                                    <NativeScalarControls query={nativeQuery!} result={nativeEnvelope} jobLabel={id => jobsById.get(id)?.name} onChange={query => {setNativeQuery(query); setCurrentPage(1);}} />
+                                                    <NativeScalarControls query={nativeQuery!} result={nativeEnvelope} jobLabel={id => { const job = jobsById.get(id); return job ? predictionDataTable ? predictionJobLabel(job) : job.name : undefined; }} onChange={query => {setNativeQuery(query); setCurrentPage(1);}} />
                                                     <div className="mt-2 flex flex-wrap gap-2 text-xs">
                                                         <button onClick={selectVisibleDesigns}>Select visible</button>
                                                         <button onClick={selectAllFilteredDesigns}>Select all matching</button>
@@ -8359,7 +8366,7 @@ function ResultsViewerContent() {
                                                 <div className="mt-2 text-[11px] text-slate-500">
                                                     {selectedDesignSource === 'rfantibody'
                                                         ? `RF lens: ${rfMetricLabels.short}. Toggle loop/whole-antibody in review.`
-                                                        : 'Any-Target uses whole target; Epitope uses selected residues.'}
+                                                        : predictionDataTable ? 'Native confidence scores; original identities remain in row details.' : 'Any-Target uses whole target; Epitope uses selected residues.'}
                                                 </div>
                                             </div>
                                             {/* Text Filter + Annotate CDRs */}
@@ -8458,7 +8465,7 @@ function ResultsViewerContent() {
                                             </div>
                                             {/* Table */}
                                             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-700/50 bg-slate-900/40 px-3 py-2 text-[11px] text-slate-400">
-                                                <span>Drag inside the table to pan horizontally or vertically. Scrollbars still work.</span>
+                                                <span>{predictionDataTable ? 'Only retained native scalar scores are shown. A missing scalar PAE does not mean the PAE matrix is missing; inspect Charts for the matrix.' : 'Drag inside the table to pan horizontally or vertically. Scrollbars still work.'}</span>
                                                 <span>{pageSize === 0 ? 'Windowed table view enabled' : 'Use page size + drag-to-pan for dense scans'}</span>
                                             </div>
                                             <div
@@ -8469,7 +8476,7 @@ function ResultsViewerContent() {
                                                 onPointerCancel={endTablePan}
                                                 className="w-full max-h-[70vh] overflow-auto rounded-xl border border-slate-700/60 bg-slate-950/30 pb-2 cursor-grab active:cursor-grabbing select-none [scrollbar-width:thin] [&_table]:text-[11px] [&_table]:leading-tight [&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-10 [&_thead_th]:bg-slate-950/95 [&_thead_th]:backdrop-blur [&_th]:px-2 [&_th]:py-1.5 [&_th]:text-[10px] [&_th]:uppercase [&_th]:tracking-[0.04em] [&_td]:px-2 [&_td]:py-1.5"
                                             >
-                                                <table className="w-full min-w-[2700px]">
+                                                <table className={predictionDataTable ? "w-full" : "w-full min-w-[2700px]"}>
                                                     <thead>
                                                         <tr className="border-b border-slate-700">
                                                             {[
@@ -8487,6 +8494,7 @@ function ResultsViewerContent() {
                                                                     )
                                                                 },
                                                                 { key: 'name', label: 'Output' },
+                                                                ...(predictionDataTable ? predictionColumns : [
                                                                 ...(tableReviewCapabilities.antibody ? [
                                                                     { key: 'binding_tier', label: isPostRFantibodyReview ? 'Screen' : 'Binding' },
                                                                     { key: 'binder_length', label: 'Size' },
@@ -8561,6 +8569,7 @@ function ResultsViewerContent() {
                                                                     { key: 'fr2_contacts', label: 'FR2' },
                                                                 ] : []),
                                                                 { key: 'is_favorite', label: '★' },
+                                                                ]),
                                                             ].map(col => {
                                                                 const sortable = isTableColumnSortable(
                                                                     col.key,
@@ -8616,13 +8625,12 @@ function ResultsViewerContent() {
                                                                                 Frustra
                                                                             </span>
                                                                         )}
-                                                                        <span className="font-medium truncate">{getFriendlyDesignName(d as UntypedApiValue)}</span>
+                                                                        <span className="font-medium truncate">{predictionDataTable ? predictionDisplayLabel(d, tableDesigns.indexOf(d)) : getFriendlyDesignName(d as UntypedApiValue)}</span>
                                                                     </div>
-                                                                    <div className="mt-1 truncate text-[11px] text-slate-500" title={d.name}>
-                                                                        {d.name}
-                                                                    </div>
+                                                                    {predictionDataTable ? <details className="mt-1 text-[11px] text-slate-500"><summary className="cursor-pointer">Original identity</summary><span className="break-all">{d.name}</span></details> : <div className="mt-1 truncate text-[11px] text-slate-500" title={d.name}>{d.name}</div>}
                                                                 </td>
 
+                                                                {predictionDataTable ? predictionColumns.map(col => <Fragment key={col.key}>{scalarCell(nativeTableScalars(d), [col.key])}</Fragment>) : <>
                                                                 {tableReviewCapabilities.antibody && (
                                                                     <>
                                                                 {/* Binding Quality Tier */}
@@ -8857,6 +8865,7 @@ function ResultsViewerContent() {
                                                                     </td>
                                                                 )}
                                                                 <td className="px-3 py-2">{d.is_favorite ? '★' : ''}</td>
+                                                                </>}
                                                             </tr>
                                                         )})}
                                                     </tbody>

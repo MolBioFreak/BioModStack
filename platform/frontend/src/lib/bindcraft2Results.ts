@@ -1,5 +1,5 @@
 import type { BindCraft2NativePage, BindCraft2Stage } from '../components/BindCraft2NativeResults';
-import type { NativeGenerationPage, NativeGenerationRecord } from './nativeBinderResults';
+import { uniqueBinderComplex, type NativeGenerationPage, type NativeGenerationRecord } from './nativeBinderResults';
 
 export const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 // Native CSV scalar decoding only. Empty cells are missing, never zero. JSON evidence is unchanged.
@@ -51,9 +51,47 @@ export function bc2Page(page: BindCraft2NativePage): NativeGenerationPage {
     return { ...page, records: page.rows.map(row => bc2Record(row, page)), receipt: { accounting: page.accounting, analytics: page.analytics },
         publication: page.metadata ?? {}, artifacts: page.artifacts?.map(file => ({ ...file, download_url: file.download_url ?? undefined })) };
 }
-export function bc2Label(row: NativeGenerationRecord): string {
+export function bc2PreferredColumns(page: BindCraft2NativePage): string[] {
+    const records = page.rows.map(row => bc2Record(row, page));
+    const available = [...new Set(records.flatMap(row => Object.keys(object(row.metrics))))];
+    const present = (key: string) => records.some(row => object(row.metrics)[key] !== null && object(row.metrics)[key] !== undefined);
+    const confidence = ['i_pTM', 'pLDDT', 'pTM', 'i_pAE', 'Binder_RMSD'];
+    const phaseConfidence = available.filter(key => /^(?:refine|screen) · .+\.iptm · last recorded$/.test(key));
+    const preferred = page.stage === 'trajectory'
+        ? ['seq_length', ...phaseConfidence, 'duration_seconds', 'terminated', 'outcome']
+        : ['seq_length', ...confidence, ...available.filter(key => / · (?:i_pTM|pLDDT)$/.test(key)), 'outcome', 'rank'];
+    return preferred.filter(key => available.includes(key) && present(key));
+}
+export function bc2MetricLabel(key: string): string | undefined {
+    return ({ i_pTM: 'Interface pTM (0–1)', pLDDT: 'pLDDT (0–1)', pTM: 'pTM (0–1)',
+        i_pAE: 'Interface PAE loss (normalized)', i_pDAE: 'Interface pDAE', Binder_RMSD: 'Binder RMSD (Å)',
+        Unbound_Binder_pLDDT: 'Binder-only pLDDT (0–1)', Target_pLDDT: 'Target pLDDT (0–1)' } as Record<string, string>)[key];
+}
+export const bc2PreferredDocument = (row: NativeGenerationRecord) => uniqueBinderComplex(row.structures ?? []);
+
+export async function fetchBC2TrajectoryNames(jobId: string, arm: string | null, signal?: AbortSignal): Promise<Record<string, string>> {
+    const names: Record<string, string> = {};
+    let offset = 0, total = Infinity;
+    while (offset < total) {
+        const page = await fetchBC2Page(jobId, arm, 'trajectory', offset, signal);
+        total = page.total;
+        if (!page.rows.length && offset < total) throw new Error('Design names are partially available; refresh to retry.');
+        for (const row of page.rows) {
+            const number = object(row.values).trajectory;
+            if (row.design && csvNumber(number) !== undefined) names[String(row.design)] = `Design ${number}`;
+        }
+        offset += page.rows.length;
+    }
+    return names;
+}
+export function bc2Label(row: NativeGenerationRecord, names: Record<string, string> = {}): string {
     const native = object(row.native_record), values = object(native.values);
-    return values.trajectory ? `Trajectory ${values.trajectory}` : String(native.design ?? native.path ?? 'Native record');
+    const design = String(native.scored_design ?? native.design ?? '');
+    const family = String(native.trajectory_design ?? design.replace(/_(?:candidate|seq)\d+$/, ''));
+    const variant = /_candidate(\d+)$/.exec(design)?.[1];
+    const name = names[family] ?? (values.trajectory ? `Design ${values.trajectory}` : 'Candidate');
+    const length = csvNumber(values.length) ?? (typeof native.sequence === 'string' ? native.sequence.length : undefined);
+    return [name, variant ? `Variant ${variant}` : undefined, length ? `${length} aa` : undefined].filter(Boolean).join(' · ');
 }
 export interface BC2TracePage {
     design: string; arm: string | null; offset: number; limit: number; total: number;

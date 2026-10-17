@@ -169,6 +169,22 @@ it('opens the published structure on first demand with no confidence or viewer-l
     expect(tree.root.findAllByType('details').filter(node => ['Native receipt and accounting', 'Native files and provenance', 'Selected record: complete native readback'].includes(text(node.findByType('summary')))).every(node => !node.props.open)).toBe(true);
     expect(props.workbenchCollapsed).toBe(true);
 });
+it('a BC2 display preference opens the unique complex without selecting it for execution', async () => {
+    const binder = { artifact_id: 'binder', binder_chains: 'A', target_chains: null, download_url: '/binder.cif' };
+    const complex = { artifact_id: 'complex', binder_chains: 'B', target_chains: 'A', download_url: '/complex.cif' };
+    const changed = vi.fn();
+    await mount({ onSelectedNativeSourcesChange: changed, adapter: {
+        key: 'bc2-display', title: 'BC2', label: () => 'Design 61 · Variant 1',
+        preferredDocument: row => row.structures!.find(doc => doc.artifact_id === 'complex'),
+        fetchPage: async () => ({ records: [{ candidate_key: 'exact', structures: [binder, complex] }], total: 1, offset: 0, limit: 100, receipt: {}, publication: {} }),
+    } });
+    expect(tree.root.findByType(StructureWorkbench).props.structureDocumentId).toBe('complex');
+    expect(tree.root.findByProps({ 'aria-label': 'Published document' }).props.value).toBe('1');
+    expect(changed).not.toHaveBeenCalled();
+    await act(async () => tree.root.findByProps({ 'aria-label': 'Published document' }).props.onChange({ target: { value: '0' } }));
+    expect(tree.root.findByType(StructureWorkbench).props.structureDocumentId).toBe('binder');
+    expect(changed).not.toHaveBeenCalled();
+});
 it('matches exact artifact AND state and keeps the exact download', async () => {
     await mount({ selectedDesignId: 'd1', artifactId: 'alternate', targetState: 'B' });
     expect(tree.root.findByType(StructureWorkbench).props).toMatchObject({ structureUrl: alternate.download_url, format: 'cif' });

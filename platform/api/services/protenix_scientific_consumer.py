@@ -126,7 +126,7 @@ def verify_publication(job, design, root, *, confidence=True, scalar_only=False)
             matches.append(binding)
     if len(matches) != 1:
         raise ValueError('missing selected native publication')
-    selected = dict(design_id=design.id, snapshots=snapshots, artifacts=dict(artifacts),
+    selected = dict(design_id=design.id, publication_root=root, snapshots=snapshots, artifacts=dict(artifacts),
                     block=dict(candidate_id=native['producer_output_key'], document_id=native['producer_output_key']),
                     source_kind='mmcif')
     if not confidence:

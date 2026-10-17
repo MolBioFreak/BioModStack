@@ -38,7 +38,20 @@ test('retains failed retries, verifies older exact native sequence names, reject
     const data = buildProjectCandidateData([source], [validation, retry, old, unknown]);
     assert.equal(data.candidates.length, 1);
     assert.equal(data.unlinkedJobCount, 1);
-    assert.deepEqual(data.candidates[0].attempts.map(a => [a.id, a.kind, a.href]), [['mono', 'monomer', '/designs/mono?include_children=false'], ['failed-retry', 'other', '/jobs/failed-retry'], ['older', 'trimer1', '/designs/older?include_children=false']]);
+    assert.deepEqual(data.candidates[0].attempts.map(a => [a.id, a.kind, a.href]), [['mono', 'monomer', '/designs/mono?include_children=false&view=structure'], ['failed-retry', 'other', '/jobs/failed-retry'], ['older', 'trimer1', '/designs/older?include_children=false&view=structure']]);
+});
+test('includes explicitly linked later work of other models without treating the root as a candidate', () => {
+    const child = job('sequence-child', { model_id: 'proteinmpnn', mode: 'sequence_design', selection_source_job_id: validation.id });
+    const unrelated = job('unrelated', { lineage_root_job_id: source.id, parent_job_id: validation.id });
+    const data = buildProjectCandidateData([source], [validation, child, unrelated]);
+    assert.deepEqual(data.candidates[0].attempts.map(a => a.id), ['mono', 'sequence-child']);
+    assert.equal(data.candidates[0].attempts[1].label, 'Sequence design');
+    assert.equal(data.unlinkedJobCount, 1);
+});
+test('uses native design numbers, never a recipe hash as the visible family name', () => {
+    const data = buildProjectCandidateData([{ ...source, trajectoryNames: { 'backbone-a': 'Design 61' } }], [validation]);
+    assert.equal(data.candidates[0].familyLabel, 'Design 61');
+    assert.equal(data.candidates[0].nativeId, nativeId);
 });
 test('natural variants and failed-only candidates are retained without scores', () => {
     const ids = [10, 2].map(n => nativeId.replace('candidate2', `candidate${n}`));

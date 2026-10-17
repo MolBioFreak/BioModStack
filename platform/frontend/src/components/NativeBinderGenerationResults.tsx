@@ -3,7 +3,7 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
 import { metricKeys, numericMetricKeys, formatMetric, summarizeMetric, type CohortRow } from '../lib/cohortAnalytics';
-import { fetchNativeBinderGeneration, nativeCandidateRoute, nativeGenerationMetrics, nativeGenerationMetricDetail, nativeGenerationMetricUnit, type NativeGenerationPage, type NativeGenerationRecord, type NativeGenerationDocument } from '../lib/nativeBinderResults';
+import { fetchNativeBinderGeneration, nativeCandidateRoute, nativeDocumentLabel, nativeGenerationMetrics, nativeGenerationMetricDetail, nativeGenerationMetricUnit, type NativeGenerationPage, type NativeGenerationRecord, type NativeGenerationDocument } from '../lib/nativeBinderResults';
 
 import { readBinderSelection, writeBinderSelection, readBinderNativeSources, writeBinderNativeSources, type NativeCandidateSource } from '../lib/binderContinuation';
 import { BinderCandidateSets } from './BinderCandidateSets';
@@ -22,9 +22,12 @@ export interface NativeWorkbenchAdapter {
     fetchPage: (offset: number, signal?: AbortSignal) => Promise<NativeGenerationPage>;
     label: (row: NativeGenerationRecord) => string;
     preferredColumns?: string[];
+    metricLabel?: (key: string) => string | undefined;
+    preferredDocument?: (row: NativeGenerationRecord) => NativeGenerationDocument | undefined;
     initialMetrics?: (numericKeys: string[]) => CohortInitialMetrics;
     compact?: boolean;
     inspect?: (row: NativeGenerationRecord) => ReactNode;
+    related?: (row: NativeGenerationRecord) => ReactNode;
     summary?: (rows: NativeGenerationRecord[]) => ReactNode;
 }
 export interface Props {
@@ -72,7 +75,7 @@ export function NativeBinderGenerationResults(props: Props) {
     return <NativeGenerationWorkbench key={`${props.jobId}:${props.adapter?.key ?? "native"}`} {...props} />;
 }
 function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, selectedDesignId, selectedDesignIds = [], onSelectedDesignIdsChange, selectedRecordIds, onSelectedRecordIdsChange, selectedNativeSources, onSelectedNativeSourcesChange, onInspectDocument, artifactId, targetState }: Props) {
-    const [view, setView] = useState<View>(selectedDesignId || artifactId ? 'structure' : 'candidates');
+    const [view, setView] = useState<View>(() => selectedDesignId || artifactId || new URLSearchParams(window.location.search).has('native_candidate') ? 'structure' : 'candidates');
     const [structureOpened, setStructureOpened] = useState(view === 'structure' || view === 'candidates');
     const [analyticsOpened, setAnalyticsOpened] = useState(view === 'dashboard' || view === 'analytics');
     useEffect(() => {
@@ -125,7 +128,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const cohort = useMemo<CohortRow[]>(() => rows.map((item, i) => ({ id: rowKey(item, i), label: adapter?.label(item) ?? `Candidate ${i + 1}`, values: values(item) })), [rows, adapter]);
     const keys = useMemo(() => metricKeys(cohort), [cohort]);
     const numericKeys = useMemo(() => numericMetricKeys(cohort), [cohort]);
-    const label = (key: string) => { const unit = rows.map(item => nativeGenerationMetricUnit(item, key)).find(Boolean); return `${describeCohortMetric(key, keys).label}${unit ? ` (${unit})` : ''}`; };
+    const label = (key: string) => { const nativeLabel = adapter?.metricLabel?.(key); if (nativeLabel) return nativeLabel; const unit = rows.map(item => nativeGenerationMetricUnit(item, key)).find(Boolean); return `${describeCohortMetric(key, keys).label}${unit ? ` (${unit})` : ''}`; };
     const preferred = (adapter?.preferredColumns ?? ['seq_length', 'dsasa', 'radius_of_gyration', 'num_ca_ca_clashes']).filter(key => keys.includes(key));
     const selectionScope = `${jobId}:records:${adapter?.key ?? 'native'}`;
     const [nativeSelected, setNativeSelected] = useState(() => readBinderSelection(selectionScope));
@@ -200,15 +203,21 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
     const returnCandidate = new URLSearchParams(window.location.search).get('native_candidate');
     const activeId = localSelection?.key ?? (selectedDesignId ? cohort.find(entry => byId.get(entry.id)?.design_id === selectedDesignId)?.id : returnCandidate ?? (artifactId ? cohort.find(entry => byId.get(entry.id)?.structures?.some(doc => doc.artifact_id === artifactId))?.id : cohort[0]?.id));
     const row = activeId ? byId.get(activeId) : undefined;
+    const focusedInspection = useRef(false);
+    useEffect(() => {
+        if (view !== 'structure' || !row || focusedInspection.current) return;
+        const frame = requestAnimationFrame(() => { inspector.current?.scrollIntoView({ block: 'start' }); focusedInspection.current = true; });
+        return () => cancelAnimationFrame(frame);
+    }, [view, row]);
     const documents = row?.structures ?? [];
     const explicit = localSelection?.document != null || (!localSelection && (artifactId != null || targetState != null));
     const requestedArtifact = localSelection?.document?.artifact_id ?? artifactId;
     const requestedState = localSelection?.document ? localSelection.document.target_state : targetState;
     const document = explicit
         ? documents.find(doc => (requestedArtifact == null || doc.artifact_id === requestedArtifact) && (requestedState == null || doc.target_state === requestedState))
-        : documents.find(doc => doc.primary) ?? (row?.design_id || documents.length === 1 ? documents[0] : undefined);
+        : documents.find(doc => doc.primary) ?? (row ? adapter?.preferredDocument?.(row) : undefined) ?? (row?.design_id || documents.length === 1 ? documents[0] : undefined);
     const inspect = (item: NativeGenerationRecord, doc?: NativeGenerationDocument) => {
-        const exact = doc ?? item.structures?.find(value => value.primary) ?? (item.structures?.length === 1 ? item.structures[0] : undefined);
+        const exact = doc ?? item.structures?.find(value => value.primary) ?? adapter?.preferredDocument?.(item) ?? (item.structures?.length === 1 ? item.structures[0] : undefined);
         setLocal({ scope, key: rowKey(item, rows.indexOf(item)), document: exact });
         const url = new URL(window.location.href);
         url.searchParams.set('native_candidate', rowKey(item, rows.indexOf(item)));
@@ -310,17 +319,17 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
         {query.isError && <p role="status" className={`${panel} p-4`}>Native publication {rows.length ? 'is partially loaded' : 'is not available'}: {String(query.error)} <button className={control} type="button" onClick={() => void (query.isFetchNextPageError ? query.fetchNextPage() : query.refetch())}>Retry native readback</button></p>}
         {query.isFetchingNextPage && <p role="status">Loading the full cohort: {rows.length} of {page?.total} records. Current plots and exports cover loaded records only.</p>}
         {page && <>
-            <div hidden={view === 'analytics'}>{adapter?.summary?.(matched.map(entry => byId.get(entry.id)!))}</div>
+            <div hidden={view === 'analytics' || view === 'structure'}>{adapter?.summary?.(matched.map(entry => byId.get(entry.id)!))}</div>
             {page.total === 0 ? <p className={`${panel} p-5`}>No native candidate records were emitted. This published zero-yield result remains available for review.</p> : <>
-                <div className={`grid grid-cols-2 ${adapter?.compact ? "gap-2" : "gap-3"} lg:grid-cols-4`} aria-label="Cohort summary" style={view === 'analytics' ? { display: 'none' } : undefined}>
+                <div className={`grid grid-cols-2 ${adapter?.compact ? "gap-2" : "gap-3"} lg:grid-cols-4`} aria-label="Cohort summary" style={view === 'analytics' || view === 'structure' ? { display: 'none' } : undefined}>
                     {[
                         [adapter?.recordLabel ?? 'Published candidates', page.total, `${matched.length} in view · ${rows.length} loaded`],
                         ...headlineMetrics.map(metric => [`Median ${label(metric.key)}`, metric.median == null ? '—' : formatMetric(metric.median), `${metric.observed} observations in this view`]),
                         ['Selected', selection.length, 'Records for export; saved molecules for operations'],
                     ].map(([label, count, detail]) => <div key={String(label)} className={`${panel} px-4 py-2 ${adapter?.compact ? "flex min-w-0 items-center justify-between gap-2" : ""}`}><div title={String(label)} className={`text-xs text-[var(--text-secondary)] ${adapter?.compact ? "truncate" : ""}`}>{label}</div><div title={String(detail)} className={`${adapter?.compact ? "text-lg" : "my-1 text-2xl"} font-semibold tabular-nums`}>{count}</div>{!adapter?.compact && <div className="text-xs text-[var(--text-secondary)]">{detail}</div>}</div>)}
                 </div>
-                <nav aria-label="Native populations" className="flex flex-wrap gap-2">{[['all', 'All'], ['passed', 'Passed'], ['ranked', 'Ranked'], ['rejected', 'Rejected']].map(([key, title]) => <button type="button" className={control} aria-pressed={population === key} key={key} onClick={() => { setPopulation(key); setPageIndex(0); }}>{title}</button>)}<span>{selection.length} checked in this population · {selection.filter(id => !matched.some(entry => entry.id === id)).length} outside this view</span></nav>
-                <div role="tablist" aria-label="Native result review" className="flex flex-wrap gap-1 border-b border-[var(--border-color)]">{([['candidates', 'Candidates'], ['dashboard', 'Dashboard'], ['analytics', 'Custom charts'], ['table', 'Data table'], ['structure', 'Structure']] as const).map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={view === key} className={`border-b-2 px-4 py-2 text-sm font-medium ${view === key ? 'border-blue-500 bg-blue-500/10' : 'border-transparent hover:bg-blue-500/5'}`} onClick={event => { setView(key); const section = event?.currentTarget?.closest('section'); if (section && key === 'analytics') requestAnimationFrame(() => section.scrollIntoView({ block: 'start' })); }}>{adapter && key === 'structure' ? 'Inspect record' : label}</button>)}</div>
+                <nav hidden={view === 'structure'} aria-label="Native populations" className="flex flex-wrap gap-2">{[['all', 'All'], ['passed', 'Passed'], ['ranked', 'Ranked'], ['rejected', 'Rejected']].map(([key, title]) => <button type="button" className={control} aria-pressed={population === key} key={key} onClick={() => { setPopulation(key); setPageIndex(0); }}>{title}</button>)}<span>{selection.length} checked in this population · {selection.filter(id => !matched.some(entry => entry.id === id)).length} outside this view</span></nav>
+                <div role="tablist" aria-label="Native result review" className="flex flex-wrap gap-1 border-b border-[var(--border-color)]">{([['candidates', 'Candidates'], ['dashboard', 'Dashboard'], ['analytics', 'Custom charts'], ['table', 'Data table'], ['structure', 'Structure']] as const).map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={view === key} className={`border-b-2 px-4 py-2 text-sm font-medium ${view === key ? 'border-blue-500 bg-blue-500/10' : 'border-transparent hover:bg-blue-500/5'}`} onClick={event => { setView(key); const section = event?.currentTarget?.closest('section'); if (section && key === 'analytics') requestAnimationFrame(() => section.scrollIntoView({ block: 'start' })); }}>{adapter && key === 'structure' && !documents.length ? 'Inspect record' : label}</button>)}</div>
                 {view === 'dashboard' && matched.length !== rows.length && <p className="text-sm text-[var(--text-secondary)]">Showing {matched.length} of {rows.length} records after filtering. <button type="button" className="underline" onClick={() => setView('table')}>Adjust filters</button></p>}
                 <div hidden={view === 'dashboard' || view === 'structure'} className={`${panel} ${adapter?.compact ? "space-y-1 p-2" : "space-y-3 p-3"}`} aria-label="Cohort controls">
                     <div className="bms-cohort-search flex flex-wrap items-center gap-3"><input aria-label="Search candidates" title="Search candidates, source IDs or metric values" className={`${control} min-w-0 flex-1`} type="search" placeholder="Search candidates…" value={search} onChange={event => { setSearch(event.target.value); setPageIndex(0); }} />
@@ -346,7 +355,15 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                 {view !== 'structure' && table}
                 <div ref={inspector} hidden={view !== 'structure' && view !== 'candidates'} className={`${panel} p-4`} aria-label="Candidate structure inspector">
                     {(structureOpened || view === 'structure' || view === 'candidates') && <Suspense fallback={<p role="status">Loading native structure…</p>}>{!row ? <p role="status">{!complete ? 'Loading the requested candidate from the publication. ' : 'Requested candidate is unavailable in this publication. '}Another candidate is not substituted.</p> : <>
-                        <div className="flex flex-wrap items-center justify-between gap-3"><div><h4 className="text-lg font-semibold">{cohort.find(entry => entry.id === activeId)?.label ?? 'Candidate'}</h4><p className="text-xs text-[var(--text-secondary)]">{adapter ? "Native record and phase observations" : "Exact published structure · native measurements are shown without an inferred confidence score"}</p></div><div className="flex gap-2"><button className={control} type="button" disabled={navigationRows.indexOf(row) <= 0} onClick={() => inspect(navigationRows[navigationRows.indexOf(row) - 1])}>Previous candidate</button><button className={control} type="button" disabled={navigationRows.indexOf(row) >= navigationRows.length - 1} onClick={() => inspect(navigationRows[navigationRows.indexOf(row) + 1])}>Next candidate</button></div></div>
+                        <div className="flex flex-wrap items-center justify-between gap-3"><div><h4 title={String(row.native_input_id ?? row.candidate_key ?? "")} className="text-lg font-semibold">{cohort.find(entry => entry.id === activeId)?.label ?? 'Candidate'}</h4><p className="text-xs text-[var(--text-secondary)]">{adapter ? 'Structure and native scores' : 'Published structure and measurements'}</p></div><div className="flex gap-2"><button className={control} type="button" disabled={navigationRows.indexOf(row) <= 0} onClick={() => inspect(navigationRows[navigationRows.indexOf(row) - 1])}>Previous candidate</button><button className={control} type="button" disabled={navigationRows.indexOf(row) >= navigationRows.length - 1} onClick={() => inspect(navigationRows[navigationRows.indexOf(row) + 1])}>Next candidate</button></div></div>
+                        <div className={adapter?.related ? 'mt-3 grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]' : 'mt-3 min-w-0'}><div className="min-w-0">
+                        {(!adapter || documents.length > 0) && <div className="min-w-0" aria-label="Published molecule and measurements">
+                            <label className="mb-2 block text-xs">Structure <select className={`${control} ml-2 max-w-full`} aria-label="Published document" value={document ? String(documents.indexOf(document)) : ''} onChange={event => { const doc = documents[Number(event.target.value)]; if (doc) inspect(row, doc); }}>
+                                {!document && <option value="">{explicit ? 'Requested document unavailable' : 'Choose a saved structure'}</option>}{documents.map((doc, i) => <option key={`${doc.artifact_id}:${doc.target_state}:${i}`} value={i}>{nativeDocumentLabel(doc)}{doc.primary ? ' · primary' : ''}</option>)}
+                            </select></label>
+                            {document?.download_url ? <StructureWorkbench key={`${document.artifact_id}:${document.target_state}:${document.download_url}`} mode="standard" structureUrl={document.download_url} format={/\.(cif|mmcif)(?:$|\?)/i.test(document.logical_path ?? document.download_url) ? 'cif' : 'pdb'} structureDocumentId={document.artifact_id} structureContentSha256={document.sha256} alphafoldView={false} height={520} showSequenceTrack showMeasurements showM6Workbench hideControls={false} workbenchCollapsed={!viewerToolsOpen} /> : <p role="status">{explicit ? 'Requested native document is unavailable. The Design primary structure is not substituted.' : documents.some(doc => doc.download_url) ? 'Choose a saved structure above to inspect this candidate.' : 'No downloadable native structure was published for this record.'}</p>}
+                        </div>}
+                        </div>{adapter?.related?.(row)}</div>
                         {document?.artifact_id && <nav aria-label="Continue exact native document">{(['redesign', 'sequence', 'prediction'] as const).map(destination => {
                             const href = new URL(continuationHref({ job_id: jobId, ...(row.design_id ? { design_id: row.design_id } : {}), document: { artifact_id: document.artifact_id, ...(document.target_state != null ? { target_state: document.target_state } : {}) } }, destination), window.location.origin);
                             const back = new URL(href.searchParams.get('return_to')!, window.location.origin);
@@ -358,20 +375,14 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                             return <a className="mr-3 underline" key={destination} href={`${href.pathname}${href.search}`}>{destination === 'redesign' ? 'Redesign exact structure' : destination === 'sequence' ? 'Design sequence from exact structure' : 'Predict exact structure'}</a>;
                         })}</nav>}
                         {adapter?.inspect?.(row)}
-                        {!row.design_id && <div className="my-3">
+                        {!row.design_id && <details className="my-3"><summary className="cursor-pointer text-sm">Select saved structures for another operation</summary>
                             {!documents.length ? <p>No saved molecule. This record remains available for inspection and export.</p> : documents.filter(doc => doc.artifact_id).map((doc, index) => <div key={doc.artifact_id} className="my-3 space-y-2"><label className="flex items-start gap-2"><input type="checkbox" aria-label={`Use native document ${doc.artifact_id}`} checked={nativeSources.some(source => source.job_id === jobId && source.artifact_id === doc.artifact_id)} onChange={event => {
                                 const remaining = nativeSources.filter(source => source.job_id !== jobId || source.artifact_id !== doc.artifact_id);
                                 changeSources(event.target.checked ? [...remaining, { job_id: jobId, artifact_id: doc.artifact_id, document: doc }] : remaining);
                                 if (event.target.checked) { const next = Array.from(new Set([...nativeSelected, selectionId(row)])); setNativeSelected(next); writeBinderSelection(selectionScope, next); }
-                            }} /><span>Use saved molecule {index + 1} · {doc.target_state ?? 'Native state'}{doc.primary ? ' · primary' : ''}</span></label><details className="text-xs text-[var(--text-secondary)]"><summary>Exact saved molecule identity</summary><code className="block break-all">{doc.logical_path}</code><code className="block break-all">{doc.artifact_id}</code></details></div>)}
-                        </div>}
-                        {(!adapter || documents.length > 0) && <div className="mt-4 min-w-0 space-y-4" aria-label="Published molecule and measurements"><div className="min-w-0">
-                            <label className="mb-3 block text-xs">Published document <select className={`mt-1 block w-full min-w-0 ${control}`} aria-label="Published document" value={document ? String(documents.indexOf(document)) : ''} onChange={event => { const doc = documents[Number(event.target.value)]; if (doc) inspect(row, doc); }}>
-                                {!document && <option value="">{explicit ? "Requested document unavailable" : "Choose a saved structure"}</option>}{documents.map((doc, i) => <option key={`${doc.artifact_id}:${doc.target_state}:${i}`} value={i}>{i + 1} · {doc.target_state ?? 'Native state'}{doc.primary ? ' · primary' : ''} · {doc.logical_path?.split('/').at(-1) ?? 'Saved molecule'}</option>)}
-                            </select></label>
-                            {document && <div className="mb-3 space-y-1 text-xs"><p>{document.target_state ?? 'Native state'}{document.primary ? ' · Primary document' : ''}</p><p className="break-all">{document.logical_path?.split('/').at(-1) ?? 'Saved molecule'}</p><details className="text-[var(--text-secondary)]"><summary>Exact document identity</summary><code className="block break-all">{document.logical_path}</code><code className="block break-all">{document.artifact_id}</code></details></div>}
-                            {document?.download_url ? <StructureWorkbench key={`${document.artifact_id}:${document.target_state}:${document.download_url}`} mode="standard" structureUrl={document.download_url} format={/\.(cif|mmcif)(?:$|\?)/i.test(document.logical_path ?? document.download_url) ? 'cif' : 'pdb'} structureDocumentId={document.artifact_id} structureContentSha256={document.sha256} alphafoldView={false} height={520} showSequenceTrack showMeasurements showM6Workbench hideControls={false} workbenchCollapsed={!viewerToolsOpen} /> : <p role="status">{explicit ? 'Requested native document is unavailable. The Design primary structure is not substituted.' : documents.some(doc => doc.download_url) ? 'Choose a saved structure above to inspect this candidate.' : 'No downloadable native structure was published for this record.'}</p>}
-                        </div><aside className="min-w-0"><h5 className="mb-2 text-sm font-semibold">Native measurements</h5><dl aria-label="Native measurements" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),1fr))] gap-x-6 text-sm">{Object.entries(values(row)).map(([key, value]) => <div key={key} className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-baseline gap-3 border-b border-[var(--border-color)] py-2" title={[key, nativeGenerationMetricDetail(row, key)].filter(Boolean).join(' · ')}><dt className="min-w-0 [overflow-wrap:anywhere] text-[var(--text-secondary)]">{label(key)}</dt><dd className="min-w-0 [overflow-wrap:anywhere] text-right tabular-nums">{formatMetric(value)}</dd></div>)}</dl></aside></div>}
+                            }} /><span>Use saved molecule {index + 1} · {nativeDocumentLabel(doc)}{doc.primary ? ' · primary' : ''}</span></label><details className="text-xs text-[var(--text-secondary)]"><summary>Exact saved molecule identity</summary><code className="block break-all">{doc.logical_path}</code><code className="block break-all">{doc.artifact_id}</code></details></div>)}
+                        </details>}
+                        {(!adapter || documents.length > 0) && <div className="mt-4 min-w-0 space-y-4"><aside className="min-w-0"><h5 className="mb-2 text-sm font-semibold">Native measurements</h5><dl aria-label="Native measurements" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),1fr))] gap-x-6 text-sm">{Object.entries(values(row)).filter(([, value]) => value != null).map(([key, value]) => <div key={key} className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-baseline gap-3 border-b border-[var(--border-color)] py-2" title={[key, nativeGenerationMetricDetail(row, key)].filter(Boolean).join(' · ')}><dt className="min-w-0 [overflow-wrap:anywhere] text-[var(--text-secondary)]">{label(key)}</dt><dd className="min-w-0 [overflow-wrap:anywhere] text-right tabular-nums">{formatMetric(value)}</dd></div>)}</dl>{Object.entries(values(row)).some(([, value]) => value == null) && <details className="mt-3 text-xs text-[var(--text-secondary)]"><summary className="cursor-pointer">Unreported fields</summary>{Object.entries(values(row)).filter(([, value]) => value == null).map(([key, value]) => <p key={key}>{label(key)}: {formatMetric(value)}</p>)}</details>}</aside></div>}
                         <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">{document?.download_url && <><button className={control} type="button" aria-expanded={viewerToolsOpen} onClick={() => setViewerToolsOpen(value => !value)}>{viewerToolsOpen ? 'Hide viewer tools' : 'Measurements and exports'}</button><a className="underline" href={document.download_url} download>Download exact native document</a></>}{row.design_id && <a className="underline" href={nativeCandidateRoute(jobId, row.design_id, document, launchContextId)}>Open candidate workbench</a>}</div>
                     </>}</Suspense>}
                 </div>

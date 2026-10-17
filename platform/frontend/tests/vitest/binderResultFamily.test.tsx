@@ -60,3 +60,33 @@ test('loads every server page and rejects truncated readback instead of claiming
     api.defaults.adapter = async config => ({ data: { jobs: [], total: 1 }, status: 200, statusText: 'OK', headers: {}, config });
     await expect(fetchBinderResultFamily('root')).rejects.toThrow('Family listing changed');
 });
+
+test('the inspected BC2 candidate exposes every linked model and state with exact return navigation', async () => {
+    const nativeId = 'design_l3_privatehash_candidate1';
+    const direct = (id: string, copies: number) => row(id, { model_id: 'protenix', provenance: { binder_round_step: {
+        source_ref: { job_id: 'root', native_record_id: nativeId },
+        input_components: [{ role: 'binder', sequence: 'AAA' }, { role: 'target', sequence: 'TTT', count: copies }],
+    } } });
+    const linked = [rows[0], direct('mono', 1), direct('trimer', 3), row('sequence', { model_id: 'proteinmpnn', mode: 'sequence_design', selection_source_job_id: 'mono' }),
+        row('failed', { status: 'failed', provenance: { binder_round_step: { retry_of_job_id: 'mono' } } }), rows[2]];
+    api.defaults.adapter = async config => {
+        expect(config.method).toBe('get'); expect(config.url).toBe('/api/jobs');
+        return { data: { jobs: linked, total: linked.length }, status: 200, statusText: 'OK', headers: {}, config };
+    };
+    window.history.replaceState({}, '', '/designs/root?native_candidate=exact');
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => { renderer = create(<QueryClientProvider client={client}><BinderResultFamily jobId="root"
+        candidate={{ native_record: { design: nativeId, sequence: 'AAA', trajectory_design: 'native-family' } }} candidateLabel="Design 61 · Variant 1" /></QueryClientProvider>); });
+    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); expect(JSON.stringify(renderer!.toJSON())).toContain('Trimer target'); });
+    const links = renderer!.root.findAllByType('a');
+    expect(links.map(a => new URL(a.props.href, window.location.origin).pathname).sort()).toEqual(['/designs/mono', '/designs/sequence', '/designs/trimer', '/jobs/failed']);
+    expect(links.map(a => a.children.join('')).join(' ')).toContain('Sequence design');
+    const mono = new URL(links.find(a => a.props.href.startsWith('/designs/mono?'))!.props.href, window.location.origin);
+    expect(mono.searchParams.get('include_children')).toBe('false');
+    expect(mono.searchParams.get('view')).toBe('structure');
+    expect(mono.searchParams.get('return_to')).toBe('/designs/root?native_candidate=exact');
+    expect(mono.searchParams.get('return_label')).toBe('Design 61 · Variant 1');
+    expect(renderer!.root.findByType('details').props.open).not.toBe(true);
+    await act(async () => renderer!.unmount()); renderer = undefined; client.clear();
+    window.history.replaceState({}, '', '/');
+});

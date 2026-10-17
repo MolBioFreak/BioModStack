@@ -362,7 +362,7 @@ describe('ProjectManager', () => {
         await waitUntil(() => expect(container.querySelector('[aria-label="Relationship map"]')).not.toBeNull());
         expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('view=records');
         expect(container.querySelector('[aria-label="Project tree"]')).not.toBeNull();
-        await act(async () => Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Candidates')!.click());
+        await act(async () => Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Work links')!.click());
         await waitUntil(() => expect(container.querySelector('[aria-label="Candidate overview"]')).not.toBeNull());
     });
 

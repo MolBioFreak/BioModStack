@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { predictionDisplayLabel } from '../lib/designFriendlyLabel';
 import { useQuery } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data } from 'plotly.js';
@@ -143,7 +144,7 @@ function PredictionEvidence({ design, structure, fullPaeRequested, scalars }: { 
                 </section>
             </div>;
     return <>
-        <dl aria-label="Native confidence summary" className="prediction-summary">{scalars.entries.map(entry => <div key={entry.key}><dt>{entry.label}</dt><dd title={entry.title}>{entry.display}</dd></div>)}{scalars.reason && <div role="status">{scalars.reason}</div>}</dl>
+        {!structure && <dl aria-label="Native confidence summary" className="prediction-summary">{scalars.entries.map(entry => <div key={entry.key}><dt>{entry.label}</dt><dd title={entry.title}>{entry.display}</dd></div>)}{scalars.reason && <div role="status">{scalars.reason}</div>}</dl>}
         <div className="prediction-workspace">
             {structure ? <section aria-label="Selected prediction structure" className="prediction-structure">{typeof structure === 'function' ? structure(inspection, acceptSelection, charts) : structure}</section> : charts}
         </div>
@@ -179,7 +180,7 @@ function PaeComparison({ design, onSelect, fullPaeRequested }: { design: Design;
     const document = design.scientific_structure_document ?? (detail.data?.id === design.id ? detail.data.scientific_structure_document : undefined);
     const native = parseScientificPae(query.data, document, design.id);
     return <article className="prediction-card">
-        <button className="prediction-sample-link" onClick={onSelect}>{design.name}</button>
+        <button className="prediction-sample-link" onClick={onSelect} title={design.name}>{predictionDisplayLabel(design)}</button>
         {native.status === 'ok' ? <PaePlot matrix={native.matrix}
             rowLabels={native.axisKind === 'model_token' ? native.rowTokens.map(tokenLabel) : native.rows.map(axisLabel)}
             columnLabels={native.axisKind === 'model_token' ? native.columnTokens.map(tokenLabel) : native.columns.map(axisLabel)}
@@ -202,18 +203,22 @@ export function StructurePredictionResults({ designs, selectedDesignId, onSelect
     const external = asRecord(design.provenance?.external_import);
     const modelLabel = external?.provider === 'boltz_api' ? 'Boltz API' : labels[modelId ?? String(design.provenance?.producer_model_id ?? design.provenance?.model_id ?? '')] ?? 'Structure prediction';
     return <section aria-label="Structure prediction confidence" className="prediction-results space-y-4 text-[var(--text-primary)]">
-        <h2 className="text-lg font-semibold">{modelLabel} confidence</h2>
+        {!structure && <h2 className="text-lg font-semibold">{modelLabel} confidence</h2>}
+        <label className="prediction-selector"><span>Selected prediction</span><select title={design.name} aria-label="Selected prediction" value={design.id} onChange={e => select(e.target.value)}>{designs.map((d, i) => <option key={d.id} value={d.id} title={d.name}>{predictionDisplayLabel(d, i)}</option>)}</select></label>
+        {structure && <PredictionEvidence key={design.id} design={design} structure={structure} fullPaeRequested={fullPaeRequested} scalars={scalarsFor(design)} />}
+        <details open={structure ? undefined : true}><summary>Prediction details and confidence</summary>
         {external?.provider === 'boltz_api' && <p className="prediction-caption">Imported provider result · {String(external.sample_id ?? 'saved sample')}. Provider confidence is retained under its own definition.</p>}
         {design.native_sample && <p className="prediction-caption">Native sample {String(design.native_sample.producer_sample ?? design.name)}{design.native_sample.producer_rank == null ? '' : ` · producer rank ${design.native_sample.producer_rank}`}{design.native_sample.producer_partition ? ` · ${design.native_sample.producer_partition}` : ''}</p>}
         {modelId === 'protenix' && <p className="prediction-caption">Producer sample rank is not generation order. The producer disorder field is a placeholder, not a measured disorder result.</p>}
         <p className="prediction-caption">pLDDT uses the native 0–100 confidence scale, not a probability of correctness. iPTM is an interface-placement score, not a binding grade; monomer values do not establish binding.</p>
-        <label className="prediction-selector"><span>Selected prediction</span><select aria-label="Selected prediction" value={design.id} onChange={e => select(e.target.value)}>{designs.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label>
-        {summaryOnly ? <dl aria-label="Native confidence summary" className="prediction-summary">{scalarsFor(design).entries.map(entry => <div key={entry.key}><dt>{entry.label}</dt><dd title={entry.title}>{entry.display}</dd></div>)}{scalarsFor(design).reason && <p role="status">{scalarsFor(design).reason}</p>}</dl> : <PredictionEvidence key={design.id} design={design} structure={structure} fullPaeRequested={fullPaeRequested} scalars={scalarsFor(design)} />}
+        <p className="prediction-caption break-all" title={design.id}>{design.name}</p>
+        {summaryOnly || structure ? <dl aria-label="Native confidence summary" className="prediction-summary">{scalarsFor(design).entries.map(entry => <div key={entry.key}><dt>{entry.label}</dt><dd title={entry.title}>{entry.display}</dd></div>)}{scalarsFor(design).reason && <p role="status">{scalarsFor(design).reason}</p>}</dl> : <PredictionEvidence key={design.id} design={design} structure={structure} fullPaeRequested={fullPaeRequested} scalars={scalarsFor(design)} />}
+        </details>
         {!summaryOnly && <details onToggle={event => setCompare(event.currentTarget.open)}><summary>Compare native PAE — fixed 0–30 Å scale</summary>
             <p className="text-xs">Same 0–30 Å scale for every prediction; each matrix keeps its original order.</p>
             {compare && <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">{designs.map(d => <PaeComparison key={d.id} fullPaeRequested={fullPaeRequested} design={d} onSelect={() => select(d.id)} />)}</div>}
         </details>}
         <NativeArtifactDownloads key={`artifacts-${design.id}`} design={design} />
-        <details><summary>Saved predictions ({designs.length})</summary><p className="text-xs">Saved sample identities, not a new ranking. Missing scores are not zero. pLDDT is not evidence of correct inter-chain placement.</p><div className="overflow-auto"><table className="w-full text-left text-sm"><thead><tr><th>Prediction</th><th>pLDDT (0–100)</th><th>pTM</th><th>iPTM</th></tr></thead><tbody>{designs.map(d => <tr key={d.id} aria-selected={design.id === d.id}><td><button onClick={() => select(d.id)}>{d.name}</button></td>{scalarCell(scalarsFor(d), ['complex_plddt', 'plddt', 'plddt_mean', 'plddt_overall'])}{scalarCell(scalarsFor(d), ['ptm'])}{scalarCell(scalarsFor(d), ['iptm'])}</tr>)}</tbody></table></div></details>
+        <details><summary>Saved predictions ({designs.length})</summary><p className="text-xs">Saved sample identities, not a new ranking. Missing scores are not zero. pLDDT is not evidence of correct inter-chain placement.</p><div className="overflow-auto"><table className="w-full text-left text-sm"><thead><tr><th>Prediction</th><th>pLDDT (0–100)</th><th>pTM</th><th>iPTM</th></tr></thead><tbody>{designs.map(d => <tr key={d.id} aria-selected={design.id === d.id}><td><button onClick={() => select(d.id)} title={d.name}>{predictionDisplayLabel(d, designs.indexOf(d))}</button></td>{scalarCell(scalarsFor(d), ['complex_plddt', 'plddt', 'plddt_mean', 'plddt_overall'])}{scalarCell(scalarsFor(d), ['ptm'])}{scalarCell(scalarsFor(d), ['iptm'])}</tr>)}</tbody></table></div></details>
     </section>;
 }

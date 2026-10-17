@@ -7,10 +7,11 @@ import { ProjectCandidateOverview } from '../../src/components/project-manager/P
 import { buildProjectCandidateData, fetchProjectCandidateData, type CandidateSource } from '../../src/lib/projectCandidateOverview';
 import type { Job } from '../../src/lib/api';
 const mocks = vi.hoisted(() => ({ get: vi.fn(), project: vi.fn(), family: vi.fn(), page: vi.fn() }));
-vi.mock('../../src/lib/api', () => ({ api: { get: mocks.get } }));
+vi.mock('../../src/lib/api', () => ({ api: { get: (url: string, config: any) => url === '/api/jobs'
+    ? mocks.family(config.params.scientific_family_job_id, config.signal).then((jobs: Job[]) => ({ data: { jobs, total: jobs.length } }))
+    : mocks.get(url, config) } }));
 vi.mock('../../src/lib/projectManager', () => ({ getProject: mocks.project }));
-vi.mock('../../src/lib/binderResultFamily', () => ({ fetchBinderResultFamily: mocks.family }));
-vi.mock('../../src/lib/bindcraft2Results', () => ({ object: (v: unknown) => v && typeof v === 'object' && !Array.isArray(v) ? v : {}, fetchBC2Page: mocks.page }));
+vi.mock('../../src/lib/bindcraft2Results', () => ({ object: (v: unknown) => v && typeof v === 'object' && !Array.isArray(v) ? v : {}, fetchBC2Page: mocks.page, fetchBC2TrajectoryNames: async () => ({ family: "Design 61" }) }));
 const job = (id: string, extra: Partial<Job> = {}) => ({ id, name: id, model_id: 'protenix', status: 'completed', mode: 'complex', params: {}, created_at: '', design_count: 1, output_dir: null, ...extra }) as Job;
 const native = 'design_l3_abcdef1234567890_candidate2';
 const source: CandidateSource = { id: 'source', label: 'Site A', job: job('source', { model_id: 'bindcraft2' }), draws: [{ design: native, sequence: 'AAA', trajectory_design: 'family', arm: null }] };
@@ -34,7 +35,7 @@ describe('project candidate overview', () => {
         const input = host.querySelector('input')!;
         await act(() => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'abcdef'); input.dispatchEvent(new Event('input', { bubbles: true })); });
         expect(host.querySelector('[data-location]')?.textContent).toContain('candidate_search=abcdef');
-        await act(() => (host.querySelector('a[href="/designs/mono?include_children=false"]') as HTMLAnchorElement).click());
+        await act(() => (host.querySelector('a[href="/designs/mono?include_children=false&view=structure"]') as HTMLAnchorElement).click());
         expect(host.textContent).toContain('Exact validation result');
         await act(() => [...host.querySelectorAll('button')].find(b => b.textContent === 'Return to candidates')!.click());
         expect(host.querySelector('input')?.value).toBe('abcdef');
@@ -46,13 +47,13 @@ describe('project candidate overview', () => {
         await act(() => root!.render(<MemoryRouter><ProjectCandidateOverview data={buildProjectCandidateData([source], jobs)} onOpenRecords={records} /></MemoryRouter>));
         const links = [...host.querySelectorAll('a')].map(a => a.getAttribute('href'));
         expect(links).toContain('/designs/source');
-        for (const id of ['mono', 'trimer-1', 'trimer-3']) expect(links).toContain(`/designs/${id}?include_children=false`);
+        for (const id of ['mono', 'trimer-1', 'trimer-3']) expect(links).toContain(`/designs/${id}?include_children=false&view=structure`);
         expect(links).toContain('/jobs/failed');
-        const exact = new URL(links.find(x => x?.includes('native_candidate'))!, 'http://local');
+        const exact = new URL(links.find(x => x?.includes('native_candidate') && JSON.parse(new URL(x, 'http://local').searchParams.get('native_candidate')!)[1] === 'draw')!, 'http://local');
         expect(JSON.parse(exact.searchParams.get('native_candidate')!)).toEqual([null, 'draw', native]);
         expect(JSON.parse(exact.searchParams.get('native_scope')!)).toEqual(['bindcraft2', null, 'draw']);
         expect(host.querySelector('table')?.parentElement?.className).toContain('overflow-x-auto');
-        const failed = [...host.querySelectorAll('details')].find(d => d.textContent?.includes('Failed / cancelled'))!;
+        const failed = [...host.querySelectorAll('details')].find(d => d.textContent?.includes('Attempt history'))!;
         expect(failed.open).toBe(false);
         expect(host.textContent).toContain('not scientific acceptance');
         const input = host.querySelector('input')!;

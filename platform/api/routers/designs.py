@@ -3556,6 +3556,7 @@ async def get_confidence_artifacts(design_id: str, session: AsyncSession = Depen
         raise HTTPException(status_code=404, detail='Design not found')
     job = await session.get(Job, design.job_id)
     entries, producer = [], None
+    native_snapshots = None
     try:
         if job and revision_for_job(job) == 1 and job.model_id in ('boltz', 'boltz2'):
             selected = await verified_boltz_design(design, session)
@@ -3566,6 +3567,15 @@ async def get_confidence_artifacts(design_id: str, session: AsyncSession = Depen
             # for PAE and never inferred from a launch/save flag.
             structure_key = Path(keys['structure'])
             keys['pde'] = (structure_key.parent / f'pde_{structure_key.stem}.npz').as_posix()
+        elif job and revision_for_job(job) == 1 and job.model_id == 'protenix':
+            from services.protenix_scientific_consumer import verified_native_design
+            selected = await verified_native_design(design, session)
+            native_snapshots = {role: (selected['artifacts'][role], selected['snapshots'][role])
+                                for role in ('structure', 'metrics', 'pae')}
+            producer = 'protenix'
+            root = selected['publication_root']
+            keys = {role: Path(selected['artifacts'][role]['path']).relative_to(root).as_posix()
+                    for role in ('structure', 'metrics', 'pae')}
         else:
             found = retained_cp_paths(design, job)
             if found is None:
@@ -3573,7 +3583,7 @@ async def get_confidence_artifacts(design_id: str, session: AsyncSession = Depen
             root, keys, producer = found
         for role, key in keys.items():
             try:
-                artifact, content = _snapshot(root, key)
+                artifact, content = native_snapshots[role] if native_snapshots is not None else _snapshot(root, key)
                 relative = _safe_allowed_relative(artifact['path'])
                 entries.append(dict(role=role, filename=Path(key).name, retained=True,
                     artifact_sha256=artifact['sha256'], size_bytes=len(content),

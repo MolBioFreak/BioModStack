@@ -875,8 +875,8 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             </header>
 
             {candidateOverviewAvailable && <nav aria-label="Project view" className="flex gap-2 border-b border-border-primary bg-surface-secondary px-4 py-2">
-                <button type="button" aria-pressed={showCandidates} onClick={() => switchProjectView('candidates')} className={`rounded-lg px-4 py-2 text-sm font-semibold ${showCandidates ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`}>Candidates</button>
-                <button type="button" aria-pressed={!showCandidates} onClick={() => switchProjectView('records')} className={`rounded-lg px-4 py-2 text-sm font-semibold ${!showCandidates ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`}>All records & history</button>
+                <button type="button" aria-pressed={showCandidates} onClick={() => switchProjectView('candidates')} className={`rounded-lg px-4 py-2 text-sm font-semibold ${showCandidates ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`}>Work links</button>
+                <button type="button" aria-pressed={!showCandidates} onClick={() => switchProjectView('records')} className={`rounded-lg px-4 py-2 text-sm font-semibold ${!showCandidates ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`}>Experiments & history</button>
             </nav>}
             {candidates.isError && <div role="status" className="flex flex-wrap items-center gap-3 border-b border-border-primary px-4 py-2 text-sm text-content-secondary">
                 Candidate overview could not be loaded. Project records remain available.

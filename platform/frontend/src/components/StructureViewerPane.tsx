@@ -94,6 +94,8 @@ interface ViewerAnalysisBundle {
     chainPairIptmLoading?: boolean;
 }
 
+import { predictionDisplayLabel } from '../lib/designFriendlyLabel';
+
 interface Props {
     confidenceCompanion?: boolean;
     confidenceCharts?: React.ReactNode;
@@ -2856,7 +2858,7 @@ export default function StructureViewerPane({
                 >
                     {designs.map(d => (
                         <option key={d.id} value={d.id}>
-                            {`${getDesignOriginLabel(d) ? `[${getDesignOriginLabel(d)}] ` : ''}${inferDesignOutputSource(d) === 'validation' ? (formatStructureValidationName(d) || d.name) : d.name}${inferDesignOutputSource(d) !== 'ppiflow' && d.plddt_overall ? ` (${d.plddt_overall.toFixed(0)})` : ''}`}
+                            {`${getDesignOriginLabel(d) ? `[${getDesignOriginLabel(d)}] ` : ''}${confidenceCompanion ? predictionDisplayLabel(d, designs.indexOf(d)) : inferDesignOutputSource(d) === 'validation' ? (formatStructureValidationName(d) || d.name) : d.name}${inferDesignOutputSource(d) !== 'ppiflow' && d.plddt_overall ? ` (${d.plddt_overall.toFixed(0)})` : ''}`}
                         </option>
                     ))}
                 </select>
@@ -3008,7 +3010,7 @@ export default function StructureViewerPane({
                     style={isFullscreen && viewportWidth < 700 ? {flex: '0 0 auto'} : undefined}>
                     {/* Toolbar - positioned differently based on mode */}
                     <div className="prediction-viewer-toolbar">
-                        {renderViewerToolbar(isFullscreen || viewerLayout.isStacked)}
+                        {renderViewerToolbar(confidenceCompanion || isFullscreen || viewerLayout.isStacked)}
                         {fampnnPsceProfile && <div className="text-[10px] text-slate-400">
                             {fampnnPsceProfile.policy
                                 ? `pSCE policy v${fampnnPsceProfile.policy.version} · ${fampnnPsceProfile.scope === 'all_chains' ? 'All chains' : `Chain ${fampnnPsceProfile.scope}`} · Cβ ${fampnnPsceProfile.ignore_cbeta ? 'excluded' : 'included'} · Å, residue-weighted`

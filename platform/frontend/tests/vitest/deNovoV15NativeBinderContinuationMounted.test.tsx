@@ -28,7 +28,7 @@ async function mount(stage = 'draw') {
     await flush();
 }
 async function close() { await act(async () => tree.unmount()); client.clear(); }
-beforeEach(() => { localStorage.clear(); sessionStorage.clear(); posts.length = 0; api.defaults.adapter = async config => {
+beforeEach(() => { localStorage.clear(); sessionStorage.clear(); window.history.replaceState({}, '', '/'); posts.length = 0; api.defaults.adapter = async config => {
     let data: any = [];
     if (config.url?.startsWith('/api/models/')) data = { params: [{ name: 'samples', label: 'Samples', type: 'integer', default: 1 }] };
     if (config.url?.startsWith('/api/designs/')) data = { job_id: 'accepted-owner' };
