@@ -346,8 +346,6 @@ it.each(['native', 'validated'] as const)('selected %s Redesign submits retained
     const posts = await selectedTransport(); const changed = vi.fn();
     const prepared = await prepareDeNovoContinuation(source, 'redesign');
     await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={{ ...prepared, execution_depth: depth,
-        // This fixture has no declared producer roles; the operator chooses A.
-        design_chains: 'A', context_chains: [],
         redesign_ranges: 'A1', select_unfixed_sequence: 'A1', seq_method: 'mpnn', pinned_gpu: 0,
         seed: 0, partial_t: 0, dump_trajectories: false, interactive_gating: false, region_padding: 0,
         fix_fixed_sidechains: false, seqs_per_design: 2 }} onDraftChange={changed} />);

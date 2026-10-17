@@ -24,7 +24,13 @@ it('missing and malformed roles never become chain guesses; prediction receives 
     native.author_residues = [{ model_number: 1, auth_asym_id: 'A', auth_seq_id: 1, insertion_code: '', residue_name: 'ALA' }];
     native.source_identity.binder_chains = 'A';
     expect(continuationRoleDefaults(native, 'sequence')).toEqual({});
-    expect(continuationRoleDefaults(native, 'redesign')).toEqual({ design_chains: '', context_chains: [] });
+    expect(continuationRoleDefaults(native, 'redesign')).toEqual({});
+    expect(continuationRoleDefaults(materialized({ binder_chains: [42], target_chains: null }), 'redesign')).toEqual({});
+    expect(continuationRoleDefaults(materialized({ binder_chains: '' }), 'redesign')).toEqual({});
+    expect(continuationRoleDefaults(materialized({ binder_chains: ['B', 'C'], target_chains: 'A' }), 'redesign')).toEqual({});
+    for (const destination of ['redesign', 'sequence'] as const) {
+        expect(continuationRoleDefaults(materialized({ target_chains: 'A' }), destination)).toEqual({});
+    }
     expect(continuationRoleDefaults(materialized({ binder_chains: [42], target_chains: null }), 'sequence')).toEqual({});
     expect(continuationRoleDefaults(materialized({ binder_chains: 'B', target_chains: 'A' }), 'prediction')).toEqual({});
 });

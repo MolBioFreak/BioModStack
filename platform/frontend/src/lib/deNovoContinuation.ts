@@ -34,10 +34,14 @@ export function continuationRoleDefaults(native: StructureMaterialization, desti
     };
     const binder = read('binder_chains'), target = read('target_chains');
     const defaults: Record<string, unknown> = destination === 'redesign'
-        // Exact-source editors must not silently choose the first protein chain.
-        ? { design_chains: binder?.join(',') ?? '', context_chains: target ?? [] }
-        : destination === 'sequence' ? {
-            ...(binder === undefined ? {} : { binder_chains: binder.join(','), design_chain: binder.join(',') }),
+        // Missing evidence leaves the existing editor defaults alone; it is not
+        // an authored clear or a new requirement to choose a chain again.
+        ? binder?.length === 1 ? {
+            design_chains: binder[0],
+            ...(target === undefined ? {} : { context_chains: target }),
+        } : {}
+        : destination === 'sequence' && binder?.length ? {
+            binder_chains: binder.join(','), design_chain: binder.join(','),
             ...(target === undefined ? {} : { target_chains: target.join(','), target_chain: target.join(',') }),
         } : {};
     return { ...defaults, ...draft }; // Own-property clears, nulls and edits win.
