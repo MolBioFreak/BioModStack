@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { JsonObject, ProjectManagerReadModel } from '../../lib/projectManager';
 import { displayLabel, valueText } from './projectManagerState';
+import { ProjectNarrative, hasProjectNarrativeLinks } from './ProjectNarrative';
 
 export type FolderKind = 'plans' | 'runs' | 'results' | 'datasets' | 'notes' | 'decisions' | 'activity' | 'lineage';
 
@@ -25,13 +26,15 @@ function RecordList({ items, empty, onSelect }: { items: JsonObject[]; empty: st
                 const id = text(item, 'id') ?? text(item, 'resource_id') ?? text(item, 'receipt_id') ?? `${index}`;
                 const title = text(item, 'record_kind') ?? text(item, 'event_type') ?? text(item, 'edge_mode') ?? text(item, 'entity_kind') ?? text(item, 'label') ?? id;
                 const detail = text(item, 'body') ?? text(item, 'entity_id') ?? text(item, 'edge_key') ?? text(item, 'unavailable_reason');
+                const linkedDetail = detail ? hasProjectNarrativeLinks(detail) : false;
                 return (
                     <li key={id} className="rounded-lg border border-border-primary bg-surface">
                         <button type="button" onClick={() => onSelect(item)} className="w-full p-3 text-left outline-none focus:ring-2 focus:ring-accent">
                             <span className="block text-xs font-semibold text-content">{displayLabel(title)}</span>
-                            {detail ? <span className="mt-1 block text-[11px] text-content-secondary">{detail}</span> : null}
+                            {detail && !linkedDetail ? <span className="mt-1 block text-[11px] text-content-secondary">{detail}</span> : null}
                             <span className="mt-1 block text-[9px] text-content-muted">{valueText(id)}</span>
                         </button>
+                        {detail && linkedDetail ? <div className="px-3 pb-3 text-sm text-content-secondary"><ProjectNarrative text={detail} /></div> : null}
                     </li>
                 );
             })}

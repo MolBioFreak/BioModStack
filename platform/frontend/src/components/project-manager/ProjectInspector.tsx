@@ -1,5 +1,6 @@
 import type { ProjectManagerReadModel } from '../../lib/projectManager';
 import { displayLabel, valueText } from './projectManagerState';
+import { ProjectNarrative } from './ProjectNarrative';
 
 interface ProjectInspectorProps {
     summary: ProjectManagerReadModel;
@@ -42,7 +43,7 @@ function DetailGrid({ value }: { value: Record<string, unknown> }) {
             {entries.map(([key, item]) => (
                 <div key={key} className="py-1">
                     <dt className="text-xs font-semibold text-content-muted">{displayLabel(key)}</dt>
-                    <dd className="mt-1 break-words text-sm text-content-secondary">{valueText(item)}</dd>
+                    <dd className="mt-1 break-words text-sm text-content-secondary"><ProjectNarrative text={valueText(item)} /></dd>
                 </div>
             ))}
         </dl>

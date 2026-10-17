@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ProjectNarrative } from '../ProjectNarrative';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
@@ -99,7 +100,7 @@ export function ProteinEvidenceOperator({ projectId, globalExperimentId, domainE
                                 <span className="rounded-full border border-border-primary px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-content-secondary">{record.record_kind}</span>
                                 <time className="text-xs text-content-muted">{new Date(record.created_at).toLocaleString()}</time>
                             </div>
-                            <p className="mt-3 whitespace-pre-wrap text-sm text-content-secondary">{record.body}</p>
+                            <p className="mt-3 whitespace-pre-wrap text-sm text-content-secondary"><ProjectNarrative text={record.body} /></p>
                             {record.source_receipt_ids.length > 0 && (
                                 <p className="mt-3 break-all font-mono text-xs text-content-muted">Evidence: {record.source_receipt_ids.join(', ')}</p>
                             )}
