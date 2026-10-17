@@ -28,14 +28,16 @@
 /* Embedded Mol* responds to its actual panel width, not the browser orientation.
    Keep the native hide/collapse classes and fullscreen layout authoritative. */
 .bms-structure-canvas { container-type: inline-size; }
-.bms-structure-workspace:has(.msp-layout-standard-reactive > :first-child:not(.msp-layout-hide-right)) {
+/* Only embedded viewers grow to their tools. In browser fullscreen the caller
+   supplies a definite height; auto here collapses its scene to the 540px floor. */
+.bms-structure-workspace:not(:fullscreen, :fullscreen *):has(.msp-layout-standard-reactive > :first-child:not(.msp-layout-hide-right)) {
   height: auto !important;
 }
-.bms-structure-workspace:has(.msp-layout-standard-reactive > :first-child:not(.msp-layout-hide-right)) > .bms-structure-workspace-layout {
+.bms-structure-workspace:not(:fullscreen, :fullscreen *):has(.msp-layout-standard-reactive > :first-child:not(.msp-layout-hide-right)) > .bms-structure-workspace-layout {
   height: auto;
   grid-template-rows: auto;
 }
-.bms-structure-canvas [data-bms-molstar-adapter]:has(.msp-layout-standard-reactive > :first-child:not(.msp-layout-hide-right)) {
+.bms-structure-canvas [data-bms-molstar-adapter]:not(:fullscreen, :fullscreen *):has(.msp-layout-standard-reactive > :first-child:not(.msp-layout-hide-right)) {
   min-height: 540px;
 }
 .bms-structure-workbench { scrollbar-gutter: stable; overflow-wrap: anywhere; }

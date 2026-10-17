@@ -119,6 +119,21 @@ test('shared workbench docks beside or below the scene instead of covering it', 
     assert.match(css, /color: var\(--text-primary\)/);
 });
 
+test('embedded auto-height floors do not override the browser fullscreen height', () => {
+    const rules = [...VIEWER_CSS.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+    const embeddedHeightRules = rules.filter(([, selector, body]) =>
+        selector.includes(':has(.msp-layout-standard-reactive')
+        && /(?:height:\s*auto|\bmin-height:\s*540px)/.test(body));
+    assert.equal(embeddedHeightRules.length, 3, 'host, layout and adapter floor');
+    for (const [fullRule, selector] of embeddedHeightRules) {
+        assert.ok(selector.includes(':not(:fullscreen, :fullscreen *)'),
+            `embedded sizing must exclude both fullscreen owner and descendants: ${fullRule}`);
+    }
+    // The narrow native-tools layout remains available in either mode.
+    assert.match(VIEWER_CSS, /@container \(max-width: 56rem\)/);
+    assert.match(VIEWER_CSS, /height: 820px !important/);
+});
+
 test('structure viewer top toolbar contains navigation only, not legacy metric controls', () => {
     const source = readFileSync(STRUCTURE_VIEWER_PANE_PATH, 'utf8');
     const start = source.indexOf('const renderViewerToolbar');
