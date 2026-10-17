@@ -7,6 +7,12 @@ const job = (id: string, extra: Partial<Job> = {}): Job => ({ id, name: 'Mislead
 const nativeId = 'design_l3_abcdef0123456789_candidate2';
 const source: CandidateSource = { id: 'source-a', label: 'Site A', job: job('source-a', { model_id: 'bindcraft2' }), draws: [{ design: nativeId, trajectory_design: 'backbone-a', sequence: 'AAA', arm: null }] };
 const validation = job('mono', { provenance: { binder_round_step: { source_ref: { job_id: source.id, native_record_id: nativeId }, input_components: [{ role: 'binder', sequence: 'AAA' }, { role: 'target', sequence: 'TTT' }] } } });
+test('missing document producer identity never links unrelated jobs through an empty key', () => {
+    const unbound = { ...source, draws: [{ path: 'native.pdb', producer_design: null, structures: [] }] };
+    const data = buildProjectCandidateData([unbound], [source.job, validation, job('unrelated')]);
+    assert.deepEqual(data.candidates, []);
+    assert.equal(data.unlinkedJobCount, 2);
+});
 test('uses project references, not narrative links', () => {
     assert.deepEqual(projectSourceReferences({ payload: { external_references: [{ value: '/designs/source-a', label: 'Site A' }, { value: 'https://example.org/designs/no' }] }, description: '[wrong](/designs/wrong)' }), [{ id: 'source-a', label: 'Site A' }]);
 });

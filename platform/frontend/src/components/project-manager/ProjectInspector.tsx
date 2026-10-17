@@ -21,6 +21,17 @@ interface ProjectInspectorProps {
 
 const narrativeKeys = new Set(['objective', 'research_objective', 'scientific_objective', 'description']);
 const normalizedNarrative = (value: string) => value.trim().replace(/\s+/g, ' ');
+const hasContent = (value: unknown): boolean => value !== null && value !== undefined && value !== ''
+    && (Array.isArray(value) ? value.some(hasContent) : typeof value === 'object' ? Object.values(value).some(hasContent) : true);
+const sameField = (left: unknown, right: unknown): boolean => {
+    if (left === right) return true;
+    if (Array.isArray(left) && Array.isArray(right)) return left.length === right.length && left.every((v, i) => sameField(v, right[i]));
+    if (left && right && typeof left === 'object' && typeof right === 'object') {
+        const a = Object.entries(left), b = Object.entries(right);
+        return a.length === b.length && a.every(([key, value]) => Object.hasOwn(right, key) && sameField(value, (right as Record<string, unknown>)[key]));
+    }
+    return false;
+};
 
 function operatorFields(value: Record<string, unknown>, existingNarratives = new Set<string>()): Record<string, unknown> {
     const technical = /(^schema$|(^|_)(id|ids|digest|generation|revision|receipt|receipts|adapter|raw|uri|route|payload)(_|$))/;
@@ -37,6 +48,7 @@ function operatorFields(value: Record<string, unknown>, existingNarratives = new
         const rank = (key: string) => preferred.includes(key) ? preferred.indexOf(key) : preferred.length;
         return rank(a) - rank(b);
     }).filter(([key, item]) => {
+        if (!hasContent(item)) return false;
         if (!narrativeKeys.has(key) || typeof item !== 'string') return true;
         const text = normalizedNarrative(item);
         if (seenNarratives.has(text)) return false;
@@ -91,7 +103,8 @@ export function ProjectInspector({
     const narratives = new Set(Object.entries(summaryFields)
         .filter(([key, value]) => narrativeKeys.has(key) && typeof value === 'string')
         .map(([, value]) => normalizedNarrative(value as string)));
-    const scientificFields = operatorFields(selection.scientific_context, narratives);
+    const scientificFields = Object.fromEntries(Object.entries(operatorFields(selection.scientific_context, narratives))
+        .filter(([key, value]) => hasContent(value) && !sameField(value, summaryFields[key])));
     const subtitleRepeated = selection.subtitle && narratives.has(normalizedNarrative(selection.subtitle));
     const treeSelection = summary.tree.nodes.find((node) => node.node_key === selection.node_key);
     const actions = new Set([...selection.available_actions, ...(treeSelection?.allowed_actions ?? [])]);

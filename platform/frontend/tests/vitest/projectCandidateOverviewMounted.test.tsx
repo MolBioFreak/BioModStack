@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({ get: vi.fn(), project: vi.fn(), family: vi.fn(
 vi.mock('../../src/lib/api', () => ({ api: { get: (url: string, config: any) => url === '/api/jobs'
     ? mocks.family(config.params.scientific_family_job_id, config.signal).then((jobs: Job[]) => ({ data: { jobs, total: jobs.length } }))
     : mocks.get(url, config) } }));
-vi.mock('../../src/lib/projectManager', () => ({ getProject: mocks.project }));
+vi.mock('../../src/lib/projectManager', async original => ({ ...await original<typeof import('../../src/lib/projectManager')>(), getProject: mocks.project }));
 vi.mock('../../src/lib/bindcraft2Results', () => ({ object: (v: unknown) => v && typeof v === 'object' && !Array.isArray(v) ? v : {}, fetchBC2Page: mocks.page, fetchBC2TrajectoryNames: async () => ({ family: "Design 61" }) }));
 const job = (id: string, extra: Partial<Job> = {}) => ({ id, name: id, model_id: 'protenix', status: 'completed', mode: 'complex', params: {}, created_at: '', design_count: 1, output_dir: null, ...extra }) as Job;
 const native = 'design_l3_abcdef1234567890_candidate2';
@@ -35,7 +35,12 @@ describe('project candidate overview', () => {
         const input = host.querySelector('input')!;
         await act(() => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'abcdef'); input.dispatchEvent(new Event('input', { bubbles: true })); });
         expect(host.querySelector('[data-location]')?.textContent).toContain('candidate_search=abcdef');
-        await act(() => (host.querySelector('a[href="/designs/mono?include_children=false&view=structure"]') as HTMLAnchorElement).click());
+        const link = host.querySelector<HTMLAnchorElement>('a[href^="/designs/mono?"]')!;
+        expect(new URL(link.href).searchParams.get('return_to')).toBe('/projects/project?candidate_search=abcdef');
+        for (const anchor of host.querySelectorAll<HTMLAnchorElement>('a')) {
+            expect(new URL(anchor.href).searchParams.get('return_to')).toBe('/projects/project?candidate_search=abcdef');
+        }
+        await act(() => link.click());
         expect(host.textContent).toContain('Exact validation result');
         await act(() => [...host.querySelectorAll('button')].find(b => b.textContent === 'Return to candidates')!.click());
         expect(host.querySelector('input')?.value).toBe('abcdef');

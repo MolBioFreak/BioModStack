@@ -1748,6 +1748,91 @@ async def _save_revision(
             "references": hierarchy_bindings,
         }
     )
+    if aggregate_kind in {"workspace", "experiment", "domain_experiment"}:
+        # Parent Global authority is part of a Domain revision's identity, even
+        # when its user-authored metadata has not changed. Older revisions used
+        # the graph without this binding; retain those immutable rows as-is.
+        legacy_graph_sha256 = sha256_text(graph_json)
+        revision_bindings = list(hierarchy_bindings)
+        if parent_global_revision is not None:
+            revision_bindings.append({
+                "target_resource_id": parent_global_revision.resource_id,
+                "role": "parent_global_revision",
+                "ordinal": 0,
+                "expected_sha256": parent_global_revision.payload_sha256,
+            })
+            graph_json = canonical_json({
+                "nodes": payload.get("nodes", []),
+                "edges": payload.get("edges", []),
+                "references": revision_bindings,
+            })
+        candidates = (await session.execute(
+            select(ExperimentRevision).where(
+                ExperimentRevision.subject_id == aggregate_id,
+                ExperimentRevision.payload_sha256 == sha256_text(payload_json),
+                ExperimentRevision.dependency_graph_sha256.in_(
+                    {legacy_graph_sha256, sha256_text(graph_json)}
+                ),
+            ).order_by(ExperimentRevision.revision_number.desc())
+        )).scalars().all()
+        expected_edges = {
+            (str(binding["target_resource_id"]), str(binding["role"]),
+             int(binding["ordinal"]), str(binding["expected_sha256"]))
+            for binding in revision_bindings
+        }
+        for candidate in candidates:
+            resource = await session.get(ExperimentResource, candidate.resource_id)
+            edges = (await session.execute(
+                select(ExperimentRevisionEdge).where(
+                    ExperimentRevisionEdge.revision_id == candidate.resource_id
+                )
+            )).scalars().all()
+            if (
+                candidate.canonical_payload != payload_json
+                or resource is None or resource.kind != "revision"
+                or resource.workspace_id != workspace_id
+                or resource.lifecycle_owner_id != aggregate_id
+                or {(edge.target_resource_id, edge.role, edge.ordinal, edge.expected_sha256)
+                    for edge in edges} != expected_edges
+            ):
+                continue
+            unchanged = candidate.resource_id == head.current_revision_id
+            generation = expected_head_generation if unchanged else expected_head_generation + 1
+            values: dict[str, Any] = {"head_generation": generation}
+            if not unchanged:
+                values.update(current_revision_id=candidate.resource_id,
+                              lifecycle_state=str(payload["status"]), updated_at=now())
+            # Even an unchanged Save must acquire the head CAS: an identity-map
+            # snapshot cannot authorize a stale writer. Reverts advance the head
+            # generation, never rewrite or renumber the retained revision.
+            changed = await session.execute(
+                update(ExperimentAggregateHead).where(
+                    ExperimentAggregateHead.aggregate_id == aggregate_id,
+                    ExperimentAggregateHead.aggregate_kind == aggregate_kind,
+                    ExperimentAggregateHead.head_generation == expected_head_generation,
+                    ExperimentAggregateHead.current_revision_id == head.current_revision_id,
+                ).values(**values).execution_options(synchronize_session=False)
+            )
+            if changed.rowcount != 1:
+                await session.refresh(head)
+                raise RevisionConflict(
+                    f"{aggregate_kind} head generation conflict: expected {expected_head_generation}, current {head.head_generation}"
+                )
+            if not unchanged:
+                add_audit_event(
+                    session, workspace_id=workspace_id, resource_id=candidate.resource_id,
+                    event_type="immutable_revision_reused", generation=generation,
+                    payload={"subject_id": aggregate_id, "payload_sha256": candidate.payload_sha256,
+                             "previous_revision_id": head.current_revision_id},
+                )
+                if previous_status != str(payload["status"]):
+                    add_audit_event(
+                        session, workspace_id=workspace_id, resource_id=aggregate_id,
+                        event_type="aggregate_lifecycle_transitioned", generation=generation,
+                        payload={"from": previous_status, "to": str(payload["status"])},
+                    )
+            await session.refresh(head)
+            return candidate
     parent_revision_id = head.current_revision_id
     next_generation = expected_head_generation + 1
     revision: ExperimentRevision

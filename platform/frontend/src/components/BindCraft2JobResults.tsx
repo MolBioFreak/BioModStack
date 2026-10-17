@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { BinderResultFamily } from './BinderResultFamily';
 import { NativeBinderGenerationResults, type Props as WorkbenchProps } from './NativeBinderGenerationResults';
 import { BindCraft2Trajectory, BindCraft2OutcomeSummary } from './BindCraft2Trajectory';
-import { bc2Page, bc2Label, bc2MetricLabel, bc2PreferredColumns, bc2PreferredDocument, fetchBC2Page, fetchBC2TrajectoryNames } from '../lib/bindcraft2Results';
+import { bc2Page, bc2Label, bc2SourceRecord, bc2MetricLabel, bc2PreferredColumns, bc2PreferredDocument, fetchBC2Page, fetchBC2TrajectoryNames } from '../lib/bindcraft2Results';
 import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { isAxiosError } from 'axios';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
@@ -159,7 +159,7 @@ export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchCon
               : { x: keys.includes('pLDDT') ? 'pLDDT' : undefined, y: keys.includes('i_pTM') ? 'i_pTM' : undefined, distribution: keys.includes('i_pTM') ? 'i_pTM' : undefined, headline: ['i_pTM', 'pLDDT'].filter(key => keys.includes(key)) };
           },
           fetchPage: async (offset, signal) => bc2Page(offset === 0 ? data : await fetchBC2Page(jobId, data.arm, query.stage, offset, signal)),
-          label: row => bc2Label(row, names.data), related: row => <BinderResultFamily jobId={jobId} candidate={row} candidateLabel={bc2Label(row, names.data)} />, preferredColumns: bc2PreferredColumns(data), metricLabel: bc2MetricLabel, preferredDocument: bc2PreferredDocument,
+          label: row => bc2Label(row, names.data), related: row => <BinderResultFamily jobId={jobId} candidate={{ ...row, native_record: bc2SourceRecord(row) }} candidateLabel={bc2Label(row, names.data)} />, preferredColumns: bc2PreferredColumns(data), metricLabel: bc2MetricLabel, preferredDocument: bc2PreferredDocument,
           inspect: row => <BindCraft2Trajectory key={row.candidate_key} jobId={jobId} row={row} arm={data.arm} />,
           summary: rows => <><BindCraft2OutcomeSummary rows={rows} />{data.analytics?.complete === false && <p role="status">Trajectory analytics are incomplete. Plots cover available recorded observations only.</p>}</>,
         }} />}

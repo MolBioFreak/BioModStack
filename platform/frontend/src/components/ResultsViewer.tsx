@@ -1835,20 +1835,20 @@ function ResultsViewerContent() {
         params.delete('artifact_id'); params.delete('target_state');
         navigate(`${location.pathname}?${params}`, { replace: true });
     }, [location.pathname, location.search, navigate]);
-    const [designSelection, setDesignSelection] = useState(() => ({ jobId: selectedJobId, ids: readBinderSelection(selectedJobId) }));
+    const [designSelection, setDesignSelection] = useState(() => ({ jobId: selectedJobId, ids: readBinderSelection(selectedJobId), changed: false }));
     const selectedDesignIds = designSelection.jobId === selectedJobId ? designSelection.ids : readBinderSelection(selectedJobId);
     const setSelectedDesignIds = useCallback((value: string[] | ((current: string[]) => string[])) => {
         setDesignSelection(current => {
             const previous = current.jobId === selectedJobId ? current.ids : readBinderSelection(selectedJobId);
-            return { jobId: selectedJobId, ids: typeof value === 'function' ? value(previous) : value };
+            return { jobId: selectedJobId, ids: typeof value === 'function' ? value(previous) : value, changed: true };
         });
     }, [selectedJobId]);
     useEffect(() => { writeBinderSelection(designSelection.jobId, designSelection.ids); }, [designSelection]);
-    const [nativeSelection, setNativeSelection] = useState(() => ({ jobId: selectedJobId, sources: readBinderNativeSources(selectedJobId) }));
+    const [nativeSelection, setNativeSelection] = useState(() => ({ jobId: selectedJobId, sources: readBinderNativeSources(selectedJobId), changed: false }));
     const selectedNativeSources = nativeSelection.jobId === selectedJobId ? nativeSelection.sources : readBinderNativeSources(selectedJobId);
     const setSelectedNativeSources = useCallback((sources: NativeCandidateSource[]) => {
         writeBinderNativeSources(selectedJobId, sources);
-        setNativeSelection({ jobId: selectedJobId, sources });
+        setNativeSelection({ jobId: selectedJobId, sources, changed: true });
     }, [selectedJobId]);
     const [comparison, setComparison] = useState<{ jobId: string; ids: string[] }>();
     useEffect(() => {
@@ -3437,14 +3437,17 @@ function ResultsViewerContent() {
         if (manualOutputSourceSelectionRef.current && outputSourceSelectionJobRef.current === selectedJobId) {
             return;
         }
+        if (!displayedDesignsData) return;
         const preferredSource = inferPreferredOutputSource(activeJob);
-        const nextSource = preferredSource !== 'all' && designs.some((design) => inferDesignOutputSource(design as UntypedApiValue) === preferredSource)
+        // Source filtering is client-derived. Do not default a large cohort into
+        // an unavailable bulk view; explicit operator/saved filters still win.
+        const nextSource = serverTotalDesigns <= MAX_BULK_SELECTION_DESIGNS && preferredSource !== 'all' && designs.some((design) => inferDesignOutputSource(design as UntypedApiValue) === preferredSource)
             ? preferredSource
             : 'all';
         outputSourceSelectionJobRef.current = selectedJobId || null;
         setOutputSourceFilter(nextSource);
         setAntibodySourceFilter(nextSource);
-    }, [selectedJobId, activeJob?.awaiting_stage, activeJob?.current_stage, activeJob?.awaiting_payload?.candidate_dir, designs, activeJob]);
+    }, [selectedJobId, activeJob?.awaiting_stage, activeJob?.current_stage, activeJob?.awaiting_payload?.candidate_dir, designs, activeJob, displayedDesignsData, serverTotalDesigns]);
 
     useEffect(() => {
         setRfReviewSet(null);
@@ -5154,7 +5157,12 @@ function ResultsViewerContent() {
 
         saveAntibodyRefinementLaunchState(refinementLaunchState);
 
-        navigate('/submit?template=antibody_denovo&refinement=1', {
+        const refinementQuery = new URLSearchParams({ template: 'antibody_denovo', refinement: '1', return_to: `${location.pathname}${location.search}${location.hash}` });
+        for (const key of ['launch_context_id', 'project_id', 'setup_context_id']) {
+            const value = new URLSearchParams(location.search).get(key);
+            if (value) refinementQuery.set(key, value);
+        }
+        navigate(`/submit?${refinementQuery}`, {
             state: {
                 refinementMode: true,
                 sourceJobId: activeJob.id,
@@ -5596,7 +5604,11 @@ function ResultsViewerContent() {
                     onCompareJobs={ids => setComparison({ jobId: selectedJobId, ids })} />}
                 {showResultFamily && <BinderResultComparison key={`comparison-${selectedJobId}`}
                     jobId={selectedJobId} jobIds={comparison?.jobId === selectedJobId ? comparison.ids : undefined}
-                    selectedDesignIds={selectedDesignIds} {...{ selectedNativeSources, candidateDocuments: selectedCandidateDocuments }} launchContextId={destinationLaunchContextId} />}
+                    // An untouched empty table is not a command to erase the comparison's saved selection.
+                    selectedDesignIds={selectedDesignIds.length || (designSelection.jobId === selectedJobId && designSelection.changed) ? selectedDesignIds : undefined}
+                    selectedNativeSources={selectedNativeSources.length || (nativeSelection.jobId === selectedJobId && nativeSelection.changed) ? selectedNativeSources : undefined}
+                    candidateDocuments={Object.keys(selectedCandidateDocuments).length || (designSelection.jobId === selectedJobId && designSelection.changed) || (nativeSelection.jobId === selectedJobId && nativeSelection.changed) ? selectedCandidateDocuments : undefined}
+                    launchContextId={destinationLaunchContextId} />}
                 {activeJob && isProteinLocalRedesignResultJob(activeJob) && !isRFD3LocalRedesignResultJob(activeJob) && (
                     <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                 )}
@@ -5607,7 +5619,7 @@ function ResultsViewerContent() {
                     </ProteinDesignPanel>
                 )}
                 {activeJob && ['rfantibody', 'template_antibody_denovo'].includes(activeJob.model_id) && (
-                    <BinderPredictionEvidence jobId={selectedJobId} sourceDesignId={selectedDesignId ?? undefined} launchContextId={destinationLaunchContextId} />
+                    <BinderPredictionEvidence jobId={selectedDesign?.job_id || selectedJobId} sourceDesignId={selectedDesign?.job_id ? selectedDesign.id : undefined} launchContextId={destinationLaunchContextId} />
                 )}
                 {activeJob && ((activeJob.model_id === 'esmfold2' && activeJob.mode === 'blind_pose')
                     || (activeJob.model_id === 'ligandmpnn' && activeJob.mode === 'interface_context')) &&
@@ -6680,7 +6692,7 @@ function ResultsViewerContent() {
 
                         {/* Content */}
                         <div className="bg-slate-900/50 rounded-xl border border-slate-800 min-h-[600px]">
-                            {isLoading ? (
+                            {isLoading && activeTab !== 'table' ? (
                                 <div className="flex items-center justify-center h-96">
                                     <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-500" />
                                 </div>
@@ -7014,7 +7026,7 @@ function ResultsViewerContent() {
                                             </div>
                                             {pageSize !== 0 && totalDesigns > designs.length && (
                                                 <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-100">
-                                                    Overview cards and distributions are computed from the currently loaded page of {designs.length} designs, not the full {totalDesigns.toLocaleString()}-design set. Use `All` to score the whole set at once.
+                                                    Overview cards and distributions are computed from the currently loaded page of {designs.length} designs, not the full {totalDesigns.toLocaleString()}-design set. Use the page controls to inspect other results or choose a larger page (up to 500).
                                                 </div>
                                             )}
                                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -7220,7 +7232,7 @@ function ResultsViewerContent() {
                                             <div className="max-w-xl rounded-xl border border-slate-700/60 bg-slate-900/60 p-6 text-center">
                                                 <div className="text-sm font-semibold text-slate-100">No overview data loaded</div>
                                                 <p className="mt-2 text-sm leading-6 text-slate-400">
-                                                    This job does not have persisted design rows or review-summary metadata yet. Once the RFA review rows are materialized, the overview and charts surfaces will populate automatically.
+                                                    No persisted design rows or review-summary metadata are available for this view. Check this job’s retained results and status for available outputs.
                                                 </p>
                                             </div>
                                         </div>
@@ -7887,6 +7899,7 @@ function ResultsViewerContent() {
                                     {/* DATA TABLE TAB */}
                                     {activeTab === 'table' && (
                                         <div className="p-4">
+                                            {isLoading && <p role="status">Loading matching results…</p>}
                                             {/* Backbone / Family Toggle Bar */}
                                             {reviewBackboneRows.length > 0 && backboneFilterApplies && (
                                                 <div className="mb-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">

@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ProjectMapNode, ProjectManagerReadModel } from '../../lib/projectManager';
 import { compactCountLabel, displayLabel } from './projectManagerState';
 
@@ -56,6 +56,19 @@ export function RelationshipMap({ summary, selectedNodeKey, onSelect, onLoadMore
     const groupedKeys = new Set([projectNode?.node_key, ...globalNodes.map((node) => node.node_key), ...domainNodes.map((node) => node.node_key)]);
     const evidenceNodes = summary.map.nodes.filter((node) => !groupedKeys.has(node.node_key));
     const hasSelectedTarget = index.has(selectedNodeKey);
+    const [revealedKey, setRevealedKey] = useState<string | null>(null);
+    const selected = summary.selection;
+    const canReveal = selected.node_key === selectedNodeKey && selected.node_type !== 'virtual_folder';
+    const focusedNode: ProjectMapNode | null = !hasSelectedTarget && canReveal && revealedKey === selectedNodeKey ? {
+        node_key: selected.node_key, node_type: selected.node_type, label: selected.title,
+        normalized_state: summary.tree.nodes.find(node => node.node_key === selectedNodeKey)?.lifecycle_state
+            ?? (typeof selected.summary.lifecycle_state === 'string' ? selected.summary.lifecycle_state : 'selected'),
+        canonical_identity: selected.canonical_identity, reconciliation: selected.reconciliation,
+        counts: {}, allowed_actions: [],
+    } : null;
+    useEffect(() => {
+        if (revealedKey === selectedNodeKey) viewportRef.current?.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
+    }, [revealedKey, selectedNodeKey]);
 
     const evidenceByDomain = new Map<string, ProjectMapNode[]>();
     for (const domain of domainNodes) {
@@ -87,6 +100,7 @@ export function RelationshipMap({ summary, selectedNodeKey, onSelect, onLoadMore
         </section>;
     };
     const fitToFocus = () => {
+        if (!hasSelectedTarget) setRevealedKey(selectedNodeKey);
         viewportRef.current?.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
     };
 
@@ -99,13 +113,17 @@ export function RelationshipMap({ summary, selectedNodeKey, onSelect, onLoadMore
                 </div>
                 <div className="flex items-center gap-2">
                     <span className="rounded-full border border-border-primary px-2 py-1 text-[10px] text-content-secondary">{summary.map.nodes.length} nodes</span>
-                    <button type="button" onClick={fitToFocus} disabled={!hasSelectedTarget} className="rounded-lg border border-border-primary bg-surface-tertiary px-3 py-1.5 text-xs font-medium text-content-secondary outline-none hover:text-content focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-50">Show selected item</button>
+                    <button type="button" onClick={fitToFocus} disabled={!hasSelectedTarget && !canReveal} className="rounded-lg border border-border-primary bg-surface-tertiary px-3 py-1.5 text-xs font-medium text-content-secondary outline-none hover:text-content focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-50">Show selected item</button>
                 </div>
             </header>
-            {!hasSelectedTarget && <p className="px-4 pt-3 text-xs text-content-muted">{selectedNodeKey.endsWith(':activity') ? 'Activity is shown in the records panel below.' : 'This selection has no card in the loaded map. See its records or inspector.'}</p>}
+            {!hasSelectedTarget && !focusedNode && <p className="px-4 pt-3 text-xs text-content-muted">{selectedNodeKey.endsWith(':activity') ? 'Activity is shown in the records panel below.' : 'This selection has no card in the loaded map. See its records or inspector.'}</p>}
             <div ref={viewportRef} className="relative min-w-0 p-3 sm:p-5" tabIndex={0}>
 
                 <div className="relative mx-auto flex min-w-0 w-full max-w-5xl flex-col gap-5">
+                    {focusedNode && <section aria-label="Selected item outside map page" className="rounded-xl border border-accent p-3">
+                        <p className="mb-2 text-xs text-content-muted">Selected record · outside this bounded map page</p>
+                        <MapNodeButton node={focusedNode} selected onSelect={onSelect} />
+                    </section>}
                     {projectNode && (
                         <div className="mx-auto w-[min(100%,30rem)]">
                             <MapNodeButton node={projectNode} selected={selectedNodeKey === projectNode.node_key} onSelect={onSelect} region="project" />

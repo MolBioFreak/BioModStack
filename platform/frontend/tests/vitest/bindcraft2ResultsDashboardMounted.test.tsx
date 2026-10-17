@@ -8,7 +8,7 @@ import { BindCraft2JobResults } from '../../src/components/BindCraft2JobResults'
 import { CohortAnalytics } from '../../src/components/CohortAnalytics';
 import { StructureWorkbench } from '../../src/structureViewer/StructureWorkbench';
 import { api } from '../../src/lib/api';
-import { bc2Record, csvNumber } from '../../src/lib/bindcraft2Results';
+import { bc2Label, bc2Record, bc2SourceRecord, csvNumber } from '../../src/lib/bindcraft2Results';
 
 vi.mock('react-plotly.js', () => ({ default: () => <div data-plot-renderer /> }));
 vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: (props: any) => <div data-structure-url={props.structureUrl} /> }));
@@ -181,6 +181,33 @@ it('scored candidates default to populated confidence and an immediately visible
     expect(tree.root.findByType(StructureWorkbench).props.structureUrl).toBe('/exact/complex.cif');
     expect(control('Published document').props.value).toBe('1');
     expect(tree.root.findByProps({ 'aria-label': 'Use native document complex' }).props.checked).toBe(false);
+});
+
+it('names exact document rows without borrowing another producer identity or missing metrics', async () => {
+    const producer = 'design_l3_nativehash_candidate2';
+    const nativeRow = { stage: 'draw', design: producer, trajectory_design: 'design_l3_nativehash', sequence: 'AAA', values: { length: '3' } };
+    const doc = { artifact_id: 'complex', binder_chains: 'B', target_chains: 'A', logical_path: 'complex.cif', download_url: '/exact/complex.cif', native_rows: [nativeRow] };
+    const rows: any[] = [{ stage: 'document', path: '2_Refolded/Complexes/complex.cif', producer_design: producer, structures: [doc] },
+        { stage: 'document', path: '2_Refolded/BinderMonomer/monomer.cif', producer_design: producer, structures: [{ ...doc, artifact_id: 'monomer', binder_chains: 'A', target_chains: null, download_url: '/exact/monomer.cif' }] },
+        { stage: 'document', path: '3_Ranked/retained.cif', producer_design: 'design_l3_nativehash_seq0', structures: [{ ...doc, native_rows: [{ ...nativeRow, stage: 'retained', design: 'design_l3_nativehash_seq0', scored_design: producer }] }] },
+        { design: 'design_l3_nativehash', stage: 'trajectory', values: { trajectory: '61', length: '3' } }];
+    await mount(rows); await click('Candidates');
+    const contents = tableRows().map(row => text(row));
+    expect(contents[0]).toContain('Design 61 · Variant 2 · 3 aa · Binder–target complex');
+    expect(contents[1]).toContain('Design 61 · Variant 2 · 3 aa · Binder only');
+    expect(contents[2]).toContain('Design 61 · Variant 2 · 3 aa · Binder–target complex · Retained');
+    expect(text(control('Candidate data table').findByType('thead'))).not.toMatch(/Duration|Terminated|Outcome|Rank|Sequence length/);
+    expect(text(control('Candidate data table').findByType('tbody'))).not.toContain('Not reported');
+    // The operator can still expose a native column explicitly.
+    await change('Column rank', true);
+    expect(text(control('Candidate data table').findByType('thead'))).toContain('Rank');
+    const mismatched = bc2Record({ ...rows[0], producer_design: 'design_l3_nativehash_candidate8' }, { arm: null, stage: 'document' });
+    expect(bc2Label(mismatched, { design_l3_nativehash: 'Design 61' })).toBe('Design 61 · Variant 8 · Binder–target complex');
+    expect(bc2SourceRecord(bc2Record(rows[0], { arm: null, stage: 'document' }))).toEqual(nativeRow);
+    expect(bc2SourceRecord(mismatched)).toBe(mismatched.native_record);
+    const unbound = bc2Record({ path: '1_Trajectories/native_forced_targeting.pdb', producer_design: null, structures: [] }, { arm: null, stage: 'document' });
+    expect(bc2Label(unbound)).toBe('native_forced_targeting.pdb');
+    expect(bc2SourceRecord(unbound).design).toBeUndefined();
 });
 
 it('native arm and stage remain distinct transport and selection scopes', async () => {

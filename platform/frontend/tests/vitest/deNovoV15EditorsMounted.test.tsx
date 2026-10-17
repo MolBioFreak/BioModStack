@@ -346,6 +346,8 @@ it.each(['native', 'validated'] as const)('selected %s Redesign submits retained
     const posts = await selectedTransport(); const changed = vi.fn();
     const prepared = await prepareDeNovoContinuation(source, 'redesign');
     await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={{ ...prepared, execution_depth: depth,
+        // This fixture has no declared producer roles; the operator chooses A.
+        design_chains: 'A', context_chains: [],
         redesign_ranges: 'A1', select_unfixed_sequence: 'A1', seq_method: 'mpnn', pinned_gpu: 0,
         seed: 0, partial_t: 0, dump_trajectories: false, interactive_gating: false, region_padding: 0,
         fix_fixed_sidechains: false, seqs_per_design: 2 }} onDraftChange={changed} />);
@@ -379,6 +381,15 @@ it.each(['native', 'validated'] as const)('selected %s Redesign submits retained
     expect(request.execution_plan_approval).toBe('a'.repeat(64));
     await click('Local'); await flush(); await click(launch); await flush();
     expect(posts.filter(p => p.url === '/api/jobs').at(-1)?.body.execution_target_id).toBeNull();
+});
+
+it.each([[null], [''], [[]]])('exact Redesign preserves an explicit cleared design role (%j) instead of selecting the first chain', async cleared => {
+    await selectedTransport(); const changed = vi.fn();
+    const prepared = await prepareDeNovoContinuation(source, 'redesign');
+    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={{ ...prepared, design_chains: cleared, context_chains: [] }} onDraftChange={changed} />);
+    await waitForViewer();
+    expect(changed.mock.lastCall![0].design_chains).toEqual([]);
+    expect(changed.mock.lastCall![0].context_chains).toEqual([]);
 });
 
 it('Redesign clear ignores a late selected-source read and replacement drops old ancestry', async () => {

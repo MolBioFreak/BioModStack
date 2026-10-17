@@ -3070,11 +3070,11 @@ export default function StructureViewerPane({
                     <div
                         className={isFullscreen
                             ? 'prediction-fullscreen-canvas relative'
-                            : 'relative rounded-lg border border-slate-700'
+                            : 'prediction-embedded-canvas relative rounded-lg border border-slate-700'
                         }
                         style={isFullscreen
                             ? viewportWidth < 700 ? {height: metricWorkbenchOpen ? '1320px' : '820px', flex: '0 0 auto'} : undefined
-                            : { height: confidenceCompanion ? (viewportWidth < 700 ? (metricWorkbenchOpen ? '1320px' : '820px') : 'clamp(560px, 72vh, 800px)') : viewerLayout.viewerHeight }}
+                            : { minHeight: confidenceCompanion ? (viewportWidth < 700 ? (metricWorkbenchOpen ? '1320px' : '820px') : 'clamp(560px, 72vh, 800px)') : viewerLayout.viewerHeight }}
                     >
                         {awaitingGovernedWorkbenchIdentity ? (
                             <div className="flex h-full items-center justify-center text-sm text-slate-400">Preparing governed structure resources…</div>

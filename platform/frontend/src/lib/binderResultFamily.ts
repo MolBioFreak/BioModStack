@@ -128,7 +128,7 @@ export function buildProjectCandidateData(sources: CandidateSource[], jobs: Job[
         for (const job of jobs) {
             if (job.id === source.id) continue;
             const nativeId = identity(job), draw = drawById.get(nativeId);
-            if (!draw) continue;
+            if (!nativeId || !draw) continue;
             const binder = text(draw.sequence) || text(object(draw.values).Binder_Sequence);
             const key = JSON.stringify([source.id, nativeId]);
             let candidate = candidates.get(key);

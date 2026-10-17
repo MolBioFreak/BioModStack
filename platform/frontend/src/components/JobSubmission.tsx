@@ -1,4 +1,5 @@
-import { prepareDeNovoContinuation, nativeSequenceInput, sequenceDestinations, type DeNovoDestination } from '../lib/deNovoContinuation';
+import { prepareDeNovoContinuation, continuationRoleDefaults, nativeSequenceInput, sequenceDestinations, type DeNovoDestination } from '../lib/deNovoContinuation';
+import { sourceResultReturn } from '../lib/sourceResultReturn';
 import { materializeExactStructure, type StructureSourceSelection } from '../lib/api';
 import { launcherWorkflowTemplates, launcherExperimentalTemplates, visibleLauncherTemplates } from '../lib/launcherCatalog';
 
@@ -288,9 +289,12 @@ export function JobSubmission() {
     useEffect(() => {
         if (!continuationQuery.data || appliedContinuation.current === continuationKey || (projectSetup.active && (!projectSetup.setup || projectSetup.settings.sequence_continuation))) return;
         appliedContinuation.current = continuationKey;
-        const values = continuationDestination === 'sequence'
+        const preparedValues = continuationDestination === 'sequence'
             ? { sequence_continuation: true, ...continuationQuery.data, ...nativeSequenceInput(selectedModelId || 'proteinmpnn', continuationQuery.data._source_prepared, continuationQuery.data._source_native_prepared) }
             : continuationQuery.data;
+        // Saved setup fields (including explicit empty roles) are authored values,
+        // not missing defaults. Acquisition must not overwrite them on a cold load.
+        const values = projectSetup.active ? { ...preparedValues, ...projectSetup.settings } : preparedValues;
         setClonedValues(values); setParams(values);
         setDedicatedTemplateVersion(version => version + 1);
     }, [continuationQuery.data, continuationKey, projectSetup.active, projectSetup.setup]);
@@ -420,7 +424,7 @@ export function JobSubmission() {
     // Dedicated templates should not retain stale clone params once user navigates away.
     const handleDedicatedTemplateBack = () => {
         const returnTo = searchParams.get('return_to');
-        if (continuationSource && returnTo?.startsWith('/') && !returnTo.startsWith('//')) { navigate(returnTo); return; }
+        if (sourceResultReturn(returnTo)) { navigate(returnTo!); return; }
         if (selectedTemplateId === 'antibody_denovo') setBinderInitialDraft(binderDraftRef.current);
         setSelectedTemplateId(null);
         setClonedValues(undefined);
@@ -1043,6 +1047,7 @@ export function JobSubmission() {
         const next = binderNativeDrafts.current[`${model}:${mode}`] || {
             sequence_continuation: true, source_structure: params.source_structure,
             _source_prepared: params._source_prepared, _source_native_prepared: params._source_native_prepared,
+            ...(params._source_native_prepared ? continuationRoleDefaults(params._source_native_prepared, 'sequence') : {}),
             ...(params._source_prepared ? nativeSequenceInput(model, params._source_prepared, params._source_native_prepared) : {}),
         };
         setClonedValues(next); setParams(next); setSelectedModelId(model); setSelectedModeId(mode);
@@ -1621,7 +1626,7 @@ export function JobSubmission() {
     return (
         <Suspense fallback={<p role="status">Loading selected editor…</p>}>
         <div className="min-h-screen bg-slate-950 p-6">
-            {continuationSource && <button type="button" onClick={handleDedicatedTemplateBack} className="mb-3 rounded-lg border border-slate-600 px-3 py-2 text-sm">Back to selected result</button>}
+            {sourceResultReturn(searchParams.get('return_to')) && <button type="button" onClick={handleDedicatedTemplateBack} className="mb-3 rounded-lg border border-slate-600 px-3 py-2 text-sm">Back to selected result</button>}
             {isSequenceContinuation && <label className="block p-4 text-sm">Sequence design model
                 <select aria-label="Sequence design model" value={`${selectedModelId}:${selectedModeId}`} onChange={event => {
                     const [model, mode] = event.target.value.split(':');

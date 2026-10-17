@@ -10,6 +10,25 @@ import test from 'node:test';
 const chrome = process.env.BMS_CHROME_BINARY ?? 'google-chrome';
 const available = spawnSync(chrome, ['--version']).status === 0;
 const css = readFileSync(resolve('node_modules/molstar/build/viewer/molstar.css'), 'utf8') + '\n' + readFileSync(resolve('src/structureViewer/structureViewer.css'), 'utf8');
+const predictionCss = readFileSync(resolve('src/components/StructurePredictionResults.css'), 'utf8');
+for (const width of [430, 900, 1440]) {
+    test(`growing metric workspace reserves sibling chart flow at ${width}px`, { skip: !available }, () => {
+        const dir = mkdtempSync(join(tmpdir(), 'bms-viewer-flow-'));
+        try {
+            const path = join(dir, 'fixture.html');
+            writeFileSync(path, `<!doctype html><style>${css}\n${predictionCss}</style>
+<style>body{margin:0}.prediction-embedded-canvas{position:relative}.adapter{position:relative;height:100%;min-height:540px}.bms-structure-workspace{position:relative}.msp-plugin{position:absolute;inset:0}.bms-structure-workbench{height:1280px}button{height:40px;width:220px}</style>
+<div class="prediction-embedded-canvas" style="min-height:720px"><div class="bms-structure-workspace" style="height:100%"><div class="bms-structure-workspace-layout" data-workbench-visible="true"><div class="bms-structure-canvas"><div class="adapter" data-bms-molstar-adapter><div class="msp-plugin"><div class="msp-layout-standard msp-layout-standard-reactive"><div class="msp-layout-collapse-left"><div class="msp-layout-main msp-layout-region"></div></div></div></div></div></div><aside class="bms-structure-workbench">Metrics and exact atom form</aside></div></div></div>
+<section class="prediction-companion"><button id="charts">Companion charts</button><div style="height:400px">Chart owner</div></section><pre id="result"></pre>
+<script>const rect=s=>document.querySelector(s).getBoundingClientRect().toJSON();document.querySelector('#charts').scrollIntoView();const b=rect('#charts');document.querySelector('#result').textContent=JSON.stringify({host:rect('.prediction-embedded-canvas'),workspace:rect('.bms-structure-workspace'),charts:rect('.prediction-companion'),hit:document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)?.id});</script>`);
+            const html = execFileSync(chrome, ['--headless', '--no-sandbox', '--disable-gpu', '--no-proxy-server', `--user-data-dir=${join(dir, 'profile')}`, `--window-size=${width},1100`, '--dump-dom', `file://${path}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30000 });
+            const geometry = JSON.parse(html.match(/<pre id="result">([^<]+)<\/pre>/)![1]);
+            assert.ok(geometry.host.bottom >= geometry.workspace.bottom, JSON.stringify(geometry));
+            assert.ok(geometry.charts.top >= geometry.workspace.bottom, JSON.stringify(geometry));
+            assert.equal(geometry.hit, 'charts');
+        } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+}
 for (const [viewport, panel, hidden] of [[430, 355, false], [1600, 620, false], [1600, 1000, false], [430, 355, true]] as const) {
     test(`embedded native regions: viewport ${viewport}, panel ${panel}, controls hidden ${hidden}`, { skip: !available }, () => {
         const dir = mkdtempSync(join(tmpdir(), 'bms-viewer-layout-'));

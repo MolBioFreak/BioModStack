@@ -286,6 +286,6 @@ test('structure viewer source wires the responsive stacked analytics layout', ()
     assert.match(source, /resolveStructureViewerLayout/);
     assert.match(source, /data-structure-viewer-layout=/);
     assert.match(source, /data-structure-viewer-analytics-layout=/);
-    assert.match(source, /renderViewerToolbar\(isFullscreen \|\| viewerLayout\.isStacked\)/);
+    assert.match(source, /renderViewerToolbar\(confidenceCompanion \|\| isFullscreen \|\| viewerLayout\.isStacked\)/);
     assert.match(source, /renderSectionButtons\(viewerLayout\.isStacked\)/);
 });

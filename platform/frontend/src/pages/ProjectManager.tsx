@@ -489,7 +489,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             if (!globalExperimentId || !domainExperimentId) {
                 throw new Error('The selected surface has no validated Domain Experiment launch context.');
             }
-            const returnQuery = new URLSearchParams();
+            const returnQuery = new URLSearchParams(searchParams);
             returnQuery.set('focus', globalExperimentId);
             returnQuery.set('selected', summary.selection.node_key);
             const returnUri = `/projects/${encodeURIComponent(projectId)}?${returnQuery.toString()}`;
@@ -845,7 +845,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             : 'grid-cols-1';
 
     return (
-        <div className="relative flex h-full min-h-[calc(100vh-4rem)] flex-col overflow-hidden bg-surface" data-project-manager="true">
+        <div className="relative flex min-h-full flex-col bg-surface md:h-full md:min-h-[calc(100vh-4rem)] md:overflow-hidden" data-project-manager="true">
             <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border-primary bg-surface-secondary px-3 py-2 sm:px-4">
                 <div className="flex min-w-0 items-center gap-3">
                     <Link to="/projects" className="rounded-lg border border-border-primary px-2.5 py-2 text-xs text-content-secondary outline-none hover:text-content focus:ring-2 focus:ring-accent">All Projects</Link>
@@ -901,17 +901,22 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     <div ref={overlay === 'tree' ? drawerRef : undefined} role={overlay === 'tree' ? 'dialog' : undefined} aria-modal={overlay === 'tree' || undefined} aria-label={overlay === 'tree' ? 'Project tree drawer' : undefined} className="fixed inset-y-0 left-0 z-[70] w-[min(88vw,25rem)] shadow-2xl md:static md:z-auto md:w-auto md:shadow-none">
                         <ProjectTree
                             nodes={summary.tree.nodes}
+                            mapNodes={summary.map.nodes}
                             selectedNodeKey={selectedNodeKey ?? summary.selection.node_key}
                             onSelect={(nodeKey) => {
                                 const node = summary.tree.nodes.find((item) => item.node_key === nodeKey);
                                 if (node) setSelection(node.node_key, node.node_type, node.subject_id);
+                                else {
+                                    const record = summary.map.nodes.find((item) => item.node_key === nodeKey);
+                                    if (record) setSelection(record.node_key, record.node_type, typeof record.canonical_identity.entity_id === 'string' ? record.canonical_identity.entity_id : null);
+                                }
                             }}
                             onClose={() => setTreeOpen(false)}
                         />
                     </div>
                 )}
                 {projectTreeVisible && <div role="separator" aria-orientation="vertical" aria-label="Resize Project tree" tabIndex={0} onPointerDown={(event) => startRailResize('tree', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setTreeWidth((value) => Math.max(208, value - 16)); if (event.key === 'ArrowRight') setTreeWidth((value) => Math.min(400, value + 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent md:block" />}
-                <main className="flex min-h-0 min-w-0 flex-col overflow-y-auto">
+                <main className="flex min-h-0 min-w-0 flex-col md:overflow-y-auto">
                     <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} />
                     {loadingCandidateOverview && <p role="status" className="p-6 text-sm text-content-secondary">Loading candidate sources and validation results… <button type="button" onClick={() => switchProjectView('records')} className="text-accent underline">Open records now</button></p>}
                     {showCandidates && candidates.data && <ProjectCandidateOverview data={candidates.data} onOpenRecords={() => switchProjectView('records')} />}

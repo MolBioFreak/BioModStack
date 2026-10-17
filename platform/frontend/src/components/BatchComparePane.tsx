@@ -24,7 +24,7 @@ export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeM
     const setSelectedJobIds = (ids: string[]) => { setLocalIds(ids); onJobIdsChange?.(ids); };
 
     // Fetch all jobs for the selector
-    const { data: jobsData } = useQuery({
+    const { data: jobsData, isPending: jobsPending, isError: jobsError } = useQuery({
         queryKey: ['jobs', 'comparison', nativeMetrics],
         queryFn: ({ signal }) => fetchJobs({ limit: 500, summary: true, include_children: nativeMetrics }, undefined, signal),
     });
@@ -86,7 +86,9 @@ export function BatchComparePane({ initialJobId, jobIds, onJobIdsChange, nativeM
                     <p className="text-xs text-slate-500 mt-1">Select multiple jobs to compare</p>
                 </div>
                 <div className="flex-1 overflow-y-auto p-2">
-                    {jobs.length === 0 ? (
+                    {jobsPending && jobs.length === 0 ? <p role="status" className="p-3 text-sm text-slate-500">Loading comparison jobs…</p>
+                        : jobsError && jobs.length === 0 ? <p role="alert" className="p-3 text-sm text-slate-500">Comparison jobs could not be loaded.</p>
+                        : jobs.length === 0 ? (
                         <div className="p-3 text-sm text-slate-500">
                             No protein workflow jobs available for comparison.
                         </div>

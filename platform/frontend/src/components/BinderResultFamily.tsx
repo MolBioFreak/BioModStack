@@ -48,13 +48,11 @@ export function BinderResultFamily({ jobId, launchContextId, onOpenJob, onCompar
         const attempts = [...(result?.candidates[0]?.attempts ?? [])].sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? '') || a.id.localeCompare(b.id));
         const failed = attempts.filter(run => run.status === 'failed' || run.status === 'cancelled');
         const completed = attempts.filter(run => !failed.includes(run));
-        const returnTo = `${window.location.pathname}${window.location.search}`;
+        const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
         const resultLink = (run: typeof attempts[number], index: number, list: typeof attempts) => {
             const url = new URL(run.href, window.location.origin);
-            if (run.status === 'completed') {
-                url.searchParams.set('return_to', returnTo);
-                url.searchParams.set('return_label', candidateLabel ?? 'BC2 candidate');
-            }
+            url.searchParams.set('return_to', returnTo);
+            url.searchParams.set('return_label', candidateLabel ?? 'BC2 candidate');
             const repeated = list.filter(item => item.label === run.label && item.model === run.model).length > 1;
             return <li key={run.id} className="border-t border-[var(--border-color)] py-3">
                 <a href={`${url.pathname}${url.search}`} className="text-accent hover:underline" title={jobs.find(job => job.id === run.id)?.name}>

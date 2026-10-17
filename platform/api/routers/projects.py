@@ -1321,7 +1321,7 @@ async def upgrade_global_experiment_route(
     try:
         actor = _mutation_principal(request)
         await _require_mutation_owner(request, session, resource_id=project_id)
-        head = await _global_experiment(session, experiment_id, project_id)
+        head = await _global_experiment(session, project_id, experiment_id)
         current = await _payload(session, head)
         if current.get("schema") != "bms.global-experiment.v1":
             raise HTTPException(status_code=409, detail={"code": "global_experiment_contract_upgrade_not_required", "message": "Global Experiment already uses the v2 contract"})
@@ -1341,7 +1341,7 @@ async def upgrade_global_experiment_route(
             lifecycle_operation="experiment_contract_upgrade",
         )
         await session.commit()
-        return await _head_json(session, await _global_experiment(session, experiment_id, project_id), exposed_kind="global_experiment", storage_kind="global_experiment")
+        return await _head_json(session, await _global_experiment(session, project_id, experiment_id), exposed_kind="global_experiment", storage_kind="global_experiment")
     except ExperimentServiceError as exc:
         await session.rollback()
         raise _error(exc) from exc

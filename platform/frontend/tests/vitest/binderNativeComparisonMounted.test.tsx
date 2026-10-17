@@ -8,6 +8,7 @@ import { BinderResultComparison } from '../../src/components/BinderResultCompari
 import { readNativeComparison, nativeComparisonSelection, nativeComparisonValues, nativeComparisonKey } from '../../src/lib/nativeBinderComparison';
 import { api, downloadDesignPdb } from '../../src/lib/api';
 import { DesignComparePane } from '../../src/components/DesignComparePane';
+import { BatchComparePane } from '../../src/components/BatchComparePane';
 import { parseScientificNativeMetric } from '../../src/lib/scientificViewerIdentity';
 import { esmfold2Fixture } from '../fixtures/scientificViewerEsmfold2Fixture';
 vi.mock('react-plotly.js', () => ({ default: (props: any) => <div data-comparison-plot data-traces={JSON.stringify(props.data)} /> }));
@@ -116,6 +117,44 @@ it('keeps comparison demand-loaded and passes native selection and nonrecursive 
 });
 
 // Shared native wire-shaped fixtures only; no model inference or measured biology.
+it('does not report an empty Runs population while the selector is pending or failed', async () => {
+    let reject!: (reason: Error) => void;
+    api.defaults.adapter = config => new Promise((_resolve, fail) => { reject = fail; });
+    await mount(<BatchComparePane nativeMetrics jobIds={[]} />);
+    expect(text(renderer!.root)).toContain('Loading comparison jobs');
+    expect(text(renderer!.root)).not.toContain('No protein workflow jobs');
+    await act(async () => reject(Error('read unavailable'))); await flush();
+    expect(text(renderer!.root)).toContain('Comparison jobs could not be loaded');
+    expect(text(renderer!.root)).not.toContain('No protein workflow jobs');
+});
+it('keeps same-name Jobs and exact candidate IDs separate through multi-Job selection and cold remount', async () => {
+    const base = api.defaults.adapter as any;
+    api.defaults.adapter = async config => {
+        if (config.url === '/api/jobs') return { config, status: 200, statusText: 'OK', headers: {}, data: { jobs: ['a', 'b'].map(id => ({ ...job(id), name: 'Same name' })), total: 2 } };
+        if (String(config.url).includes('/api/analytics/batch')) return { config, status: 200, statusText: 'OK', headers: {}, data: { job_ids: ['a', 'b'], metrics_summary: {}, scientific_cohorts: [] } };
+        return base(config);
+    };
+    await mount(<BinderResultComparison jobId="a" jobIds={['a', 'b']} selectedDesignIds={['a-design-0', 'b-design-0']} candidateDocuments={{ 'a-design-0': { artifact_id: 'a-ranked-0' }, 'b-design-0': { artifact_id: 'b-ranked-0' } }} />);
+    const click = async (label: string) => { await act(async () => renderer!.root.findAllByType('button').find(node => text(node) === label)!.props.onClick()); await flush(); };
+    await click('Compare result sets');
+    const boxes = renderer!.root.findAllByType('input').filter(node => node.props.type === 'checkbox');
+    expect(boxes.filter(node => node.props.checked)).toHaveLength(2);
+    await click('Runs');
+    const runs = renderer!.root.findAllByType('button').filter(node => text(node).includes('Same name'));
+    expect(runs).toHaveLength(2); expect(runs.every(node => node.props['aria-pressed'])).toBe(true);
+    expect(new Set(calls.map(call => call.job))).toEqual(new Set(['a', 'b']));
+    const rows = renderer!.root.findByType(NativeBinderComparison).findAllByType('tr').slice(1);
+    expect(rows).toHaveLength(2);
+    await click('Candidates');
+    const selected = renderer!.root.findAllByType('input').filter(node => node.props.type === 'checkbox' && node.props.checked);
+    await act(async () => selected[0].props.onChange()); await flush();
+    expect(renderer!.root.findByType(DesignComparePane).props.selectedDesignIds).toEqual(['b-design-0']);
+    await act(async () => renderer!.unmount()); renderer = undefined; client!.clear();
+    await mount(<BinderResultComparison jobId="a" />); await click('Compare result sets');
+    expect(renderer!.root.findByType(DesignComparePane).props.selectedDesignIds).toEqual(['b-design-0']);
+    expect(renderer!.root.findByType(DesignComparePane).props.candidateDocuments['b-design-0']).toEqual({ artifact_id: 'b-ranked-0' });
+    expect(apiCalls.filter(call => call.url === '/api/designs').every(call => call.params.include_children === false)).toBe(true);
+});
 const nativeSource = { job_id: 'a', artifact_id: 'native-qa' };
 function profileWire(id: string, artifact: string, native = false) {
     const value: any = esmfold2Fixture(id).confidence;

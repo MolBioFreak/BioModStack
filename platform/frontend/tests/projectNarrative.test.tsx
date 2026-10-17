@@ -31,6 +31,30 @@ test('unsupported links and HTML remain literal, not executable or external navi
     assert.equal(doc.body.textContent, text);
 });
 
+test('PM native Job narrative preserves the current notes and filters as navigation return', () => {
+    const returnTo = '/projects/p?focus=g&selected=virtual_folder%3Ad%3Anotes&view=records&candidate_search=e8db269a';
+    const doc = new JSDOM(renderToStaticMarkup(<MemoryRouter initialEntries={[returnTo]}><ProjectNarrative text="[Failed attempt](/jobs/failed)" /></MemoryRouter>)).window.document;
+    const link = new URL(doc.querySelector('a')!.getAttribute('href')!, 'https://bms.local');
+    assert.equal(link.pathname, '/jobs/failed');
+    assert.equal(link.searchParams.get('return_to'), returnTo);
+    assert.equal(link.searchParams.get('return_label'), 'Return to Project');
+});
+
+test('PM narrative results keep exact owner scope unless the note explicitly requests children', () => {
+    const returnTo = '/projects/p?focus=g&selected=virtual_folder%3Ad%3Anotes&view=records';
+    for (const [href, expected] of [['/designs/monomer?design_id=sample&artifact_id=exact#structure', 'false'], ['/designs/workflow?include_children=true', 'true']]) {
+        const doc = new JSDOM(renderToStaticMarkup(<MemoryRouter initialEntries={[returnTo]}><ProjectNarrative text={`[Result](${href})`} /></MemoryRouter>)).window.document;
+        const link = new URL(doc.querySelector('a')!.getAttribute('href')!, 'https://bms.local');
+        assert.equal(link.searchParams.get('include_children'), expected);
+        assert.equal(link.searchParams.get('return_to'), returnTo);
+        if (expected === 'false') {
+            assert.equal(link.searchParams.get('design_id'), 'sample');
+            assert.equal(link.searchParams.get('artifact_id'), 'exact');
+            assert.equal(link.hash, '#structure');
+        }
+    }
+});
+
 test('plain existing notes and incomplete link syntax remain unchanged', () => {
     const text = 'Original note\n42 candidates; [not a complete link](/designs/';
     const doc = narrative(text);

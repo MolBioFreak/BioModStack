@@ -160,7 +160,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
             && (ref.target_state == null || doc.target_state === ref.target_state));
     };
     const selection = Array.from(new Set([...(selectedRecordIds ?? nativeSelected).filter(id => !rows.some(item => selectionId(item) === id && item.candidate_ref)), ...rows.filter(item => (item.design_id && selectedDesignIds.includes(item.design_id)) || savedRefs.some(ref => matchesRef(item, ref)) || nativeSources.some(source => source.job_id === jobId && item.structures?.some(doc => doc.artifact_id === source.artifact_id))).map(selectionId)]));
-    const tableKeys = columns ?? (preferred.length ? preferred : keys.slice(0, 6));
+    const tableKeys = columns ?? (preferred.length || adapter?.preferredColumns !== undefined ? preferred : keys.slice(0, 6));
     const byId = useMemo(() => new Map(cohort.map((entry, index) => [entry.id, rows[index]])), [cohort, rows]);
     const selectedSet = useMemo(() => new Set(selection), [selection]);
     const selectedCohortIds = useMemo(() => cohort.filter(entry => { const item = byId.get(entry.id); const id = item && selectionId(item); return id && selectedSet.has(id); }).map(entry => entry.id), [cohort, byId, selectedSet]);

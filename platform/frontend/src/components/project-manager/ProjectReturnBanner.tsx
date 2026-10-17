@@ -1,6 +1,6 @@
 import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { getLaunchContext, getProjectResultContext, verifiedProjectReturnUri } from '../../lib/projectManager';
+import { getLaunchContext, getProjectResultContext, verifiedProjectReturnUri, safeProjectNavigationReturn } from '../../lib/projectManager';
 import { parseFrustraMpnnExperimentContext } from '../frustrampnn/workflowResultViewState';
 
 export function ProjectReturnBanner() {
@@ -30,7 +30,14 @@ export function ProjectReturnBanner() {
     });
     const context = launchContextId ? launchQuery.data : resultQuery.data;
     const returnUri = context ? verifiedProjectReturnUri(context) : null;
-    if (!returnUri || !context) return null;
+    // PM Work and narrative links are navigation, not launch-context issuance.
+    // ResultsViewer owns /designs return_to; this Layout banner owns /projects.
+    const navigationReturn = safeProjectNavigationReturn(searchParams.get('return_to'));
+    if (!returnUri || !context) return navigationReturn ? (
+        <aside className="border-b border-accent/30 bg-accent/10 px-4 py-2" aria-label="Project return navigation">
+            <Link to={navigationReturn} aria-label="Return to Project context" className="text-sm font-semibold text-accent">Return to Project</Link>
+        </aside>
+    ) : null;
 
     return (
         <aside className="border-b border-accent/30 bg-accent/10 px-4 py-2 text-content" aria-label="Project return context">

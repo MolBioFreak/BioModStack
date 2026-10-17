@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     archiveDomainExperiment,
     archiveGlobalExperiment,
@@ -246,6 +246,7 @@ interface ManagerDialogProps {
 }
 
 export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }: ManagerDialogProps) {
+    const queryClient = useQueryClient();
     const selection = summary?.selection;
     const selectionId = typeof selection?.canonical_identity.entity_id === 'string' ? selection.canonical_identity.entity_id : null;
     const selectedGlobalId = summary && selection ? globalExperimentForNode(summary, selection.node_key) : null;
@@ -653,7 +654,10 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
             }
             throw new Error('This Project Manager operation is unavailable for the current selection.');
         },
-        onSuccess: (result) => {
+        onSuccess: async (result) => {
+            // The summary and the editor retain separate queries. Refresh the
+            // existing detail owner before reopening with a new aggregate head.
+            if (projectId) await queryClient.invalidateQueries({ queryKey: ['project-manager', 'hierarchy-detail', projectId] });
             if (mode === 'create_project' && 'id' in result && typeof result.id === 'string') {
                 onComplete({ projectId: result.id });
             } else if (mode === 'create_global' && 'id' in result && typeof result.id === 'string') {

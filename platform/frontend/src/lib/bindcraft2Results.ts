@@ -1,5 +1,5 @@
 import type { BindCraft2NativePage, BindCraft2Stage } from '../components/BindCraft2NativeResults';
-import { uniqueBinderComplex, type NativeGenerationPage, type NativeGenerationRecord } from './nativeBinderResults';
+import { nativeDocumentLabel, uniqueBinderComplex, type NativeGenerationPage, type NativeGenerationRecord } from './nativeBinderResults';
 
 export const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 // Native CSV scalar decoding only. Empty cells are missing, never zero. JSON evidence is unchanged.
@@ -84,14 +84,32 @@ export async function fetchBC2TrajectoryNames(jobId: string, arm: string | null,
     }
     return names;
 }
+/** Reuse only the document's explicit producer-row association. */
+export function bc2SourceRecord(row: NativeGenerationRecord): Record<string, unknown> {
+    const native = object(row.native_record);
+    if (typeof native.path !== 'string' || !native.producer_design) return native;
+    const linked = (row.structures ?? []).flatMap(item => {
+        const records = object(item).native_rows;
+        return Array.isArray(records) ? records.map(object).filter(record => record.design === native.producer_design) : [];
+    });
+    return linked.length === 1 ? linked[0] : native;
+}
 export function bc2Label(row: NativeGenerationRecord, names: Record<string, string> = {}): string {
-    const native = object(row.native_record), values = object(native.values);
-    const design = String(native.scored_design ?? native.design ?? '');
-    const family = String(native.trajectory_design ?? design.replace(/_(?:candidate|seq)\d+$/, ''));
+    const native = object(row.native_record);
+    const document = typeof native.path === 'string' && 'producer_design' in native;
+    const source = bc2SourceRecord(row);
+    const values = object(source.values);
+    const design = String(source.scored_design ?? source.design ?? native.producer_design ?? '');
+    const family = String(source.trajectory_design ?? design.replace(/_(?:candidate|seq)\d+$/, ''));
     const variant = /_candidate(\d+)$/.exec(design)?.[1];
-    const name = names[family] ?? (values.trajectory ? `Design ${values.trajectory}` : 'Candidate');
-    const length = csvNumber(values.length) ?? (typeof native.sequence === 'string' ? native.sequence.length : undefined);
-    return [name, variant ? `Variant ${variant}` : undefined, length ? `${length} aa` : undefined].filter(Boolean).join(' · ');
+    const name = names[family] ?? (values.trajectory ? `Design ${values.trajectory}` : document ? String(native.path).split('/').at(-1) : 'Candidate');
+    const length = csvNumber(values.length) ?? (typeof source.sequence === 'string' ? source.sequence.length : undefined);
+    return [name, variant ? `Variant ${variant}` : undefined, length ? `${length} aa` : undefined,
+        document && row.structures?.[0] ? nativeDocumentLabel(row.structures[0]) : undefined,
+        document && source.stage === 'trajectory' ? 'Backbone' : undefined,
+        document && source.stage === 'retained' ? 'Retained' : undefined,
+        document ? native.target_state : undefined,
+    ].filter(Boolean).join(' · ');
 }
 export interface BC2TracePage {
     design: string; arm: string | null; offset: number; limit: number; total: number;
