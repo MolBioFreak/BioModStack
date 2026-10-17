@@ -34,7 +34,7 @@ function MapNodeButton({ node, selected, onSelect, region }: {
             <span className="flex items-start justify-between gap-3">
                 <span className="min-w-0">
                     <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-content-muted">{displayLabel(node.node_type)}</span>
-                    <span className="mt-1 block truncate text-sm font-semibold text-content">{node.label}</span>
+                    <span className="mt-1 block break-words text-sm font-semibold text-content">{node.label}</span>
                 </span>
                 <span className="shrink-0 rounded-full border border-border-primary px-2 py-0.5 text-[10px] text-content-secondary">{displayLabel(node.normalized_state)}</span>
             </span>
@@ -82,7 +82,7 @@ export function RelationshipMap({ summary, selectedNodeKey, onSelect, onLoadMore
                     <h3 className="mb-2 text-xs font-semibold text-content-secondary">{group.label} · {group.items.length}</h3>
                     <div className="space-y-1">{group.items.map((record) => <MapNodeButton key={record.node_key} node={record} selected={selectedNodeKey === record.node_key} onSelect={onSelect} region="record" />)}</div>
                 </section>)}
-                {!records.length && <p className="text-xs text-content-muted">No external records are attached to this Domain Experiment. Domain-owned data is separate from this relationship list.</p>}
+                {!records.length && <p className="text-xs text-content-muted">Records are not shown in this map page. Select the experiment to inspect its results and notes.</p>}
             </div>
         </section>;
     };
@@ -122,7 +122,7 @@ export function RelationshipMap({ summary, selectedNodeKey, onSelect, onLoadMore
                                 <div aria-hidden="true" className="mx-auto h-5 w-px bg-border-secondary" />
                                 <div className="grid gap-5 lg:grid-cols-2">
                                     {domains.map((domain) => renderDomain(domain))}
-                                    {!domains.length && <p className="col-span-full text-center text-xs text-content-muted">This Global Experiment has no visible Domain Experiments.</p>}
+                                    {!domains.length && <p className="col-span-full text-center text-xs text-content-muted">Select this group to view its experiments.</p>}
                                 </div>
                             </section>;
                         })}

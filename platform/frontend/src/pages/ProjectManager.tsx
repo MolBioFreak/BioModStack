@@ -32,6 +32,7 @@ import { ProjectInspector, hasDomainWorkspace } from '../components/project-mana
 import { DNASequenceProjectWorkspace } from '../components/project-manager/DNASequenceProjectWorkspace';
 import { ProjectTree } from '../components/project-manager/ProjectTree';
 import { RelationshipMap } from '../components/project-manager/RelationshipMap';
+import { ProjectCandidateOverview, useProjectCandidateData } from '../components/project-manager/ProjectCandidateOverview';
 import { RunPanel } from '../components/project-manager/RunPanel';
 import { VirtualFolderPanel, type FolderKind } from '../components/project-manager/VirtualFolderPanel';
 import { focusIdFromReadModel, globalExperimentForNode } from '../components/project-manager/projectManagerState';
@@ -406,6 +407,17 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     });
     const projectLevelError = summaryQuery.isError && !invalidSelection;
     const summary = rawSummary;
+    const candidates = useProjectCandidateData(projectId, rawSummary?.project.project_scope === 'global');
+    const candidateOverviewAvailable = candidates.data?.supported === true;
+    const explicitRecord = Boolean(selectedNodeKey && !selectedNodeKey.startsWith('project:') && !selectedNodeKey.startsWith('global_experiment:'));
+    const loadingCandidateOverview = rawSummary?.project.project_scope === 'global' && candidates.isPending && !explicitRecord && searchParams.get('view') !== 'records';
+    const showCandidates = candidateOverviewAvailable && searchParams.get('view') !== 'records'
+        && (searchParams.get('view') === 'candidates' || !explicitRecord);
+    const switchProjectView = (view: 'candidates' | 'records') => {
+        const next = new URLSearchParams(searchParams);
+        next.set('view', view);
+        setSearchParams(next);
+    };
 
     useEffect(() => {
         setMapCursor(undefined);
@@ -792,8 +804,8 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     const isStandaloneNativeProject = summary.project.project_scope === 'ngs_molbio_local'
         && globalLinksQuery.isSuccess
         && globalLinksQuery.data.length === 0;
-    const projectTreeVisible = treeOpen && !isStandaloneNativeProject;
-    const projectInspectorVisible = inspectorOpen && !isStandaloneNativeProject;
+    const projectTreeVisible = treeOpen && !isStandaloneNativeProject && !showCandidates && !loadingCandidateOverview;
+    const projectInspectorVisible = inspectorOpen && !isStandaloneNativeProject && !showCandidates && !loadingCandidateOverview;
     const folderKind = folderKindFromNodeKey(selectedNodeKey);
     const loadMoreFolder = (folder: FolderKind) => {
         if (folder === 'plans') setMapCursor(summary.map.next_cursor ?? undefined);
@@ -839,7 +851,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     <Link to="/projects" className="rounded-lg border border-border-primary px-2.5 py-2 text-xs text-content-secondary outline-none hover:text-content focus:ring-2 focus:ring-accent">All Projects</Link>
                     <div className="min-w-0">
                         <h1 className="truncate text-sm font-semibold text-content">{summary.project.name}</h1>
-                        <p className="truncate text-xs text-content-muted">{summary.project.project_scope === 'ngs_molbio_local' ? 'NGS/MolBio Project' : 'Global Project'} · {summary.project.objective || 'No objective recorded'}</p>
+                        <p className="truncate text-xs text-content-muted">{summary.project.project_scope === 'ngs_molbio_local' ? 'NGS/MolBio Project' : 'Global Project'} · {summary.project.objective?.split('\n')[0] || 'No objective recorded'}</p>
                     </div>
                     {busy && <span role="status" className="text-[10px] font-medium text-accent">Refreshing…</span>}
                 </div>
@@ -852,7 +864,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                         </div>
                     </details>}
                     <button type="button" disabled={!selectionReady} onClick={() => setAttachOpen(true)} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary focus:ring-2 focus:ring-accent">{isStandaloneNativeProject ? 'Link Project or attach record' : 'Attach existing record'}</button>
-                    {!isStandaloneNativeProject && <details ref={viewRef} className="relative">
+                    {!isStandaloneNativeProject && !showCandidates && <details ref={viewRef} className="relative">
                         <summary className="cursor-pointer rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">View</summary>
                         <div className="absolute right-0 z-40 mt-2 w-44 rounded-lg border border-border-primary bg-surface-secondary p-2 shadow-xl">
                             <button type="button" aria-pressed={treeOpen} onClick={() => { setTreeOpen(!treeOpen); if (!treeOpen && viewportWidth < 768) setInspectorOpen(false); if (viewRef.current) viewRef.current.open = false; }} className="w-full rounded p-2 text-left text-xs text-content-secondary">{treeOpen ? 'Hide tree' : 'Show tree'}</button>
@@ -862,6 +874,14 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 </div>
             </header>
 
+            {candidateOverviewAvailable && <nav aria-label="Project view" className="flex gap-2 border-b border-border-primary bg-surface-secondary px-4 py-2">
+                <button type="button" aria-pressed={showCandidates} onClick={() => switchProjectView('candidates')} className={`rounded-lg px-4 py-2 text-sm font-semibold ${showCandidates ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`}>Candidates</button>
+                <button type="button" aria-pressed={!showCandidates} onClick={() => switchProjectView('records')} className={`rounded-lg px-4 py-2 text-sm font-semibold ${!showCandidates ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`}>All records & history</button>
+            </nav>}
+            {candidates.isError && <div role="status" className="flex flex-wrap items-center gap-3 border-b border-border-primary px-4 py-2 text-sm text-content-secondary">
+                Candidate overview could not be loaded. Project records remain available.
+                <button type="button" onClick={() => void candidates.refetch()} className="text-accent underline">Retry overview</button>
+            </div>}
             {summary.warnings.length > 0 && (
                 <div role="status" className="border-b border-warning/40 bg-warning/10 px-4 py-2 text-xs text-warning">{summary.warnings.join(' · ')}</div>
             )}
@@ -876,7 +896,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 className={`relative grid min-h-0 flex-1 grid-cols-1 ${gridClass}`}
                 style={{ '--tree-width': `${treeWidth}px`, '--inspector-width': `${inspectorWidth}px` } as CSSProperties}
             >
-                {overlay && <button type="button" aria-label="Close panel backdrop" onClick={closeDrawer} className="fixed inset-0 z-[65] bg-black/40" />}
+                {overlay && !showCandidates && !loadingCandidateOverview && <button type="button" aria-label="Close panel backdrop" onClick={closeDrawer} className="fixed inset-0 z-[65] bg-black/40" />}
                 {projectTreeVisible && (
                     <div ref={overlay === 'tree' ? drawerRef : undefined} role={overlay === 'tree' ? 'dialog' : undefined} aria-modal={overlay === 'tree' || undefined} aria-label={overlay === 'tree' ? 'Project tree drawer' : undefined} className="fixed inset-y-0 left-0 z-[70] w-[min(88vw,25rem)] shadow-2xl md:static md:z-auto md:w-auto md:shadow-none">
                         <ProjectTree
@@ -893,7 +913,9 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 {projectTreeVisible && <div role="separator" aria-orientation="vertical" aria-label="Resize Project tree" tabIndex={0} onPointerDown={(event) => startRailResize('tree', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setTreeWidth((value) => Math.max(208, value - 16)); if (event.key === 'ArrowRight') setTreeWidth((value) => Math.min(400, value + 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent md:block" />}
                 <main className="flex min-h-0 min-w-0 flex-col overflow-y-auto">
                     <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} />
-                    {!isStandaloneNativeProject && (
+                    {loadingCandidateOverview && <p role="status" className="p-6 text-sm text-content-secondary">Loading candidate sources and validation results… <button type="button" onClick={() => switchProjectView('records')} className="text-accent underline">Open records now</button></p>}
+                    {showCandidates && candidates.data && <ProjectCandidateOverview data={candidates.data} onOpenRecords={() => switchProjectView('records')} />}
+                    {!isStandaloneNativeProject && !showCandidates && !loadingCandidateOverview && (
                         <>
                             <RelationshipMap
                                 summary={summary}

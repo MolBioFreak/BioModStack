@@ -1819,6 +1819,7 @@ function ResultsViewerContent() {
     const [activeTab, setActiveTab] = useState<TabId>('overview');
     const [rfWorkbenchJob, setRfWorkbenchJob] = useState<string>();
     const requestedDesignId = new URLSearchParams(location.search).get('design_id')?.trim() ?? '';
+    const exactJobScope = new URLSearchParams(location.search).get('include_children') === 'false';
     const destinationLaunchContextId = new URLSearchParams(location.search).get('launch_context_id');
     const exactArtifactId = new URLSearchParams(location.search).get('artifact_id');
     const exactTargetState = new URLSearchParams(location.search).get('target_state');
@@ -2525,7 +2526,8 @@ function ResultsViewerContent() {
         include_summary: true,
         ...(nativeResults && nativeRetryFilters ? {job_id: nativeRetryFilters.job_id, model_id: nativeRetryFilters.model_id,
             include_children: nativeRetryFilters.include_children, design_ids: nativeRetryFilters.design_ids} : {}),
-    }), [nativeRetryFilters, nativeResults, nativeQuery, scopedModelId, selectedJobId, isReviewStageJob, filterText, pageSize, currentPage, apiSortField, sortDir, selectedBackboneId, plddtMin, iptmMin, ipsaeMin, contactsMin, targetContactsMin, epitopeMaxDistValue, targetMaxDistValue, binderSizeMinValue, binderSizeMaxValue, cdrH1MinValue, cdrH1MaxValue, cdrH2MinValue, cdrH2MaxValue, cdrH3MinValue, cdrH3MaxValue, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue, activeRfArtifactGroup, activeSavedSubsetDesignIds, activeJob?.design_count, activeJobHasDesignBearingChildren, backboneFilterApplies, forceBulkLoadForSorting]);
+        ...(exactJobScope ? { include_children: false } : {}),
+    }), [exactJobScope, nativeRetryFilters, nativeResults, nativeQuery, scopedModelId, selectedJobId, isReviewStageJob, filterText, pageSize, currentPage, apiSortField, sortDir, selectedBackboneId, plddtMin, iptmMin, ipsaeMin, contactsMin, targetContactsMin, epitopeMaxDistValue, targetMaxDistValue, binderSizeMinValue, binderSizeMaxValue, cdrH1MinValue, cdrH1MaxValue, cdrH2MinValue, cdrH2MaxValue, cdrH3MinValue, cdrH3MaxValue, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue, activeRfArtifactGroup, activeSavedSubsetDesignIds, activeJob?.design_count, activeJobHasDesignBearingChildren, backboneFilterApplies, forceBulkLoadForSorting]);
     useEffect(() => { setSelectedDesignId(''); setCurrentPage(1); setNativeQuery({}); setNativeRetryFilters(null); }, [selectedJobId, resultSurface]);
     const bulkSelectionFilters = useMemo<DesignFilters>(() => ({
         ...designQueryFilters,

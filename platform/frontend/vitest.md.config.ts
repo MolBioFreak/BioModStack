@@ -24,6 +24,7 @@ export default defineConfig({
             './tests/vitest/resultsDemandMounted.test.tsx',
             './tests/vitest/resultsOverviewSummaryDemand.test.tsx',
             './tests/vitest/projectCollectionDemandMounted.test.tsx',
+            './tests/vitest/projectCandidateOverviewMounted.test.tsx',
             './tests/vitest/cmPickerBoundedMounted.test.tsx',
             './tests/vitest/molBioDigestApiAuthority.test.tsx',
             './tests/vitest/molBioTraffic*.test.tsx',

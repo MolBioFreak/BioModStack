@@ -19,9 +19,13 @@ interface ProjectInspectorProps {
     onRecord: () => void;
 }
 
-function operatorFields(value: Record<string, unknown>): Record<string, unknown> {
+const narrativeKeys = new Set(['objective', 'research_objective', 'scientific_objective', 'description']);
+const normalizedNarrative = (value: string) => value.trim().replace(/\s+/g, ' ');
+
+function operatorFields(value: Record<string, unknown>, existingNarratives = new Set<string>()): Record<string, unknown> {
     const technical = /(^schema$|(^|_)(id|ids|digest|generation|revision|receipt|receipts|adapter|raw|uri|route|payload)(_|$))/;
     const preferred = ['lifecycle_state', 'status', 'priority', 'objective', 'research_objective', 'scientific_objective', 'scientific_question', 'success_criteria'];
+    const seenNarratives = new Set(existingNarratives);
     const nested = value.domain_payload && typeof value.domain_payload === 'object' && !Array.isArray(value.domain_payload)
         ? value.domain_payload as Record<string, unknown> : {};
     const clean = (item: unknown): unknown => {
@@ -32,6 +36,12 @@ function operatorFields(value: Record<string, unknown>): Record<string, unknown>
     return Object.fromEntries(Object.entries({ ...nested, ...value }).filter(([key]) => !technical.test(key) && key !== 'name').map(([key, item]) => [key, clean(item)] as const).sort(([a], [b]) => {
         const rank = (key: string) => preferred.includes(key) ? preferred.indexOf(key) : preferred.length;
         return rank(a) - rank(b);
+    }).filter(([key, item]) => {
+        if (!narrativeKeys.has(key) || typeof item !== 'string') return true;
+        const text = normalizedNarrative(item);
+        if (seenNarratives.has(text)) return false;
+        seenNarratives.add(text);
+        return true;
     }));
 }
 
@@ -77,6 +87,12 @@ export function ProjectInspector({
     onRecord,
 }: ProjectInspectorProps) {
     const selection = summary.selection;
+    const summaryFields = operatorFields(selection.summary);
+    const narratives = new Set(Object.entries(summaryFields)
+        .filter(([key, value]) => narrativeKeys.has(key) && typeof value === 'string')
+        .map(([, value]) => normalizedNarrative(value as string)));
+    const scientificFields = operatorFields(selection.scientific_context, narratives);
+    const subtitleRepeated = selection.subtitle && narratives.has(normalizedNarrative(selection.subtitle));
     const treeSelection = summary.tree.nodes.find((node) => node.node_key === selection.node_key);
     const actions = new Set([...selection.available_actions, ...(treeSelection?.allowed_actions ?? [])]);
     const surface = selection.canonical_surface;
@@ -101,7 +117,7 @@ export function ProjectInspector({
                     <div className="min-w-0">
                         <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Selected {displayLabel(selection.node_type)}</p>
                         <h2 className="mt-1 truncate text-lg font-semibold text-content">{selection.title}</h2>
-                        {selection.subtitle && <p className="mt-1 text-xs leading-5 text-content-secondary">{selection.subtitle}</p>}
+                        {selection.subtitle && !subtitleRepeated && <p className="mt-1 text-xs leading-5 text-content-secondary"><ProjectNarrative text={selection.subtitle} /></p>}
                     </div>
                     {onClose && <button type="button" onClick={onClose} className="rounded-md border border-border-primary px-2 py-1 text-xs text-content-secondary xl:hidden">Close</button>}
                 </div>
@@ -137,11 +153,11 @@ export function ProjectInspector({
                 )}
 
                 <section aria-label="Research summary">
-                    <DetailGrid value={operatorFields(selection.summary)} />
+                    <DetailGrid value={summaryFields} />
                 </section>
-                {Object.keys(selection.scientific_context).length > 0 && <section>
+                {Object.keys(scientificFields).length > 0 && <section>
                     <h3 className="mb-2 text-sm font-semibold text-content">Scientific context</h3>
-                    <DetailGrid value={operatorFields(selection.scientific_context)} />
+                    <DetailGrid value={scientificFields} />
                 </section>}
 
                 <section>
