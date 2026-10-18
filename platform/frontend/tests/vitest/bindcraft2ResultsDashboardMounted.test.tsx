@@ -33,6 +33,7 @@ async function mount(rows = fixture(100), options: { failOffset?: number; missin
     };
     vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
         const url = new URL(input, 'http://test'); reads.push(url);
+        if (url.pathname.endsWith('/bindcraft2-navigation')) return { ok: true, json: async () => ({ job_id: 'bc2-job', arm: url.searchParams.get('arm'), trajectories: rows.filter(row => row.stage === 'trajectory').map(row => ({ design: row.design, trajectory: row.values.trajectory ?? null })), draws: [], total: 0 }) };
         if (url.pathname.endsWith('/trajectory')) {
             expect(init?.signal).toBeInstanceOf(AbortSignal);
             const offset = Number(url.searchParams.get('offset')), total = options.traceTotal ?? 120;
@@ -74,7 +75,7 @@ it('lands a 100-trajectory zero-yield result on shared plots, not settings or em
     expect(tree.root.findAllByType(Plot).length).toBeGreaterThan(1);
     expect(text(tree.toJSON())).toContain('0 retained sequences');
     expect(text(tree.toJSON())).not.toContain('Final i_pTM');
-    expect(reads.filter(url => url.pathname.endsWith('/bindcraft2-results'))).toHaveLength(3);
+    expect(reads.filter(url => url.pathname.endsWith('/bindcraft2-results'))).toHaveLength(2);
     expect(tree.root.findAllByType(StructureWorkbench)).toHaveLength(0);
     const summary = tree.root.findAllByType('summary').find(node => text(node) === 'Native campaign settings')!;
     expect(summary.parent?.props.open).not.toBe(true);
@@ -110,7 +111,7 @@ it('fills three pages; table, plots, outcomes, cross-page selection and native J
     const rows = fixture(205); await mount(rows);
     const readsByScope = reads.filter(url => url.pathname.endsWith('/bindcraft2-results')).map(url => [url.searchParams.get('stage'), url.searchParams.get('offset')]);
     expect(readsByScope.filter(([stage]) => stage === 'draw')).toEqual([['draw', '0']]);
-    for (const offset of ['0', '100', '200']) expect(readsByScope.filter(([stage, start]) => stage === 'trajectory' && start === offset)).toHaveLength(2);
+    for (const offset of ['0', '100', '200']) expect(readsByScope.filter(([stage, start]) => stage === 'trajectory' && start === offset)).toHaveLength(1);
     expect(tree.root.findByType(CohortAnalytics).props.rows).toHaveLength(205);
     await click('Select all matching (205)');
     await click('Next native records'); await change('Select this page', false);
@@ -120,7 +121,7 @@ it('fills three pages; table, plots, outcomes, cross-page selection and native J
     expect(tree.root.findByType(CohortAnalytics).props.rows).toHaveLength(1);
     expect(text(control('Native outcomes in view'))).toContain('Screening 1');
     await change('Export scope', 'filtered'); expect(await exported()).toEqual([rows[204]]);
-    expect(reads.filter(url => url.pathname.endsWith('/bindcraft2-results'))).toHaveLength(7);
+    expect(reads.filter(url => url.pathname.endsWith('/bindcraft2-results'))).toHaveLength(4);
     expect(reads.filter(url => url.pathname.endsWith('/trajectory')).map(url => url.searchParams.get('design'))).toEqual(['exact/design-0']);
 });
 it('preserves axes/search/selection when a plotted trajectory opens its exact paginated phase trace and returns', async () => {
@@ -148,7 +149,7 @@ it('keeps missing traces and unknown numeric observations missing', async () => 
     const rows = fixture(1); rows[0].analytics.trace_available = false;
     await mount(rows); await click('Design 1 · 100 aa'); await flush();
     expect(text(control('Native trajectory detail'))).toContain('No recorded loss trace');
-    expect(reads.filter(url => url.pathname.endsWith('/bindcraft2-results'))).toHaveLength(3);
+    expect(reads.filter(url => url.pathname.endsWith('/bindcraft2-results'))).toHaveLength(2);
     expect(reads.filter(url => url.pathname.endsWith('/trajectory'))).toHaveLength(0);
     expect(csvNumber('')).toBeUndefined(); expect(csvNumber(false)).toBeUndefined(); expect(csvNumber('0')).toBe(0);
     const record = bc2Record({ design: 'x', values: { length: '', score: 'not numeric' } }, { arm: null, stage: 'trajectory' });
@@ -160,7 +161,7 @@ it('retained outputs use the full shared workbench and exact alternate document,
         structures: [{ artifact_id: 'primary', target_state: 'A', logical_path: 'a.pdb', download_url: '/exact/a.pdb', primary: true },
             { artifact_id: 'alternate', target_state: 'B', logical_path: 'b.cif', download_url: '/exact/b.cif' }] }];
     await mount(rows, { props: { selectedDesignId: 'real-design', artifactId: 'alternate', targetState: 'B' } });
-    expect(reads.filter(url => url.pathname.endsWith('/bindcraft2-results')).map(url => url.searchParams.get('stage'))).toEqual(['retained', 'trajectory']);
+    expect(reads.filter(url => url.pathname.endsWith('/bindcraft2-results')).map(url => url.searchParams.get('stage'))).toEqual(['retained']);
     const viewer = tree.root.findByType(StructureWorkbench);
     expect(viewer.props.structureUrl).toBe('/exact/b.cif'); expect(viewer.props.format).toBe('cif');
     expect(text(control('Native trajectory detail'))).toContain('ACDE');

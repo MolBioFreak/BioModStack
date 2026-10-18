@@ -11,7 +11,7 @@ vi.mock('../../src/lib/api', () => ({ api: { get: (url: string, config: any) => 
     ? mocks.family(config.params.scientific_family_job_id, config.signal).then((jobs: Job[]) => ({ data: { jobs, total: jobs.length } }))
     : mocks.get(url, config) } }));
 vi.mock('../../src/lib/projectManager', async original => ({ ...await original<typeof import('../../src/lib/projectManager')>(), getProject: mocks.project }));
-vi.mock('../../src/lib/bindcraft2Results', () => ({ object: (v: unknown) => v && typeof v === 'object' && !Array.isArray(v) ? v : {}, fetchBC2Page: mocks.page, fetchBC2TrajectoryNames: async () => ({ family: "Design 61" }) }));
+vi.mock('../../src/lib/bindcraft2Results', async original => ({ ...await original<typeof import('../../src/lib/bindcraft2Results')>(), fetchBC2Navigation: mocks.page }));
 const job = (id: string, extra: Partial<Job> = {}) => ({ id, name: id, model_id: 'protenix', status: 'completed', mode: 'complex', params: {}, created_at: '', design_count: 1, output_dir: null, ...extra }) as Job;
 const native = 'design_l3_abcdef1234567890_candidate2';
 const source: CandidateSource = { id: 'source', label: 'Site A', job: job('source', { model_id: 'bindcraft2' }), draws: [{ design: native, sequence: 'AAA', trajectory_design: 'family', arm: null }] };
@@ -66,16 +66,17 @@ describe('project candidate overview', () => {
         expect(host.querySelectorAll('tbody tr')).toHaveLength(0);
         await act(() => (host.querySelector('button')!).click()); expect(records).toHaveBeenCalledOnce();
     });
-    it('uses only referenced verified BC2 families, paginates draws and forwards cancellation', async () => {
+    it('uses only referenced verified BC2 families, loads compact navigation and forwards cancellation', async () => {
         mocks.project.mockResolvedValue({ payload: { external_references: [{ value: '/designs/source', label: 'Site A' }, { value: '/designs/other' }] } });
         mocks.get.mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('/source') ? source.job : job('other') }));
         mocks.family.mockResolvedValue(jobs);
-        mocks.page.mockResolvedValueOnce({ rows: source.draws, total: 2 }).mockResolvedValueOnce({ rows: [{ design: 'another', sequence: 'BBB' }], total: 2 });
+        mocks.page.mockResolvedValueOnce({ job_id: 'source', arm: null, trajectories: [{ design: 'family', trajectory: '61' }], draws: [...source.draws, { design: 'another', sequence: 'BBB' }], total: 2 });
         const signal = new AbortController().signal;
         const result = await fetchProjectCandidateData('project', signal);
         expect(result.supported).toBe(true); expect(result.candidates).toHaveLength(1);
         expect(mocks.family).toHaveBeenCalledExactlyOnceWith('source', signal);
-        expect(mocks.page).toHaveBeenNthCalledWith(2, 'source', null, 'draw', 1, signal);
+        expect(mocks.page).toHaveBeenCalledExactlyOnceWith('source', null, signal);
+        expect(mocks.get).toHaveBeenCalledWith('/api/jobs/source', { params: { projection: 'binder_navigation' }, signal });
         expect(mocks.get).toHaveBeenCalledTimes(2);
     });
     it('propagates cancellation rather than reporting a partial inventory', async () => {

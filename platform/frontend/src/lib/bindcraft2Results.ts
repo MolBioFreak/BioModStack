@@ -69,20 +69,30 @@ export function bc2MetricLabel(key: string): string | undefined {
 }
 export const bc2PreferredDocument = (row: NativeGenerationRecord) => uniqueBinderComplex(row.structures ?? []);
 
-export async function fetchBC2TrajectoryNames(jobId: string, arm: string | null, signal?: AbortSignal): Promise<Record<string, string>> {
+export interface BC2Navigation {
+    job_id: string;
+    arm: string | null;
+    trajectories: { design: string; trajectory: string | null }[];
+    draws: { design: string; arm: string | null; trajectory_design: string | null; sequence: string | null;
+        structures: { artifact_id: string; target_state: string | null; binder_chains: string | string[] | null; target_chains: string | string[] | null }[] }[];
+    total: number;
+}
+export async function fetchBC2Navigation(jobId: string, arm: string | null, signal?: AbortSignal): Promise<BC2Navigation> {
+    const params = new URLSearchParams();
+    if (arm !== null) params.set('arm', arm);
+    const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/bindcraft2-navigation${params.size ? `?${params}` : ''}`, { signal });
+    if (!response.ok) throw new Error(`Native records unavailable (${response.status})`);
+    return response.json();
+}
+export function bc2TrajectoryNames(trajectories: BC2Navigation['trajectories']): Record<string, string> {
     const names: Record<string, string> = {};
-    let offset = 0, total = Infinity;
-    while (offset < total) {
-        const page = await fetchBC2Page(jobId, arm, 'trajectory', offset, signal);
-        total = page.total;
-        if (!page.rows.length && offset < total) throw new Error('Design names are partially available; refresh to retry.');
-        for (const row of page.rows) {
-            const number = object(row.values).trajectory;
-            if (row.design && csvNumber(number) !== undefined) names[String(row.design)] = `Design ${number}`;
-        }
-        offset += page.rows.length;
+    for (const row of trajectories) {
+        if (row.design && csvNumber(row.trajectory) !== undefined) names[row.design] = `Design ${row.trajectory}`;
     }
     return names;
+}
+export async function fetchBC2TrajectoryNames(jobId: string, arm: string | null, signal?: AbortSignal): Promise<Record<string, string>> {
+    return bc2TrajectoryNames((await fetchBC2Navigation(jobId, arm, signal)).trajectories);
 }
 /** Reuse only the document's explicit producer-row association. */
 export function bc2SourceRecord(row: NativeGenerationRecord): Record<string, unknown> {
