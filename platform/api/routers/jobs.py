@@ -74,6 +74,8 @@ from runtime_policy import (
     workflow_launches_allowed,
 )
 from schemas import ExecutionPolicy, JobCreate, JobResponse, JobList, JobSummaryResponse, JobSummaryList, JobStatus
+from schemas import BinderNavigationJob, BinderNavigationJobList, BC2NavigationResponse
+from services.binder_navigation_jobs import navigation_columns, navigation_job
 from services.job_control import cancel_job_lineage, reject_generic_md_lifecycle_control
 from services import alignment_access, ont_submission_trust, stage_reporting, ont_ngs_contract
 from services.md.chemistry_catalog import ChemistryCatalogError, ChemistryProfileSelectionError
@@ -5447,7 +5449,7 @@ def _scientific_family_ids(job_id: str):
     return select(family.c.id)
 
 
-@router.get("", response_model=JobList | JobSummaryList)
+@router.get("", response_model=JobList | JobSummaryList | BinderNavigationJobList)
 async def list_jobs(
     status: Optional[JobStatus] = None,
     q: Optional[str] = None,
@@ -5461,6 +5463,7 @@ async def list_jobs(
     include_children: bool = False,  # New param: show child jobs if True
     scientific_family_job_id: Optional[str] = None,
     summary: bool = False,  # Mobile/list views: omit heavyweight detail fields until a job is opened
+    projection: Optional[Literal["binder_navigation"]] = None,
     session: AsyncSession = Depends(get_session),
     *,
     request: Request = None,
@@ -5571,6 +5574,11 @@ async def list_jobs(
         filters.append(~or_(model_identity.in_(ngs_models), and_(
             model_identity == "", or_(workflow_identity.in_(ngs_workflows),
                                       mode_identity.in_((*ngs_workflows, "nanopore_methylation"))))))
+    if projection == "binder_navigation":
+        rows = (await session.execute(select(*navigation_columns()).where(*filters).order_by(
+            Job.created_at.desc(), Job.id).limit(limit).offset(offset))).mappings().all()
+        total = (await session.execute(select(func.count(Job.id)).where(*filters))).scalar_one()
+        return BinderNavigationJobList(jobs=[navigation_job(row) for row in rows], total=total)
     if summary:
         # Bound the Jobs scope before counting Designs. The existing job_id
         # index serves one exact count per displayed row, not a global GROUP BY
@@ -9282,12 +9290,18 @@ async def get_rfd3_local_redesign_artifact(
     )
 
 
-@router.get("/{job_id}", response_model=JobResponse)
+@router.get("/{job_id}", response_model=JobResponse | BinderNavigationJob)
 async def get_job(
     job_id: str,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    projection: Optional[Literal["binder_navigation"]] = None,
 ):
     """Get details of a specific job."""
+    if projection == "binder_navigation":
+        row = (await session.execute(select(*navigation_columns()).where(Job.id == job_id))).mappings().one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return navigation_job(row)
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     
@@ -9522,6 +9536,29 @@ async def get_native_generation_results(
     except (ValueError, RuntimeError, OSError) as exc:
         logger.warning("Native generation results unavailable for job %s: %s", job_id, exc)
         raise HTTPException(status_code=409, detail="Native generation results unavailable") from exc
+
+
+@router.get("/{job_id}/bindcraft2-navigation", response_model=BC2NavigationResponse)
+async def get_bindcraft2_navigation(
+    job_id: str,
+    arm: Optional[str] = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Compact navigation, with the same fresh publication authority as results."""
+    from services.bindcraft2_result_readback import read_bindcraft2_navigation
+    from services.bindcraft2_publication import PublicationError
+    from services.bindcraft2_native_results import NativeResultError
+
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.model_id != "bindcraft2":
+        raise HTTPException(status_code=400, detail="Job is not a BindCraft2 campaign")
+    try:
+        return await read_bindcraft2_navigation(job, session, arm=arm)
+    except (PublicationError, NativeResultError, OSError) as exc:
+        logger.warning("BC2 native navigation unavailable for job %s: %s", job_id, exc)
+        raise HTTPException(status_code=409, detail="Verified native results unavailable") from exc
 
 
 @router.get("/{job_id}/bindcraft2-results")

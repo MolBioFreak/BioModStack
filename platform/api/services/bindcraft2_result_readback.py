@@ -46,6 +46,30 @@ def _trace(receipt, row):
     return native_loss_trace(data)
 
 
+async def read_bindcraft2_navigation(job, session, *, arm: str | None = None) -> dict:
+    """Project navigation from one fresh verified publication, without analytics."""
+    publication, receipt = await read_published_native_results(job, session)
+    selected = _selected_arm(publication, arm)
+    structures = {}
+    for document in receipt["native_documents"]:
+        if document["arm"] != selected.name:
+            continue
+        for native in document["native_rows"]:
+            if native["stage"] == "draw":
+                structures.setdefault(native["design"], []).append({
+                    key: document.get(key) for key in (
+                        "artifact_id", "target_state", "binder_chains", "target_chains")
+                })
+    draws = [{"design": row.design, "arm": row.arm,
+              "trajectory_design": row.trajectory_design,
+              "sequence": row.sequence or row.values.get("Binder_Sequence"),
+              "structures": structures.get(row.design, [])} for row in selected.draws]
+    return {"job_id": job.id, "arm": selected.name,
+            "trajectories": [{"design": row.design, "trajectory": row.values.get("trajectory")}
+                             for row in selected.trajectories],
+            "draws": draws, "total": len(draws)}
+
+
 async def read_bindcraft2_result_page(
     job, session, *, arm: str | None = None,
     stage: Literal["trajectory", "draw", "retained", "attempt", "document"] = "trajectory",

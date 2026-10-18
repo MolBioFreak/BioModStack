@@ -18,6 +18,66 @@ def serialize_datetime(dt: datetime) -> str:
     return dt.isoformat() + 'Z'
 
 
+class BinderNavigationJob(BaseModel):
+    """Read-only linkage evidence, not a full Job or scientific receipt."""
+
+    id: str
+    name: str
+    model_id: Optional[str] = None
+    status: str
+    created_at: Optional[datetime] = None
+    mode: Optional[str] = None
+    stage_family: Optional[str] = None
+    parent_job_id: Optional[str] = None
+    lineage_root_job_id: Optional[str] = None
+    selection_source_job_id: Optional[str] = None
+    source_stage_job_id: Optional[str] = None
+    # Closed projection is performed by the owner; raw JSON leaves deliberately
+    # retain malformed/legacy evidence rather than coercing classification.
+    params: Any = None
+    provenance: Any = None
+
+    from pydantic import field_serializer
+
+    @field_serializer('created_at')
+    @classmethod
+    def serialize_created_at(cls, dt: Optional[datetime]) -> Optional[str]:
+        return None if dt is None else serialize_datetime(dt)
+
+
+class BinderNavigationJobList(BaseModel):
+    jobs: List[BinderNavigationJob]
+    total: int
+
+
+class BC2NavigationStructure(BaseModel):
+    artifact_id: str
+    target_state: Optional[str] = None
+    binder_chains: str | list | None = None
+    target_chains: str | list | None = None
+
+
+class BC2NavigationTrajectory(BaseModel):
+    design: str
+    trajectory: Optional[str] = None
+
+
+class BC2NavigationDraw(BaseModel):
+    design: str
+    arm: Optional[str] = None
+    trajectory_design: Optional[str] = None
+    sequence: Optional[str] = None
+    structures: List[BC2NavigationStructure]
+
+
+class BC2NavigationResponse(BaseModel):
+    job_id: str
+    arm: Optional[str] = None
+    trajectories: List[BC2NavigationTrajectory]
+    draws: List[BC2NavigationDraw]
+    total: int
+
+
 class JobStatus(str, Enum):
     """Job status enum."""
     QUEUED = "queued"
