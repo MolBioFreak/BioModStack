@@ -283,9 +283,14 @@ def resolve_allowed_path(rel_path: str) -> Path:
     return candidate
 
 
-def to_allowed_relative(path: Path) -> str:
+def to_allowed_relative(path: Path, *, allowed_roots: dict[str, Path] | None = None) -> str:
+    """Resolve one file; a batch may share invocation-local root configuration.
+
+    A supplied mapping does not cache file resolution or containment. Scalar
+    callers retain fresh configuration lookup on every invocation.
+    """
     resolved = path.resolve()
-    for key, root in get_allowed_roots().items():
+    for key, root in (get_allowed_roots() if allowed_roots is None else allowed_roots).items():
         root_resolved = root.resolve()
         try:
             rel = resolved.relative_to(root_resolved)

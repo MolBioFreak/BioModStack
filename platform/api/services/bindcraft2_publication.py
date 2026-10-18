@@ -488,13 +488,20 @@ def native_workbench_page(page: dict, receipt: dict) -> dict:
     request. No filename/sequence join or second numerical authority is added.
     """
     from urllib.parse import quote
-    from paths import to_allowed_relative
+    from paths import get_allowed_roots, to_allowed_relative
 
     root = Path(receipt["root"]) / receipt.get("campaign_root", ".")
+    # Root configuration belongs to this response, not to each artifact. Keep
+    # per-file resolution/containment and refresh configuration on the next read.
+    try:
+        allowed_roots = get_allowed_roots() if receipt["files"] else {}
+    except ValueError:
+        # As before, unavailable download paths must not hide native records.
+        allowed_roots = {}
     downloads = {}
     for name in receipt["files"]:
         try:
-            relative = to_allowed_relative(root / name)
+            relative = to_allowed_relative(root / name, allowed_roots=allowed_roots)
         except ValueError:
             continue  # Publication outside a configured download root remains readable.
         downloads[name] = "/api/files/download/" + quote(relative, safe="/")
