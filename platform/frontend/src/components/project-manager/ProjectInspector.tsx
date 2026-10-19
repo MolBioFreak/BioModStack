@@ -57,6 +57,30 @@ function operatorFields(value: Record<string, unknown>, existingNarratives = new
     }));
 }
 
+function ExternalReferences({ value }: { value: unknown[] }) {
+    return <ul className="space-y-2">{value.map((item, index) => {
+        if (!item || typeof item !== 'object') return <li key={index}>{valueText(item)}</li>;
+        const reference = item as Record<string, unknown>;
+        const raw = typeof reference.value === 'string' ? reference.value : '';
+        const label = typeof reference.label === 'string' && reference.label ? reference.label : raw;
+        let href: string | undefined;
+        // References are typed metadata, not arbitrary Markdown/HTML in notes.
+        // Preserve the stored URL exactly and leave unsupported schemes as text.
+        if (raw && !/[\\\s\u0000-\u001f\u007f]/.test(raw)) {
+            if (/^https?:\/\//i.test(raw)) {
+                try { const url = new URL(raw); if (!url.username && !url.password) href = raw; } catch { /* Display malformed URLs as text. */ }
+            } else if (/^\/(?:projects|designs|jobs|api\/files\/download|api\/files\/stream)\//.test(raw)) {
+                href = raw;
+            } else if (reference.kind === 'doi' && /^10\.\d{4,9}\/.+/.test(raw)) {
+                href = `https://doi.org/${raw}`;
+            }
+        }
+        return <li key={index}>{href
+            ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-accent underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">{label}</a>
+            : <span>{label}{raw && raw !== label ? ` · ${raw}` : ''}</span>}</li>;
+    })}</ul>;
+}
+
 function DetailGrid({ value }: { value: Record<string, unknown> }) {
     const entries = Object.entries(value).filter(([, item]) => item !== null && item !== undefined && item !== '');
     if (!entries.length) return <p className="text-xs text-content-muted">No additional fields were supplied by the current revision.</p>;
@@ -65,7 +89,9 @@ function DetailGrid({ value }: { value: Record<string, unknown> }) {
             {entries.map(([key, item]) => (
                 <div key={key} className="py-1">
                     <dt className="text-xs font-semibold text-content-muted">{displayLabel(key)}</dt>
-                    <dd className="mt-1 break-words text-sm text-content-secondary"><ProjectNarrative text={valueText(item)} /></dd>
+                    <dd className="mt-1 break-words text-sm text-content-secondary">{key === 'external_references' && Array.isArray(item)
+                        ? <ExternalReferences value={item} />
+                        : <ProjectNarrative text={valueText(item)} />}</dd>
                 </div>
             ))}
         </dl>

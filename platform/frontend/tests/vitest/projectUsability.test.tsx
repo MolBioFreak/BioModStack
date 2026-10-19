@@ -36,3 +36,32 @@ test('an unobserved successor or same-kind note does not hide original records',
  const host=await mount(<VirtualFolderPanel folder="notes" summary={summary} onLoadMore={vi.fn()} onSelectRecord={vi.fn()}/>);
  expect(host.textContent).not.toContain('Previous records');expect(host.textContent).toContain('First');expect(host.textContent).toContain('Second');expect(host.textContent).toContain('Next notes page');
 });
+
+test('typed project references preserve exact named download, source and DOI links', async () => {
+ const references = [
+  {kind:'url',label:'Challenge rules',value:'https://proteinbase.com/competitions/example?round=3'},
+  {kind:'url',label:'MSA',value:'/api/files/download/inputs/reference/target.a3m'},
+  {kind:'other',label:'Native results',value:'/designs/job?native_candidate=%5B%22x%22%5D'},
+  {kind:'doi',label:'Primary paper',value:'10.1038/example'},
+  {kind:'accession',label:'Target',value:'P43220'},
+ ];
+ const original=JSON.stringify(references);
+ const summary={tree:{nodes:[]},selection:{node_key:'project:p',node_type:'project',title:'Review',available_actions:[],canonical_identity:{},reconciliation:{state:'current'},summary:{external_references:references},scientific_context:{}},source_receipt_ids:[],adapter_versions:[]} as unknown as ProjectManagerReadModel;
+ const noop=vi.fn();const host=await mount(<ProjectInspector summary={summary} onOpenCanonical={noop} onAddExisting={noop} onCreateDomain={noop} onEdit={noop} onArchive={noop} onRestore={noop} onRecord={noop}/>);
+ const links=[...host.querySelectorAll('a')];
+ expect(links.map(a=>[a.textContent,a.getAttribute('href')])).toEqual([
+  ['Challenge rules',references[0].value],['MSA',references[1].value],['Native results',references[2].value],['Primary paper','https://doi.org/10.1038/example'],
+ ]);
+ expect(links.every(a=>a.target==='_blank' && a.rel==='noopener noreferrer')).toBe(true);
+ expect(host.textContent).toContain('Target · P43220');
+ expect(JSON.stringify(references)).toBe(original);
+});
+
+test('reference metadata does not turn unsafe schemes or arbitrary note URLs into links', async () => {
+ const references=['javascript:alert(1)','data:text/html,test','//foreign.example/path','https://user:secret@example.org','https://example.org/ bad','https://','/unknown/path','https://example.org/\\\\evil'].map((value,i)=>({kind:'url',label:`Reference ${i}`,value}));
+ const summary={tree:{nodes:[]},selection:{node_key:'project:p',node_type:'project',title:'Review',available_actions:[],canonical_identity:{},reconciliation:{state:'current'},summary:{external_references:references,description:'[Plain remote note](https://example.org)'},scientific_context:{}},source_receipt_ids:[],adapter_versions:[]} as unknown as ProjectManagerReadModel;
+ const noop=vi.fn();const host=await mount(<ProjectInspector summary={summary} onOpenCanonical={noop} onAddExisting={noop} onCreateDomain={noop} onEdit={noop} onArchive={noop} onRestore={noop} onRecord={noop}/>);
+ expect(host.querySelectorAll('a')).toHaveLength(0);
+ expect(host.textContent).toContain('Reference 0 · javascript:alert(1)');
+ expect(host.textContent).toContain('[Plain remote note](https://example.org)');
+});
