@@ -128,7 +128,9 @@ export function buildRestrictionMapAnnotations({ occurrences, selectedEnzymes, s
             const sourceDirection = occurrence.orientation === 'forward' ? 1 : -1;
             const semantic = occurrence.nicks.length > 0 ? 'nick' : occurrence.double_strand_events.length > 0 ? 'DSB' : 'recognition';
             return {
-                name: `${occurrence.canonical_name} · ${occurrence.certainty} ${semantic}`,
+                name: occurrence.canonical_name,
+                description: `${occurrence.canonical_name} · ${occurrence.certainty} ${semantic} · ${occurrence.orientation} · recognition ${start}–${end} (0-based, end-exclusive)`,
+                labelLane: true,
                 start: range.start,
                 end: range.end,
                 direction: transformDirectionForDisplayStrand(sourceDirection, sourceDisplayStrand, resolvedDisplayStrand),
