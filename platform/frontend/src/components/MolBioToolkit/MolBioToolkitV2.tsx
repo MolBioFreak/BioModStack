@@ -899,6 +899,11 @@ export function MolBioToolkitV2() {
         enzymeIds: Set<string> | null;
         promise: Promise<RestrictionAnalysisBatch | undefined>;
     } | null>(null);
+    const restrictionFullCatalogWaitRef = useRef<{
+        source: RestrictionSource;
+        workspace: string;
+        resolve: Array<(batch: RestrictionAnalysisBatch | undefined) => void>;
+    } | null>(null);
     const restrictionAnalysisControllerRef = useRef(createLatestAsyncResourceController());
     const restrictionAuthorityControllerRef = useRef(createLatestAsyncResourceController());
     const restrictionDigestControllerRef = useRef(createLatestAsyncResourceController());
@@ -923,8 +928,9 @@ export function MolBioToolkitV2() {
 
     // Fence callbacks during render as well as effect cleanup: a previous source
     // can finish between a construct/catalog render and its passive effects.
-    const restrictionAnalysisKey = JSON.stringify([activeWorkspaceId, restrictionSource,
-        restrictionCatalog?.catalog_id, restrictionCatalog?.catalog_sha256]);
+    const restrictionAnalysisKey = useMemo(() => JSON.stringify([activeWorkspaceId, restrictionSource,
+        restrictionCatalog?.catalog_id, restrictionCatalog?.catalog_sha256]),
+        [activeWorkspaceId, restrictionSource, restrictionCatalog?.catalog_id, restrictionCatalog?.catalog_sha256]);
     const restrictionAnalysis = restrictionAnalysisResultRef.current?.key === restrictionAnalysisKey
         ? restrictionAnalysisState : null;
     const restrictionAnalysisKeyRef = useRef(restrictionAnalysisKey);
@@ -1001,12 +1007,39 @@ export function MolBioToolkitV2() {
         return promise;
     }, [restrictionCatalog, restrictionSource, restrictionAnalysisKey]);
 
+    // A mapping click can arrive before the existing catalog query completes.
+    // Retain that intent rather than making the operator click it a second time.
+    const requestFullRestrictionAnalysis = useCallback((): Promise<RestrictionAnalysisBatch | undefined> => {
+        if (restrictionCatalog) return runRestrictionAnalysis();
+        if (!restrictionSource || restrictionAnalysisKeyRef.current !== restrictionAnalysisKey) return Promise.resolve(undefined);
+        return new Promise(resolve => {
+            const waiting = restrictionFullCatalogWaitRef.current;
+            if (waiting && waiting.source === restrictionSource && waiting.workspace === activeWorkspaceId) waiting.resolve.push(resolve);
+            else {
+                waiting?.resolve.forEach(finish => finish(undefined));
+                restrictionFullCatalogWaitRef.current = { source: restrictionSource, workspace: activeWorkspaceId, resolve: [resolve] };
+            }
+        });
+    }, [activeWorkspaceId, restrictionAnalysisKey, restrictionCatalog, restrictionSource, runRestrictionAnalysis]);
+    useEffect(() => {
+        const waiting = restrictionFullCatalogWaitRef.current;
+        if (!waiting) return;
+        if (waiting.source !== restrictionSource || waiting.workspace !== activeWorkspaceId) {
+            restrictionFullCatalogWaitRef.current = null;
+            waiting.resolve.forEach(finish => finish(undefined));
+        } else if (restrictionCatalog) {
+            restrictionFullCatalogWaitRef.current = null;
+            void runRestrictionAnalysis().then(batch => waiting.resolve.forEach(finish => finish(batch)));
+        }
+    }, [activeWorkspaceId, restrictionCatalog, restrictionSource, runRestrictionAnalysis]);
 
     useEffect(() => () => {
         restrictionAuthorityControllerRef.current.dispose();
         restrictionAnalysisControllerRef.current.dispose();
         restrictionAnalysisAbortRef.current?.abort();
         restrictionDigestControllerRef.current.dispose();
+        restrictionFullCatalogWaitRef.current?.resolve.forEach(finish => finish(undefined));
+        restrictionFullCatalogWaitRef.current = null;
     }, []);
 
     const runRestrictionDigest = useCallback((enzymeIds: string[]) => {
@@ -2361,7 +2394,11 @@ export function MolBioToolkitV2() {
             setRestrictionCatalog(page.catalog);
             setRestrictionCatalogRecords(page.items);
         }).catch((error) => {
-            if (!cancelled) setRestrictionAuthorityError(error instanceof Error ? error.message : 'Restriction catalog unavailable.');
+            if (!cancelled) {
+                setRestrictionAuthorityError(error instanceof Error ? error.message : 'Restriction catalog unavailable.');
+                restrictionFullCatalogWaitRef.current?.resolve.forEach(finish => finish(undefined));
+                restrictionFullCatalogWaitRef.current = null;
+            }
         });
         return () => { cancelled = true; };
     }, [queryClient, restrictionConsumerVisible]);
@@ -3258,7 +3295,7 @@ export function MolBioToolkitV2() {
                         digestError={restrictionDigestError}
                         onDigestSelectionChange={handleRestrictionDigestSelection}
                         onSimulateDigest={runRestrictionDigest}
-                        onAnalyzeAll={() => runRestrictionAnalysis()}
+                        onAnalyzeAll={requestFullRestrictionAnalysis}
                     />
                 )}
                 qc={(
@@ -3795,7 +3832,7 @@ export function MolBioToolkitV2() {
                         digestError={restrictionDigestError}
                         onDigestSelectionChange={handleRestrictionDigestSelection}
                         onSimulateDigest={runRestrictionDigest}
-                        onAnalyzeAll={() => runRestrictionAnalysis()}
+                        onAnalyzeAll={requestFullRestrictionAnalysis}
                             />
                         )}
                         {!isExactMolecularAuthority && activePanel === 'pcr' && (

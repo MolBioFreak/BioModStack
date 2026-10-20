@@ -33,10 +33,11 @@ describe('mapping groups from initially partial native analysis', () => {
     let finish: (batch: RestrictionAnalysisBatch | undefined) => void;
     let analyze: ReturnType<typeof vi.fn<() => Promise<RestrictionAnalysisBatch | undefined>>>;
     let rerender: (value: SequenceData) => Promise<void>;
+    let loadCatalog: () => void;
 
     afterEach(async () => { if (root) await act(async () => root?.unmount()); root = undefined; host?.remove(); });
 
-    async function mount(initialMapped: string[] = []) {
+    async function mount(initialMapped: string[] = [], coldCatalog = false) {
         host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host);
         mapped = initialMapped;
         const pending = new Promise<RestrictionAnalysisBatch | undefined>(resolve => { finish = resolve; });
@@ -46,9 +47,11 @@ describe('mapping groups from initially partial native analysis', () => {
             const [ids, setIds] = useState(initialMapped);
             const [batch, setBatch] = useState<RestrictionAnalysisBatch>(partial);
             publish = setBatch;
+            const [loaded, setLoaded] = useState(!coldCatalog);
+            loadCatalog = () => setLoaded(true);
             const change = useCallback((next: string[]) => { mapped = next; setIds(next); }, []);
             return <DigestPanel mobile sequenceData={value} sequenceId="fixture" onHighlight={noop}
-                selectedEnzymes={ids} onEnzymesChange={change} catalog={catalog} catalogRecords={records} analysis={batch}
+                selectedEnzymes={ids} onEnzymesChange={change} catalog={loaded ? catalog : null} catalogRecords={loaded ? records : []} analysis={loaded ? batch : null}
                 authorityLoading={false} authorityError={null} digestSimulation={null} digestLoading={false} digestError={null}
                 onDigestSelectionChange={noop} onSimulateDigest={noop} onAnalyzeAll={analyze} />;
         }
@@ -68,6 +71,16 @@ describe('mapping groups from initially partial native analysis', () => {
         await act(async () => finish(full));
         expect(mapped).toEqual(expected); expect(button(label as string).getAttribute('aria-pressed')).toBe('true');
         await click(label as string); expect(mapped).toEqual([]);
+    });
+
+    it('keeps the first mapping intent through initial catalog loading', async () => {
+        await mount([], true); await click('Map nicking');
+        expect(analyze).toHaveBeenCalledOnce();
+        await act(async () => loadCatalog());
+        expect(button('Map nicking').getAttribute('aria-busy')).toBe('true');
+        await act(async () => finish(full));
+        expect(mapped).toEqual(['Nick']);
+        expect(button('Map nicking').getAttribute('aria-pressed')).toBe('true');
     });
 
     it('merges rapid group requests and preserves manual mappings when one group is removed', async () => {

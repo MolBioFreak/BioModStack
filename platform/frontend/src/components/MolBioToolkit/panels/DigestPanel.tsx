@@ -169,6 +169,9 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
     const [activeQuickMapGroups, setActiveQuickMapGroups] = useState<Set<QuickMapGroup>>(new Set());
     const selectedEnzymesRef = useRef(selectedEnzymes);
     const manualRef = useRef(new Set(selectedEnzymes));
+    const recordsRef = useRef(catalogRecords);
+    recordsRef.current = catalogRecords;
+    const mappingContextRef = useRef({ sequenceId, dna: sequenceData.sequence, circular: sequenceData.circular, catalog: catalog?.catalog_sha256 });
 
     selectedEnzymesRef.current = selectedEnzymes;
     const activeGroupsRef = useRef(activeQuickMapGroups);
@@ -196,11 +199,14 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
     useEffect(() => {
         setDigestEnzymes([]);
         onDigestSelectionChange([]);
-        cancelPendingMapping();
+        const previous = mappingContextRef.current;
+        if (previous.sequenceId !== sequenceId || previous.dna !== sequenceData.sequence || previous.circular !== sequenceData.circular
+            || (previous.catalog !== undefined && previous.catalog !== catalog?.catalog_sha256)) cancelPendingMapping();
+        mappingContextRef.current = { sequenceId, dna: sequenceData.sequence, circular: sequenceData.circular, catalog: catalog?.catalog_sha256 };
         updateGroups(new Set());
         manualRef.current = new Set(selectedEnzymesRef.current);
         onHighlight([]);
-    }, [sequenceData.sequence, sequenceData.circular, catalog?.catalog_sha256, onDigestSelectionChange, onHighlight]);
+    }, [sequenceId, sequenceData.sequence, sequenceData.circular, catalog?.catalog_sha256, onDigestSelectionChange, onHighlight]);
 
     const indexedAnalysis = useMemo(() => indexRestrictionAnalysis(analysis), [analysis]);
     const enzymeData = useMemo(() => buildEnzymeRows(catalogRecords, indexedAnalysis, selection, sequenceData), [catalogRecords, indexedAnalysis, selection, sequenceData.sequence, sequenceData.circular]);
@@ -229,7 +235,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
     const fullAnalysisRows = async (): Promise<EnzymeCutData[] | undefined> => {
         if (hasFullAnalysis || !onAnalyzeAll) return enzymeData;
         const batch = await onAnalyzeAll();
-        return batch ? buildEnzymeRows(catalogRecords, indexRestrictionAnalysis(batch), selection, sequenceData) : undefined;
+        return batch ? buildEnzymeRows(recordsRef.current, indexRestrictionAnalysis(batch), selection, sequenceData) : undefined;
     };
     const requestCountAnalysis = () => {
         if (!hasFullAnalysis) void Promise.resolve(onAnalyzeAll?.()).catch(() => undefined);

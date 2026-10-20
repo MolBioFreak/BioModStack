@@ -9,7 +9,7 @@ import { api } from '../../src/lib/api';
 import type { RestrictionAnalysisBatch } from '../../src/lib/restrictionAnalysis';
 import fixture from '../fixtures/molBioTrafficPairing.json';
 
-const shell = vi.hoisted(() => ({ visibility: {} as any, input: {} as any, digest: {} as any, viewer: {} as any, catalog: {} as any, requests: [] as any[] }));
+const shell = vi.hoisted(() => ({ visibility: {} as any, input: {} as any, digest: {} as any, viewer: {} as any, catalog: {} as any, catalogReady: null as Promise<void> | null, requests: [] as any[] }));
 vi.mock('../../src/components/MolBioToolkit/SequenceViewer', () => ({ SequenceViewer: (props: any) => { shell.viewer = props; return null; } }));
 vi.mock('../../src/components/MolBioToolkit/MolecularInputModal', () => ({ MolecularInputModal: (props: any) => { shell.input = props; return null; } }));
 vi.mock('../../src/components/MolBioToolkit/VisibilityPanel', () => ({ VisibilityPanel: (props: any) => { shell.visibility = props; return null; } }));
@@ -21,7 +21,7 @@ vi.mock('../../src/components/MolBioToolkit/panels', () => ({
 vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({ useGlobalExperimentContext: () => ({ updateQueryParams: vi.fn(), contextHref: () => '/' }) }));
 vi.mock('../../src/lib/restrictionAnalysis', async importOriginal => ({
     ...await importOriginal<any>(),
-    fetchRestrictionCatalogBrowse: async () => ({ catalog: shell.catalog, items: ['EcoRI', 'BamHI', 'BsaI'].map(enzyme_id => ({ enzyme_id, canonical_name: enzyme_id })) }),
+    fetchRestrictionCatalogBrowse: async () => { await shell.catalogReady; return { catalog: shell.catalog, items: ['EcoRI', 'BamHI', 'BsaI'].map(enzyme_id => ({ enzyme_id, canonical_name: enzyme_id })) }; },
     fetchRestrictionAnalysisBatch: (options: any) => new Promise((resolve, reject) => shell.requests.push({ ...options, resolve, reject })),
 }));
 import { MolBioToolkitV2 } from '../../src/components/MolBioToolkit/MolBioToolkitV2';
@@ -46,7 +46,7 @@ async function mount() {
 }
 async function finish(request: any, result: RestrictionAnalysisBatch) { await act(async () => request.resolve(result)); }
 beforeEach(() => {
-    shell.requests = []; shell.catalog = fixture.catalog.receipt; shell.digest = {};
+    shell.requests = []; shell.catalog = fixture.catalog.receipt; shell.catalogReady = null; shell.digest = {};
     localStorage.clear(); window.innerWidth = 1400;
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -54,6 +54,29 @@ beforeEach(() => {
     api.defaults.adapter = async config => ({ config, status: 200, statusText: 'OK', headers: {}, data: config.url?.endsWith('/primer-tm/options') ? { algorithms: [{ id: 'nn_santalucia_hicks_2004', sequence_types: ['dna', 'rna'] }], defaults: {} } : [] });
 });
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); api.defaults.adapter = adapter; vi.unstubAllGlobals(); });
+
+it.each([false, true])('retains a full mapping request during catalog load and drops it on source change (%s)', async changeSource => {
+    let catalogReady!: () => void;
+    shell.catalogReady = new Promise<void>(resolve => { catalogReady = resolve; });
+    await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter><MolBioToolkitV2 /></MemoryRouter></QueryClientProvider>));
+    await act(async () => shell.input.onLoadDemo(seq));
+    await click('Digest');
+    let promise!: Promise<RestrictionAnalysisBatch | undefined>;
+    await act(async () => { promise = shell.digest.onAnalyzeAll(); });
+    expect(shell.requests).toHaveLength(0);
+    if (changeSource) {
+        await act(async () => shell.input.onLoadDemo({ ...seq, name: 'New construct', sequence: 'TTTT' }));
+        expect(await promise).toBeUndefined();
+    }
+    await act(async () => catalogReady());
+    const request = shell.requests.at(-1);
+    expect(request).toBeTruthy();
+    if (!changeSource) {
+        expect(request.enzymeIds).toBeUndefined();
+        const result = batch(['EcoRI', 'BamHI', 'BsaI'], request);
+        await finish(request, result); expect(await promise).toBe(result);
+    }
+});
 
 it('returns and shares a full scan, keeps mapped results during progress, and reuses its coverage after group mapping', async () => {
     await mount();
