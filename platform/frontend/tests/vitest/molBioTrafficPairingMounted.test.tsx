@@ -120,7 +120,10 @@ it('mounted workspace uses six compact pages, all inventory, zero warm-remount c
     expect(calls.every(r => new URL(r.url, 'http://fixture').searchParams.get('response_view') === 'compact')).toBe(true);
     expect(calls.reduce((sum, r) => sum + r.responseBytes, 0)).toBe(fixture.catalog.decoded_bytes.compact);
     expect(fixture.catalog.decoded_bytes.compact).toBeLessThan(fixture.catalog.decoded_bytes.full);
-    expect(host.textContent).toContain(`of ${receipt.counts.total} enzymes`);
+    expect(host.textContent).toContain(`of ${full.filter(r => !['AbaSI', 'MspJI'].includes(r.enzyme_id)).length} enzymes`);
+    await click('Special cases');
+    expect([...host.querySelectorAll('[data-enzyme-name]')].map(e => e.getAttribute('data-enzyme-name'))).toEqual(['AbaSI', 'MspJI']);
+    await click('Special cases');
     await input(full.at(-1)!.enzyme_id);
     expect(host.querySelector(`[data-enzyme-name="${full.at(-1)!.enzyme_id}"]`)).not.toBeNull();
     expect(requests.filter(r => r.url.includes('enzyme_ids'))).toHaveLength(0);
@@ -155,14 +158,14 @@ it('mounted full/compact inventory has identical filters, every bulk-map group a
     const analysis = { schema: 'bms.molbio.restriction-analysis-batch-view.v1', source: {}, catalog: receipt, chunks: [], analysis: { counts: { recognition_site_count_definite: full.length, recognition_site_count_possible: 0, double_strand_break_count: 0, nick_count: 0 }, enzyme_summaries: full.map((r, i) => ({ enzyme_id: r.enzyme_id, canonical_name: r.canonical_name, analysis_capability: r.analysis_capability, cleavage_status: r.cleavage.status, recognition_site_count_definite: 1, recognition_site_count_possible: 0, double_strand_break_count: i % 4, nick_count: r.analysis_capability === 'nicking_analysis' ? 1 : 0, limitations: [] })), occurrences: [], grouped_cleavages: [], warnings: [], limitations: [] } } as unknown as RestrictionAnalysisBatch;
     const map = vi.fn(), analyze = vi.fn();
     const props = { sequenceData: seq, sequenceId: null, onHighlight: noop, catalog: receipt, analysis, authorityLoading: false, authorityError: null, digestSimulation: null, digestLoading: false, digestError: null, onDigestSelectionChange: noop, onSimulateDigest: noop, onEnzymesChange: map, onAnalyzeAll: analyze };
-    const expected = full.map((record, i) => ({ record, summary: analysis.analysis.enzyme_summaries[i], cuts: [], selectionCuts: 0 }));
+    const expected = full.map((record, i) => ({ record, summary: analysis.analysis.enzyme_summaries[i], cuts: [], selectionCuts: 0 })).filter(({ record }) => !['AbaSI', 'MspJI'].includes(record.enzyme_id));
     // IDs follow the synthetic fixture's index assignment, never the UI selector.
     const quickMapIds = {
-        unique: full.filter((_, i) => i % 4 === 1).map(r => r.enzyme_id),
-        double: full.filter((_, i) => i % 4 === 2).map(r => r.enzyme_id),
-        three_plus: full.filter((_, i) => i % 4 === 3).map(r => r.enzyme_id),
-        nicking: full.filter(r => r.analysis_capability === 'nicking_analysis').map(r => r.enzyme_id),
-        type_iis: full.filter(r => fixture.catalog.golden_gate_compatible_ids.includes(r.enzyme_id)).map(r => r.enzyme_id),
+        unique: full.filter((r, i) => i % 4 === 1 && !['AbaSI', 'MspJI'].includes(r.enzyme_id)).map(r => r.enzyme_id),
+        double: full.filter((r, i) => i % 4 === 2 && !['AbaSI', 'MspJI'].includes(r.enzyme_id)).map(r => r.enzyme_id),
+        three_plus: full.filter((r, i) => i % 4 === 3 && !['AbaSI', 'MspJI'].includes(r.enzyme_id)).map(r => r.enzyme_id),
+        nicking: full.filter(r => r.analysis_capability === 'nicking_analysis' && !['AbaSI', 'MspJI'].includes(r.enzyme_id)).map(r => r.enzyme_id),
+        type_iis: full.filter(r => fixture.catalog.golden_gate_compatible_ids.includes(r.enzyme_id) && !['AbaSI', 'MspJI'].includes(r.enzyme_id)).map(r => r.enzyme_id),
     };
     for (const records of [full, compact]) {
         await render(null); await render(<DigestPanel {...props} catalogRecords={records} />);

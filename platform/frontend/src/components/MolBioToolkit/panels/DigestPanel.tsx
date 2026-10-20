@@ -2,6 +2,7 @@ import { digestFragmentsForAssembly } from '../../../lib/digestAssemblyTransfer'
 import type { AssemblyFragmentInput } from '../../../lib/api';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { saveRestrictionDigest, restrictionRecognitionSite } from '../../../lib/restrictionAnalysis';
+import { restrictionSpecialCase } from '../../../lib/restrictionSpecialCases';
 import type { HighlightedRegion, SelectionInfo, SequenceData } from '../types';
 import type {
     RestrictionAnalysisBatch,
@@ -14,7 +15,7 @@ import type {
 } from '../../../lib/restrictionAnalysis';
 
 type CutFilter = 'all' | 'zero' | 'unique' | 'double' | 'three_plus' | 'selection';
-type GroupFilter = 'all' | 'digest' | 'nicking' | 'recognition_only';
+type GroupFilter = 'all' | 'digest' | 'nicking' | 'recognition_only' | 'special';
 export type QuickMapGroup = 'unique' | 'double' | 'three_plus' | 'nicking' | 'type_iis';
 
 interface DigestPanelProps {
@@ -52,7 +53,7 @@ interface EnzymeCutData {
 
 export function getQuickMapEnzymeNames(enzymes: Pick<EnzymeCutData, 'record' | 'summary'>[], group: QuickMapGroup): string[] {
     return enzymes.filter(({ record, summary }) => {
-        if (!summary) return false;
+        if (!summary || restrictionSpecialCase(record.enzyme_id)) return false;
         const sites = summary.recognition_site_count_definite + summary.recognition_site_count_possible;
         if (sites === 0) return false;
         if (group === 'unique') return summary.double_strand_break_count === 1;
@@ -109,7 +110,9 @@ function buildEnzymeRows(records: DigestPanelProps['catalogRecords'], index: Ret
 function filterEnzymeRows(rows: EnzymeCutData[], searchQuery: string, groupFilter: GroupFilter, cutFilter: CutFilter) {
     const query = searchQuery.trim().toLowerCase();
     return rows.filter(({ record, summary, selectionCuts }) => {
+        if (Boolean(restrictionSpecialCase(record.enzyme_id)) !== (groupFilter === 'special')) return false;
         if (query && ![record.enzyme_id, record.canonical_name, restrictionRecognitionSite(record), ...record.aliases].some(value => value.toLowerCase().includes(query))) return false;
+        if (groupFilter === 'special') return true; // Motif counts are not ordinary cut-count filters.
         if (groupFilter === 'digest' && record.analysis_capability !== 'digest_simulation') return false;
         if (groupFilter === 'nicking' && (summary?.nick_count ?? 0) === 0) return false;
         if (groupFilter === 'recognition_only' && record.analysis_capability !== 'recognition_only') return false;
@@ -212,13 +215,24 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
     const enzymeData = useMemo(() => buildEnzymeRows(catalogRecords, indexedAnalysis, selection, sequenceData), [catalogRecords, indexedAnalysis, selection, sequenceData.sequence, sequenceData.circular]);
     const hasFullAnalysis = catalogRecords.length > 0 && catalogRecords.every(record => indexedAnalysis.summaries.has(record.enzyme_id));
     const filtered = useMemo(() => filterEnzymeRows(enzymeData, searchQuery, groupFilter, cutFilter), [cutFilter, enzymeData, groupFilter, searchQuery]);
+    const specialCasesVisible = groupFilter === 'special';
+    const displayCounts = useMemo(() => {
+        const rows = (analysis?.analysis.enzyme_summaries ?? []).filter(row => Boolean(restrictionSpecialCase(row.enzyme_id)) === specialCasesVisible);
+        return rows.reduce((counts, row) => ({
+            definite: counts.definite + row.recognition_site_count_definite,
+            possible: counts.possible + row.recognition_site_count_possible,
+            dsb: counts.dsb + row.double_strand_break_count,
+            nicks: counts.nicks + row.nick_count,
+            enzymes: counts.enzymes + 1,
+        }), { definite: 0, possible: 0, dsb: 0, nicks: 0, enzymes: 0 });
+    }, [analysis, specialCasesVisible]);
     const filteredMapIds = useMemo(() => filtered.filter(({ summary }) => summary !== null && summary.recognition_site_count_definite + summary.recognition_site_count_possible > 0).map(({ record }) => record.enzyme_id), [filtered]);
 
-    // Paging only bounds mounted rows; filters and every bulk action retain the full inventory.
+    // Paging only bounds mounted rows; special cases remain available by explicit choice.
     const pageCount = Math.max(1, Math.ceil(filtered.length / 50));
     const currentPage = Math.min(displayPage, pageCount - 1);
     const displayed = filtered.slice(currentPage * 50, (currentPage + 1) * 50);
-    useEffect(() => { setDisplayPage(0); }, [searchQuery, cutFilter, groupFilter, sequenceData.sequence, sequenceData.circular, catalog?.catalog_sha256]);
+    useEffect(() => { setDisplayPage(0); }, [searchQuery, cutFilter, groupFilter, sequenceData.sequence, sequenceData.circular, catalog?.catalog_sha256, groupFilter]);
 
     const updateDigest = (next: string[]) => { setDigestEnzymes(next); onDigestSelectionChange(next); };
     const toggleDigest = (id: string) => updateDigest(digestEnzymes.includes(id) ? digestEnzymes.filter((entry) => entry !== id) : [...digestEnzymes, id]);
@@ -328,15 +342,16 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
             {analysis?.complete === false && <span className="text-amber-300">Partial scan: {analysis.analysis.enzyme_summaries.length}/{analysis.requested_enzyme_count} requested enzymes analyzed.</span>}
         </div>
         {analysis && <div data-restriction-counts="true" className="grid grid-cols-3 gap-2 px-3 text-xs text-slate-300">
-            <div><strong>{analysis.analysis.counts.recognition_site_count_definite}</strong> definite enzyme-site match{analysis.analysis.counts.recognition_site_count_definite === 1 ? '' : 'es'} <span className="text-slate-500">across {analysis.analysis.enzyme_summaries.length} analyzed enzymes</span><div className="text-slate-500"><strong>{analysis.analysis.counts.recognition_site_count_possible}</strong> possible match{analysis.analysis.counts.recognition_site_count_possible === 1 ? '' : 'es'}</div></div>
-            <div><strong>{analysis.analysis.counts.double_strand_break_count}</strong> predicted DSB{analysis.analysis.counts.double_strand_break_count === 1 ? '' : 's'}</div>
-            <div><strong>{analysis.analysis.counts.nick_count}</strong> nicks</div>
+            <div><strong>{displayCounts.definite}</strong> definite {specialCasesVisible ? 'sequence-motif' : 'enzyme-site'} match{displayCounts.definite === 1 ? '' : 'es'} <span className="text-slate-500">across {displayCounts.enzymes} analyzed enzymes</span><div className="text-slate-500"><strong>{displayCounts.possible}</strong> possible match{displayCounts.possible === 1 ? '' : 'es'}</div></div>
+            {specialCasesVisible ? <div className="col-span-2 text-amber-200">Sequence motifs only; no cuts on unmodified DNA.</div> : <><div><strong>{displayCounts.dsb}</strong> predicted DSB{displayCounts.dsb === 1 ? '' : 's'}</div><div><strong>{displayCounts.nicks}</strong> nicks</div></>}
         </div>}
         {analysis && <p className="px-3 text-xs text-slate-500">Each enzyme is counted separately. Shared motifs and context-dependent enzymes may overlap at one sequence position.</p>}
 
         <div data-digest-mobile-sticky-search={mobile ? 'true' : undefined} className="space-y-2 px-3">
+            <button type="button" aria-pressed={specialCasesVisible} onClick={() => { setGroupFilter(specialCasesVisible ? 'all' : 'special'); setCutFilter('all'); setDisplayPage(0); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-3 py-1 ${specialCasesVisible ? 'border-amber-400 bg-amber-900/40' : 'border-slate-600 bg-slate-800'}`}>Special cases</button>
+            {specialCasesVisible && <p className="text-xs text-amber-200">AbaSI and MspJI require modified cytosines. On unmodified DNA, their sequence matches are not cut sites. Map them here only to inspect sequence motifs.</p>}
             <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search enzyme or recognition site…" data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 ${mobile ? 'min-h-12 min-w-12' : ''}`} />
-            {!compactLandscape && <><div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{CUT_FILTERS.map(([value,label]) => <button key={value} onClick={() => { setCutFilter(value); if (value !== 'all') requestCountAnalysis(); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${cutFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div><div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{GROUP_FILTERS.map(([value,label]) => <button key={value} onClick={() => { setGroupFilter(value); if (value === 'nicking') requestCountAnalysis(); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${groupFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div><div data-digest-bulk-map="true" className="flex gap-1 overflow-x-auto"><button disabled={hasFullAnalysis && filteredMapIds.length === 0} onClick={() => void mapFiltered()} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border border-cyan-600 bg-cyan-950/50 px-2 disabled:opacity-40`}>Map filtered ({filteredMapIds.length})</button><button disabled={selectedEnzymes.length === 0 && pendingMappingCount === 0} onClick={clearMap} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 disabled:opacity-40`}>Clear map ({selectedEnzymes.length})</button></div><div data-digest-quick-map="true" className="flex gap-1 overflow-x-auto">{QUICK.map(([value,label]) => <button key={value} aria-pressed={activeQuickMapGroups.has(value)} aria-busy={pendingGroups.current.has(value)} onClick={() => void toggleQuick(value)} className={`${mobile ? 'min-h-12 min-w-12' : ''} ${activeQuickMapGroups.has(value) ? 'border-cyan-400 bg-cyan-700' : 'border-slate-600 bg-slate-800'} rounded border px-2`}>{label}</button>)}</div></>}
+            {!compactLandscape && <>{!specialCasesVisible && <div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{CUT_FILTERS.map(([value,label]) => <button key={value} onClick={() => { setCutFilter(value); if (value !== 'all') requestCountAnalysis(); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${cutFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div>}<div data-digest-mobile-filter-bar={mobile ? 'true' : undefined} className="flex gap-1 overflow-x-auto">{GROUP_FILTERS.map(([value,label]) => <button key={value} onClick={() => { setGroupFilter(value); if (value === 'nicking') requestCountAnalysis(); }} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 ${groupFilter === value ? 'bg-cyan-700' : 'bg-slate-800'}`}>{label}</button>)}</div><div data-digest-bulk-map="true" className="flex gap-1 overflow-x-auto"><button disabled={hasFullAnalysis && filteredMapIds.length === 0} onClick={() => void mapFiltered()} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border border-cyan-600 bg-cyan-950/50 px-2 disabled:opacity-40`}>Map filtered ({filteredMapIds.length})</button><button disabled={selectedEnzymes.length === 0 && pendingMappingCount === 0} onClick={clearMap} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 disabled:opacity-40`}>Clear map ({selectedEnzymes.length})</button></div><div data-digest-quick-map="true" className="flex gap-1 overflow-x-auto">{QUICK.map(([value,label]) => <button key={value} aria-pressed={activeQuickMapGroups.has(value)} aria-busy={pendingGroups.current.has(value)} onClick={() => void toggleQuick(value)} className={`${mobile ? 'min-h-12 min-w-12' : ''} ${activeQuickMapGroups.has(value) ? 'border-cyan-400 bg-cyan-700' : 'border-slate-600 bg-slate-800'} rounded border px-2`}>{label}</button>)}</div></>}
         </div>
         <nav aria-label="Enzyme display pages" className="flex items-center justify-between gap-2 px-3">
             <button type="button" disabled={currentPage === 0} onClick={() => setDisplayPage(currentPage - 1)} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 disabled:opacity-40`}>Previous enzymes</button>
@@ -344,7 +359,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
             <button type="button" disabled={currentPage + 1 === pageCount} onClick={() => setDisplayPage(currentPage + 1)} className={`${mobile ? 'min-h-12 min-w-12' : ''} rounded border px-2 disabled:opacity-40`}>Next enzymes</button>
         </nav>
         <div data-digest-scroll-region={mobile ? 'enzymes' : undefined} className={mobile ? 'space-y-2 p-3' : 'max-h-80 space-y-2 overflow-y-auto'}>
-            {displayed.map(({ record, summary }) => { const digestable = record.analysis_capability === 'digest_simulation'; return <div key={record.enzyme_id} data-enzyme-name={record.enzyme_id} className="rounded border border-slate-700 bg-slate-800 p-2"><div className="flex justify-between gap-2"><div><strong>{record.canonical_name}</strong><div className="font-mono text-xs text-slate-400">{restrictionRecognitionSite(record)}</div>{summary ? <div className="text-xs">{summary.recognition_site_count_definite} definite + {summary.recognition_site_count_possible} possible · {summary.double_strand_break_count} DSB · {summary.nick_count} nick</div> : <div className="text-xs text-amber-300">{record.analysis_capability === 'recognition_only' ? 'geometry unavailable' : 'not yet analyzed'}</div>}{!digestable && summary && <span className="text-xs text-amber-300">{record.analysis_capability === 'nicking_analysis' ? 'map-only nickase' : 'geometry unavailable'}</span>}</div><div className="flex gap-1"><button onClick={() => toggleMap(record.enzyme_id)} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`${mobile ? 'min-h-12 min-w-20' : ''} rounded border px-2 disabled:opacity-40`}>{selectedEnzymes.includes(record.enzyme_id) ? 'Unmap' : 'Map'}</button><button disabled={!digestable} onClick={() => toggleDigest(record.enzyme_id)} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`${mobile ? 'min-h-12 min-w-20' : ''} rounded border px-2 disabled:opacity-40`}>{mobile ? (digestEnzymes.includes(record.enzyme_id) ? 'Remove' : 'Add') : 'Digest'}</button></div></div></div>; })}
+            {displayed.map(({ record, summary }) => { const special = restrictionSpecialCase(record.enzyme_id); const digestable = record.analysis_capability === 'digest_simulation'; return <div key={record.enzyme_id} data-enzyme-name={record.enzyme_id} className="rounded border border-slate-700 bg-slate-800 p-2"><div className="flex justify-between gap-2"><div><strong>{record.canonical_name}</strong><div className="font-mono text-xs text-slate-400">{restrictionRecognitionSite(record)}</div>{special && <p className="max-w-lg text-xs text-amber-200">{special}</p>}{summary ? <div className="text-xs">{summary.recognition_site_count_definite} definite + {summary.recognition_site_count_possible} possible {special ? 'sequence motifs (not cuts)' : `· ${summary.double_strand_break_count} DSB · ${summary.nick_count} nick`}</div> : <div className="text-xs text-amber-300">{record.analysis_capability === 'recognition_only' ? 'geometry unavailable' : 'not yet analyzed'}</div>}{!digestable && summary && <span className="text-xs text-amber-300">{record.analysis_capability === 'nicking_analysis' ? 'map-only nickase' : 'geometry unavailable'}</span>}</div><div className="flex gap-1"><button onClick={() => toggleMap(record.enzyme_id)} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`${mobile ? 'min-h-12 min-w-20' : ''} rounded border px-2 disabled:opacity-40`}>{selectedEnzymes.includes(record.enzyme_id) ? 'Unmap' : 'Map'}</button><button disabled={!digestable} onClick={() => toggleDigest(record.enzyme_id)} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`${mobile ? 'min-h-12 min-w-20' : ''} rounded border px-2 disabled:opacity-40`}>{mobile ? (digestEnzymes.includes(record.enzyme_id) ? 'Remove' : 'Add') : 'Digest'}</button></div></div></div>; })}
         </div>
         {onReadEnzymeDetails && <div className="px-3">
             <button type="button" onClick={readDetails} disabled={selectedEnzymes.length + digestEnzymes.length === 0}>Read selected enzyme details</button>
@@ -357,6 +372,7 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
         </div>
         <div data-digest-mobile-footer={mobile ? 'true' : undefined} data-digest-compact-landscape={mobile && compactLandscape ? 'true' : undefined} className={`${mobile ? 'max-h-[40%] shrink-0 overflow-y-auto overscroll-contain' : ''} border-t border-slate-700 bg-slate-950 p-3`}>
             <div className="mb-2 flex gap-1 overflow-x-auto">{digestEnzymes.map((id) => <button key={id} onClick={() => toggleDigest(id)} className="rounded border border-amber-500 px-2">{id} ×</button>)}</div>
+            {digestEnzymes.some(id => restrictionSpecialCase(id)) && <p className="mb-2 text-xs text-amber-200">Special-case simulation shows motif-based geometry, not cleavage of unmodified DNA.</p>}
             <button onClick={() => onSimulateDigest(digestEnzymes)} disabled={digestLoading || digestEnzymes.length === 0} data-digest-mobile-run={mobile ? 'true' : undefined} data-digest-mobile-touch-target={mobile ? 'true' : undefined} className={`w-full rounded bg-cyan-600 py-2 disabled:bg-slate-600 ${mobile ? 'min-h-12 min-w-12' : ''}`}>{digestLoading ? 'Digesting…' : `Run Digest (${digestEnzymes.length} enzyme${digestEnzymes.length === 1 ? '' : 's'})`}</button>
             {digestSimulation?.source?.kind === 'molecular_revision' && <div>
                 <button type="button" onClick={saveDigest} disabled={currentSave?.pending || !!currentSave?.operationId} className="rounded border px-3 py-2 disabled:opacity-40">{currentSave?.pending ? 'Saving…' : 'Save digest & fragments'}</button>
