@@ -130,8 +130,10 @@ describe('AbaSI/MspJI explicit special-case mapping', () => {
     ])('$label excludes both special IDs even when native summaries fit the category', async ({ label, specialDsb, expected }) => {
         await mount({ specialDsb }); await click(label); expect(mapped).toEqual(expected);
         await click(label); expect(mapped).toEqual([]);
-        // Quick groups are ordinary even when the explicit special view is open.
-        await click('Special cases'); await click(label); expect(mapped).toEqual(expected);
+        // Special-case browsing offers motif mapping, not ordinary cutter controls.
+        await click('Special cases');
+        expect([...host.querySelectorAll('button')].some(button => button.textContent === label)).toBe(false);
+        expect(mapped).toEqual([]);
     });
 
     it('bulk maps only ordinary enzymes by default and includes special motifs only on explicit special-view mapping', async () => {
