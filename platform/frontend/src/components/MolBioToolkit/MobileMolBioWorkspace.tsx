@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { MobileMolBioToolbar } from './MobileMolBioToolbar';
 import type { SequenceData } from './types';
 import type { MolBioMobileSurface } from './utils/mobileLayout';
@@ -85,10 +85,27 @@ export function MobileMolBioWorkspace({
     digest,
     qc,
 }: MobileMolBioWorkspaceProps) {
-    useEffect(() => {
+    const workspaceRef = useRef<HTMLDivElement>(null);
+    useLayoutEffect(() => {
         const className = 'bms-molbio-mobile-active';
         document.documentElement.classList.add(className);
-        return () => document.documentElement.classList.remove(className);
+        const viewport = window.visualViewport;
+        // Android's keyboard resizes the visual viewport, not 100dvh. Keep the
+        // action plane above it, including when the browser pans a focused field.
+        const updateViewport = () => {
+            workspaceRef.current?.style.setProperty('--molbio-viewport-height', `${viewport?.height ?? window.innerHeight}px`);
+            workspaceRef.current?.style.setProperty('--molbio-viewport-top', `${viewport?.offsetTop ?? 0}px`);
+        };
+        updateViewport();
+        viewport?.addEventListener('resize', updateViewport);
+        viewport?.addEventListener('scroll', updateViewport);
+        window.addEventListener('resize', updateViewport);
+        return () => {
+            document.documentElement.classList.remove(className);
+            viewport?.removeEventListener('resize', updateViewport);
+            viewport?.removeEventListener('scroll', updateViewport);
+            window.removeEventListener('resize', updateViewport);
+        };
     }, []);
 
     const showConstructs = constructPickerOpen || !hasSequence;
@@ -106,8 +123,13 @@ export function MobileMolBioWorkspace({
 
     return (
         <div
+            ref={workspaceRef}
             data-molbio-mobile-layout="true"
-            className="fixed inset-0 z-[80] flex h-[100dvh] w-screen flex-col overflow-hidden bg-slate-950 text-slate-100"
+            style={{
+                top: 'var(--molbio-viewport-top, 0px)',
+                height: 'calc(var(--molbio-viewport-height, 100dvh) - var(--molbio-mobile-dock-space, 0px))',
+            }}
+            className="fixed inset-x-0 z-[80] flex flex-col overflow-hidden bg-slate-950 text-slate-100"
         >
             <MobileMolBioToolbar
                 constructName={constructName}

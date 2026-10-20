@@ -36,12 +36,16 @@ describe('DigestPanel mobile API workflow', () => {
         await act(async () => map.click());
         expect(onEnzymesChange).toHaveBeenCalledWith(['EcoRI']);
     });
-    it('keeps one enzyme scroller, touch-safe sticky footer, and exact API output usable', async () => {
+    it('scrolls controls and enzymes together above the reachable footer, preserving exact API output', async () => {
         container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
         const simulate = vi.fn();
         await act(async () => root?.render(<DigestPanel mobile sequenceData={sequence} sequenceId={null} onHighlight={vi.fn()} selectedEnzymes={[]} onEnzymesChange={vi.fn()} catalog={catalog} productEvidence={products} catalogRecords={[record]} analysis={analysis} authorityLoading={false} authorityError={null} digestSimulation={simulation} digestLoading={false} digestError={null} onDigestSelectionChange={vi.fn()} onSimulateDigest={simulate} />));
         const panel = container.querySelector('[data-digest-layout="mobile"]');
-        const scroller = container.querySelector('[data-digest-scroll-region="enzymes"]');
+        const scroller = container.querySelector('[data-digest-scroll-region="controls"]');
+        expect(scroller?.contains(container.querySelector('input'))).toBe(true);
+        expect(scroller?.contains(container.querySelector('[data-digest-scroll-region="enzymes"]'))).toBe(true);
+        expect(scroller?.className).toContain('overflow-y-auto');
+        expect(container.querySelector('[data-digest-scroll-region="enzymes"]')?.className).not.toContain('overflow-y-auto');
         const footer = container.querySelector('[data-digest-mobile-footer="true"]');
         expect(panel).toBeTruthy(); expect(scroller).toBeTruthy(); expect(footer).toBeTruthy(); expect(scroller?.contains(footer)).toBe(false);
         for (const target of container.querySelectorAll<HTMLElement>('[data-digest-mobile-touch-target="true"]')) expect(target.className).toContain('min-h-12');

@@ -33,7 +33,7 @@ export function MobileMolBioToolbar({
         <header
             data-molbio-mobile-toolbar="true"
             style={{ paddingTop: 'calc(env(safe-area-inset-top) + 0.75rem)' }}
-            className="z-40 flex flex-shrink-0 items-center gap-2 overflow-x-auto border-b border-slate-700 bg-slate-950/95 pb-2 pt-[max(env(safe-area-inset-top),0.75rem)] pl-[max(env(safe-area-inset-left),0.75rem)] pr-[max(env(safe-area-inset-right),0.75rem)] shadow-lg overscroll-x-contain"
+            className="z-40 grid flex-shrink-0 grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-2 border-b border-slate-700 bg-slate-950/95 pb-2 pl-[max(env(safe-area-inset-left),0.75rem)] pr-[max(env(safe-area-inset-right),0.75rem)] shadow-lg"
         >
             <button
                 type="button"
@@ -50,10 +50,10 @@ export function MobileMolBioToolbar({
             >
                 Constructs
             </button>
-            <div className="min-w-32 max-w-64 flex-shrink truncate px-1 text-sm font-semibold text-slate-100" title={constructName}>
+            <div className="min-w-0 truncate px-1 text-sm font-semibold text-slate-100" title={constructName}>
                 {constructName || 'Choose a construct'}
             </div>
-            <nav className="flex flex-shrink-0 items-center gap-1" aria-label="Mobile MolBio views">
+            <nav className="col-span-3 grid min-w-0 grid-cols-5 gap-1" aria-label="Mobile MolBio views">
                 {SURFACES.map((item) => (
                     <button
                         key={item.id}
@@ -70,7 +70,7 @@ export function MobileMolBioToolbar({
                                 ? 'QC is available for the current construct only.'
                                 : undefined}
                         onClick={() => onSurfaceChange(item.id)}
-                        className={`min-h-12 min-w-12 rounded-lg px-3 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                        className={`min-h-12 min-w-12 rounded-lg px-1 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                             surface === item.id
                                 ? 'bg-cyan-600 text-white'
                                 : 'border border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800'

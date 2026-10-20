@@ -533,8 +533,7 @@ html.bms-cordova-compact .bms-layout-main {
 }
 
 html.bms-cordova-compact [data-molbio-mobile-layout='true'] {
-  bottom: calc(5.75rem + max(0.75rem, env(safe-area-inset-bottom)));
-  height: auto !important;
+  --molbio-mobile-dock-space: calc(5.75rem + max(0.75rem, env(safe-area-inset-bottom)));
 }
 
 html.bms-cordova-compact [data-bms-dev-issues-drawer='true'] {
@@ -567,6 +566,17 @@ html.bms-cordova-compact [data-bms-telemetry-canvas='true'] {
 html.bms-cordova-compact [data-bms-telemetry-axis='true'],
 html.bms-cordova-compact [data-bms-telemetry-lines='true'] {
   top: 0 !important;
+}
+
+/* Keep the phone's controls visible without spending two rows in landscape. */
+@media (min-width: 700px) and (max-height: 500px) {
+  [data-molbio-mobile-toolbar='true'] {
+    grid-template-columns: auto auto minmax(0, 1fr) minmax(360px, 1.6fr);
+  }
+
+  [data-molbio-mobile-toolbar='true'] nav {
+    grid-column: auto;
+  }
 }
 
 /* Android WebView can report a zero top inset after landscape rotation. */
