@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 
-test('native content owns Android 15 bar/cutout insets without changing zoom or older Android', () => {
+test('native content owns Android 15 bar, cutout and keyboard insets without changing zoom or older Android', () => {
   const root = mkdtempSync(join(tmpdir(), 'bms-window-insets-'));
   try {
     mkdirSync(join(root, 'scripts'));
@@ -33,11 +33,15 @@ public class MainActivity extends CordovaActivity {
     assert.match(patched, /right \+ safe.right, bottom \+ safe.bottom\)/);
     assert.match(patched, /new android.view.WindowInsets.Builder\(insets\)/);
     assert.match(patched, /setInsets\(types, android.graphics.Insets.NONE\)/);
-    assert.doesNotMatch(patched, /Type.ime\(\)|WindowInsets.CONSUMED/);
+    assert.match(patched, /Type.ime\(\)/);
+    assert.doesNotMatch(patched, /WindowInsets.CONSUMED/);
     assert.match(patched, /content.requestApplyInsets\(\)/);
     assert.match(patched, /setSupportZoom\(true\)/);
     execFileSync(process.execPath, [script]);
     assert.equal(readFileSync(activity, 'utf8'), patched, 'repeated prepare must not stack padding/listeners');
+    writeFileSync(activity, patched.replace('\n                    | android.view.WindowInsets.Type.ime()', ''));
+    execFileSync(process.execPath, [script]);
+    assert.equal(readFileSync(activity, 'utf8'), patched, 'reused platform source receives the current keyboard policy');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
