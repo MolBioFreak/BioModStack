@@ -884,7 +884,7 @@ export function MolBioToolkitV2() {
     const [restrictionCatalog, setRestrictionCatalog] = useState<RestrictionCatalogReceipt | null>(null);
     const [restrictionCatalogRecords, setRestrictionCatalogRecords] = useState<RestrictionCatalogSummary[]>([]);
     const [restrictionProductEvidence, setRestrictionProductEvidence] = useState<RestrictionProductReleaseReceipt | null>(null);
-    const [restrictionAnalysis, setRestrictionAnalysis] = useState<RestrictionAnalysisBatch | null>(null);
+    const [restrictionAnalysisState, setRestrictionAnalysis] = useState<RestrictionAnalysisBatch | null>(null);
     const [restrictionAuthorityLoading, setRestrictionAuthorityLoading] = useState(false);
     const [restrictionAuthorityError, setRestrictionAuthorityError] = useState<string | null>(null);
     const [restrictionDigest, setRestrictionDigest] = useState<RestrictionDigestSimulation | null>(null);
@@ -893,6 +893,12 @@ export function MolBioToolkitV2() {
 
     const restrictionCatalogRecordsRef = useRef<RestrictionCatalogSummary[]>([]);
     const restrictionAnalysisAbortRef = useRef<AbortController | null>(null);
+    const restrictionAnalysisResultRef = useRef<{ key: string; batch: RestrictionAnalysisBatch } | null>(null);
+    const restrictionAnalysisPendingRef = useRef<{
+        key: string;
+        enzymeIds: Set<string> | null;
+        promise: Promise<RestrictionAnalysisBatch | undefined>;
+    } | null>(null);
     const restrictionAnalysisControllerRef = useRef(createLatestAsyncResourceController());
     const restrictionAuthorityControllerRef = useRef(createLatestAsyncResourceController());
     const restrictionDigestControllerRef = useRef(createLatestAsyncResourceController());
@@ -915,45 +921,85 @@ export function MolBioToolkitV2() {
         };
     }, [selectedExactMolecularRevision, sequenceData.circular, sequenceData.name, sequenceData.sequence, sequenceData.sequenceType]);
 
+    // Fence callbacks during render as well as effect cleanup: a previous source
+    // can finish between a construct/catalog render and its passive effects.
+    const restrictionAnalysisKey = JSON.stringify([activeWorkspaceId, restrictionSource,
+        restrictionCatalog?.catalog_id, restrictionCatalog?.catalog_sha256]);
+    const restrictionAnalysis = restrictionAnalysisResultRef.current?.key === restrictionAnalysisKey
+        ? restrictionAnalysisState : null;
+    const restrictionAnalysisKeyRef = useRef(restrictionAnalysisKey);
+    restrictionAnalysisKeyRef.current = restrictionAnalysisKey;
     useEffect(() => {
         restrictionDigestControllerRef.current.begin();
         restrictionAnalysisControllerRef.current.begin();
+        restrictionAnalysisResultRef.current = null;
+        restrictionAnalysisPendingRef.current = null;
         restrictionAnalysisAbortRef.current?.abort();
         setRestrictionAnalysis(null);
         setRestrictionDigest(null);
         setRestrictionDigestLoading(false);
         setRestrictionDigestError(null);
         setRestrictionAuthorityLoading(false);
-    }, [restrictionSource]);
+    }, [restrictionAnalysisKey]);
 
-    const runRestrictionAnalysis = useCallback((enzymeIds?: string[]) => {
-        if (!restrictionSource || !restrictionCatalog || enzymeIds?.length === 0) return;
+    const runRestrictionAnalysis = useCallback((enzymeIds?: string[]): Promise<RestrictionAnalysisBatch | undefined> => {
+        if (!restrictionSource || !restrictionCatalog || enzymeIds?.length === 0
+            || restrictionAnalysisKeyRef.current !== restrictionAnalysisKey) return Promise.resolve(undefined);
+        const pending = restrictionAnalysisPendingRef.current;
+        if (pending?.key === restrictionAnalysisKey
+            && (pending.enzymeIds === null || (enzymeIds && enzymeIds.every(id => pending.enzymeIds!.has(id))))) {
+            return pending.promise;
+        }
+        const existing = restrictionAnalysisResultRef.current?.key === restrictionAnalysisKey
+            ? restrictionAnalysisResultRef.current.batch : null;
+        // An explicit Analyze full catalog remains a fresh scan, not a cache hit.
+        if (enzymeIds && existing) {
+            const covered = new Set(existing.analysis.enzyme_summaries.map(summary => summary.enzyme_id));
+            if (enzymeIds.every(id => covered.has(id))) return Promise.resolve(existing);
+        }
         restrictionAnalysisAbortRef.current?.abort();
         const abort = new AbortController();
         restrictionAnalysisAbortRef.current = abort;
         const controller = restrictionAnalysisControllerRef.current;
         const token = controller.begin();
+        const isCurrent = () => controller.isCurrent(token) && !abort.signal.aborted
+            && restrictionAnalysisKeyRef.current === restrictionAnalysisKey;
         setRestrictionAuthorityLoading(true);
         setRestrictionAuthorityError(null);
-        void fetchRestrictionAnalysisBatch({
+        const publish = (batch: RestrictionAnalysisBatch) => {
+            restrictionAnalysisResultRef.current = { key: restrictionAnalysisKey, batch };
+            setRestrictionAnalysis(batch);
+        };
+        const promise = fetchRestrictionAnalysisBatch({
             source: restrictionSource,
             catalog: restrictionCatalog,
             records: restrictionCatalogRecordsRef.current,
             enzymeIds,
             signal: abort.signal,
             onProgress: (batch) => {
-                if (controller.isCurrent(token) && !abort.signal.aborted) setRestrictionAnalysis(batch);
+                if (!isCurrent()) return;
+                // Keep the last useful view until progressive coverage includes it.
+                // Do not synthesize scientific aggregates from overlapping batches.
+                const covered = new Set(batch.analysis.enzyme_summaries.map(summary => summary.enzyme_id));
+                if (!existing || existing.analysis.enzyme_summaries.every(summary => covered.has(summary.enzyme_id))) publish(batch);
             },
         }).then((batch) => {
-            if (!controller.isCurrent(token) || abort.signal.aborted) return;
-            setRestrictionAnalysis(batch);
+            if (!isCurrent()) return undefined;
+            publish(batch);
             if (batch.failed_enzyme_ids?.length) setRestrictionAuthorityError(`${batch.failed_enzyme_ids.length} enzymes unavailable; successful analysis is retained.`);
+            return batch;
         }).catch((error) => {
-            if (controller.isCurrent(token) && !abort.signal.aborted) setRestrictionAuthorityError(error instanceof Error ? error.message : 'Restriction analysis is unavailable.');
+            if (isCurrent()) setRestrictionAuthorityError(error instanceof Error ? error.message : 'Restriction analysis is unavailable.');
+            return undefined;
         }).finally(() => {
-            if (controller.isCurrent(token)) setRestrictionAuthorityLoading(false);
+            if (isCurrent()) {
+                restrictionAnalysisPendingRef.current = null;
+                setRestrictionAuthorityLoading(false);
+            }
         });
-    }, [restrictionCatalog, restrictionSource]);
+        restrictionAnalysisPendingRef.current = { key: restrictionAnalysisKey, enzymeIds: enzymeIds ? new Set(enzymeIds) : null, promise };
+        return promise;
+    }, [restrictionCatalog, restrictionSource, restrictionAnalysisKey]);
 
 
     useEffect(() => () => {
