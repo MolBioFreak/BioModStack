@@ -2261,7 +2261,7 @@ export function MolBioToolkitV2() {
             {ngsWorkupQuery.hasNextPage && <p>{ngsWorkups.length} workups loaded; more candidate history remains.</p>}
             {ngsWorkupQuery.isError && <p role="alert">Workup history could not be loaded completely.</p>}
             {(ngsWorkupQuery.hasNextPage || ngsWorkupQuery.isError) && (
-                <button type="button" disabled={ngsWorkupQuery.isFetching} onClick={() => {
+                <button type="button" className="min-h-12 rounded-lg border border-slate-600 px-3 text-sm text-slate-100" disabled={ngsWorkupQuery.isFetching} onClick={() => {
                     if (ngsWorkupQuery.hasNextPage) void ngsWorkupQuery.fetchNextPage();
                     else void ngsWorkupQuery.refetch();
                 }}>
@@ -3179,15 +3179,14 @@ export function MolBioToolkitV2() {
                 map={mobileViewer(mobileMapViewMode)}
                 sequence={mobileViewer('linear')}
                 details={(
-                    <>
                     <MobileMolBioReadPanel
                         mode="details"
                         sequenceData={sequenceData}
                         workups={ngsWorkups}
                         workupsStatus={ngsWorkupStatus}
-                    />
-                    {ngsWorkupContinuation}
-                    </>
+                    >
+                        {ngsWorkupContinuation}
+                    </MobileMolBioReadPanel>
                 )}
                 digest={(
                     <DigestPanel
@@ -3217,15 +3216,19 @@ export function MolBioToolkitV2() {
                     />
                 )}
                 qc={(
-                    <>
-                    {ngsWorkupQuery.hasNextPage && ngsWorkups.length === 0 ? <p className="p-3">No valid workups in the loaded page; continue to check older history.</p> : <MobileMolBioReadPanel
+                    ngsWorkupQuery.hasNextPage && ngsWorkups.length === 0 ? (
+                        <div className="h-full overflow-y-auto overscroll-contain">
+                            <p className="p-3">No valid workups in the loaded page; continue to check older history.</p>
+                            {ngsWorkupContinuation}
+                        </div>
+                    ) : <MobileMolBioReadPanel
                         mode="qc"
                         sequenceData={sequenceData}
                         workups={ngsWorkups}
                         workupsStatus={ngsWorkupStatus}
-                    />}
-                    {ngsWorkupContinuation}
-                    </>
+                    >
+                        {ngsWorkupContinuation}
+                    </MobileMolBioReadPanel>
                 )}
             />
         );

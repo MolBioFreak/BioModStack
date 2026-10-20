@@ -64,6 +64,7 @@ interface MobileMolBioReadPanelProps {
     sequenceData: SequenceData;
     workups: MobileMolBioWorkup[];
     workupsStatus: MobileMolBioWorkupStatus;
+    children?: ReactNode;
 }
 
 export function MobileMolBioWorkspace({
@@ -187,6 +188,7 @@ export function MobileMolBioReadPanel({
     sequenceData,
     workups,
     workupsStatus,
+    children,
 }: MobileMolBioReadPanelProps) {
     if (mode === 'qc') {
         return (
@@ -240,6 +242,7 @@ export function MobileMolBioReadPanel({
                         ))}
                     </div>
                 )}
+                {children}
             </div>
         );
     }
@@ -292,6 +295,7 @@ export function MobileMolBioReadPanel({
                     )}
                 </DetailSection>
             </div>
+            {children}
         </div>
     );
 }

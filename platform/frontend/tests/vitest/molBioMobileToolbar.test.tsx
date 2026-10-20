@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MobileMolBioToolbar } from '../../src/components/MolBioToolkit/MobileMolBioToolbar';
-import { MobileMolBioWorkspace } from '../../src/components/MolBioToolkit/MobileMolBioWorkspace';
+import { MobileMolBioWorkspace, MobileMolBioReadPanel } from '../../src/components/MolBioToolkit/MobileMolBioWorkspace';
 
 describe('MobileMolBioToolbar', () => {
     let root: Root | undefined;
@@ -59,6 +59,22 @@ describe('MobileMolBioToolbar', () => {
             expect(button.className).toContain('min-w-12');
         }
         expect(rendered.container.querySelector('button[aria-pressed="true"]')?.textContent).toContain('Map');
+    });
+
+    it.each(['details', 'qc'] as const)('keeps %s continuation inside its scrollable panel', async (mode) => {
+        const retry = vi.fn();
+        container = document.createElement('div');
+        document.body.appendChild(container);
+        root = createRoot(container);
+        await act(async () => root?.render(<MobileMolBioReadPanel
+            mode={mode} sequenceData={{ name: 'PL931', sequence: 'ACGT', sequenceType: 'dna', circular: true, features: [] }}
+            workups={[]} workupsStatus="unavailable"
+        ><button onClick={retry}>Retry workup history</button></MobileMolBioReadPanel>));
+        const scroll = container.querySelector('.overflow-y-auto');
+        const button = container.querySelector('button');
+        expect(scroll?.contains(button)).toBe(true);
+        await act(async () => button?.click());
+        expect(retry).toHaveBeenCalledOnce();
     });
 
     it('tracks the visible keyboard viewport and removes its listeners on exit', async () => {
