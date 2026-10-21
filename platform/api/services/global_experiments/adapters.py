@@ -405,6 +405,38 @@ def _query_uri(path: str, **identity: str) -> str:
     return f"{path}?{urlencode(identity)}"
 
 
+def _native_protenix_import(job: Job) -> bool:
+    return job.model_id == "protenix" and job.mode == "external_import"
+
+
+def _import_result_authority(job: Job) -> tuple[Path, dict[str, Any]]:
+    """Use import custody, without extending the ordinary Job results root."""
+    from paths import get_data_root, resolve_runtime_data_path
+    from services.protenix_scientific_consumer import _snapshot, _json
+
+    try:
+        provenance = job.provenance["external_import"]
+        parts = [provenance[key] for key in
+                 ("provider", "resource_type", "provider_job_id", "source_fingerprint")]
+        if parts[:2] != ["protenix_native", "native_structure_prediction"] or any(
+            not isinstance(part, str) or not part or Path(part).name != part or part in {".", ".."}
+            for part in parts
+        ):
+            raise ValueError("invalid native import custody identity")
+        base = (get_data_root() / "external_imports").resolve()
+        expected = base.joinpath(*parts).resolve()
+        expected.relative_to(base)
+        root = resolve_runtime_data_path(job.output_dir).resolve()
+        if root != expected:
+            raise ValueError("native import result root differs from retained custody")
+        descriptor, raw = _snapshot(root, "normalized/import-manifest.json")
+        if descriptor["sha256"] != provenance["manifest_sha256"]:
+            raise ValueError("changed native import manifest")
+        return root, _json(raw)
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+        raise AdapterError("source_contract_unavailable", str(exc)) from exc
+
+
 class CoreProteinResultAdapter:
     adapter_id = "bms.core.protein-result-reference.adapter.v1"
     adapter_version = 1
@@ -455,16 +487,22 @@ class CoreProteinResultAdapter:
                 raise AdapterError("source_contract_unavailable", "design has no native candidate artifacts")
         from services.core_protein_result_contract import verify_addressed_design_artifacts, CandidateIntegrityError
         try:
-            artifact_root = resolve_persisted_job_result_root(job)
-            from services.core_protein_scientific_contract import revision_for_job
-            if job.model_id in {"boltz", "boltz2"} and revision_for_job(job) == 1 and design.source_stage is None:
-                from services.boltz_scientific_consumer import verified_boltz_design
-                native = await verified_boltz_design(design, core_session)
+            if _native_protenix_import(job):
+                artifact_root, manifest = _import_result_authority(job)
+                from services.protenix_scientific_consumer import verify_publication
+                native = verify_publication(job, design, artifact_root, confidence=False)
                 authoritative = native["artifacts"]["structure"]
             else:
-                authoritative = verify_addressed_design_artifacts(
-                    job, design, artifact_root, verify_file=_verify_file,
-                )
+                artifact_root = resolve_persisted_job_result_root(job)
+                from services.core_protein_scientific_contract import revision_for_job
+                if job.model_id in {"boltz", "boltz2"} and revision_for_job(job) == 1 and design.source_stage is None:
+                    from services.boltz_scientific_consumer import verified_boltz_design
+                    native = await verified_boltz_design(design, core_session)
+                    authoritative = native["artifacts"]["structure"]
+                else:
+                    authoritative = verify_addressed_design_artifacts(
+                        job, design, artifact_root, verify_file=_verify_file,
+                    )
         except AdapterError:
             raise
         except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
@@ -3239,7 +3277,10 @@ class TypedCoreJobResultAdapter:
                 "model_id": job.model_id,
                 "mode": job.mode,
                 "artifact_count": artifact_count,
-                "artifact_authority": "verified_producer_design_receipts",
+                "artifact_authority": (
+                    "verified_external_import_design_receipts" if _native_protenix_import(job)
+                    else "verified_producer_design_receipts"
+                ),
                 "result_scope": "declared_native_final_candidates" if expected is not None else "all_design_rows",
                 "result_contract_id": "typed_core_job_result_v1",
             },
