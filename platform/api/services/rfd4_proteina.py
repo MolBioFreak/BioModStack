@@ -36,7 +36,7 @@ def compile_request(mode,params,*,source_identities=None):
             'dependencies':selected_dependencies(request),'result_contract':RESULT_CONTRACT}
 
 
-def prepare_for_job(mode,params,directory,*,resolved_sources,allowed_roots,runtime_identity=None,source_identities=None):
+def prepare_for_job(mode,params,directory,*,resolved_sources,allowed_roots,runtime_identity=None,source_identities=None,oracle_runtime=None):
     """Retain source closure, not native science; runner prepares once in selected image.
 
     resolved_sources is slot -> exact materialized path from the shared native-document
@@ -61,7 +61,8 @@ def prepare_for_job(mode,params,directory,*,resolved_sources,allowed_roots,runti
         # Relative to the staged closure. Runtime resolves these once before native work.
         bindings[slot]=str(target.relative_to(dest))
     payload={'request':compiled['request'],'request_identity':compiled['request_identity'],
-             'runtime_identity':{**copy.deepcopy(runtime_identity or {}),'sources':compiled['sources']}}
+             'runtime_identity':{**copy.deepcopy(runtime_identity or {}),'sources':compiled['sources']},
+             'oracle_runtime':copy.deepcopy(oracle_runtime or {})}
     (dest/'request.json').write_text(json.dumps(payload,indent=2)+'\n')
     (dest/'bindings.json').write_text(json.dumps(bindings,indent=2)+'\n')
     return {**normalize_params(mode,params),PREPARED_FIELD:str(dest/'request.json'),BINDINGS_FIELD:str(dest/'bindings.json'),

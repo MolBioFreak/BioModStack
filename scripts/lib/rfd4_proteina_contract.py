@@ -113,7 +113,8 @@ def _provider_schema(group):
 def parameter_schema(mode='generate'):
     if mode not in ('generate','evaluate'):raise ValueError('RFD4 mode must be generate or evaluate')
     props={'version':{'const':CONTRACT,'default':CONTRACT},'mode':{'const':mode,'default':mode},
-        'input':INPUT,'settings':_settings(mode),'providers':obj({g.split('/')[-1]:_provider_schema(g)
+        'input':INPUT,'settings':_settings(mode),'oracle_parameter_family':choice('af3','of3'),
+        'providers':obj({g.split('/')[-1]:_provider_schema(g)
             for g in _PROFILE['groups'] if g.startswith('metrics/')}),
         'resume_slot':nullable({**S,'x-ui-control':'file'}),
         'adapter_slot':nullable({**S,'x-ui-control':'file'}),
@@ -264,8 +265,23 @@ def selected_dependencies(request):
         if name in explicit:groups=[{t for t in g if t.startswith(('is_refold:','exists_refold:','oracle:'))} for g in groups]
         required_all,required_any,prohibited=groups
         if (not required_all or tags.issuperset(required_all)) and (not required_any or tags.intersection(required_any)) and not tags.intersection(prohibited):active.append(name)
+    active_profiles=[selected['profile']] if active else []
+    for extension in r.get('metric_extensions',[]):
+        family={'AF2Oracle':'af2','AF3Oracle':'af3'}.get(extension['implementation'].rsplit('.',1)[-1])
+        if family is None:continue
+        kwargs=extension['kwargs']
+        all_tags=set(kwargs.get('required_tags_all') or [])
+        any_tags=set(kwargs.get('required_tags_any') or [])
+        prohibited=set(kwargs.get('prohibited_tags') or [])
+        if extension['name'] in explicit:
+            all_tags={t for t in all_tags if t.startswith(('is_refold:','exists_refold:','oracle:'))}
+            any_tags={t for t in any_tags if t.startswith(('is_refold:','exists_refold:','oracle:'))}
+            prohibited={t for t in prohibited if t.startswith(('is_refold:','exists_refold:','oracle:'))}
+        if tags.issuperset(all_tags) and (not any_tags or tags.intersection(any_tags)) and not tags.intersection(prohibited):
+            active_profiles.append(family);active.append(extension['name'])
     return {'primary':'rfd4_proteina','providers':{k:v['profile'] for k,v in r.get('providers',{}).items()},
-            'active_oracle_profiles':[selected['profile']] if active else [],'active_oracle_names':active,
+            'oracle_parameter_family':r.get('oracle_parameter_family'),
+            'active_oracle_profiles':list(dict.fromkeys(active_profiles)),'active_oracle_names':active,
             'metric_extensions':[e['implementation'] for e in r.get('metric_extensions',[])],
             'metrics_tags':r.get('settings',{}).get('metrics_tags',[]),'search':search,'source_slots':source_slots(r)}
 

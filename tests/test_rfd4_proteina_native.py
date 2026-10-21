@@ -102,6 +102,13 @@ def test_native_provider_constructor_and_trusted_extensions(tmp_path):
     # Native BioIR will report its exclusion; BMS never drops the trajectory request
     # or silently substitutes another backend to make it run.
     assert cfg.inference_backend=='bioir' and cfg.generation.args.save_trajectory_every==2
+    from bms_rfd4.run import oracle_environment
+    selected=request();selected['oracle_parameter_family']='of3'
+    assert oracle_environment(selected,{})=={}  # metrics off: no unused oracle acquisition
+    selected['settings']={'metrics_tags':['ppi_refolding']}
+    env={'AF3_IMAGE':'/selected/oracle.sif','AF3_MODEL_DIR':'/selected/of3','AF3_JAX_CACHE_DIR':'/private/jax'}
+    assert oracle_environment(selected,{'of3':env})==env
+    with pytest.raises(ValueError,match='runtime path binding'):oracle_environment(selected,{'af3':env})
 
 
 def test_exact_final_checkpoint_membership_not_filename(tmp_path):

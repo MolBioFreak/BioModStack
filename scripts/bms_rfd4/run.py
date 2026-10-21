@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import os
 import traceback
-from lib.rfd4_proteina_contract import normalize_request, native_overlay, request_identity, SOURCE_REVISION
+from lib.rfd4_proteina_contract import normalize_request, native_overlay, request_identity, selected_dependencies, SOURCE_REVISION
 from bms_rfd4.inputs import prepare_inputs
 from bms_rfd4.publication import NativeObserver, publish
 
@@ -57,7 +57,30 @@ def write_evaluation_tasks(request, identity, destination):
     return path.resolve()
 
 
-def run(request,bindings,output,*,bundle=None,runtime_identity=None,prepared_inputs=None,config_dir=None):
+def oracle_environment(request, runtime_bindings):
+    """Select only the requested official oracle family, through system-owned paths.
+
+    OF3 uses AF3Oracle and the official converted-weight provenance reader; BMS
+    does not convert weights or emulate its inference configuration.
+    """
+    deps=selected_dependencies(request)
+    active=set(deps['active_oracle_profiles'])
+    selected={profile for profile in active if profile=='af2'}
+    if 'af3' in active:selected.add(request.get('oracle_parameter_family','af3'))
+    result={}
+    for family in selected:
+        if family not in runtime_bindings:
+            if request.get('oracle_parameter_family')==family:
+                raise ValueError(f'Explicit {family.upper()} oracle requires its selected runtime path binding')
+            continue  # Preserve official environment defaults when not explicitly rebound.
+        prefix='AF2' if family=='af2' else 'AF3'
+        for suffix in ('IMAGE','JAX_CACHE_DIR','MODEL_DIR'):
+            key=prefix+'_'+suffix
+            result[key]=str(runtime_bindings[family][key])
+    return result
+
+
+def run(request,bindings,output,*,bundle=None,runtime_identity=None,prepared_inputs=None,config_dir=None,oracle_runtime=None):
     import rfproteina
     from omegaconf import OmegaConf
     request=normalize_request(request)
@@ -67,7 +90,12 @@ def run(request,bindings,output,*,bundle=None,runtime_identity=None,prepared_inp
              'runtime_identity':runtime_identity or {},'execution_status':'running',
              'native_package_version':importlib.metadata.version('rfd4-proteina')}
     cfg=None
+    previous_environment={}
     try:
+        environment=oracle_environment(request,oracle_runtime or {})
+        previous_environment={key:os.environ.get(key) for key in environment}
+        os.environ.update(environment)
+        receipt['oracle_environment']=environment
         if prepared_inputs is None:
             inputs,identity=prepare_inputs(request,bindings,root/'prepared')
             receipt['input_identity']=identity
@@ -94,6 +122,9 @@ def run(request,bindings,output,*,bundle=None,runtime_identity=None,prepared_inp
         receipt.update(execution_status='failed',error=f'{type(exc).__name__}: {exc}')
         raise
     finally:
+        for key,value in previous_environment.items():
+            if value is None:os.environ.pop(key,None)
+            else:os.environ[key]=value
         if cfg is not None:
             # Includes the seed resolved/mutated by run_generation, even metrics-off.
             try:effective=OmegaConf.to_container(cfg,resolve=True)
@@ -121,6 +152,7 @@ def main():
     bindings={slot:str((base/path).resolve()) if not Path(path).is_absolute() else path
               for slot,path in json.loads(Path(args.bindings).read_text()).items()}
     run(payload.get('request',payload),bindings,args.output,bundle=args.bundle,
-        runtime_identity=payload.get('runtime_identity'),prepared_inputs=args.prepared_inputs)
+        runtime_identity=payload.get('runtime_identity'),prepared_inputs=args.prepared_inputs,
+        oracle_runtime=payload.get('oracle_runtime'))
 
 if __name__=='__main__':main()
