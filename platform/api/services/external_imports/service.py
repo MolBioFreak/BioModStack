@@ -24,6 +24,17 @@ from .boltz_api import (
 )
 
 
+from .protenix import preview_protenix_run, normalize_protenix_run
+
+
+def preview_import(source_dir: Path, provider: str):
+    if provider == "protenix_native":
+        return preview_protenix_run(source_dir)
+    if provider == "boltz_api":
+        return preview_boltz_api_run(source_dir)
+    raise BoltzImportError("PROVIDER_UNSUPPORTED", provider)
+
+
 logger = logging.getLogger(__name__)
 _ACTIVE_STATES = {"discovered", "validating", "staging", "normalizing", "committing"}
 
@@ -41,11 +52,11 @@ def _provider_timestamp(value: Any) -> datetime | None:
         return None
 
 
-def _normalized_root(data_root: Path, resource: str, provider_job_id: str, fingerprint: str) -> Path:
+def _normalized_root(data_root: Path, resource: str, provider_job_id: str, fingerprint: str, provider: str = PROVIDER_ID) -> Path:
     return (
         data_root
         / "external_imports"
-        / PROVIDER_ID
+        / provider
         / resource.replace(":", "-")
         / provider_job_id
         / fingerprint
@@ -60,8 +71,9 @@ async def queue_external_import(
     dataset_name: str,
     job_name: str | None,
     bms_job_id: str | None = None,
+    provider: str = PROVIDER_ID,
 ) -> ExternalResultImport:
-    preview = await asyncio.to_thread(preview_boltz_api_run, source_dir)
+    preview = await asyncio.to_thread(preview_import, source_dir, provider)
     if not preview.importable:
         raise BoltzImportError(preview.error_code or "RESOURCE_UNSUPPORTED", "; ".join(preview.errors))
     if preview.source_fingerprint != preview_fingerprint:
@@ -131,7 +143,7 @@ async def retry_external_import(session: AsyncSession, *, import_id: str) -> Ext
         return record
     if record.state != "failed":
         raise BoltzImportError("IMPORT_NOT_RETRYABLE", f"import state {record.state} is not retryable")
-    current = preview_boltz_api_run(Path(record.source_path))
+    current = preview_import(Path(record.source_path), record.provider_id)
     if current.source_fingerprint != record.source_fingerprint:
         raise BoltzImportError("IMPORT_IDENTITY_CONFLICT", "retry source differs from registered evidence")
     record.state = "discovered"
@@ -202,8 +214,9 @@ async def process_external_import(
         linked_job = await session.get(Job, record.bms_job_id) if record.bms_job_id else None
         if linked_job is not None and str(linked_job.status or "").lower() == "cancelled":
             raise BoltzImportError("BMS_JOB_CANCELLED", "linked BioModStack job was cancelled")
+        provider = record.provider_id
         source_dir = Path(record.source_path).expanduser().resolve()
-        preview = await asyncio.to_thread(preview_boltz_api_run, source_dir)
+        preview = await asyncio.to_thread(preview_import, source_dir, provider)
         if preview.source_fingerprint != record.source_fingerprint:
             raise BoltzImportError("SOURCE_CHANGED_AFTER_PREVIEW", "source changed after import was queued")
         if preview.run_metadata_sha256 != record.run_metadata_sha256 or preview.archive_sha256 != record.archive_sha256:
@@ -215,7 +228,7 @@ async def process_external_import(
 
         selected_data_root = (data_root or get_data_root()).expanduser().resolve()
         manifest = await asyncio.to_thread(
-            normalize_boltz_api_run,
+            normalize_protenix_run if record.provider_id == "protenix_native" else normalize_boltz_api_run,
             source_dir,
             selected_data_root,
             preview,
@@ -225,6 +238,7 @@ async def process_external_import(
             record.resource_type,
             record.provider_job_id,
             record.source_fingerprint,
+            record.provider_id,
         )
         manifest_path = final_root / "normalized" / "import-manifest.json"
         if not manifest_path.is_file():
@@ -235,6 +249,7 @@ async def process_external_import(
         record.updated_at = _utcnow()
         await session.commit()
 
+        native = record.provider_id == "protenix_native"
         provider = manifest["provider"]
         existing_job = await session.get(Job, record.bms_job_id) if record.bms_job_id else None
         if existing_job is not None:
@@ -248,8 +263,9 @@ async def process_external_import(
             "external_resource": record.resource_type,
             "entities": manifest["input"]["entities"],
             "num_samples": manifest["input"]["num_samples"],
+            **({"external_native_settings": manifest["settings"], "native_input_path": str(final_root / manifest["native_input_path"])} if native else {}),
         }
-        imported_provenance = {
+        imported_provenance: dict[str, Any] = {
             "external_import": {
                 "schema": manifest["schema"],
                 "provider": record.provider_id,
@@ -264,18 +280,22 @@ async def process_external_import(
                 "data_deleted_at": provider.get("data_deleted_at"),
             }
         }
+        if native:
+            from .archive import sha256_file
+            imported_provenance["core_protein_scientific_contract"] = 1
+            imported_provenance["external_import"]["manifest_sha256"] = sha256_file(manifest_path)
         job_values = {
             "status": "completed",
             "queue_status": "completed",
-            "model_id": "boltz2",
+            "model_id": "protenix" if native else "boltz2",
             "mode": "external_import",
             "params": imported_params,
             "started_at": _provider_timestamp(provider.get("started_at")) or (existing_job.started_at if existing_job else None),
             "completed_at": completed_at,
             "output_dir": str(final_root),
             "stage_family": "validation",
-            "stage_mode": "boltz_api_structure_import",
-            "selection_source_type": "external_api",
+            "stage_mode": "protenix_native_structure_import" if native else "boltz_api_structure_import",
+            "selection_source_type": "external_native" if native else "external_api",
             "selection_dataset_name": record.dataset_name,
             "source_selection_manifest_path": str(manifest_path),
             "source_selection_count": len(manifest["samples"]),
@@ -287,7 +307,7 @@ async def process_external_import(
         if existing_job is None:
             job = Job(
                 id=job_id,
-                name=record.job_name or f"Boltz API {record.provider_job_id}",
+                name=record.job_name or f"{record.provider_id} {record.provider_job_id}",
                 created_at=_provider_timestamp(provider.get("created_at")) or record.created_at,
                 **job_values,
             )
@@ -313,8 +333,8 @@ async def process_external_import(
                 name=f"{record.provider_job_id}_{sample['sample_id']}",
                 pdb_path=str(structure_path),
                 stage_family="validation",
-                stage_mode="boltz_api_structure_import",
-                source_stage_family="external_api",
+                stage_mode="protenix_native_structure_import" if native else "boltz_api_structure_import",
+                source_stage_family="external_native" if native else "external_api",
                 source_stage_mode=record.resource_type,
                 artifact_class="imported_structure",
                 artifact_schema_version=1,
@@ -325,11 +345,11 @@ async def process_external_import(
                 plddt_overall=canonical.get("plddt_overall"),
                 ptm=canonical.get("ptm"),
                 conf_score=canonical.get("conf_score"),
-                iptm=None,
+                iptm=canonical.get("iptm") if native else None,
                 aligned_error_path=str(pae_path),
-                aligned_error_format="boltz_pae_npz",
-                aligned_error_key="pae",
-                confidence_metrics={"boltz_api": {"raw": raw}},
+                aligned_error_format="protenix_full_json" if native else "boltz_pae_npz",
+                aligned_error_key="token_pair_pae" if native else "pae",
+                confidence_metrics={record.provider_id: {"raw": raw}},
                 provenance={
                     "external_import": {
                         "provider": record.provider_id,
