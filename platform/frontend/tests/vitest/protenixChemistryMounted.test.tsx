@@ -100,7 +100,7 @@ it('retains an annotated single primary peptide and edits typed modifications an
     expect(preview().complex_components).toEqual(saved.complex_components);
 });
 
-it('keeps chemistry and supplied alignments independent of MSA settings, and invalidates only alignments after sequence change', async () => {
+it('keeps chemistry and supplied alignments independent of MSA settings, and invalidates sequence-derived alignments and template hits after sequence change', async () => {
     await mount({ ...fixture, complex_components: [peptide] });
     const msaToggle = renderer.root.findAllByType('select').find(node => node.parent && text(node.parent).includes('Use MSA'));
     expect(msaToggle).toBeTruthy();
@@ -114,7 +114,8 @@ it('keeps chemistry and supplied alignments independent of MSA settings, and inv
     expect(preview().complex_components[0].modifications).toEqual(peptide.modifications);
     expect(preview().complex_components[0].copy_ids).toEqual(peptide.copy_ids);
     expect(preview().complex_components[0]).not.toHaveProperty('unpairedMsa');
-    expect(preview().complex_components[0].templatesPath).toBe(peptide.templatesPath);
+    expect(preview().complex_components[0]).not.toHaveProperty('templatesPath');
+    expect(text(renderer.root)).toContain('Retained modifications and bond/contact/pocket residue positions are not remapped');
     await change('Entity 1 name', 'renamed after sequence edit');
     expect(preview().complex_components[0]).not.toHaveProperty('unpairedMsa');
     await change('Entity 1 unpairedMsa', '');
@@ -154,10 +155,10 @@ it('edits native nucleotide, ligand, contact and pocket records without a JSON e
     expect(preview().covalent_bonds[1]).not.toHaveProperty('left_position');
 });
 
-it('serialization helper changes only alignment-owned fields and keeps native entity order', () => {
+it('serialization helper clears sequence-derived files and keeps native entity order', () => {
     const updated = updateProtenixComponent(peptide, { sequence: 'AC', name: 'new' });
     expect(updated.modifications).toEqual(peptide.modifications);
-    expect(updated.templatesPath).toBe(peptide.templatesPath);
+    expect(updated).not.toHaveProperty('templatesPath');
     expect(updated).not.toHaveProperty('pairedMsa');
     const ligand: ProtenixComponent = { id: 'L', type: 'ligand', count: 30, ccd: 'ATP' };
     expect(JSON.parse(JSON.stringify(orderedProtenixComponents(['L', 'P'], updated, [ligand])))).toEqual([ligand, updated]);

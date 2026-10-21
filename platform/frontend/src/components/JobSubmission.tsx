@@ -617,9 +617,9 @@ export function JobSubmission() {
                     setDedicatedTemplateVersion(version => version + 1);
                     navigateDeNovo(deNovoNavigation(draft), true);
                 }
-                else if (data.source_structure && ['boltz2', 'protenix'].includes(data.model_id)) {
+                else if (['boltz2', 'protenix'].includes(data.model_id) && (data.source_structure || ['predict', 'complex'].includes(data.mode))) {
                     setWizardMode('templates'); setSelectedTemplateId('structure_prediction');
-                    setClonedValues({ ...data.params, name: data.name, pred_method: data.model_id === 'boltz2' ? 'boltz' : 'protenix' });
+                    setClonedValues({ ...data.params, name: data.name, pred_method: data.params.pred_method ?? (data.model_id === 'boltz2' ? 'boltz' : 'protenix') });
                 }
                 // 7. Manual Mode
                 else {

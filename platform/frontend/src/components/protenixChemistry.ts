@@ -45,14 +45,18 @@ export interface ProtenixConstraint {
     pocket?: { binder_chain: { entity?: number; copy?: number }; contact_residues: { entity?: number; copy?: number; position?: number }[]; max_distance?: number };
 }
 
-// Alignment invalidation owns alignment fields only, never chemical annotations.
+// Sequence-derived alignments/template hits cannot describe a replacement sequence.
+// Keep chemical annotations for explicit positional review; never infer a remapping.
 export function updateProtenixComponent(original: ProtenixComponent, patch: Partial<ProtenixComponent>): ProtenixComponent {
     const next = { ...original, ...patch };
     for (const key of Object.keys(patch) as (keyof ProtenixComponent)[]) {
         if (patch[key] === undefined) delete next[key];
     }
     if (patch.sequence !== undefined && patch.sequence !== original.sequence) {
-        for (const key of ['pairedMsa', 'unpairedMsa', 'pairedMsaPath', 'unpairedMsaPath', 'msa_path', 'msa'] as const) delete next[key];
+        for (const key of ['pairedMsa', 'unpairedMsa', 'pairedMsaPath', 'unpairedMsaPath', 'msa_path', 'msa', 'templatesPath'] as const) delete next[key];
+        // Boltz's empty/blank sentinels are explicit policy, not alignments.
+        const nativeMsa: unknown = original.msa;
+        if (nativeMsa === 'empty' || nativeMsa === '') next.msa = original.msa;
     }
     return next;
 }

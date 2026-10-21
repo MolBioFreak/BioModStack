@@ -79,7 +79,7 @@ it('populated actual launcher preserves native settings and molecules in draft/t
     await edit('Structure samples', 1);
     await click('Save Template');
     const saved = templates.at(-1).currentParams;
-    expect(saved).toEqual(drafts.at(-1));
+    expect(saved).toEqual(drafts.at(-1).editor_state);
     const expected = { model_variant: 'full', quality_preset: 'custom', num_loops: 3, num_sampling_steps: 200, num_diffusion_samples: 1,
         esmf_use_msa: true, msa_provider: 'neurosnap_api', msa_neurosnap_coverage_percent: 55.5, seed: 0, run_frustrampnn: true };
     expect(saved).toMatchObject(expected); expect(saved).not.toHaveProperty('use_msa');
@@ -93,11 +93,11 @@ it('populated actual launcher preserves native settings and molecules in draft/t
     if (process.env.BMS_ESMFOLD2_WIRE_DIR) writeFileSync(`${process.env.BMS_ESMFOLD2_WIRE_DIR}/frontend-mounted-wire.json`, JSON.stringify({ fixture: 'offline populated synthetic complex; not a live submission', draft: saved, preview: wire.preview, submitted: requests[0] }, null, 2));
     await act(async () => renderer.unmount()); client.clear();
     await mount(saved);
-    expect(drafts.at(-1)).toMatchObject(expected);
+    expect(drafts.at(-1).editor_state).toMatchObject(expected);
     expect(wire.preview.params).toMatchObject(expected);
     const msaToggle = renderer.root.findAllByType('label').find(n => text(n) === 'Use ESMFold2 MSA')!.findByType('input');
     await act(async () => msaToggle.props.onChange({ target: { checked: false } })); await flush();
-    const disabledDraft = drafts.at(-1);
+    const disabledDraft = drafts.at(-1).editor_state;
     expect(disabledDraft).toMatchObject({ esmf_use_msa: false, msa_provider: 'neurosnap_api', msa_neurosnap_coverage_percent: 55.5 });
     await act(async () => renderer.unmount()); client.clear();
     await mount(disabledDraft);
@@ -105,15 +105,15 @@ it('populated actual launcher preserves native settings and molecules in draft/t
 });
 it('native presets reveal actual counts, custom edits and invalid input block preview and submit', async () => {
     await mount(); await edit('Quality preset', 'thorough');
-    expect(drafts.at(-1)).toMatchObject({ num_loops: 5, num_sampling_steps: 100, num_diffusion_samples: 2 });
-    await edit('Structure samples', 1); expect(drafts.at(-1).quality_preset).toBe('custom');
+    expect(drafts.at(-1).editor_state).toMatchObject({ num_loops: 5, num_sampling_steps: 100, num_diffusion_samples: 2 });
+    await edit('Structure samples', 1); expect(drafts.at(-1).editor_state.quality_preset).toBe('custom');
     await edit('Diffusion sampling steps', 1001);
     expect(text(renderer.root)).toContain('must be an integer from 1 to 1000'); expect(wire.preview).toBeNull();
     await click('Launch Prediction'); expect(requests).toHaveLength(0);
 });
 it('Fast plus MSA stays visibly selected but blocks preview/submit until Full is explicitly chosen', async () => {
     await mount({ ...fixture, model_variant: 'fast' });
-    expect(drafts.at(-1)).toMatchObject({ model_variant: 'fast', esmf_use_msa: true });
+    expect(drafts.at(-1).editor_state).toMatchObject({ model_variant: 'fast', esmf_use_msa: true });
     expect(text(renderer.root)).toContain('Choose Full to use MSA');
     expect(wire.preview).toBeNull();
     await click('Launch Prediction'); expect(requests).toHaveLength(0);
@@ -122,7 +122,7 @@ it('Fast plus MSA stays visibly selected but blocks preview/submit until Full is
 });
 it('old omitted settings keep admitted no-MSA 3/50/1 and disabled MSA retains provider choices through clone', async () => {
     await mount({ pred_method: 'esmfold2', sequence: 'MQLK', model_variant: 'full', run_frustrampnn: false });
-    expect(drafts.at(-1)).toMatchObject({ esmf_use_msa: false, num_loops: 3, num_sampling_steps: 50, num_diffusion_samples: 1 });
+    expect(drafts.at(-1).editor_state).toMatchObject({ esmf_use_msa: false, num_loops: 3, num_sampling_steps: 50, num_diffusion_samples: 1 });
     expect(renderer.root.findAllByType('button').some(n => text(n).includes('MSA Quality Options'))).toBe(false);
 });
 it('actual retry panel synchronizes MSA and persists displayed native overrides without sample inflation', async () => {

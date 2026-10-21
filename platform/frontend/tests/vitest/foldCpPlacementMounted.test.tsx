@@ -123,7 +123,7 @@ it.each(['cp_topology', 'bcp_cp_topology'])('retains populated %s 1D through dra
     await click('Save Template');
     const saved = JSON.parse(JSON.stringify(templates.at(-1).currentParams));
     expect(saved).toMatchObject({ bcp_cp_topology: '1d', bcp_size_cp: 2, bcp_seed: 0, bcp_write_full_pae: true });
-    expect(saved).toEqual(drafts.at(-1));
+    expect(saved).toEqual(drafts.at(-1).editor_state);
     await act(async () => renderer.unmount()); client.clear();
     await mount(saved);
     await click('Launch Prediction');

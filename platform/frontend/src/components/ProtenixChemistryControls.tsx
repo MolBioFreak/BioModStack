@@ -45,6 +45,7 @@ export function ProtenixChemistryControls({ components, onComponentChange, bonds
                 {polymer && <div>
                     <Field label={`Entity ${entity + 1} sequence`} value={component.sequence} multiline onChange={value => change({ sequence: String(value ?? '') })} />
                     {(component.modifications ?? []).map((modification, index) => {
+                        if ('position' in modification) return <p key={index}>Retained Boltz modification; edit in Boltz native controls.</p>;
                         const positionKey = nucleic ? 'basePosition' : 'ptmPosition';
                         const typeKey = nucleic ? 'modificationType' : 'ptmType';
                         const row = modification as unknown as Record<string, string | number>;
