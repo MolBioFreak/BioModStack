@@ -37,6 +37,28 @@ class StructureNormalizationError(ValueError):
     """A structure cannot be normalized without guessing or losing identity."""
 
 
+def native_residue_positions(rows: Iterable[Mapping[str, Any]]) -> dict[tuple[str, int, str], int]:
+    """Pinned alt_parse_PDB_biounits index: gaps occupy slots, insertions sort.
+
+    Only residues actually written to the normalized PDB contribute. Author
+    and sequence identity are not renumbered to manufacture dense positions.
+    """
+    chains: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row["status"] == "mapped":
+            chains[row["pdb_chain_id"]].append(row)
+    positions = {}
+    for chain, chain_rows in chains.items():
+        previous = None
+        position = -1
+        for row in sorted(chain_rows, key=lambda row: (row["pdb_residue_id"], row["pdb_insertion_code"])):
+            number = row["pdb_residue_id"]
+            position += 1 if previous is None else max(1, number - previous)
+            positions[(chain, number, row["pdb_insertion_code"])] = position
+            previous = number
+    return positions
+
+
 def _protein_atom_names(heavy_atoms: str, hydrogen_atoms: str) -> frozenset[str]:
     names = set(heavy_atoms.split()) | set(hydrogen_atoms.split())
     names.add("HXT")
@@ -1120,6 +1142,9 @@ def _normalize_structure(
     mapped = [row for row in rows if row["status"] == "mapped"]
     if not mapped:
         raise StructureNormalizationError("normalization produced no scoreable protein residues")
+    positions = native_residue_positions(mapped)
+    for row in mapped:
+        row["model_position"] = positions[(row["pdb_chain_id"], row["pdb_residue_id"], row["pdb_insertion_code"])]
     for instance_id, expected_sequence in selected_sequences.items():
         if source_format == "mmcif":
             observed_sequence = next(

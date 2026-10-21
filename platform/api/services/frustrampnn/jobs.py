@@ -737,14 +737,15 @@ async def create_child_job(
 async def submit_selected_analysis(session, experiment_session, background_tasks, *,
                                    selections, source_parent, requested_settings,
                                    execution_target_id, destination_launch_context_id,
-                                   idempotency_key, response_context):
+                                   idempotency_key, response_context, trigger="binder_selected",
+                                   supersedes=None, partition=True, execution_target_supplied=True):
     from component_runtime import partition_ordered
     from experiment_services import new_id, scheduler_job_id_for_attempt
     from routers.jobs import submit_selected_child_jobs
     from fastapi import HTTPException
 
     batches = partition_ordered(selections, batching_enabled=requested_settings.batching_enabled,
-                                structures_per_job=requested_settings.structures_per_job)
+                                structures_per_job=requested_settings.structures_per_job) if partition else (selections,)
     children = []
     attempts = []
     try:
@@ -754,11 +755,11 @@ async def submit_selected_analysis(session, experiment_session, background_tasks
             if attempt_id:
                 attempts.append(attempt_id)
             children.append(await create_child_job(session, selections=batch,
-                source_parent=source_parent, trigger="binder_selected",
+                source_parent=source_parent, trigger=trigger, supersedes=supersedes,
                 requested_settings=requested_settings, preallocated_job_id=job_id,
                 prepare_only=True, execution_target_id=execution_target_id))
         return await submit_selected_child_jobs(
-            [prepared_child_request(child) for child in children], background_tasks,
+            [prepared_child_request(child, execution_target_supplied=execution_target_supplied) for child in children], background_tasks,
             session, experiment_session,
             destination_launch_context_id=destination_launch_context_id,
             preallocated_attempt_ids=attempts if destination_launch_context_id else None,
@@ -778,13 +779,16 @@ async def submit_selected_analysis(session, experiment_session, background_tasks
         raise
 
 
-def prepared_child_request(child: Job):
+def prepared_child_request(child: Job, *, execution_target_supplied: bool = True):
     from schemas import JobCreate
     # Scientific ancestry is retained in the child envelope/Job, not used for
     # placement inheritance by the generic submission owner.
-    return JobCreate(name=child.name, model_id=MODEL_ID, mode=MODE,
+    request = JobCreate(name=child.name, model_id=MODEL_ID, mode=MODE,
                      params=copy.deepcopy(child.params), sequence_length=child.sequence_length,
                      execution_target_id=child.execution_target_id)
+    if not execution_target_supplied:
+        request.model_fields_set.discard("execution_target_id")
+    return request
 
 
 def load_prepared_child(request) -> Job:
@@ -827,6 +831,7 @@ async def create_reanalysis_child(
     *,
     prior_child: Job,
     replacement_settings: FrustraMPNNRequestedSettings | None,
+    submission: dict[str, Any] | None = None,
 ) -> Job:
     envelope = (prior_child.params or {}).get(ENVELOPE_KEY)
     if prior_child.model_id != MODEL_ID or not isinstance(envelope, dict):
@@ -916,6 +921,13 @@ async def create_reanalysis_child(
     source_parent = await session.get(Job, source_parent_id) if source_parent_id else None
     if source_parent_id and source_parent is None:
         raise FrustraMPNNChildError("prior child source-parent authority no longer exists")
+    if submission is not None:
+        responses = await submit_selected_analysis(
+            session, selections=selections, source_parent=source_parent,
+            requested_settings=requested_settings, trigger="reanalyze",
+            supersedes=prior_child, partition=False, **submission,
+        )
+        return await session.get(Job, responses[0].id)
     return await create_child_job(
         session,
         selections=selections,

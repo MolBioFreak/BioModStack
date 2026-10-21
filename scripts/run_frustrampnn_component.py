@@ -1222,7 +1222,7 @@ def finalize_batched_component(
             }
             receipt = {
                 "schema_name": "frustrampnn_execution_receipt", "schema_version": 3,
-                "execution_method": "predict_batch",
+                "execution_method": ("predict_batch" if effective.requested_settings.protein_selection.mode == "all_protein_entities" else "predict_selected_batch"),
                 "invocation_id": request["invocation_id"],
                 "execution_configuration_sha256": request["execution_configuration_sha256"],
                 "requested_settings_sha256": request["requested_settings_sha256"],

@@ -107,3 +107,11 @@ def test_v3_core_bundle_publishes_without_statistics_and_reopens(
     )
     assert bundle.contract_version == 3
     assert bundle.statistics is None
+    # Current producer bytes must enter CM's optional comparison receiver, not
+    # merely validate against an independently hand-authored legacy fixture.
+    from services.conformational_mapping.state_landscape_analysis import _source_by_candidate, _provenance_identity
+    landscape = json.loads((output / "frustrampnn_landscape_v3.json").read_bytes())
+    received = _source_by_candidate([landscape], schema_key="cm_frustration_landscape_v1", label="landscape")
+    assert received[request["candidate_id"]] == landscape
+    assert _provenance_identity(landscape) == tuple(landscape[key] for key in (
+        "requested_settings_sha256", "runtime_identity_sha256", "threshold_policy_id", "threshold_policy_sha256"))

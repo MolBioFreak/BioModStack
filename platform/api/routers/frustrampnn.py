@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, Mapping, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi import BackgroundTasks, APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import (
     BaseModel,
@@ -52,6 +52,7 @@ from database import (
     Job,
     get_session,
 )
+from experiment_database import get_experiment_session
 from services.scientific_artifacts import resolve_json_value
 from services.frustrampnn.analytics import multidimensional_points, parse_dataset_ids
 from services.frustrampnn.comparison import (
@@ -93,6 +94,7 @@ from services.frustrampnn.jobs import (
     child_receipt,
     create_child_job,
     create_reanalysis_child,
+    submit_selected_analysis,
     design_selections,
     discard_uncommitted_child_artifacts,
     handoff_selection,
@@ -138,7 +140,15 @@ class DesignSelectionRequest(BaseModel):
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
-class AnalyzeDesignsRequest(BaseModel):
+class AnalysisPlacement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    launch_context_id: str | None = Field(default=None, min_length=1)
+    execution_target_id: str | None = Field(default=None, min_length=1)
+    idempotency_key: str | None = Field(default=None, min_length=1)
+
+
+class AnalyzeDesignsRequest(AnalysisPlacement):
     model_config = ConfigDict(extra="forbid")
 
     selections: list[DesignSelectionRequest] = Field(min_length=1)
@@ -152,7 +162,7 @@ class AnalyzeDesignsRequest(BaseModel):
         return validate_complete_requested_settings(value)
 
 
-class ReanalyzeRequest(BaseModel):
+class ReanalyzeRequest(AnalysisPlacement):
     model_config = ConfigDict(extra="forbid")
 
     frustrampnn_settings: FrustraMPNNRequestedSettings | None = None
@@ -2834,6 +2844,7 @@ async def validate_uploaded_settings(
 )
 async def analyze_uploaded_structure(
     request: Request,
+    background_tasks: BackgroundTasks,
     pdb_file: UploadFile = File(
         ...,
         description="PDB or mmCIF structure; maximum accepted size is 64 MiB",
@@ -2843,17 +2854,21 @@ async def analyze_uploaded_structure(
         max_length=_MAX_MULTIPART_METADATA_CHARS,
         description="Complete FrustraMPNN settings JSON object; omitted selects canonical defaults",
     ),
+    launch_context_id: Optional[str] = Form(None),
+    execution_target_id: Optional[str] = Form(None),
+    idempotency_key: Optional[str] = Form(None),
     expected_sha256: Optional[str] = Query(
         None,
         pattern=r"^[0-9a-f]{64}$",
         description="Optional expected SHA-256 of the uploaded structure bytes",
     ),
     session: AsyncSession = Depends(get_session),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
 ):
     """Snapshot an upload and return a persisted scheduler-owned child receipt."""
     unknown_query = set(request.query_params) - {"expected_sha256"}
     form = await request.form()
-    unknown_form = set(form) - {"pdb_file", "frustrampnn_settings"}
+    unknown_form = set(form) - {"pdb_file", "frustrampnn_settings", "launch_context_id", "execution_target_id", "idempotency_key"}
     if unknown_query or unknown_form:
         raise HTTPException(422, "FrustraMPNN launch overrides/unknown fields are forbidden")
     try:
@@ -2863,13 +2878,23 @@ async def analyze_uploaded_structure(
             expected_sha256=expected_sha256,
         )
         requested_settings = _multipart_requested_settings(form)
-        job = await create_child_job(
-            session,
-            selections=[selection],
-            source_parent=None,
-            trigger="upload_analyze",
-            requested_settings=requested_settings,
-        )
+        if "execution_target_id" in form or form.get("launch_context_id"):
+            responses = await submit_selected_analysis(
+                session, experiment_session, background_tasks,
+                selections=[selection], source_parent=None, requested_settings=requested_settings,
+                execution_target_id=form.get("execution_target_id") or None,
+                execution_target_supplied="execution_target_id" in form,
+                destination_launch_context_id=form.get("launch_context_id") or None,
+                idempotency_key=form.get("idempotency_key") or None,
+                response_context={"operation": "frustrampnn", "trigger": "upload_analyze"},
+                trigger="upload_analyze",
+            )
+            job = await session.get(Job, responses[0].id)
+        else:
+            job = await create_child_job(
+                session, selections=[selection], source_parent=None,
+                trigger="upload_analyze", requested_settings=requested_settings,
+            )
         return await _child_job_receipt(session, job)
     except FrustraMPNNChildError as exc:
         await session.rollback()
@@ -3142,7 +3167,9 @@ async def handoff_external_candidate(
 async def analyze_designs(
     parent_job_id: str,
     body: AnalyzeDesignsRequest,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
 ):
     """Fan out immutable selected Designs as scheduler-visible child Jobs."""
     parent = await session.get(Job, parent_job_id)
@@ -3157,13 +3184,32 @@ async def analyze_designs(
             design_ids=design_ids,
             expected_sha256=expected,
         )
-        fanout = await _fanout_design_selections(
-            session,
-            parent=parent,
-            selections=selections,
-            requested_settings=body.frustrampnn_settings,
-            trigger="design_analyze",
-        )
+        if "execution_target_id" in body.model_fields_set or body.launch_context_id:
+            responses = await submit_selected_analysis(
+                session, experiment_session, background_tasks,
+                selections=selections, source_parent=parent, requested_settings=body.frustrampnn_settings,
+                execution_target_id=body.execution_target_id,
+                execution_target_supplied="execution_target_id" in body.model_fields_set,
+                destination_launch_context_id=body.launch_context_id,
+                idempotency_key=body.idempotency_key,
+                response_context={"operation": "frustrampnn", "source_job_id": parent.id},
+                trigger="design_analyze",
+            )
+            from services.structure_dataset_fanout import StructureDatasetFanoutResult
+            settings = body.frustrampnn_settings
+            fanout = StructureDatasetFanoutResult(
+                child_jobs=tuple([await session.get(Job, response.id) for response in responses]),
+                fanout_id=canonical_sha256({"child_job_ids": [response.id for response in responses]}),
+                parent_job_id=parent.id, selected_structure_count=len(selections),
+                structures_per_job=settings.structures_per_job,
+                effective_structures_per_job=settings.structures_per_job if settings.batching_enabled else 1,
+                replayed=False,
+            )
+        else:
+            fanout = await _fanout_design_selections(
+                session, parent=parent, selections=selections,
+                requested_settings=body.frustrampnn_settings, trigger="design_analyze",
+            )
         return await _fanout_receipt(session, fanout)
     except (FrustraMPNNChildError, StructureDatasetFanoutError) as exc:
         await session.rollback()
@@ -3178,7 +3224,9 @@ async def analyze_designs(
 async def reanalyze_child(
     child_job_id: str,
     body: ReanalyzeRequest,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
 ):
     prior = await session.get(Job, child_job_id)
     if prior is None:
@@ -3188,6 +3236,14 @@ async def reanalyze_child(
             session,
             prior_child=prior,
             replacement_settings=body.frustrampnn_settings,
+            submission={
+                "experiment_session": experiment_session, "background_tasks": background_tasks,
+                "execution_target_id": body.execution_target_id,
+                "execution_target_supplied": "execution_target_id" in body.model_fields_set,
+                "destination_launch_context_id": body.launch_context_id,
+                "idempotency_key": body.idempotency_key,
+                "response_context": {"operation": "frustrampnn", "prior_child_job_id": prior.id},
+            } if "execution_target_id" in body.model_fields_set or body.launch_context_id else None,
         )
         return await _child_job_receipt(session, job)
     except FrustraMPNNChildError as exc:
