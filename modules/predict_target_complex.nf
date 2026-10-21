@@ -37,7 +37,7 @@ process PredictTargetComplex {
     
     script:
     def dna_arg = dna_seq ? "--dna-seq '${dna_seq}'" : ""
-    def msa_arg = params.target_use_msa ? "--msa-path ${params.target_msa_path}" : ""
+    def msa_arg = params.target_msa_path ? "--msa-path '${params.target_msa_path}'" : (params.target_use_msa ? "--use-msa" : "")
     
     """
     set -euo pipefail
@@ -50,6 +50,7 @@ process PredictTargetComplex {
     python3 ${params.code_root}/scripts/prep_complex_yaml.py \\
         --protein-seq "${protein_seq}" \\
         ${dna_arg} \\
+        ${msa_arg} \\
         --protein-id A \\
         --dna-id B \\
         --output complex.yaml \\
@@ -66,19 +67,20 @@ process PredictTargetComplex {
     export HOME=tmp
     
     # Run Boltz-2 prediction
-    boltz predict \\
+    python3 ${params.code_root}/scripts/run_boltz_wrapper.py predict \\
+        ${params.boltz_seed != null ? "--seed " + params.boltz_seed : ""} \\
         complex.yaml \\
         --output_format pdb \\
-        --recycling_steps ${params.target_complex_recycling ?: 3} \\
-        --sampling_steps ${params.target_complex_sampling ?: 50} \\
+        --recycling_steps ${(params.target_complex_recycling != null ? params.target_complex_recycling : 3)} \\
+        --sampling_steps ${(params.target_complex_sampling != null ? params.target_complex_sampling : 50)} \\
         --diffusion_samples 1 \\
-        ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
+        ${params.boltz_max_parallel_samples != null ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
         --cache /boltzcache \\
         2>&1 | tee -a predict_complex.log
     
     # Extract output files
-    if [ -f boltz_results/predictions/complex/complex_model_0.pdb ]; then
-        mv boltz_results/predictions/complex/complex_model_0.pdb target_complex.pdb
+    if [ -f boltz_results_complex/predictions/complex/complex_model_0.pdb ]; then
+        mv boltz_results_complex/predictions/complex/complex_model_0.pdb target_complex.pdb
         echo "Complex structure saved to target_complex.pdb" | tee -a predict_complex.log
     else
         echo "ERROR: Boltz output not found" | tee -a predict_complex.log
@@ -86,8 +88,8 @@ process PredictTargetComplex {
     fi
     
     # Extract confidence JSON
-    if [ -f boltz_results/predictions/complex/confidence_complex_model_0.json ]; then
-        mv boltz_results/predictions/complex/confidence_complex_model_0.json confidence.json
+    if [ -f boltz_results_complex/predictions/complex/confidence_complex_model_0.json ]; then
+        mv boltz_results_complex/predictions/complex/confidence_complex_model_0.json confidence.json
     else
         echo "{}" > confidence.json
     fi

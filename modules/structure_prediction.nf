@@ -716,9 +716,9 @@ process BoltzFromSequenceTask {
     path "*.log"
 
     script:
-    def recycling = params.boltz_recycling_steps ?: 3
-    def sampling = params.boltz_sampling_steps ?: 50
-    def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
+    def recycling = (params.boltz_recycling_steps != null ? params.boltz_recycling_steps : 3)
+    def sampling = (params.boltz_sampling_steps != null ? params.boltz_sampling_steps : 50)
+    def numSamples = params.boltz_diffusion_samples != null ? params.boltz_diffusion_samples : (params.boltz_num_samples != null ? params.boltz_num_samples : 1)
     def producerMetadataBase64 = JsonOutput.toJson(producer_meta).bytes.encodeBase64().toString()
     def msaDbPath = params.msa_local_db
     def msaCacheDir = params.msa_cache_dir
@@ -838,18 +838,19 @@ print(yaml.dump(boltz_yaml, default_flow_style=False))
 PYEOF
     
     # Run Boltz-2 prediction (NO --use_msa_server - MSA is pre-computed!)
-    boltz predict \\
+    python3 ${params.code_root}/scripts/run_boltz_wrapper.py predict \\
+        ${params.boltz_seed != null ? "--seed " + params.boltz_seed : ""} \\
         ./yamls/ \\
         --output_format pdb \\
         ${params.protein_science_contract_revision == 1 ? '--write_full_pae' : ''} \\
         --diffusion_samples ${numSamples} \\
-        ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
+        ${params.boltz_max_parallel_samples != null ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
         --recycling_steps ${recycling} \\
         --sampling_steps ${sampling} \\
         ${params.boltz_method ? "--method '" + params.boltz_method.toString().replace("'", "'\"'\"'") + "'" : ''} \\
         ${params.boltz_use_potentials ? '--use_potentials' : ''} \\
-        ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \\
-        ${params.boltz_predict_affinity ? '--sampling_steps_affinity ' + (params.boltz_sampling_steps_affinity ?: 200) + ' --diffusion_samples_affinity ' + (params.boltz_diffusion_samples_affinity ?: 5) : ''} \\
+        ${params.boltz_step_scale != null ? '--step_scale ' + params.boltz_step_scale : ''} \\
+        ${params.boltz_predict_affinity ? '--sampling_steps_affinity ' + ((params.boltz_sampling_steps_affinity != null ? params.boltz_sampling_steps_affinity : 200)) + ' --diffusion_samples_affinity ' + ((params.boltz_diffusion_samples_affinity != null ? params.boltz_diffusion_samples_affinity : 5)) : ''} \\
         ${params.boltz_affinity_mw_correction ? '--affinity_mw_correction' : ''} \\
         --cache /boltzcache \\
         ${params.boltz_extra_config ?: ''} \\
@@ -950,9 +951,9 @@ process BoltzFromSequenceWithMSATask {
     path "*.log"
 
     script:
-    def recycling = params.boltz_recycling_steps ?: 3
-    def sampling = params.boltz_sampling_steps ?: 50
-    def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
+    def recycling = (params.boltz_recycling_steps != null ? params.boltz_recycling_steps : 3)
+    def sampling = (params.boltz_sampling_steps != null ? params.boltz_sampling_steps : 50)
+    def numSamples = params.boltz_diffusion_samples != null ? params.boltz_diffusion_samples : (params.boltz_num_samples != null ? params.boltz_num_samples : 1)
     def producerMetadataBase64 = JsonOutput.toJson(producer_meta).bytes.encodeBase64().toString()
     """
     printf '%s' '${boltzTaskBindingBase64(producer_meta.producer_artifact_id, "BoltzFromSequenceWithMSATask")}' | base64 --decode > boltz_task_binding.json
@@ -1045,18 +1046,19 @@ print(yaml.dump(boltz_yaml, default_flow_style=False))
 PYEOF
     
     # Run Boltz-2 prediction with cached MSA (NO --use_msa_server!)
-    boltz predict \\
+    python3 ${params.code_root}/scripts/run_boltz_wrapper.py predict \\
+        ${params.boltz_seed != null ? "--seed " + params.boltz_seed : ""} \\
         ./yamls/ \\
         --output_format pdb \\
         ${params.protein_science_contract_revision == 1 ? '--write_full_pae' : ''} \\
         --diffusion_samples ${numSamples} \\
-        ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
+        ${params.boltz_max_parallel_samples != null ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
         --recycling_steps ${recycling} \\
         --sampling_steps ${sampling} \\
         ${params.boltz_method ? "--method '" + params.boltz_method.toString().replace("'", "'\"'\"'") + "'" : ''} \\
         ${params.boltz_use_potentials ? '--use_potentials' : ''} \\
-        ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \\
-        ${params.boltz_predict_affinity ? '--sampling_steps_affinity ' + (params.boltz_sampling_steps_affinity ?: 200) + ' --diffusion_samples_affinity ' + (params.boltz_diffusion_samples_affinity ?: 5) : ''} \\
+        ${params.boltz_step_scale != null ? '--step_scale ' + params.boltz_step_scale : ''} \\
+        ${params.boltz_predict_affinity ? '--sampling_steps_affinity ' + ((params.boltz_sampling_steps_affinity != null ? params.boltz_sampling_steps_affinity : 200)) + ' --diffusion_samples_affinity ' + ((params.boltz_diffusion_samples_affinity != null ? params.boltz_diffusion_samples_affinity : 5)) : ''} \\
         ${params.boltz_affinity_mw_correction ? '--affinity_mw_correction' : ''} \\
         --cache /boltzcache \\
         ${params.boltz_extra_config ?: ''} \\
@@ -1214,8 +1216,10 @@ if prepared_source:
     complex_def = hydrate_prepared_boltz_components(complex_def, prepared_source,
         "${params.boltz_prepared_msa_sha256 ?: ''}", task_name="${complex_name}")
 
-boltz_yaml = {"version": 1, "sequences": []}
-binder_chain = None
+import sys
+sys.path.insert(0, "${params.code_root}/scripts")
+from lib.boltz_fidelity import component_copies, molecular_entry, task_fields
+boltz_yaml = {"version": 1, "sequences": [], **task_fields(complex_def)}
 
 msa_db_path = "${msaDbPath}"
 cache_dir = "${msaCacheDir}"
@@ -1258,7 +1262,8 @@ anchor_target = "${anchorTarget}".strip().lower() == "true"
 fixed_target_source_path = "${fixedTargetSourcePath}".strip()
 fixed_target_source_chains = [token.strip() for token in "${fixedTargetSourceChains}".split(",") if token.strip()]
 fixed_target_model_number = "${fixedTargetModelNumber}".strip()
-target_chain_ids = {token.strip() for token in "${targetChains}".split(",") if token.strip()}
+target_chain_ids = [token.strip() for token in "${targetChains}".split(",") if token.strip()]
+target_template_chain_map = dict(zip(target_chain_ids, fixed_target_source_chains))
 target_template_threshold = float("${params.target_template_threshold_angstrom ?: 2.0}")
 msa_chain_timeout_seconds = int("${msaChainTimeoutSeconds}")
 code_root = Path("${params.code_root}")
@@ -1314,7 +1319,7 @@ if anchor_target:
     template_cif_path = str(Path(template_info["cif"]).resolve())
     print(f"Prepared fixed-target template: {template_cif_path}")
 
-for comp in complex_def.get("components", []):
+for comp in component_copies(complex_def.get("components", [])):
     comp_type = comp.get("type", "protein")
     comp_id = comp.get("id", "A")
     
@@ -1330,8 +1335,12 @@ for comp in complex_def.get("components", []):
         }
         
         # Check for pre-existing MSA path
-        msa_path = comp.get("msa_path")
-        if msa_path and Path(msa_path).exists():
+        msa_path = comp.get("msa", comp.get("msa_path"))
+        if "msa" in comp:
+            entry["protein"]["msa"] = str(Path(msa_path).resolve()) if isinstance(msa_path, str) and msa_path not in ("", "empty") else msa_path
+            record["msa_mode"] = "native_explicit"
+            record["msa_path"] = msa_path
+        elif msa_path and Path(msa_path).exists():
             resolved = str(Path(msa_path).resolve())
             entry["protein"]["msa"] = resolved
             record["msa_mode"] = "provided"
@@ -1448,50 +1457,22 @@ for comp in complex_def.get("components", []):
             entry_chain_ids = entry["protein"]["id"] if isinstance(entry["protein"]["id"], list) else [entry["protein"]["id"]]
             for chain_id in entry_chain_ids:
                 if chain_id in target_chain_ids:
-                    entry["protein"]["templates"] = [{
+                    boltz_yaml.setdefault("templates", []).append({
                         "cif": template_cif_path,
                         "chain_id": chain_id,
-                        "template_id": chain_id,
+                        "template_id": target_template_chain_map.get(chain_id, chain_id),
                         "force": True,
                         "threshold": target_template_threshold,
-                    }]
+                    })
                     record["anchored_template_cif"] = template_cif_path
-                    break
         msa_records.append(record)
                 
     elif comp_type == "ligand":
         entry = {"ligand": {"id": [comp_id] if isinstance(comp_id, str) else comp_id}}
         
-        if binder_chain is None:
-            binder_chain = comp_id
-
-        cofactor_smiles = {
-            "ATP": "Nc1ncnc2n(cnc12)[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O",
-            "ADP": "Nc1ncnc2n(cnc12)[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O",
-            "GTP": "Nc1nc2c(ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O)c(=O)[nH]1",
-            "GDP": "Nc1nc2c(ncn2[C@@H]3O[C@H](COP(=O)(O)OP(=O)(O)O)[C@@H](O)[C@H]3O)c(=O)[nH]1",
-            "HEM": "CC1=C(CCC(=O)O)C2=CC3=C(C)C(C=C)=C([NH]3)C=C4C(C=C)=C(C)C(=N4)C=C1N2"
-        }
-
-        if comp.get("ccd"):
-            ccd_code = comp["ccd"]
-            if ccd_code in cofactor_smiles:
-                 entry["ligand"]["smiles"] = cofactor_smiles[ccd_code]
-            else:
-                 entry["ligand"]["ccd"] = ccd_code
-        elif comp.get("smiles"):
-            entry["ligand"]["smiles"] = comp["smiles"]
+        entry = molecular_entry(comp)
     elif comp_type == "ion":
-        ccd_code = comp.get("ccd", "MG")
-        ion_smiles = {
-            "MG": "[Mg+2]", "ZN": "[Zn+2]", "CA": "[Ca+2]", "NA": "[Na+]",
-            "CL": "[Cl-]", "K": "[K+]", "MN": "[Mn+2]", "FE": "[Fe+2]",
-            "CO": "[Co+2]", "NI": "[Ni+2]", "CU": "[Cu+2]"
-        }
-        if ccd_code in ion_smiles:
-            entry = {"ligand": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "smiles": ion_smiles[ccd_code]}}
-        else:
-            entry = {"ligand": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "ccd": ccd_code}}
+        entry = molecular_entry(comp)
     elif comp_type == "dna":
         dna_seq = comp.get("sequence", "")
         entry = {"dna": {"id": [comp_id] if isinstance(comp_id, str) else comp_id, "sequence": dna_seq}}
@@ -1513,14 +1494,15 @@ for comp in complex_def.get("components", []):
         # Peptides >= 30 residues: try MSA generation like regular proteins
         PEPTIDE_MSA_THRESHOLD = 30
         
-        if len(peptide_seq) < PEPTIDE_MSA_THRESHOLD:
+        if "msa" in comp or comp.get("msa_path"):
+            msa_value = comp.get("msa", comp.get("msa_path"))
+            entry["protein"]["msa"] = str(Path(msa_value).resolve()) if isinstance(msa_value, str) and msa_value not in ("", "empty") else msa_value
+            record["msa_mode"] = "native_explicit"
+            record["msa_path"] = entry["protein"]["msa"]
+        elif len(peptide_seq) < PEPTIDE_MSA_THRESHOLD:
             # Short peptides use single-sequence mode to avoid MSA consistency errors
             entry["protein"]["msa"] = "empty"
             record["msa_mode"] = "empty_short_peptide"
-        elif comp.get("msa_path"):
-            entry["protein"]["msa"] = str(Path(comp["msa_path"]).resolve())
-            record["msa_mode"] = "provided"
-            record["msa_path"] = entry["protein"]["msa"]
         elif use_msa and peptide_seq:
             # Longer peptides: try MSA generation using same logic as proteins
             if peptide_seq in seq_to_msa:
@@ -1597,10 +1579,12 @@ for comp in complex_def.get("components", []):
         msa_records.append(record)
     else:
         continue
-    boltz_yaml["sequences"].append(entry)
-
-if binder_chain:
-    boltz_yaml["properties"] = [{"binder": [binder_chain] if isinstance(binder_chain, str) else binder_chain}]
+    native_entry = molecular_entry(comp)
+    native_kind = next(iter(native_entry))
+    # The MSA owner above supplies only alignment intent; molecular fields have
+    # one serializer, including modification chemistry and cyclic topology.
+    native_entry[native_kind].update({k: v for k, v in entry[native_kind].items() if k == "msa"})
+    boltz_yaml["sequences"].append(native_entry)
 
 if msa_failures:
     print("ERROR: Aborting complex preparation because required protein-chain MSA generation failed.")
@@ -1620,9 +1604,6 @@ manifest_payload = {
 }
 Path("msa/complex_msa_manifest.json").write_text(json.dumps(manifest_payload, indent=2), encoding="utf-8")
 
-if prepared_source:
-    boltz_yaml = hydrate_prepared_boltz_task(boltz_yaml, prepared_source,
-        "${params.boltz_prepared_msa_sha256 ?: ''}", task_name=complex_name)
 yaml_path = f"yamls/{complex_name}.yaml"
 with open(yaml_path, "w") as f:
     yaml.dump(boltz_yaml, f, default_flow_style=False)
@@ -1662,9 +1643,9 @@ process BoltzFromComplex {
     path "*.log"
 
     script:
-    def recycling = params.boltz_recycling_steps ?: 3
-    def sampling = params.boltz_sampling_steps ?: 50
-    def numSamples = params.boltz_diffusion_samples ?: params.boltz_num_samples ?: 1
+    def recycling = (params.boltz_recycling_steps != null ? params.boltz_recycling_steps : 3)
+    def sampling = (params.boltz_sampling_steps != null ? params.boltz_sampling_steps : 50)
+    def numSamples = params.boltz_diffusion_samples != null ? params.boltz_diffusion_samples : (params.boltz_num_samples != null ? params.boltz_num_samples : 1)
     def geometryMode = params.boltz_target_geometry_mode ?: (params.boltz_anchor_target ? 'conditioned' : 'flexible')
     def producerSampleBase64 = complex_name.toString().getBytes('UTF-8').encodeBase64().toString()
     """
@@ -1682,18 +1663,19 @@ process BoltzFromComplex {
         cp -L "${msa_dir}"/*.a3m msa/ 2>/dev/null || true
     fi
 
-    boltz predict \\
+    python3 ${params.code_root}/scripts/run_boltz_wrapper.py predict \\
+        ${params.boltz_seed != null ? "--seed " + params.boltz_seed : ""} \\
         ./yamls/ \\
         --output_format pdb \\
         ${params.protein_science_contract_revision == 1 ? '--write_full_pae' : ''} \\
         --diffusion_samples ${numSamples} \\
-        ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
+        ${params.boltz_max_parallel_samples != null ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
         --recycling_steps ${recycling} \\
         --sampling_steps ${sampling} \\
         ${params.boltz_method ? "--method '" + params.boltz_method.toString().replace("'", "'\"'\"'") + "'" : ''} \\
         ${params.boltz_use_potentials ? '--use_potentials' : ''} \\
-        ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \\
-        ${params.boltz_predict_affinity ? '--sampling_steps_affinity ' + (params.boltz_sampling_steps_affinity ?: 200) + ' --diffusion_samples_affinity ' + (params.boltz_diffusion_samples_affinity ?: 5) : ''} \\
+        ${params.boltz_step_scale != null ? '--step_scale ' + params.boltz_step_scale : ''} \\
+        ${params.boltz_predict_affinity ? '--sampling_steps_affinity ' + ((params.boltz_sampling_steps_affinity != null ? params.boltz_sampling_steps_affinity : 200)) + ' --diffusion_samples_affinity ' + ((params.boltz_diffusion_samples_affinity != null ? params.boltz_diffusion_samples_affinity : 5)) : ''} \\
         ${params.boltz_affinity_mw_correction ? '--affinity_mw_correction' : ''} \\
         --cache /boltzcache \\
         ${params.boltz_extra_config ?: ''} \\
@@ -1848,8 +1830,10 @@ workflow structure_prediction_wf {
 
         if (pred_method == 'esmfold2') {
             def esmfold2_outputs
-            if (params.containsKey('core_protein_scientific_contract')) {
-                ESMFold2MSAPredict(esmfold2ContractInputs(typed_inputs, params))
+            if (params.containsKey('core_protein_scientific_contract') || params.sequence_batch_json_path) {
+                def esmSettings = new LinkedHashMap(params)
+                if (params.sequence_batch_json_path) esmSettings.core_protein_scientific_contract = 1
+                ESMFold2MSAPredict(esmfold2ContractInputs(typed_inputs, esmSettings))
                 esmfold2_outputs = ESMFold2MSAPredict.out.typed_cifs
             } else {
                 ESMFold2Predict(typed_inputs)

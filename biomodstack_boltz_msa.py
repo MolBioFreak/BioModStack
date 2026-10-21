@@ -160,7 +160,7 @@ def hydrate_prepared_boltz_components(payload, source, manifest_sha256, *, task_
         component = result['components'][chain['component_index']]
         path = _resolve_native_alignment(Path(source), chain['alignment'], chain['sequence'])
         if path == 'empty':
-            # Native short-peptide policy owns this sentinel; do not make it a path.
+            component['msa'] = 'empty'
             continue
         supplied = component.get('msa_path')
         original = expected[chain['component_index']].get('msa_path')
@@ -169,6 +169,7 @@ def hydrate_prepared_boltz_components(payload, source, manifest_sha256, *, task_
         if supplied and supplied != original and validate_boltz_msa(Path(supplied), chain['sequence']) != Path(path).read_bytes():
             raise ValueError('Supplied component MSA conflicts with prepared chain')
         component['msa_path'] = path
+        component['msa'] = path
     return result
 
 

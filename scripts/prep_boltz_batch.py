@@ -12,39 +12,7 @@ import json
 import yaml
 from pathlib import Path
 
-# Try BioPython import, fallback to simple parser
-try:
-    from Bio import SeqIO
-except ImportError:
-    SeqIO = None
-
-def parse_pdb_simple(pdb_path):
-    """Fallback PDB parser to extract sequence if BioPython is missing"""
-    # Simple extraction of amino acid sequence from CA atoms
-    aa_codes = {
-        'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
-        'GLN': 'Q', 'GLU': 'E', 'GLY': 'G', 'HIS': 'H', 'ILE': 'I',
-        'LEU': 'L', 'LYS': 'K', 'MET': 'M', 'PHE': 'F', 'PRO': 'P',
-        'SER': 'S', 'THR': 'T', 'TRP': 'W', 'TYR': 'Y', 'VAL': 'V'
-    }
-    
-    chain_seqs = {}
-    with open(pdb_path) as f:
-        seen = set()
-        for line in f:
-            if line.startswith('ATOM') and line[13:15] == 'CA':
-                chain = line[21]
-                resnum = line[22:26].strip()
-                resname = line[17:20].strip()
-                code = aa_codes.get(resname, 'X')
-                
-                key = f"{chain}_{resnum}"
-                if key not in seen:
-                    if chain not in chain_seqs: chain_seqs[chain] = []
-                    chain_seqs[chain].append(code)
-                    seen.add(key)
-    
-    return {c: "".join(s) for c, s in chain_seqs.items()}
+from prep_boltz_yaml import extract_chain_groups, generate_yaml_config
 
 def file_to_list(file_string):
     """Parses Nextflow string input (space separated or list) into file list"""
@@ -116,21 +84,10 @@ def main():
             
         name = pdb_path.stem
         
-        # Extract sequence
-        if SeqIO:
-             # robust parsing
-             chains = {}
-             for record in SeqIO.parse(pdb_path, "pdb-atom"):
-                 chain_id = record.annotations.get("chain", "A")
-                 chains[chain_id] = str(record.seq)
-        else:
-             chains = parse_pdb_simple(pdb_path)
-        
-        # Build YAML structure
-        yaml_data = {
-            "version": 1,
-            "sequences": []
-        }
+        yaml_data = generate_yaml_config(extract_chain_groups(pdb_path))
+        entries = yaml_data['sequences']
+        yaml_data['sequences'] = []
+        chains = {entry['protein']['id'][0]: entry['protein']['sequence'] for entry in entries if 'protein' in entry}
 
         template_info = template_manifest.get(name) if args.anchor_target else None
         if args.anchor_target and not isinstance(template_info, dict):
@@ -138,13 +95,13 @@ def main():
         
         shared_msa_bound = False
         shared_msa_chain_ids = set(binder_chains or ([next(iter(chains.keys()))] if chains else []))
-        for chain_id, sequence in chains.items():
-            entry = {
-                "protein": {
-                    "id": [chain_id],
-                    "sequence": sequence
-                }
-            }
+        for entry in entries:
+            if 'protein' not in entry:
+                yaml_data['sequences'].append(entry)
+                continue
+            chain_id = entry['protein']['id'][0]
+            if use_shared_msa:
+                entry['protein'].pop('msa', None)
             if use_shared_msa and chain_id in shared_msa_chain_ids:
                 entry["protein"]["msa"] = msa_abs_path
                 shared_msa_bound = True
@@ -159,18 +116,20 @@ def main():
                 template_path = os.path.abspath(str(template_info.get("cif", "")))
                 if not template_path:
                     raise ValueError(f"Template path missing for anchored target chain {chain_id} in {name}")
-                entry["protein"]["templates"] = [{
+                yaml_data.setdefault("templates", []).append({
                     "cif": template_path,
                     "chain_id": chain_id,
                     "template_id": chain_id,
                     "force": True,
                     "threshold": args.template_threshold,
-                }]
+                })
             
             yaml_data["sequences"].append(entry)
 
-        if not shared_msa_bound and use_shared_msa and yaml_data["sequences"]:
-            yaml_data["sequences"][0]["protein"]["msa"] = msa_abs_path
+        if not shared_msa_bound and use_shared_msa:
+            protein = next((e['protein'] for e in yaml_data['sequences'] if 'protein' in e), None)
+            if protein is not None:
+                protein['msa'] = msa_abs_path
 
         if epitope_contacts and shared_msa_chain_ids:
             binder_chain = sorted(shared_msa_chain_ids)[0]

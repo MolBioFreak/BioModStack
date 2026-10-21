@@ -25,7 +25,7 @@ process PrepBoltz {
     micromamba activate pyrosetta
 
     # Generate yaml files containing sequences for Boltz-2 prediction 
-    python /scripts/prep_boltz_yaml.py \
+    python ${params.code_root}/scripts/prep_boltz_yaml.py \
         --input "./" \
         --output "yamls"
     """
@@ -94,54 +94,35 @@ process RunBoltz {
         mkdir yamls
         cp -L -- *.yaml ./yamls/
 
-        boltz predict \
+        python3 ${params.code_root}/scripts/run_boltz_wrapper.py predict \
+        ${params.boltz_seed != null ? "--seed " + params.boltz_seed : ""} \
             ./yamls/ \
             --output_format pdb \
             --write_full_pae \
-            ${params.boltz_diffusion_samples ? '--diffusion_samples ' + params.boltz_diffusion_samples : ''} \
-            ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \
-            --recycling_steps ${params.boltz_recycling_steps ?: 3} \
-            --sampling_steps ${params.boltz_sampling_steps ?: 50} \
+            --diffusion_samples ${params.boltz_diffusion_samples != null ? params.boltz_diffusion_samples : (params.boltz_num_samples != null ? params.boltz_num_samples : 1)} \
+            ${params.boltz_max_parallel_samples != null ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \
+            --recycling_steps ${(params.boltz_recycling_steps != null ? params.boltz_recycling_steps : 3)} \
+            --sampling_steps ${(params.boltz_sampling_steps != null ? params.boltz_sampling_steps : 50)} \
+            ${params.boltz_method ? '--method ' + params.boltz_method : ''} \
             ${params.boltz_use_potentials ? '--use_potentials' : ''} \
-            ${params.boltz_step_scale ? '--step_scale ' + params.boltz_step_scale : ''} \
-            ${params.boltz_predict_affinity ? '--sampling_steps_affinity ' + (params.boltz_sampling_steps_affinity ?: 200) + ' --diffusion_samples_affinity ' + (params.boltz_diffusion_samples_affinity ?: 5) : ''} \
+            ${params.boltz_step_scale != null ? '--step_scale ' + params.boltz_step_scale : ''} \
+            ${params.boltz_predict_affinity ? '--sampling_steps_affinity ' + ((params.boltz_sampling_steps_affinity != null ? params.boltz_sampling_steps_affinity : 200)) + ' --diffusion_samples_affinity ' + ((params.boltz_diffusion_samples_affinity != null ? params.boltz_diffusion_samples_affinity : 5)) : ''} \
             ${params.boltz_affinity_mw_correction ? '--affinity_mw_correction' : ''} \
             --cache /boltzcache \
             ${params.boltz_extra_config ? params.boltz_extra_config : ''} \
             2>&1 | tee boltz_${batch_id}.log
  
-        # Move output files out of nested directories and rename to {inputname}_boltzpred.pdb|json
-        mkdir -p predictions
-        for dir in boltz_results_yamls/predictions/*/; do
-            # Extract input name from directory path
-            inputname=\$(basename "\$dir")
-            # Process PDB file
-            if [ -f "\${dir}/\${inputname}_model_0.pdb" ]; then
-                mv "\${dir}/\${inputname}_model_0.pdb" "predictions/\${inputname}_boltzpred.pdb"
-            fi
-            # Process JSON file 
-            if [ -f "\${dir}/confidence_\${inputname}_model_0.json" ]; then
-                mv "\${dir}/confidence_\${inputname}_model_0.json" "predictions/\${inputname}_boltzpred.json"
-            fi
-            npz_src="\${dir}/pae_\${inputname}_model_0.npz"
-            if [ -f "\$npz_src" ]; then
-                cp "\$npz_src" "predictions/\${inputname}_boltzpred.pae.npz"
-            fi
-            # Copy affinity JSONs (generated when --sampling_steps_affinity is set)
-            cp "\${dir}"/affinity_*.json predictions/ 2>/dev/null || :
-        done
+        # Preserve every native ranked sample and its exact original YAML ID.
+        python3 ${params.code_root}/scripts/publish_boltz_samples.py \
+            --native-root boltz_results_yamls/predictions --inputs yamls --output predictions
 
         python3 - <<'PY'
 import json
 from pathlib import Path
 
 expected = sorted(path.stem for path in Path('yamls').glob('*.yaml'))
-completed = [
-    candidate_id
-    for candidate_id in expected
-    if Path('predictions', f'{candidate_id}_boltzpred.pdb').is_file()
-    and Path('predictions', f'{candidate_id}_boltzpred.json').is_file()
-]
+samples = json.loads(Path('predictions/boltz_samples.manifest').read_text())['samples']
+completed = sorted({row['source_id'] for row in samples if row['confidence_present']})
 Path('boltz_completion.json').write_text(
     json.dumps(
         {
@@ -149,6 +130,7 @@ Path('boltz_completion.json').write_text(
             'validator': 'boltz2',
             'expected_candidates': expected,
             'completed_candidates': completed,
+            'native_samples': samples,
         },
         sort_keys=True,
         separators=(',', ':'),
@@ -195,7 +177,7 @@ process AlignBoltz {
 
     # Script to align predictions to RFdiffusion designs and calculate RMSD
     # Also, extracts and renames metadata from json files
-    python /scripts/align_boltz.py \
+    python ${params.code_root}/scripts/align_boltz.py \
         --design_dir ./ \
         --boltz_dir ./ \
         --output_dir aligned \
