@@ -55,6 +55,59 @@ def save(root, progress):
     root.provenance = {**(root.provenance or {}), PROGRESS: deepcopy(progress)}
 
 
+async def refresh_children(session, root_id, retained):
+    """Recover atomic Job insertions before interpreting dependency progress."""
+    children = await session.scalars(select(Job).where(
+        Job.provenance[STEP]['root_job_id'].as_string() == root_id).execution_options(populate_existing=True))
+    for child in children:
+        step = retained['steps'].get(child.provenance[STEP]['step_id'])
+        if step is not None:
+            step.update(job_id=child.id, state=child.status)
+            step.pop('error', None)
+
+
+def round_state(retained):
+    states = {s['state'] for s in retained['steps'].values() if not s.get('superseded_by')}
+    dependencies = {d['state'] for d in retained.get('dependencies', {}).values()}
+    if retained['errors'] or 'error' in states or 'publication_error' in dependencies:
+        return 'needs_retry'
+    if 'review_required' in states:
+        return 'review_required'
+    if states - {'completed', 'failed', 'cancelled'} or dependencies & {'awaiting_predecessor', 'awaiting_publication'}:
+        return 'running'
+    return 'completed_with_errors' if states & {'failed', 'cancelled'} else 'completed'
+
+
+async def submit_step(session, experiments, step, *, destination, context):
+    """One ordinary Job/Project submission boundary for initial and selected rounds."""
+    from routers.jobs import submit_selected_child_jobs
+    tasks = BackgroundTasks()
+    try:
+        response = await submit_selected_child_jobs(
+            [JobCreate.model_validate(step['request'])], tasks, session, experiments,
+            destination_launch_context_id=destination,
+            idempotency_key=step['metadata']['step_id'], response_context=context)
+        outcome = {'state': 'queued', 'job_id': response[0].id}
+    except HTTPException as exc:
+        if exc.status_code == 409 and isinstance(exc.detail, dict) and exc.detail.get('code') == 'remote_prepared_job_review_required':
+            outcome = {'state': 'review_required', 'review': exc.detail}
+            prepared = exc.detail.get('job_request') or exc.detail.get('job_requests', [None])[0]
+            if prepared:
+                outcome['request'] = prepared
+        else:
+            await session.rollback()
+            outcome = {'state': 'error', 'error': str(exc.detail)}
+    except asyncio.CancelledError:
+        await session.rollback()
+        await experiments.rollback()
+        raise
+    except Exception as exc:
+        logger.exception('Round submission failed for %s', context)
+        await session.rollback()
+        outcome = {'state': 'error', 'error': str(exc)}
+    return outcome, tasks
+
+
 async def read_round(session, root_id, *, round_id=None):
     root = await session.get(Job, root_id)
     if root is None:
@@ -66,6 +119,8 @@ async def read_round(session, root_id, *, round_id=None):
         result['state'] = 'not_requested'
     elif not envelope['enabled']:
         result['state'] = 'generation_only'
+    elif root.status in {'failed', 'cancelled'} and not result['steps']:
+        result.update(state=root.status, outcome='no_follow_on')
     result.update(job_id=root.id, binder_round=provenance.get(REQUEST),
                   sequence_design=provenance.get(SEQUENCE_REQUEST),
                   kind='general_sequence_design' if SEQUENCE_REQUEST in provenance else 'binder')
@@ -216,7 +271,6 @@ async def _plan(session, root, progress, request, *, retry=False):
 
 async def reconcile_round(session, experiment_session, root_id, *, retry=False):
     """Recovery tick; generation completion and native result rows are immutable."""
-    from routers.jobs import submit_selected_child_jobs
     root = await lock_root(session, root_id)
     envelope = (root.provenance or {}).get(SEQUENCE_REQUEST) or (root.provenance or {}).get(REQUEST)
     if envelope is None:
@@ -226,6 +280,7 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
     if not retry and progress['state'] in {'completed', 'completed_with_errors', 'cancelled', 'generation_only'}:
         await session.rollback()
         return await read_round(session, root_id)
+    await refresh_children(session, root_id, progress)
     if retry:
         # Explicit retries create new ordinary Jobs from the retained settings;
         # failed/cancelled observations and their source generation stay intact.
@@ -249,7 +304,7 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
             old['superseded_by'] = new_id
     if not envelope['enabled'] or root.status != 'completed':
         progress['state'] = 'generation_only' if not envelope['enabled'] else (
-            'cancelled' if root.status == 'cancelled' else 'waiting_generation')
+            root.status if root.status in {'failed', 'cancelled'} else 'waiting_generation')
         save(root, progress)
         await session.commit()
         return await read_round(session, root_id)
@@ -274,31 +329,9 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
         if root.status != 'completed' or step['state'] == 'review_required' or (step['state'] == 'error' and not retry):
             await session.rollback()
             continue
-        tasks = BackgroundTasks()
-        try:
-            responses = await submit_selected_child_jobs(
-                [JobCreate.model_validate(step['request'])], tasks, session, experiment_session,
-                destination_launch_context_id=(root.provenance or {}).get('launch_context_id'),
-                idempotency_key=step_id,
-                response_context={'root_job_id': root_id, 'binder_round_step_id': step_id})
-            outcome = {'state': 'queued', 'job_id': responses[0].id}
-        except HTTPException as exc:
-            if exc.status_code == 409 and isinstance(exc.detail, dict) and exc.detail.get('code') == 'remote_prepared_job_review_required':
-                outcome = {'state': 'review_required', 'review': exc.detail}
-                retained = exc.detail.get('job_request') or exc.detail.get('job_requests', [None])[0]
-                if retained:
-                    outcome['request'] = retained
-            else:
-                outcome = {'state': 'error', 'error': str(exc.detail)}
-                await session.rollback()
-        except asyncio.CancelledError:
-            await session.rollback()
-            await experiment_session.rollback()
-            raise
-        except Exception as exc:
-            logger.exception('Binder round submission failed for %s', step_id)
-            outcome = {'state': 'error', 'error': str(exc)}
-            await session.rollback()
+        outcome, tasks = await submit_step(session, experiment_session, step,
+            destination=(root.provenance or {}).get('launch_context_id'),
+            context={'root_job_id': root_id, 'binder_round_step_id': step_id})
         root = await lock_root(session, root_id)
         progress = progress_of(root)
         progress['steps'][step_id].update(outcome)
@@ -309,17 +342,9 @@ async def reconcile_round(session, experiment_session, root_id, *, retry=False):
         await tasks()
     root = await lock_root(session, root_id)
     progress = progress_of(root)
-    states = {item['state'] for item in progress['steps'].values() if not item.get('superseded_by')}
-    if progress['errors'] or 'error' in states:
-        progress['state'] = 'needs_retry'
-    elif 'review_required' in states:
-        progress['state'] = 'review_required'
-    elif states & {'prepared', 'queued', 'running', 'awaiting_input'}:
-        progress['state'] = 'running'
-    elif states & {'failed', 'cancelled'}:
-        progress['state'] = 'completed_with_errors'
-    else:
-        progress['state'] = 'completed'
+    await refresh_children(session, root_id, progress)
+    await _plan(session, root, progress, request_type.model_validate(envelope), retry=retry)
+    progress['state'] = round_state(progress)
     save(root, progress)
     await session.commit()
     return await read_round(session, root_id)

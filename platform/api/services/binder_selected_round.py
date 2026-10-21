@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import uuid
 
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from database import Design, Job, JobArtifact
@@ -41,6 +41,8 @@ def normalize(request):
         invocations = stage.models if stage.kind != 'maturation' else [stage]
         for invocation in invocations:
             model = invocation.model_id
+            from services.sequence_designer_settings import normalize_historical_sequence_settings
+            invocation.params = normalize_historical_sequence_settings(model, invocation.params)
             definition = registry.get_internal_model_definition(model)
             if definition is None or not any(m.id == MODES[model] for m in definition.modes):
                 raise ValueError(f'Unsupported model/mode {model}/{MODES[model]}')
@@ -60,14 +62,13 @@ def normalize(request):
                 defaults.update({key: False for key in BLIND_FIXED_PARAMETERS if key in known})
             invocation.params = {**defaults, **invocation.params}
             if model == 'protonpottsmpnn':
-                from scripts.lib.protonpottsmpnn_contract import normalize_options, parameter_schema
-                scientific = set(parameter_schema()['properties']) - {'target_pdb'}
-                invocation.params.update(normalize_options({k:v for k,v in invocation.params.items() if k in scientific}))
-                errors = []  # Full native option schema above; source bound at create.
+                # Final native validation runs after role_defaults binds the
+                # exact producer chain. No placeholder chain is scientific input.
+                errors = []  # Model owner validates the complete source-bound request.
             else:
                 errors = registry.validate_job_params(model, MODES[model], invocation.params)
             errors = [e for e in errors if e not in {f'Missing required parameter: {k}'
-                      for k in bound | {'binder_chains', 'target_chains', 'design_chain', 'target_chain'}}]
+                      for k in bound | {'binder_chain', 'binder_chains', 'target_chains', 'design_chain', 'target_chain'}}]
             if errors:
                 raise ValueError(str(errors))
     return result
@@ -321,6 +322,8 @@ async def output_refs(session, child):
         from services.protonpottsmpnn_design import DIRECTORY
         manifest = await session.scalar(select(JobArtifact.id).where(JobArtifact.owner_job_id == child.id,
             JobArtifact.attempt == (child.retry_count or 0), JobArtifact.logical_path == DIRECTORY + '/manifest.json'))
+        if not manifest and child.status == 'completed':
+            raise FileNotFoundError('Native sequence publication is not registered yet')
         if manifest:
             artifact, rows = await native_sequences(session, child)
             refs.extend({'kind': 'native_sequence', 'job_id': child.id, 'publication_ref': artifact.id,
@@ -439,10 +442,26 @@ async def plan(session, root, retained):
             for parent_id, parent in list(steps.items()):
                 if parent['metadata']['stage_id'] != stage.input.stage_id or parent.get('superseded_by'):
                     continue
+                dependency_key = stage.id + ':' + parent_id
+                disposition = retained.setdefault('dependencies', {}).setdefault(dependency_key, {})
                 child = await session.get(Job, parent['job_id']) if parent.get('job_id') else None
-                if child is None:
+                disposition.update(parent_step_id=parent_id, source_job_id=child.id if child else None,
+                                   attempt=(child.retry_count or 0) if child else None)
+                if child is None or child.status not in TERMINAL:
+                    disposition['state'] = 'awaiting_predecessor'
                     continue
-                parent.update(state=child.status, outputs=await output_refs(session, child))
+                try:
+                    parent.update(state=child.status, outputs=await output_refs(session, child))
+                except FileNotFoundError:
+                    disposition['state'] = 'awaiting_publication'
+                    continue
+                except (ValueError, OSError, HTTPException) as exc:
+                    disposition.update(state='publication_error', error=str(exc.detail if isinstance(exc, HTTPException) else exc))
+                    retained['errors'][dependency_key] = disposition['error']
+                    continue
+                disposition.pop('error', None)
+                retained['errors'].pop(dependency_key, None)
+                disposition['state'] = 'resolved_outputs' if parent['outputs'] else 'valid_empty'
                 for ref in parent['outputs']:
                     key = digest(ref)
                     if key not in retained['resolved_outputs']:
@@ -519,16 +538,26 @@ async def read_selected(session, root, *, round_id=None):
         row = {k: deepcopy(retained[k]) for k in ('round_id', 'source_job_id', 'root_job_id', 'state', 'request', 'selection')}
         row['selection'].pop('resolved', None)
         row['errors'] = deepcopy(retained['errors'])
+        row['dependencies'] = deepcopy(retained.get('dependencies', {}))
         row['steps'] = []
         for identity, step in retained['steps'].items():
             child = await session.get(Job, step['job_id']) if step.get('job_id') else None
             if child is None:
                 child = await session.scalar(select(Job).where(Job.provenance[rounds.STEP]['step_id'].as_string() == identity,
                     Job.provenance[rounds.STEP]['root_job_id'].as_string() == root.id))
+            outputs = deepcopy(step.get('outputs', []))
+            publication_error = None
+            if child and not retained.get('outputs_retained'):
+                try:
+                    outputs = await output_refs(session, child)
+                except (ValueError, OSError, HTTPException) as exc:
+                    publication_error = str(exc.detail if isinstance(exc, HTTPException) else exc)
             projected = {**deepcopy(step['metadata']), 'state': child.status if child else step['state'],
                          'job_id': child.id if child else step.get('job_id'),
-                         'outputs': await output_refs(session, child) if child else []}
-            for key in ('review', 'error', 'superseded_by'):
+                         'outputs': outputs}
+            if publication_error:
+                projected['publication_error'] = publication_error
+            for key in ('review', 'error', 'superseded_by', 'publication_error'):
                 if key in step:
                     projected[key] = deepcopy(step[key])
             row['steps'].append(projected)
@@ -569,13 +598,18 @@ async def submit(session, experiments, request):
 
 
 async def reconcile(session, experiments, root_id, round_id, *, retry=False):
-    from routers.jobs import submit_selected_child_jobs
     root = await rounds.lock_root(session, root_id)
     progress = rounds.progress_of(root)
     retained = next((r for r in progress.get(KEY, []) if r['round_id'] == round_id), None)
     if retained is None:
         raise HTTPException(404, 'Selected round not found')
+    if not retry and retained['state'] in {'completed', 'completed_with_errors'}:
+        await session.rollback()
+        root = await session.get(Job, root_id)
+        return (await read_selected(session, root, round_id=round_id))[0]
+    await rounds.refresh_children(session, root_id, retained)
     if retry:
+        retained.pop('outputs_retained', None)
         retained['errors'] = {}
         for old_id, step in list(retained['steps'].items()):
             child = await session.get(Job, step['job_id']) if step.get('job_id') else None
@@ -611,25 +645,10 @@ async def reconcile(session, experiments, root_id, round_id, *, retry=False):
         if step.get('superseded_by') or step['state'] == 'review_required' or (step['state'] == 'error' and not retry):
             await session.rollback()
             continue
-        tasks = BackgroundTasks()
-        try:
-            response = await submit_selected_child_jobs([JobCreate.model_validate(step['request'])], tasks, session, experiments,
-                destination_launch_context_id=retained['request']['launch_context_id'], idempotency_key=identity,
-                response_context={'operation': 'round', 'root_job_id': root_id, 'round_id': round_id,
-                                  'binder_round_step_id': identity, 'source_job_id': retained['source_job_id']})
-            outcome = {'state': 'queued', 'job_id': response[0].id}
-        except HTTPException as exc:
-            if exc.status_code == 409 and isinstance(exc.detail, dict) and exc.detail.get('code') == 'remote_prepared_job_review_required':
-                outcome = {'state': 'review_required', 'review': exc.detail}
-                prepared = exc.detail.get('job_request') or exc.detail.get('job_requests', [None])[0]
-                if prepared:
-                    outcome['request'] = prepared
-            else:
-                await session.rollback()
-                outcome = {'state': 'error', 'error': str(exc.detail)}
-        except Exception as exc:
-            await session.rollback()
-            outcome = {'state': 'error', 'error': str(exc)}
+        outcome, tasks = await rounds.submit_step(session, experiments, step,
+            destination=retained['request']['launch_context_id'],
+            context={'operation': 'round', 'root_job_id': root_id, 'round_id': round_id,
+                     'binder_round_step_id': identity, 'source_job_id': retained['source_job_id']})
         root = await rounds.lock_root(session, root_id)
         progress = rounds.progress_of(root)
         retained = next(r for r in progress[KEY] if r['round_id'] == round_id)
@@ -640,10 +659,23 @@ async def reconcile(session, experiments, root_id, round_id, *, retry=False):
     root = await rounds.lock_root(session, root_id)
     progress = rounds.progress_of(root)
     retained = next(r for r in progress[KEY] if r['round_id'] == round_id)
-    states = {s['state'] for s in retained['steps'].values() if not s.get('superseded_by')}
-    retained['state'] = ('needs_retry' if retained['errors'] or 'error' in states else
-        'review_required' if 'review_required' in states else
-        'running' if states - TERMINAL else 'completed_with_errors' if states & {'failed', 'cancelled'} else 'completed')
+    await rounds.refresh_children(session, root_id, retained)
+    # A predecessor may have completed during submission. Retain its newly
+    # expanded successors now; prepared children remain scheduler-recoverable.
+    await plan(session, root, retained)
+    retained['state'] = rounds.round_state(retained)
+    if retained['state'] in {'completed', 'completed_with_errors'}:
+        # Freeze leaf output references too, so terminal GET never needs source
+        # bytes. Missing leaf publication is an observation, not a new gate.
+        for step in retained['steps'].values():
+            if not step.get('job_id') or step.get('outputs'):
+                continue
+            child = await session.get(Job, step['job_id'])
+            try:
+                step['outputs'] = await output_refs(session, child)
+            except (ValueError, OSError, HTTPException) as exc:
+                step['publication_error'] = str(exc.detail if isinstance(exc, HTTPException) else exc)
+        retained['outputs_retained'] = True
     rounds.save(root, progress)
     await session.commit()
     return (await read_selected(session, root, round_id=round_id))[0]

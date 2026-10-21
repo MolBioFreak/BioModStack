@@ -26,6 +26,8 @@ def normalize_request(request, registry=None):
     registry = registry or get_registry()
     result = BinderRoundRequest.model_validate(request).model_copy(deep=True)
     for stage in result.design_stages + result.prediction_stages:
+        from services.sequence_designer_settings import normalize_historical_sequence_settings
+        stage.params = normalize_historical_sequence_settings(stage.model_id, stage.params)
         definition = registry.get_internal_model_definition(stage.model_id)
         if definition is None or not any(m.id == MODES[stage.model_id] for m in definition.modes):
             raise ValueError(f'{stage.model_id} does not support ordinary {MODES[stage.model_id]} execution')
