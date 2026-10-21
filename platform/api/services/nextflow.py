@@ -958,6 +958,7 @@ def _write_sequence_batch_payloads(
     params: Dict[str, Any],
     complex_components: Optional[List[Dict[str, Any]]],
     write_input=None,
+    task_chemistry=None,
 ) -> Tuple[Optional[Path], Optional[Path], Optional[List[Dict[str, Any]]]]:
     from component_runtime import durable_write
     write_input = write_input or durable_write
@@ -1056,6 +1057,7 @@ def _write_sequence_batch_payloads(
             variant_payload = {
                 "name": variant_name,
                 "components": variant_components,
+                **(task_chemistry or {}),
             }
             variant_path = complex_batch_dir / f"{index:03d}_{variant_name}.json"
             write_input(variant_path, json.dumps(variant_payload, indent=2).encode('utf-8'))
@@ -6442,6 +6444,14 @@ def compile_nextflow_invocation(
         'nampnn_seed': 'nampnn_seed',
     }
     
+    # Protenix owns its nested chemistry; do not alter other models' documents.
+    task_chemistry = {}
+    if model_id == 'protenix':
+        from scripts.protenix_chemistry import validate_chemistry
+        from services.protenix_chemistry import stage_component_files
+        validate_chemistry(params)
+        params = stage_component_files(params, output_dir=output_dir, write_input=plan_input)
+        task_chemistry = {key: params.pop(key) for key in ('covalent_bonds', 'constraint') if key in params}
     # Handle complex_components specially - write JSON file for BoltzFromComplex process
     complex_components = params.pop('complex_components', None)
     sequence_batch_json_path, complex_batch_dir, complex_components = _write_sequence_batch_payloads(
@@ -6449,6 +6459,7 @@ def compile_nextflow_invocation(
         params=params,
         complex_components=complex_components,
         write_input=plan_input,
+        task_chemistry=task_chemistry,
     )
     
     # Model-specific param preprocessing: Route ntp_type and ligand_smiles to correct targets
@@ -7005,7 +7016,7 @@ def compile_nextflow_invocation(
     if complex_components:
         complex_json_path = Path(output_dir) / "complex_definition.json"
         plan_input(complex_json_path,
-            json.dumps({"components": complex_components}, indent=2).encode('utf-8'))
+            json.dumps({"components": complex_components, **task_chemistry}, indent=2).encode('utf-8'))
         logger.info(f"Compiled complex definition for {complex_json_path}")
         cmd.extend(["--complex_json_path", str(complex_json_path)])
         native_parameters['complex_json_path'] = str(complex_json_path)

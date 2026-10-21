@@ -329,6 +329,11 @@ class JobCreate(BaseModel):
         # in preview/admission effective params, while replay retains intent.
         if "remote_result_policy" in self.params or "execution_policy" in self.params:
             raise ValueError("use typed execution_policy, not scientific params")
+        if self.model_id == "protenix":
+            from scripts.protenix_chemistry import validate_chemistry
+            validate_chemistry(self.params)
+            from services.protenix_chemistry import validate_component_files
+            validate_component_files(self.params)
         apply_msa_policy(self.model_id, self.params)
         return self
 

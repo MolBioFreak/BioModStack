@@ -282,6 +282,9 @@ def _frustrampnn_discovery_metadata() -> dict:
 
 def _native_parameter_schema(model_id: str, mode_id: str) -> dict | None:
     """Discovery metadata only; scientific validation stays model-owned."""
+    if model_id == 'protenix' and mode_id in ('predict', 'complex'):
+        from scripts.protenix_chemistry import parameter_schema
+        return parameter_schema()
     if model_id == 'caliby_experimental':
         from services.caliby_native import SUPPORTED_MODES, parameter_schema
         if mode_id in SUPPORTED_MODES:

@@ -500,7 +500,7 @@ def test_compiled_protenix_batch_real_producer_and_relocated_cli(tmp_path, monke
             assert msa.is_relative_to(relocated)
             assert f'>operation-{index}' in msa.read_text()
         assert task['sequences'][0]['proteinChain']['count'] == 2
-        assert task['sequences'][0]['proteinChain']['id'] == ['B']
+        assert 'id' not in task['sequences'][0]['proteinChain']  # Scalar BMS label is not a two-copy ID roster.
         assert task['sequences'][2:] == native[index - 1]['sequences'][2:]
 
 @pytest.mark.asyncio

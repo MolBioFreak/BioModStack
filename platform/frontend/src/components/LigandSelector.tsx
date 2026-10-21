@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
+import type { ProtenixComponent } from './protenixChemistry';
 import { OligoBuilderModal } from './OligoBuilderModal';
 import { fetchJobs, fetchDesigns, type Job } from '../lib/api';
 import { AVAILABLE_LIGANDS, componentIdFromIndex } from './ligandSelectorData';
 
-export interface LigandEntry {
+export interface LigandEntry extends ProtenixComponent {
     id: string;
     type: 'ligand' | 'ion' | 'dna' | 'rna' | 'peptide' | 'protein';
     ccd?: string;
@@ -15,6 +16,7 @@ export interface LigandEntry {
 export interface LigandSelectorProps {
     ligands: LigandEntry[];
     setLigands: React.Dispatch<React.SetStateAction<LigandEntry[]>>;
+    countedCopies?: boolean;
     showCustomSmiles?: boolean;
     onImportProtein?: () => void;  // Callback to open sequence library/import modal for adding protein
 }
@@ -27,7 +29,7 @@ const reverseComplement = (seq: string, isRna: boolean = false): string => {
     return seq.split('').reverse().map(base => complement[base] || base).join('');
 };
 
-export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, onImportProtein }: LigandSelectorProps) {
+export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, onImportProtein, countedCopies = false }: LigandSelectorProps) {
     const [customSmiles, setCustomSmiles] = useState('');
     const [customName, setCustomName] = useState('');
     const [presetComponentCopies, setPresetComponentCopies] = useState(1);
@@ -162,6 +164,10 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
 
     const addLigandByCcd = (ccd: string, copies: number = 1) => {
         const selected = AVAILABLE_LIGANDS.find(l => l.ccd === ccd);
+        if (countedCopies && selected) {
+            setLigands(previous => [...previous, { id: componentIdFromIndex(1 + previous.length), type: selected.type, ccd: selected.ccd, name: selected.name, count: copies }]);
+            return;
+        }
         const normalizedCopies = Number.isFinite(copies) ? Math.max(1, Math.min(12, Math.floor(copies))) : 1;
         if (selected) {
             setLigands(prev => {
@@ -238,10 +244,10 @@ export function LigandSelector({ ligands, setLigands, showCustomSmiles = false, 
                     <input
                         type="number"
                         min={1}
-                        max={12}
+                        max={countedCopies ? undefined : 12}
                         step={1}
                         value={presetComponentCopies}
-                        onChange={(e) => setPresetComponentCopies(Math.max(1, Math.min(12, parseInt(e.target.value || '1', 10) || 1)))}
+                        onChange={(e) => setPresetComponentCopies(countedCopies ? Number(e.target.value) : Math.max(1, Math.min(12, parseInt(e.target.value || '1', 10) || 1)))}
                         className="w-14 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-center text-sm text-white"
                     />
                 </div>

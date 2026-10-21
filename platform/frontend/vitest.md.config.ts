@@ -16,6 +16,8 @@ export default defineConfig({
             './tests/vitest/jobQuickSummaryMounted.test.tsx',
             './tests/vitest/jobStageProgressMounted.test.tsx',
             './tests/vitest/coreSanity*.test.tsx',
+            './tests/vitest/protenixChemistryMounted.test.tsx',
+            './tests/vitest/protenixChemistryFollowupMounted.test.tsx',
             './tests/vitest/foldCpPlacementMounted.test.tsx',
             './tests/vitest/installFeaturesMounted.test.tsx',
             './tests/vitest/msaProviderReadinessMounted.test.tsx',

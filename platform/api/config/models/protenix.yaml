@@ -38,6 +38,9 @@ modes:
       - msa_neurosnap_pad_sequences
       - sequence
       - sequence_name
+      - complex_components
+      - covalent_bonds
+      - constraint
       - protenix_model_weights
       - protenix_use_msa
       - protenix_msa_backend
@@ -65,6 +68,9 @@ modes:
       - msa_neurosnap_pad_sequences
       - sequence
       - sequence_name
+      - complex_components
+      - covalent_bonds
+      - constraint
       - protenix_model_weights
       - protenix_use_msa
       - protenix_msa_backend
@@ -76,6 +82,15 @@ modes:
       - num_parallel_jobs
 
 params:
+  - name: complex_components
+    type: array
+    description: "Ordered Protenix chemistry entities. Nested versioned contract is exposed by mode parameter_schema."
+  - name: covalent_bonds
+    type: array
+    description: "Native 1-based entity/copy/residue covalent bond endpoints; preserves component ordering."
+  - name: constraint
+    type: object
+    description: "Native supported contact and pocket constraints (singular constraint)."
   - name: colabfold_use_env
     type: boolean
     description: "ColabFold API only — Include environmental sequence databases. Native use_env."

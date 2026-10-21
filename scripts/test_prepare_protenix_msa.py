@@ -480,15 +480,15 @@ def test_prepared_batch_rejects_missing_or_ambiguous_task_identity(tmp_path):
 
 def test_native_adapter_preserves_original_complex_construction(tmp_path):
     # Expected values retain the original PrepProtenixComplex construction,
-    # including CCD prefixing, count coercion, ID lists and default naming.
+    # including CCD prefixing, valid native copy IDs and default naming.
     components = [
         {"type": "protein", "id": "B", "sequence": "ACDE", "count": 2},
         {"type": "peptide", "id": "A", "sequence": "FGHI"},
-        {"type": "dna", "id": "D", "sequence": "ACGT", "count": "2"},
+        {"type": "dna", "id": "D", "sequence": "ACGT", "count": 2},
         {"type": "rna", "id": "R", "sequence": "ACGU"},
         {"type": "ligand", "id": "L", "ccd": "ATP"},
-        {"type": "ligand", "smiles": "CCO", "count": 0},
-        {"type": "ion", "id": "Z", "element": "zn", "count": "invalid"},
+        {"type": "ligand", "smiles": "CCO", "count": 1},
+        {"type": "ion", "id": "Z", "element": "zn", "count": 1},
     ]
     source = tmp_path / "native-name.json"
     source.write_text(json.dumps({"components": components}, indent=2))
@@ -496,9 +496,9 @@ def test_native_adapter_preserves_original_complex_construction(tmp_path):
     payload = prepare_protenix_msa.load_native_protenix_input({
         "complex_json_path": str(source), "protenix_seeds": "7,19"})
     assert payload == [{"name": "native-name", "modelSeeds": [7, 19], "sequences": [
-        {"proteinChain": {"sequence": "ACDE", "count": 2, "id": ["B"]}},
+        {"proteinChain": {"sequence": "ACDE", "count": 2}},
         {"proteinChain": {"sequence": "FGHI", "count": 1, "id": ["A"]}},
-        {"dnaSequence": {"sequence": "ACGT", "count": 2, "id": ["D"]}},
+        {"dnaSequence": {"sequence": "ACGT", "count": 2}},
         {"rnaSequence": {"sequence": "ACGU", "count": 1, "id": ["R"]}},
         {"ligand": {"ligand": "CCD_ATP", "count": 1, "id": ["L"]}},
         {"ligand": {"ligand": "CCO", "count": 1}},

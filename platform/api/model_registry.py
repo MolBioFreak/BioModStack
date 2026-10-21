@@ -848,6 +848,13 @@ class ModelRegistry:
             errors.append(f"Unknown mode '{mode_id}' for model '{model_id}'")
             return errors
         
+        if model_id == 'protenix':
+            from scripts.protenix_chemistry import validate_chemistry
+            try:
+                validate_chemistry(params)
+            except (TypeError, ValueError) as exc:
+                errors.append(str(exc))
+
         if model_id == 'protonpottsmpnn':
             from services.protonpottsmpnn_design import normalize_design_params
             try:
@@ -1181,9 +1188,7 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
         source = module + ':' + process
         helpers = []
         if predictor == 'protenix':
-            helpers.append('run_protenix_inference.py')
-            if native_bool('protenix_use_msa', True):
-                helpers.append('prepare_protenix_msa.py')
+            helpers.extend(('run_protenix_inference.py', 'prepare_protenix_msa.py', 'protenix_chemistry.py'))
             if complex_input:
                 helpers.extend(('prepare_protenix_constraints.py', 'write_structure_producer_manifest.py',
                     'extract_target_templates.py', 'prepare_protenix_exact_templates.py', 'finalize_target_geometry.py'))

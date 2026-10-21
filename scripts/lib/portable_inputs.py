@@ -235,6 +235,13 @@ def native_reference_fields(document, format):
     elif format == "boltz-authority":
         for source in document.get("input_files", {}):
             yield ("input_files", source), source, "input"
+    elif format == "protenix-complex":
+        for i, component in enumerate(document.get("components", [])):
+            for key, role in (("ligand_file", "ligand"), ("unpairedMsaPath", "msa"),
+                              ("pairedMsaPath", "msa"), ("templatesPath", "template")):
+                yield from field(component, key, ("components", i), role)
+            yield from field(component.get("msa", {}), "precomputed_msa_dir",
+                             ("components", i, "msa"), "msa")
     elif format == "boltz-complex":
         for i, component in enumerate(document.get("components", [])):
             yield from field(component, "msa_path", ("components", i), "msa")
@@ -468,6 +475,8 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
         else:
             document = json.loads(data)
         fmt = _format(document, path)
+        if model_id == "protenix" and fmt == "boltz-complex":
+            fmt = "protenix-complex"
         record["format"] = fmt
         for child_selector, child, child_role in native_reference_fields(document, fmt):
             if fmt == "cm-request" and child_role == "runtime-snapshot" and inventory_supplied:

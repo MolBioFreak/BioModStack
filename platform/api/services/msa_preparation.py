@@ -47,6 +47,10 @@ def materialize_protenix_inputs(source: Path, output_json: Path, settings: dict)
     manifest = json.loads((source / 'msa-inputs.json').read_text())
     payload = copy.deepcopy(manifest['model_input'])
     sequences = {f'{task}:{index}': chain['sequence'] for task, index, chain in iter_protein_chains(payload)}
+    inline_ids = {f'{task}:{index}' for task, index, chain in iter_protein_chains(payload)
+                  if any(chain.get(key) is not None for key in ('unpairedMsa', 'pairedMsa'))}
+    artifact_ids = {item['chain_id'] for item in manifest['artifacts']}
+    sequences = {key: value for key, value in sequences.items() if key not in inline_ids or key in artifact_ids}
     paths = resolve_alignments(source, manifest, sequences=sequences, settings=settings)
     for task, index, chain in iter_protein_chains(payload):
         for role, key in [('paired', 'pairedMsaPath'), ('unpaired', 'unpairedMsaPath')]:
@@ -175,7 +179,8 @@ def prepare_protenix_inputs(config_path: Path | None, input_json: Path, destinat
             chains = [chain for _, chain in roster]
             # Supplied paired groups have no provider-operation identity. Joining
             # them to newly generated rows would invent cross-source pairing.
-            supplied = [chain for chain in chains if chain.get('pairedMsaPath') or chain.get('unpairedMsaPath')]
+            supplied = [chain for chain in chains if chain.get('pairedMsaPath') or chain.get('unpairedMsaPath')
+                        or any(chain.get(key) is not None for key in ('pairedMsa', 'unpairedMsa'))]
             if supplied and (scientific['pairing_mode'] != 'unpaired'
                              or any(chain.get('pairedMsaPath') for chain in supplied)):
                 raise ValueError('Cannot combine supplied and generated paired groups without shared pairing identity')

@@ -1,3 +1,5 @@
+import { ProtenixChemistryControls } from './ProtenixChemistryControls';
+import { transportProtenixComponent, identifyProtenixComponent, protenixEntityKey, remapProtenixEndpoints, protenixEndpointErrors, orderedProtenixComponents, updateProtenixComponent, type ProtenixComponent, type ProtenixBond, type ProtenixConstraint } from './protenixChemistry';
 import { Esmfold2SettingsControls } from './Esmfold2SettingsControls';
 import { hydrateEsmfold2Settings, buildEsmfold2Params, esmfold2SettingsError } from './esmfold2Settings';
 import { MsaProviderReadiness } from './MsaProviderReadiness';
@@ -295,9 +297,10 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const [protenixNSample, setProtenixNSample] = useState(initialValues?.protenix_n_sample ?? 5);
     const [protenixNStep, setProtenixNStep] = useState(initialValues?.protenix_n_step ?? 200);
     const [protenixNCycle, setProtenixNCycle] = useState(initialValues?.protenix_n_cycle ?? 10);
+    const [protenixUseTemplate, setProtenixUseTemplate] = useState<boolean | undefined>(initialValues?.protenix_use_template);
     const [protenixUseMsa, setProtenixUseMsa] = useState(initialValues?.protenix_use_msa ?? true);
     const [protenixTargetGeometryMode, setProtenixTargetGeometryMode] = useState<'flexible' | 'conditioned' | 'frozen'>(
-        initialValues?.protenix_target_geometry_mode || ((initialValues?.protenix_anchor_target || initialValues?.protenix_use_template) ? 'conditioned' : 'flexible')
+        initialValues?.protenix_target_geometry_mode || (initialValues?.protenix_anchor_target ? 'conditioned' : 'flexible')
     );
 
     // Parallel jobs
@@ -365,39 +368,49 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         initialValues?.colabfold_api_poll_interval ?? 6
     );
 
+    const protenixSelected = getPredictorFamiliesForSelection('complex', predictor).includes('protenix');
+    const [primaryChemistry, setPrimaryChemistry] = useState<ProtenixComponent>(() => identifyProtenixComponent(structuredClone(initialPrimaryProteinComponent ?? { id: initialPrimaryChain, type: 'protein', sequence: initialPrimarySequence }), `saved:${(initialValues?.complex_components ?? []).indexOf(initialPrimaryProteinComponent)}`));
+    useEffect(() => {
+        if (protenixSelected) setPrimaryChemistry(previous => previous.sequence === sequence.trim() ? previous : updateProtenixComponent(previous, { sequence: sequence.trim() }));
+    }, [protenixSelected, sequence]);
+    const [protenixBonds, setProtenixBonds] = useState<ProtenixBond[] | undefined>(() => structuredClone(initialValues?.covalent_bonds));
+    const [protenixConstraint, setProtenixConstraint] = useState<ProtenixConstraint | undefined>(() => structuredClone(initialValues?.constraint));
+    const originalComponentIds = useRef<string[]>((initialValues?.complex_components ?? []).map((_: ProtenixComponent, index: number) => `saved:${index}`));
     // Complex components (ligands, DNA, RNA)
     // Initialize from cloned job data if present (complex_components array)
-    const [ligands, setLigands] = useState<LigandEntry[]>(() => {
+    const [nativeLigands, setNativeLigands] = useState<LigandEntry[]>(() => {
         const components = initialValues?.complex_components;
         if (!components || !Array.isArray(components) || components.length <= 1) {
             return [];
         }
-        const primaryId = String(initialPrimaryProteinComponent?.id || '');
-        const nonPrimaryComponents = components.filter((component: UntypedApiValue) => String(component?.id || '') !== primaryId);
-        // Everything except the resolved primary component becomes additional context.
-        // Expand counted components into distinct entries so
-        // retries and cloned jobs preserve repeated ions/cofactors in the UI.
+        return components.flatMap((component: ProtenixComponent, index: number) => component === initialPrimaryProteinComponent ? [] : [identifyProtenixComponent({ ...structuredClone(component), name: component.name ?? '' }, `saved:${index}`)]);
+    });
+    // Keep the full native roster independent of other predictors' expanded display rows.
+    const [legacyLigands, setLegacyLigands] = useState<LigandEntry[]>(() => {
         const expanded: LigandEntry[] = [];
-        nonPrimaryComponents.forEach((component: UntypedApiValue) => {
-            const countRaw = component?.count ?? 1;
-            const count = Number.isFinite(Number(countRaw))
-                ? Math.max(1, Math.min(12, Math.floor(Number(countRaw))))
-                : 1;
-            for (let idx = 0; idx < count; idx += 1) {
-                const baseName = component?.name || `Chain ${component?.id || componentIdFromIndex(1 + expanded.length)}`;
-                const displayName = count > 1 ? `${baseName} #${idx + 1}` : baseName;
-                expanded.push({
-                    id: count > 1 ? componentIdFromIndex(1 + expanded.length) : (component?.id || componentIdFromIndex(1 + expanded.length)),
-                    type: component?.type || 'protein',
-                    sequence: component?.sequence,
-                    ccd: component?.ccd,
-                    smiles: component?.smiles,
-                    name: displayName,
-                });
+        nativeLigands.forEach(component => {
+            const count = Number.isFinite(Number(component.count ?? 1)) ? Math.max(1, Math.min(12, Math.floor(Number(component.count ?? 1)))) : 1;
+            for (let index = 0; index < count; index += 1) {
+                const fallbackId = componentIdFromIndex(1 + expanded.length);
+                const name = component.name || `Chain ${component.id || fallbackId}`;
+                expanded.push({ id: count > 1 ? fallbackId : component.id || fallbackId,
+                    type: component.type, sequence: component.sequence, ccd: component.ccd, smiles: component.smiles,
+                    name: count > 1 ? `${name} #${index + 1}` : name });
             }
         });
         return expanded;
     });
+    const ligands = protenixSelected ? nativeLigands : legacyLigands;
+    const nextEntityKey = useRef(0);
+    const setLigands: React.Dispatch<React.SetStateAction<LigandEntry[]>> = action => {
+        if (!protenixSelected) { setLegacyLigands(action); return; }
+        setNativeLigands(previous => {
+            const next = typeof action === 'function' ? action(previous) : action;
+            return next.map(component => protenixEntityKey(component) !== component.id ? component
+                : identifyProtenixComponent(component, `added:${++nextEntityKey.current}`));
+        });
+    };
+    const [endpointRoster, setEndpointRoster] = useState<string[]>(originalComponentIds.current);
     const [sequenceBatchInput, setSequenceBatchInput] = useState(initialValues?.sequence_batch_input || '');
     const [sequenceBatchPrefix, setSequenceBatchPrefix] = useState(
         initialValues?.sequence_batch_prefix || initialValues?.sequence_name || initialValues?.name || 'variant'
@@ -581,7 +594,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const hasBatchEntries = batchEntriesPreview.length > 0;
     const hasProteinBinderComponents = ligands.some((ligand) => ligand.type === 'protein' || ligand.type === 'peptide');
     const autoBatchBinderMode = hasBatchEntries && fixedTargetAvailable && !hasProteinBinderComponents;
-    const complexMode = ligands.length > 0 || autoBatchBinderMode;
+    const complexMode = ligands.length > 0 || autoBatchBinderMode || protenixSelected;
     const implicitBatchBinderId = (() => {
         const usedIds = new Set<string>();
         const primaryId = (primaryChainId || 'A').trim() || 'A';
@@ -595,7 +608,14 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         return nextAvailableComponentId(usedIds);
     })();
 
-    const buildComplexComponents = useCallback((batchEntries: Array<{ name: string; sequence: string }> = []) => {
+    const buildComplexComponents = useCallback((batchEntries: Array<{ name: string; sequence: string }> = [], editorIdentity = false) => {
+        if (protenixSelected) {
+            const primary = updateProtenixComponent(primaryChemistry, { id: primaryChainId, sequence: sequence.trim(), name: sequenceName });
+            const additional: ProtenixComponent[] = [...ligands];
+            if (autoBatchBinderMode) additional.push({ id: implicitBatchBinderId, type: 'protein', sequence: batchEntries[0]?.sequence || 'G', name: `${sequenceBatchPrefix || 'batch'}_binder_panel` });
+            return { components: orderedProtenixComponents(originalComponentIds.current, primary, additional).map(component => editorIdentity ? component : transportProtenixComponent(component)), resolvedPrimaryId: primary.id,
+                binderIds: additional.filter(isProteinComponent).map(component => component.id) };
+        }
         const components: Array<Record<string, UntypedApiValue>> = [];
         const usedIds = new Set<string>();
         const reserveId = (preferred?: string) => {
@@ -663,7 +683,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             resolvedPrimaryId,
             binderIds,
         };
-    }, [autoBatchBinderMode, implicitBatchBinderId, initialValues, ligands, primaryChainId, sequence, sequenceBatchPrefix, sequenceName]);
+    }, [protenixSelected, primaryChemistry, autoBatchBinderMode, implicitBatchBinderId, initialValues, ligands, primaryChainId, sequence, sequenceBatchPrefix, sequenceName]);
 
     const proteinBatchTargets = [
         { id: primaryChainId || 'A', name: `${sequenceName || 'Primary'} (${primaryChainId || 'A'})`, role: 'Primary' },
@@ -702,6 +722,17 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
     const usesBoltz = predictorFamilies.includes('boltz');
     const usesFoldCp = predictorFamilies.includes('fold_cp');
     const usesProtenix = predictorFamilies.includes('protenix');
+    // Render-phase state adjustment prevents drafts/effects seeing stale scientific ordinals.
+    const chemistryComponents = buildComplexComponents([], true).components as ProtenixComponent[];
+    const chemistryRoster = protenixSelected ? chemistryComponents.map(protenixEntityKey) : endpointRoster;
+    if (protenixSelected && JSON.stringify(chemistryRoster) !== JSON.stringify(endpointRoster)) {
+        const remapped = remapProtenixEndpoints(endpointRoster, chemistryRoster, protenixBonds, protenixConstraint);
+        setEndpointRoster(chemistryRoster);
+        setProtenixBonds(remapped.bonds);
+        setProtenixConstraint(remapped.constraint);
+    }
+    const chemistryErrors = usesProtenix ? protenixEndpointErrors(chemistryComponents.map(c => c.id), protenixBonds, protenixConstraint) : [];
+
     const usesEsmFold2 = predictorFamilies.includes('esmfold2');
     const msaNeeded =
         (usesBoltz && !isBoltzApi && boltzUseMsa) ||
@@ -812,12 +843,15 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         }
 
         if (usesProtenix) {
+            params.covalent_bonds = protenixBonds;
+            params.constraint = protenixConstraint;
             params.protenix_model_weights = protenixModelWeights;
             params.protenix_seeds = protenixSeeds;
             params.protenix_n_sample = protenixNSample;
             params.protenix_n_step = protenixNStep;
             params.protenix_n_cycle = protenixNCycle;
             params.protenix_use_msa = protenixUseMsa;
+            params.protenix_use_template = protenixUseTemplate;
             params.protenix_msa_backend = msaBackend;
             params.protenix_target_geometry_mode = protenixTargetGeometryMode;
         }
@@ -894,7 +928,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [continuationSource, continuationChain, initialValues, executionTargetId, jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Settings, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpCpTopology, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    }, [protenixUseTemplate, protenixBonds, protenixConstraint, continuationSource, continuationChain, initialValues, executionTargetId, jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, resolvedPredictorSelection.requestedSelection, resolvedPredictorSelection.valid, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Settings, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpCpTopology, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaBackend, neurosnapMsa, colabfoldMsa, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
     const targetPreview = targetSource
         ? resolveTargetPreviewSource({
             previewUrl: targetPreviewUrl,
@@ -1042,12 +1076,15 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
 
         // Protenix parameters
         if (usesProtenix) {
+            params.covalent_bonds = protenixBonds;
+            params.constraint = protenixConstraint;
             params.protenix_model_weights = protenixModelWeights;
             params.protenix_seeds = protenixSeeds;
             params.protenix_n_sample = protenixNSample;
             params.protenix_n_step = protenixNStep;
             params.protenix_n_cycle = protenixNCycle;
             params.protenix_use_msa = protenixUseMsa;
+            params.protenix_use_template = protenixUseTemplate;
             params.protenix_msa_backend = msaBackend;
             params.protenix_target_geometry_mode = protenixTargetGeometryMode;
         }
@@ -1208,6 +1245,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         return () => { active = false; clearTimeout(timer); };
     }, [msaCacheKey, msaNeeded]);
     const handleSubmit = async () => {
+        if (chemistryErrors.length) { setLaunchError(chemistryErrors.join("\n")); return; }
         let submission;
         try {
             // Authoring-time batches are compiled into native tasks at launch;
@@ -2222,6 +2260,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                 {showProtenixParams && (
                     <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
                         <h3 className="text-sm font-semibold text-violet-400">Protenix Settings</h3>
+                        <label><input aria-label="Use native Protenix templates" type="checkbox" checked={protenixUseTemplate ?? false} onChange={e => setProtenixUseTemplate(e.target.checked)} />Use native template hit files (independent of target geometry)</label>
 
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                             <div className="col-span-2">
@@ -2689,7 +2728,22 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                 )}
 
                 {/* Complex Components (Ligands, DNA, RNA) */}
+                {chemistryErrors.map(error => <p role="alert" key={error}>{error}</p>)}
+                {usesProtenix && <ProtenixChemistryControls
+                    components={buildComplexComponents(batchEntriesPreview, true).components as ProtenixComponent[]}
+                    onComponentChange={(id, patch) => {
+                        if (id === protenixEntityKey(primaryChemistry)) {
+                            setPrimaryChemistry(updateProtenixComponent(updateProtenixComponent(primaryChemistry, { sequence: sequence.trim() }), patch));
+                            if (patch.id !== undefined) setPrimaryChainId(patch.id);
+                            if (patch.name !== undefined) setSequenceName(patch.name);
+                            if (patch.sequence !== undefined) setSequence(patch.sequence);
+                        } else setLigands(previous => previous.map(component => protenixEntityKey(component) === id ? { ...updateProtenixComponent(component, patch), name: patch.name ?? component.name } : component));
+                    }}
+                    bonds={protenixBonds} onBondsChange={setProtenixBonds}
+                    constraint={protenixConstraint} onConstraintChange={setProtenixConstraint}
+                />}
                 <LigandSelector
+                    countedCopies={usesProtenix}
                     ligands={ligands}
                     setLigands={setLigands}
                     showCustomSmiles={true}

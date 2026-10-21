@@ -198,6 +198,45 @@ def _seal_coordinate_ledger(ledger_path: Path) -> None:
     os.chmod(ledger_path, 0o440)
 
 
+def materialize_inline_protenix_msa(payload: list[dict], root: Path) -> bool:
+    """Bridge native path-only search detection to its inline-first CPU reader.
+
+    Keep inline values (including empty/query-only) authoritative. Materialized
+    files are execution artifacts, not shared sequence-cache search results.
+    Missing/None roles stay missing; no other chemistry is reconstructed.
+    """
+    changed = False
+    for task_index, task in enumerate(payload):
+        for entity_index, wrapper in enumerate(task.get('sequences', [])):
+            chain = wrapper.get('proteinChain')
+            if not isinstance(chain, dict):
+                continue
+            for key in ('pairedMsa', 'unpairedMsa'):
+                inline = chain.get(key)
+                if inline is None:
+                    continue
+                path = root / f'task_{task_index}' / f'entity_{entity_index}' / f'{key}.a3m'
+                path.parent.mkdir(parents=True, exist_ok=True)
+                # Empty inline means query-only to the native reader. Give the
+                # portable A3M validator a real query, while retaining ''.
+                path.write_text(inline if inline else f">query\n{chain['sequence']}\n", encoding='utf-8')
+                chain[key + 'Path'] = str(path.resolve())
+                changed = True
+    return changed
+
+
+def prepare_inline_msa_input(infer_json: str, out_dir: str) -> str:
+    """Task-owned derived JSON; keep the submitted native document immutable."""
+    source = Path(infer_json)
+    payload = json.loads(source.read_text(encoding='utf-8'))
+    root = Path(out_dir) / 'inline_msa' / hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:16]
+    if not materialize_inline_protenix_msa(payload, root):
+        return infer_json
+    derived = root / 'input.json'
+    derived.write_text(json.dumps(payload, indent=2), encoding='utf-8')
+    return str(derived.resolve())
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run Protenix inference with raw confidence dumps enabled.")
     parser.add_argument("--input", required=True, help="Input JSON file or directory.")
@@ -294,6 +333,7 @@ def main() -> None:
         raise RuntimeError(f"Can not read a special file: {input_path}")
 
     for infer_json in infer_jsons:
+        infer_json = prepare_inline_msa_input(infer_json, args.out_dir)
         runner.configs["input_json_path"] = preprocess_input(
             infer_json,
             out_dir=args.out_dir,
