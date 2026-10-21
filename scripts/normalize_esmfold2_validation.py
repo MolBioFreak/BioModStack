@@ -65,6 +65,12 @@ def normalize_design(design_pdb: Path, raw_root: Path, output_dir: Path) -> list
         writer.set_structure(structure)
         writer.save(str(output_pdb))
         shutil.copy2(cif_path, output_cif)
+        if metrics.get('native_confidence'):
+            confidence = cif_path.parent / metrics['native_confidence']
+            if confidence.is_file():
+                output_confidence = output_dir / f'{sample_id}_esmfold2.confidence.npz'
+                shutil.copy2(confidence, output_confidence)
+                metrics = {**metrics, 'native_confidence': output_confidence.name}
         normalized = {
             **metrics,
             "workflow": "esmfold2",

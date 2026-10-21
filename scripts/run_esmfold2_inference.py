@@ -19,8 +19,8 @@ from typing import Any, Iterable, Sequence
 
 
 AMINO_ACID_RE = re.compile(r"^[A-Z]+$")
-DNA_RE = re.compile(r"^[ACGTN]+$")
-RNA_RE = re.compile(r"^[ACGUN]+$")
+DNA_RE = re.compile(r"^[ACGTUN]+$")
+RNA_RE = re.compile(r"^[ACGTUN]+$")
 MMCIF_DATA_BLOCK_SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 DEFAULT_FAST_MODEL = "biohub/ESMFold2-Fast"
 DEFAULT_FULL_MODEL = "biohub/ESMFold2"
@@ -132,12 +132,12 @@ def normalize_component_sequence(sequence: str, molecule_type: str) -> str:
             raise ESMFold2InputError("protein sequence must contain amino-acid letters only")
         return normalized
     if mol_type == "dna":
-        normalized = normalized.replace("U", "T")
+
         if not DNA_RE.match(normalized):
             raise ESMFold2InputError("DNA sequence must contain only A/C/G/T/N bases")
         return normalized
     if mol_type == "rna":
-        normalized = normalized.replace("T", "U")
+
         if not RNA_RE.match(normalized):
             raise ESMFold2InputError("RNA sequence must contain only A/C/G/U/N bases")
         return normalized
@@ -256,7 +256,7 @@ def load_components_file(path: str | None) -> list[dict[str, Any]]:
 
 def _classify_pdb_chain(residue_names: Sequence[str]) -> str | None:
     names = [name.upper().strip() for name in residue_names if name.strip()]
-    protein_hits = sum(1 for name in names if name in PROTEIN_3TO1)
+    protein_hits = sum(1 for name in names if protein_residue_letter(name))
     dna_hits = sum(1 for name in names if name in DNA_3TO1 and (name.startswith("D") or name == "T"))
     rna_hits = sum(1 for name in names if name in RNA_3TO1 and (name.startswith("R") or name == "U"))
     nucleotide_hits = sum(1 for name in names if name in DNA_3TO1 or name in RNA_3TO1)
@@ -273,10 +273,16 @@ def _classify_pdb_chain(residue_names: Sequence[str]) -> str | None:
     return None
 
 
+def protein_residue_letter(name: str) -> str | None:
+    # Biopython's CCD-derived parent table, not a hand-invented substitution.
+    from Bio.Data.PDBData import protein_letters_3to1_extended
+    return PROTEIN_3TO1.get(name) or protein_letters_3to1_extended.get(name)
+
+
 def _map_residue_to_letter(residue_name: str, molecule_type: str) -> str | None:
     name = residue_name.upper().strip()
     if molecule_type == "protein":
-        return PROTEIN_3TO1.get(name)
+        return protein_residue_letter(name)
     if molecule_type == "dna":
         return DNA_3TO1.get(name)
     if molecule_type == "rna":
@@ -289,6 +295,7 @@ def parse_pdb_polymer_components(
     *,
     chain_ids: str | Sequence[str] | None = None,
     include_dna_rna: bool = True,
+    include_ligands: bool = False,
     _author_residue_rows: dict | None = None,
 ) -> list[dict[str, Any]]:
     """Extract protein/DNA/RNA sequence components from a local PDB file.
@@ -309,6 +316,7 @@ def parse_pdb_polymer_components(
 
     chains: dict[str, list[tuple[str, str]]] = {}
     seen_residues: set[tuple[str, str, str]] = set()
+    polymer_records = set()
     # The round author's former second read was strict UTF-8. Keep that input
     # behavior for the opt-in projection, without changing the default bridge.
     errors = "strict" if _author_residue_rows is not None else "replace"
@@ -330,21 +338,34 @@ def parse_pdb_polymer_components(
                  'insertion_code': line[26:27].strip()})
         residue_id = (line[22:27].strip() or str(len(chains.get(chain_id, [])) + 1)) if len(line) >= 27 else str(len(chains.get(chain_id, [])) + 1)
         key = (chain_id, residue_id, residue_name)
+        if line.startswith('ATOM  ') or protein_residue_letter(residue_name) or residue_name in DNA_3TO1 or residue_name in RNA_3TO1:
+            polymer_records.add(key)
         if key in seen_residues:
             continue
         seen_residues.add(key)
         chains.setdefault(chain_id, []).append((residue_id, residue_name))
 
     components: list[dict[str, Any]] = []
-    for chain_id in sorted(chains):
-        residue_names = [name for _, name in chains[chain_id]]
+    reserved = set(chains)
+    for chain_id in chains:
+        residue_names = [name for resid, name in chains[chain_id] if (chain_id, resid, name) in polymer_records]
         mol_type = _classify_pdb_chain(residue_names)
+        if include_ligands:
+            for resid, name in chains[chain_id]:
+                if (chain_id, resid, name) in polymer_records or name in {'HOH', 'WAT', 'DOD'}:
+                    continue
+                ligand_id = chain_id if not residue_names and not any(c['id'] == chain_id for c in components) else _next_chain_id(reserved, '')
+                reserved.add(ligand_id)
+                components.append({'type': 'ligand', 'id': ligand_id, 'ccd': [name],
+                    'source': str(pdb_path), 'source_chain_id': chain_id, 'source_residue_id': resid})
         if mol_type is None:
             continue
         if mol_type in {"dna", "rna"} and not include_dna_rna:
             continue
-        letters = [_map_residue_to_letter(name, mol_type) for name in residue_names]
-        sequence = "".join(letter for letter in letters if letter)
+        letters = [_map_residue_to_letter(name, mol_type) or ('X' if mol_type == 'protein' else 'N') for name in residue_names]
+        sequence = "".join(letters)
+        standard = (set(PROTEIN_3TO1) - {'MSE', 'SEC', 'PYL'}) if mol_type == 'protein' else ({'DA', 'DC', 'DG', 'DT'} if mol_type == 'dna' else {'A', 'C', 'G', 'U'})
+        modifications = [{'position': i, 'ccd': name} for i, name in enumerate(residue_names) if name not in standard]
         if not sequence:
             continue
         components.append(
@@ -353,6 +374,7 @@ def parse_pdb_polymer_components(
                 "id": chain_id,
                 "sequence": normalize_component_sequence(sequence, mol_type),
                 "source": str(pdb_path),
+                "modifications": modifications,
             }
         )
     if selected is not None and not components:
@@ -559,7 +581,10 @@ def _next_chain_id(used_ids: set[str], preferred: str) -> str:
         candidate = chr(ordinal)
         if candidate not in used_ids:
             return candidate
-    return f"X{len(used_ids) + 1}"
+    ordinal = 1
+    while f'X{ordinal}' in used_ids:
+        ordinal += 1
+    return f'X{ordinal}'
 
 
 def _record_ids(value: str | list[str], used_ids: set[str]) -> None:
@@ -584,6 +609,12 @@ def build_structure_prediction_input(
     used_ids: set[str] = set()
     protein_count = 0
 
+    def native_modifications(raw):
+        if raw is None:
+            return None
+        from esm.utils.structure.input_builder import Modification
+        return [Modification(position=m['position'], ccd=m['ccd']) for m in raw]
+
     def add_protein(
         *,
         chain_id: object,
@@ -593,6 +624,8 @@ def build_structure_prediction_input(
         msa_format: str = "auto",
         msa_max_sequences: int | None = None,
         msa_remove_insertions: bool = True,
+        modifications=None,
+        inline_msa=None,
     ) -> None:
         nonlocal protein_count
         normalized_sequence = normalize_component_sequence(sequence, "protein")
@@ -600,7 +633,7 @@ def build_structure_prediction_input(
         _record_ids(component_id, used_ids)
         msa, msa_metadata = load_msa_for_sequence(
             MSA,
-            path=msa_path,
+            path=None if inline_msa is not None else msa_path,
             fmt=msa_format,
             remove_insertions=msa_remove_insertions,
             max_sequences=msa_max_sequences,
@@ -608,7 +641,11 @@ def build_structure_prediction_input(
             expected_sha256=getattr(args, '_msa_expected_hashes', {}).get(str(msa_path)),
             snapshot_dir=Path(args.output_dir) if getattr(args, '_msa_expected_hashes', None) else None,
         )
-        inputs.append(ProteinInput(id=component_id, sequence=normalized_sequence, msa=msa))
+        if inline_msa is not None:
+            msa = MSA.from_sequences(inline_msa['sequences'])
+            msa_metadata = {'source': 'inline', 'depth': len(inline_msa['sequences'])}
+        inputs.append(ProteinInput(id=component_id, sequence=normalized_sequence, msa=msa,
+                                   modifications=native_modifications(modifications)))
         protein_count += 1
         manifest_components.append(
             {
@@ -617,17 +654,18 @@ def build_structure_prediction_input(
                 "sequence_length": len(normalized_sequence),
                 "source": source,
                 "msa": msa_metadata,
+                "modifications": modifications,
             }
         )
 
-    def add_polymer(*, molecule_type: str, chain_id: object, sequence: str, source: str) -> None:
+    def add_polymer(*, molecule_type: str, chain_id: object, sequence: str, source: str, modifications=None) -> None:
         normalized_sequence = normalize_component_sequence(sequence, molecule_type)
         component_id = parse_chain_ids(chain_id)
         _record_ids(component_id, used_ids)
         if molecule_type == "dna":
-            inputs.append(DNAInput(id=component_id, sequence=normalized_sequence))
+            inputs.append(DNAInput(id=component_id, sequence=normalized_sequence, modifications=native_modifications(modifications)))
         elif molecule_type == "rna":
-            inputs.append(RNAInput(id=component_id, sequence=normalized_sequence))
+            inputs.append(RNAInput(id=component_id, sequence=normalized_sequence, modifications=native_modifications(modifications)))
         else:
             raise ESMFold2InputError(f"unsupported polymer type {molecule_type!r}")
         manifest_components.append(
@@ -636,6 +674,7 @@ def build_structure_prediction_input(
                 "id": component_id,
                 "sequence_length": len(normalized_sequence),
                 "source": source,
+                "modifications": modifications,
             }
         )
 
@@ -669,23 +708,42 @@ def build_structure_prediction_input(
         )
 
     if str(args.pdb_sequence_path or "").strip():
+        pdb_msa_query = None
+        if args.msa_path:
+            msa_format = args.msa_format
+            if msa_format == 'auto':
+                msa_format = 'stockholm' if Path(args.msa_path).suffix.lower() in {'.sto', '.stockholm'} else 'a3m'
+            reader = MSA.from_stockholm if msa_format == 'stockholm' else MSA.from_a3m
+            source_msa = reader(Path(args.msa_path), remove_insertions=args.msa_remove_insertions,
+                                max_sequences=args.msa_max_sequences)
+            if source_msa.sequences:
+                pdb_msa_query = source_msa.sequences[0].replace('-', '').upper()
         for component in parse_pdb_polymer_components(
             args.pdb_sequence_path,
             chain_ids=args.pdb_chain_ids,
             include_dna_rna=args.pdb_include_dna_rna,
+            include_ligands=True,
         ):
             if component["type"] == "protein":
                 add_protein(
                     chain_id=component["id"],
                     sequence=component["sequence"],
                     source=component.get("source") or "pdb_sequence_path",
+                    modifications=component.get('modifications'),
+                    msa_path=args.msa_path if component['sequence'] == pdb_msa_query else None,
+                    msa_format=args.msa_format,
+                    msa_max_sequences=args.msa_max_sequences,
+                    msa_remove_insertions=args.msa_remove_insertions,
                 )
+            elif component['type'] == 'ligand':
+                add_ligand(chain_id=component['id'], smiles=None, ccd=component['ccd'], source=component['source'])
             else:
                 add_polymer(
                     molecule_type=component["type"],
                     chain_id=component["id"],
                     sequence=component["sequence"],
                     source=component.get("source") or "pdb_sequence_path",
+                    modifications=component.get('modifications'),
                 )
 
     if str(args.dna_sequence or "").strip():
@@ -711,11 +769,32 @@ def build_structure_prediction_input(
         )
 
     json_components = []
-    json_components.extend(load_components_file(args.complex_components_file))
-    json_components.extend(parse_components_json(args.complex_components_json))
+    conditioning = {}
+    documents = []
+    if args.complex_components_file:
+        documents.append(Path(args.complex_components_file).read_text())
+    if args.complex_components_json:
+        documents.append(args.complex_components_json)
+    for text in documents:
+        json_components.extend(parse_components_json(text))
+        document = json.loads(text)
+        if isinstance(document, dict):
+            for key in ('covalent_bonds', 'distogram_conditioning'):
+                if document.get(key) is not None:
+                    conditioning.setdefault(key, []).extend(document[key])
+    reserved_ids = set(used_ids)
+    for component in json_components:
+        if component.get('id') or component.get('chain_id'):
+            reserved_ids.update(iter_chain_ids(parse_chain_ids(component.get('id') or component['chain_id'])))
     for index, component in enumerate(json_components, start=1):
         mol_type = component["type"]
-        chain_id = component.get("id") or component.get("chain_id") or _next_chain_id(used_ids, "")
+        chain_id = component.get("id") or component.get("chain_id") or _next_chain_id(used_ids | reserved_ids, "")
+        ids = list(iter_chain_ids(parse_chain_ids(chain_id)))
+        for _ in range(max(0, int(component.get('count', len(ids))) - len(ids))):
+            copy_id = _next_chain_id(reserved_ids | used_ids | set(ids), '')
+            ids.append(copy_id)
+            reserved_ids.add(copy_id)
+        chain_id = ids if len(ids) > 1 else ids[0]
         source = str(component.get("source") or "complex_components_json")
         if mol_type == "protein":
             add_protein(
@@ -730,6 +809,8 @@ def build_structure_prediction_input(
                     else None
                 ),
                 msa_remove_insertions=parse_bool(component.get("msa_remove_insertions", True)),
+                modifications=component.get('modifications'),
+                inline_msa=component.get('msa'),
             )
         elif mol_type in {"dna", "rna"}:
             add_polymer(
@@ -737,6 +818,7 @@ def build_structure_prediction_input(
                 chain_id=chain_id,
                 sequence=str(component.get("sequence") or ""),
                 source=source,
+                modifications=component.get('modifications'),
             )
         elif mol_type == "ligand":
             add_ligand(
@@ -752,8 +834,11 @@ def build_structure_prediction_input(
         raise ESMFold2InputError(
             "provide a protein sequence, a PDB sequence source, or Components JSON"
         )
-    if protein_count == 0:
-        raise ESMFold2InputError("ESMFold2 input must include at least one protein component")
+    if conditioning:
+        from esm.utils.structure.input_builder import deserialize_structure_prediction_input
+        native = deserialize_structure_prediction_input({'sequences': [], **conditioning})
+        return StructurePredictionInput(sequences=inputs, covalent_bonds=native.covalent_bonds,
+            distogram_conditioning=native.distogram_conditioning), manifest_components
     return StructurePredictionInput(sequences=inputs), manifest_components
 
 
@@ -838,10 +923,18 @@ def compile_workflow_request(request: dict, staged_paths: dict) -> tuple[list[st
     if components is None:
         raw = normalized.get('complex_components_json')
         components = json.loads(raw) if raw else []
+    document = components if isinstance(components, dict) else {}
+    components = document.get('components', document.get('sequences', components))
+    conditioning = {key: document[key] for key in ('covalent_bonds', 'distogram_conditioning') if key in document}
+    for key in ('covalent_bonds', 'distogram_conditioning'):
+        if key in normalized:
+            conditioning[key] = normalized[key]
+        elif 'esmf_' + key in normalized:
+            conditioning[key] = normalized['esmf_' + key]
     if not isinstance(components, list):
         raise ValueError('complex_components must be a list')
     components = json.loads(json.dumps(components, allow_nan=False))
-    if normalized.get('msa_path') and not normalized.get('sequence'):
+    if normalized.get('msa_path') and not normalized.get('sequence') and not normalized.get('pdb_sequence_path'):
         raise ValueError('top-level MSA requires a primary sequence; component MSA must be scoped explicitly')
     for component in components:
         if not isinstance(component, dict):
@@ -856,7 +949,7 @@ def compile_workflow_request(request: dict, staged_paths: dict) -> tuple[list[st
             component['msa_path'] = stage(component['msa_path'], scope)
     for key, default in defaults.items():
         if key == 'complex_components_json':
-            value = json.dumps(components, allow_nan=False) if components else ''
+            value = json.dumps({'components': components, **conditioning}, allow_nan=False) if components or conditioning else ''
         else:
             value = checked(key, normalized.get(key, default))
         scope = 'primary' if key.startswith('msa_') else 'model'
@@ -881,7 +974,7 @@ def compile_workflow_request(request: dict, staged_paths: dict) -> tuple[list[st
     return argv, receipt
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, model_cache: dict | None = None) -> int:
     args = build_parser().parse_args(argv)
     receipt_path = os.environ.get('BMS_ESMFOLD2_EFFECTIVE_SETTINGS')
     if receipt_path:
@@ -940,7 +1033,7 @@ def main(argv: list[str] | None = None) -> int:
     primary_protein = next((c for c in manifest_components if c["type"] == "protein"), None)
     sequence_length = int(primary_protein["sequence_length"]) if primary_protein else 0
     total_polymer_residues = sum(
-        int(component.get("sequence_length") or 0)
+        int(component.get("sequence_length") or 0) * len(list(iter_chain_ids(component['id'])))
         for component in manifest_components
         if component.get("type") in {"protein", "dna", "rna"}
     )
@@ -960,12 +1053,16 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(device_event, sort_keys=True), flush=True)
 
     try:
-        model = ESMFold2Model.from_pretrained(
-            model_id_or_path,
-            local_files_only=args.local_files_only,
-        )
-        model = model.to(device)
-        model = model.eval()
+        # Native fold seeds prep and diffusion independently for explicit seeds.
+        # Unseeded callers retain fresh-process initialization/RNG semantics.
+        cache_key = (model_id_or_path, args.local_files_only, device)
+        model = model_cache.get(cache_key) if model_cache is not None and args.seed is not None else None
+        if model is None:
+            model = ESMFold2Model.from_pretrained(
+                model_id_or_path, local_files_only=args.local_files_only,
+            ).to(device).eval()
+            if model_cache is not None and args.seed is not None:
+                model_cache[cache_key] = model
     except Exception as exc:  # pragma: no cover - depends on local HF cache
         raise SystemExit(
             "ESMFold2 model load failed. No download was attempted when local_files_only=true; "
@@ -1016,9 +1113,8 @@ def main(argv: list[str] | None = None) -> int:
             "iptm": scalar(getattr(sample, "iptm", None)),
             "cif": cif_name,
         }
-        if receipt_path:
-            metrics.update(native_scalar_metrics(sample))
-            metrics.update(retain_native_confidence(sample, output_dir, sample_id))
+        metrics.update(native_scalar_metrics(sample))
+        metrics.update(retain_native_confidence(sample, output_dir, sample_id))
         metrics_name = f"{sample_id}.metrics.json"
         (output_dir / metrics_name).write_text(json.dumps(metrics, indent=2, sort_keys=True, allow_nan=False), encoding="utf-8")
         samples.append({"sample_id": sample_id, "cif": cif_name, "metrics": metrics_name, **metrics})

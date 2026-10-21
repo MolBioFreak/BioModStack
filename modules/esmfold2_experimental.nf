@@ -21,7 +21,7 @@ def esmfold2ContractInputs(inputs, settings) {
     def componentsFile = request.get('esmf_complex_components_file')
     if (componentsFile) {
         def parsed = new groovy.json.JsonSlurper().parse(new File(componentsFile.toString()))
-        request.esmf_complex_components = parsed instanceof Map ? parsed.components : parsed
+        request.esmf_complex_components = parsed
         request.remove('esmf_complex_components_file')
     }
     def components = request.get('esmf_complex_components') ?: request.get('complex_components') ?: []
@@ -38,7 +38,8 @@ def esmfold2ContractInputs(inputs, settings) {
         if (a != null && b != null && a != b) throw new IllegalArgumentException("conflicting aliases: ${key}")
         if (a ?: b) sources << (a ?: b).toString()
     }
-    components.each { component -> if (component.msa_path) sources << component.msa_path.toString() }
+    def componentRows = components instanceof Map ? (components.components ?: components.sequences) : components
+    componentRows.each { component -> if (component.msa_path) sources << component.msa_path.toString() }
     sources = sources.unique()
     def files = sources.collect { source ->
         def resolved = source
@@ -51,11 +52,35 @@ def esmfold2ContractInputs(inputs, settings) {
         }
         file(resolved, checkIfExists: true)
     }
-    return inputs.map { meta, sequence, name ->
-        def payload = new LinkedHashMap(request)
-        if (!components) payload.esmf_sequence = sequence.toString()
-        payload.esmf_sequence_name = name.toString()
-        tuple(meta, payload, sources, files)
+    def batch = settings.get('sequence_batch_json_path')
+    def rows = batch ? new groovy.json.JsonSlurper().parse(file(batch.toString()).toFile()) : null
+    return inputs.flatMap { meta, sequence, name ->
+        def entries = rows ?: [[name: name, sequence: sequence]]
+        entries.collect { row ->
+            def payload = new LinkedHashMap(request)
+            def rowSources = new ArrayList(sources)
+            def rowFiles = new ArrayList(files)
+            if (row.complex_json) {
+                def document = new groovy.json.JsonSlurper().parse(file(row.complex_json.toString()).toFile())
+                payload.remove('complex_components')
+                payload.remove('complex_components_json')
+                payload.remove('esmf_complex_components_json')
+                payload.esmf_complex_components = document
+                payload.esmf_sequence = ''
+                def roster = document instanceof Map ? (document.components ?: document.sequences) : document
+                roster.each { c ->
+                    if (c.msa_path && !rowSources.contains(c.msa_path.toString())) {
+                        rowSources << c.msa_path.toString()
+                        rowFiles << file(c.msa_path.toString(), checkIfExists: true)
+                    }
+                }
+            } else if (!components || rows) payload.esmf_sequence = row.sequence.toString()
+            def rowName = rows && (settings.get('num_parallel_jobs') ?: 1) > 1 ? "${row.name}_${name}" : row.name.toString()
+            payload.esmf_sequence_name = rowName
+            def rowMeta = new LinkedHashMap(meta)
+            if (rows) rowMeta.id = rowName
+            tuple(rowMeta, payload, rowSources, rowFiles)
+        }
     }
 }
 
@@ -178,22 +203,23 @@ SHAPE_ESMF
     }
     def modelVariant = shapeMode ? (params.get('shape_esmf_model_variant') ?: 'fast') : (params.get('esmf_model_variant') ?: params.get('model_variant') ?: 'fast')
     def modelIdOrPath = params.get('esmf_model_id_or_path') ?: params.get('model_id_or_path') ?: ''
-    def localFilesOnly = boolString(params.get('esmf_local_files_only') ?: params.get('local_files_only'), true)
+    def localFilesOnly = boolString(params.get('esmf_local_files_only') != null ? params.get('esmf_local_files_only') : params.get('local_files_only'), true)
     def numLoops = shapeMode ? (params.get('shape_esmf_num_loops') ?: 3) : (params.get('esmf_num_loops') ?: params.get('num_loops') ?: 1)
     def numSamplingSteps = shapeMode ? (params.get('shape_esmf_num_sampling_steps') ?: 50) : (params.get('esmf_num_sampling_steps') ?: params.get('sampling_steps') ?: 5)
     def numDiffusionSamples = shapeMode ? 1 : (params.get('esmf_num_diffusion_samples') ?: params.get('num_diffusion_samples') ?: 1)
-    def seed = shapeMode ? params.get('shape_seed') : (params.get('esmf_seed') ?: params.get('seed'))
+    def seed = shapeMode ? params.get('shape_seed') : (params.get('esmf_seed') != null ? params.get('esmf_seed') : params.get('seed'))
     def device = params.get('esmf_device') ?: params.get('device') ?: 'cuda'
     def complexComponents = params.get('esmf_complex_components') ?: params.get('complex_components') ?: []
     def complexComponentsFile = params.get('esmf_complex_components_file')
     if (!(complexComponents instanceof Collection && !complexComponents.isEmpty()) && complexComponentsFile) {
         def parsedComplexComponents = new groovy.json.JsonSlurper().parse(new File(complexComponentsFile.toString()))
-        complexComponents = parsedComplexComponents instanceof Map ? parsedComplexComponents.components : parsedComplexComponents
+        complexComponents = parsedComplexComponents
     }
     def normalizedName = (sequence_name ?: 'esmfold2_prediction').toString().replaceAll(/[^A-Za-z0-9._-]+/, '_')
-    def hasComplexComponents = complexComponents instanceof Collection && !complexComponents.isEmpty()
+    def componentRows = complexComponents instanceof Map ? (complexComponents.components ?: complexComponents.sequences) : complexComponents
+    def hasComplexComponents = componentRows instanceof Collection && !componentRows.isEmpty()
     def sequenceArg = shellQuote(hasComplexComponents ? '' : (sequence?.toString()?.trim() ?: ''))
-    def complexArg = complexComponents instanceof Collection && !complexComponents.isEmpty() ? shellQuote(groovy.json.JsonOutput.toJson(complexComponents)) : "''"
+    def complexArg = hasComplexComponents ? shellQuote(groovy.json.JsonOutput.toJson(complexComponents)) : "''"
     def seedArg = seed == null || seed.toString().trim().isEmpty() ? '' : "--seed ${seed}"
     def telemetryPath = shellQuote("esmfold2_results/${normalizedName}.telemetry.json")
 
@@ -243,7 +269,7 @@ process ESMFold2FromPdb {
     def numLoops = params.get('esmf_num_loops') ?: params.get('num_loops') ?: 1
     def numSamplingSteps = params.get('esmf_num_sampling_steps') ?: params.get('sampling_steps') ?: 5
     def numDiffusionSamples = params.get('esmf_num_diffusion_samples') ?: params.get('num_diffusion_samples') ?: 1
-    def seed = params.get('esmf_seed') ?: params.get('seed')
+    def seed = params.get('esmf_seed') != null ? params.get('esmf_seed') : params.get('seed')
     def seedArg = seed == null || seed.toString().trim().isEmpty() ? '' : "--seed ${seed}"
     """
     set -euo pipefail

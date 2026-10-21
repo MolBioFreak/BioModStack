@@ -15,7 +15,7 @@ import re
 import subprocess
 import sys
 
-from run_esmfold2_inference import PROTEIN_3TO1, parse_pdb_polymer_components
+from run_esmfold2_inference import PROTEIN_3TO1, parse_pdb_polymer_components, protein_residue_letter
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from io import StringIO
 
@@ -41,7 +41,7 @@ def _source(path: Path, chain_ids: list[str], *, role: str,
         residues = {chain: {} for chain in chain_ids}
         instances = {chain: set() for chain in chain_ids}
         for i in range(count):
-            if column('group_PDB')[i] != 'ATOM':
+            if column('group_PDB')[i] != 'ATOM' and column('label_seq_id')[i] in {'.', '?'}:
                 continue
             chain = column('auth_asym_id')[i]
             if chain not in residues:
@@ -59,10 +59,12 @@ def _source(path: Path, chain_ids: list[str], *, role: str,
             names = list(residues[chain].values())
             if len(instances[chain]) != 1 or instances[chain] & {'.', '?'}:
                 raise ValueError(f'{role} auth chain {chain} is not one CIF chain instance')
-            if not names or any(name not in PROTEIN_3TO1 for name in names):
+            if not names or any(not protein_residue_letter(name) for name in names):
                 raise ValueError(f'{role} chain {chain} is not an identified protein')
             components.append({'id': chain, 'type': 'protein',
-                               'sequence': ''.join(PROTEIN_3TO1[name] for name in names)})
+                               'sequence': ''.join(protein_residue_letter(name) for name in names),
+                               'modifications': [{'position': i, 'ccd': name} for i, name in enumerate(names)
+                                   if name not in set(PROTEIN_3TO1) - {'MSE', 'SEC', 'PYL'}]})
     elif path.suffix.lower() == '.pdb':
         rows = {chain: {} for chain in chain_ids} if include_source_residues else None
         components = parse_pdb_polymer_components(path, chain_ids=chain_ids, include_dna_rna=False,
@@ -130,7 +132,8 @@ def compile_selected_inputs(manifest: dict, staged_dir: Path, target_pdb: Path) 
             raise ValueError('Binder and target chain IDs overlap in native complex')
         seen.add(key)
         components = [
-            {'type': 'protein', 'id': c['id'], 'sequence': c['sequence'], 'source': role}
+            {'type': 'protein', 'id': c['id'], 'sequence': c['sequence'], 'source': role,
+             **({'modifications': c.get('modifications', [])} if role == 'target_sequence_from_declared_target' else {})}
             for role, group in [('binder_sequence_from_candidate', binder), ('target_sequence_from_declared_target', target)]
             for c in group
         ]
@@ -154,6 +157,7 @@ def run(manifest_path: Path, staged_dir: Path, target_pdb: Path, output_dir: Pat
     compiled = compile_selected_inputs(json.loads(manifest_path.read_text()), staged_dir, target_pdb)
     output_dir.mkdir(parents=True, exist_ok=True)
     records = []
+    requests = []
     for item in compiled:
         key = item['candidate_key']
         sample_dir = output_dir / key
@@ -170,7 +174,14 @@ def run(manifest_path: Path, staged_dir: Path, target_pdb: Path, output_dir: Pat
             command += ['--model-id-or-path', model_id_or_path]
         if seed is not None:
             command += ['--seed', str(seed)]
-        subprocess.run(command, check=True)
+        requests.append({'argv': command[2:]})
+    batch_request = output_dir / 'native_batch_requests.json'
+    batch_request.write_text(json.dumps(requests, indent=2))
+    subprocess.run([sys.executable, str(runner.with_name('run_esmfold2_batch.py')),
+                    '--request-file', str(batch_request)], check=True)
+    for item in compiled:
+        key = item['candidate_key']
+        sample_dir = output_dir / key
         native = json.loads((sample_dir / 'manifest.json').read_text())
         samples = native.get('samples')
         if (native.get('workflow') != 'esmfold2' or native.get('sequence_name') != key
