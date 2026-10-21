@@ -304,12 +304,20 @@ process BatchProtenixValidation {
     mkdir -p validation_designs raw_predictions predictions
 
     SHARED_PROTENIX_ROOT="/protenix_weights"
+    if [ "${requested_template}" = "true" ] && [ "${anchor_target}" = "true" ]; then
+        export BMS_PROTENIX_GENERIC_MMCIF_DIR="\$SHARED_PROTENIX_ROOT/mmcif"
+    fi
     if [ "${anchor_target}" = "true" ]; then
         export PROTENIX_ROOT_DIR="\$PWD/.protenix_anchor_root"
         mkdir -p "\$PROTENIX_ROOT_DIR"
         if [ -d "\$SHARED_PROTENIX_ROOT/checkpoint" ] && [ ! -e "\$PROTENIX_ROOT_DIR/checkpoint" ]; then
             ln -s "\$SHARED_PROTENIX_ROOT/checkpoint" "\$PROTENIX_ROOT_DIR/checkpoint"
         fi
+        for shared_data in common search_database; do
+            if [ -d "\$SHARED_PROTENIX_ROOT/\$shared_data" ] && [ ! -e "\$PROTENIX_ROOT_DIR/\$shared_data" ]; then
+                ln -s "\$SHARED_PROTENIX_ROOT/\$shared_data" "\$PROTENIX_ROOT_DIR/\$shared_data"
+            fi
+        done
     else
         export PROTENIX_ROOT_DIR="\$SHARED_PROTENIX_ROOT"
     fi
@@ -378,6 +386,7 @@ PY
             --pdb_files validation_designs/*.pdb \\
             --target_chains "\$PROTENIX_TARGET_CHAINS" \\
             --out_dir "\$PROTENIX_ROOT_DIR/mmcif" \\
+            --native-template-ids \\
             --manifest target_template_manifest.json
         echo "[BatchProtenixValidation] Antibody validator mode: target-anchored co-fold. A task-local Protenix template DB was staged from the experimental target chains." | tee -a protenix_batch.log
     else
@@ -431,9 +440,23 @@ PY
         PROTENIX_INPUT_JSON="prepared_input.json"
     fi
 
+    ALLOW_EXACT_DUPLICATE_TEMPLATE_PDB_IDS=""
+    if [ "${anchor_target}" = "true" ]; then
+        python3 ${params.code_root}/scripts/prepare_protenix_exact_templates.py \\
+            --input_json "\$PROTENIX_INPUT_JSON" \\
+            --output_json prepared_input_exact_templates.json \\
+            --manifest target_template_manifest.json \\
+            ${requested_template ? '--generic-templates' : ''} \\
+            --target_chains "\$PROTENIX_TARGET_CHAINS" \\
+            --out_dir exact_target_templates
+        PROTENIX_INPUT_JSON="prepared_input_exact_templates.json"
+        ALLOW_EXACT_DUPLICATE_TEMPLATE_PDB_IDS="\$(python3 -c 'import json; print(",".join(dict.fromkeys(r["template_id"] for r in json.load(open("target_template_manifest.json")).values())))')"
+    fi
+
     python3 ${params.code_root}/scripts/run_protenix_inference.py \\
         --input "\$PROTENIX_INPUT_JSON" \\
         --out_dir raw_predictions/ \\
+        --allow_exact_duplicate_template_pdb_ids "\$ALLOW_EXACT_DUPLICATE_TEMPLATE_PDB_IDS" \\
         --model_name ${effective_model} \\
         --seeds "${seeds}" \\
         --sample ${n_sample} \\

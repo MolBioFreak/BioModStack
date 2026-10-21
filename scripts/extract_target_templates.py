@@ -11,27 +11,11 @@ leaving binder chains flexible.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 from pathlib import Path
-import sys
 from collections import OrderedDict
-import re
-import shutil
-from tempfile import TemporaryDirectory
-import urllib.request
-
-try:
-    from Bio.PDB import MMCIFIO, PDBParser, Select
-except ImportError:
-    MMCIFIO = None
-    PDBParser = None
-    Select = object
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-
-from extract_chain import extract_chains
 
 
 AA_CODES = {
@@ -59,12 +43,12 @@ AA_CODES = {
 }
 
 
-class _ChainSelect(Select if Select is not object else object):
-    def __init__(self, allowed_chains: set[str]):
-        self.allowed_chains = allowed_chains
+# Biopython's curated modified amino-acid parent table is also available in
+# the installed Protenix image. Retain the actual CCD identity in coordinates.
+from Bio.Data.PDBData import protein_letters_3to1_extended
 
-    def accept_chain(self, chain) -> int:
-        return 1 if chain.id in self.allowed_chains else 0
+CANONICAL_NAMES = {code: name for name, code in AA_CODES.items() if name != "MSE"}
+AA_CODES.update(protein_letters_3to1_extended)
 
 
 def parse_chain_csv(raw: str) -> list[str]:
@@ -153,6 +137,8 @@ def _iter_selected_pdb_atoms(
 
             if record_type not in {"ATOM", "HETATM"}:
                 continue
+            if record_type == "HETATM" and line[17:20].strip() not in AA_CODES:
+                continue  # Protein templates; nonpolymer chemistry remains in native input.
 
             chain_id = line[21].strip()
             if chain_id not in requested_chains:
@@ -194,7 +180,7 @@ def _build_polymer_residue_map(
     entity_ids: dict[str, str] = {}
 
     for atom in atoms:
-        if atom["group_PDB"] != "ATOM":
+        if atom["group_PDB"] != "ATOM" and atom["label_comp_id"] not in AA_CODES:
             continue
         chain_id = str(atom["auth_asym_id"])
         residue_key = (int(atom["auth_seq_id"]), str(atom["ins_code"]))
@@ -269,9 +255,12 @@ def _write_simple_mmcif(
         )
         for chain_id, residues in residues_by_chain.items():
             sequence = "".join(AA_CODES.get(res_name, "X") for res_name in residues.values()) or "X"
+            modified = any(name not in CANONICAL_NAMES.values() for name in residues.values())
+            original = "".join(AA_CODES[name] if name in CANONICAL_NAMES.values() else f"({name})"
+                               for name in residues.values())
             lines.append(
-                f"{entity_ids[chain_id]} polypeptide(L) no no {_cif_value(chain_id)} "
-                f"{_cif_value(sequence)} {_cif_value(sequence)}"
+                f"{entity_ids[chain_id]} polypeptide(L) no {'yes' if modified else 'no'} {_cif_value(chain_id)} "
+                f"{_cif_value(original)} {_cif_value(sequence)}"
             )
         lines.append("#")
 
@@ -289,6 +278,16 @@ def _write_simple_mmcif(
                 lines.append(f"{entity_ids[chain_id]} {index} {_cif_value(res_name)} .")
         lines.append("#")
 
+    # Native template readers use chemical-component types to recognize
+    # polymer chains. Coordinate-only MMCIFIO output is insufficient.
+    lines.extend(["loop_", "_chem_comp.id", "_chem_comp.type",
+                  "_chem_comp.mon_nstd_parent_comp_id", "_chem_comp.one_letter_code"])
+    for name in dict.fromkeys(str(atom["label_comp_id"]) for atom in atoms):
+        kind = "L-peptide linking" if name in AA_CODES else "non-polymer"
+        code = AA_CODES.get(name, "X")
+        parent = CANONICAL_NAMES.get(code, "?") if name not in CANONICAL_NAMES.values() else "?"
+        lines.append(f"{_cif_value(name)} {_cif_value(kind)} {parent} {code}")
+    lines.append("#")
     lines.extend(
         [
             "loop_",
@@ -340,7 +339,7 @@ def _write_simple_mmcif(
                     _cif_value(chain_id),
                     _cif_value(atom["label_comp_id"]),
                     f"{float(atom['b_iso']):.3f}",
-                    _cif_value(atom["model_num"]),
+                    "1",  # The selected source model is the sole native model.
                 ]
             )
         )
@@ -349,100 +348,48 @@ def _write_simple_mmcif(
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _looks_like_pdb_id(stem: str) -> bool:
-    return bool(re.fullmatch(r"[A-Za-z0-9]{4}", stem or ""))
-
-
-def _resolve_authoritative_rcsb_mmcif(pdb_path: Path) -> Path | None:
-    stem = pdb_path.stem.lower()
-    if not _looks_like_pdb_id(stem):
-        return None
-
-    local_candidates = [
-        pdb_path.with_suffix(".cif"),
-        pdb_path.with_suffix(".mmcif"),
-        pdb_path.parent / f"{stem}.cif",
-        pdb_path.parent / f"{stem}.mmcif",
-    ]
-    for candidate in local_candidates:
-        if candidate.exists() and candidate.is_file():
-            return candidate.resolve()
-
-    target_path = pdb_path.parent / f"{stem}.cif"
-    url = f"https://files.rcsb.org/download/{stem.upper()}.cif"
-    try:
-        with urllib.request.urlopen(url, timeout=20) as response:
-            payload = response.read()
-        target_path.write_bytes(payload)
-        return target_path.resolve()
-    except Exception:
-        return None
-
-
 def extract_templates(
     pdb_paths: list[Path],
     target_chains: list[str],
     out_dir: Path,
     model_number: int | None = None,
+    native_template_ids: bool = False,
 ) -> dict[str, dict[str, object]]:
+    """Stage the selected source bytes, never reacquire a name-matched PDB.
+
+    A private four-character native identifier addresses each target molecule;
+    the manifest retains its full source identity and explicit chain mapping.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
-    manifest: dict[str, dict[str, object]] = {}
+    manifest = {}
     requested = set(target_chains)
-    use_biopython = all(obj is not None for obj in (PDBParser, MMCIFIO)) and Select is not object
-    parser = PDBParser(QUIET=True) if use_biopython else None
-
+    identities = {}
     for pdb_path in pdb_paths:
-        authoritative_mmcif = _resolve_authoritative_rcsb_mmcif(pdb_path)
-        source_path = pdb_path
-        temp_dir: TemporaryDirectory[str] | None = None
-        if use_biopython and model_number is not None:
-            temp_dir = TemporaryDirectory()
-            extracted_path = Path(temp_dir.name) / f"{pdb_path.stem}_model{model_number}.pdb"
-            extract_chains(
-                str(pdb_path),
-                str(extracted_path),
-                target_chains,
-                model_number=model_number,
-            )
-            source_path = extracted_path
-
-        out_path = out_dir / f"{pdb_path.stem.lower()}.cif"
-        if authoritative_mmcif is not None:
-            shutil.copyfile(authoritative_mmcif, out_path)
-            present = list(target_chains)
-        elif use_biopython:
-            structure = parser.get_structure(pdb_path.stem, str(source_path))
-            present = []
-            for model in structure:
-                for chain in model:
-                    if chain.id in requested and chain.id not in present:
-                        present.append(chain.id)
-
-            if not present:
-                raise ValueError(
-                    f"No requested target chains {sorted(requested)} were found in {pdb_path}"
-                )
-
-            io = MMCIFIO()
-            io.set_structure(structure)
-            io.save(str(out_path), select=_ChainSelect(set(present)))
-        else:
-            atoms, present = _iter_selected_pdb_atoms(pdb_path, requested, model_number)
-            if not present:
-                raise ValueError(
-                    f"No requested target chains {sorted(requested)} were found in {pdb_path}"
-                )
-            _write_simple_mmcif(pdb_path.stem, atoms, out_path)
+        atoms, present = _iter_selected_pdb_atoms(pdb_path, requested, model_number)
+        if not present:
+            raise ValueError(f"No requested target chains {sorted(requested)} were found in {pdb_path}")
+        payload = json.dumps(atoms, sort_keys=True, separators=(",", ":")).encode()
+        digest = hashlib.sha256(payload).hexdigest()
+        salt = 0
+        template_id = digest[:4] if native_template_ids else pdb_path.stem.lower()
+        corpus = os.environ.get("BMS_PROTENIX_GENERIC_MMCIF_DIR")
+        while native_template_ids and (
+            (template_id in identities and identities[template_id] != digest)
+            or (corpus and (Path(corpus) / f"{template_id}.cif").exists())
+        ):
+            salt += 1
+            template_id = hashlib.sha256(payload + str(salt).encode()).hexdigest()[:4]
+        identities[template_id] = digest
+        out_path = out_dir / f"{template_id}.cif"
+        _write_simple_mmcif(template_id, atoms, out_path)
+        residues, _ = _build_polymer_residue_map(atoms)
         manifest[pdb_path.stem] = {
-            "cif": str(out_path.resolve()),
-            "chains": present,
-            "model_number": model_number,
-            "writer": "rcsb" if authoritative_mmcif is not None else ("biopython" if use_biopython else "simple"),
+            "cif": str(out_path.resolve()), "template_id": template_id,
+            "source_sha256": hashlib.sha256(pdb_path.read_bytes()).hexdigest(),
+            "chains": present, "model_number": model_number, "writer": "source",
+            "sequences": {chain: "".join(AA_CODES.get(name, "X") for name in row.values())
+                          for chain, row in residues.items()},
         }
-
-        if temp_dir is not None:
-            temp_dir.cleanup()
-
     return manifest
 
 
@@ -453,6 +400,7 @@ def main() -> None:
     parser.add_argument("--out_dir", required=True, help="Directory for extracted target templates")
     parser.add_argument("--manifest", required=True, help="Output JSON manifest path")
     parser.add_argument("--model_number", type=int, default=None, help="Specific PDB MODEL number to extract before saving templates")
+    parser.add_argument("--native-template-ids", action="store_true", help="Use source-bound four-character IDs for native Protenix hits")
     args = parser.parse_args()
 
     pdb_paths = [Path(path).expanduser() for path in args.pdb_files]
@@ -465,6 +413,7 @@ def main() -> None:
         target_chains,
         out_dir,
         model_number=args.model_number,
+        native_template_ids=args.native_template_ids,
     )
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

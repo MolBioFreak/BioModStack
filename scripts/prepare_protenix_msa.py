@@ -53,6 +53,8 @@ def _convert_complex_entry(bms, default_name, seeds):
     import copy
     from protenix_chemistry import validate_chemistry
 
+    if not isinstance(bms, dict):
+        raise ValueError("Compiled complex JSON must be a BMS object with components, not a native task list; native tasks use the native_payload adapter")
     validate_chemistry({"complex_components": bms.get("components", []),
                         **{k: bms[k] for k in ("covalent_bonds", "constraint") if k in bms}})
     sequences = []

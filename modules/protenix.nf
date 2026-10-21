@@ -132,29 +132,8 @@ Path("input.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 PY
 
     PROTENIX_INPUT_JSON="input.json"
-    if [ "${use_template}" = "true" ]; then
-        python3 - <<'PY'
-import json
-import os
-from pathlib import Path
-
-input_path = Path("input.json")
-output_path = Path("protenix_input_with_templates.json")
-template_dir = str((Path(os.environ["PROTENIX_ROOT_DIR"]) / "mmcif").resolve())
-
-payload = json.loads(input_path.read_text(encoding="utf-8"))
-if not isinstance(payload, list):
-    raise SystemExit("Expected top-level list in Protenix input JSON")
-
-for entry in payload:
-    if isinstance(entry, dict):
-        entry["templatesPath"] = template_dir
-
-output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-PY
-        PROTENIX_INPUT_JSON="protenix_input_with_templates.json"
-        echo "[PROTENIX] Injected templatesPath=\$PROTENIX_ROOT_DIR/mmcif into \$PROTENIX_INPUT_JSON"
-    fi
+    # The wrapper prepares per-chain template-search inputs and preserves
+    # explicit native hit files; the mmCIF database is configured by PROTENIX_ROOT_DIR.
     if [ "${use_msa}" = "true" ]; then
         PROTENIX_MSA_CACHE_DIR="${params.msa_cache_dir}"
         if [ -z "\$PROTENIX_MSA_CACHE_DIR" ] || ! mkdir -p "\$PROTENIX_MSA_CACHE_DIR/.locks" 2>/dev/null; then
@@ -360,6 +339,9 @@ process ProtenixFromComplex {
     set -euo pipefail
 
     SHARED_PROTENIX_ROOT="/protenix_weights"
+    if [ "${requested_template}" = "true" ] && [ "${anchor_target}" = "true" ]; then
+        export BMS_PROTENIX_GENERIC_MMCIF_DIR="\$SHARED_PROTENIX_ROOT/mmcif"
+    fi
     if [ "${anchor_target}" = "true" ]; then
         if [ -z "${params.fixed_target_source_path ?: ''}" ] || [ -z "${params.fixed_target_source_chains ?: ''}" ]; then
             echo "[PROTENIX-COMPLEX] ERROR: protenix_anchor_target requires fixed_target_source_path and fixed_target_source_chains" | tee -a protenix_complex.log
@@ -404,6 +386,7 @@ process ProtenixFromComplex {
             --pdb_files "\$RESOLVED_FIXED_TARGET_SOURCE_PATH" \\
             --target_chains "${params.fixed_target_source_chains}" \\
             --out_dir "\$PROTENIX_ROOT_DIR/mmcif" \\
+            --native-template-ids \\
             --manifest target_template_manifest.json \\
             ${params.fixed_target_model_number ? '--model_number ' + params.fixed_target_model_number : ''}
         echo "[PROTENIX-COMPLEX] Fixed-target mode enabled: staged target templates from \$RESOLVED_FIXED_TARGET_SOURCE_PATH" | tee -a protenix_complex.log
@@ -433,29 +416,8 @@ process ProtenixFromComplex {
     cat ${complex_json}
 
     PROTENIX_INPUT_JSON="${complex_json}"
-    if [ "${use_template}" = "true" ]; then
-        python3 - <<'PY'
-import json
-import os
-from pathlib import Path
-
-input_path = Path("${complex_json}")
-output_path = Path("protenix_input_with_templates.json")
-template_dir = str((Path(os.environ["PROTENIX_ROOT_DIR"]) / "mmcif").resolve())
-
-payload = json.loads(input_path.read_text(encoding="utf-8"))
-if not isinstance(payload, list):
-    raise SystemExit("Expected top-level list in Protenix complex input JSON")
-
-for entry in payload:
-    if isinstance(entry, dict):
-        entry["templatesPath"] = template_dir
-
-output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-PY
-        PROTENIX_INPUT_JSON="protenix_input_with_templates.json"
-        echo "[PROTENIX-COMPLEX] Injected templatesPath=\$PROTENIX_ROOT_DIR/mmcif into \$PROTENIX_INPUT_JSON"
-    fi
+    # The wrapper prepares per-chain template-search inputs and preserves
+    # explicit native hit files; the mmCIF database is configured by PROTENIX_ROOT_DIR.
     python3 ${params.code_root}/scripts/prepare_protenix_constraints.py \\
         --input_json "\$PROTENIX_INPUT_JSON" \\
         --output_json protenix_input_conditioned.json \\
@@ -509,22 +471,18 @@ PY
             2>&1 | tee protenix_msa_prep.log
         PROTENIX_INPUT_JSON="prepared_input.json"
     fi
-    if [ "${anchor_target}" = "true" ] && [ -n "${params.fixed_target_source_sequence ?: ''}" ]; then
-        TARGET_TEMPLATE_PDB_ID="\$(basename "\$RESOLVED_FIXED_TARGET_SOURCE_PATH" .pdb | tr '[:upper:]' '[:lower:]')"
+    ALLOW_EXACT_DUPLICATE_TEMPLATE_PDB_IDS=""
+    if [ "${anchor_target}" = "true" ]; then
         python3 ${params.code_root}/scripts/prepare_protenix_exact_templates.py \\
             --input_json "\$PROTENIX_INPUT_JSON" \\
             --output_json prepared_input_exact_templates.json \\
-            --target_sequence "${params.fixed_target_source_sequence}" \\
-            --template_pdb_id "\$TARGET_TEMPLATE_PDB_ID" \\
-            --template_chains "${params.fixed_target_source_chains}" \\
+            ${requested_template ? '--generic-templates' : ''} \\
+            --manifest target_template_manifest.json \\
+            --target_chains "${params.target_chains ?: ''}" \\
             --out_dir exact_target_templates \\
             2>&1 | tee -a protenix_msa_prep.log
         PROTENIX_INPUT_JSON="prepared_input_exact_templates.json"
-    fi
-
-    ALLOW_EXACT_DUPLICATE_TEMPLATE_PDB_IDS=""
-    if [ "${anchor_target}" = "true" ] && [ -n "${params.fixed_target_source_sequence ?: ''}" ]; then
-        ALLOW_EXACT_DUPLICATE_TEMPLATE_PDB_IDS="\$TARGET_TEMPLATE_PDB_ID"
+        ALLOW_EXACT_DUPLICATE_TEMPLATE_PDB_IDS="\$(python3 -c 'import json; print(",".join(dict.fromkeys(r["template_id"] for r in json.load(open("target_template_manifest.json")).values())))')"
     fi
 
     # Run structure prediction

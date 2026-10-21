@@ -408,9 +408,10 @@ def native_checkpoint_dependencies(process: str, params: dict):
         templates = enabled('protenix_use_template') or anchored
         if templates:
             members.extend(('common/obsolete_to_successor.json', 'common/release_date_cache.json'))
-            # Anchored consumers generate mmcif from their declared target input.
-            if not anchored:
-                members.append('mmcif')
+            # Exact-only anchoring uses the declared target, while an explicit
+            # generic search still needs its corpus even when also anchored.
+            if enabled('protenix_use_template'):
+                members.extend(('mmcif', 'search_database/pdb_seqres_2022_09_28.fasta'))
         for member in members:
             dependencies.append(SelectedDependency('weights:protenix:' + member, 'weights',
                 'protenix/' + member, owner, selector='protenix_weights', selector_subpath=member))
@@ -1190,7 +1191,7 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
         if predictor == 'protenix':
             helpers.extend(('run_protenix_inference.py', 'prepare_protenix_msa.py', 'protenix_chemistry.py'))
             if complex_input:
-                helpers.extend(('prepare_protenix_constraints.py', 'write_structure_producer_manifest.py',
+                helpers.extend(('prepare_protenix_constraints.py', 'protenix_constraint_utils.py', 'write_structure_producer_manifest.py',
                     'extract_target_templates.py', 'prepare_protenix_exact_templates.py', 'finalize_target_geometry.py'))
         elif predictor == 'boltz2':
             helpers.append('write_structure_producer_manifest.py' if complex_input else

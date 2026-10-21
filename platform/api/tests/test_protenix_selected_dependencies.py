@@ -19,6 +19,7 @@ BASE = {
     'common/obsolete_release_date.csv',
 }
 TEMPLATE = {'common/obsolete_to_successor.json', 'common/release_date_cache.json'}
+SEARCH = {'mmcif', 'search_database/pdb_seqres_2022_09_28.fasta'}
 PROCESSES = ('ProtenixPredict', 'ProtenixFromComplex', 'BatchProtenixValidation',
              'CanonicalProtenixEnsemble', 'RunShapeProtenixValidator')
 
@@ -47,7 +48,7 @@ def test_native_members_and_embedded_stage_agree(process, template, anchor):
     deps, blockers = native_checkpoint_dependencies(process, params)
     anchored = anchor and process in {'ProtenixFromComplex', 'BatchProtenixValidation'}
     templates = process != 'RunShapeProtenixValidator' and (bool(template) or anchored)
-    expected = BASE | (TEMPLATE if templates else set()) | ({'mmcif'} if templates and not anchored else set())
+    expected = BASE | (TEMPLATE if templates else set()) | (SEARCH if template and process != 'RunShapeProtenixValidator' else set())
     assert {d.selector_subpath for d in deps} == expected
     assert {d.relative_path for d in deps} == {'protenix/' + p for p in expected}
     assert all(d.selector == 'protenix_weights' and d.requiredness == 'required' for d in deps)
@@ -75,7 +76,8 @@ def test_selected_plan_projects_only_required_members(tmp_path, monkeypatch, wor
     selected_root = root / ('custom-root' if custom else 'protenix')
     for member in BASE | TEMPLATE | {'checkpoint/protenix_base_default_v0.5.0.pt',
                                     'triton/kernel.so', 'matplotlib/fontlist.json',
-                                    'common/cuequivariance-triton/kernel.bin', 'mmcif/unused.cif'}:
+                                    'common/cuequivariance-triton/kernel.bin', 'mmcif/unused.cif',
+                                    'search_database/pdb_seqres_2022_09_28.fasta'}:
         path = selected_root / member
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(member.encode())
@@ -85,7 +87,7 @@ def test_selected_plan_projects_only_required_members(tmp_path, monkeypatch, wor
     settings = science(**({'protenix_weights': str(selected_root)} if custom else {}))
     settings.update(protenix_use_template=template, protenix_anchor_target=anchor)
     anchored = anchor and workflow == 'complex_prediction'
-    expected = BASE | (TEMPLATE if template or anchored else set()) | ({'mmcif'} if template and not anchored else set())
+    expected = BASE | (TEMPLATE if template or anchored else set()) | (SEARCH if template else set())
     before = deepcopy(settings)
     plan = plan_for(settings, workflow)
     assert plan.dependency_closure_complete
@@ -135,7 +137,7 @@ def test_cm_request_policy_selects_dependencies_before_native_stage(templates):
         entrypoint='workflows/conformational_mapping.nf', requested=settings,
         effective=settings, native_parameters=settings,
         source_identity=SourceIdentity('a' * 40, 'b' * 40))
-    expected = BASE | (TEMPLATE | {'mmcif'} if templates else set())
+    expected = BASE | (TEMPLATE | SEARCH if templates else set())
     assert {d.selector_subpath for d in plan.dependencies if d.kind == 'weights'} == expected
     assert settings == before
 

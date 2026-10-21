@@ -84,11 +84,91 @@ def _install_exact_template_duplicate_allowlist(allowed_pdb_ids: list[str]) -> N
         )
 
     template_utils.TemplateHitFilter._assess_hit = _wrapped_assess_hit
+    original_prefilter = getattr(template_utils.TemplateHitFilter, "_bms_original_prefilter", None)
+    if original_prefilter is None:
+        original_prefilter = template_utils.TemplateHitFilter.prefilter
+        template_utils.TemplateHitFilter._bms_original_prefilter = original_prefilter
+
+    def _prefilter_explicit_source(self, query_seq, hit, max_date):
+        try:
+            pdb_id, _ = template_utils.get_pdb_id_and_chain(hit)
+        except ValueError:
+            return original_prefilter(self, query_seq, hit, max_date)
+        if pdb_id not in normalized:
+            return original_prefilter(self, query_seq, hit, max_date)
+        # Explicit staged target coordinates are not a searched PDB-corpus hit.
+        # Do not invent a release date for private input. Keep the native
+        # alignment/length checks; only corpus-date and duplicate filters differ.
+        try:
+            self._assess_hit(hit, pdb_id, query_seq, None)
+        except template_utils.PrefilterError as exc:
+            return template_utils.PrefilterResult(False, warning=str(exc))
+        return template_utils.PrefilterResult(True)
+
+    template_utils.TemplateHitFilter.prefilter = _prefilter_explicit_source
+    original_read = getattr(template_utils.TemplateHitProcessor, "_bms_original_read", None)
+    if original_read is None:
+        original_read = template_utils.TemplateHitProcessor._fetch_or_read_cif
+        template_utils.TemplateHitProcessor._bms_original_read = original_read
+
+    def _read_source_or_corpus(self, pdb_id):
+        # Keep the private source namespace authoritative. Generic hits still
+        # read the immutable shared corpus without copying/linking its entries.
+        corpus = os.environ.get("BMS_PROTENIX_GENERIC_MMCIF_DIR")
+        if corpus and str(pdb_id).lower() not in normalized:
+            path = Path(corpus) / f"{pdb_id}.cif"
+            if path.is_file():
+                return self._read_file(str(path))
+        return original_read(self, pdb_id)
+
+    template_utils.TemplateHitProcessor._fetch_or_read_cif = _read_source_or_corpus
+    original_process = getattr(template_utils.TemplateHitProcessor, "_bms_original_process", None)
+    if original_process is None:
+        original_process = template_utils.TemplateHitProcessor.process
+        template_utils.TemplateHitProcessor._bms_original_process = original_process
+
+    def _process_explicit_source(self, query_seq, hit, max_date, release_dates, obsolete_pdbs, strict=False):
+        pdb_id, _ = template_utils.get_pdb_id_and_chain(hit)
+        if pdb_id in normalized:
+            from datetime import datetime
+            # The native reader also applies a corpus-date filter after loading
+            # coordinates. Private exact inputs have no publication date; keep
+            # its unknown-date metadata, but do not exclude the requested source
+            # or redirect its private identifier through an obsolete-PDB table.
+            max_date = datetime.max
+            obsolete_pdbs = {key: value for key, value in obsolete_pdbs.items() if key != pdb_id}
+        return original_process(self, query_seq, hit, max_date, release_dates, obsolete_pdbs, strict)
+
+    template_utils.TemplateHitProcessor.process = _process_explicit_source
     template_utils.TemplateHitFilter._bms_allow_exact_duplicate_pdb_ids = normalized
     print(
         "[run_protenix_inference] Allowing exact duplicate templates for PDB IDs:",
         ",".join(sorted(normalized)),
     )
+
+
+def _install_native_bondless_input_support() -> None:
+    """Represent a genuinely bond-free native molecule with an empty bond list.
+
+    The pinned native annotation owner copies AtomArray.bonds unconditionally.
+    Biotite's None and an empty BondList both mean no bonds; preserve every atom
+    and leave all existing covalent connectivity untouched.
+    """
+    from biotite.structure import BondList
+    from protenix.data.inference.json_to_feature import SampleDictToFeatures
+
+    if hasattr(SampleDictToFeatures, "_bms_bondless_original"):
+        return
+    original = SampleDictToFeatures.build_full_atom_array
+
+    def build(self):
+        atoms = original(self)
+        if atoms.bonds is None:
+            atoms.bonds = BondList(len(atoms))
+        return atoms
+
+    SampleDictToFeatures._bms_bondless_original = original
+    SampleDictToFeatures.build_full_atom_array = build
 
 
 def _apply_default_params(args: argparse.Namespace) -> None:
@@ -215,7 +295,8 @@ def materialize_inline_protenix_msa(payload: list[dict], root: Path) -> bool:
                 inline = chain.get(key)
                 if inline is None:
                     continue
-                path = root / f'task_{task_index}' / f'entity_{entity_index}' / f'{key}.a3m'
+                filename = 'pairing.a3m' if key == 'pairedMsa' else 'non_pairing.a3m'
+                path = root / f'task_{task_index}' / f'entity_{entity_index}' / filename
                 path.parent.mkdir(parents=True, exist_ok=True)
                 # Empty inline means query-only to the native reader. Give the
                 # portable A3M validator a real query, while retaining ''.
@@ -225,12 +306,47 @@ def materialize_inline_protenix_msa(payload: list[dict], root: Path) -> bool:
     return changed
 
 
-def prepare_inline_msa_input(infer_json: str, out_dir: str) -> str:
-    """Task-owned derived JSON; keep the submitted native document immutable."""
+def prepare_inline_msa_input(infer_json: str, out_dir: str, *, use_template: bool = False, use_msa: bool = True) -> str:
+    """Materialize native search inputs without changing submitted science.
+
+    TemplatesPath is a per-chain hit file, never an mmCIF database directory.
+    The installed template search requires pairing.a3m/non_pairing.a3m beside
+    its output. Stage supplied alignments privately; when MSA is disabled only,
+    a query-only alignment permits the independently requested template search.
+    """
     source = Path(infer_json)
-    payload = json.loads(source.read_text(encoding='utf-8'))
-    root = Path(out_dir) / 'inline_msa' / hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:16]
-    if not materialize_inline_protenix_msa(payload, root):
+    source_bytes = source.read_bytes()
+    payload = json.loads(source_bytes)
+    root = Path(out_dir) / 'inline_msa' / hashlib.sha256(source_bytes).hexdigest()[:16]
+    changed = materialize_inline_protenix_msa(payload, root)
+    if use_template:
+        import shutil
+        for task_index, task in enumerate(payload):
+            for entity_index, wrapper in enumerate(task.get('sequences', [])):
+                chain = wrapper.get('proteinChain')
+                if not isinstance(chain, dict):
+                    continue
+                if chain.get('templatesPath') and Path(chain['templatesPath']).is_file():
+                    continue  # Explicit native hit-file authority wins.
+                directory = root / f'task_{task_index}' / f'entity_{entity_index}'
+                supplied = False
+                for key, filename in [('pairedMsaPath', 'pairing.a3m'), ('unpairedMsaPath', 'non_pairing.a3m')]:
+                    source = Path(chain[key]) if chain.get(key) else None
+                    if source is None or not source.is_file():
+                        continue
+                    directory.mkdir(parents=True, exist_ok=True)
+                    destination = directory / filename
+                    if source.resolve() != destination.resolve():
+                        shutil.copyfile(source, destination)
+                    chain[key] = str(destination.resolve())
+                    supplied = changed = True
+                if not supplied and not use_msa:
+                    directory.mkdir(parents=True, exist_ok=True)
+                    destination = directory / 'non_pairing.a3m'
+                    destination.write_text(f">query\n{chain['sequence']}\n", encoding='utf-8')
+                    chain['unpairedMsaPath'] = str(destination.resolve())
+                    changed = True
+    if not changed:
         return infer_json
     derived = root / 'input.json'
     derived.write_text(json.dumps(payload, indent=2), encoding='utf-8')
@@ -285,6 +401,7 @@ def main() -> None:
             _parse_csv(args.allow_exact_duplicate_template_pdb_ids)
         )
 
+    _install_native_bondless_input_support()
     from configs.configs_inference import inference_configs
     from runner.batch_inference import get_default_runner, preprocess_input
     from runner.inference import infer_predict
@@ -333,7 +450,7 @@ def main() -> None:
         raise RuntimeError(f"Can not read a special file: {input_path}")
 
     for infer_json in infer_jsons:
-        infer_json = prepare_inline_msa_input(infer_json, args.out_dir)
+        infer_json = prepare_inline_msa_input(infer_json, args.out_dir, use_template=args.use_template, use_msa=args.use_msa)
         runner.configs["input_json_path"] = preprocess_input(
             infer_json,
             out_dir=args.out_dir,

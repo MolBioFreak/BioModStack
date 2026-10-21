@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import re
 import string
 from collections import OrderedDict
 from pathlib import Path
@@ -68,6 +69,7 @@ def extract_chain_sequences(
     *,
     chain_filter: set[str] | None = None,
     model_number: int | None = None,
+    residue_positions: dict[tuple[str, int, str], int] | None = None,
 ) -> list[tuple[str, str]]:
     chain_sequences: "OrderedDict[str, list[str]]" = OrderedDict()
     seen_residues: dict[str, set[tuple[int, str]]] = {}
@@ -118,6 +120,8 @@ def extract_chain_sequences(
 
             seen_residues[chain_id].add(residue_key)
             chain_sequences[chain_id].append(aa)
+            if residue_positions is not None:
+                residue_positions[(chain_id, res_num, insertion_code)] = len(chain_sequences[chain_id])
 
     return [(chain_id, "".join(seq)) for chain_id, seq in chain_sequences.items() if seq]
 
@@ -308,7 +312,7 @@ def extract_target_ion_counts(
 
     current_model: int | None = None
     saw_model_records = False
-    seen_sites: set[tuple[str, str, str]] = set()
+    seen_sites: set[tuple[str, str, str, str]] = set()
 
     with target_pdb.open() as handle:
         for line in handle:
@@ -326,7 +330,7 @@ def extract_target_ion_counts(
             if record != "HETATM":
                 continue
 
-            if saw_model_records and model_number is not None and current_model != model_number:
+            if not _model_allowed(line, saw_model_records=saw_model_records, current_model=current_model, model_number=model_number):
                 continue
 
             residue_name = line[17:20].strip().upper()
@@ -339,7 +343,7 @@ def extract_target_ion_counts(
             if target_chains and chain_id not in target_chains:
                 continue
 
-            site_key = (ion_code, chain_id, residue_number)
+            site_key = (ion_code, chain_id, residue_number, line[26:27].strip())
             if site_key in seen_sites:
                 continue
             seen_sites.add(site_key)
@@ -388,15 +392,13 @@ def build_entry(
             if chain_id in target_chain_ids and chain_id in entity_by_chain
         ]
         if binder_entity and contact_residues:
-            entry["constraint"] = [
-                {
-                    "pocket": {
-                        "binder_chain": {"entity": binder_entity, "copy": 1},
-                        "contact_residues": contact_residues,
-                        "max_distance": float(pocket_max_distance),
-                    }
+            entry["constraint"] = {
+                "pocket": {
+                    "binder_chain": {"entity": binder_entity, "copy": 1},
+                    "contact_residues": contact_residues,
+                    "max_distance": float(pocket_max_distance),
                 }
-            ]
+            }
     return entry
 
 
@@ -416,6 +418,37 @@ def infer_internal_chain_roles(
         binder_chain_ids = list(entry_chain_ids)
 
     return _ordered_unique(binder_chain_ids), _ordered_unique(target_chain_ids)
+
+
+def resolve_epitope_residues(raw: str, residue_positions: dict, aliases: dict[str, str]) -> list[tuple[str, int]]:
+    """Translate author selectors; preserve the existing CHAIN:ordinal syntax.
+
+    The UI's compact X42A denotes author residue 42, insertion A. The legacy
+    CLI X:2 already denotes native sequence position 2. Both use source chain
+    IDs, which are renamed only after resolving the source authority.
+    """
+    result = []
+    for token in (raw or "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        positional = re.fullmatch(r"([^:\s]+)\s*:\s*(-?[0-9]+)", token)
+        if positional:
+            chain, position = positional.group(1), int(positional.group(2))
+        else:
+            # Bind the prefix to the actual source chain, including numeric IDs.
+            # Parsing an arbitrary alphabetic prefix would omit valid PDB chains.
+            matches = [(chain, position) for (chain, number, insertion), position in residue_positions.items()
+                       if token == f"{chain}{number}{insertion}"]
+            if len(matches) != 1:
+                # No invented correspondence or new launch gate. Report the
+                # unresolved selector instead of silently substituting a residue.
+                import warnings
+                warnings.warn(f"Epitope {token!r} has no unique selected source residue")
+                continue
+            chain, position = matches[0]
+        result.append((aliases.get(chain, chain), position))
+    return result
 
 
 def parse_seeds(raw: str) -> list[int]:
@@ -452,7 +485,7 @@ def main() -> None:
         default="",
         help="Optional comma-separated binder chain IDs to use when explicit binder source chains are unavailable",
     )
-    parser.add_argument("--epitope_residues", default="", help="Optional comma-separated residues like B:12,B:15 for soft pocket constraints")
+    parser.add_argument("--epitope_residues", default="", help="Source author residues B12,B15A, or legacy native sequence positions B:2,B:3")
     parser.add_argument("--auto_pocket_if_missing", action="store_true", help="Infer target pocket residues when no epitope residues are supplied")
     parser.add_argument("--auto_pocket_max_residues", type=int, default=24, help="Maximum number of auto-inferred target pocket residues")
     parser.add_argument("--pocket_max_distance", type=float, default=8.0, help="Pocket constraint max distance in angstroms")
@@ -465,31 +498,26 @@ def main() -> None:
     target_chains = {token.strip() for token in args.target_chains.split(",") if token.strip()}
     binder_source_chains = [token.strip() for token in args.binder_source_chains.split(",") if token.strip()]
     default_binder_chains = [token.strip() for token in args.default_binder_chains.split(",") if token.strip()]
-    epitope_residues: list[tuple[str, int]] = []
-    for token in args.epitope_residues.split(","):
-        raw = token.strip()
-        if not raw or ":" not in raw:
-            continue
-        chain_id, position_raw = raw.split(":", 1)
-        chain_id = chain_id.strip()
-        try:
-            position = int(position_raw.strip())
-        except ValueError:
-            continue
-        if chain_id:
-            epitope_residues.append((chain_id, position))
+    has_explicit_epitope = bool(args.epitope_residues.strip())
     target_ion_counts = extract_target_ion_counts(
         target_pdb,
         target_chains=target_chains or None,
         model_number=args.target_model_number,
     )
     auto_source_epitope_residues: list[tuple[str, int]] = []
-    if args.auto_pocket_if_missing and not epitope_residues and target_pdb and target_chains:
+    if args.auto_pocket_if_missing and not has_explicit_epitope and target_pdb and target_chains:
+        # Automatic contacts must index the same residue roster as this writer,
+        # including insertion codes and residues omitted by its sequence contract.
+        auto_residue_positions: dict[tuple[str, int, str], int] = {}
+        extract_chain_sequences(target_pdb, chain_filter=target_chains,
+                                model_number=args.target_model_number,
+                                residue_positions=auto_residue_positions)
         auto_source_epitope_residues = infer_target_pocket_residues(
             target_pdb=target_pdb,
+            residue_positions=auto_residue_positions,
             source_target_chains=sorted(target_chains),
             predicted_target_chains=sorted(target_chains),
-            model_number=args.target_model_number,
+            model_number=1 if args.target_model_number is None else args.target_model_number,
             max_residues=int(args.auto_pocket_max_residues),
         )
     out_pdb_dir = Path(args.out_pdb_dir).expanduser().resolve() if args.out_pdb_dir else None
@@ -499,6 +527,7 @@ def main() -> None:
     all_binder_chain_ids: list[str] = []
     all_target_chain_ids: list[str] = []
     for pdb_path in pdb_files:
+        residue_positions: dict[tuple[str, int, str], int] = {}
         if args.external_target_as_target:
             if target_pdb is None:
                 raise ValueError("--external-target-as-target requires --target_pdb")
@@ -510,6 +539,7 @@ def main() -> None:
                 target_pdb,
                 chain_filter=target_chains or None,
                 model_number=args.target_model_number,
+                residue_positions=residue_positions,
             )
             if not external_target_sequences:
                 raise ValueError(
@@ -541,7 +571,7 @@ def main() -> None:
             binder_chain_ids_for_entry = [chain_id for chain_id, _sequence in binder_sequences]
             binder_chain_id = binder_chain_ids_for_entry[0] if binder_chain_ids_for_entry else None
             target_chain_ids_for_entry = [alias for alias, _sequence in target_sequences]
-            mapped_epitope_residues = list(epitope_residues)
+            mapped_epitope_residues = resolve_epitope_residues(args.epitope_residues, residue_positions, target_alias_map)
             if auto_source_epitope_residues:
                 mapped_epitope_residues = [
                     (target_alias_map.get(chain_id, chain_id), position)
@@ -558,14 +588,15 @@ def main() -> None:
                     target_model_number=args.target_model_number,
                 )
         else:
-            entry_sequences = extract_chain_sequences(pdb_path, model_number=1)
+            entry_sequences = extract_chain_sequences(pdb_path, model_number=1, residue_positions=residue_positions)
             binder_chain_ids_for_entry, target_chain_ids_for_entry = infer_internal_chain_roles(
                 entry_sequences,
                 default_binder_chains=default_binder_chains,
                 configured_target_chains=target_chains,
             )
             binder_chain_id = binder_chain_ids_for_entry[0] if binder_chain_ids_for_entry else (entry_sequences[0][0] if entry_sequences else None)
-            mapped_epitope_residues = list(epitope_residues or auto_source_epitope_residues)
+            mapped_epitope_residues = (resolve_epitope_residues(args.epitope_residues, residue_positions, {})
+                                       if has_explicit_epitope else list(auto_source_epitope_residues))
             if out_pdb_dir is not None:
                 out_pdb_dir.mkdir(parents=True, exist_ok=True)
                 out_target = out_pdb_dir / f"{pdb_path.stem}.pdb"

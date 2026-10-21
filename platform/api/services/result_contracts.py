@@ -415,6 +415,13 @@ def resolve_result_contract(
 
     family = _token(stage_family)
     model_id = _token(model_type) or _token((provenance or {}).get("model_id"))
+    if (model_id == "antibody_child" and _token(stage_mode) in {"validation", "validation_batch"}
+            and not family and not _token(artifact_class)):
+        # This child publishes predictor structures/confidence, not the parent's
+        # aggregate closeout report. Reuse its existing prediction reader.
+        definition = _definition_by_id("structure_prediction_v1")
+        assert definition is not None
+        return _contract_from_definition(definition)
     if (model_id == "conformational_mapping" and _token(stage_mode) == "map"
             and not family and not _token(artifact_class)):
         definition = _definition_by_id("conformational_mapping_ensemble_v1")

@@ -2831,6 +2831,7 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
         }
 
         def structure_validator = (params.structure_validator ?: 'boltz2').toString().toLowerCase()
+        if (structure_validator == 'protenix_v2') structure_validator = 'protenix'
         if (!(structure_validator in ['boltz2', 'protenix', 'esmfold2'])) {
             log.warn("Unknown structure_validator '${structure_validator}', defaulting to boltz2")
             structure_validator = 'boltz2'
@@ -2936,7 +2937,12 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                 def parent_id = params.job_id ?: "unknown_${System.currentTimeMillis()}"
                 def batch = orchestrator_batch_name
 
-                def child_params = groovy.json.JsonOutput.toJson([
+                // Preserve the selected model's complete effective settings,
+                // rather than maintaining a reduced child-only Protenix schema.
+                def child_params = groovy.json.JsonOutput.toJson(params.findAll { key, value ->
+                    key.toString().startsWith('protenix_')
+                } + [
+                    epitope_residues: params.epitope_residues,
                     structure_validator: structure_validator,
                     boltz_sampling_steps: params.boltz_sampling_steps ?: 200,
                     boltz_recycling_steps: params.boltz_recycling_steps ?: 3,
@@ -2944,24 +2950,12 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                     boltz_use_potentials: params.boltz_use_potentials ?: false,
                     boltz_use_msa: false,
                     boltz_step_scale: params.boltz_step_scale,
-                    protenix_model_weights: params.protenix_model_weights,
-                    protenix_seeds: params.protenix_seeds,
-                    protenix_n_sample: params.protenix_n_sample,
-                    protenix_n_step: params.protenix_n_step,
-                    protenix_n_cycle: params.protenix_n_cycle,
-                    protenix_use_msa: params.protenix_use_msa,
-                    protenix_msa_backend: params.protenix_msa_backend,
-                    protenix_use_template: params.protenix_use_template,
-                    protenix_enable_cache: params.protenix_enable_cache,
-                    protenix_enable_fusion: params.protenix_enable_fusion,
                     target_pdb: params.target_pdb,
                     target_model_number: params.target_model_number,
                     antibody_chains: params.antibody_chains,
                     antigen_chains: params.antigen_chains,
                     target_chains: params.antigen_chains,
                     protenix_binder_source_chains: params.protenix_binder_source_chains ?: params.antibody_chains,
-                    protenix_auto_oom_retry: params.protenix_auto_oom_retry,
-                    protenix_oom_retry_attempts: params.protenix_oom_retry_attempts,
                     msa_preset: params.msa_preset,
                     msa_use_gpu: params.msa_use_gpu,
                     msa_local_db: params.msa_local_db,
@@ -2976,10 +2970,6 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                     msa_gpu_server_wait_timeout: params.msa_gpu_server_wait_timeout,
                     msa_gpu_server_db_load_mode: params.msa_gpu_server_db_load_mode,
                     msa_gpu_server_startup_wait: params.msa_gpu_server_startup_wait,
-                    protenix_allow_cpu_msa_fallback: params.protenix_allow_cpu_msa_fallback,
-                    protenix_local_msa_timeout_seconds: params.protenix_local_msa_timeout_seconds,
-                    protenix_msa_max_seqs_per_validation_job: params.protenix_msa_max_seqs_per_validation_job,
-                    protenix_local_msa_max_seqs_per_validation_job: params.protenix_local_msa_max_seqs_per_validation_job,
                     run_thermompnn: params.run_thermompnn ?: false,
                     thermompnn_max_ddg: params.thermompnn_max_ddg,
                     run_immunogenicity_scoring: params.run_immunogenicity_scoring ?: false,
