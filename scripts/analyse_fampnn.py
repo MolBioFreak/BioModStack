@@ -50,7 +50,7 @@ def compute_psce_profile(path, policy):
     chains, sequences, all_scores = {}, {}, []
     for model_index, model in enumerate(structure):
         for chain in model:
-            if policy["chain_id"] != "all_chains" and chain.id != policy["chain_id"]:
+            if policy["chain_id"] != "all_chains" and chain.id not in {c.strip() for c in policy["chain_id"].split(",")}:
                 continue
             sequence = []
             profile = chains.setdefault(chain.id, {"type": "protein", "psce": [],
@@ -87,6 +87,32 @@ def compute_psce_profile(path, policy):
     return {"policy": policy, "chains": chains, "sequences": sequences, "summary": summary}
 
 
+def predicted_sidechain_summary(path, profile):
+    """Optional observed population; never infer prediction from nonzero pSCE.
+
+    Keep the legacy B-factor population separately labelled for existing filters.
+    Missing scope evidence does not change execution or selection behavior.
+    """
+    unavailable = {"available": False, "reason": "native_prediction_scope_unavailable"}
+    try:
+        receipt = json.loads(Path(str(path) + '.psce_scope').read_text())
+        if receipt['version'] != 1 or receipt['structure_sha256'] != hashlib.sha256(Path(path).read_bytes()).hexdigest():
+            return unavailable
+        predicted = {(r['chain_id'], r['author_number'], r['insertion_code'])
+                     for r in receipt['residues'] if r['predicted']}
+        scores = [score for chain, data in profile['chains'].items()
+                  for number, insertion, score in zip(data['residue_numbers'], data['insertion_codes'], data['psce'])
+                  if (chain, number, insertion) in predicted]
+        return {"available": bool(scores), "population": "native_predicted_sidechains",
+                "reason": None if scores else "no_predicted_sidechain_atoms",
+                "residue_count": len(scores), "unit": "angstrom",
+                "avg_psce": sum(scores) / len(scores) if scores else None,
+                "max_psce": max(scores) if scores else None,
+                "min_psce": min(scores) if scores else None}
+    except (OSError, ValueError, KeyError, TypeError):
+        return unavailable
+
+
 def average_per_residue_bfactor(input_dir, chain_id, ignore_cbeta, out_dir):
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     policy = psce_policy(chain_id, ignore_cbeta)
@@ -101,11 +127,13 @@ def average_per_residue_bfactor(input_dir, chain_id, ignore_cbeta, out_dir):
         output = {"design": path.stem, "psce_policy": policy,
                   "producer_model_id": "fampnn",
                   "producer_structure_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                  "sequence": "|".join(f"{c}:{s}" for c, s in sequences.items()) if chain_id == "all_chains" else sequences[chain_id],
-                  "chain_avg_psce": {c: round(v["avg_psce"], 2) for c, v in profile["chains"].items()},
-                  "fampnn_avg_psce": round(summary["avg_psce"], 2),
-                  "fampnn_max_residue_psce": round(summary["max_psce"], 2),
-                  "fampnn_min_residue_psce": round(summary["min_psce"], 2)}
+                  "sequence": "|".join(f"{c}:{s}" for c, s in sequences.items()) if chain_id == "all_chains" or "," in chain_id else sequences[chain_id],
+                  "chain_avg_psce": {c: v["avg_psce"] for c, v in profile["chains"].items()},
+                  "fampnn_avg_psce": summary["avg_psce"],
+                  "fampnn_max_residue_psce": summary["max_psce"],
+                  "fampnn_min_residue_psce": summary["min_psce"]}
+        output['fampnn_psce_population'] = 'all_emitted_sidechain_atoms_in_policy_scope_including_preserved_or_unpredicted_zeros'
+        output['fampnn_predicted_sidechain_psce'] = predicted_sidechain_summary(path, profile)
         (Path(out_dir) / f"{path.stem}.json").write_text(json.dumps(output, allow_nan=False) + "\n")
         results[path.name] = summary["avg_psce"]
     return results

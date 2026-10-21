@@ -19,14 +19,16 @@ class FampnnAnalysisPolicy {
     }
 
     static def stagePrepared(params, pdbs) {
-        if (declarationValue(params) == null) return pdbs
         def files = (pdbs instanceof Collection ? pdbs : [pdbs]).flatten()
         return files.collectMany { path ->
+            def custody = path.resolveSibling(path.fileName.toString().replaceFirst(/\.pdb$/, '.fampnn_source.json'))
+            def staged = java.nio.file.Files.isRegularFile(custody) ? [path, custody] : [path]
+            if (declarationValue(params) == null) return staged
             def receipt = path.resolveSibling(path.fileName.toString().replaceFirst(/\.pdb$/, '.fampnn_prep.json'))
             if (!java.nio.file.Files.isRegularFile(receipt)) {
                 throw new IllegalArgumentException('Missing PrepFAMPNN transformation provenance')
             }
-            [path, receipt]
+            staged + [receipt]
         }
     }
 

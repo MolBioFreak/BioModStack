@@ -407,6 +407,9 @@ process RunMaturationFAMPNN {
     tuple val(meta), path("matured_pdbs/*.pdb"), path("matured_jsons/*.json"), emit: redesigned
 
     script:
+    def typedNativeArgs = FampnnNativeControls.arguments(params)
+    def psceThreshold = params.containsKey('fampnn_psce_threshold') ? params.fampnn_psce_threshold : 0.3
+    def extraBase64 = (params.get('fampnn_extra_config') != null ? params.get('fampnn_extra_config') : '').toString().getBytes('UTF-8').encodeBase64().toString()
     def analysisChain = params.analysis_chain_id ?: 'all_chains'
     def genericBinder = params.get('binder_chains') != null
     def temperature = genericBinder ? paramValueOrDefault(params, 'fampnn_temperature', 0.1) : paramValueOrDefault(params, 'maturation_redesign_temp', paramValueOrDefault(params, 'fampnn_temperature', 0.1))
@@ -428,14 +431,14 @@ process RunMaturationFAMPNN {
     PYTHON_BIN=\$(command -v python3 || command -v python)
     [ -n "\${PYTHON_BIN}" ] || { echo "[PPIFlow] ERROR: python interpreter not found" >&2; exit 127; }
 
+    # Raw config remains argv data, never shell syntax or command substitution.
+    "\${PYTHON_BIN}" -c 'import base64,shlex,sys; args=shlex.split(base64.b64decode(sys.argv[1]).decode()); sys.stdout.buffer.write((chr(0).join(args)+chr(0) if args else "").encode())' '${extraBase64}' > native_extra_args.bin
+    mapfile -d '' -t native_extra_args < native_extra_args.bin
     mkdir -p results
     # PyTorch >=2.6 defaults torch.load(..., weights_only=True), which breaks
     # legacy FAMPNN checkpoints saved with OmegaConf/defaultdict metadata.
-    nativeCommand=("\${PYTHON_BIN}" /app/fampnn/fampnn/inference/seq_design.py)
-    if [ "${meta.binder_refinement ?: false}" = "true" ]; then
-        nativeCommand=("\${PYTHON_BIN}" "${params.code_root}/scripts/prep_fampnn_constraints_generic.py"
-            --native-script /app/fampnn/fampnn/inference/seq_design.py --)
-    fi
+    nativeCommand=("\${PYTHON_BIN}" "${params.code_root}/scripts/prep_fampnn_constraints_generic.py"
+        --native-script /app/fampnn/fampnn/inference/seq_design.py --)
     if [ "${params.get('core_protein_scientific_contract') ?: ''}" = "1" ]; then
         cp ${transport_dir}/*.comparison.json ./
         nativeCommand=("\${PYTHON_BIN}" "${params.code_root}/scripts/maturation_native_adapter.py"
@@ -448,14 +451,15 @@ process RunMaturationFAMPNN {
         fixed_pos_csv=${csv} \\
         num_seqs_per_pdb=${sequenceCount} \\
         pdb_dir="./" \\
-        presort_by_length=true \\
-        psce_threshold=${paramValueOrDefault(params, 'fampnn_psce_threshold', 0.3)} \\
+        ${params.get('fampnn_presort_by_length') == null ? 'presort_by_length=true' : ''} \\
+        ${typedNativeArgs} \\
+        psce_threshold=${psceThreshold == null ? 'null' : psceThreshold} \\
         temperature=${temperature} \\
         seq_only=${paramValueOrDefault(params, 'fampnn_seq_only', false)} \\
         repack_last=${paramValueOrDefault(params, 'fampnn_repack_last', true)} \\
         timestep_schedule.num_steps=${numSteps} \\
         out_dir="fampnn_output" \\
-        ${params.fampnn_extra_config ? params.fampnn_extra_config : ''} \\
+        "\${native_extra_args[@]}" \\
         2>&1 | tee fampnn_redesign_${task.index}.log
 
     for file in fampnn_output/samples/*_sample*.pdb; do
@@ -463,6 +467,7 @@ process RunMaturationFAMPNN {
         new_name=\$(echo "\$base_name" | sed 's/sample/seq_/')
         cp -L -l --remove-destination "\$file" "results/\$new_name"
         if [ -f "\$file.fa_binding.json" ]; then cp "\$file.fa_binding.json" "results/\$new_name.fa_binding"; fi
+        if [ -f "\$file.psce_scope" ]; then cp "\$file.psce_scope" "results/\$new_name.psce_scope"; fi
         if [ "${params.get('core_protein_scientific_contract') ?: ''}" = "1" ]; then
             cp "\$file.comparison.json" "results/\$new_name.comparison.json"
         fi

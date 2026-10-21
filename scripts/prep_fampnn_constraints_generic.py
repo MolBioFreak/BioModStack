@@ -131,19 +131,21 @@ def write_constraints(input_dir, out_csv, request=None, prepared_dir=None):
         rows.append((source.stem, encode(seq), encode(sc)))
     with Path(out_csv).open('w', newline='') as handle:
         writer = csv.writer(handle)
-        writer.writerow(['pdb', 'fixed_seq_positions', 'fixed_sidechains'] +
-                        (['bms_source'] if request is not None else []))
+        writer.writerow(['pdb', 'fixed_seq_positions', 'fixed_sidechains'])
+        custody = {}
         import hashlib
-        # The native reader selects named mask columns. Carry the original
-        # bytes' identity in this already-staged per-input document, before
-        # Rosetta-restored coordinates become the native input.
+        # Native pandas reads three positional columns. Custody stays separate.
         for source, row in zip(files, rows):
             evidence = None
             if request is not None:
                 prepared = Path(prepared_dir) / source.name
                 evidence = dict(source_structure_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
                                 prepared_sha256=hashlib.sha256(prepared.read_bytes()).hexdigest())
-            writer.writerow([*row, json.dumps(evidence)] if request is not None else row)
+                custody[source.stem] = evidence
+                prepared.with_suffix('.fampnn_source.json').write_text(json.dumps(evidence) + '\n')
+            writer.writerow(row)
+    if request is not None:
+        Path(str(out_csv) + '.custody.json').write_text(json.dumps(custody) + '\n')
     return rows
 
 
@@ -197,10 +199,11 @@ def fampnn_correspondence(path, source_csv):
         return unavailable
     try:
         receipt = json.loads(Path(str(path) + '.fa_binding').read_text())
-        with Path(source_csv).open() as handle:
-            sources = {r['pdb']: json.loads(r.get('bms_source') or 'null')
-                       for r in csv.DictReader(handle)}
-        source = sources.get(receipt['input_id'])
+        custody = Path(str(source_csv) + '.custody.json')
+        if custody.is_file():
+            source = json.loads(custody.read_text()).get(receipt['input_id'])
+        else:
+            source = json.loads((Path(source_csv).parent / (receipt['input_id'] + '.fampnn_source.json')).read_text())
         if (not source or source['prepared_sha256'] != receipt['source_pdb_sha256']
                 or hashlib.sha256(path.read_bytes()).hexdigest() != receipt['candidate_pdb_sha256']):
             return unavailable
