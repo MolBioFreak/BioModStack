@@ -1,0 +1,76 @@
+id: rfd4_proteina
+name: RFD4-Proteina
+version: 0.0.2
+category: protein_design
+description: Official paired RFD4 native generation, refinement, search and evaluation.
+container: rfd4_proteina.sif
+inputs: [cif, bcif]
+outputs: [cif, json, csv]
+modes:
+- id: generate
+  name: Generate or refine
+  params: [rfd4_request]
+- id: evaluate
+  name: Evaluate native structures
+  params: [rfd4_request]
+# Nested schema is projected by services.rfd4_proteina.generation_settings(mode).
+# This catalog must never become another scientific default list.
+params:
+- name: rfd4_request
+  type: object
+  label: Native RFD4 request
+  required: true
+acquisition:
+- artifact_id: rfd4_proteina-cu13-48377e45
+  url: https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/runtime/rfd4-proteina-cu13-amd64.sif
+  sha256: 058a27dff02778cd7304cf8955c73115f6baaa4dfc0202540c73a10a403fa957
+  size_bytes: 4036120576
+  source_authority: huggingface.co
+  approval_ref: de-novo-full-20261021/Asset-Plan
+  license_id: null
+  redirect_policy:
+    source_url: https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/runtime/rfd4-proteina-cu13-amd64.sif
+    approval_ref: de-novo-full-20261021/Asset-Plan
+    allowed_authorities:
+    - huggingface.co
+    - us.aws.cdn.hf.co
+    max_hops: 5
+  dependency:
+    kind: image
+    relative_path: rfd4_proteina.sif
+- artifact_id: rfd4_proteina-model-48377e45
+  url: https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/model.safetensors
+  sha256: 5b549dd61adb2f6c6b5cb95bda13f40f5e31556b4e6c755edc0ca6f011c68fb0
+  size_bytes: 1742660596
+  source_authority: huggingface.co
+  approval_ref: de-novo-full-20261021/Asset-Plan
+  license_id: BSD-3-Clause
+  redirect_policy:
+    source_url: https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/model.safetensors
+    approval_ref: de-novo-full-20261021/Asset-Plan
+    allowed_authorities:
+    - huggingface.co
+    - us.aws.cdn.hf.co
+    max_hops: 5
+  dependency:
+    kind: weights
+    relative_path: rfd4-proteina
+  member_path: model.safetensors
+- artifact_id: rfd4_proteina-config-48377e45
+  url: https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/config.json
+  sha256: 154ea927ab8005b7eac2d047a792147fb4606ab4878e496aa8414b6b40dad368
+  size_bytes: 7270
+  source_authority: huggingface.co
+  approval_ref: de-novo-full-20261021/Asset-Plan
+  license_id: BSD-3-Clause
+  redirect_policy:
+    source_url: https://huggingface.co/nvidia/RFD4-Proteina/resolve/48377e45eb25a4fce8d2aff56c1a659b726d2106/config.json
+    approval_ref: de-novo-full-20261021/Asset-Plan
+    allowed_authorities:
+    - huggingface.co
+    - us.aws.cdn.hf.co
+    max_hops: 5
+  dependency:
+    kind: weights
+    relative_path: rfd4-proteina
+  member_path: config.json
