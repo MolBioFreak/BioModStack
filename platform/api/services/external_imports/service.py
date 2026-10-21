@@ -312,6 +312,9 @@ async def process_external_import(
                 **job_values,
             )
             session.add(job)
+            # The import row references the new Job without an ORM relationship;
+            # flush its FK parent before marking the import completed.
+            await session.flush()
         else:
             prior_params = dict(existing_job.params or {})
             imported_params = {**prior_params, **imported_params, "provider_state": "completed"}

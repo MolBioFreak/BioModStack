@@ -46,6 +46,7 @@ async def test_native_import_route_worker_and_viewer_readback(source, tmp_path, 
     monkeypatch.setattr(external_imports, "resolve_allowed_path", lambda _: source)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'db.sqlite'}")
     async with engine.begin() as connection:
+        await connection.exec_driver_sql("PRAGMA foreign_keys=ON")
         await connection.run_sync(Base.metadata.create_all)
     Session = async_sessionmaker(engine, expire_on_commit=False)
     try:

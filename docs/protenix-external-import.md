@@ -1,6 +1,6 @@
 # Importing retained native Protenix predictions
 
-Use the existing `/api/external-imports/preview` and `/api/external-imports`
+Use the existing `/api/jobs/imports/external/preview` and `/api/jobs/imports/external`
 endpoints with `provider_hint` / `provider` set to `protenix_native`. Upload the
 retained files through `/api/files/upload` under a managed input directory first.
 Preview returns the content fingerprint required by create. The existing durable
