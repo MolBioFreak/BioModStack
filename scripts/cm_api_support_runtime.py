@@ -64,8 +64,9 @@ def selected_payload(venv: Path, runtime: Path, project: Path, sync_log: Path | 
     from biomodstack_python_prerequisites import support_payload_receipt, UV_VERSION
     state_root = venv.parent if venv.name == "environment" and (venv.parent / "state.json").is_file() else None
     if state_root:
+        state = json.loads((state_root / "state.json").read_text())
         selection = {"groups": [], "extras": [], "install_project": False,
-                     "policy": "frozen-no-dev-no-build-no-install-project-v1"}
+                     "policy": state["identity"]["policy"]}
         version = UV_VERSION
         refresh = False
     else:

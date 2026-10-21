@@ -38,6 +38,54 @@ class PrerequisitesTest(unittest.TestCase):
         p.save(self.external, state)
         return state
 
+    def source_only_lock(self):
+        approved = p.DOCOPT_SOURCE
+        text = ('version = 1\n\n[[package]]\nname = "docopt"\n'
+                f'version = "{approved["version"]}"\n'
+                'source = { registry = "https://pypi.org/simple" }\n'
+                f'sdist = {{ url = "{approved["url"]}", hash = "{approved["hash"]}", size = 25901 }}\n'
+                '\n[[package]]\nname = "future-source-package"\nversion = "1.0"\n'
+                'source = { registry = "https://pypi.org/simple" }\n'
+                'sdist = { url = "https://example.invalid/package.tar.gz", hash = "sha256:other" }\n')
+        lock = self.source / "platform/api/uv.lock"
+        lock.write_text(text)
+        return lock, text
+
+    def test_only_exact_reviewed_docopt_source_can_build(self):
+        lock, original = self.source_only_lock()
+        flags, approved = p.locked_build_policy(lock)
+        self.assertEqual(flags, ["--no-build-package", "future-source-package"])
+        self.assertEqual(approved, [p.DOCOPT_SOURCE])
+        for old, new in ((p.DOCOPT_SOURCE["hash"], "sha256:wrong"),
+                         (p.DOCOPT_SOURCE["url"], "https://example.invalid/docopt.tar.gz"),
+                         ('version = "0.6.2"', 'version = "0.6.3"'),
+                         ('registry = "https://pypi.org/simple"', 'registry = "https://example.invalid"'),
+                         ('name = "future-source-package"', 'name = "unsupported\\escape"')):
+            with self.subTest(change=old):
+                lock.write_text(original.replace(old, new))
+                self.assertEqual(p.locked_build_policy(lock), (["--no-build"], []))
+
+    def test_source_build_exception_is_recorded_and_scoped_to_locked_sync(self):
+        self.source_only_lock()
+        commands = []
+        def success(command, **kwargs):
+            commands.append((command, kwargs["env"]["UV_NO_BUILD"]))
+            return subprocess.CompletedProcess(command, 0)
+        with patch.object(p.subprocess, "run", side_effect=success), \
+             patch.object(p, "check_environment", return_value="inventory"), \
+             patch.object(p, "refresh_installed_support", return_value=None), \
+             patch.object(p, "publish_installed_support", return_value=None):
+            result = p.prerequisite_report("python-bootstrap", project_root=self.source)
+        self.assertEqual(result["status"], "installed")
+        self.assertEqual(result["approved_source_builds"], [p.DOCOPT_SOURCE])
+        self.assertEqual(commands[0][1], "1")
+        self.assertEqual(commands[1][1], "false")
+        for flag in ("--frozen", "--no-dev", "--no-install-project", "--no-python-downloads"):
+            self.assertIn(flag, commands[1][0])
+        self.assertIn("--no-build-package", commands[1][0])
+        self.assertIn("future-source-package", commands[1][0])
+        self.assertEqual(p.subprocess_env(self.external)["UV_NO_BUILD"], "1")
+
     def test_plan_no_writes_no_processes(self):
         with patch.object(p.subprocess, "run", side_effect=AssertionError("process")):
             report = p.prerequisite_report("python-plan", project_root=self.source)
