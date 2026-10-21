@@ -56,6 +56,8 @@ afterEach(async () => { if (renderer) await close(); api.defaults.adapter = oldA
 
 it('preserves counted copies, entity order, peptide chemistry and task records through rename, save, reopen and submission clone', async () => {
     await mount();
+    expect(renderer.root.findAllByProps({ 'aria-label': 'Entity 2 msa_path' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ 'aria-label': 'Entity 2 unpairedMsaPath' })).toHaveLength(1);
     expect(preview().complex_components.map((c: any) => c.id)).toEqual(['L', 'P', 'D', 'R', 'I']);
     expect(preview().complex_components[0]).toMatchObject(fixture.complex_components[0]);
     expect(preview().complex_components[1]).toMatchObject(peptide);
