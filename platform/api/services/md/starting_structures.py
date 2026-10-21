@@ -309,13 +309,6 @@ class MdNativeWindow(_ClosedModel):
 
 
 class MdNativeLaunchIntent(_ClosedModel):
-    @model_serializer(mode="wrap")
-    def intent_wire(self, handler):
-        data = handler(self)
-        if "return_to" not in self.model_fields_set:
-            data.pop("return_to", None)
-        return data
-
     return_to: str | None = Field(default=None, pattern=r"^/designs/[^\\\s?#]+(?:[?#][^\\\r\n]*)?$")
     schema_version: Literal["bms.md.launch-intent.v2"]
     launch_context_id: str | None = None
