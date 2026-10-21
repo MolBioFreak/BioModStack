@@ -32,7 +32,7 @@ async def test_real_source_launch_prewarm_lossless_and_cache_reuse(package, loca
             archive_commands.append(argv)
             # Only the fixture's synthetic revision/root are substituted. Exercise
             # the production archive format/options against the full committed tree.
-            return REAL_RUN([*argv[:-1], 'HEAD'], **{**kwargs, 'cwd': REPO})
+            return REAL_RUN([*argv[:4], 'HEAD', *argv[5:]], **{**kwargs, 'cwd': REPO})
         return fake_run(argv, **kwargs)
 
     monkeypatch.setattr(subprocess, 'run', run)
@@ -47,12 +47,14 @@ async def test_real_source_launch_prewarm_lossless_and_cache_reuse(package, loca
     launch_source, = [a for a in bundle.cache_transfer_artifacts(prepared) if a.role == 'source']
     warm_source, = [a for a in prewarmed if a.role == 'source']
     # One revision-keyed shared archive, privately staged for both consumers.
-    assert archive_commands == [['git', 'archive', '--format=tar.gz', '-6', job.execution_source_revision]]
+    assert archive_commands == [['git', 'archive', '--format=tar.gz', '-6',
+        job.execution_source_revision, '--', '.', ':(exclude,glob)artifacts/android/*.apk']]
     assert launch_source.source != warm_source.source
     assert (roots['data'] / 'remote-execution/source-archives' /
             (job.execution_source_revision + '.tar.gz')).read_bytes() == launch_source.source.read_bytes()
     compressed = launch_source.source.read_bytes()
-    raw = REAL_RUN(['git', 'archive', '--format=tar', 'HEAD'], cwd=REPO,
+    raw = REAL_RUN(['git', 'archive', '--format=tar', 'HEAD', '--', '.',
+                   ':(exclude,glob)artifacts/android/*.apk'], cwd=REPO,
                    check=True, capture_output=True).stdout
     assert gzip.decompress(compressed) == raw
     assert compressed == warm_source.source.read_bytes()
@@ -156,3 +158,82 @@ def test_compressed_cache_digest_checked_before_extract(tmp_path):
     with pytest.raises(ValueError, match='corrupt_source_archive'):
         store.extract_source(item, tmp_path / 'extracted')
     assert not (tmp_path / 'extracted').exists()
+
+
+def test_revision_inventory_reuse_excludes_only_android_distribution(tmp_path, monkeypatch):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    REAL_RUN(['git', 'init', '-q', str(repo)], check=True)
+    payloads = {'workflow.nf': b'workflow {}',
+                'artifacts/android/phone.apk': b'inert distribution',
+                'tests/native_fixture.apk': b'not a distribution payload',
+                'platform/frontend/src/App.tsx': b'export default 1'}
+    for name, payload in payloads.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+    REAL_RUN(['git', '-C', str(repo), 'add', '.'], check=True)
+    REAL_RUN(['git', '-C', str(repo), '-c', 'user.name=Fixture',
+              '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'source'], check=True)
+    revision = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
+    reads = []
+    actual = bundle._source_archive_members
+    def counted(path):
+        reads.append(str(path))
+        return actual(path)
+    monkeypatch.setattr(bundle, '_source_archive_members', counted)
+    data = tmp_path / 'data'
+    first, second = tmp_path / 'first', tmp_path / 'second'
+    digest = bundle._staged_source_archive(repo, data, revision, first, extract=False)
+    records = bundle._source_archive_records(first / '.bms-source.tar.gz', digest)
+    expected = {'source/' + name for name in payloads if name != 'artifacts/android/phone.apk'}
+    assert {row.relative_path for row in records} == expected | {'source/.bms-source.tar.gz'}
+    assert len(reads) == 1
+    assert bundle._staged_source_archive(repo, data, revision, second, extract=False) == digest
+    warm = bundle._source_archive_records(second / '.bms-source.tar.gz', digest)
+    assert [row.model_dump() for row in warm] == [row.model_dump() for row in records]
+    assert len(reads) == 1  # no repeated member decompression/hash on warm staging
+    assert first.joinpath('.bms-source.tar.gz').stat().st_ino != second.joinpath('.bms-source.tar.gz').stat().st_ino
+    records[1].relative_path = 'caller-local-change'
+    assert bundle._source_archive_records(second / '.bms-source.tar.gz', digest)[1].relative_path != 'caller-local-change'
+    cached = data / 'remote-execution/source-archives' / (revision + '.tar.gz')
+    bundle._SOURCE_ARCHIVE_DIGESTS.pop(str(cached))  # process-restart policy is unchanged
+    assert bundle._staged_source_archive(repo, data, revision, tmp_path / 'restart', extract=False) == digest
+    assert len(reads) == 2
+
+
+def test_cold_worker_members_stream_once_and_warm_reuses_inventory(tmp_path, monkeypatch):
+    payloads = {'main.nf': b'workflow {}', 'scripts/run.py': b'print(1)\n' * 100}
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode='w:gz') as archive:
+        for name, payload in payloads.items():
+            member = tarfile.TarInfo(name)
+            member.size, member.mode = len(payload), 0o755 if name.endswith('.py') else 0o644
+            archive.addfile(member, io.BytesIO(payload))
+    data = raw.getvalue()
+    item = {'sha256': hashlib.sha256(data).hexdigest(), 'size_bytes': len(data)}
+    store = artifact_cache.Cache(tmp_path / 'cache')
+    incoming = Path(store.root) / 'incoming/source'
+    incoming.write_bytes(data)
+    store.ingest(item, incoming)
+    stale = Path(store.root) / 'archives' / ('.source-member-' + item['sha256'] + '-old')
+    stale.write_bytes(b'interrupted member')
+    unrelated = Path(store.root) / 'archives' / ('.source-member-' + 'f' * 64 + '-other')
+    unrelated.write_bytes(b'other archive owner')
+    reads = []
+    actual = tarfile.TarFile.extractfile
+    def counted(archive, member):
+        reads.append(member.name)
+        return actual(archive, member)
+    monkeypatch.setattr(tarfile.TarFile, 'extractfile', counted)
+    first, second = tmp_path / 'first', tmp_path / 'second'
+    store.extract_source(item, first, immutable=True)
+    assert reads == list(payloads)
+    assert not stale.exists() and unrelated.read_bytes() == b'other archive owner'
+    assert list((Path(store.root) / 'archives').glob('.source-member-' + item['sha256'] + '-*')) == []
+    store.extract_source(item, second, immutable=True)
+    assert reads == list(payloads)
+    for name, payload in payloads.items():
+        assert (first / name).read_bytes() == (second / name).read_bytes() == payload
+        assert (first / name).stat().st_mode & 0o777 == (0o555 if name.endswith('.py') else 0o444)
+        assert (first / name).stat().st_ino != (second / name).stat().st_ino

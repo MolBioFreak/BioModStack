@@ -99,7 +99,7 @@ async def test_cache_completion_receiving_real_source_launch_prewarm_lossless_an
             archive_commands.append(argv)
             # Only the fixture's synthetic revision/root are substituted. Exercise
             # the production archive format/options against the full committed tree.
-            return REAL_RUN([*argv[:-1], 'HEAD'], **{**kwargs, 'cwd': REPO})
+            return REAL_RUN([*argv[:4], 'HEAD', *argv[5:]], **{**kwargs, 'cwd': REPO})
         return fake_run(argv, **kwargs)
 
     monkeypatch.setattr(subprocess, 'run', run)
@@ -114,12 +114,14 @@ async def test_cache_completion_receiving_real_source_launch_prewarm_lossless_an
     launch_source, = [a for a in bundle.cache_transfer_artifacts(prepared) if a.role == 'source']
     warm_source, = [a for a in prewarmed if a.role == 'source']
     # One revision-keyed shared archive, privately staged for both consumers.
-    assert archive_commands == [['git', 'archive', '--format=tar.gz', '-6', job.execution_source_revision]]
+    assert archive_commands == [['git', 'archive', '--format=tar.gz', '-6',
+        job.execution_source_revision, '--', '.', ':(exclude,glob)artifacts/android/*.apk']]
     assert launch_source.source != warm_source.source
     assert (roots['data'] / 'remote-execution/source-archives' /
             (job.execution_source_revision + '.tar.gz')).read_bytes() == launch_source.source.read_bytes()
     compressed = launch_source.source.read_bytes()
-    raw = REAL_RUN(['git', 'archive', '--format=tar', 'HEAD'], cwd=REPO,
+    raw = REAL_RUN(['git', 'archive', '--format=tar', 'HEAD', '--', '.',
+                   ':(exclude,glob)artifacts/android/*.apk'], cwd=REPO,
                    check=True, capture_output=True).stdout
     assert gzip.decompress(compressed) == raw
     assert compressed == warm_source.source.read_bytes()
@@ -144,4 +146,4 @@ async def test_cache_completion_receiving_real_source_launch_prewarm_lossless_an
             if member.isfile():
                 local = source / member.name
                 assert local.read_bytes() == archive.extractfile(member).read()
-                assert local.stat().st_mode & 0o777 == member.mode & 0o777
+                assert local.stat().st_mode & 0o777 == member.mode & 0o555

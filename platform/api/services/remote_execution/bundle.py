@@ -235,10 +235,9 @@ def resolve_job_result_contract(job: Any) -> dict[str, Any]:
     ).model_dump(mode="json")
 
 
-def _source_archive_records(archive_path: Path, digest: str) -> list[RemoteFileRecord]:
-    """Inventory actual archived bytes without allocating an extracted hash tree."""
-    records = [_record_file(archive_path, 'source/' + archive_path.name, 'source',
-                            staged_sha256=digest)]
+def _source_archive_members(archive_path: Path) -> tuple[RemoteFileRecord, ...]:
+    """Read each member once when the existing archive owner builds a revision."""
+    records = []
     with tarfile.open(archive_path, 'r|*') as archive:
         for member in archive:
             path = PurePosixPath(member.name)
@@ -249,7 +248,19 @@ def _source_archive_records(archive_path: Path, digest: str) -> list[RemoteFileR
                     sha = hashlib.file_digest(stream, 'sha256').hexdigest()
                 records.append(RemoteFileRecord(relative_path='source/' + path.as_posix(),
                     size_bytes=member.size, sha256=sha, role='source', mode=member.mode & 0o555))
-    return records
+    return tuple(records)
+
+
+def _source_archive_records(archive_path: Path, digest: str) -> list[RemoteFileRecord]:
+    # Staging already checks the cached archive's exact bytes. Its member
+    # inventory shares that identity; warm requests need not decompress again.
+    members = next((rows for sha, rows in tuple(_SOURCE_ARCHIVE_DIGESTS.values())
+                    if sha == digest), None)
+    if members is None:
+        members = _source_archive_members(archive_path)
+    return [_record_file(archive_path, 'source/' + archive_path.name, 'source',
+                         staged_sha256=digest),
+            *(row.model_copy() for row in members)]
 
 
 def _safe_extract(archive_path: Path, destination: Path) -> None:
@@ -1403,7 +1414,8 @@ def _relocate_python_runtime(source: Path, destination: Path, remote_destination
     return destination
 
 
-_SOURCE_ARCHIVE_DIGESTS: dict[str, str] = {}
+# Digest and member inventory have one process-owned, revision-keyed lifetime.
+_SOURCE_ARCHIVE_DIGESTS: dict[str, tuple[str, tuple[RemoteFileRecord, ...]]] = {}
 
 
 def _prune_source_archives(cache_root: Path) -> None:
@@ -1441,22 +1453,25 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
         fcntl.flock(lock, fcntl.LOCK_EX)
         # The expected digest is held by this process, not loaded from a
         # writable sidecar. After a restart regenerate from the Git object.
-        expected = _SOURCE_ARCHIVE_DIGESTS.get(key)
+        cached = _SOURCE_ARCHIVE_DIGESTS.get(key)
+        expected = cached[0] if cached is not None else None
         if archive.is_symlink() or (archive.exists() and not archive.is_file()):
             raise RemoteBundleError('Unsafe cached source archive')
         if not archive.exists() or not expected:
             temporary = cache_root / ('.archive-' + uuid.uuid4().hex)
             try:
                 with temporary.open('xb') as output:
-                    subprocess.run(['git', 'archive', '--format=tar.gz', '-6', revision],
+                    subprocess.run(['git', 'archive', '--format=tar.gz', '-6', revision,
+                                    '--', '.', ':(exclude,glob)artifacts/android/*.apk'],
                                    cwd=repo_root, check=True, stdout=output,
                                    stderr=subprocess.PIPE, timeout=300)
                     output.flush()
                     os.fsync(output.fileno())
                 expected = _sha256_file(temporary)
+                members = _source_archive_members(temporary)
                 temporary.chmod(0o444)
                 os.replace(temporary, archive)
-                _SOURCE_ARCHIVE_DIGESTS[key] = expected
+                _SOURCE_ARCHIVE_DIGESTS[key] = (expected, members)
             finally:
                 temporary.unlink(missing_ok=True)
         staged = source_root / '.bms-source.tar.gz'

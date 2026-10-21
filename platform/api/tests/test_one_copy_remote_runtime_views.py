@@ -67,11 +67,15 @@ def test_source_members_once_across_attempts_and_revisions(tmp_path, monkeypatch
     storage = cache.Cache(tmp_path / 'cache')
     one, two = [ingest(storage, packed(revision)) for revision in (b'one', b'two')]
     copies = []
-    original = storage._publish_copy
-    def copied(*args):
-        copies.append((args[3]['sha256'], args[4]))
-        return original(*args)
-    monkeypatch.setattr(storage, '_publish_copy', copied)
+    original = os.replace
+    def published(source, destination, **kwargs):
+        result = original(source, destination, **kwargs)
+        # Count actual member CAS adoption, not the removed second copy pass.
+        if str(source).startswith('.source-member-'):
+            path = Path(os.readlink('/proc/self/fd/' + str(kwargs['dst_dir_fd']))) / destination
+            copies.append((str(destination), path.stat().st_mode & 0o777))
+        return result
+    monkeypatch.setattr(os, 'replace', published)
     a, b, c = [tmp_path / name for name in ('a', 'b', 'c')]
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(lambda dest: storage.extract_source(one, dest, immutable=True), (a, b)))
@@ -102,6 +106,7 @@ def test_cancelled_source_stage_has_no_completion_and_recovers(tmp_path, monkeyp
         storage.extract_source(item, tmp_path / 'attempt', immutable=True)
     assert not list((tmp_path / 'cache/archives').glob('source-*'))
     assert not list((tmp_path / 'cache').rglob('.partial-*'))
+    assert not list((tmp_path / 'cache/archives').glob('.source-member-*'))
     monkeypatch.setattr(storage, 'emit', lambda *a, **kw: None)
     storage.extract_source(item, tmp_path / 'retry', immutable=True)
     assert (tmp_path / 'retry/lib.py').read_bytes() == b'unchanged library\n'
