@@ -78,19 +78,27 @@ def run_sidechain_packing(*, model, data_cfg, sampling_cfg, pdb_paths, device, o
     return emit(pdb_paths, out_dir, sampling_cfg, 'sidechain_pack', dict(paths=pdb_paths))
 ''')
     source_paths = []
-    for directory in ("first", "second"):
+    for directory in ("first", "second", "third", "fourth"):
         source = tmp_path / directory / "same name.cif"
         source.parent.mkdir()
         source.write_text("data_INERT_INPUT\n")
         source_paths.append(source)
-    states = [{"state_id": name, "path": str(path)} for name, path in zip(("primary state", "other state"), source_paths)]
-    params = {"num_workers": 0, "batch_size": 2, "scn_num_steps": 7, "scn_step_scale": 0.8}
+    states = [{"state_id": name, "path": str(path)} for name, path in
+              zip(("primary state", "other state", "primary state", "other state"), source_paths)]
+    params: dict = {"num_workers": 0, "batch_size": 2, "scn_num_steps": 7, "scn_step_scale": 0}
     if mode == "ensemble_design":
-        params.update(ensembles=[{"ensemble_id": "ensemble with spaces", "states": states}],
+        for index, state in enumerate(states):
+            state.update(fixed_pos_seq=f"A{index + 1}", fixed_pos_scn=f"A{index + 5}",
+                         fixed_pos_override_seq=f"A{index + 9}:G", pos_restrict_aatype=f"A{index + 13}:AV",
+                         symmetry_pos=f"A{index + 17},B{index + 17}")
+        params.update(ensembles=[{"ensemble_id": "ensemble with spaces", "states": states[:2]},
+                                 {"ensemble_id": "separate ensemble", "states": states[2:]}],
                       omit_aas=[], verbose=False, use_primary_res_type=False, temperature=0.23,
+                      gaussian_n_conformers=0, gaussian_noise_std=0,
+                      potts_rejection_step=False, potts_only_cond=False,
                       potts_sweeps=11, potts_proposal="chromatic")
     else:
-        params.update(structures=states, packer_model_name="caliby_packer_030")
+        params.update(structures=states[:2], packer_model_name="caliby_packer_030")
     request = contract.normalize_request(mode, params)
     request_json = tmp_path / "normalized.json"
     request_json.write_text(json.dumps(request))
@@ -136,7 +144,20 @@ def run_sidechain_packing(*, model, data_cfg, sampling_cfg, pdb_paths, device, o
         assert call["primary"] is False
         assert call["cfg"]["omit_aas"] == []
         assert call["cfg"]["potts_sampling_cfg"]["potts_temperature"] == 0.23
-        assert len(call["mapping"]["ensemble with spaces"]) == 2
+        assert list(call["mapping"]) == ["ensemble with spaces", "separate ensemble"]
+        assert [[Path(p).stem for p in paths] for paths in call["mapping"].values()] == [
+            ["state_000000", "state_000001"], ["state_000002", "state_000003"]]
+        assert call["cfg"]["scn_packing_cfg"]["step_scale"] == 0
+        assert call["cfg"]["gaussian_conformers_cfg"] == {"n_conformers": 0, "noise_std": 0}
+        assert call["cfg"]["potts_sampling_cfg"]["rejection_step"] is False
+        assert call["cfg"]["potts_sampling_cfg"]["potts_only_cond"] is False
+        expected_states = [s for e in result["request"]["effective"]["ensembles"] for s in e["states"]]
+        assert call["constraints"] == [{"pdb_key": Path(s["path"]).stem,
+            **{k: v for k, v in s.items() if k not in {"state_id", "path"}}} for s in expected_states]
+        assert [r["source"]["ensemble_id"] for r in result["records"]] == ["ensemble with spaces", "separate ensemble"]
+        for record, ensemble in zip(result["records"], result["request"]["effective"]["ensembles"]):
+            assert record["source"]["conditioning_states"] == ensemble["states"]
+            assert record["source"]["primary"] is True
         assert result["records"][0]["source"]["state_id"] == "primary state"
         assert result["records"][0]["native"]["U"] == -1.25
     else:
