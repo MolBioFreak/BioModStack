@@ -321,8 +321,9 @@ def _snapshot_input_file(
     field: str,
     contract_dir: Path,
     expected_sha256: str | None = None,
+    suffix: str | None = None,
 ) -> tuple[Path, str, int]:
-    destination = contract_dir / f"{field}{_safe_snapshot_suffix(source)}"
+    destination = contract_dir / f"{field}{suffix or _safe_snapshot_suffix(source)}"
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{field}.", suffix=".tmp", dir=contract_dir)
     temporary = Path(temporary_name)
     digest = hashlib.sha256()
@@ -1084,6 +1085,9 @@ def materialize_md_job_spec(
         )
     normalized["engine_runtime"] = engine_runtime
     published_snapshots: list[Path] = []
+    original_snapshot = None
+    original_digest = None
+    original_size = None
     try:
         contract_dir = output_dir / "inputs"
         contract_dir.mkdir(parents=True, exist_ok=True)
@@ -1101,15 +1105,26 @@ def materialize_md_job_spec(
                 Path(str(input_config["structure"]))
             )
 
+        source_provenance = params.get("md_source_provenance") or {}
+        if source_provenance.get("original_sha256"):
+            original_snapshot, original_digest, original_size = _snapshot_input_file(
+                source=Path(resolve_runtime_path("bms-md-starting-structure:original")),
+                field="original_structure", contract_dir=contract_dir,
+                expected_sha256=source_provenance["original_sha256"],
+                suffix=".cif" if source_provenance.get("original_format") == "cif" else ".pdb",
+            )
+            published_snapshots.append(original_snapshot)
+
         for field in INPUT_FILE_FIELDS:
             source_value = input_config.get(field)
             if not source_value:
                 continue
             snapshot, digest, size = _snapshot_input_file(
                 source=Path(str(source_value)),
-                field=field,
+                field=f"structure-model-{source_provenance['model_number']}" if field == "structure" and original_snapshot is not None else field,
                 contract_dir=contract_dir,
                 expected_sha256=expected_structure_sha256 if field == "structure" else None,
+                suffix=(".cif" if source_provenance.get("original_format") == "cif" else ".pdb") if field == "structure" and original_snapshot is not None else None,
             )
             published_snapshots.append(snapshot)
             input_config[field] = str(snapshot)
@@ -1146,6 +1161,8 @@ def materialize_md_job_spec(
                 actual["topology_closure"] = {key: value for key, value in input_config["topology_closure"].items() if key != "root"}
             if normalized.get("windows"):
                 actual["windows"] = [{"id": window["id"], **({"coordinates": window["coordinates_sha256"]} if window.get("coordinates") else {})} for window in normalized["windows"]]
+            if original_snapshot is not None:
+                actual["original_structure"] = original_digest
             if actual != expected_native:
                 raise MDLaunchError("MD_LAUNCH_PREVIEW_STALE", "Native input bytes changed after preview.", status_code=409)
         _validate_raw_md_job_spec(normalized)
@@ -1171,5 +1188,7 @@ def materialize_md_job_spec(
         materialized["md_source_provenance"] = {
             **params["md_source_provenance"],
             "snapshot": dict(normalized["input"]),
+            **({"original_snapshot": {"path": str(original_snapshot), "sha256": original_digest,
+                                       "bytes": original_size}} if original_snapshot is not None else {}),
         }
     return materialized

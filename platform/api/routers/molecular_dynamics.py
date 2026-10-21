@@ -377,16 +377,23 @@ def browse_starting_structure_server_files(
 )
 async def starting_structure_content(
     source_kind: Literal[
-        "rcsb", "design", "upload", "managed_fixture", "prior_md_input", "server_file"
+        "rcsb", "design", "upload", "managed_fixture", "prior_md_input", "server_file", "candidate"
     ],
     source_id: str,
     expected_sha256: str = Query(pattern=r"^[0-9a-f]{64}$"),
+    selection: str | None = Query(default=None, max_length=8192),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     resolved = None
     try:
         expected = require_expected_sha256(expected_sha256)
-        source_ref = StartingStructureSourceRef(kind=source_kind, id=source_id)
+        try:
+            source_ref = (StartingStructureSourceRef.model_validate_json(selection) if selection else
+                          StartingStructureSourceRef(kind=source_kind, id=source_id))
+        except ValueError as exc:
+            raise StartingStructureError("MD_STARTING_STRUCTURE_SOURCE_INVALID", "Invalid exact source selection.") from exc
+        if source_ref.kind != source_kind or source_ref.id != source_id:
+            raise StartingStructureError("MD_STARTING_STRUCTURE_SOURCE_ID_MISMATCH", "Selection differs from content owner.", status_code=409)
         resolved = await resolve_source(source_ref, session)
         snapshot = open_resolved_structure_snapshot(
             resolved, expected_sha256=expected
@@ -695,6 +702,8 @@ async def _compile_native_preview(intent: MdNativeLaunchIntent, session: AsyncSe
         def resolver(value: str) -> str:
             if resolved is not None and value == source_token:
                 return resolved_runtime_path(resolved)
+            if resolved is not None and value == "bms-md-starting-structure:original" and resolved.original_runtime_path:
+                return resolved.original_runtime_path
             return _resolve_md_input_path_for_runtime(value)
 
         spec = compile_native_job_intent(intent, profile=profile, source_token=source_token)
@@ -703,6 +712,9 @@ async def _compile_native_preview(intent: MdNativeLaunchIntent, session: AsyncSe
             chemistry_catalog=catalog, chemistry_view=view,
         )
         identity = native_input_identity(normalized)
+        if resolved is not None and resolved.original_runtime_path:
+            assert resolved.source_provenance is not None
+            identity["original_structure"] = resolved.source_provenance["original_sha256"]
         if source is not None:
             normalized["input"]["structure"] = source_token
         for field in V2_SERVER_RESOLVED_CHEMISTRY_FIELDS:
@@ -714,7 +726,7 @@ async def _compile_native_preview(intent: MdNativeLaunchIntent, session: AsyncSe
             "execution_policy": intent.execution_policy.model_dump(mode="json"),
         }
         preview = MdNativeLaunchPreview(
-            **preimage, preview_digest=hashlib.sha256(canonical_bytes(preimage)).hexdigest(),
+            **preimage, preview_digest=hashlib.sha256(canonical_bytes({**preimage, **({"return_to": intent.return_to} if intent.return_to is not None else {})})).hexdigest(),
         )
         if intent.execution_target_id:
             from services.nextflow import build_selected_execution_plan
@@ -900,6 +912,8 @@ async def launch_typed_md_job(
         expected_sha256 = preview.source.sha256
 
         def trusted_source_resolver(value: str) -> str:
+            if value == "bms-md-starting-structure:original" and resolved.original_runtime_path:
+                return resolved.original_runtime_path
             if value != source_token:
                 raise MDLaunchError(
                     "MD_INPUT_PATH_FORBIDDEN",
@@ -922,7 +936,8 @@ async def launch_typed_md_job(
             "source_ref": preview.source.source_ref.model_dump(mode="json"),
             "source_sha256": expected_sha256,
         }
-        params = {"md_job_spec": md_job_spec, "md_source_provenance": source_provenance}
+        params = {"md_job_spec": md_job_spec, "md_source_provenance": source_provenance,
+                  "intent": request.intent.model_dump(mode="json")}
         if resolved.design_id is not None:
             params.update({
                 "source_design_id": resolved.design_id,

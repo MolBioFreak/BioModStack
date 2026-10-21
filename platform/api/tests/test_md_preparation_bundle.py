@@ -14,6 +14,19 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+@pytest.mark.parametrize("schema,profile,inputs,owner", [
+    ("bms.md.job.v1", None, {"structure": "source.pdb"}, "gromacs"),
+    ("bms.md.job.v2", "amber_ff19sb_opc_protein_v1", {"structure": "source.pdb"}, "amber"),
+    ("bms.md.job.v3", "amber_ff19sb_opc_protein_v1", {"structure": "source.pdb"}, "amber"),
+    ("bms.md.job.v3", "gmx_amber99sb_ildn_tip3p_smoke_v1", {"structure": "source.pdb"}, "gromacs"),
+    ("bms.md.job.v3", None, {"coordinates": "system.gro", "topology": "system.top"}, None),
+    ("bms.md.job.v3", None, {"tpr": "system.tpr", "checkpoint": "state.cpt"}, None),
+])
+def test_preparation_owner_uses_profile_not_contract_version(schema, profile, inputs, owner):
+    from scripts.bms_md.chemistry.prepare import preparation_owner
+    assert preparation_owner({"schema": schema, "chemistry": {"profile_id": profile}, "input": inputs}) == owner
+
+
 def test_profiles_are_exact_and_reject_free_form_chemistry() -> None:
     from scripts.bms_md.chemistry.prepare import preparation_profile
     assert preparation_profile("amber_ff19sb_opc_protein_v1").leaprc == (

@@ -79,7 +79,7 @@ const panelClass = 'rounded-2xl border border-slate-700/80 bg-slate-900/55 p-5 s
 const inputClass = 'mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/80 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-500 disabled:cursor-not-allowed disabled:opacity-65';
 const labelClass = 'block text-xs font-semibold uppercase tracking-[0.12em] text-slate-400';
 
-type SourceMode = 'fixture' | 'rcsb' | 'upload' | 'prediction' | 'design' | 'prior_md_input' | 'server_file';
+type SourceMode = 'fixture' | 'rcsb' | 'upload' | 'prediction' | 'design' | 'prior_md_input' | 'server_file' | 'candidate';
 
 const displayError = (error: unknown, fallback: string): string => {
     if (error && typeof error === 'object') {
@@ -215,6 +215,7 @@ export function MolecularDynamicsTemplate({
         retry: (failureCount, error) => !String(error).includes('Invalid chemistry profile inventory response') && failureCount < 1,
     });
     const [form, setForm] = useState<MolecularDynamicsForm>(() => initialForm(initialValues));
+    const [selectedModelNumber, setSelectedModelNumber] = useState('');
     const [native, setNative] = useState<MolecularDynamicsNativeDraft | null>(() => hydrateMolecularDynamicsNative(initialValues));
     const [nativeEnabled, setNativeEnabled] = useState(() => hydrateMolecularDynamicsNative(initialValues) !== null);
     const nativeModeDrafts = useRef<Partial<Record<'guided' | 'prepared' | 'compiled', MolecularDynamicsNativeDraft>>>({});
@@ -528,22 +529,24 @@ export function MolecularDynamicsTemplate({
 
     useEffect(() => {
         if (!returnedPredictionJobId) return;
-        const routeGeneration = `${returnedPredictionJobId}:${routedDesignId}`;
+        const routeGeneration = `${returnedPredictionJobId}:${routedDesignId}:${JSON.stringify(initialValues?.source_ref)}`;
         if (loadedReturnedPredictionRef.current === routeGeneration) return;
         loadedReturnedPredictionRef.current = routeGeneration;
-        if (routedDesignId) {
+        if (initialValues?.source_ref) {
+            void inspectSource(initialValues.source_ref as MolecularDynamicsStartingStructureRef, undefined, returnedPredictionJobId);
+        } else if (routedDesignId) {
             // An exact ResultsViewer Design may come from any producer. The
             // existing Design resolver owns its bytes and source Job identity.
             setSourceMode('design');
             setDesignId(routedDesignId);
-            void inspectSource({ kind: 'design', id: routedDesignId }, undefined, returnedPredictionJobId);
+            void inspectSource((initialValues?.source_ref as MolecularDynamicsStartingStructureRef | undefined) ?? { kind: 'design', id: routedDesignId }, undefined, returnedPredictionJobId);
         } else {
             setSourceMode('prediction');
             void loadPredictionCandidates();
         }
         // The returned Job and optional exact Design IDs are immutable for this mounted route generation.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [returnedPredictionJobId, routedDesignId]);
+    }, [returnedPredictionJobId, routedDesignId, initialValues?.source_ref]);
 
     const openPrediction = async () => {
         try {
@@ -621,7 +624,7 @@ export function MolecularDynamicsTemplate({
         if (nativeEnabled && native) {
             const input = native.input.kind === 'guided' && inspection && selectedProfile && chemistryCatalogQuery.data
                 ? { ...native.input, source_ref: inspection.source_ref, expected_source_sha256: inspection.identity.sha256, chemistry_profile_id: selectedProfile.id, chemistry_profile_sha256: selectedProfile.profile_sha256, catalog_digest: chemistryCatalogQuery.data.catalog_digest } : native.input;
-            return serializeMolecularDynamicsNativeDraft({ ...native, name: form.jobName, launch_context_id: launchContextId, input, stages: input.kind === 'compiled' ? [] : native.stages, ...placement });
+            return serializeMolecularDynamicsNativeDraft({ ...native, return_to: Object.hasOwn(native, 'return_to') ? native.return_to : (initialValues?.md_return_to as string | undefined), name: form.jobName, launch_context_id: launchContextId, input, stages: input.kind === 'compiled' ? [] : native.stages, ...placement });
         }
         if (!inspection || !selectedProfile || !chemistryCatalogQuery.data) throw new Error('Inspect and admit one starting structure before preview.');
         return buildMolecularDynamicsLaunchIntent({
@@ -630,6 +633,7 @@ export function MolecularDynamicsTemplate({
             profile: selectedProfile,
             catalogDigest: chemistryCatalogQuery.data.catalog_digest,
             launchContextId,
+            returnTo: initialIntent && Object.hasOwn(initialIntent, 'return_to') ? initialIntent.return_to as string | null : (initialValues?.md_return_to as string | undefined),
             ...placement,
         });
     };
@@ -838,6 +842,7 @@ export function MolecularDynamicsTemplate({
                                     </div>
                                     <div className="border-t border-slate-800 pt-4"><label className={labelClass}>Completed prediction Job ID<input className={inputClass} value={predictionJobId} onChange={(event) => setPredictionJobId(event.target.value)} /></label><button type="button" disabled={sourceBusy || !predictionJobId.trim()} onClick={() => void loadPredictionCandidates()} className="mt-3 rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">Load prediction candidates</button></div>
                                 </div>}
+                                {sourceMode === 'candidate' && <p className="text-xs text-slate-300">Exact selected producer document. Changing another source does not retarget this selection.</p>}
                                 {sourceMode === 'design' && <div><label className={labelClass}>Completed Design ID<input className={inputClass} value={designId} onChange={(event) => setDesignId(event.target.value)} /></label><button type="button" disabled={sourceBusy || !designId.trim()} onClick={() => void inspectSource({ kind: 'design', id: designId.trim() })} className="mt-3 rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">Inspect Design</button></div>}
                                 {sourceMode === 'prior_md_input' && <div><label className={labelClass}>Prior MD Job ID<input className={inputClass} value={priorMdJobId} onChange={(event) => setPriorMdJobId(event.target.value)} /></label><p className="mt-2 text-xs text-slate-500">Reopen the prior Job-owned immutable input; browser-visible host paths are never reused.</p><button type="button" disabled={sourceBusy || !priorMdJobId.trim()} onClick={() => void inspectSource({ kind: 'prior_md_input', id: priorMdJobId.trim() })} className="mt-3 rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">Inspect prior MD input</button></div>}
                                 {sourceMode === 'server_file' && <div><label className={labelClass}>Search governed server files<input className={inputClass} value={serverSearch} onChange={(event) => { setServerSearch(event.target.value); setServerCursor(null); }} /></label>{serverFilesQuery.isError && <p className="mt-3 text-xs text-amber-300">The policy-controlled server-file browser is unavailable.</p>}<div className="mt-3 max-h-64 space-y-2 overflow-auto">{serverFilesQuery.data?.items.map((item) => <button key={item.id} type="button" onClick={() => void inspectSource({ kind: 'server_file', id: item.id })} className="block w-full rounded border border-slate-700 p-2 text-left text-xs text-slate-300"><span className="font-semibold">{item.label}</span><span className="ml-2 text-slate-500">{item.format.toUpperCase()} · {item.bytes.toLocaleString()} bytes</span></button>)}</div></div>}
@@ -858,6 +863,7 @@ export function MolecularDynamicsTemplate({
                                 {sourceError && <p role="alert" className="mt-3 rounded border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-200">{sourceError}</p>}
                             </div>
 
+                            <div>{inspection && <label className={labelClass}>PDB / mmCIF model number (explicit member)<input aria-label="Selected model number" className={inputClass} type="number" step={1} value={selectedModelNumber} onChange={e => setSelectedModelNumber(e.target.value)} /><button type="button" disabled={!selectedModelNumber || sourceBusy} onClick={() => { const ref = inspection.source_ref; const candidate = ref.candidate_ref; const member = Number(selectedModelNumber); void inspectSource(candidate?.kind === 'design' && candidate.document ? { ...ref, candidate_ref: { ...candidate, document: { ...candidate.document, model: member } }, model_number: undefined } : candidate?.kind === 'native_document' ? { ...ref, candidate_ref: { ...candidate, model: member }, model_number: undefined } : { ...ref, model_number: member }); }}>Inspect selected model</button></label>}
                             <Gen2StructureReviewPanel
                                 inspection={inspection}
                                 viewerState={viewerState}
@@ -867,7 +873,7 @@ export function MolecularDynamicsTemplate({
                                 actionLabel={selectedPredictionCandidate && inspection?.source_ref.id === selectedPredictionCandidate.source_ref.id ? 'Use selected Design for MD' : 'Use this structure'}
                                 onLoadStateChange={handleViewerLoadState}
                                 onPromote={() => { if (inspection) setPromotedSha256(inspection.identity.sha256); }}
-                            />
+                            /></div>
                         </div>
                         <label className={`${labelClass} mt-4`}>Chemistry profile
                             <select data-md-chemistry-profile className={inputClass} value={profileDigestIsStale ? '' : selectedProfileId} disabled={chemistryCatalogQuery.isPending || chemistryCatalogQuery.isError || promotedSha256 !== inspection?.identity.sha256} onChange={(event) => {

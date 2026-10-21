@@ -59,7 +59,7 @@ def run_native_stages(config: Mapping[str, Any], *, config_path: Path, output_di
                       replica_index: int, gmx_binary: str, version_output: str,
                       preparation_bundle: Path | None, ledger: StageLedger) -> Path:
     from .gromacs_pipeline import (
-        _atomic_json, _consume_preparation_bundle, _portable_stage_snapshot,
+        _atomic_json, _consume_preparation_bundle, _portable_stage_snapshot, _prepare_system,
         _resolve_input_path, _run_command, _version_summary,
     )
 
@@ -70,12 +70,18 @@ def run_native_stages(config: Mapping[str, Any], *, config_path: Path, output_di
     coordinates, topology = files.get("coordinates"), files.get("topology")
     prepared_inputs: list[Path] = []
     if inputs.get("structure"):
-        if preparation_bundle is None:
-            raise ValueError("guided native input requires its preparation bundle")
-        prepared_coordinates, topology, prepared_inputs = _consume_preparation_bundle(config, preparation_bundle, output_dir, ledger)
+        from .chemistry.prepare import preparation_owner
+        if preparation_owner(dict(config)) == "gromacs":
+            prepared_coordinates, topology, prepared_inputs = _prepare_system(
+                config, config_path=config_path,
+                output_dir=output_dir, gmx_binary=gmx_binary, ledger=ledger)
+        else:
+            if preparation_bundle is None:
+                raise ValueError("guided native input requires its preparation bundle")
+            prepared_coordinates, topology, prepared_inputs = _consume_preparation_bundle(config, preparation_bundle, output_dir, ledger)
         coordinates = files.get("coordinates", prepared_coordinates)
     previous_checkpoint = files.get("checkpoint")
-    stages = config["stages"] if "tpr" not in files else [{"name": "production"}]
+    stages: list[Mapping[str, Any]] = config["stages"] if "tpr" not in files else [{"name": "production"}]
     artifacts: dict[str, Path] = {"normalized_config": output_dir / "job.normalized.json",
                                 "stage_ledger": output_dir / "stage_state.json",
                                 "engine_version": output_dir / "gromacs_version.txt"}
@@ -116,6 +122,8 @@ def run_native_stages(config: Mapping[str, Any], *, config_path: Path, output_di
         # Reuse only the exact completed artifacts recorded by the existing ledger.
         recorded = ledger.snapshot()["stages"].get(name, {}).get("artifacts", [])
         complete = bool(recorded) and ledger.is_complete(name, [Path(x["path"]) for x in recorded])
+        dump = None
+        compiled_mdp: Mapping[str, Any] | None = None
         if not complete:
             if not checkpoint.is_file():
                 if "tpr" in files:
@@ -133,10 +141,21 @@ def run_native_stages(config: Mapping[str, Any], *, config_path: Path, output_di
                     ledger.mark_running(name, command)
                     try:
                         _run_command(command, cwd=topology.parent, log_path=directory / "grompp.command.log")
+                        compiled_mdp = stage["mdp"]
                     except Exception as exc:
                         ledger.mark_failed(name, str(exc))
                         raise
-            execution = config["execution"]
+            dump = observe_dump("-s", tpr, directory / "tpr.dump.txt")
+            match = re.search(r"^\s*integrator\s*=\s*(\S+)", dump, re.MULTILINE)
+            integrator = match[1] if match else None
+            if integrator is None and compiled_mdp is not None:
+                integrator = next((str(value) for key, value in compiled_mdp.items()
+                                   if key.lower().replace("_", "-") == "integrator"), None)
+            # Native minimizers cannot use dynamics GPU update/PME placement.
+            # Never infer physics from a stage name or rewrite requested settings.
+            execution = dict(config["execution"])
+            if integrator is not None and integrator.lower() in {"steep", "cg", "l-bfgs"}:
+                execution["gpu_offload"] = "none"
             command = build_mdrun_command(
                 gmx=gmx_binary, deffnm=str(prefix), gpu_id=execution["gpu_id"],
                 ntmpi=execution["ntmpi"], ntomp=execution["ntomp"],
@@ -172,7 +191,8 @@ def run_native_stages(config: Mapping[str, Any], *, config_path: Path, output_di
         for key, path in stage_products.items():
             if path is not None and path.is_file():
                 artifacts[f"stage_{name}_{key}"] = path
-        dump = observe_dump("-s", tpr, directory / "tpr.dump.txt")
+        if dump is None:
+            dump = observe_dump("-s", tpr, directory / "tpr.dump.txt")
         native = {}
         for key in ("integrator", "nsteps", "init-step", "dt", "tinit", "ld-seed", "pull-ncoords"):
             match = re.search(r"^\s*" + key + r"\s*=\s*(\S+)", dump, re.MULTILINE)

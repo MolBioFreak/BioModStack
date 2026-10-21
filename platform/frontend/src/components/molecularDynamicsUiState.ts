@@ -1,4 +1,5 @@
 import type { ExecutionPolicy } from '../lib/executionPolicy';
+import type { CandidateRef } from '../lib/binderSelectedRound';
 
 export type MolecularDynamicsEngine = 'gromacs' | 'openmm';
 
@@ -13,7 +14,7 @@ export interface MolecularDynamicsAnalysisOptions {
         windows: Array<{ replica: number; window: string; coordinate: number; coordinate_count: number }> } | null;
 }
 export interface MolecularDynamicsNativeIntent {
-    schema_version: 'bms.md.launch-intent.v2'; name: string; launch_context_id?: string | null;
+    schema_version: 'bms.md.launch-intent.v2'; name: string; launch_context_id?: string | null; return_to?: string | null;
     input: { kind: 'prepared' | 'compiled' | 'guided'; coordinates?: string; topology?: string; tpr?: string;
         checkpoint?: string | null; index?: string | null; restraint_reference?: string | null;
         source_ref?: MolecularDynamicsStartingStructureRef; expected_source_sha256?: string;
@@ -247,11 +248,14 @@ export type MolecularDynamicsStartingStructureKind =
     | 'upload'
     | 'managed_fixture'
     | 'prior_md_input'
-    | 'server_file';
+    | 'server_file'
+    | 'candidate';
 
 export interface MolecularDynamicsStartingStructureRef {
     kind: MolecularDynamicsStartingStructureKind;
     id: string;
+    candidate_ref?: CandidateRef | null;
+    model_number?: number | null;
 }
 
 export interface MolecularDynamicsStartingStructureInspection {
@@ -333,6 +337,7 @@ export interface MolecularDynamicsRequestedSettings {
 }
 
 export interface MolecularDynamicsLaunchIntent {
+    return_to?: string | null;
     execution_target_id?: string | null;
     execution_policy?: ExecutionPolicy;
     schema_version: 'bms.md.launch-intent.v1';
@@ -624,10 +629,35 @@ const wireFinite = (value: unknown, contract: string) => {
     if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`Invalid ${contract} response.`);
 };
 
-const parseSourceRef = (value: unknown, contract: string): MolecularDynamicsStartingStructureRef => {
+export const molecularDynamicsSourceKey = (source: MolecularDynamicsStartingStructureRef): string => {
+    const ref = source.candidate_ref;
+    return JSON.stringify([source.kind, source.id, source.model_number ?? null,
+        ref?.kind === 'design' ? [ref.kind, ref.job_id, ref.design_id, ref.document?.artifact_id ?? null, ref.document?.target_state ?? null, ref.document?.model ?? null]
+        : ref?.kind === 'native_document' ? [ref.kind, ref.job_id, ref.artifact_id, ref.target_state ?? null, ref.model ?? null] : null]);
+};
+
+export const parseMolecularDynamicsSourceRef = (value: unknown, contract: string): MolecularDynamicsStartingStructureRef => {
     const record = wireRecord(value, contract);
-    exactWireKeys(record, ['kind', 'id'], contract);
-    const kinds: MolecularDynamicsStartingStructureKind[] = ['rcsb', 'design', 'upload', 'managed_fixture', 'prior_md_input', 'server_file'];
+    closedWireKeys(record, ['kind', 'id'], ['candidate_ref', 'model_number'], contract);
+    if (record.model_number != null && !Number.isInteger(record.model_number)) throw new Error(`Invalid ${contract} model.`);
+    if (record.kind === 'candidate') {
+        const ref = wireRecord(record.candidate_ref, contract);
+        if (!['design', 'native_document'].includes(String(ref.kind)) || ref.job_id !== record.id) throw new Error(`Invalid ${contract} candidate.`);
+        closedWireKeys(ref, ['kind', 'job_id'], ['design_id', 'document', 'artifact_id', 'target_state', 'model', 'publication_ref', 'native_output_id', 'native_record_id'], contract);
+        if (ref.kind === 'design') {
+            wireString(ref.design_id, contract);
+            if (ref.document != null) {
+                const document = wireRecord(ref.document, contract);
+                closedWireKeys(document, ['artifact_id'], ['target_state', 'model'], contract);
+                wireString(document.artifact_id, contract);
+                if (document.model != null && !Number.isInteger(document.model)) throw new Error(`Invalid ${contract} model.`);
+            }
+        } else {
+            wireString(ref.artifact_id, contract);
+            if (ref.model != null && !Number.isInteger(ref.model)) throw new Error(`Invalid ${contract} model.`);
+        }
+    }
+    const kinds: MolecularDynamicsStartingStructureKind[] = ['rcsb', 'design', 'upload', 'managed_fixture', 'prior_md_input', 'server_file', 'candidate'];
     if (!kinds.includes(record.kind as MolecularDynamicsStartingStructureKind) || typeof record.id !== 'string' || !record.id.trim()) {
         throw new Error(`Invalid ${contract} response.`);
     }
@@ -730,8 +760,8 @@ export const parseMolecularDynamicsStartingStructureInspection = (
     const root = wireRecord(value, contract);
     exactWireKeys(root, ['schema_version', 'source_ref', 'identity', 'viewer', 'inspection', 'admission'], contract);
     if (root.schema_version !== 'bms.md.starting-structure-inspection.v1') throw new Error(`Invalid ${contract} response.`);
-    const sourceRef = parseSourceRef(root.source_ref, contract);
-    if (expectedSource && (sourceRef.kind !== expectedSource.kind || sourceRef.id !== expectedSource.id)) {
+    const sourceRef = parseMolecularDynamicsSourceRef(root.source_ref, contract);
+    if (expectedSource && molecularDynamicsSourceKey(sourceRef) !== molecularDynamicsSourceKey(expectedSource)) {
         throw new Error(`Invalid ${contract} response.`);
     }
     const identity = wireRecord(root.identity, contract);
@@ -795,7 +825,7 @@ export const parseMolecularDynamicsPredictionSourceCandidates = (
     root.candidates.forEach((entry) => {
         const candidate = wireRecord(entry, contract);
         exactWireKeys(candidate, ['source_ref', 'name', 'format', 'eligible', 'blocker_code', 'metrics', 'created_at'], contract);
-        const sourceRef = parseSourceRef(candidate.source_ref, contract);
+        const sourceRef = parseMolecularDynamicsSourceRef(candidate.source_ref, contract);
         if (sourceRef.kind !== 'design' || !UUID_RE.test(sourceRef.id)) throw new Error(`Invalid ${contract} response.`);
         wireString(candidate.name, contract);
         if (!['pdb', 'cif'].includes(String(candidate.format)) || typeof candidate.eligible !== 'boolean') throw new Error(`Invalid ${contract} response.`);
@@ -839,7 +869,7 @@ export function parseMolecularDynamicsLaunchPreview(
     if (root.schema_version !== 'bms.md.launch-preview.v1' || !SHA256_RE.test(String(root.preview_digest))) throw new Error(`Invalid ${contract} response.`);
     const source = wireRecord(root.source, contract);
     exactWireKeys(source, ['source_ref', 'label', 'format', 'size_bytes', 'sha256', 'pdb_id', 'producer_job_id', 'design_id'], contract);
-    const sourceRef = parseSourceRef(source.source_ref, contract);
+    const sourceRef = parseMolecularDynamicsSourceRef(source.source_ref, contract);
     wireString(source.label, contract);
     if (!['pdb', 'cif'].includes(String(source.format)) || !SHA256_RE.test(String(source.sha256))) throw new Error(`Invalid ${contract} response.`);
     wireFinite(source.size_bytes, contract);
@@ -919,6 +949,7 @@ export const buildMolecularDynamicsLaunchIntent = ({
     profile,
     catalogDigest,
     launchContextId,
+    returnTo,
     execution_target_id = null,
     execution_policy = { remote_result_policy: 'manual' },
 }: {
@@ -927,6 +958,7 @@ export const buildMolecularDynamicsLaunchIntent = ({
     profile: MolecularDynamicsChemistryProfile;
     catalogDigest: string;
     launchContextId?: string | null;
+    returnTo?: string | null;
     execution_target_id?: string | null;
     execution_policy?: ExecutionPolicy;
 }): MolecularDynamicsLaunchIntent => {
@@ -942,6 +974,7 @@ export const buildMolecularDynamicsLaunchIntent = ({
     if (errors.length) throw new Error(errors.join(' '));
     return {
         schema_version: 'bms.md.launch-intent.v1',
+        ...(returnTo !== undefined ? { return_to: returnTo } : {}),
         execution_target_id,
         execution_policy,
         name: form.jobName.trim(),
@@ -960,7 +993,10 @@ export const resolveMolecularDynamicsCloneSource = (
 ): MolecularDynamicsStartingStructureRef | null => {
     const nativeIntent = initialValues.intent as MolecularDynamicsNativeIntent | undefined;
     if (nativeIntent?.schema_version === 'bms.md.launch-intent.v2' && nativeIntent.input.kind === 'guided') {
-        try { return parseSourceRef(nativeIntent.input.source_ref, 'native clone source'); } catch { return null; }
+        try { return parseMolecularDynamicsSourceRef(nativeIntent.input.source_ref, 'native clone source'); } catch { return null; }
+    }
+    if (initialValues.source_ref) {
+        try { return parseMolecularDynamicsSourceRef(initialValues.source_ref, 'clone source'); } catch { return null; }
     }
     const sourceDesignId = typeof initialValues.source_design_id === 'string'
         ? initialValues.source_design_id.trim()
@@ -976,7 +1012,7 @@ export const resolveMolecularDynamicsCloneSource = (
         : initialValues.source_ref;
     if (!sourceRef || typeof sourceRef !== 'object' || Array.isArray(sourceRef)) return null;
     if ((intent as Record<string, unknown> | undefined)?.schema_version === 'bms.md.launch-intent.v2') {
-        try { return parseSourceRef(sourceRef, 'native clone source'); } catch { return null; }
+        try { return parseMolecularDynamicsSourceRef(sourceRef, 'native clone source'); } catch { return null; }
     }
     const kind = (sourceRef as Record<string, unknown>).kind;
     const id = (sourceRef as Record<string, unknown>).id;

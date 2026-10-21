@@ -128,7 +128,10 @@ def _prepare_system(
     copied_structure = system_dir / f"input{structure.suffix.lower() or '.pdb'}"
     shutil.copy2(structure, copied_structure)
 
-    preparation = config["preparation"]
+    from .contract import _DEFAULT_CONFIG
+    preparation = {**_DEFAULT_CONFIG["preparation"],
+                   **config.get("chemistry", {}).get("resolved_preparation", {}),
+                   **config["preparation"]}
     processed = system_dir / "processed.gro"
     boxed = system_dir / "boxed.gro"
     solvated = system_dir / "solvated.gro"
@@ -528,7 +531,8 @@ def run_gromacs_job(
             version_output=version_output, preparation_bundle=preparation_bundle, ledger=ledger,
         )
     prepared_inputs: list[Path] = []
-    if config.get("schema") == "bms.md.job.v2":
+    from .chemistry.prepare import preparation_owner
+    if preparation_owner(config) == "amber":
         if preparation_bundle is None:
             raise ValueError("bms.md.job.v2 requires an immutable preparation bundle")
         coordinates, topology, prepared_inputs = _consume_preparation_bundle(

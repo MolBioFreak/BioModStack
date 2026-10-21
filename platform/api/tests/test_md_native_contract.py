@@ -97,6 +97,22 @@ def test_native_materialization_and_worker_relocation_preserve_bytes(native_file
         verify_input_snapshots(normalized)
 
 
+def test_native_explicit_null_analysis_and_empty_imported_keys(native_files):
+    intent = _intent(native_files)
+    intent["analysis"] = None
+    intent["stages"][0]["mdp"].update({"Native_Unknown-Key": "", "gen-vel": "no", "nsteps": 0})
+    intent["windows"] = [{"id": "zero", "mdp": {"adsorption": {"pull-coord1-init": 0}}}]
+    typed = MdNativeLaunchIntent.model_validate(intent)
+    spec = compile_native_job_intent(typed)
+    normalized = contract.normalize_md_job_spec(params={"md_job_spec": spec}, job_id="roundtrip", resolve_runtime_path=lambda value: value)
+    assert normalized["analysis"] is None
+    assert normalized["stages"] == intent["stages"]
+    assert normalized["windows"] == intent["windows"]
+    assert parse_mdp(render_mdp(normalized["stages"][0]["mdp"]))["Native_Unknown-Key"] == ""
+    del intent["analysis"]
+    assert "analysis" not in compile_native_job_intent(MdNativeLaunchIntent.model_validate(intent))
+
+
 def test_mdp_import_has_one_settings_document_and_native_render(native_files):
     mdp = native_files / "import.mdp"
     mdp.write_text("; native import\nintegrator = md\nnsteps = -1 ; native indefinite\nref-t = 310 290\npull-coord2-k = 0\nuserreal1 = 1e-07\n")
