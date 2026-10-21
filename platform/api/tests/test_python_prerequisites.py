@@ -86,6 +86,24 @@ class PrerequisitesTest(unittest.TestCase):
         self.assertIn("future-source-package", commands[1][0])
         self.assertEqual(p.subprocess_env(self.external)["UV_NO_BUILD"], "1")
 
+    def test_launcher_prefers_managed_interpreter_over_unrelated_path_python(self):
+        managed = self.external / "environment/bin/python"
+        managed.parent.mkdir(parents=True)
+        managed.write_text('#!/bin/sh\nprintf "%s\\n" "$0" "managed-root" ""\n')
+        managed.chmod(0o755)
+        shadow = self.base / "shadow"
+        shadow.mkdir()
+        (shadow / "python3").write_text('#!/bin/sh\necho "wrong interpreter" >&2\nexit 42\n')
+        (shadow / "python3").chmod(0o755)
+        result = subprocess.run([
+            "/bin/bash", "-c",
+            'source "$1"; bms_python_runtime_resolve || exit $?; printf "%s\\n" "$BMS_MANAGED_PYTHON"',
+            "test", str(ROOT / "scripts/python_runtime_guard.sh"),
+        ], env={**os.environ, "PATH": str(shadow) + ":/usr/bin:/bin"},
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), str(managed))
+
     def test_plan_no_writes_no_processes(self):
         with patch.object(p.subprocess, "run", side_effect=AssertionError("process")):
             report = p.prerequisite_report("python-plan", project_root=self.source)
