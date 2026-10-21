@@ -1,0 +1,131 @@
+{
+  "source": {
+    "repository": "https://github.com/NVIDIA-BioNeMo/Proteina-Complexa",
+    "revision": "acf55a89a9a7206d5ce9abc0bf2246c3b3829f92",
+    "package_version": "1.1.0"
+  },
+  "checkpoints": {
+    "proteina_complexa": {
+      "version": "1.0",
+      "metadata_url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files",
+      "members": [
+        {
+          "name": "complexa.ckpt",
+          "bytes": 2934289381,
+          "sha256": "589db1741f29838c7961386f6b873087238c72682e56189b89e0ae02610c19e9",
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files/complexa.ckpt"
+        },
+        {
+          "name": "complexa_ae.ckpt",
+          "bytes": 4100101779,
+          "sha256": "35f8865efd269995eeaf1670e1c1085acfe2988c40abdeda8e09a0e15eb40816",
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files/complexa_ae.ckpt"
+        }
+      ],
+      "verification": "NGC metadata; payloads not downloaded"
+    },
+    "proteina_complexa_ligand": {
+      "version": "1.0",
+      "metadata_url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files",
+      "members": [
+        {
+          "name": "complexa_ligand.ckpt",
+          "bytes": 1790554392,
+          "sha256": "8175213eac5ec6433fed1756d055ce3f867129bfdb033040e1a0560ca558bfe5",
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files/complexa_ligand.ckpt"
+        },
+        {
+          "name": "complexa_ligand_ae.ckpt",
+          "bytes": 4100184649,
+          "sha256": "898da17022cdeaaaea7caace41c8b6fe7bfcb78be4876b0113127eb9bb1527e6",
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files/complexa_ligand_ae.ckpt"
+        }
+      ],
+      "verification": "NGC metadata; payloads not downloaded"
+    },
+    "proteina_complexa_ame": {
+      "version": "1.0",
+      "metadata_url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files",
+      "members": [
+        {
+          "name": "complexa_ame.ckpt",
+          "bytes": 1792013880,
+          "sha256": "d11319693d024d0427abc356a86350a694a1cb7dceb8db642c8041e5a20a9f7b",
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files/complexa_ame.ckpt"
+        },
+        {
+          "name": "complexa_ame_ae.ckpt",
+          "bytes": 4100197925,
+          "sha256": "63b1358c5459e968628094fdc9a2a6a95ac003606fcf7b1a3a21174458a69734",
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files/complexa_ame_ae.ckpt"
+        }
+      ],
+      "verification": "NGC metadata; payloads not downloaded"
+    }
+  },
+  "build": {
+    "base": "nvcr.io/nvidia/pytorch@sha256:60cc7c9cf24b423c28f621287779ebe5e52cd39cfd284df04983df52566c1e39",
+    "upstream_base_tag": "24.08-py3",
+    "python": "3.12",
+    "torch": "2.7.0+cu126",
+    "jax": "0.4.29",
+    "tmol_revision": "d8a6f7f9649d36e74440bca25246ee7c467ce490",
+    "status": "recipe_not_built_or_dependency_locked",
+    "unresolved": [
+      "Upstream pyproject ranges and unpinned atomworks/rc-foundry/PyG/uv/apt packages need a resolved build lock before reproducible image publication.",
+      "Full import closure must be tested even for no-reward generation.",
+      "SC/DSSP/HBPLUS binaries are not distributed by upstream. Foldseek/MMseqs are not installed by its public builder.",
+      "Optional AF2/RF3/ESM/MPNN checkpoint identities must be acquired only for selected native operations."
+    ]
+  },
+  "upstream_files": {
+    "env/docker/Dockerfile": "679f5b2c21e4eaa93c306de17d4a81465571c6cbae79491c786d9f30c5570f02",
+    "env/build_uv_env.sh": "e75b2de7e28734da1e7654ddcd21c67db2972a1e31e86d429448943972f2839d",
+    "pyproject.toml": "de9775b3024cabb4f92a06a12dc21c5c52e8fc221070453f49f70391fda86da6",
+    "LICENSE": "379c22c1c64e5ff7cce6c9407bb5da9fb1f9279934f16c20b1031592c1b3feab",
+    "src/proteinfoundation/search/search_factory.py": "25b2f09b31b314430e4b63db6a7a96a329f4dfb853722771bcbd715e46cdea20",
+    "configs/pipeline/base_gen_data.yaml": "0d0324ea196daef26236454c7478ef3495fbab90feafccb65392c6829e263412",
+    "configs/pipeline/model_sampling.yaml": "d5ef6a7d59cd0154fd9c1c0899b4ae2f505ba9548f2717a71a71425441dfdc01",
+    "configs/pipeline/motif/motif_analyze.yaml": "b2a7bee2ceca6642b79f15e3af1aa217827bd8f5016ae52f3019a683c18755c1",
+    "configs/pipeline/motif/idx_motif_generate.yaml": "f3988b9ad1c99d317e588fb417d4be70b8c615bbd5beecf056dc76d3b815193d",
+    "configs/pipeline/motif/uidx_motif_evaluate.yaml": "b4caa9dd546c648313adaf76a3ccbb072c9315c9c8fd67fbec79fdf1a7964745",
+    "configs/pipeline/motif/idx_motif_evaluate.yaml": "948a1468affcb4f30438cc0ea64bced0517fd3f07cbbcf752c695cd0242284c4",
+    "configs/pipeline/motif/uidx_motif_generate.yaml": "a72e1e1981dfe3309647faebd409004ca670929fb8429d6f5d6287f9ad7cb5de",
+    "configs/pipeline/ligand_binder/ligand_binder_evaluate.yaml": "df1d5366b266532a524698b981bc5726786e1a3e5dce2ba7b8953a8b94706274",
+    "configs/pipeline/ligand_binder/ligand_binder_generate.yaml": "9df5d517bbb758de870ff02efaaab32d082334a05c5bd031bd8f752384f273a7",
+    "configs/pipeline/ligand_binder/ligand_binder_analyze.yaml": "bb68b5499e037788ae30c2e54ab8e6ce0778450ecb01418204d00dd281865df9",
+    "configs/pipeline/monomer/monomer_generate.yaml": "a3b22f3247c50c29f158629cdc024abaccbf9180d2e659512a85f057e290d13f",
+    "configs/pipeline/monomer/monomer_evaluate.yaml": "061b41781aed672ad503f54367982c1d2d1c08bae6cb935b4cc582fa3a1b0a78",
+    "configs/pipeline/monomer/monomer_analyze.yaml": "26e0b175e88f5f9e2167d80842e73ef6c124f77bf86d065b8f370831421cea61",
+    "configs/pipeline/ame/ame_generate.yaml": "2d83c2452454f1e247e28f5d904b465a40c575ea864c0781ed930c7cc6b9a4a9",
+    "configs/pipeline/ame/ame_analyze.yaml": "8fb0cff5ea88c385011806110ffd9007f1e7e96bfebe7e44d7d1ebfad87a2358",
+    "configs/pipeline/ame/ame_evaluate.yaml": "3330efbc0946de49504607e826662d434a85a5fd8c54a74031c57c3666e2b38b",
+    "configs/pipeline/binder/binder_generate.yaml": "501005c8a4b796da01ec00348af79510dba21230d14ae6331a60a1f6d0817aff",
+    "configs/pipeline/binder/binder_evaluate.yaml": "061a8ef1478e2a12958699a5785adea924e45dfc2dd5c61497d1b1f547f5138a",
+    "configs/pipeline/binder/binder_analyze.yaml": "cfbe42f30aedf9357e5d742b67dc830ee15b75b79b6c21e8d2ccac536330b6ba",
+    "env/download_startup.sh": "bd44402f74a5dfedd99daed991abd76d6b1082d6d1202484fa138584c4e11ec8"
+  },
+  "selected_oracle_sources": {
+    "af2": {
+      "selected_by": "protein_binder profile reward, colabdesign evaluation or sequence_hallucination",
+      "url": "https://storage.googleapis.com/download/storage/v1/b/alphafold/o/alphafold_params_2022-12-06.tar?generation=1670353726160664&alt=media",
+      "generation": "1670353726160664",
+      "bytes": 5587968000,
+      "md5_base64": "XMWaVh6AYBhilI/zbGsECw==",
+      "sha256": null,
+      "status": "metadata only; SHA256 and selected parameter-member layout require acquisition"
+    },
+    "rf3": {
+      "selected_by": "ligand_binder profile reward, RF3 evaluation, or explicit RF3 reward",
+      "url": "https://files.ipd.uw.edu/pub/rf3/rf3_foundry_01_24_latest_remapped.ckpt",
+      "bytes": 3038876446,
+      "sha256": null,
+      "status": "upstream mutable URL/HTTP metadata only; immutable byte pin unresolved; not acquired"
+    },
+    "protein_mpnn": {
+      "source_revision": "8907e6671bfbfc92303b5f79c4b5e6ce47cdef57",
+      "source": "env/download_startup.sh:104,120",
+      "selected_by": "native designability or explicit mpnn/mpnn_fixed; choose required weight only"
+    }
+  }
+}

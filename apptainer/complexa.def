@@ -1,0 +1,32 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch@sha256:60cc7c9cf24b423c28f621287779ebe5e52cd39cfd284df04983df52566c1e39
+
+%labels
+    org.biomodstack.model complexa
+    org.biomodstack.source.revision acf55a89a9a7206d5ce9abc0bf2246c3b3829f92
+    org.biomodstack.recipe.status unbuilt-upstream-dependency-resolution-required
+
+%post
+    set -eu
+    apt-get update
+    apt-get install -y --no-install-recommends git curl rsync libxrender1 libxext6
+    git clone https://github.com/NVIDIA-BioNeMo/Proteina-Complexa.git /opt/complexa
+    cd /opt/complexa
+    git checkout --detach acf55a89a9a7206d5ce9abc0bf2246c3b3829f92
+    # Official full import environment. This does NOT download oracle weights.
+    # Upstream has unpinned dependency ranges; see bms_complexa/assets.json.
+    export PATH=/root/.local/bin:$PATH
+    bash env/build_uv_env.sh --root /opt/complexa --python 3.12
+    uv pip freeze --python /opt/complexa/.venv/bin/python > /opt/complexa/installed-packages.txt
+
+%environment
+    export COMPLEXA_ROOT=/opt/complexa
+    export PATH=/opt/complexa/.venv/bin:$PATH
+    export PYTHONPATH=/opt/complexa/src:$PYTHONPATH
+    export DATA_PATH=/opt/complexa/assets
+
+%test
+    /opt/complexa/.venv/bin/complexa --help
+
+%runscript
+    exec /opt/complexa/.venv/bin/complexa "$@"

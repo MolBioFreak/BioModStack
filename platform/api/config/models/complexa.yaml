@@ -1,0 +1,26 @@
+id: complexa
+name: Proteina-Complexa
+version: 1.1.0
+category: backbone_generation
+description: Native joint sequence and all-atom protein/ligand binder and motif design. Source acf55a89; matched NGC 1.0 checkpoint pairs, not La or RFD4.
+container: complexa.sif
+ui_icon: flask
+ui_color: '#0891B2'
+inputs: [pdb]
+outputs: [pdb, csv, json]
+modes:
+- id: generate
+  name: Generate
+  description: Generation/search, optional native refinement, or full native design evaluation.
+  params: [complexa_request]
+- id: evaluate
+  name: Evaluate
+  description: Native evaluation and optional analysis of retained documents.
+  params: [complexa_request]
+params:
+- name: complexa_request
+  type: object
+  label: Complexa settings
+  description: Closed versioned native contract from services.complexa.discovery; nested typed controls, not a raw JSON editor.
+  required: true
+  ui_control: parameter-group

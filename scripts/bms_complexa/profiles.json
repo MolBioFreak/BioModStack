@@ -1,0 +1,913 @@
+{
+  "source_revision": "acf55a89a9a7206d5ce9abc0bf2246c3b3829f92",
+  "authority": "Native Hydra profile defaults; discovery-only, never a parallel runtime resolver",
+  "tasks": {
+    "protein_binder": {
+      "args": {
+        "nsteps": 400,
+        "self_cond": true,
+        "guidance_w": 1.0,
+        "ag_ratio": 0.0,
+        "ag_ckpt_path": null,
+        "save_trajectory_every": 0,
+        "fold_cond": false
+      },
+      "model": {
+        "bb_ca": {
+          "schedule": {
+            "mode": "log",
+            "p": 2.0
+          },
+          "gt": {
+            "mode": "1/t",
+            "p": 1.0,
+            "clamp_val": null
+          },
+          "simulation_step_params": {
+            "sampling_mode": "sc",
+            "sc_scale_noise": 0.1,
+            "sc_scale_score": 1.0,
+            "t_lim_ode": 0.98,
+            "t_lim_ode_below": 0.02,
+            "tsr_k": 1.0,
+            "tsr_sigma": 1.0,
+            "center_every_step": false
+          }
+        },
+        "local_latents": {
+          "schedule": {
+            "mode": "power",
+            "p": 2.0
+          },
+          "gt": {
+            "mode": "tan",
+            "p": 1.0,
+            "clamp_val": null
+          },
+          "simulation_step_params": {
+            "sampling_mode": "sc",
+            "sc_scale_noise": 0.1,
+            "sc_scale_score": 1.0,
+            "t_lim_ode": 0.98,
+            "t_lim_ode_below": 0.02,
+            "tsr_k": 1.0,
+            "tsr_sigma": 1.0,
+            "center_every_step": false
+          }
+        }
+      },
+      "n_recycle": 0,
+      "search": {
+        "algorithm": "best-of-n",
+        "max_batch_size": "${..dataloader.batch_size}",
+        "reward_threshold": null,
+        "step_checkpoints": [
+          0,
+          100,
+          200,
+          300,
+          400
+        ],
+        "best_of_n": {
+          "replicas": 2
+        },
+        "beam_search": {
+          "n_branch": 4,
+          "beam_width": 4,
+          "keep_lookahead_samples": true,
+          "save_intermediate_states": false
+        },
+        "fk_steering": {
+          "n_branch": 4,
+          "beam_width": 4,
+          "temperature": 0.1,
+          "keep_lookahead_samples": true
+        },
+        "mcts": {
+          "n_simulations": 20,
+          "exploration_prob": 0.5,
+          "exploration_constant": 1.0,
+          "keep_lookahead_samples": true
+        }
+      },
+      "refinement": {
+        "algorithm": null,
+        "refine_targets": "final",
+        "save_pre_refinement": "none",
+        "enable_soft_optimization": false,
+        "enable_greedy_optimization": true,
+        "n_temp_iters": 45,
+        "n_hard_iters": 5,
+        "n_recycles": 3,
+        "n_greedy_iters": 15,
+        "greedy_percentage": 1,
+        "loss_weights": {
+          "pae": 0.4,
+          "plddt": 0.1,
+          "i_pae": 0.1,
+          "con": 1.0,
+          "i_con": 1.0,
+          "dgram_cce": 0.0,
+          "rg": 0.3,
+          "i_ptm": 0.05,
+          "helix_binder": -0.3
+        }
+      },
+      "reward_model": {
+        "_target_": "proteinfoundation.rewards.base_reward.CompositeRewardModel",
+        "reward_models": {
+          "af2folding": {
+            "_target_": "proteinfoundation.rewards.alphafold2_reward.AF2RewardModel",
+            "protocol": "binder",
+            "use_multimer": true,
+            "af_params_dir": "${oc.env:AF2_DIR}",
+            "num_recycles": 3,
+            "use_initial_guess": true,
+            "use_initial_atom_pos": false,
+            "reward_weights": {
+              "con": 0.0,
+              "i_pae": -1.0,
+              "plddt": 0.0,
+              "dgram_cce": 0.0,
+              "min_ipae": 0.0,
+              "min_ipsae": 0.0,
+              "avg_ipsae": 0.0,
+              "max_ipsae": 0.0,
+              "min_ipsae_10": 0.0,
+              "max_ipsae_10": 0.0,
+              "avg_ipsae_10": 0.0
+            },
+            "seed": 0,
+            "device_id": null
+          }
+        }
+      },
+      "filter": {
+        "filter_samples_limit": 1000,
+        "delete_non_top_n_samples": false,
+        "dedup_sequence": true,
+        "reward_threshold": null
+      },
+      "batch_size": 16,
+      "nres": {
+        "_target_": "proteinfoundation.datasets.gen_dataset.UniformInt",
+        "low": "${....target_dict_cfg.${..task_name}.binder_length[0]}",
+        "high": "${....target_dict_cfg.${..task_name}.binder_length[1]}",
+        "nsamples": 4,
+        "endpoint": true
+      },
+      "conditional_features": [
+        {
+          "_target_": "proteinfoundation.datasets.gen_dataset.TargetFeatures",
+          "task_name": "${...task_name}",
+          "binder_gen_only": true,
+          "pdb_path": "${oc.select:.....target_dict_cfg.${.task_name}.target_path,${oc.env:DATA_PATH}/target_data/${.....target_dict_cfg.${.task_name}.source}/${.....target_dict_cfg.${.task_name}.target_filename}.pdb}",
+          "input_spec": "${.....target_dict_cfg.${.task_name}.target_input}",
+          "target_hotspots": "${.....target_dict_cfg.${.task_name}.hotspot_residues}",
+          "binder_center": null,
+          "pdb_id": "${.....target_dict_cfg.${.task_name}.pdb_id}"
+        }
+      ],
+      "evaluation": {
+        "compute_binder_metrics": true,
+        "binder_folding_method": "colabdesign",
+        "sequence_types": [
+          "self"
+        ],
+        "num_redesign_seqs": 2,
+        "interface_cutoff": 8.0,
+        "inverse_folding_model": "soluble_mpnn",
+        "compute_esm_metrics": true,
+        "ranking_criteria": null,
+        "compute_pre_refolding_metrics": false,
+        "pre_refolding": {
+          "bioinformatics": false,
+          "tmol": false
+        },
+        "compute_refolded_structure_metrics": false,
+        "refolded": {
+          "bioinformatics": false,
+          "tmol": false
+        },
+        "compute_monomer_metrics": true,
+        "monomer_folding_models": [
+          "esmfold"
+        ],
+        "compute_designability": true,
+        "designability_modes": [
+          "ca"
+        ],
+        "compute_codesignability": true,
+        "codesignability_modes": [
+          "ca",
+          "all_atom"
+        ],
+        "compute_co_sequence_recovery": false,
+        "compute_ss": true,
+        "compute_novelty_pdb": false,
+        "compute_novelty_afdb": false,
+        "compute_novelty_afdb_rep_v4": false,
+        "compute_novelty_afdb_rep_v4_geniefilters_maxlen512": false,
+        "keep_folding_outputs": true
+      },
+      "analysis": {
+        "limit": null,
+        "analysis_modes": [
+          "binder",
+          "monomer"
+        ]
+      },
+      "env_vars": {}
+    },
+    "ligand_binder": {
+      "args": {
+        "nsteps": 400,
+        "self_cond": true,
+        "guidance_w": 1.0,
+        "ag_ratio": 0.0,
+        "ag_ckpt_path": null,
+        "save_trajectory_every": 0,
+        "fold_cond": false
+      },
+      "model": {
+        "bb_ca": {
+          "schedule": {
+            "mode": "log",
+            "p": 2.0
+          },
+          "gt": {
+            "mode": "1/t",
+            "p": 1.0,
+            "clamp_val": null
+          },
+          "simulation_step_params": {
+            "sampling_mode": "sc",
+            "sc_scale_noise": 0.1,
+            "sc_scale_score": 1.0,
+            "t_lim_ode": 0.98,
+            "t_lim_ode_below": 0.02,
+            "tsr_k": 1.0,
+            "tsr_sigma": 1.0,
+            "center_every_step": false
+          }
+        },
+        "local_latents": {
+          "schedule": {
+            "mode": "power",
+            "p": 2.0
+          },
+          "gt": {
+            "mode": "tan",
+            "p": 1.0,
+            "clamp_val": null
+          },
+          "simulation_step_params": {
+            "sampling_mode": "sc",
+            "sc_scale_noise": 0.1,
+            "sc_scale_score": 1.0,
+            "t_lim_ode": 0.98,
+            "t_lim_ode_below": 0.02,
+            "tsr_k": 1.0,
+            "tsr_sigma": 1.0,
+            "center_every_step": false
+          }
+        }
+      },
+      "n_recycle": 0,
+      "search": {
+        "algorithm": "best-of-n",
+        "max_batch_size": "${..dataloader.batch_size}",
+        "reward_threshold": null,
+        "step_checkpoints": [
+          0,
+          100,
+          200,
+          300,
+          400
+        ],
+        "best_of_n": {
+          "replicas": 2
+        },
+        "beam_search": {
+          "n_branch": 4,
+          "beam_width": 4,
+          "keep_lookahead_samples": true
+        },
+        "fk_steering": {
+          "n_branch": 4,
+          "beam_width": 4,
+          "temperature": 0.1,
+          "keep_lookahead_samples": true
+        },
+        "mcts": {
+          "n_simulations": 20,
+          "exploration_prob": 0.5,
+          "exploration_constant": 1.0,
+          "keep_lookahead_samples": true
+        }
+      },
+      "refinement": {
+        "algorithm": null,
+        "enable_soft_optimization": false,
+        "enable_greedy_optimization": true,
+        "n_temp_iters": 45,
+        "n_hard_iters": 5,
+        "n_recycles": 3,
+        "n_greedy_iters": 15,
+        "greedy_percentage": 1
+      },
+      "reward_model": {
+        "_target_": "proteinfoundation.rewards.base_reward.CompositeRewardModel",
+        "reward_models": {
+          "rf3folding": {
+            "_target_": "proteinfoundation.rewards.rf3_reward.RF3RewardRunner",
+            "ckpt_path": "${oc.env:RF3_CKPT_PATH}",
+            "rf3_path": "${oc.env:RF3_EXEC_PATH}",
+            "normalize_pae": true,
+            "reward_weights": {
+              "min_ipAE": -1.0,
+              "plddt": 0.0,
+              "ipAE": 0.0,
+              "mean_min_ipAE": 0.0,
+              "mean_ipAE": 0.0,
+              "min_mean_ipAE": 0.0,
+              "pAE": 0.0,
+              "ipTM": 0.0,
+              "pTM": 0.0,
+              "ranking_score": 0.0,
+              "has_clash": 0.0,
+              "min_ipSAE": 0.0,
+              "max_ipSAE": 0.0,
+              "avg_ipSAE": 0.0
+            }
+          }
+        }
+      },
+      "filter": {
+        "filter_samples_limit": 1000,
+        "delete_non_top_n_samples": true,
+        "dedup_sequence": true,
+        "reward_threshold": null
+      },
+      "batch_size": 16,
+      "nres": {
+        "_target_": "proteinfoundation.datasets.gen_dataset.UniformInt",
+        "low": "${....target_dict_cfg.${..task_name}.binder_length[0]}",
+        "high": "${oc.select:....target_dict_cfg.${..task_name}.binder_length.1,null}",
+        "nsamples": 2,
+        "endpoint": true
+      },
+      "conditional_features": [
+        {
+          "_target_": "proteinfoundation.datasets.gen_dataset.LigandFeatures",
+          "task_name": "${...task_name}",
+          "pdb_path": "${oc.select:.....target_dict_cfg.${.task_name}.target_path,${oc.env:DATA_PATH}/target_data/${.....target_dict_cfg.${.task_name}.source}/${.....target_dict_cfg.${.task_name}.target_filename}.pdb}",
+          "ligand": "${.....target_dict_cfg.${.task_name}.ligand}",
+          "ligand_only": "${.....target_dict_cfg.${.task_name}.ligand_only}",
+          "SMILES": "${.....target_dict_cfg.${.task_name}.SMILES}",
+          "use_bonds_from_file": "${.....target_dict_cfg.${.task_name}.use_bonds_from_file}"
+        }
+      ],
+      "evaluation": {
+        "compute_binder_metrics": true,
+        "binder_folding_method": "rf3_latest",
+        "sequence_types": [
+          "self",
+          "mpnn"
+        ],
+        "num_redesign_seqs": 2,
+        "interface_cutoff": 8.0,
+        "inverse_folding_model": "ligand_mpnn",
+        "compute_esm_metrics": true,
+        "ranking_criteria": null,
+        "compute_pre_refolding_metrics": false,
+        "pre_refolding": {
+          "bioinformatics": false,
+          "tmol": false
+        },
+        "compute_refolded_structure_metrics": false,
+        "refolded": {
+          "bioinformatics": false,
+          "tmol": false
+        },
+        "compute_monomer_metrics": true,
+        "monomer_folding_models": [
+          "esmfold"
+        ],
+        "compute_designability": true,
+        "designability_modes": [
+          "ca"
+        ],
+        "compute_codesignability": true,
+        "codesignability_modes": [
+          "ca",
+          "all_atom"
+        ],
+        "compute_co_sequence_recovery": false,
+        "compute_novelty_pdb": false,
+        "compute_novelty_afdb": false,
+        "compute_novelty_afdb_rep_v4": false,
+        "compute_novelty_afdb_rep_v4_geniefilters_maxlen512": false,
+        "keep_folding_outputs": false
+      },
+      "analysis": {
+        "limit": null,
+        "analysis_modes": [
+          "binder",
+          "monomer"
+        ]
+      },
+      "env_vars": {}
+    },
+    "AME": {
+      "args": {
+        "nsteps": 400,
+        "self_cond": true,
+        "guidance_w": 1.0,
+        "ag_ratio": 0.0,
+        "ag_ckpt_path": null,
+        "save_trajectory_every": 0,
+        "fold_cond": false
+      },
+      "model": {
+        "bb_ca": {
+          "schedule": {
+            "mode": "log",
+            "p": 2.0
+          },
+          "gt": {
+            "mode": "1/t",
+            "p": 1.0,
+            "clamp_val": null
+          },
+          "simulation_step_params": {
+            "sampling_mode": "sc",
+            "sc_scale_noise": 0.1,
+            "sc_scale_score": 1.0,
+            "t_lim_ode": 0.98,
+            "t_lim_ode_below": 0.02,
+            "tsr_k": 1.0,
+            "tsr_sigma": 1.0,
+            "center_every_step": false
+          }
+        },
+        "local_latents": {
+          "schedule": {
+            "mode": "power",
+            "p": 2.0
+          },
+          "gt": {
+            "mode": "tan",
+            "p": 1.0,
+            "clamp_val": null
+          },
+          "simulation_step_params": {
+            "sampling_mode": "sc",
+            "sc_scale_noise": 0.1,
+            "sc_scale_score": 1.0,
+            "t_lim_ode": 0.98,
+            "t_lim_ode_below": 0.02,
+            "tsr_k": 1.0,
+            "tsr_sigma": 1.0,
+            "center_every_step": false
+          }
+        }
+      },
+      "n_recycle": 0,
+      "search": {
+        "algorithm": "single-pass",
+        "max_batch_size": "${..dataloader.batch_size}",
+        "reward_threshold": null,
+        "step_checkpoints": [
+          0,
+          100,
+          200,
+          300,
+          400
+        ],
+        "best_of_n": {
+          "replicas": 2
+        },
+        "beam_search": {
+          "n_branch": 4,
+          "beam_width": 4,
+          "keep_lookahead_samples": true
+        },
+        "fk_steering": {
+          "n_branch": 4,
+          "beam_width": 4,
+          "temperature": 0.1,
+          "keep_lookahead_samples": true
+        },
+        "mcts": {
+          "n_simulations": 20,
+          "exploration_prob": 0.5,
+          "exploration_constant": 1.0,
+          "keep_lookahead_samples": true
+        }
+      },
+      "refinement": {
+        "algorithm": null,
+        "enable_soft_optimization": false,
+        "enable_greedy_optimization": true,
+        "n_temp_iters": 45,
+        "n_hard_iters": 5,
+        "n_recycles": 3,
+        "n_greedy_iters": 15,
+        "greedy_percentage": 1
+      },
+      "reward_model": null,
+      "filter": {
+        "filter_samples_limit": 1000,
+        "delete_non_top_n_samples": true,
+        "dedup_sequence": true,
+        "reward_threshold": null
+      },
+      "batch_size": 16,
+      "nres": {
+        "_target_": "proteinfoundation.datasets.gen_dataset.UniformInt",
+        "low": "${....motif_target_dict_cfg.${..task_name}.binder_length[0]}",
+        "high": "${oc.select:....motif_target_dict_cfg.${..task_name}.binder_length.1,null}",
+        "nsamples": 4,
+        "endpoint": true
+      },
+      "conditional_features": [
+        {
+          "_target_": "proteinfoundation.datasets.gen_dataset.MotifFeatures",
+          "task_name": "${...task_name}",
+          "pdb_path": "${oc.select:.....motif_target_dict_cfg.${.task_name}.target_path,${oc.env:DATA_PATH}/target_data/${.....motif_target_dict_cfg.${.task_name}.source}/${.....motif_target_dict_cfg.${.task_name}.target_filename}.pdb}",
+          "motif_atom_spec": "${.....motif_target_dict_cfg.${.task_name}.contig_atoms}"
+        },
+        {
+          "_target_": "proteinfoundation.datasets.gen_dataset.LigandFeatures",
+          "task_name": "${...task_name}",
+          "pdb_path": "${oc.select:.....motif_target_dict_cfg.${.task_name}.target_path,${oc.env:DATA_PATH}/target_data/${.....motif_target_dict_cfg.${.task_name}.source}/${.....motif_target_dict_cfg.${.task_name}.target_filename}.pdb}",
+          "ligand": "${.....motif_target_dict_cfg.${.task_name}.ligand}"
+        }
+      ],
+      "evaluation": {
+        "compute_motif_binder_metrics": true,
+        "binder_folding_method": "rf3_latest",
+        "sequence_types": [
+          "self",
+          "mpnn_fixed"
+        ],
+        "inverse_folding_model": "ligand_mpnn",
+        "ranking_criteria": null,
+        "motif_ranking_criteria": null,
+        "compute_esm_metrics": true,
+        "compute_pre_refolding_metrics": false,
+        "pre_refolding": {
+          "bioinformatics": false,
+          "tmol": false
+        },
+        "compute_refolded_structure_metrics": false,
+        "refolded": {
+          "bioinformatics": false,
+          "tmol": false
+        },
+        "compute_monomer_metrics": false,
+        "monomer_folding_models": [
+          "esmfold"
+        ],
+        "compute_designability": true,
+        "designability_modes": [
+          "ca"
+        ],
+        "compute_codesignability": true,
+        "codesignability_modes": [
+          "ca",
+          "all_atom"
+        ],
+        "keep_folding_outputs": true
+      },
+      "analysis": {
+        "limit": null,
+        "analysis_modes": [
+          "motif_binder",
+          "monomer"
+        ],
+        "compute_diversity": true,
+        "compute_mmseqs_diversity": true
+      },
+      "env_vars": {
+        "USE_V2_COMPLEXA_ARCH": "True"
+      }
+    },
+    "monomer_motif_indexed": {
+      "args": {
+        "nsteps": 400,
+        "self_cond": true,
+        "guidance_w": 1.0,
+        "ag_ratio": 0.0,
+        "ag_ckpt_path": null,
+        "save_trajectory_every": 0,
+        "fold_cond": false
+      },
+      "model": {
+        "bb_ca": {
+          "schedule": {
+            "mode": "log",
+            "p": 2.0
+          },
+          "gt": {
+            "mode": "1/t",
+            "p": 1.0,
+            "clamp_val": null
+          },
+          "simulation_step_params": {
+            "sampling_mode": "sc",
+            "sc_scale_noise": 0.1,
+            "sc_scale_score": 1.0,
+            "t_lim_ode": 0.98,
+            "t_lim_ode_below": 0.02,
+            "tsr_k": 1.0,
+            "tsr_sigma": 1.0,
+            "center_every_step": false
+          }
+        },
+        "local_latents": {
+          "schedule": {
+            "mode": "power",
+            "p": 2.0
+          },
+          "gt": {
+            "mode": "tan",
+            "p": 1.0,
+            "clamp_val": null
+          },
+          "simulation_step_params": {
+            "sampling_mode": "sc",
+            "sc_scale_noise": 0.1,
+            "sc_scale_score": 1.0,
+            "t_lim_ode": 0.98,
+            "t_lim_ode_below": 0.02,
+            "tsr_k": 1.0,
+            "tsr_sigma": 1.0,
+            "center_every_step": false
+          }
+        }
+      },
+      "n_recycle": 0,
+      "search": {
+        "algorithm": "single-pass",
+        "max_batch_size": "${..dataloader.batch_size}",
+        "reward_threshold": null,
+        "step_checkpoints": [
+          0,
+          100,
+          200,
+          300,
+          400
+        ],
+        "best_of_n": {
+          "replicas": 2
+        },
+        "beam_search": {
+          "n_branch": 4,
+          "beam_width": 4,
+          "keep_lookahead_samples": true,
+          "save_intermediate_states": false
+        },
+        "fk_steering": {
+          "n_branch": 4,
+          "beam_width": 4,
+          "temperature": 0.1,
+          "keep_lookahead_samples": true
+        },
+        "mcts": {
+          "n_simulations": 20,
+          "exploration_prob": 0.5,
+          "exploration_constant": 1.0,
+          "keep_lookahead_samples": true
+        }
+      },
+      "refinement": {
+        "algorithm": null,
+        "refine_targets": "final",
+        "save_pre_refinement": "none"
+      },
+      "reward_model": null,
+      "filter": {
+        "filter_samples_limit": null,
+        "delete_non_top_n_samples": false,
+        "dedup_sequence": true,
+        "reward_threshold": null
+      },
+      "batch_size": 5,
+      "nres": null,
+      "conditional_features": [
+        {
+          "_target_": "proteinfoundation.datasets.gen_dataset.MotifFeatures",
+          "task_name": "${...task_name}",
+          "pdb_path": "${.....motif_dict_cfg.${.task_name}.motif_pdb_path}",
+          "atom_selection_mode": "${.....motif_dict_cfg.${.task_name}.atom_selection_mode}",
+          "nsamples": 100,
+          "contig_string": "${.....motif_dict_cfg.${.task_name}.contig_string}",
+          "motif_only": "${.....motif_dict_cfg.${.task_name}.motif_only}",
+          "min_length": "${.....motif_dict_cfg.${.task_name}.motif_min_length}",
+          "max_length": "${.....motif_dict_cfg.${.task_name}.motif_max_length}",
+          "segment_order": "${.....motif_dict_cfg.${.task_name}.segment_order}",
+          "padding": true
+        }
+      ],
+      "evaluation": {
+        "compute_motif_metrics": true,
+        "monomer_folding_models": [
+          "esmfold"
+        ],
+        "motif_rmsd_modes": [
+          "ca",
+          "all_atom"
+        ],
+        "designability_num_seq": 8,
+        "designability_modes": [
+          "ca"
+        ],
+        "codesignability_modes": [
+          "ca",
+          "all_atom"
+        ],
+        "compute_ss": true,
+        "compute_monomer_metrics": false,
+        "compute_co_sequence_recovery": false,
+        "compute_binder_metrics": false,
+        "compute_novelty_pdb": false,
+        "compute_novelty_afdb": false,
+        "compute_novelty_afdb_rep_v4": false,
+        "keep_folding_outputs": true
+      },
+      "analysis": {
+        "limit": null,
+        "analysis_modes": [
+          "motif"
+        ],
+        "compute_diversity": true,
+        "compute_mmseqs_diversity": false
+      },
+      "env_vars": {
+        "USE_V2_COMPLEXA_ARCH": "False"
+      }
+    },
+    "monomer_motif_unindexed": {
+      "args": {
+        "nsteps": 400,
+        "self_cond": true,
+        "guidance_w": 1.0,
+        "ag_ratio": 0.0,
+        "ag_ckpt_path": null,
+        "save_trajectory_every": 0,
+        "fold_cond": false
+      },
+      "model": {
+        "bb_ca": {
+          "schedule": {
+            "mode": "log",
+            "p": 2.0
+          },
+          "gt": {
+            "mode": "1/t",
+            "p": 1.0,
+            "clamp_val": null
+          },
+          "simulation_step_params": {
+            "sampling_mode": "sc",
+            "sc_scale_noise": 0.1,
+            "sc_scale_score": 1.0,
+            "t_lim_ode": 0.98,
+            "t_lim_ode_below": 0.02,
+            "tsr_k": 1.0,
+            "tsr_sigma": 1.0,
+            "center_every_step": false
+          }
+        },
+        "local_latents": {
+          "schedule": {
+            "mode": "power",
+            "p": 2.0
+          },
+          "gt": {
+            "mode": "tan",
+            "p": 1.0,
+            "clamp_val": null
+          },
+          "simulation_step_params": {
+            "sampling_mode": "sc",
+            "sc_scale_noise": 0.1,
+            "sc_scale_score": 1.0,
+            "t_lim_ode": 0.98,
+            "t_lim_ode_below": 0.02,
+            "tsr_k": 1.0,
+            "tsr_sigma": 1.0,
+            "center_every_step": false
+          }
+        }
+      },
+      "n_recycle": 0,
+      "search": {
+        "algorithm": "single-pass",
+        "max_batch_size": "${..dataloader.batch_size}",
+        "reward_threshold": null,
+        "step_checkpoints": [
+          0,
+          100,
+          200,
+          300,
+          400
+        ],
+        "best_of_n": {
+          "replicas": 2
+        },
+        "beam_search": {
+          "n_branch": 4,
+          "beam_width": 4,
+          "keep_lookahead_samples": true,
+          "save_intermediate_states": false
+        },
+        "fk_steering": {
+          "n_branch": 4,
+          "beam_width": 4,
+          "temperature": 0.1,
+          "keep_lookahead_samples": true
+        },
+        "mcts": {
+          "n_simulations": 20,
+          "exploration_prob": 0.5,
+          "exploration_constant": 1.0,
+          "keep_lookahead_samples": true
+        }
+      },
+      "refinement": {
+        "algorithm": null,
+        "refine_targets": "final",
+        "save_pre_refinement": "none"
+      },
+      "reward_model": null,
+      "filter": {
+        "filter_samples_limit": null,
+        "delete_non_top_n_samples": false,
+        "dedup_sequence": true,
+        "reward_threshold": null
+      },
+      "batch_size": 5,
+      "nres": {
+        "_target_": "proteinfoundation.datasets.gen_dataset.UniformInt",
+        "low": "${....motif_dict_cfg.${..task_name}.motif_min_length}",
+        "high": "${....motif_dict_cfg.${..task_name}.motif_max_length}",
+        "nsamples": 100,
+        "endpoint": true
+      },
+      "conditional_features": [
+        {
+          "_target_": "proteinfoundation.datasets.gen_dataset.MotifFeatures",
+          "task_name": "${...task_name}",
+          "pdb_path": "${.....motif_dict_cfg.${.task_name}.motif_pdb_path}",
+          "atom_selection_mode": "${.....motif_dict_cfg.${.task_name}.atom_selection_mode}",
+          "contig_string": "${.....motif_dict_cfg.${.task_name}.contig_string}",
+          "motif_only": "${.....motif_dict_cfg.${.task_name}.motif_only}",
+          "min_length": "${.....motif_dict_cfg.${.task_name}.motif_min_length}",
+          "max_length": "${.....motif_dict_cfg.${.task_name}.motif_max_length}",
+          "segment_order": "${.....motif_dict_cfg.${.task_name}.segment_order}",
+          "padding": false
+        }
+      ],
+      "evaluation": {
+        "compute_motif_metrics": true,
+        "monomer_folding_models": [
+          "esmfold"
+        ],
+        "motif_rmsd_modes": [
+          "ca",
+          "all_atom"
+        ],
+        "designability_num_seq": 8,
+        "designability_modes": [
+          "ca"
+        ],
+        "codesignability_modes": [
+          "ca",
+          "all_atom"
+        ],
+        "compute_ss": true,
+        "compute_monomer_metrics": false,
+        "compute_co_sequence_recovery": false,
+        "compute_binder_metrics": false,
+        "compute_novelty_pdb": false,
+        "compute_novelty_afdb": false,
+        "compute_novelty_afdb_rep_v4": false,
+        "keep_folding_outputs": true
+      },
+      "analysis": {
+        "limit": null,
+        "analysis_modes": [
+          "motif"
+        ],
+        "compute_diversity": true,
+        "compute_mmseqs_diversity": false
+      },
+      "env_vars": {
+        "USE_V2_COMPLEXA_ARCH": "False"
+      }
+    }
+  }
+}
