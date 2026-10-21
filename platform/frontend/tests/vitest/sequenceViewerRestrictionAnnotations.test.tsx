@@ -44,6 +44,48 @@ describe('SequenceViewer restriction annotations', () => {
             host.remove();
         }
     });
+    it.each([412, 1200])('packs sparse native labels with clamped extents at width %i without changing sites', async (width) => {
+        const host = document.createElement('div');
+        document.body.append(host);
+        const root = createRoot(host);
+        const annotations = [0, 1, 16, 32, 48, 64, 79, 80, 96, 112, 128, 144, 159].map((start, i) => ({
+            id: `site:${i}`, name: i % 2 ? 'EcoO157SI' : 'BmeDI',
+            start, end: start + 1, direction: (i % 2 ? -1 : 1) as 1 | -1, color: '#22d3ee', labelLane: true,
+        }));
+        const original = structuredClone(annotations);
+        try {
+            const props = { seq: 'ACGT'.repeat(40), annotations, enzymes: [], disableExternalFonts: true, testSize: { width, height: 12000 } };
+            await act(async () => root.render(<SeqViz {...props} viewer="linear" />));
+            const labels = [...host.querySelectorAll('.la-vz-annotation-label')];
+            expect(labels.map((n) => [n.id, n.textContent]).sort()).toEqual(annotations.map((a) => [a.id, a.name]).sort());
+            expect(annotations).toEqual(original);
+            const rows = [...host.querySelectorAll('.la-vz-linear-annotation-row')];
+            expect(rows.some((row) => row.querySelectorAll('.la-vz-annotation-label').length > 1)).toBe(true);
+            expect(rows.length).toBeLessThan(annotations.length);
+            for (const row of rows) {
+                const extents = [...row.querySelectorAll('.la-vz-annotation-label')].map((label) => {
+                    const group = label.parentElement!;
+                    const x = Number(group.getAttribute('transform')!.match(/translate\(([^,]+)/)![1]);
+                    const center = x + Number(label.getAttribute('x'));
+                    const half = label.textContent!.length * 0.591 * 12 / 2;
+                    return [center - half, center + half];
+                }).sort((a, b) => a[0] - b[0]);
+                for (let i = 1; i < extents.length; i++) expect(extents[i][0] - extents[i - 1][1]).toBeGreaterThanOrEqual(7.99);
+            }
+            // The selection registry is populated by native marker refs, not label extents.
+            const path = host.querySelector('path.la-vz-annotation')!;
+            const fiberKey = Object.keys(path).find((key) => key.startsWith('__reactFiber'))!;
+            let fiber = (path as unknown as Record<string, any>)[fiberKey];
+            while (fiber && !fiber.stateNode?.findXAndWidthElement) fiber = fiber.return;
+            expect(fiber).toBeTruthy();
+            const native = fiber.memoizedProps.annotationRows.flat().filter((a: { labelLane?: boolean }) => a.labelLane);
+            for (const a of native) expect(original.find((o) => o.id === a.id)).toMatchObject({ start: a.start, end: a.end, direction: a.direction, name: a.name });
+        } finally {
+            await act(async () => root.unmount());
+            host.remove();
+        }
+    });
+
     it('uses only API occurrences and preserves wrapped segments, orientation, certainty, and semantics', () => {
         const annotations = buildRestrictionMapAnnotations({ occurrences, selectedEnzymes: ['EcoRI', 'Nt.BbvCI'], sequenceLength: 12, sourceDisplayStrand: 'plus', resolvedDisplayStrand: 'plus' });
         expect(annotations.map(({ id, start, end, direction, name, type }) => ({ id, start, end, direction, name, type }))).toEqual([

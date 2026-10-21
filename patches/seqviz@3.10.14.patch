@@ -1,5 +1,5 @@
 diff --git a/dist/index.js b/dist/index.js
-index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b4ca1bfe9 100644
+index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d0f78edd32fac7e7a3655a40fe540251314428c6 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -352,7 +352,11 @@ var Circular = /** @class */ (function (_super) {
@@ -36,10 +36,10 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b
          var primerRevRows = (0, elementsToRows_1.createMultiRows)((0, elementsToRows_1.stackElements)(vetAnnotations(primers.filter(function (p) { return p.direction === -1; })), seq.length), bpsPerBlock, arrSize);
          var annotationRows = (0, elementsToRows_1.createMultiRows)((0, elementsToRows_1.stackElements)(vetAnnotations(annotations), seq.length), bpsPerBlock, arrSize);
 +        // Label lanes are display layout only: never expand native feature coordinates.
-+        annotationRows = annotationRows.map(function (rows) {
-+            var ordinary = rows.map(function (row) { return row.filter(function (a) { return !a.labelLane; }); }).filter(function (row) { return row.length; });
-+            var lanes = rows.reduce(function (all, row) { return all.concat(row.filter(function (a) { return a.labelLane; }).map(function (a) { return [a]; })); }, []);
-+            return ordinary.concat(lanes);
++        var charWidth = this.props.charWidth;
++        annotationRows = annotationRows.map(function (rows, block) {
++            var firstBase = block * bpsPerBlock;
++            return (0, SeqBlock_1.packLabelLanes)(rows, { bpsPerBlock: bpsPerBlock, charWidth: charWidth, firstBase: firstBase, fullSeq: seq, seq: seq.substring(firstBase, firstBase + bpsPerBlock), size: size });
 +        });
          var searchRows = search && search.length ? (0, elementsToRows_1.createSingleRows)(search, bpsPerBlock, arrSize) : new Array(arrSize).fill([]);
          var highlightRows = (0, elementsToRows_1.createSingleRows)(highlights, bpsPerBlock, arrSize);
@@ -114,7 +114,127 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b
                      _this.stopIncrementingScroller();
                  }
                  return;
-@@ -2370,7 +2393,7 @@ var SeqBlock = /** @class */ (function (_super) {
+@@ -2211,23 +2234,14 @@ var Translations_1 = __webpack_require__(27);
+  * the sequence, and flair around it including the
+  * complementary sequence, sequence index, and anotations *
+  */
+-var SeqBlock = /** @class */ (function (_super) {
+-    __extends(SeqBlock, _super);
+-    function SeqBlock() {
+-        var _this = _super !== null && _super.apply(this, arguments) || this;
+-        _this.componentWillUnmount = function () {
+-            var _a = _this.props, id = _a.id, onUnmount = _a.onUnmount;
+-            onUnmount(id);
+-        };
+-        /**
+-         * For elements in arrays, check whether it wraps around the zero index.
+-         */
+-        _this.findXAndWidthElement = function (i, element, elements) {
++// One geometry owner for both lane allocation and the rendered marker.
++function createAnnotationGeometry(getProps) {
++        var findXAndWidthElement = function (i, element, elements) {
+             var _a, _b, _c, _d;
+-            var _e = _this.props, bpsPerBlock = _e.bpsPerBlock, firstBase = _e.firstBase, fullSeq = _e.fullSeq, seq = _e.seq;
++            var _e = getProps(), bpsPerBlock = _e.bpsPerBlock, firstBase = _e.firstBase, fullSeq = _e.fullSeq, seq = _e.seq;
+             var lastBase = firstBase + seq.length;
+             var end = element.end, start = element.start;
+-            var _f = _this.findXAndWidth(start, end), width = _f.width, x = _f.x;
++            var _f = findXAndWidth(start, end), width = _f.width, x = _f.x;
+             // does the element overflow to the left or the right of this seqBlock?
+             var overflowLeft = start < firstBase;
+             var overflowRight = end > lastBase || (start === end && fullSeq.length > bpsPerBlock); // start === end means covers whole plasmid
+@@ -2238,13 +2252,13 @@ var SeqBlock = /** @class */ (function (_super) {
+             if (split) {
+                 if (elements.findIndex(function (el) { return el.id === element.id; }) === i) {
+                     // we're in the first half of the split element
+-                    (_a = _this.findXAndWidth(firstBase, end), width = _a.width, x = _a.x);
++                    (_a = findXAndWidth(firstBase, end), width = _a.width, x = _a.x);
+                     overflowLeft = true;
+                     overflowRight = false;
+                 }
+                 else {
+                     // we're in the second half of the split element
+-                    (_b = _this.findXAndWidth(start, lastBase), width = _b.width, x = _b.x);
++                    (_b = findXAndWidth(start, lastBase), width = _b.width, x = _b.x);
+                     overflowLeft = false;
+                     overflowRight = true;
+                 }
+@@ -2252,7 +2266,7 @@ var SeqBlock = /** @class */ (function (_super) {
+             else if (start > end) {
+                 // the element crosses over the zero index and this needs to be accounted for
+                 // this is very similar to the Block rendering logic in ../Selection/Selection.jsx
+-                (_c = _this.findXAndWidth(start > lastBase ? firstBase : Math.max(firstBase, start), end < firstBase ? lastBase : Math.min(lastBase, end)), width = _c.width, x = _c.x);
++                (_c = findXAndWidth(start > lastBase ? firstBase : Math.max(firstBase, start), end < firstBase ? lastBase : Math.min(lastBase, end)), width = _c.width, x = _c.x);
+                 // if this is the first part of element that crosses the zero index
+                 if (start > firstBase) {
+                     overflowLeft = true;
+@@ -2267,7 +2281,7 @@ var SeqBlock = /** @class */ (function (_super) {
+             else if (start === end) {
+                 // the element circles the entire plasmid and we aren't currently in a SeqBlock
+                 // where the element starts or ends
+-                (_d = _this.findXAndWidth(start, end + fullSeq.length), width = _d.width, x = _d.x);
++                (_d = findXAndWidth(start, end + fullSeq.length), width = _d.width, x = _d.x);
+             }
+             return { overflowLeft: overflowLeft, overflowRight: overflowRight, width: width, x: x };
+         };
+@@ -2277,10 +2291,10 @@ var SeqBlock = /** @class */ (function (_super) {
+          *
+          * If an element and elements are provided, it also factors in whether the element circles around the 0-index.
+          */
+-        _this.findXAndWidth = function (firstIndex, lastIndex) {
++        var findXAndWidth = function (firstIndex, lastIndex) {
+             if (firstIndex === void 0) { firstIndex = 0; }
+             if (lastIndex === void 0) { lastIndex = 0; }
+-            var _a = _this.props, bpsPerBlock = _a.bpsPerBlock, charWidth = _a.charWidth, firstBase = _a.firstBase, seqLength = _a.fullSeq.length, size = _a.size;
++            var _a = getProps(), bpsPerBlock = _a.bpsPerBlock, charWidth = _a.charWidth, firstBase = _a.firstBase, seqLength = _a.fullSeq.length, size = _a.size;
+             firstIndex |= 0;
+             lastIndex |= 0;
+             var lastBase = Math.min(firstBase + bpsPerBlock, seqLength);
+@@ -2309,6 +2323,43 @@ var SeqBlock = /** @class */ (function (_super) {
+             }
+             return { width: width, x: x };
+         };
++    return { findXAndWidthElement: findXAndWidthElement, findXAndWidth: findXAndWidth };
++}
++exports.packLabelLanes = function (rows, props) {
++    var ordinary = rows.map(function (row) { return row.filter(function (a) { return !a.labelLane; }); }).filter(function (row) { return row.length; });
++    var geometry = createAnnotationGeometry(function () { return props; });
++    var sites = rows.reduce(function (all, row) { return all.concat(row.filter(function (a) { return a.labelLane; })); }, []);
++    var extents = sites.map(function (a, i) {
++        var marker = geometry.findXAndWidthElement(i, a, sites);
++        var center = (0, Annotations_1.labelLaneCenter)(a.name, props.size.width, marker.x, marker.width);
++        var halfLabel = a.name.length * 0.591 * 12 / 2;
++        return { annotation: a, left: Math.min(marker.x, center - halfLabel) - 4, right: Math.max(marker.x + marker.width, center + halfLabel) + 4, order: i };
++    }).sort(function (a, b) { return a.left - b.left || a.order - b.order; });
++    var lanes = [], ends = [];
++    extents.forEach(function (extent) {
++        var lane = ends.findIndex(function (end) { return end <= extent.left; });
++        if (lane === -1) { lane = lanes.length; lanes.push([]); }
++        lanes[lane].push(extent.annotation);
++        ends[lane] = extent.right;
++    });
++    // Preserve native input ordering between rows when all sites overlap.
++    lanes.sort(function (a, b) { return sites.indexOf(a[0]) - sites.indexOf(b[0]); });
++    return ordinary.concat(lanes);
++};
++var SeqBlock = /** @class */ (function (_super) {
++    __extends(SeqBlock, _super);
++    function SeqBlock() {
++        var _this = _super !== null && _super.apply(this, arguments) || this;
++        _this.componentWillUnmount = function () {
++            var _a = _this.props, id = _a.id, onUnmount = _a.onUnmount;
++            onUnmount(id);
++        };
++        /**
++         * For elements in arrays, check whether it wraps around the zero index.
++         */
++        var geometry = createAnnotationGeometry(function () { return _this.props; });
++        _this.findXAndWidthElement = geometry.findXAndWidthElement;
++        _this.findXAndWidth = geometry.findXAndWidth;
+         /**
+          * Given a bp, return either the bp as was or a text span if it should have a color.
+          *
+@@ -2370,7 +2421,7 @@ var SeqBlock = /** @class */ (function (_super) {
          }
          // height and yDiff of annotations
          var annYDiff = translationYDiff + translationHeight;
@@ -123,7 +243,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b
          // height and ydiff of the index row
          var elementGap = primerRevRows.length + primerRevRows.length + annotationRows.length + translationRows.length ? 3 : 0;
          var indexRowYDiff = annYDiff + annHeight + elementGap;
-@@ -2450,7 +2473,7 @@ var hoverOtherAnnotationRows = function (className, opacity) {
+@@ -2450,7 +2501,7 @@ var hoverOtherAnnotationRows = function (className, opacity) {
   * Render each row of annotations into its own row.
   * This is not a default export for sake of the React component displayName.
   */
@@ -132,7 +252,20 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b
  exports["default"] = AnnotationRows;
  /**
   * A single row of annotations. Multiple of these may be in one seqBlock
-@@ -2515,7 +2538,7 @@ var SingleNamedElement = function (props) {
+@@ -2461,6 +2512,12 @@ var AnnotationRow = function (props) { return (React.createElement("g", { classN
+  * SingleNamedElement is a single rectangular element in the SeqBlock.
+  * It does a bunch of stuff to avoid edge-cases from wrapping around the 0-index, edge of blocks, etc.
+  */
++// Keep clamping identical in the allocator and the SVG label owner.
++function labelLaneCenter(name, blockWidth, x, width) {
++    var halfLabel = name.length * 0.591 * 12 / 2;
++    return Math.max(halfLabel + 4, Math.min(blockWidth - halfLabel - 4, x + width / 2));
++}
++exports.labelLaneCenter = labelLaneCenter;
+ var SingleNamedElement = function (props) {
+     var element = props.element, elements = props.elements, findXAndWidth = props.findXAndWidth, firstBase = props.firstBase, index = props.index, inputRef = props.inputRef, lastBase = props.lastBase;
+     var color = element.color, direction = element.direction, end = element.end, name = element.name, start = element.start;
+@@ -2515,7 +2572,7 @@ var SingleNamedElement = function (props) {
      var availableCharacters = Math.floor((width - 40) / annotationCharacterWidth);
      // Ellipsize or hide the name if it's too long.
      var displayName = name;
@@ -141,21 +274,21 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b
          var charactersToShow = availableCharacters - 1;
          if (charactersToShow < 3) {
              // If we can't show at least three characters, don't show any.
-@@ -2525,8 +2548,11 @@ var SingleNamedElement = function (props) {
+@@ -2525,8 +2582,11 @@ var SingleNamedElement = function (props) {
              displayName = "".concat(name.slice(0, charactersToShow), "\u2026");
          }
      }
 -    return (React.createElement("g", { id: element.id, transform: "translate(".concat(x, ", ").concat(0.1 * height, ")") },
 -        React.createElement("title", null, name),
-+    // A full-width reserved lane lets even one-base recognition spans keep their name.
-+    var labelX = element.labelLane ? Math.max(name.length * annotationCharacterWidth / 2 + 4, Math.min(props.width - name.length * annotationCharacterWidth / 2 - 4, x + width / 2)) - x : width / 2;
++    // A packed label lane keeps full names without changing recognition coordinates.
++    var labelX = element.labelLane ? labelLaneCenter(name, props.width, x, width) - x : width / 2;
 +    return (React.createElement("g", { id: element.id, "aria-label": element.description || name, transform: "translate(".concat(x, ", ").concat(0.1 * height, ")") },
 +        React.createElement("title", null, element.description || name),
 +        element.labelLane && React.createElement("path", { d: "M" + (width / 2) + " 0 L" + labelX + " " + (-height / 2 + 7), stroke: color, fill: "none", pointerEvents: "none" }),
          React.createElement("path", { ref: inputRef(element.id, {
                  end: end,
                  name: element.name,
-@@ -2539,7 +2565,7 @@ var SingleNamedElement = function (props) {
+@@ -2539,7 +2599,7 @@ var SingleNamedElement = function (props) {
              }, onFocus: function () {
                  // do nothing
              }, onMouseOut: function () { return hoverOtherAnnotationRows(element.id, 0.7); }, onMouseOver: function () { return hoverOtherAnnotationRows(element.id, 1.0); } }),
@@ -164,7 +297,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b
                  // do nothing
              }, onFocus: function () {
                  // do nothing
-@@ -3840,6 +3866,11 @@ var SelectionHandler = /** @class */ (function (_super) {
+@@ -3840,6 +3900,11 @@ var SelectionHandler = /** @class */ (function (_super) {
          _this.selectionStarted = false;
          /* was the last selection action a shift click, used for shift-click catch up */
          _this.shiftSelection = false;
@@ -176,7 +309,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b
          /* unix time of the last click (awful attempt at detecting double clicks) */
          _this.lastClick = Date.now();
          /** a map between the id of child elements and their associated SelectRanges */
-@@ -3853,10 +3884,41 @@ var SelectionHandler = /** @class */ (function (_super) {
+@@ -3853,10 +3918,41 @@ var SelectionHandler = /** @class */ (function (_super) {
              if (!document)
                  return;
              document.removeEventListener("mouseup", _this.stopDrag);
@@ -218,7 +351,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b
          };
          /**
           * Called at start of drag to make sure checkers are reset to default state
-@@ -3959,15 +4021,17 @@ var SelectionHandler = /** @class */ (function (_super) {
+@@ -3959,15 +4055,17 @@ var SelectionHandler = /** @class */ (function (_super) {
          _this.handleLinearSeqEvent = function (e, knownRange) {
              var selection = _this.context;
              var currBase = _this.calculateBaseLinear(e, knownRange);
@@ -239,7 +372,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b
              }
          };
          /**
-@@ -4054,7 +4118,7 @@ var SelectionHandler = /** @class */ (function (_super) {
+@@ -4054,7 +4152,7 @@ var SelectionHandler = /** @class */ (function (_super) {
                      end = currBase; // nothing special just update the selection
                  }
                  _this.shiftSelection = false;
@@ -248,7 +381,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b
              }
          };
          /**
-@@ -4262,7 +4326,7 @@ var SingleAnnotation = function (props) {
+@@ -4262,7 +4360,7 @@ var SingleAnnotation = function (props) {
          sweepFWD: true,
      });
      var circAnnID = "la-vz-".concat(a.id, "-circular");
@@ -257,7 +390,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b
          React.createElement("path", { d: namePath, fill: "transparent", id: circAnnID, stroke: "transparent" }),
          React.createElement("path", { ref: inputRef(a.id, {
                  direction: a.direction,
-@@ -4631,12 +4695,13 @@ var Labels = /** @class */ (function (_super) {
+@@ -4631,12 +4729,13 @@ var Labels = /** @class */ (function (_super) {
          var _this = _super.call(this, props) || this;
          // set the currently hovered group
          _this.setHoveredGroup = function (hoveredGroup) {
@@ -272,7 +405,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b
              labelGroups: [],
          };
          return _this;
-@@ -4657,22 +4722,24 @@ var Labels = /** @class */ (function (_super) {
+@@ -4657,22 +4756,24 @@ var Labels = /** @class */ (function (_super) {
                      g.forkCoor && (React.createElement("path", { className: "la-vz-label-line", d: "M".concat(fC.x, " ").concat(fC.y, " L").concat(g.textCoor.x, " ").concat(g.textCoor.y), style: style_1.circularLabelLine }))));
                  if (!g.grouped) {
                      // just a single name in this position
@@ -304,7 +437,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b
          // I'm storing the name position groups in state because hovering and
          // leaving a hover both trigger a change in whether to render and show
          // the annotation block, it would be expensive to regroup labels
-@@ -4680,6 +4747,7 @@ var Labels = /** @class */ (function (_super) {
+@@ -4680,6 +4781,7 @@ var Labels = /** @class */ (function (_super) {
          return {
              hoveredGroup: prevState.hoveredGroup,
              labelGroups: Labels.groupOverlappingLabels(nextProps),
@@ -312,7 +445,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b
          };
      };
      /**
-@@ -4898,81 +4966,34 @@ var style_1 = __webpack_require__(15);
+@@ -4898,81 +5000,34 @@ var style_1 = __webpack_require__(15);
   * the height and width of the resulting annotaiton block
   */
  var WrappedGroupLabel = function (props) {
