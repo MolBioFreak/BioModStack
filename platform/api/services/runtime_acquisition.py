@@ -1,6 +1,7 @@
 """Setup-facing acquisition API. Does not configure/activate/qualify models."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import sys
@@ -120,14 +121,22 @@ def acquire_model(model_id: str, store_root: Path, *, expected_plan_digest: str,
         item = Artifact(**entry['manifest'])
         if item.kind == 'weights' and item.license_id not in licenses:
             raise AcquisitionError(f'license acceptance required: {item.license_id}')
+    from services.remote_execution.hf_assets import resolve_acquisition_source
+    def resolve_source(artifact):
+        return asyncio.run(resolve_acquisition_source(artifact))
+
     receipts = []
     for entry in plan['artifacts']:
         receipt = acquire(Artifact(**entry['manifest']), store_root,
                           accepted_licenses=licenses, attempts=attempts,
-                          timeout=timeout, total_timeout=total_timeout, weights_root=weights_root)
+                          timeout=timeout, total_timeout=total_timeout, weights_root=weights_root,
+                          source_resolver=resolve_source)
         receipts.append({'dependency': entry['dependency'], **receipt})
     layouts = [materialize_weights(dependency, members, store_root,
                 accepted_licenses=licenses, attempts=attempts, timeout=timeout,
-                total_timeout=total_timeout, weights_root=weights_root) for dependency, members in _layouts(plan)]
+                total_timeout=total_timeout, weights_root=weights_root,
+                acquired={Artifact(**e['manifest']).manifest_digest: r
+                          for e, r in zip(plan['artifacts'], receipts)})
+               for dependency, members in _layouts(plan)]
     return {'model_id': model_id, 'plan_digest': plan['plan_digest'],
             'artifacts': receipts, 'layouts': layouts, 'qualification': 'not_checked'}

@@ -17,6 +17,7 @@ from pathlib import Path
 from .pinned_acquisition import AcquisitionError, Artifact, acquire
 from .shared_runtime_images import (
     _directory, _file, _hash, _check_file, _check_directory, _lock, _same,
+    _identity, image_identity,
 )
 
 
@@ -47,7 +48,7 @@ def validate_members(dependency, entries, *, test_only=False):
     return paths
 
 
-def _verify_tree(root, entries, *, frozen, weights_root=None):
+def _verify_tree(root, entries, *, frozen, weights_root=None, observed_files=None):
     root = Path(root)
     weight_store = Path(weights_root) if weights_root is not None else root.parents[2]
     expected = {e['member_path']: e['manifest'] for e in entries}
@@ -75,7 +76,12 @@ def _verify_tree(root, entries, *, frozen, weights_root=None):
                     with _file(member) as (fd, owner, before):
                         if before.st_nlink != 1 or ((frozen or stat.S_ISLNK(info.st_mode)) and stat.S_IMODE(before.st_mode) != 0o400):
                             raise AcquisitionError('invalid layout member identity/mode')
-                        digest = _hash(fd)
+                        stamp = _identity(before)
+                        digest = (observed_files or {}).get(stamp)
+                        if digest is None:
+                            digest = _hash(fd)
+                        if observed_files is not None:
+                            observed_files[stamp] = digest
                         _check_file(member, fd, owner, before)
                         if stat.S_ISLNK(info.st_mode) and not _same(info, os.stat(name, dir_fd=parent, follow_symlinks=False)):
                             raise AcquisitionError('layout alias changed during verification')
@@ -93,13 +99,17 @@ def _verify_tree(root, entries, *, frozen, weights_root=None):
 
 
 def materialize_weights(dependency, entries, store_root, *, accepted_licenses=(),
-                        test_only=False, attempts=3, timeout=30, total_timeout=300, weights_root=None):
+                        test_only=False, attempts=3, timeout=30, total_timeout=300, weights_root=None,
+                        acquired=None):
     """Return immutable generation path; caller owns activation/transaction binding.
 
     entries = [{member_path: relative POSIX path, manifest: Artifact kwargs}].
     Validate all licenses before IO. Completed acquisitions and immutable aliases
     survive interruption; old uncommitted copy temps are discarded, never promoted.
     Corrupt completed members/publications block instead of being repaired.
+    acquired accepts only receipts returned by this invocation's acquisition,
+    never saved resume evidence. Its generations are rechecked without rereading
+    bodies; standalone/resumed layout calls still authenticate the full bytes.
     """
     dependency, entries = copy.deepcopy((dependency, entries))
     validate_members(dependency, entries, test_only=test_only)
@@ -118,13 +128,33 @@ def materialize_weights(dependency, entries, store_root, *, accepted_licenses=()
     layouts = weight_store / 'layouts' / dependency['relative_path']
     destination = layouts / digest
     stage = layouts / ('.staging-' + digest)
+    # Invocation-local observations only; explicit resume/audit still hashes.
+    observed_files = {}
+    acquired = acquired or {}
+    for entry in entries:
+        artifact = Artifact(**entry['manifest'])
+        receipt = acquired.get(artifact.manifest_digest)
+        if receipt is not None:
+            concrete = weight_store / 'objects' / 'sha256' / artifact.sha256 / 'runtime.sif'
+            if (receipt['path'] != str(concrete) or receipt['test_only'] != test_only
+                    or image_identity(concrete, artifact.sha256) != receipt['verification']
+                    or receipt['verification']['size'] != artifact.size_bytes):
+                raise AcquisitionError('acquired member identity changed')
+            with _file(concrete) as (fd, parent, before):
+                observation = receipt['verification']
+                if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                        observation['device'], observation['inode'], observation['size'],
+                        observation['mtime_ns'], observation['ctime_ns']):
+                    raise AcquisitionError('acquired member identity changed')
+                observed_files[_identity(before)] = artifact.sha256
+                _check_file(concrete, fd, parent, before)
     with _lock(layouts, digest):
         if not os.path.lexists(destination):
             with _directory(stage, create=True):
                 pass
             for entry in entries:
                 artifact = Artifact(**entry['manifest'])
-                receipt = acquire(artifact, store_root, accepted_licenses=licenses,
+                receipt = acquired.get(artifact.manifest_digest) or acquire(artifact, store_root, accepted_licenses=licenses,
                                   test_only=test_only, attempts=attempts, timeout=timeout,
                                   total_timeout=total_timeout, weights_root=weights_root)
                 target = stage / entry['member_path']
@@ -147,7 +177,7 @@ def materialize_weights(dependency, entries, store_root, *, accepted_licenses=()
                                target.name, dir_fd=parent)
                     _check_directory(target.parent, parent)
                     os.fsync(parent)
-            _verify_tree(stage, entries, frozen=False, weights_root=weight_store)
+            _verify_tree(stage, entries, frozen=False, weights_root=weight_store, observed_files=observed_files)
             # Freeze children first; reruns can reuse a fully prepared frozen stage.
             dirs = {stage} | {stage / p for e in entries for p in Path(e['member_path']).parents
                               if str(p) != '.'}
@@ -155,11 +185,11 @@ def materialize_weights(dependency, entries, store_root, *, accepted_licenses=()
                 with _directory(directory) as fd:
                     os.fchmod(fd, 0o500)
                     os.fsync(fd)
-            _verify_tree(stage, entries, frozen=True, weights_root=weight_store)
+            _verify_tree(stage, entries, frozen=True, weights_root=weight_store, observed_files=observed_files)
             with _directory(layouts) as parent:
                 os.rename(stage.name, destination.name, src_dir_fd=parent, dst_dir_fd=parent)
                 os.fsync(parent)
-        verification = _verify_tree(destination, entries, frozen=True, weights_root=weight_store)
+        verification = _verify_tree(destination, entries, frozen=True, weights_root=weight_store, observed_files=observed_files)
         return {'dependency': dependency, 'path': str(destination),
                 'layout_digest': digest, 'members': verification,
                 'qualification': 'not_checked', 'test_only': test_only}

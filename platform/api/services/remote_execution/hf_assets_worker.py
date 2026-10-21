@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ctypes
+from dataclasses import replace
 import fcntl
 import hashlib
 import json
@@ -81,10 +82,14 @@ def _hash(stream, size, digest):
 
 def _prepare(request, config, api, http, token, *, publisher_lock=None):
     import re
+    if request.get('action') == 'resolve':
+        config = replace(config, allow_publish=False)
     role, digest, size = request.get('role'), request.get('sha256'), request.get('size_bytes')
     if (role not in DELIVERY_ROLES or not isinstance(digest, str)
             or not re.fullmatch('[0-9a-f]{64}', digest) or type(size) is not int
-            or not MIN_BYTES <= size <= config.max_bytes):
+            or not 1 <= size <= config.max_bytes
+            or (size < MIN_BYTES and not (role == 'weights' and
+                request.get('action') in {'release', 'resolve'}))):
         raise HFAssetError('HF asset identity or role is invalid')
     key = f'sha256/{digest}/' + ('image.sif' if role == 'image' else 'artifact')
     info = _private_bucket(api, config)
@@ -173,7 +178,7 @@ def _execute(request):
             if request.get('action') == 'check':
                 _private_bucket(api, config)
                 return {'available': True}
-            if request.get('action') != 'prepare':
+            if request.get('action') not in {'prepare', 'release', 'resolve'}:
                 raise HFAssetError('HF asset operation is invalid')
             with httpx.Client(timeout=60, follow_redirects=False, trust_env=False) as http:
                 return _prepare(request, config, api, http, token, publisher_lock=lock.fileno())

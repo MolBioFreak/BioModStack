@@ -21,7 +21,7 @@ from pathlib import Path
 from .reviewed_transport import TransportError, validate_policy, open_response
 
 from .shared_runtime_images import (
-    _directory, _file, _hash, _check_file, _lock, publish_image, verify_image,
+    _directory, _file, _hash, _check_file, _lock, _publish_image_locked, verify_image,
 )
 
 
@@ -107,7 +107,8 @@ def _observed(path: Path) -> tuple[str, int]:
 
 def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
             attempts: int = 3, timeout: float = 30, total_timeout: float = 300,
-            test_only: bool = False, weights_root: Path | None = None) -> dict:
+            test_only: bool = False, weights_root: Path | None = None,
+            source_resolver=None) -> dict:
     """Download/resume one reviewed artifact, verify, atomically publish, receipt.
 
     A changed manifest for the same artifact ID, altered checkpoint bytes, or
@@ -116,6 +117,9 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
     Range is accepted only with an exact Content-Range; a 200 restarts safely.
     test_only uses a segregated fixture store and cannot produce production paths.
     Weights are opaque pinned files: no archive extraction or license acceptance.
+    source_resolver is an internal controller hook, not request metadata. It may
+    resolve a transient mirror capability for this exact artifact; only the
+    original manifest is persisted, and all received bytes retain pinned checks.
     """
     artifact = replace(artifact, redirect_policy=copy.deepcopy(artifact.redirect_policy))
     artifact.validate(test_only=test_only)
@@ -192,7 +196,12 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
                     raise AcquisitionError('total acquisition deadline exceeded')
                 try:
                     try:
-                        response = open_response(artifact.url, policy=artifact.redirect_policy,
+                        # Controller-only resolver returns an ephemeral validated URL.
+                        # It never changes manifest/checkpoint authority and is only
+                        # called when bytes are actually missing (including retries).
+                        source = source_resolver(artifact) if source_resolver else None
+                        response = open_response(source or artifact.url,
+                            policy=None if source else artifact.redirect_policy,
                             offset=offset, timeout=timeout, deadline=deadline, test_only=test_only)
                     except TransportError as exc:
                         raise AcquisitionError(str(exc)) from None
@@ -242,11 +251,17 @@ def acquire(artifact: Artifact, store_root: Path, *, accepted_licenses=(),
                 except (OSError, urllib.error.URLError) as exc:
                     if attempt + 1 == attempts:
                         raise AcquisitionError(f'download failed after {attempts} attempt(s)') from None
-            digest, size = _observed(partial)
+            # Resume already authenticated the checkpoint; a completed response
+            # checkpoint hashed it above. Publication independently authenticates
+            # adoption under its own custody fence, so do not reread it here.
+            digest, size = state['partial_sha256'], state['bytes']
             if (digest, size) != (artifact.sha256, artifact.size_bytes):
                 raise AcquisitionError('downloaded bytes differ from pinned SHA-256/size')
-            result = publish_image(partial, cache, artifact.sha256, adopt_owned=True)
-            receipt = verify_image(result, artifact.sha256)
+            published = {}
+            with _lock(cache, 'lifecycle'):
+                result = _publish_image_locked(partial, cache, artifact.sha256,
+                    adopt_owned=True, _receipts=published)
+                receipt = published[artifact.sha256]
         state.update(status='verified', receipt=receipt)
         _write_state(stage, state)
         # Only discard our authenticated download staging, never a published

@@ -347,7 +347,35 @@ def _validate_source(source):
         raise HFAssetError('HF returned an invalid source capability') from None
 
 
-async def prepare_sources(entries, *, check_fence) -> dict:
+async def resolve_acquisition_source(artifact) -> str | None:
+    """Resolve pinned local acquisition without publishing or persisting a URL."""
+    if configuration() is None:
+        return None
+    try:
+        source = await _invoke(dict(action='resolve', role=artifact.kind,
+            sha256=artifact.sha256, size_bytes=artifact.size_bytes), check_fence=_noop)
+    except HFAssetError as exc:
+        if str(exc) == ERROR_MESSAGES['publish_disabled']:
+            return None  # Public pinned origin remains the cold fallback.
+        raise
+    return _validate_source(source)['url']
+
+
+async def prepare_release_sources(entries, *, check_fence) -> dict:
+    """Explicit bounded release publication, not ordinary small-file delivery.
+
+    Only weight companions may bypass the relay floor; at most 32 entries and
+    one floor's worth of small companions per controller release invocation.
+    """
+    entries = list(entries)
+    if (len(entries) > 32 or any(e.size_bytes < MIN_BYTES and
+            (e.role != 'weights' or e.size_bytes <= 0) for e in entries)
+            or sum(e.size_bytes for e in entries if e.size_bytes < MIN_BYTES) > MIN_BYTES):
+        raise HFAssetError(ERROR_MESSAGES['identity'])
+    return await prepare_sources(entries, check_fence=check_fence, _release=True)
+
+
+async def prepare_sources(entries, *, check_fence, _release=False) -> dict:
     config = configuration()
     if config is None:
         return {}
@@ -357,11 +385,11 @@ async def prepare_sources(entries, *, check_fence) -> dict:
                 not re.fullmatch('[0-9a-f]{64}', entry.sha256) or
                 type(entry.size_bytes) is not int or entry.size_bytes < 0):
             raise HFAssetError('HF asset identity or role is invalid')
-        if entry.size_bytes < MIN_BYTES:
+        if entry.size_bytes < MIN_BYTES and not _release:
             continue
         if entry.size_bytes > config.max_bytes:
             raise HFAssetError('HF asset exceeds configured byte limit')
-        source = await _invoke(dict(action='prepare', role=entry.role, sha256=entry.sha256,
+        source = await _invoke(dict(action='release' if _release else 'prepare', role=entry.role, sha256=entry.sha256,
                                     size_bytes=entry.size_bytes, path=str(entry.source)),
                                check_fence=check_fence)
         result[(entry.role == 'image', entry.sha256)] = _validate_source(source)
