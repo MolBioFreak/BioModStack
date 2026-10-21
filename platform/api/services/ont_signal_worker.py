@@ -540,6 +540,20 @@ def _append_lease_recovery_receipt(
     }
 
 
+def _container_cli_env() -> dict[str, str]:
+    """Minimal host-client context; container mounts/network remain command-owned.
+
+    Rootless Podman needs the invoking user's real home and session runtime
+    directory to find its existing storage and user namespace. These variables
+    configure the host CLI; they are not forwarded into the scientific image.
+    """
+    context = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(Path.home())}
+    for key in ("XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "DBUS_SESSION_BUS_ADDRESS"):
+        if os.environ.get(key):
+            context[key] = os.environ[key]
+    return context
+
+
 class OntSignalWorker:
     """Single-owner leased worker for move validation, reusable mapping, and bounded renders."""
 
@@ -679,7 +693,7 @@ class OntSignalWorker:
                 text=True,
                 check=False,
                 timeout=30,
-                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+                env=_container_cli_env(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError("local approved Squigualiser image inspection failed") from exc
@@ -1014,7 +1028,7 @@ class OntSignalWorker:
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+            env=_container_cli_env(),
         )
         try:
             _stdout, stderr = await asyncio.wait_for(cleanup.communicate(), timeout=30)
@@ -1036,7 +1050,7 @@ class OntSignalWorker:
             process = await asyncio.create_subprocess_exec(
                 runtime, "ps", "-aq", "--filter", f"label={WORKER_LABEL}",
                 stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+                env=_container_cli_env(),
             )
         except FileNotFoundError as exc:
             # Only failure to spawn the selected executable is optional. Discovery
@@ -1190,7 +1204,7 @@ class OntSignalWorker:
             self._child = await asyncio.create_subprocess_exec(
                 *command, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+                env=_container_cli_env(),
                 start_new_session=True,
             )
             await self._send_fd_request(broker_socket, parents, operation_argv)
