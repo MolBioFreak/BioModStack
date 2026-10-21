@@ -7,7 +7,7 @@ from fastapi import APIRouter, FastAPI
 
 NGS_MODEL_IDS = frozenset({
     "nanopore", "ont_fastq_qc", "ont_plasmid_qc", "ont_construct_screening",
-    "wf_clone_validation", "oligo_design",
+    "wf_clone_validation",
 })
 
 _SHARED_PATHS = {

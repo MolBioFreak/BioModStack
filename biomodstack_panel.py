@@ -495,46 +495,8 @@ def call_local_api_json(method: str, path: str, payload: Optional[dict] = None, 
         raise RuntimeError(f"{method.upper()} {path} failed ({exc.code}): {detail}") from exc
 
 
-def get_bioxp_status(timeout: float = 3.0) -> dict:
-    return call_local_api_json("GET", "/api/bioxp/status", timeout=timeout)
 
 
-def summarize_bioxp_status(payload: dict) -> str:
-    if not payload:
-        return "BMS API unavailable"
-    nested = payload.get("connection")
-    state: dict = nested if isinstance(nested, dict) else payload
-    configured = bool(state.get("configured"))
-    active = bool(state.get("active"))
-    fresh = state.get("fresh")
-    reachable = state.get("reachable")
-    runtime_ready = state.get("runtime_ready")
-    hardware = state.get("hardware_ready")
-    if not configured:
-        label = "NOT CONFIGURED"
-    elif not active:
-        label = "SAVED / DISCONNECTED"
-    elif fresh is False:
-        label = "STALE"
-    elif reachable is False:
-        label = "UNREACHABLE"
-    elif fresh is not True or reachable is not True:
-        label = "UNKNOWN"
-    elif runtime_ready is False:
-        label = "API REACHABLE / RUNTIME NOT READY"
-    elif runtime_ready is not True:
-        label = "API REACHABLE / RUNTIME UNKNOWN"
-    elif hardware is False:
-        label = "API REACHABLE / HARDWARE NOT READY"
-    elif hardware is not True:
-        label = "API REACHABLE / HARDWARE UNKNOWN"
-    else:
-        label = "READY"
-    parts = [label, f"generation={int(state.get('generation') or 0)}"]
-    target = state.get("target_url")
-    if target:
-        parts.append(str(target))
-    return "  |  ".join(parts)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NOTIFICATIONS
@@ -610,7 +572,6 @@ class BioModStackPanel(Adw.Application):
         content.append(self._build_status_section())
         content.append(self._build_setup_section())
         content.append(self._build_runtime_ports_section())
-        content.append(self._build_bioxp_section())
         content.append(self._build_actions_section())
         content.append(self._build_logs_section())
         content.append(self._build_database_section())
@@ -758,39 +719,8 @@ class BioModStackPanel(Adw.Application):
             "Restart the selected surfaces, then reload Electron/browser to apply the new ports.",
         )
 
-    def _build_bioxp_section(self) -> Gtk.Widget:
-        """Read-only BioXP status; configuration and controls live in the web cockpit."""
-        group = Adw.PreferencesGroup()
-        group.set_title("BioXP")
 
-        self.bioxp_row = Adw.ActionRow()
-        self.bioxp_row.set_title("Control-plane status")
-        self._update_bioxp_row()
-        group.add(self.bioxp_row)
 
-        button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        button_box.set_halign(Gtk.Align.START)
-        refresh = Gtk.Button(label="Refresh")
-        refresh.connect("clicked", self._on_bioxp_refresh)
-        button_box.append(refresh)
-
-        action_row = Adw.ActionRow()
-        action_row.set_title("Status only")
-        action_row.set_subtitle("Use the BioXP web cockpit for profile and connection actions. This panel does not control the robot host or collect remote logs.")
-        action_row.set_child(button_box)
-        group.add(action_row)
-        return group
-
-    def _update_bioxp_row(self):
-        if not hasattr(self, "bioxp_row"):
-            return
-        try:
-            self.bioxp_row.set_subtitle(summarize_bioxp_status(get_bioxp_status(timeout=2.0)))
-        except Exception as exc:
-            self.bioxp_row.set_subtitle(f"BMS API/BioXP status unavailable: {exc}")
-
-    def _on_bioxp_refresh(self, button):
-        self._update_bioxp_row()
 
     def _build_actions_section(self) -> Gtk.Widget:
         """Quick action buttons."""
@@ -1535,7 +1465,6 @@ X-GNOME-Autostart-enabled=true
         self._update_status_rows()
         self._update_jobs_row()
         self._update_db_info()
-        self._update_bioxp_row()
         self._update_dev_updates_control()
         return True  # Keep timer running
 

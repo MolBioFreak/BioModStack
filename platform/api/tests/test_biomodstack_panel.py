@@ -498,63 +498,10 @@ def test_panel_api_log_falls_back_when_docker_is_unavailable(monkeypatch, tmp_pa
     assert "dev api line" in content
 
 
-def test_panel_summarizes_compact_bioxp_status(monkeypatch) -> None:
-    module = load_module(monkeypatch)
-
-    summary = module.summarize_bioxp_status(
-        {
-            "connection": {
-                "active": True,
-                "configured": True,
-                "fresh": True,
-                "reachable": True,
-                "runtime_ready": True,
-                "hardware_ready": True,
-                "generation": 4,
-                "target_url": "http://ro***:8123",
-            }
-        }
-    )
-
-    assert summary.startswith("READY")
-    assert "generation=4" in summary
-    assert "http://ro***:8123" in summary
 
 
-def test_panel_bioxp_summary_fails_closed_on_stale_evidence(monkeypatch) -> None:
-    module = load_module(monkeypatch)
-
-    summary = module.summarize_bioxp_status(
-        {
-            "connection": {
-                "active": True,
-                "configured": True,
-                "fresh": False,
-                "reachable": True,
-                "hardware_ready": True,
-                "generation": 2,
-            }
-        }
-    )
-
-    assert summary.startswith("STALE")
-    assert "READY" not in summary
 
 
-def test_panel_bioxp_status_uses_only_compact_read_route(monkeypatch) -> None:
-    module = load_module(monkeypatch)
-    captured = []
-
-    def fake_call(method, path, payload=None, timeout=8.0):
-        captured.append((method, path, payload, timeout))
-        return {"connection": {"configured": False, "active": False, "generation": 0}}
-
-    monkeypatch.setattr(module, "call_local_api_json", fake_call)
-
-    result = module.get_bioxp_status(timeout=2.5)
-
-    assert result["connection"]["configured"] is False
-    assert captured == [("GET", "/api/bioxp/status", None, 2.5)]
 
 
 def test_local_api_calls_follow_selected_runtime_lane(monkeypatch) -> None:
@@ -586,10 +533,10 @@ def test_local_api_calls_follow_selected_runtime_lane(monkeypatch) -> None:
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
-    result = module.call_local_api_json("GET", "/api/bioxp/status", timeout=2.5)
+    result = module.call_local_api_json("GET", "/api/health", timeout=2.5)
 
     assert result["connection"]["configured"] is True
-    assert captured == [("http://127.0.0.1:18002/api/bioxp/status", "GET", 2.5)]
+    assert captured == [("http://127.0.0.1:18002/api/health", "GET", 2.5)]
 
 
 def test_panel_contains_no_robot_host_lifecycle_or_remote_log_actions(monkeypatch) -> None:

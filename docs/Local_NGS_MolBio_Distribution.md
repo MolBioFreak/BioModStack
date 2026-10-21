@@ -7,11 +7,12 @@ remains the supported way to start and stop the managed runtime.
 The generic Job Launcher, Data Viewer, Dashboard, Stats toolkit, BioXP and
 protein/structure workspaces are removed from this frontend. Unreachable UI
 source and its retired tests are removed rather than hidden behind flags.
-The MSA server menu and API controller are removed.
+The MSA server menu and API controller are removed. The native Control Panel
+retains runtime controls and removes its BioXP status section.
 
 The API registers MolBio/NGS routes plus the shared project, sequence, job,
 file, execution, resource and telemetry services that those components need.
-Its public model registry contains the Nanopore and oligo-design definitions.
+Its model registry contains only the Nanopore workflow definition.
 Protein, MD, Boltz, external-result import and FrustraMPNN workers do not start.
 The common job engine rejects unrelated model IDs before materialization.
 Shared implementation dependencies remain where the existing NGS engine and

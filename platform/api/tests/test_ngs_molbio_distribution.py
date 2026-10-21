@@ -47,7 +47,7 @@ class DistributionBoundaryTests(unittest.TestCase):
         from model_registry import get_registry
         ids = {model.id for model in get_registry().list_models()}
         self.assertIn('nanopore', ids)
-        self.assertLessEqual(ids, {'nanopore', 'oligo_design'})
+        self.assertLessEqual(ids, {'nanopore'})
 
 
 if __name__ == '__main__':
