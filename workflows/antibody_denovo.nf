@@ -853,15 +853,13 @@ process SpawnFAMPNNJobs {
         core_protein_scientific_contract: analysisContract.core_protein_scientific_contract,
         fampnn_analysis_declaration: analysisContract.declaration
     ] : [:]
-    def params_json = groovy.json.JsonOutput.toJson(analysisParams + [
-        fampnn_checkpoint: params.fampnn_checkpoint,
-        fampnn_checkpoint_path: params.fampnn_checkpoint_path,
-        fampnn_temperature: params.fampnn_temperature ?: 0.0001,
-        fampnn_num_steps: params.fampnn_num_steps ?: 500,
-        fampnn_psce_threshold: params.fampnn_psce_threshold ?: 0.15,
-        fampnn_mutation_top_n: params.fampnn_mutation_top_n,
-        fampnn_mutation_min_log_odds_delta: params.fampnn_mutation_min_log_odds_delta,
-        fampnn_constraint_mode: params.fampnn_constraint_mode,
+    // Keep the complete model-owned effective settings through child fan-out.
+    // In particular, explicit zero and nullable pSCE are not fallback requests.
+    def modelParams = params.findAll { key, value -> key.toString().startsWith('fampnn_') }
+    if (!params.containsKey('fampnn_temperature')) modelParams.fampnn_temperature = 0.0001
+    if (!params.containsKey('fampnn_num_steps')) modelParams.fampnn_num_steps = 500
+    if (!params.containsKey('fampnn_psce_threshold')) modelParams.fampnn_psce_threshold = 0.15
+    def params_json = groovy.json.JsonOutput.toJson(modelParams + analysisParams + [
         rfantibody_design_loops_custom: params.get('rfantibody_design_loops_custom'),
         rfantibody_loop_length_ranges: params.get('rfantibody_loop_length_ranges'),
         pinned_gpus: params.pinned_gpus
@@ -2937,19 +2935,13 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
                 def parent_id = params.job_id ?: "unknown_${System.currentTimeMillis()}"
                 def batch = orchestrator_batch_name
 
-                // Preserve the selected model's complete effective settings,
-                // rather than maintaining a reduced child-only Protenix schema.
+                // Preserve effective predictor settings instead of maintaining
+                // divergent child-only whitelists or replacing falsey values.
                 def child_params = groovy.json.JsonOutput.toJson(params.findAll { key, value ->
-                    key.toString().startsWith('protenix_')
+                    ['protenix_', 'boltz_', 'esmfold2_', 'esmf_'].any { prefix -> key.toString().startsWith(prefix) }
                 } + [
                     epitope_residues: params.epitope_residues,
                     structure_validator: structure_validator,
-                    boltz_sampling_steps: params.boltz_sampling_steps ?: 200,
-                    boltz_recycling_steps: params.boltz_recycling_steps ?: 3,
-                    boltz_num_samples: params.boltz_num_samples ?: 1,
-                    boltz_use_potentials: params.boltz_use_potentials ?: false,
-                    boltz_use_msa: false,
-                    boltz_step_scale: params.boltz_step_scale,
                     target_pdb: params.target_pdb,
                     target_model_number: params.target_model_number,
                     antibody_chains: params.antibody_chains,
