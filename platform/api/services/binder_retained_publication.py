@@ -30,7 +30,7 @@ ROOTS = {
 SUFFIXES = {'.pdb', '.cif', '.mmcif', '.trb', '.json', '.jsonl', '.csv', '.npz', '.fa', '.fasta'}
 
 
-def _document(root, name, info, model, files):
+def _document(root, name, info, model, files, annotations=None):
     """Read only paired, inventoried producer annotations; never infer scores."""
     import json
     from antibody_pipeline_contract import normalize_antibody_artifact_class
@@ -43,8 +43,11 @@ def _document(root, name, info, model, files):
         key = sidecar.as_posix()
         if key in files:
             try:
-                _, data = _regular(root, key)
-                value = json.loads(data)
+                if annotations is not None:
+                    value = annotations.get(key)
+                else:
+                    _, data = _regular(root, key)
+                    value = json.loads(data)
                 if isinstance(value, dict):
                     payload = value
                     break
@@ -69,7 +72,7 @@ async def publish_retained_documents(session, job, output_path):
         return None
     from services.binder_publication_roots import publication_root
     root = publication_root(job, output_path)
-    files = {}
+    files, annotations = {}, {}
     for relative in ROOTS.get(job.model_id, ()):
         directory = root / relative
         if not directory.exists():
@@ -84,6 +87,12 @@ async def publish_retained_documents(session, job, output_path):
             name = path.relative_to(root).as_posix()
             _, data = _regular(root, name)
             files[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data)}
+            if path.name.startswith('generator_') and path.suffix == '.json' or path.name.endswith('.sample.json'):
+                import json
+                try:
+                    annotations[name] = json.loads(data)
+                except (ValueError, UnicodeError):
+                    pass  # Same nonfatal annotation enrichment as _document.
     if not files:
         return None
     receipt = {'schema': 'binder.retained-publication.v1', 'model_id': job.model_id,
@@ -110,7 +119,7 @@ async def publish_retained_documents(session, job, output_path):
         media_type = ('chemical/x-pdb' if suffix == '.pdb' else
                       'chemical/x-mmcif' if suffix in {'.cif', '.mmcif'} else
                       'application/octet-stream')
-        document = _document(root, name, info, job.model_id, files)
+        document = _document(root, name, info, job.model_id, files, annotations)
         session.add(JobArtifact(id=str(uuid.uuid4()), owner_job_id=job.id,
             attempt=receipt['attempt'], logical_path=PREFIX + name, storage_path=str(root / name),
             sha256=info['sha256'], bytes=info['bytes'], media_type=media_type,
@@ -118,3 +127,42 @@ async def publish_retained_documents(session, job, output_path):
     job.provenance = {**(job.provenance or {}), PUBLICATION_KEY: receipt}
     await session.flush()
     return receipt
+
+
+async def publish_sequence_index(session, job, output_path, validated):
+    """Register the already verified all-emitted index in the import transaction.
+
+    `validated` is load_result_index's return, reused by the selected-Design
+    projection. This does not rescan coordinates or manufacture Design rows.
+    """
+    from scripts.sequence_design_results import RESULT_PATH
+    from services.binder_publication_roots import publication_root
+    index, candidates, index_sha = validated
+    root = publication_root(job, output_path)
+    attempt = job.retry_count or 0
+    identity = str(uuid.uuid5(uuid.NAMESPACE_URL, f'bms:sequence-index:{job.id}:{attempt}'))
+    records = [{'native_output_id': row['name'], 'selected': row['selected'],
+                'sequence': metadata['sequence'], 'native_metadata': metadata,
+                'structure': row['structure'], 'metrics': row['metrics'],
+                'candidate_ref': {'kind': 'native_sequence', 'job_id': job.id,
+                                  'publication_ref': identity, 'native_output_id': row['name']}}
+               for row, metadata in candidates]
+    provenance = {'model_id': job.model_id, 'mode': job.mode,
+                  'remote_attempt_id': job.remote_attempt_id, 'source': index['source'],
+                  'settings': index['settings'], 'native_sequences': records,
+                  'unfiltered_count': index['unfiltered_count'], 'selected_count': index['selected_count']}
+    path = root / RESULT_PATH
+    existing = await session.scalar(select(JobArtifact).where(
+        JobArtifact.owner_job_id == job.id, JobArtifact.attempt == attempt,
+        JobArtifact.logical_path == RESULT_PATH))
+    expected = (str(path), index_sha, path.stat().st_size, provenance)
+    if existing is not None:
+        if existing.id != identity or (existing.storage_path, existing.sha256, existing.bytes, existing.provenance) != expected:
+            raise ValueError('Native sequence publication replay changed')
+        return existing
+    artifact = JobArtifact(id=identity, owner_job_id=job.id, attempt=attempt,
+        logical_path=RESULT_PATH, storage_path=str(path), sha256=index_sha,
+        bytes=expected[2], media_type='application/json', provenance=provenance)
+    session.add(artifact)
+    await session.flush()
+    return artifact

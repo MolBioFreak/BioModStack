@@ -1,17 +1,55 @@
 """Exact model-owned registered documents, independent of accepted Designs."""
 from pathlib import Path
 from fastapi import HTTPException
-from database import JobArtifact
+from database import Job, JobArtifact
 
 
 async def resolve_native_source(session, job_id: str, artifact_id: str) -> tuple[Path, dict]:
-    from services.binder_continuation import resolve_root
-    owner, root = await resolve_root(session, job_id)
+    owner = await session.get(Job, job_id)
+    if owner is None:
+        raise HTTPException(404, 'Source job not found')
+    # Scientific custody is the producer JobArtifact, not a binder scheduler
+    # root or a surviving ancestor Job. Lineage remains descriptive metadata.
+    from services.binder_diagnostic_selection import root_id
+    lineage_root = root_id(owner)
+    if owner.model_id == 'rfd4_proteina':
+        # The native index/ingester registers output-relative JobArtifacts. Do
+        # not interpret its observation manifest as a second custody authority.
+        artifact = await session.get(JobArtifact, artifact_id)
+        from services.binder_publication_roots import publication_root
+        from services.binder_source_materialization import structure_suffix
+        if (artifact is None or artifact.owner_job_id != owner.id
+                or artifact.attempt != (owner.retry_count or 0)):
+            raise HTTPException(404, 'Selected native structure not found')
+        relative = Path(artifact.logical_path)
+        if (relative.is_absolute() or '..' in relative.parts or '\\' in artifact.logical_path
+                or relative.as_posix() != artifact.logical_path
+                or not artifact.logical_path.startswith('collected/rfd4_proteina/')
+                or structure_suffix(relative) not in {'.pdb', '.cif', '.mmcif', '.bcif',
+                    '.cif.gz', '.mmcif.gz', '.cif.zst', '.mmcif.zst', '.bcif.gz', '.bcif.zst'}):
+            raise HTTPException(404, 'Selected native structure not found')
+        root = publication_root(owner)
+        expected = root / relative
+        if Path(artifact.storage_path) != expected or any(p.is_symlink() for p in (expected, *expected.parents)):
+            raise ValueError('Selected native artifact path changed')
+        document = (artifact.provenance or {}).get('native_document') or {}
+        if document.get('sha256', artifact.sha256) != artifact.sha256:
+            raise ValueError('Selected native document identity changed')
+        return expected, {'artifact_id': artifact.id, 'artifact_sha256': artifact.sha256,
+            'owner_job_id': owner.id, 'lineage_root_job_id': lineage_root,
+            'source_parent_job_id': owner.parent_job_id, 'producer_model_id': owner.model_id,
+            'target_state': document.get('target_state'), 'producer_document': document}
     owners = {
         'bindcraft2': ('bindcraft2_native_publication', 'bindcraft2/native/'),
         'boltzgen': ('boltzgen_generation_publication', 'boltzgen/native/'),
         'ppiflow': ('ppiflow_generation_publication', 'ppiflow_generation/'),
     }
+    if owner.model_id in owners:
+        # Keep legacy binder-root enumeration semantics; the new native
+        # producer branch above does not acquire that scheduler dependency.
+        from services.binder_continuation import resolve_root
+        _, legacy_root = await resolve_root(session, job_id)
+        lineage_root = legacy_root.id
     publication_key, prefix = owners.get(owner.model_id, ('', ''))
     artifact = await session.get(JobArtifact, artifact_id)
     from services.binder_retained_publication import PUBLICATION_KEY, PREFIX, ROOTS
@@ -56,11 +94,44 @@ async def resolve_native_source(session, job_id: str, artifact_id: str) -> tuple
         document = {**document, **{field: stamp[field] for field in ('binder_chains', 'target_chains') if field in stamp}}
     return Path(artifact.storage_path), {
         'artifact_id': artifact.id, 'artifact_sha256': artifact.sha256,
-        'owner_job_id': owner.id, 'lineage_root_job_id': root.id,
+        'owner_job_id': owner.id, 'lineage_root_job_id': lineage_root,
         'source_parent_job_id': owner.parent_job_id,
         'publication_source': receipt.get('source'),
         'producer_model_id': document.get('producer_model_id', owner.model_id),
         'target_state': document.get('target_state'), 'producer_document': document}
+
+
+async def read_native_sequence_candidates(session, owner, *, verify_bytes=False):
+    """Read registered ProteinMPNN/FA-MPNN membership without fake Designs.
+
+    Scalar pages use the registration snapshot; exact selection can verify the
+    one manifest. No coordinate parsing, publication, or science writer runs.
+    """
+    from sqlalchemy import select
+    from scripts.sequence_design_results import RESULT_PATH, MODES
+    if owner.mode not in MODES.get(owner.model_id, set()):
+        raise ValueError('No public sequence-index contract for this producer')
+    artifact = await session.scalar(select(JobArtifact).where(
+        JobArtifact.owner_job_id == owner.id, JobArtifact.attempt == (owner.retry_count or 0),
+        JobArtifact.logical_path == RESULT_PATH))
+    if artifact is None:
+        raise HTTPException(404, 'Native sequence publication is not registered')
+    provenance = artifact.provenance or {}
+    if (provenance.get('model_id') != owner.model_id or provenance.get('mode') != owner.mode
+            or provenance.get('remote_attempt_id') != owner.remote_attempt_id):
+        raise ValueError('Native sequence publication owner changed')
+    if verify_bytes:
+        import hashlib
+        from scripts.sequence_design_results import _published_bytes
+        from services.binder_publication_roots import publication_root
+        root = Path(artifact.storage_path).parent.parent
+        publication_root(owner, root)
+        if root / RESULT_PATH != Path(artifact.storage_path):
+            raise ValueError('Native sequence publication path changed')
+        raw = _published_bytes(root, RESULT_PATH)
+        if len(raw) != artifact.bytes or hashlib.sha256(raw).hexdigest() != artifact.sha256:
+            raise ValueError('Native sequence publication bytes changed')
+    return artifact, provenance['native_sequences']
 
 
 async def resolve_native_sources(session, root, sources):
