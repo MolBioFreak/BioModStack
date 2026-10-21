@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Invoke pinned native La-Proteina in a private configuration/output namespace."""
 from __future__ import annotations
 
 import argparse
@@ -7,209 +8,147 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
+from lib.laproteina_contract import (
+    MOTIF_CONTROLS, RUNTIME_RELEASE, SOURCE_REVISION, apply_controls, resolve_profile,
+)
 from lib.portable_inputs import bind_native_document, resolve_input_path
-
-import yaml
-
-
-THREE_TO_ONE = {
-    "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C",
-    "GLN": "Q", "GLU": "E", "GLY": "G", "HIS": "H", "ILE": "I",
-    "LEU": "L", "LYS": "K", "MET": "M", "PHE": "F", "PRO": "P",
-    "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V",
-    "MSE": "M",
-}
 
 
 def _sanitize_name(value: str) -> str:
-    cleaned = "".join(ch if ch.isalnum() else "_" for ch in str(value).strip())
-    return cleaned.strip("_") or "pcad"
+    return "".join(ch if ch.isalnum() else "_" for ch in str(value)).strip("_") or "pcad"
 
 
-def _extract_sequence_from_pdb(path: Path) -> str:
-    residues: list[str] = []
-    seen: set[tuple[str, str]] = set()
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.startswith("ATOM"):
-            continue
-        resname = line[17:20].strip().upper()
-        chain_id = line[21].strip() or "A"
-        resseq = line[22:27].strip()
-        key = (chain_id, resseq)
-        if key in seen:
-            continue
-        seen.add(key)
-        residues.append(THREE_TO_ONE.get(resname, "X"))
-    return "".join(residues)
+def _configure_laproteina(request: dict, output_dir: Path) -> dict:
+    from hydra import compose, initialize_config_dir
+    from omegaconf import OmegaConf
 
-
-def _write_yaml(path: Path, payload: dict) -> None:
-    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-
-
-def _copy_tree(src: Path, dst: Path) -> None:
-    if dst.exists():
-        shutil.rmtree(dst)
-    shutil.copytree(src, dst)
-
-
-def _configure_laproteina(request: dict) -> tuple[str, str]:
-    upstream_root = Path(os.environ.get("LAPROTEINA_REPO", "/opt/laproteina")).resolve()
-    configs_root = upstream_root / "configs"
-    custom_root = configs_root / "bms"
-    custom_root.mkdir(parents=True, exist_ok=True)
-    _copy_tree(configs_root / "generation", custom_root / "generation")
-
-    task = request["task"]
-    laproteina = request["laproteina"]
-    target_lengths = request["target_lengths"]
-
-    if task == "unconditional":
-        preset_map = {
-            "ucond_tri": "inference_ucond_tri",
-            "ucond_notri": "inference_ucond_notri",
-            "ucond_notri_long": "inference_ucond_notri_long",
-        }
-        base_config_name = preset_map.get(laproteina["preset"], "inference_ucond_tri")
-        base_inference = yaml.safe_load((configs_root / f"{base_config_name}.yaml").read_text(encoding="utf-8"))
-        generation_cfg = yaml.safe_load((configs_root / "generation" / "uncond_codes.yaml").read_text(encoding="utf-8"))
-        generation_cfg["dataset"]["nlens_cfg"]["nres_lens"] = target_lengths
-        generation_cfg["dataset"]["nsamples"] = int(laproteina["samples_per_length"])
-        generation_cfg["args"]["nsteps"] = int(laproteina["num_steps"])
-        _write_yaml(custom_root / "generation" / "bms_uncond_codes.yaml", generation_cfg)
-        base_inference["defaults"] = ["inference_base", {"generation": "bms_uncond_codes"}, "_self_"]
-        config_name = "inference_bms"
+    upstream = Path(os.environ.get("LAPROTEINA_REPO", "/opt/laproteina")).resolve()
+    settings = request["laproteina"]
+    profile = resolve_profile(settings["preset"])
+    if request["task"] != profile["task"]:
+        raise ValueError(f"La-Proteina preset {settings['preset']} is for {profile['task']}, not {request['task']}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    attempt = Path(tempfile.mkdtemp(prefix="invocation_", dir=output_dir)).resolve()
+    config_root = attempt / "configs"
+    # Copy only small native configs, including inference_base and all transitive
+    # groups. Never copy the source tree/checkpoints or mutate an installed SIF.
+    shutil.copytree(upstream / "configs", config_root)
+    with initialize_config_dir(config_dir=str(config_root), version_base="1.3"):
+        cfg = compose(config_name=profile["config_name"])
+    cfg.ckpt_path = str(Path(settings.get("checkpoint_dir") or upstream / "checkpoints_laproteina").resolve())
+    cfg.ckpt_name = profile["ld"]
+    cfg.autoencoder_ckpt_path = str(Path(cfg.ckpt_path) / profile["ae"])
+    apply_controls(cfg, settings)
+    if profile["task"] == "unconditional":
+        cfg.generation.dataset.nlens_cfg.nres_lens = request["target_lengths"]
+        cfg.generation.dataset.nsamples = settings["samples_per_length"]
     else:
-        preset_map = {
-            "motif_idx_aa": "inference_motif_idx_aa",
-            "motif_idx_tip": "inference_motif_idx_tip",
-            "motif_uidx_aa": "inference_motif_uidx_aa",
-            "motif_uidx_tip": "inference_motif_uidx_tip",
-        }
-        base_config_name = preset_map.get(laproteina["preset"], "inference_motif_idx_aa")
-        base_inference = yaml.safe_load((configs_root / f"{base_config_name}.yaml").read_text(encoding="utf-8"))
-        generation_cfg = yaml.safe_load((configs_root / "generation" / "motif.yaml").read_text(encoding="utf-8"))
-        motif_dict_cfg = yaml.safe_load((configs_root / "generation" / "motif_dict.yaml").read_text(encoding="utf-8"))
-        generation_cfg["dataset"]["nsamples"] = int(request["num_designs"])
-        generation_cfg["args"]["nsteps"] = int(laproteina["num_steps"])
-        generation_cfg["defaults"] = [{"motif_dict": "bms_motif_dict"}, "_self_"]
+        cfg.generation.dataset.nsamples = request["num_designs"]
+        motif_name = settings.get("motif_task_name") or "BMS_CUSTOM"
+        cfg.generation.dataset.motif_task_name = motif_name
+        if settings.get("motif_pdb"):
+            motif = {"motif_pdb_path": settings["motif_pdb"], "motif_only": True,
+                     "motif_min_length": min(request["target_lengths"]),
+                     "motif_max_length": max(request["target_lengths"]),
+                     "segment_order": "A", "atom_selection_mode": "all_atom"}
+            for key in MOTIF_CONTROLS:
+                if key in settings and settings[key] is not None and settings[key] != "":
+                    motif[key] = settings[key]
+            OmegaConf.update(cfg, "generation.dataset.motif_dict_cfg." + motif_name, motif, merge=False, force_add=True)
+        elif motif_name not in cfg.generation.dataset.motif_dict_cfg:
+            raise ValueError(f"La-Proteina motif task not found: {motif_name}")
+    # Native defaults and LD3 overrides are already composed; explicit controls
+    # therefore win over profile values rather than being shadowed by _self_.
+    config_name = "inference_bms"
+    OmegaConf.save(cfg, config_root / (config_name + ".yaml"))
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(upstream) + os.pathsep + env.get("PYTHONPATH", "")
+    env["LAPROTEINA_MOTIF_FEATURE"] = profile["feature_mode"]
+    if settings.get("data_path"):
+        env["DATA_PATH"] = settings["data_path"]
+    # hydra.initialize resolves relative to the absolute generate.py, not cwd.
+    # A relative traversal points at this attempt without modifying native code.
+    config_subdir = os.path.relpath(config_root, upstream / "configs")
+    cmd = [sys.executable, str(upstream / "proteinfoundation/generate.py"),
+           "--config_name", config_name, "--config_subdir", config_subdir]
+    inference_root = attempt / "inference" / (
+        config_name if profile["task"] == "unconditional"
+        else config_name + "_" + cfg.generation.dataset.motif_task_name)
+    receipt = {"profile": profile, "requested": settings, "command": cmd,
+               "cwd": str(attempt), "config_root": str(config_root),
+               "inference_root": str(inference_root),
+               "effective_config": OmegaConf.to_container(cfg, resolve=False),
+               "runtime_release": RUNTIME_RELEASE, "source_revision": SOURCE_REVISION}
+    installed_receipt = upstream / "bms-runtime.json"
+    receipt["installed_runtime"] = json.loads(installed_receipt.read_text()) if installed_receipt.exists() else None
+    (attempt / "invocation.json").write_text(json.dumps(receipt, indent=2))
+    return {"attempt": attempt, "inference_root": inference_root, "command": cmd, "env": env,
+            "receipt": receipt}
 
-        motif_task_name = laproteina.get("motif_task_name") or "BMS_CUSTOM"
-        if laproteina.get("motif_pdb") and laproteina.get("contig_string"):
-            motif_dict_cfg.setdefault("dataset", {}).setdefault("motif_dict_cfg", {})
-            motif_dict_cfg["dataset"]["motif_dict_cfg"][motif_task_name] = {
-                "contig_string": laproteina["contig_string"],
-                "motif_pdb_path": laproteina["motif_pdb"],
-                "motif_only": True,
-                "motif_min_length": laproteina["motif_min_length"] or min(target_lengths),
-                "motif_max_length": laproteina["motif_max_length"] or max(target_lengths),
-                "segment_order": laproteina["segment_order"] or "A",
-                "atom_selection_mode": laproteina["atom_selection_mode"] or "all_atom",
-            }
-        elif motif_task_name not in motif_dict_cfg.get("dataset", {}).get("motif_dict_cfg", {}):
-            raise ValueError(f"La-Proteina motif task not found: {motif_task_name}")
 
-        generation_cfg["dataset"]["motif_task_name"] = motif_task_name
-        _write_yaml(custom_root / "generation" / "bms_motif.yaml", generation_cfg)
-        _write_yaml(custom_root / "generation" / "bms_motif_dict.yaml", motif_dict_cfg)
-        base_inference["defaults"] = ["inference_base", {"generation": "bms_motif"}, "_self_"]
-        base_inference.setdefault("generation", {}).setdefault("dataset", {})["motif_task_name"] = motif_task_name
-        config_name = "inference_bms"
-
-    checkpoint_dir = laproteina.get("checkpoint_dir")
-    if checkpoint_dir:
-        base_inference["ckpt_path"] = checkpoint_dir
-        if base_inference.get("autoencoder_ckpt_path", "").startswith("./checkpoints_laproteina/"):
-            base_inference["autoencoder_ckpt_path"] = str(Path(checkpoint_dir) / Path(base_inference["autoencoder_ckpt_path"]).name)
-
-    _write_yaml(custom_root / f"{config_name}.yaml", base_inference)
-    return str(upstream_root), config_name
+def collect_outputs(request: dict, invocation: dict, output_dir: Path) -> list[dict]:
+    """Receive only native writer-indexed final samples, never directory guesses."""
+    root = invocation["inference_root"]
+    index_path = root / "sample_index.jsonl"
+    records = [json.loads(line) for line in index_path.read_text().splitlines() if line] if index_path.exists() else []
+    raw_pdb = output_dir / "raw/pdbs"
+    raw_meta = output_dir / "raw/metadata"
+    raw_pdb.mkdir(parents=True, exist_ok=True)
+    raw_meta.mkdir(parents=True, exist_ok=True)
+    manifest = []
+    prefix = _sanitize_name(request["job_name"])
+    for record in records:
+        native_id = record["native_sample_id"]
+        design_id = f"{prefix}_laproteina_{invocation['attempt'].name}_{_sanitize_name(native_id)}"
+        source = root / record["structure_path"]
+        target = raw_pdb / f"{design_id}.pdb"
+        if source.is_file():
+            shutil.copy2(source, target)
+        sequence = record["sequence"]
+        metadata_path = raw_meta / f"generator_{design_id}.json"
+        trajectory = invocation["attempt"] / "native_trajectories" / f"batch_{record['batch_index']}.pt"
+        metadata = {"design_id": design_id, "designed_sequence": sequence,
+                    "source": "laproteina", "source_model": "La-Proteina",
+                    "generator_family": "protein_cad_experimental", "generator_mode": request["task"],
+                    "length": len(sequence), "native_sample": record,
+                    "structure_present": source.is_file(),
+                    "source_sample_dir": str(source.parent),
+                    "invocation_path": str(invocation["attempt"] / "invocation.json"),
+                    "trajectory_path": str(trajectory) if trajectory.exists() else None,
+                    "trajectory_sample_index": record["sample_index"]}
+        metadata_path.write_text(json.dumps(metadata, indent=2))
+        manifest.append({"design_id": design_id, "sequence": sequence,
+                         "structure_path": str(target) if source.is_file() else None,
+                         "metadata_path": str(metadata_path), "source_sample_dir": str(source.parent),
+                         "native_sample_id": native_id,
+                         "invocation_id": invocation["attempt"].name})
+    (output_dir / "design_manifest.json").write_text(json.dumps(manifest, indent=2))
+    return manifest
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run La-Proteina inference and normalize outputs for BMS.")
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", required=True)
     parser.add_argument("--input-dir", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--prepare-only", action="store_true", help="CPU-only native Hydra composition; no weights loaded")
     args = parser.parse_args()
-
     request_path = resolve_input_path(args.request)
-    request = bind_native_document(json.loads(request_path.read_text(encoding="utf-8")),
-                                   "protein-cad", owner=request_path)
+    request = bind_native_document(json.loads(request_path.read_text()), "protein-cad", owner=request_path)
     output_dir = Path(args.output_dir).resolve()
-    raw_pdb_dir = output_dir / "raw" / "pdbs"
-    raw_meta_dir = output_dir / "raw" / "metadata"
-    raw_pdb_dir.mkdir(parents=True, exist_ok=True)
-    raw_meta_dir.mkdir(parents=True, exist_ok=True)
-    upstream_root, config_name = _configure_laproteina(request)
-    laproteina = request["laproteina"]
-
-    env = os.environ.copy()
-    if laproteina.get("data_path"):
-        env["DATA_PATH"] = laproteina["data_path"]
-
-    inference_root = Path(upstream_root) / "inference" / config_name
-    if request["task"] == "motif_scaffolding":
-        motif_name = laproteina.get("motif_task_name") or "BMS_CUSTOM"
-        inference_root = Path(upstream_root) / "inference" / f"{config_name}_{motif_name}"
-    existing_samples = {path.name for path in inference_root.glob("job_*")} if inference_root.exists() else set()
-
-    cmd = [
-        sys.executable,
-        str(Path(upstream_root) / "proteinfoundation" / "generate.py"),
-        "--config_name",
-        config_name,
-        "--config_subdir",
-        "bms",
-    ]
-
-    log_path = output_dir / "laproteina.log"
-    with log_path.open("w", encoding="utf-8") as log_handle:
-        subprocess.run(cmd, cwd=Path(upstream_root), env=env, check=True, stdout=log_handle, stderr=subprocess.STDOUT)
-
-    manifest: list[dict[str, object]] = []
-    prefix = _sanitize_name(request["job_name"])
-    sample_dirs = sorted(
-        [
-            path
-            for path in inference_root.glob("job_*")
-            if path.is_dir() and path.name not in existing_samples
-        ]
-    )
-    for index, sample_dir in enumerate(sample_dirs, start=1):
-        pdb_candidates = sorted(sample_dir.glob("*.pdb"))
-        if not pdb_candidates:
-            continue
-        source_pdb = pdb_candidates[0]
-        design_id = f"{prefix}_laproteina_{index:04d}"
-        target_pdb = raw_pdb_dir / f"{design_id}.pdb"
-        shutil.copy2(source_pdb, target_pdb)
-        sequence = _extract_sequence_from_pdb(target_pdb)
-        metadata = {
-            "design_id": design_id,
-            "designed_sequence": sequence,
-            "source": "laproteina",
-            "source_model": "La-Proteina",
-            "generator_family": "protein_cad_experimental",
-            "generator_mode": request["task"],
-            "source_sample_dir": str(sample_dir),
-            "length": len(sequence),
-        }
-        metadata_path = raw_meta_dir / f"generator_{design_id}.json"
-        metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-        manifest.append(
-            {
-                "design_id": design_id,
-                "sequence": sequence,
-                "structure_path": str(target_pdb),
-                "metadata_path": str(metadata_path),
-                "source_sample_dir": str(sample_dir),
-            }
-        )
-
-    (output_dir / "design_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    invocation = _configure_laproteina(request, output_dir)
+    if args.prepare_only:
+        print(json.dumps(invocation["receipt"], indent=2))
+        return
+    with (output_dir / "laproteina.log").open("w") as log:
+        result = subprocess.run(invocation["command"], cwd=invocation["attempt"], env=invocation["env"],
+                                check=False, stdout=log, stderr=subprocess.STDOUT)
+    # Retain emitted partial output even if native generation later failed.
+    collect_outputs(request, invocation, output_dir)
+    result.check_returncode()
 
 
 if __name__ == "__main__":
