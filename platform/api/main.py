@@ -20,26 +20,45 @@ from molbio_ngs_database import init_molbio_ngs_db, molbio_ngs_health
 from molbio_ngs_database import molbio_ngs_session_factory
 from build_identity import current_build_identity
 from readiness import collect_runtime_readiness, http_readiness
-from dev_issue_screenshot_upload_limit import DevIssueScreenshotUploadLimitMiddleware
-from frustrampnn_upload_limit import FrustraMPNNUploadLimitMiddleware
-from routers import binder_blind_pose, binder_continuation
-from routers import ligandmpnn_interface_context, sequence_native, protonpottsmpnn, protonpottsmpnn_prediction
-from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, execution_targets, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, molbio_restriction, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, plr_results, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
+from routers import (
+    execution_targets,
+    experiment_workspaces,
+    files,
+    gpu,
+    inputs,
+    jobs,
+    models,
+    molbio_ngs_experiments,
+    molbio_ops,
+    molbio_restriction,
+    ngs_alignment_sessions,
+    ngs_molbio_n5,
+    nucleotide_sequences,
+    ont_devices,
+    ont_runs,
+    ont_signal_workbench,
+    payload_ownership_audit,
+    project_manager,
+    projects,
+    queue,
+    ribocentre,
+    rna_structure,
+    sequence_qc,
+    system,
+    telemetry,
+    user_sequences,
+    user_templates,
+)
+from product_scope import include_shared_routes
 from runtime_policy import (
     WorkflowAdmissionBlocked,
     workflow_launch_block_detail,
     workflow_launches_allowed,
     workflow_mutation_admission,
 )
-from biomodstack_runtime_profile import install_feature_enabled
-from services.analysis_worker import AnalysisWorker
-from services.boltz_api_jobs import BoltzApiJobWorker
-from services.external_imports.worker import ExternalImportWorker
 from services.gpu_orchestrator import GPUOrchestrator
-from services.md.reconcile import MdReconcilerWorker
 from services.ont_raw_signal_worker import OntRawSignalWorker
 from services.ont_signal_worker import OntSignalWorker
-from services.frustrampnn.statistics_jobs import FrustraMPNNStatisticsWorker
 from services.global_experiments.worker import (
     GlobalExperimentWorker,
     install_global_experiment_worker,
@@ -55,14 +74,9 @@ logger = logging.getLogger(__name__)
 
 # Global orchestrator instance
 _orchestrator: GPUOrchestrator = None
-_analysis_worker: AnalysisWorker = None
-_external_import_worker: ExternalImportWorker | None = None
-_boltz_api_job_worker: BoltzApiJobWorker | None = None
-_md_reconciler: MdReconcilerWorker | None = None
 _global_experiment_worker: GlobalExperimentWorker | None = None
 _ont_raw_signal_worker: OntRawSignalWorker | None = None
 _ont_signal_worker: OntSignalWorker | None = None
-_frustrampnn_statistics_worker: FrustraMPNNStatisticsWorker | None = None
 
 
 async def _orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
@@ -108,15 +122,9 @@ async def wait_for_workflow_adapter_admission(
 async def lifespan(app: FastAPI):
     """Initialize database and GPU orchestrator on startup."""
     global _orchestrator
-    global _analysis_worker
-    global _external_import_worker
-    global _boltz_api_job_worker
-    global _md_reconciler
     global _global_experiment_worker
     global _ont_raw_signal_worker
     global _ont_signal_worker
-    global _frustrampnn_statistics_worker
-    bioxp_runtime = None
     
     # Required checked-in scientific authority must be complete before workers start.
     catalog_authority.require()
@@ -143,9 +151,6 @@ async def lifespan(app: FastAPI):
     await init_experiment_db()
     await init_molbio_db()
     await init_molbio_ngs_db()
-    _frustrampnn_statistics_worker = FrustraMPNNStatisticsWorker(async_session)
-    await _frustrampnn_statistics_worker.start()
-    logger.info("[STARTUP] FrustraMPNN statistics worker started")
     async with experiment_session_factory() as admission_session:
         async with async_session() as admission_core_session:
             pending_resource_evidence = await reconcile_startup_admissions(
@@ -172,9 +177,6 @@ async def lifespan(app: FastAPI):
         # Start orchestrator in background
         await _orchestrator.start()
         logger.info("[STARTUP] GPU Orchestrator started")
-        _md_reconciler = MdReconcilerWorker(async_session, poll_interval=5.0)
-        await _md_reconciler.start()
-        logger.info("[STARTUP] MD lifecycle reconciler started")
         _global_experiment_worker = GlobalExperimentWorker(
             experiment_session_factory,
             async_session,
@@ -189,7 +191,6 @@ async def lifespan(app: FastAPI):
         )
     else:
         _orchestrator = None
-        _md_reconciler = None
         _global_experiment_worker = None
         _ont_raw_signal_worker = None
         install_global_experiment_worker(None)
@@ -217,38 +218,6 @@ async def lifespan(app: FastAPI):
         else:
             logger.warning("[STARTUP] ONT signal-workbench backend unavailable: worker blocked; scientific work unchanged; restart after provisioning to retry recovery")
 
-    _analysis_worker = AnalysisWorker(
-        db_session_factory=async_session,
-        poll_interval=2.0,
-    )
-    
-    await _analysis_worker.start()
-    logger.info("[STARTUP] Analysis worker started")
-
-    _external_import_worker = ExternalImportWorker(async_session, poll_interval=2.0)
-    await _external_import_worker.start()
-    logger.info("[STARTUP] External result import worker started")
-
-
-    _boltz_api_job_worker = BoltzApiJobWorker(async_session)
-    await _boltz_api_job_worker.start()
-    logger.info("[STARTUP] Boltz API submission worker started")
-
-    if install_feature_enabled("bioxp"):
-        from services.bioxp.runtime import create_bioxp_runtime
-
-        bioxp_runtime = create_bioxp_runtime()
-        app.state.bioxp_runtime = bioxp_runtime
-        await bioxp_runtime.start()
-        snapshot = bioxp_runtime.connection.snapshot()
-        logger.info(
-            "[STARTUP] BioXP control plane initialized active=%s reachable=%s runtime_ready=%s hardware_ready=%s",
-            snapshot.active,
-            snapshot.reachable,
-            snapshot.runtime_ready,
-            snapshot.hardware_ready,
-        )
-    
     yield
     
     # Cleanup on shutdown
@@ -258,31 +227,13 @@ async def lifespan(app: FastAPI):
     await app.state.attachment_controller.close()
     vast_inventory_stop.set()
     await vast_inventory_task
-    if bioxp_runtime is not None:
-        await bioxp_runtime.close()
-        logger.info("[SHUTDOWN] BioXP control plane closed")
     if _orchestrator:
         await _orchestrator.stop()
         logger.info("[SHUTDOWN] GPU Orchestrator stopped")
-    if _md_reconciler:
-        await _md_reconciler.stop()
-        logger.info("[SHUTDOWN] MD lifecycle reconciler stopped")
     if _global_experiment_worker:
         await _global_experiment_worker.stop()
         install_global_experiment_worker(None)
         logger.info("[SHUTDOWN] Global experiment dispatcher/reconciler stopped")
-    if _analysis_worker:
-        await _analysis_worker.stop()
-        logger.info("[SHUTDOWN] Analysis worker stopped")
-    if _frustrampnn_statistics_worker:
-        await _frustrampnn_statistics_worker.stop()
-        logger.info("[SHUTDOWN] FrustraMPNN statistics worker stopped")
-    if _boltz_api_job_worker:
-        await _boltz_api_job_worker.stop()
-        logger.info("[SHUTDOWN] Boltz API submission worker stopped")
-    if _external_import_worker:
-        await _external_import_worker.stop()
-        logger.info("[SHUTDOWN] External result import worker stopped")
     if _ont_raw_signal_worker:
         await _ont_raw_signal_worker.stop()
         logger.info("[SHUTDOWN] ONT raw-signal lease-recovery worker stopped")
@@ -292,8 +243,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="BioModStack Control Platform",
-    description="Extensible platform for protein modification and design",
+    title="BioModStack MolBio / NGS",
+    description="Local MolBio and NGS platform with shared project and execution services",
     version="0.2.0",
     lifespan=lifespan
 )
@@ -302,8 +253,6 @@ app.add_exception_handler(
     ngs_alignment_sessions.ont_ngs_route_error_handler,
 )
 
-app.add_middleware(FrustraMPNNUploadLimitMiddleware)
-app.add_middleware(DevIssueScreenshotUploadLimitMiddleware)
 
 
 @app.middleware("http")
@@ -360,35 +309,17 @@ async def launch_context_provenance(request: Request, call_next):
     finally:
         current_launch_context_id.reset(token)
 
-# Include routers
-app.include_router(models.router, prefix="/api/models", tags=["models"])
-app.include_router(molecular_dynamics.router)
-app.include_router(templates.router, prefix="/api/templates", tags=["templates"])
+# Shared job storage and file transport are required by the NGS workspace.
+include_shared_routes(app, jobs.router, prefix="/api/jobs", family="jobs")
+include_shared_routes(app, models.router, prefix="/api/models", family="models")
+include_shared_routes(app, files.router, prefix="/api/files", family="files")
 app.include_router(inputs.router, prefix="/api/inputs", tags=["inputs"])
-app.include_router(boltz_api_jobs.router, prefix="/api/jobs/boltz-api", tags=["boltz-api-jobs"])
-app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
-app.include_router(sequence_native.router, prefix="/api", tags=["native-sequence-results"])
-app.include_router(protonpottsmpnn.router, prefix="/api/jobs", tags=["protonpottsmpnn"])
-app.include_router(protonpottsmpnn_prediction.router, prefix="/api/jobs", tags=["protonpottsmpnn"])
-app.include_router(binder_blind_pose.router, prefix="/api/blind-pose", tags=["blind-pose"])
-app.include_router(binder_continuation.router, prefix="/api/binder-continuation", tags=["binder-continuation"])
-app.include_router(ligandmpnn_interface_context.router)
 app.include_router(
     execution_targets.router,
     prefix="/api/execution-targets",
     tags=["execution-targets"],
 )
-app.include_router(external_imports.router, prefix="/api/jobs/imports/external", tags=["external-result-imports"])
-app.include_router(md_results.router, prefix="/api/jobs", tags=["molecular-dynamics-results"])
-app.include_router(viewer_resources.router, prefix="/api/jobs", tags=["viewer-resources"])
-app.include_router(plr_results.router, prefix="/api/jobs", tags=["plr-workflow-results"])
-app.include_router(conformational_mapping.router)
-app.include_router(shape_blueprint.router, prefix="/api/shape-blueprint", tags=["shape-blueprint"])
-app.include_router(designs.router, prefix="/api/designs", tags=["designs"])
-app.include_router(analyses.router, prefix="/api", tags=["analyses"])
 app.include_router(gpu.router, prefix="/api/gpu", tags=["gpu"])
-app.include_router(files.router, prefix="/api/files", tags=["files"])
-app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(user_sequences.router, prefix="/api/user-sequences", tags=["user-sequences"])
 app.include_router(user_templates.router, prefix="/api/user-templates", tags=["user-templates"])
 app.include_router(experiment_workspaces.router)
@@ -397,29 +328,14 @@ app.include_router(projects.router)
 app.include_router(project_manager.router)
 app.include_router(ngs_molbio_n5.router)
 app.include_router(payload_ownership_audit.router)
-if dev_issues.dev_issue_ledger_enabled():
-    app.include_router(dev_issues.router)
-# msa_cache router removed - now using file-based caching
-app.include_router(smiles_converter.router, prefix="/api/smiles", tags=["smiles"])
 app.include_router(queue.router, prefix="/api", tags=["queue"])  # /api/queue/*
-app.include_router(rcsb.router, prefix="/api/rcsb", tags=["rcsb"])
 app.include_router(nucleotide_sequences.router)  # /api/sequences/*
 app.include_router(system.router, prefix="/api", tags=["system"])  # /api/system/*
 app.include_router(telemetry.router, prefix="/api", tags=["telemetry"])
-app.include_router(frameworks.router)  # /api/frameworks/* - SAbDab integration
-app.include_router(boltzgen.router)
 app.include_router(molbio_ops.router)
-from routers import molbio_golden_gate_design
-app.include_router(molbio_golden_gate_design.router)
 app.include_router(molbio_restriction.router)
 app.include_router(rna_structure.router)
-app.include_router(msa.router)
 app.include_router(ribocentre.router, prefix="/api/ribocentre", tags=["ribocentre"])
-app.include_router(frustrampnn.router)  # /api/frustrampnn/* - Energetic frustration analysis
-if install_feature_enabled("bioxp"):
-    from routers import bioxp
-
-    app.include_router(bioxp.router, prefix="/api/bioxp", tags=["bioxp"])
 app.include_router(sequence_qc.router, prefix="/api/sequence-qc", tags=["sequence-qc"])
 app.include_router(ngs_alignment_sessions.router, prefix="/api", tags=["ngs-alignment"])
 ngs_alignment_sessions.install_governed_ngs_openapi(app)
@@ -427,8 +343,8 @@ app.include_router(ont_devices.router, prefix="/api/ont", tags=["ont-devices"])
 app.include_router(ont_runs.router, prefix="/api/ont", tags=["ont-runs"])
 app.include_router(ont_signal_workbench.router, prefix="/api/ont/signal-workbench", tags=["ont-signal-workbench"])
 app.include_router(ont_runs.barcode_router, prefix="/api/jobs", tags=["ont-barcode-units"])
-app.include_router(mobile_apk_updates.router, prefix="/api")
-app.include_router(mobile_ui_updates.router, prefix="/api")
+from routers import molbio_golden_gate_design
+app.include_router(molbio_golden_gate_design.router)
 
 @app.get("/api/health")
 async def health_check(deep: bool = False):

@@ -898,7 +898,7 @@ class BioModStackPanel(Adw.Application):
         for key, title, hint in (
             ("document", "Settings file (JSON)", "Full path to an existing settings file, starting with /"),
             ("operation", "Recovery ID", "Copy operation_id from the interrupted settings report"),
-            ("models", "Model IDs (comma-separated)", "For example: protenix, boltz2"),
+            ("models", "Model IDs (comma-separated)", "For example: nanopore"),
             ("model_operation", "Model installation ID", "Copy operation_id from the model installation report, not a settings report"),
 
         ):

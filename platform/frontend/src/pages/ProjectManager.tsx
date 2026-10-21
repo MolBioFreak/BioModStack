@@ -32,12 +32,9 @@ import { ProjectInspector, hasDomainWorkspace } from '../components/project-mana
 import { DNASequenceProjectWorkspace } from '../components/project-manager/DNASequenceProjectWorkspace';
 import { ProjectTree } from '../components/project-manager/ProjectTree';
 import { RelationshipMap } from '../components/project-manager/RelationshipMap';
-import { ProjectCandidateOverview, useProjectCandidateData } from '../components/project-manager/ProjectCandidateOverview';
 import { RunPanel } from '../components/project-manager/RunPanel';
 import { VirtualFolderPanel, type FolderKind } from '../components/project-manager/VirtualFolderPanel';
 import { focusIdFromReadModel, globalExperimentForNode } from '../components/project-manager/projectManagerState';
-import { ProteinProjectWorkspace } from '../components/project-manager/protein/ProteinProjectWorkspace';
-import { NewProjectExperimentDialog } from '../components/project-manager/ProjectWorkflowSetup';
 
 const MAP_LIMIT = 50;
 const RUN_LIMIT = 25;
@@ -177,8 +174,8 @@ function ProjectsIndex() {
     const [statusFilter, setStatusFilter] = useState('all');
     const [archiveFilter, setArchiveFilter] = useState('active');
     const requestedScope = searchParams.get('scope');
-    const scope = requestedScope === 'global' || requestedScope === 'ngs-molbio' ? requestedScope : 'all';
-    const apiScope = scope === 'ngs-molbio' ? 'ngs_molbio_local' : scope;
+    const scope = 'ngs-molbio' as const;
+    const apiScope = 'ngs_molbio_local' as const;
     useEffect(() => {
         if (requestedScope === null || requestedScope === 'all' || requestedScope === 'global' || requestedScope === 'ngs-molbio') return;
         const next = new URLSearchParams(searchParams);
@@ -231,7 +228,7 @@ function ProjectsIndex() {
                 </header>
 
                 <div role="tablist" aria-label="Project scope" className="mt-6 inline-flex rounded-xl border border-border-primary bg-surface-secondary p-1">
-                    {([['all', 'All'], ['global', 'Global'], ['ngs-molbio', 'NGS/MolBio']] as const).map(([value, label]) => (
+                    {([['ngs-molbio', 'NGS/MolBio']] as const).map(([value, label]) => (
                         <button key={value} type="button" role="tab" aria-selected={scope === value} onClick={() => selectScope(value)} className={`rounded-lg px-4 py-2 text-sm font-semibold focus:ring-2 focus:ring-accent ${scope === value ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`}>{label}</button>
                     ))}
                 </div>
@@ -309,7 +306,6 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth >= 1280);
     const drawerRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<HTMLDetailsElement>(null);
-    const creationRef = useRef<HTMLDetailsElement>(null);
     const runActionLock = useRef(false);
     const overlay = treeOpen && viewportWidth < 768 ? 'tree' : inspectorOpen && viewportWidth < 1280 ? 'inspector' : null;
     const closeDrawer = useCallback(() => { setTreeOpen((open) => window.innerWidth < 768 ? false : open); setInspectorOpen((open) => window.innerWidth < 1280 ? false : open); }, []);
@@ -346,7 +342,6 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     const [inspectorWidth, setInspectorWidth] = useState(368);
     const [attachOpen, setAttachOpen] = useState(false);
     const [dialogMode, setDialogMode] = useState<ManagerDialogMode | null>(null);
-    const [newExperimentOpen, setNewExperimentOpen] = useState(false);
 
     // URL completion names the same server-resolved read, not a new selection.
     // Keep that observer's original identity and freshness; real navigation,
@@ -407,17 +402,8 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     });
     const projectLevelError = summaryQuery.isError && !invalidSelection;
     const summary = rawSummary;
-    const candidates = useProjectCandidateData(projectId, rawSummary?.project.project_scope === 'global');
-    const candidateOverviewAvailable = candidates.data?.supported === true;
-    const explicitRecord = Boolean(selectedNodeKey && !selectedNodeKey.startsWith('project:') && !selectedNodeKey.startsWith('global_experiment:'));
-    const loadingCandidateOverview = rawSummary?.project.project_scope === 'global' && candidates.isPending && !explicitRecord && searchParams.get('view') !== 'records';
-    const showCandidates = candidateOverviewAvailable && searchParams.get('view') !== 'records'
-        && (searchParams.get('view') === 'candidates' || !explicitRecord);
-    const switchProjectView = (view: 'candidates' | 'records') => {
-        const next = new URLSearchParams(searchParams);
-        next.set('view', view);
-        setSearchParams(next);
-    };
+    const showCandidates = false;
+    const loadingCandidateOverview = false;
 
     useEffect(() => {
         setMapCursor(undefined);
@@ -856,14 +842,6 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     {busy && <span role="status" className="text-[10px] font-medium text-accent">Refreshing…</span>}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                    {summary.project.project_scope === 'global' && <details ref={creationRef} className="relative">
-                        <summary className="cursor-pointer rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">New experiment</summary>
-                        <div className="absolute right-0 z-40 mt-2 w-72 max-w-[85vw] space-y-2 rounded-lg border border-border-primary bg-surface-secondary p-3 shadow-xl">
-                            <button type="button" disabled={!selectionReady} onClick={() => { if (creationRef.current) creationRef.current.open = false; setNewExperimentOpen(true); }} className="w-full rounded-lg p-2 text-left text-sm font-semibold text-content hover:bg-surface">Protein experiment<span className="mt-1 block text-xs font-normal text-content-secondary">Choose a Protein workflow and continue to its setup.</span></button>
-                            {summary.allowed_actions.includes('create_global_experiment') && <button type="button" disabled={!selectionReady} onClick={() => { if (creationRef.current) creationRef.current.open = false; setDialogMode('create_global'); }} className="w-full rounded-lg p-2 text-left text-sm font-semibold text-content hover:bg-surface">Empty experiment group<span className="mt-1 block text-xs font-normal text-content-secondary">Create a Global Experiment, then add its domain experiments.</span></button>}
-                        </div>
-                    </details>}
-                    <button type="button" disabled={!selectionReady} onClick={() => setAttachOpen(true)} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary focus:ring-2 focus:ring-accent">{isStandaloneNativeProject ? 'Link Project or attach record' : 'Attach existing record'}</button>
                     {!isStandaloneNativeProject && !showCandidates && <details ref={viewRef} className="relative">
                         <summary className="cursor-pointer rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">View</summary>
                         <div className="absolute right-0 z-40 mt-2 w-44 rounded-lg border border-border-primary bg-surface-secondary p-2 shadow-xl">
@@ -874,14 +852,6 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 </div>
             </header>
 
-            {candidateOverviewAvailable && <nav aria-label="Project view" className="flex gap-2 border-b border-border-primary bg-surface-secondary px-4 py-2">
-                <button type="button" aria-pressed={showCandidates} onClick={() => switchProjectView('candidates')} className={`rounded-lg px-4 py-2 text-sm font-semibold ${showCandidates ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`}>Work links</button>
-                <button type="button" aria-pressed={!showCandidates} onClick={() => switchProjectView('records')} className={`rounded-lg px-4 py-2 text-sm font-semibold ${!showCandidates ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`}>Experiments & history</button>
-            </nav>}
-            {candidates.isError && <div role="status" className="flex flex-wrap items-center gap-3 border-b border-border-primary px-4 py-2 text-sm text-content-secondary">
-                Candidate overview could not be loaded. Project records remain available.
-                <button type="button" onClick={() => void candidates.refetch()} className="text-accent underline">Retry overview</button>
-            </div>}
             {summary.warnings.length > 0 && (
                 <div role="status" className="border-b border-warning/40 bg-warning/10 px-4 py-2 text-xs text-warning">{summary.warnings.join(' · ')}</div>
             )}
@@ -918,8 +888,6 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 {projectTreeVisible && <div role="separator" aria-orientation="vertical" aria-label="Resize Project tree" tabIndex={0} onPointerDown={(event) => startRailResize('tree', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setTreeWidth((value) => Math.max(208, value - 16)); if (event.key === 'ArrowRight') setTreeWidth((value) => Math.min(400, value + 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent md:block" />}
                 <main className="flex min-h-0 min-w-0 flex-col md:overflow-y-auto">
                     <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} />
-                    {loadingCandidateOverview && <p role="status" className="p-6 text-sm text-content-secondary">Loading candidate sources and validation results… <button type="button" onClick={() => switchProjectView('records')} className="text-accent underline">Open records now</button></p>}
-                    {showCandidates && candidates.data && <ProjectCandidateOverview data={candidates.data} onOpenRecords={() => switchProjectView('records')} />}
                     {!isStandaloneNativeProject && !showCandidates && !loadingCandidateOverview && (
                         <>
                             <RelationshipMap
@@ -970,7 +938,6 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     void refreshSummary();
                 }}
             />
-            <NewProjectExperimentDialog projectId={projectId} open={newExperimentOpen} onClose={() => setNewExperimentOpen(false)} />
             <ManagerDialog
                 mode={dialogMode}
                 projectId={projectId}
@@ -986,7 +953,7 @@ export function ProjectManager() {
     const { projectId, experimentId, domainId } = useParams<{ projectId?: string; experimentId?: string; domainId?: string }>();
     const [searchParams] = useSearchParams();
     if (projectId && experimentId && domainId && searchParams.get('workspace') === 'protein') {
-        return <ProteinProjectWorkspace projectId={projectId} globalExperimentId={experimentId} domainExperimentId={domainId} />;
+        return <div className="p-6 text-content-secondary">This installation supports NGS / MolBio Projects.</div>;
     }
     return projectId ? <ProjectWorkspace key={projectId} projectId={projectId} routeFocusId={experimentId} routeDomainId={domainId} /> : <ProjectsIndex />;
 }

@@ -2493,7 +2493,6 @@ def start_all(
         if not skip_api_wait:
             wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
         wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
-        ensure_mobile_update_publisher_running(root)
         return
 
     ensure_target_enabled(root, runtime_mode=mode)
@@ -2597,7 +2596,6 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
         )
         wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
         wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
-        ensure_mobile_update_publisher_running(root, restart=True)
         return
 
     ensure_target_enabled(root, runtime_mode=mode)

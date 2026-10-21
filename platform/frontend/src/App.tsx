@@ -4,17 +4,10 @@ import { HotkeysProvider } from '@blueprintjs/core';
 import { Layout } from './components/Layout';
 import { GlobalExperimentProvider } from './components/experiments/GlobalExperimentContext';
 import NgsMolBioProjectHub from './components/molbio-ngs/NgsMolBioProjectHub';
-import { useResolvedBmsFeatures } from './runtime/installFeatures';
 
-const Dashboard = lazy(() => import('./components/Dashboard').then((module) => ({ default: module.Dashboard })));
 const ProjectManager = lazy(() => import('./pages/ProjectManager').then((module) => ({ default: module.ProjectManager })));
-const JobSubmission = lazy(() => import('./components/JobSubmission').then((module) => ({ default: module.JobSubmission })));
-const ResultsViewer = lazy(() => import('./components/ResultsViewer').then((module) => ({ default: module.ResultsViewer })));
-const JobDetailPage = lazy(() => import('./components/JobDetailPage').then((module) => ({ default: module.JobDetailPage })));
 const MolBioToolkitV2 = lazy(() => import('./components/MolBioToolkit/indexV2').then((module) => ({ default: module.MolBioToolkitV2 })));
 const NGSToolkit = lazy(() => import('./components/NGSToolkit').then((module) => ({ default: module.NGSToolkit })));
-const BioXpCockpit = lazy(() => import('./components/BioXpCockpit').then((module) => ({ default: module.BioXpCockpit })));
-const StatsToolkitLauncher = lazy(() => import('./components/StatsToolkitLauncher').then((module) => ({ default: module.StatsToolkitLauncher })));
 
 function RouteLoadingFallback() {
   return (
@@ -58,7 +51,6 @@ function HistoricalDomainExperimentReopenRoute() {
 }
 
 function App() {
-  const { features: bmsFeatures, resolved: bmsFeaturesResolved, known: bmsFeaturesKnown } = useResolvedBmsFeatures();
 
   return (
     <HotkeysProvider>
@@ -66,17 +58,11 @@ function App() {
         <Layout>
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={<Navigate replace to="/designer" />} />
             <Route path="/projects" element={<ProjectManager />} />
             <Route path="/projects/:projectId" element={<ProjectManager />} />
             <Route path="/projects/:projectId/experiments/:experimentId" element={<ProjectManager />} />
             <Route path="/projects/:projectId/experiments/:experimentId/domains/:domainId" element={<ProjectManager />} />
-            <Route path="/submit" element={<JobSubmission />} />
-            <Route path="/results" element={<ResultsViewer />} />
-            <Route path="/designs" element={<ResultsViewer />} />
-            <Route path="/designs/:jobId" element={<ResultsViewer />} />
-            <Route path="/jobs" element={<Navigate replace to="/designs" />} />
-            <Route path="/jobs/:jobId" element={<JobDetailPage />} />
             <Route path="/molbio" element={<HistoricalMolBioReopenRoute />} />
             <Route
               path="/molbio-ngs/domain-experiments/:domainExperimentId"
@@ -101,37 +87,7 @@ function App() {
                   </div>
                 )}
             />
-            {/* Isolated Stats Toolkit rendered inside the BioModStack workspace. */}
-            <Route path="/stats" element={<StatsToolkitLauncher />} />
-            {/* Historical analytics route now resolves to Dashboard telemetry. */}
-            <Route path="/infra" element={<Navigate replace to="/" />} />
-            {/* Saved workflows live inside the BioXP Handler workspace. */}
-            <Route
-              path="/bioxp/workflows"
-              element={!bmsFeaturesResolved
-                ? <RouteLoadingFallback />
-                : bmsFeatures.bioxp || !bmsFeaturesKnown
-                  ? <BioXpCockpit initialTab="workflows" />
-                  : <Navigate replace to="/" />}
-            />
-            {/* Live travel stays within the same robot workspace. */}
-            <Route
-              path="/bioxp/live-deck"
-              element={!bmsFeaturesResolved
-                ? <RouteLoadingFallback />
-                : bmsFeatures.bioxp || !bmsFeaturesKnown
-                  ? <BioXpCockpit initialTab="live-deck" />
-                  : <Navigate replace to="/" />}
-            />
-            {/* BioXP Handler Controls */}
-            <Route
-              path="/bioxp"
-              element={!bmsFeaturesResolved
-                ? <RouteLoadingFallback />
-                : bmsFeatures.bioxp || !bmsFeaturesKnown
-                  ? <BioXpCockpit />
-                  : <Navigate replace to="/" />}
-            />
+            <Route path="*" element={<div className="p-8 text-content-secondary">This workspace provides MolBio, NGS, and their shared Projects.</div>} />
             </Routes>
           </Suspense>
         </Layout>
