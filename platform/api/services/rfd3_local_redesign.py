@@ -22,12 +22,15 @@ from paths import (
 )
 from scripts.rfd3_local_redesign.contract import (
     CONTRACT_REVISION,
+    LEGACY_CONTRACT_REVISION,
     ContractError,
     build_request,
     request_sha256,
     write_request,
 )
 
+
+from scripts.lib.rfd3_scientific_settings import EXECUTION_FIELDS
 
 RFD3_WORKFLOW_ADAPTER_ID = "bms.core-job.protein_local_redesign.adapter.v1"
 RFD3_SCIENTIFIC_PARAM_KEYS = {
@@ -57,7 +60,11 @@ RFD3_SCIENTIFIC_PARAM_KEYS = {
     "profile_id",
     "source_residue_identities",
     "rfd3_request",
-}
+    "select_fixed_atoms",
+    "contig",
+    "source_mapping",
+    "source_model",
+} | set(EXECUTION_FIELDS)
 
 
 async def requeue_failed_request_for_job(session, *, job_id: str) -> bool:
@@ -364,7 +371,7 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _source_residue_identities(path: Path) -> list[dict[str, Any]]:
+def _source_residue_identities(path: Path, model_serial=None) -> list[dict[str, Any]]:
     name = path.name.lower()
     is_cif = name.endswith((".cif", ".mmcif", ".cif.gz", ".mmcif.gz"))
     parser = MMCIFParser(QUIET=True) if is_cif else PDBParser(QUIET=True)
@@ -378,7 +385,7 @@ def _source_residue_identities(path: Path) -> list[dict[str, Any]]:
         raise ContractError(f"input structure could not be parsed: {path}: {exc}") from exc
 
     try:
-        model = next(structure.get_models())
+        model = next(m for m in structure.get_models() if model_serial is None or str(m.serial_num) == str(model_serial))
     except StopIteration as exc:
         raise ContractError("input structure contains no models") from exc
 
@@ -469,20 +476,24 @@ def normalize_local_redesign_params(
     normalized["input_structure"] = str(source_path)
     normalized["input_pdb"] = str(source_path)
     normalized["plr_input_pdb"] = str(source_path)
-    normalized["source_residue_identities"] = _source_residue_identities(source_path)
+    normalized["source_residue_identities"] = _source_residue_identities(source_path, normalized.get("source_model"))
     source_sha256 = _sha256_file(source_path)
-    rebuilt_request = build_request(normalized, job_name=job_name, source_sha256=source_sha256)
+    saved = normalized.get("rfd3_request")
+    legacy_native = isinstance(saved, dict) and saved.get("contract_revision") == LEGACY_CONTRACT_REVISION
+    rebuilt_request = build_request(normalized, job_name=job_name, source_sha256=source_sha256, legacy_native=legacy_native)
     existing_request = normalized.get("rfd3_request")
     if isinstance(existing_request, dict):
         if existing_request.get("schema") != "bms.rfd3.local-redesign.request.v1":
             raise ContractError("existing native RFD3 request schema is unsupported")
-        if existing_request.get("contract_revision") != CONTRACT_REVISION:
+        if existing_request.get("contract_revision") not in {CONTRACT_REVISION, LEGACY_CONTRACT_REVISION}:
             raise ContractError(
                 "existing native RFD3 request predates the fixed-scaffold contract and cannot be replayed"
             )
         if existing_request != rebuilt_request:
             raise ContractError("existing native RFD3 request does not match the canonical source-derived request")
     request = rebuilt_request
+    for field in ("design_chains", "context_chains"):
+        normalized[field] = request["selection"].get(field, [])
     digest = request_sha256(request)
     normalized["rfd3_request"] = request
     normalized["rfd3_request_sha256"] = digest

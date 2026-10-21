@@ -15,10 +15,15 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.lib.rfd3_scientific_settings import execution_settings
+
 REQUEST_SCHEMA = "bms.rfd3.local-redesign.request.v1"
 RESULT_SCHEMA = "bms.rfd3.local-redesign.result.v1"
-CONTRACT_REVISION = "fixed-scaffold-runtime-evidence-v2"
-SUPPORTED_MODES = frozenset({"partial_diffusion", "minimal_insertion"})
+LEGACY_CONTRACT_REVISION = "fixed-scaffold-runtime-evidence-v2"
+CONTRACT_REVISION = "native-settings-source-mapping-v3"
+SUPPORTED_MODES = frozenset({"partial_diffusion", "minimal_insertion", "native_recall"})
 SUPPORTED_PROFILES = frozenset({"generic_local_redesign_v1", "drt4_datp_gate_v1"})
 _FORBIDDEN_FREE_FORM_KEYS = frozenset(
     {
@@ -342,7 +347,7 @@ def _normalize_contig(value: Any, field: str = "contig") -> str | None:
 
 
 def _minimal_insertion_contig(
-    params: Mapping[str, Any], source_identities: list[tuple[str, int, str]]
+    params: Mapping[str, Any], source_identities: list[tuple[str, int, str]], *, legacy_native: bool = False
 ) -> tuple[str, int, int]:
     design_chains = _string_list(params.get("design_chains"), "design_chains")
     if len(design_chains) != 1:
@@ -376,16 +381,30 @@ def _minimal_insertion_contig(
         return f"{identity[0] if include_chain else ''}{identity[1]}{identity[2]}"
 
     def chain_range(residues: list[tuple[str, int, str]]) -> str:
-        first, last = residues[0], residues[-1]
-        return token(first) if first == last else f"{token(first)}-{token(last, include_chain=False)}"
+        if legacy_native:
+            first, last = residues[0], residues[-1]
+            return token(first) if first == last else f"{token(first)}-{token(last, include_chain=False)}"
+        runs = []
+        start = previous = residues[0]
+        for residue in residues[1:]:
+            if residue[0] == previous[0] and not residue[2] and not previous[2] and residue[1] == previous[1] + 1:
+                previous = residue
+                continue
+            runs.append(token(start) if start == previous else f"{token(start)}-{token(previous, include_chain=False)}")
+            start = previous = residue
+        runs.append(token(start) if start == previous else f"{token(start)}-{token(previous, include_chain=False)}")
+        return ",".join(runs)
 
     parts = [chain_range(design_residues[: anchor_index + 1]), f"{minimum}-{maximum}"]
     if anchor_index + 1 < len(design_residues):
         parts.append(chain_range(design_residues[anchor_index + 1 :]))
     context_chains = _string_list(params.get("context_chains"), "context_chains")
     context_ranges = [chain_range(by_chain[chain]) for chain in context_chains if by_chain.get(chain)]
-    if context_ranges:
+    if legacy_native and context_ranges:
         parts.extend(["/0", *context_ranges])
+    else:
+        for context_range in context_ranges:
+            parts.extend(["/0", context_range])
     return ",".join(parts), minimum, maximum
 
 
@@ -441,6 +460,7 @@ def _build_native_spec(
     input_path: str,
     mode: str,
     source_identities: list[tuple[str, int, str]],
+    *, legacy_native: bool = False,
 ) -> dict[str, Any]:
     fixed_atoms = _normalize_atom_map(params.get("select_fixed_atoms"), "select_fixed_atoms")
     contig = _normalize_contig(params.get("contig"))
@@ -453,7 +473,7 @@ def _build_native_spec(
         if contig is not None:
             raise ContractError("partial_diffusion uses the supplied input structure and does not accept contig")
     elif mode == "minimal_insertion":
-        expected_contig, _minimum, _maximum = _minimal_insertion_contig(params, source_identities)
+        expected_contig, _minimum, _maximum = _minimal_insertion_contig(params, source_identities, legacy_native=legacy_native)
         if contig is not None and contig != expected_contig:
             raise ContractError("minimal_insertion contig does not match the declared anchor and length bounds")
         contig = expected_contig
@@ -497,7 +517,7 @@ def _build_native_spec(
             normalized = (
                 _normalize_selector_map(values, field)
                 if isinstance(values, Mapping)
-                else _string_list(values, field)
+                else (_string_list(values, field) if legacy_native else _normalize_residue_selector(values, field))
             )
             if normalized:
                 native[field] = normalized
@@ -519,6 +539,7 @@ def build_request(
     *,
     job_name: str | None = None,
     source_sha256: str | None = None,
+    legacy_native: bool = False,
 ) -> dict[str, Any]:
     """Normalize product parameters and construct the exact native RFD3 spec."""
     if not isinstance(params, Mapping):
@@ -539,12 +560,12 @@ def build_request(
     residue_identities = params.get("source_residue_identities")
     normalized_residue_identities: list[dict[str, Any]] = []
     source_identities: list[tuple[str, int, str]] = []
-    if residue_identities is not None or mode in {"partial_diffusion", "minimal_insertion"}:
+    if residue_identities is not None or mode in {"partial_diffusion", "minimal_insertion", "native_recall"}:
         normalized_residue_identities, source_identities = _normalize_source_residue_identities(
             residue_identities
         )
 
-    native = _build_native_spec(params, input_path, mode, source_identities)
+    native = _build_native_spec(params, input_path, mode, source_identities, legacy_native=legacy_native)
     num_designs = _positive_int(params.get("num_designs"), "num_designs", default=8)
     seed_value = params.get("seed", params.get("rfd3_seed"))
     seed = int(seed_value) if seed_value is not None else None
@@ -579,14 +600,14 @@ def build_request(
     if normalized_residue_identities:
         selection["source_residue_identities"] = normalized_residue_identities
     if mode == "minimal_insertion":
-        _expected_contig, normalized_min, normalized_max = _minimal_insertion_contig(params, source_identities)
+        _expected_contig, normalized_min, normalized_max = _minimal_insertion_contig(params, source_identities, legacy_native=legacy_native)
         selection["insertion_min_length"] = normalized_min
         selection["insertion_max_length"] = normalized_max
 
     request: dict[str, Any] = {
         "schema": REQUEST_SCHEMA,
         "schema_version": 1,
-        "contract_revision": CONTRACT_REVISION,
+        "contract_revision": LEGACY_CONTRACT_REVISION if legacy_native else CONTRACT_REVISION,
         "workflow": "protein_local_redesign",
         "job_name": _text(job_name, "job_name") or "local_redesign",
         "profile_id": profile_id,
@@ -625,8 +646,16 @@ def build_request(
             "acceptance_context": params.get("acceptance_context") or {},
         },
     }
+    # Preserve historical string boolean normalization on this existing API.
+    settings_input = {**params, "dump_trajectories": request["execution"]["dump_trajectories"],
+                      "write_full_json": request["execution"]["write_full_json"]}
+    request["execution"].update(execution_settings(settings_input))
     if request["execution"]["write_full_json"] is not True:
         raise ContractError("write_full_json is required for typed RFD3 result ingestion")
+    if params.get("source_mapping") == "bms.rfd3.source-map.v1" or params.get("source_model") is not None:
+        request["source_mapping"] = "bms.rfd3.source-map.v1"
+        if params.get("source_model") is not None:
+            request["source_model"] = params["source_model"]
     return request
 
 

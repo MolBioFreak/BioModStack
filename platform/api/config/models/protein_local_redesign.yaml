@@ -74,13 +74,13 @@ params:
     ui_group: RFD3 redesign
     ui_order: 12
   - name: design_chains
-    type: object
+    type: array
     description: Source chain identifiers that contain the editable region.
     required: false
     ui_group: RFD3 redesign
     ui_order: 17
   - name: context_chains
-    type: object
+    type: array
     description: Source chain identifiers retained as fixed molecular context.
     required: false
     ui_group: RFD3 redesign
@@ -200,7 +200,6 @@ params:
     required: false
     default: 8
     minimum: 1
-    maximum: 512
     ui_group: Execution
     ui_order: 40
   - name: seed

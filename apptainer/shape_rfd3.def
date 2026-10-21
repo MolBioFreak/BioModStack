@@ -3,8 +3,8 @@ From: /mnt/BioModStack/apptainer/foundry.sif
 
 %labels
     org.biomodstack.component "shape-rfd3"
-    org.biomodstack.base-sampler-sha256 "e64fd42242422fa40ee0112a031911f462b13403b3f8d46ae49879d569b9314f"
-    org.biomodstack.patched-sampler-sha256 "bea19f55bc545963dd8834b6d7b22d5f7b6fd3ad9425e4cd3900cd7aa040a5ab"
+    org.biomodstack.base-sampler-sha256 "fcc9d94bf92f0fcbb2f91a305e89985696016b2a2786db12ba5790240b53191a"
+    org.biomodstack.patched-sampler-sha256 "b27da5ee1341255cf351e2cd55f2de046a3e9a8b5a4df65fd831b3639240f86d"
     org.biomodstack.rfd3-version "0.1.9"
 
 %files
@@ -19,7 +19,7 @@ import hashlib
 from pathlib import Path
 from rfd3.model.inference_sampler import ConditionalDiffusionSampler
 sampler_path = Path("/usr/local/lib/python3.12/dist-packages/rfd3/model/inference_sampler.py")
-assert hashlib.sha256(sampler_path.read_bytes()).hexdigest() == "bea19f55bc545963dd8834b6d7b22d5f7b6fd3ad9425e4cd3900cd7aa040a5ab"
+assert hashlib.sha256(sampler_path.read_bytes()).hexdigest() == "b27da5ee1341255cf351e2cd55f2de046a3e9a8b5a4df65fd831b3639240f86d"
 assert "shape" in ConditionalDiffusionSampler._registry
 sampler = ConditionalDiffusionSampler._registry["shape"]
 assert sampler.__name__ == "ShapeGuidedDiffusionSampler"
@@ -31,7 +31,7 @@ import hashlib
 from pathlib import Path
 from rfd3.model.inference_sampler import ConditionalDiffusionSampler
 sampler_path = Path("/usr/local/lib/python3.12/dist-packages/rfd3/model/inference_sampler.py")
-assert hashlib.sha256(sampler_path.read_bytes()).hexdigest() == "bea19f55bc545963dd8834b6d7b22d5f7b6fd3ad9425e4cd3900cd7aa040a5ab"
+assert hashlib.sha256(sampler_path.read_bytes()).hexdigest() == "b27da5ee1341255cf351e2cd55f2de046a3e9a8b5a4df65fd831b3639240f86d"
 assert "shape" in ConditionalDiffusionSampler._registry
 PY
 

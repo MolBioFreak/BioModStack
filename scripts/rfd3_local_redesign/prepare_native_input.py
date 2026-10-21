@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from contract import canonical_json, request_sha256
+from scripts.lib.rfd3_scientific_settings import task_dispatch
+from scripts.rfd3_local_redesign.source_mapping import materialize_source, lower_native
 
 
 def _sha256_file(path: Path) -> str:
@@ -48,6 +50,11 @@ def main() -> None:
         raise SystemExit("staged input structure does not match the canonical request")
     runtime_native = dict(native)
     runtime_native["input"] = input_path.name
+    source_mapping = None
+    if request.get("source_mapping") == "bms.rfd3.source-map.v1":
+        derived = Path(args.output_native).resolve().with_name("rfd3_native_source.cif")
+        source_mapping = materialize_source(input_path, derived, model_serial=request.get("source_model"))
+        runtime_native = lower_native(native, source_mapping, derived.name)
     native_payload = {args.design_id: runtime_native}
     native_json = canonical_json(native_payload)
     Path(args.output_native).write_text(native_json + "\n", encoding="utf-8")
@@ -71,6 +78,10 @@ def main() -> None:
         },
         "native_rfd3": runtime_native,
     }
+    receipt["task_dispatch"] = task_dispatch(request.get("redesign_mode"), runtime_native)
+    if source_mapping is not None:
+        receipt["source_mapping"] = source_mapping
+        receipt["runtime_input"] = {"path": runtime_native["input"], "sha256": source_mapping["native_sha256"]}
     Path(args.output_receipt).write_text(canonical_json(receipt) + "\n", encoding="utf-8")
 
 

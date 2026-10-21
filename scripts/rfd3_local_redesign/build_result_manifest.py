@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from contract import canonical_json, request_sha256
+from scripts.rfd3_local_redesign.source_mapping import lower_native
 
 
 def _sha256(path: Path) -> str:
@@ -85,12 +86,14 @@ def main() -> None:
     parser.add_argument("--cif-file", action="append", default=[])
     parser.add_argument("--json-file", action="append", default=[])
     parser.add_argument("--native-input", required=True)
+    parser.add_argument("--native-source")
     parser.add_argument("--native-input-storage-path", required=True)
     parser.add_argument("--trajectory-file", action="append", default=[])
     parser.add_argument("--trajectory-dir")
     parser.add_argument("--preparation-receipt", required=True)
     parser.add_argument("--log-file", required=True)
     parser.add_argument("--metadata-jsonl", required=True)
+    parser.add_argument("--execution-status", choices=["unknown", "completed", "failed", "cancelled"], default="unknown")
     parser.add_argument("--output", required=True)
     parser.add_argument("--storage-root", required=True)
     parser.add_argument("--request-storage-path", required=True)
@@ -140,8 +143,6 @@ def main() -> None:
         log_file,
         metadata_jsonl,
     ]
-    if not cif_paths:
-        raise SystemExit("at least one native RFD3 candidate CIF artifact is required")
     if any(not path.is_file() for path in declared_paths):
         raise SystemExit("declared RFD3 artifacts must exist")
 
@@ -151,10 +152,6 @@ def main() -> None:
     requested_num_designs = execution.get("num_designs")
     if not isinstance(requested_num_designs, int) or requested_num_designs < 1:
         raise SystemExit("canonical request has an invalid requested design count")
-    if len(cif_paths) != requested_num_designs:
-        raise SystemExit(
-            f"native RFD3 candidate count mismatch: requested {requested_num_designs}, observed {len(cif_paths)}"
-        )
 
     metadata_by_candidate: dict[str, tuple[Path, dict[str, Any]]] = {}
     for path in json_paths:
@@ -162,6 +159,8 @@ def main() -> None:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise SystemExit(f"invalid native RFD3 metadata: {path}: {exc}") from exc
+        if _candidate_id(path) in metadata_by_candidate:
+            raise SystemExit("native RFD3 metadata identities must be unique")
         metadata_by_candidate[_candidate_id(path)] = (path, payload)
 
     trajectory_by_candidate: dict[str, dict[str, Path]] = {}
@@ -173,20 +172,22 @@ def main() -> None:
         bound[role] = path
 
     candidate_ids = {_candidate_id(path) for path in cif_paths}
-    if set(metadata_by_candidate) != candidate_ids:
-        raise SystemExit("native RFD3 metadata must match every candidate structure exactly")
+    if len(candidate_ids) != len(cif_paths):
+        raise SystemExit("native RFD3 structure identities must be unique")
+    paired_ids = candidate_ids & set(metadata_by_candidate)
+    unpaired_paths = [path for path in [*cif_paths, *json_paths] if _candidate_id(path) not in paired_ids]
+    cif_paths = [path for path in cif_paths if _candidate_id(path) in paired_ids]
     if set(trajectory_by_candidate) - candidate_ids:
         raise SystemExit("native RFD3 trajectories reference unknown candidates")
     trajectories_requested = execution.get("dump_trajectories") is True
+    incomplete_trajectories = []
     if trajectories_requested:
-        for candidate_id in candidate_ids:
+        for candidate_id in paired_ids:
             if set(trajectory_by_candidate.get(candidate_id, {})) != {
                 "denoised_trajectory",
                 "noisy_trajectory",
             }:
-                raise SystemExit(
-                    f"requested native RFD3 trajectories are incomplete for candidate '{candidate_id}'"
-                )
+                incomplete_trajectories.append(candidate_id)
     elif trajectory_paths:
         raise SystemExit("native RFD3 produced trajectories when they were not requested")
 
@@ -201,6 +202,14 @@ def main() -> None:
     native_runtime_input = receipt_native.get("input") if isinstance(receipt_native, dict) else None
     expected_native = dict(request.get("rfd3") or {})
     expected_native["input"] = native_runtime_input
+    source_mapping = receipt_payload.get("source_mapping")
+    if source_mapping is not None:
+        derived_source = Path(args.native_source) if args.native_source else native_input.parent / str(native_runtime_input)
+        if (source_mapping.get("original_sha256") != expected_source_sha
+                or not derived_source.is_file()
+                or _sha256(derived_source) != source_mapping.get("native_sha256")):
+            raise SystemExit("derived source mapping artifact does not match source custody")
+        expected_native = lower_native(request.get("rfd3") or {}, source_mapping, native_runtime_input)
     runtime_input = receipt_payload.get("runtime_input")
     try:
         native_input_payload = json.loads(native_input.read_text(encoding="utf-8"))
@@ -212,14 +221,14 @@ def main() -> None:
         or not isinstance(design_id, str)
         or not design_id
         or not isinstance(native_runtime_input, str)
-        or Path(native_runtime_input).name != source_file.name
+        or (source_mapping is None and Path(native_runtime_input).name != source_file.name)
         or receipt_native != expected_native
         or native_input_payload != {design_id: expected_native}
         or receipt_payload.get("native_input_sha256")
         != hashlib.sha256(canonical_json(native_input_payload).encode("utf-8")).hexdigest()
         or not isinstance(runtime_input, dict)
-        or runtime_input.get("path") != source_file.name
-        or runtime_input.get("sha256") != expected_source_sha
+        or runtime_input.get("path") != (native_runtime_input if source_mapping is not None else source_file.name)
+        or runtime_input.get("sha256") != (source_mapping["native_sha256"] if source_mapping is not None else expected_source_sha)
         or receipt_payload.get("redesign_mode") != request.get("redesign_mode")
         or receipt_payload.get("sequence_policy") != request.get("sequence_policy")
     ):
@@ -265,6 +274,12 @@ def main() -> None:
             relative_path=f"{args.artifact_relative_prefix}/{metadata_jsonl.name}",
         ),
     ]
+    if source_mapping is not None:
+        artifacts.append(_descriptor(
+            role="native_source_structure", source_path=derived_source,
+            storage_path=storage_root / derived_source.name,
+            relative_path=f"collected/protein_local_redesign/{derived_source.name}",
+        ))
     candidates: list[dict[str, Any]] = []
     for cif_path in sorted(cif_paths):
         candidate_id = _candidate_id(cif_path)
@@ -307,7 +322,20 @@ def main() -> None:
         artifacts.extend(candidate_artifacts)
 
     manifest = {
-        "schema": "bms.rfd3.local-redesign.result.v1",
+        "schema": "bms.rfd3.local-redesign.result.v2",
+        "execution_status": args.execution_status,
+        "population": {
+            "requested": requested_num_designs, "generated": len(candidates),
+            "missing": max(0, requested_num_designs - len(candidates)),
+            "unexpected": max(0, len(candidates) - requested_num_designs),
+            "failed": None,
+            "unpaired_artifacts": [
+                _descriptor(role="unpaired_native_output", source_path=path,
+                            storage_path=storage_root / path.name,
+                            relative_path=f"{args.artifact_relative_prefix}/{path.name}")
+                for path in unpaired_paths
+            ],
+        },
         "result_contract_id": "rfd3_local_redesign_v1",
         "request_sha256": request_sha256(request),
         "request_schema": request.get("schema"),
@@ -323,7 +351,8 @@ def main() -> None:
         "execution_evidence": {
             "requested_num_designs": requested_num_designs,
             "observed_num_designs": len(candidates),
-            "candidate_count_integrity": "exact",
+            "candidate_count_integrity": "exact" if len(candidates) == requested_num_designs else "partial_or_unexpected",
+            "incomplete_trajectory_candidates": incomplete_trajectories,
             "trajectories": "produced" if trajectory_paths else "not_requested",
             "sequence_design": sequence_state,
         },

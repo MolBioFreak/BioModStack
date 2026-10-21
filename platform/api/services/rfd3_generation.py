@@ -11,8 +11,13 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
+from scripts.lib.rfd3_scientific_settings import (
+    EXECUTION_FIELDS, execution_settings, integer, scientific_inventory, conditioning_settings,
+)
+
 REQUEST_SCHEMA = "bms.rfd3.generation.request.v1"
 RESULT_SCHEMA = "bms.rfd3.generation.result-manifest.v1"
+RESULT_SCHEMA_V2 = "bms.rfd3.generation.result-manifest.v2"
 READ_MODEL_SCHEMA = "bms.rfd3.generation.read-model.v1"
 _ALLOWED_INPUTS = {
     "generator",
@@ -23,7 +28,11 @@ _ALLOWED_INPUTS = {
     "seed",
     "dump_trajectories",
     "modification_mode",
-}
+    "conditioning",
+    "input_structure",
+    "source_mapping",
+    "source_model",
+} | set(EXECUTION_FIELDS)
 
 
 class GenerationContractError(ValueError):
@@ -53,16 +62,11 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _int(value: Any, name: str, *, minimum: int, maximum: int) -> int:
-    if isinstance(value, bool):
-        raise GenerationContractError(f"{name} must be an integer")
+def _int(value: Any, name: str, *, minimum: int, maximum: int | None = None) -> int:
     try:
-        normalized = int(value)
-    except (TypeError, ValueError) as exc:
-        raise GenerationContractError(f"{name} must be an integer") from exc
-    if normalized < minimum or normalized > maximum:
-        raise GenerationContractError(f"{name} must be within [{minimum}, {maximum}]")
-    return normalized
+        return integer(value, name, minimum, maximum, coerce=True)
+    except ValueError as exc:
+        raise GenerationContractError(str(exc)) from exc
 
 
 def normalize_generation_params(
@@ -76,13 +80,13 @@ def normalize_generation_params(
     if generator != "rfd3":
         raise GenerationContractError("native general-generation contract requires generator=rfd3")
     generation_mode = str(raw.get("generation_mode") or "unconditional_monomer").strip().lower()
-    if generation_mode != "unconditional_monomer":
-        raise GenerationContractError("generation_mode must be unconditional_monomer")
-    minimum = _int(raw.get("min_length", 100), "min_length", minimum=40, maximum=600)
-    maximum = _int(raw.get("max_length", 200), "max_length", minimum=40, maximum=600)
+    if generation_mode not in {"unconditional_monomer", "conditioned"}:
+        raise GenerationContractError("generation_mode must be unconditional_monomer or conditioned")
+    minimum = _int(raw.get("min_length", 100), "min_length", minimum=1)
+    maximum = _int(raw.get("max_length", 200), "max_length", minimum=1)
     if minimum > maximum:
         raise GenerationContractError("min_length must be less than or equal to max_length")
-    num_designs = _int(raw.get("num_designs", 8), "num_designs", minimum=1, maximum=200)
+    num_designs = _int(raw.get("num_designs", 8), "num_designs", minimum=1)
     seed = _int(raw.get("seed", 0), "seed", minimum=0, maximum=2_147_483_647)
     dump_value = raw.get("dump_trajectories", False)
     if not isinstance(dump_value, bool):
@@ -101,6 +105,20 @@ def normalize_generation_params(
         },
         "execution": {"seed": seed, "dump_trajectories": dump_value},
     }
+    try:
+        request["execution"].update(execution_settings(raw))
+        if "conditioning" in raw:
+            request["conditioning"] = conditioning_settings(raw["conditioning"])
+    except ValueError as exc:
+        raise GenerationContractError(str(exc)) from exc
+    if raw.get("input_structure"):
+        from services.rfd3_local_redesign import _resolve_local_redesign_source
+        source = _resolve_local_redesign_source(raw["input_structure"])
+        request["source"] = {"path": str(source), "sha256": file_sha256(source)}
+        if raw.get("source_mapping") == "bms.rfd3.source-map.v1" or raw.get("source_model") is not None:
+            request["source_mapping"] = "bms.rfd3.source-map.v1"
+            if raw.get("source_model") is not None:
+                request["source_model"] = raw["source_model"]
     digest = request_sha256(request)
     normalized = {
         **raw,
@@ -169,7 +187,7 @@ def generation_result_contract(params: Mapping[str, Any]) -> dict[str, Any] | No
             or params.get("rfd3_generation_result_contract_id") != "rfd3_generation_v1"
             or not params.get("rfd3_generation_request_path")):
         return None
-    return {"contract_id": "rfd3_generation_v1", "aggregate_schema": RESULT_SCHEMA,
+    return {"contract_id": "rfd3_generation_v1", "aggregate_schema": RESULT_SCHEMA_V2,
         "native_contract_authority": "platform/api/services/result_ingester.py:_ingest_rfd3_generation_manifest",
         "completion_authority": "platform/api/services/rfd3_generation.py:validate_result_manifest"}
 
@@ -234,12 +252,14 @@ def validate_result_manifest(
     job_id: str,
 ) -> dict[str, Any]:
     """Validate the exact native producer manifest and every referenced byte."""
+    partial_schema = isinstance(value, dict) and value.get("schema") == RESULT_SCHEMA_V2
     manifest = _exact_object(
         value,
-        {"schema", "job_id", "request_id", "request_sha256", "aggregate", "candidates"},
+        {"schema", "job_id", "request_id", "request_sha256", "aggregate", "candidates"}
+        | ({"execution_status", "population"} if partial_schema else set()),
         "RFD3 generation result manifest",
     )
-    if manifest["schema"] != RESULT_SCHEMA:
+    if manifest["schema"] != RESULT_SCHEMA and not partial_schema:
         raise GenerationContractError("unsupported RFD3 generation result manifest schema")
     if manifest["job_id"] != str(job_id) or request.get("job_id") != str(job_id):
         raise GenerationContractError("RFD3 generation job binding mismatch")
@@ -248,10 +268,10 @@ def validate_result_manifest(
     if manifest["request_sha256"] != request_sha256(request):
         raise GenerationContractError("RFD3 generation request hash mismatch")
     candidates = manifest["candidates"]
-    if not isinstance(candidates, list) or not candidates:
+    if not isinstance(candidates, list) or (not candidates and not partial_schema):
         raise GenerationContractError("RFD3 generation candidates must be a non-empty array")
     requested = request.get("generation", {}).get("num_designs")
-    if isinstance(requested, bool) or not isinstance(requested, int) or requested != len(candidates):
+    if isinstance(requested, bool) or not isinstance(requested, int) or (not partial_schema and requested != len(candidates)):
         raise GenerationContractError("RFD3 generation candidate cardinality mismatch")
 
     root = Path(output_root).expanduser().resolve()
@@ -337,9 +357,37 @@ def validate_result_manifest(
         "requested": requested,
         "generated": len(candidates),
         "accepted": accepted_count,
-        "length": _metric_summary(lengths),
-        "radius_of_gyration": _metric_summary(radii),
+        "length": _metric_summary(lengths) if lengths else None,
+        "radius_of_gyration": _metric_summary(radii) if radii else None,
     }
     if manifest["aggregate"] != expected_aggregate:
         raise GenerationContractError("RFD3 generation aggregate statistics mismatch")
+    if partial_schema:
+        if manifest["execution_status"] not in {"unknown", "completed", "failed", "cancelled"}:
+            raise GenerationContractError("invalid execution status observation")
+        population = _exact_object(manifest["population"],
+            {"requested", "generated", "missing", "unexpected", "failed", "unpaired_artifacts"}, "population")
+        for key, expected in {"requested": requested, "generated": len(candidates),
+                              "missing": max(0, requested - len(candidates)),
+                              "unexpected": max(0, len(candidates) - requested)}.items():
+            if isinstance(population[key], bool) or population[key] != expected:
+                raise GenerationContractError("population accounting mismatch")
+        if population["failed"] is not None:
+            raise GenerationContractError("failed count is not observed by this native writer")
+        if not isinstance(population["unpaired_artifacts"], list):
+            raise GenerationContractError("unpaired_artifacts must be an array")
+        for artifact in population["unpaired_artifacts"]:
+            _exact_object(artifact, {"role", "relative_path", "sha256", "bytes", "media_type"}, "unpaired artifact")
+            relative = Path(artifact["relative_path"])
+            if relative.is_absolute() or ".." in relative.parts or "\\" in str(relative):
+                raise GenerationContractError("unpaired artifact path is unsafe")
+            current = root
+            for part in relative.parts:
+                current /= part
+                if current.is_symlink():
+                    raise GenerationContractError("unpaired artifact path contains a symlink")
+            if not current.is_file() or not current.resolve().is_relative_to(root):
+                raise GenerationContractError("unpaired artifact is unavailable")
+            if current.stat().st_size != artifact["bytes"] or file_sha256(current) != artifact["sha256"]:
+                raise GenerationContractError("unpaired artifact digest/size mismatch")
     return {**manifest, "candidates": validated_candidates}

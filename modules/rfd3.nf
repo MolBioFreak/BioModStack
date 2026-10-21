@@ -49,25 +49,15 @@ process RunRFD3 {
     def num_designs = generalGenerationRequest
         ? params.rfd3_generation_num_designs
         : (localRedesignRequest ? (params.plr_num_designs ?: 1) : (params.rfd3_batches_per_design ?: 1))
-    def seedValue = generalGenerationRequest ? params.rfd3_generation_seed : params.plr_seed
-    def seed = seedValue == null ? 'null' : seedValue
-    def dumpTrajectories = generalGenerationRequest
-        ? params.rfd3_generation_dump_trajectories == true
-        : params.plr_dump_trajectories == true
-    def writeFullJson = true
-    def executionConfig = nativeRequest
-        ? "diffusion_batch_size=1 seed=${seed} dump_trajectories=${dumpTrajectories} output_full_json=${writeFullJson}"
-        : extra_config
+    def requestPath = generalGenerationRequest ? params.rfd3_generation_request_path : params.rfd3_request_path
+    def nativeCommand = nativeRequest
+        ? "python3 /scripts/rfd3_generation/run_native.py --request '${requestPath}' --inputs '${input_json}' --out-dir rfd3_results"
+        : "rfd3 inputs=${input_json} out_dir=rfd3_results n_batches=${num_designs} ${extra_config}"
 
     """
     echo "Running RFdiffusion3 for batch ${batch_id}"
     
-    rfd3 \\
-        inputs=${input_json} \\
-        out_dir=rfd3_results \\
-        n_batches=${num_designs} \\
-        ${executionConfig} \\
-        2>&1 | tee rfd3_${batch_id}.log
+    ${nativeCommand} 2>&1 | tee rfd3_${batch_id}.log
 
     for trajectory in rfd3_results/*_denoised_model_*.cif.gz rfd3_results/*_noisy_model_*.cif.gz; do
         [ -f "\$trajectory" ] || continue

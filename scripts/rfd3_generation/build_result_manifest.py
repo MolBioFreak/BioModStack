@@ -161,23 +161,22 @@ def build_result_manifest(
     metadata_paths: list[Path],
     accepted_candidate_ids: set[str] | None,
     storage_prefix: str,
+    execution_status: str = "unknown",
 ) -> dict[str, Any]:
     request = validate_request(json.loads(request_path.read_text(encoding="utf-8")))
     structures = {_candidate_id(path): path.resolve() for path in structure_paths}
     metadata = {_candidate_id(path): path.resolve() for path in metadata_paths}
     if len(structures) != len(structure_paths) or len(metadata) != len(metadata_paths):
         raise ContractError("candidate artifact identities must be unique")
-    if set(structures) != set(metadata):
-        raise ContractError("native RFD3 metadata must match candidate structures exactly")
+    paired_ids = set(structures) & set(metadata)
+    unpaired = sorted(set(structures) ^ set(metadata))
     requested = request["generation"]["num_designs"]
-    if len(structures) != requested:
-        raise ContractError(f"candidate count mismatch: requested {requested}, generated {len(structures)}")
     for path in [*structures.values(), *metadata.values()]:
         if not path.is_file():
             raise ContractError(f"declared artifact does not exist: {path}")
 
     candidates = []
-    for candidate_id in sorted(structures):
+    for candidate_id in sorted(paired_ids):
         metrics = _structure_metrics(structures[candidate_id])
         if accepted_candidate_ids is None:
             accepted = request["generation"]["min_length"] <= metrics["residue_count"] <= request["generation"]["max_length"]
@@ -194,13 +193,25 @@ def build_result_manifest(
             "artifact_manifest_sha256": canonical_sha256(artifacts),
             "artifacts": artifacts,
         })
-    if accepted_candidate_ids is not None and not accepted_candidate_ids <= set(structures):
+    if accepted_candidate_ids is not None and not accepted_candidate_ids <= paired_ids:
         raise ContractError("accepted candidate IDs must reference generated candidates")
 
     lengths = [item["metrics"]["residue_count"] for item in candidates]
     radii = [item["metrics"]["radius_of_gyration"] for item in candidates]
     return {
-        "schema": RESULT_MANIFEST_SCHEMA,
+        "schema": "bms.rfd3.generation.result-manifest.v2",
+        "execution_status": execution_status,
+        "population": {
+            "requested": requested, "generated": len(candidates),
+            "missing": max(0, requested - len(candidates)),
+            "unexpected": max(0, len(candidates) - requested),
+            "failed": None,
+            "unpaired_artifacts": [
+                _descriptor(structures[k] if k in structures else metadata[k],
+                            "candidate_structure" if k in structures else "candidate_metadata", storage_prefix)
+                for k in unpaired
+            ],
+        },
         "job_id": request["job_id"],
         "request_id": request["request_id"],
         "request_sha256": canonical_sha256(request),
@@ -208,8 +219,8 @@ def build_result_manifest(
             "requested": requested,
             "generated": len(candidates),
             "accepted": sum(item["accepted"] for item in candidates),
-            "length": _summary(lengths),
-            "radius_of_gyration": _summary(radii),
+            "length": _summary(lengths) if lengths else None,
+            "radius_of_gyration": _summary(radii) if radii else None,
         },
         "candidates": candidates,
     }
@@ -222,6 +233,7 @@ def main() -> None:
     parser.add_argument("--json-file", action="append", default=[])
     parser.add_argument("--accepted-candidate-id", action="append")
     parser.add_argument("--storage-prefix", default="run/rfd3")
+    parser.add_argument("--execution-status", choices=["unknown", "completed", "failed", "cancelled"], default="unknown")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     manifest = build_result_manifest(
@@ -230,6 +242,7 @@ def main() -> None:
         metadata_paths=[Path(value) for value in args.json_file],
         accepted_candidate_ids=set(args.accepted_candidate_id) if args.accepted_candidate_id is not None else None,
         storage_prefix=args.storage_prefix,
+        execution_status=args.execution_status,
     )
     Path(args.output).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 

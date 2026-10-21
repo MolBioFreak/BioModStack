@@ -6,6 +6,9 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     Version 1.0
     Description Foundry container with RFdiffusion3, RosettaFold3, LigandMPNN
 
+%files
+    scripts/rfd3_generation/install_schedule_return.py /opt/bms/install_schedule_return.py
+
 %post
     # Prevent interactive prompts during build
     export DEBIAN_FRONTEND=noninteractive
@@ -46,6 +49,7 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     # Install Foundry with all dependencies (RFD3, RF3, MPNN)
     # Note: This will install torch from PyPI (cu126), we override it below
     uv pip install --compile --system "rc-foundry[all]==0.1.9"
+    python3.12 /opt/bms/install_schedule_return.py
     
     # Force reinstall PyTorch with CUDA 12.8 (stable cu128 for Blackwell sm_120 support)
     # This overrides the torch version that rc-foundry installed

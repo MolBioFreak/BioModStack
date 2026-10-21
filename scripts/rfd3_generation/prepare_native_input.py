@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 from pathlib import Path
 
 from contract import PREPARATION_RECEIPT_SCHEMA, canonical_json, canonical_sha256, validate_request
 
 
-def prepare(request: dict) -> tuple[dict, dict]:
+def prepare(request: dict, *, source_destination: Path | None = None) -> tuple[dict, dict]:
     request = validate_request(request)
     generation = request["generation"]
     native = {
@@ -19,6 +20,20 @@ def prepare(request: dict) -> tuple[dict, dict]:
             "length": f"{generation['min_length']}-{generation['max_length']}",
         }
     }
+    if "conditioning" in request:
+        from scripts.lib.rfd3_scientific_settings import conditioning_settings
+        native["generation_0"].update(conditioning_settings(request["conditioning"]))
+    source_mapping = None
+    if "source" in request:
+        source = Path(request["source"]["path"])
+        if hashlib.sha256(source.read_bytes()).hexdigest() != request["source"]["sha256"]:
+            raise ValueError("conditioned source hash mismatch")
+        native["generation_0"]["input"] = str(source)
+        if request.get("source_mapping") == "bms.rfd3.source-map.v1":
+            from scripts.rfd3_local_redesign.source_mapping import materialize_source, lower_native
+            destination = source_destination or Path.cwd() / "rfd3_native_source.cif"
+            source_mapping = materialize_source(source, destination, model_serial=request.get("source_model"))
+            native["generation_0"] = lower_native(native["generation_0"], source_mapping, destination.name)
     receipt = {
         "schema": PREPARATION_RECEIPT_SCHEMA,
         "request_id": request["request_id"],
@@ -27,6 +42,8 @@ def prepare(request: dict) -> tuple[dict, dict]:
         "native_input_sha256": canonical_sha256(native),
         "native_rfd3": native["generation_0"],
     }
+    if source_mapping is not None:
+        receipt["source_mapping"] = source_mapping
     return native, receipt
 
 
@@ -77,7 +94,7 @@ def main() -> None:
 
     request = validate_request(json.loads(Path(args.request).read_text(encoding="utf-8")))
     _require_expected(request, args)
-    native, receipt = prepare(request)
+    native, receipt = prepare(request, source_destination=Path(args.output_native).resolve().with_name("rfd3_native_source.cif"))
     Path(args.output_native).write_text(canonical_json(native) + "\n", encoding="utf-8")
     Path(args.output_receipt).write_text(canonical_json(receipt) + "\n", encoding="utf-8")
 
