@@ -69,6 +69,12 @@ def test_inverse_evaluate_search_and_guidance_compose(tmp_path):
     r={'mode':'evaluate','input':{'kind':'annotated','slots':['native']},'settings':{'metrics_tags':[]}}
     cfg=compose_native(r,source/'configs',inputs=tmp_path,output=tmp_path/'out')
     assert cfg.delete_failing_pre_oracle is False and list(cfg.metrics_tags)==[]
+    from bms_rfd4.run import write_evaluation_tasks
+    import csv
+    r['evaluation_tasks']=[{'slot':'native','task':'same-cohort'}]
+    task_csv=write_evaluation_tasks(normalize_request(r),[{'slot':'native','native':'/retained/exact.cif.zst'}],tmp_path/'tasks.csv')
+    with task_csv.open() as stream:
+        assert list(csv.DictReader(stream))==[{'designed_structure_path':'/retained/exact.cif.zst','task':'same-cohort'}]
     r=request();r['guidance']={'metrics':['contract_ca'],'terms':{'contract_ca.sq_norm':{'bb_ca':{'kind':'window','w':0,'t_start':0,'t_end':0.1}}}}
     cfg=compose_native(r,source/'configs',inputs=tmp_path,output=tmp_path/'out',bundle=tmp_path/'pair')
     assert cfg.guidance.terms['contract_ca.sq_norm'].bb_ca._target_=='rfproteina.guidance.schedules.window'

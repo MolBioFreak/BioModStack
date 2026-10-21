@@ -42,6 +42,21 @@ def compose_native(request, config_dir, *, inputs, output, bundle=None, bindings
     return cfg
 
 
+def write_evaluation_tasks(request, identity, destination):
+    """Compile typed slot labels into native task_csv using retained exact paths."""
+    import csv
+    if 'evaluation_tasks' not in request:return None
+    paths={row['slot']:row['native'] for row in identity if 'slot' in row}
+    path=Path(destination)
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with path.open('w',newline='') as stream:
+        writer=csv.DictWriter(stream,fieldnames=['designed_structure_path','task'])
+        writer.writeheader()
+        for row in request['evaluation_tasks']:
+            writer.writerow({'designed_structure_path':paths[row['slot']],'task':row['task']})
+    return path.resolve()
+
+
 def run(request,bindings,output,*,bundle=None,runtime_identity=None,prepared_inputs=None,config_dir=None):
     import rfproteina
     from omegaconf import OmegaConf
@@ -58,10 +73,14 @@ def run(request,bindings,output,*,bundle=None,runtime_identity=None,prepared_inp
             receipt['input_identity']=identity
         else:
             inputs=Path(prepared_inputs).resolve()
+            identity=json.loads((inputs.parent/'input_identity.json').read_text()) if 'evaluation_tasks' in request else []
         if config_dir is None:
             import rootutils
             config_dir=rootutils.find_root(rfproteina.__file__,indicator='.project-root')/'configs'
         cfg=compose_native(request,config_dir,inputs=inputs,output=root/'native',bundle=bundle,bindings=bindings)
+        if request['mode']=='evaluate':
+            task_csv=write_evaluation_tasks(request,identity,root/'prepared/task_mapping.csv')
+            if task_csv is not None:cfg.task_csv=str(task_csv)
         (root/'requested.json').write_text(json.dumps(request,indent=2)+'\n')
         with observer.installed():
             if request['mode']=='generate':

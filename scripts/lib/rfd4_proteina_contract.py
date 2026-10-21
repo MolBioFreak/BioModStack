@@ -127,6 +127,7 @@ def parameter_schema(mode='generate'):
         props['guidance']=obj({'metrics':array(choice('contract_ca')),'terms':table(obj({'bb_ca':schedule,'local_latents':schedule}))})
     if mode=='evaluate':
         props['input']=copy.deepcopy(INPUT['oneOf'][2])
+        props['evaluation_tasks']=array(obj({'slot':{**S,'x-ui-control':'file'},'task':S},['slot','task']))
         props.pop('resume_slot');props.pop('adapter_slot')
     result=obj(props,['input'])
     result.update({'$schema':'https://json-schema.org/draft/2020-12/schema','$id':CONTRACT+'/'+mode,
