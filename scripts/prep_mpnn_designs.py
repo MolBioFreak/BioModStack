@@ -39,7 +39,7 @@ def get_fixed_residues(pdb_path, json_path=None):
         try:
             json_data = read_json_file(json_path)
             
-            # Look for inpaint_seq array (False means fixed)
+            # Preserve native mask polarity: True means fixed
             if 'rfd_inpaint_seq' in json_data:
                 inpaint_array = json_data['rfd_inpaint_seq']
                 logger.info(f"Found rfd_inpaint_seq with {len(inpaint_array)} elements")
@@ -69,7 +69,7 @@ def map_inpaint_to_residues(pdb_path, inpaint_array):
             if line.startswith('ATOM'):
                 chain = line[21]
                 res_num = int(line[22:26].strip())
-                res_id = (chain, res_num)
+                res_id = (chain, res_num, line[26].strip())
                 
                 if res_id != current_res:
                     residues.append(res_id)
@@ -97,7 +97,7 @@ def get_fixed_from_bfactor(pdb_path):
                 res_num = int(line[22:26].strip())
                 b_factor = float(line[60:66].strip())
                 
-                key = (chain, res_num)
+                key = (chain, res_num, line[26].strip())
                 if key not in residues:
                     residues[key] = []
                 residues[key].append(b_factor)
@@ -117,8 +117,18 @@ def modify_pdb_file(input_pdb, output_pdb, fixed_residues):
     
     with open(input_pdb, 'r') as in_file, open(output_pdb, 'w') as out_file:
         # Write FIXED remarks at the top of the file
-        for chain, res_num in sorted(fixed_residues):
-            out_file.write(f"REMARK PDBinfo-LABEL: {res_num} FIXED\n")
+        identities = list(dict.fromkeys(
+            (line[21], int(line[22:26]), line[26].strip())
+            for line in Path(input_pdb).read_text().splitlines() if line.startswith('ATOM')))
+        fixed_residues = set(fixed_residues)
+        for line in Path(input_pdb).read_text().splitlines():
+            match = re.fullmatch(r'REMARK\s+PDBinfo-LABEL:\s*(\d+)\s+FIXED\s*', line)
+            if match and 1 <= int(match.group(1)) <= len(identities):
+                fixed_residues.add(identities[int(match.group(1)) - 1])
+        fixed_residues = [r for r in identities if r in fixed_residues]
+        out_file.write('REMARK BMS_MPNN_FIXED ' + json.dumps([list(r) for r in fixed_residues]) + '\n')
+        for identity in fixed_residues:
+            out_file.write(f"REMARK PDBinfo-LABEL: {identities.index(identity) + 1} FIXED\n")
         
         # Write the rest of the PDB content
         for line in in_file:
@@ -133,32 +143,9 @@ def validate_generic_input(pdb_path, request=None):
     else:
         from proteinmpnn_native_binding import role_contract, pdb_domain
     pdb_path = Path(pdb_path)
-    if not (request and request.get('binder_chains')):
-        data = pdb_path.read_bytes()
-        role_contract(pdb_path, request, data=data)
-        return pdb_domain(pdb_path, text=data.decode())
-    if __package__:
-        from .prep_fampnn_constraints_generic import pdb_domain as legacy_domain
-    else:
-        from prep_fampnn_constraints_generic import pdb_domain as legacy_domain
-    domain = legacy_domain(pdb_path)
-    roles = bool(request and request.get('binder_chains'))
-    if roles:
-        if __package__:
-            from .proteinmpnn_binder_roles import role_selection
-        else:
-            from proteinmpnn_binder_roles import role_selection
-        role_selection(domain, request)
-    if not roles and len({chain for chain, _ in domain}) != 1:
-        raise ValueError('generic ProteinMPNN multi-chain design requires an explicit native role contract; binder runner fixes the last chain')
-    numbers = set(range(1, len(domain) + 1)) if roles else {n for _, n in domain}
-    for line in pdb_path.read_text().splitlines():
-        if 'PDBinfo-LABEL:' not in line or 'FIXED' not in line:
-            continue
-        match = re.fullmatch(r'REMARK\s+PDBinfo-LABEL:\s*(\d+)\s+FIXED\s*', line)
-        if not match or int(match.group(1)) not in numbers:
-            raise ValueError('absent or ambiguous native FIXED residue label')
-    return domain
+    data = pdb_path.read_bytes()
+    role_contract(pdb_path, request, data=data)
+    return pdb_domain(pdb_path, text=data.decode())
 
 
 def process_files(input_dir, out_dir, generic=False, request=None):
@@ -175,18 +162,11 @@ def process_files(input_dir, out_dir, generic=False, request=None):
     total_fixed = 0
     for pdb_path in pdb_files:
         if generic:
-            if request and request.get('binder_chains'):
-                # Native FIXED labels are the authority, not experimental B-factors
-                # or synthetic RFD inpaint metadata. Do not rewrite their dialect.
-                validate_generic_input(pdb_path, request)
-                (Path(out_dir) / pdb_path.name).write_bytes(pdb_path.read_bytes())
+            if __package__:
+                from .proteinmpnn_native_binding import prepare
             else:
-                # Explicit author roles, not experimental B-factors/CDR inference.
-                if __package__:
-                    from .proteinmpnn_native_binding import prepare
-                else:
-                    from proteinmpnn_native_binding import prepare
-                prepare(pdb_path, Path(out_dir) / pdb_path.name, request)
+                from proteinmpnn_native_binding import prepare
+            prepare(pdb_path, Path(out_dir) / pdb_path.name, request)
             continue
         # Look for corresponding JSON file
         json_path = pdb_path.with_suffix('.json')

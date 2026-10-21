@@ -43,7 +43,7 @@ process PrepMPNN {
 
     if ${params.get('sequence_design_engine') == 'proteinmpnn' ? 'false' : 'true'}; then
     # Legacy antibody preparation retains its existing chain locks.
-    # This is the official method used by dl_binder_design
+    # Translate H/L roles to native masks; preserve inpaint residue locks.
     python /scripts/add_fixed_labels.py \
         --input_dir "mpnn_input" \
         --output_dir "mpnn_fixed" \
@@ -78,10 +78,7 @@ process RunMPNN {
     path "*.log"
 
     script:
-    def roles = params.get('sequence_design_engine') == 'proteinmpnn' && params.get('binder_chains')
-    def roleRequest = ['binder_chains', 'target_chains', 'fixed_positions'].collectEntries { key -> [(key): params.get(key)] }
-    def roleBase64 = groovy.json.JsonOutput.toJson(roleRequest).getBytes('UTF-8').encodeBase64().toString()
-    def nativeLauncher = roles ? "/scripts/proteinmpnn_binder_roles.py --request-base64 '${roleBase64}' --" : (params.get('sequence_design_engine') == 'proteinmpnn' ? '/scripts/proteinmpnn_native_binding.py --native /dl_binder_design/mpnn_fr/dl_interface_design_multi.py --' : '/dl_binder_design/mpnn_fr/dl_interface_design_multi.py')
+    def nativeLauncher = '/scripts/proteinmpnn_native_binding.py --native /dl_binder_design/mpnn_fr/dl_interface_design_multi.py --'
     def extraBase64 = (params.get('mpnn_extra_config') != null ? params.get('mpnn_extra_config') : '').toString().getBytes('UTF-8').encodeBase64().toString()
     """
     # Raw config remains argv data, never shell syntax or command substitution.

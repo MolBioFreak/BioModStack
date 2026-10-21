@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""
-Add FIXED labels to PDB files for ProteinMPNN.
-
-This script marks residues in specified chains (or all chains except H/L) 
-as FIXED by modifying the B-factor column to 0.00 for fixed residues
-and 1.00 for designable residues.
-
-ProteinMPNN's dl_interface_design scripts detect these B-factor values
-to determine which residues to keep fixed during sequence design.
-
-Usage for antibody design:
-    python add_fixed_labels.py --input_dir ./pdbs --output_dir ./fixed_pdbs
-
-This will fix all chains EXCEPT H and L (i.e., Chain T = target antigen).
-"""
+"""Prepare explicit ProteinMPNN chain roles without rewriting B-factors."""
 
 import argparse
 from pathlib import Path
@@ -32,45 +18,16 @@ def parse_pdb_chains(pdb_path):
 
 
 def add_fixed_labels_to_pdb(input_pdb, output_pdb, chains_to_fix):
-    """
-    Add FIXED labels to a PDB file by modifying B-factor values.
-    
-    Fixed residues get B-factor = 0.00
-    Designable residues get B-factor = 1.00
-    
-    This convention is used by dl_binder_design ProteinMPNN scripts.
-    """
-    output_lines = []
-    
-    with open(input_pdb, 'r') as f:
-        for line in f:
-            if line.startswith('ATOM') or line.startswith('HETATM'):
-                chain_id = line[21]
-                
-                # Determine if this residue should be fixed
-                if chain_id in chains_to_fix:
-                    # FIXED: Set B-factor to 0.00
-                    new_bfactor = "  0.00"
-                else:
-                    # DESIGNABLE: Set B-factor to 1.00
-                    new_bfactor = "  1.00"
-                
-                # PDB format: B-factor is columns 61-66 (6 chars, right-justified)
-                # Full line structure: cols 1-60, then 61-66 (bfactor), then rest
-                if len(line) >= 66:
-                    new_line = line[:60] + new_bfactor + line[66:]
-                else:
-                    # Short line, pad and add bfactor
-                    padded = line.rstrip().ljust(60)
-                    new_line = padded + new_bfactor + "\n"
-                
-                output_lines.append(new_line)
-            else:
-                output_lines.append(line)
-    
-    with open(output_pdb, 'w') as f:
-        f.writelines(output_lines)
-    
+    """Transport real chain roles; preserve geometry and input residue locks."""
+    if __package__:
+        from .proteinmpnn_native_binding import prepare, pdb_domain
+    else:
+        from proteinmpnn_native_binding import prepare, pdb_domain
+    chains = list(dict.fromkeys(r[0] for r in pdb_domain(input_pdb, strict=False)))
+    prepare(input_pdb, output_pdb, {
+        'design_chain': [c for c in chains if c not in chains_to_fix],
+        'target_chain': [c for c in chains if c in chains_to_fix],
+    }, strict=False)
     return len(chains_to_fix)
 
 

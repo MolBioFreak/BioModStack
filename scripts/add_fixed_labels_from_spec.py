@@ -47,19 +47,21 @@ def residue_token_from_line(line: str) -> ResidueToken | None:
 
 
 def add_labels(input_pdb: Path, output_pdb: Path, designable_tokens: Set[ResidueToken]) -> None:
-    output_lines = []
-    with input_pdb.open("r", encoding="utf-8") as handle:
-        for raw in handle:
-            if raw.startswith(("ATOM", "HETATM")):
-                token = residue_token_from_line(raw)
-                designable = token in designable_tokens or (token and (token[0], token[1], "") in designable_tokens)
-                new_bfactor = "  1.00" if designable else "  0.00"
-                if len(raw) >= 66:
-                    raw = raw[:60] + new_bfactor + raw[66:]
-                else:
-                    raw = raw.rstrip("\n").ljust(60) + new_bfactor + "\n"
-            output_lines.append(raw)
-    output_pdb.write_text("".join(output_lines), encoding="utf-8")
+    if __package__:
+        from .proteinmpnn_native_binding import ROLE_REMARK, role_contract, pdb_domain
+    else:
+        from proteinmpnn_native_binding import ROLE_REMARK, role_contract, pdb_domain
+    text = input_pdb.read_text()
+    domain = pdb_domain(input_pdb, text=text, strict=False)
+    # This explicit redesign selection supersedes generator/B-factor masks.
+    data = ('\n'.join(line for line in text.splitlines()
+                       if not line.startswith(('REMARK BMS_MPNN_', 'REMARK PDBinfo-LABEL:'))) + '\n').encode()
+    chains = list(dict.fromkeys(r[0] for r in domain))
+    roles = role_contract(input_pdb, {'design_chain': chains}, data=data, strict=False)
+    import hashlib
+    roles['source_pdb_sha256'] = hashlib.sha256(input_pdb.read_bytes()).hexdigest()
+    roles['fixed_positions'] = [list(r) for r in domain if r not in designable_tokens]
+    output_pdb.write_bytes((ROLE_REMARK + json.dumps(roles) + '\n').encode() + data)
 
 
 def main() -> None:

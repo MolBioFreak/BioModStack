@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Explicit author roles at dl_binder_design's feature/threading boundary.
 
-Only generic ProteinMPNN requests use this adapter. Native sampling, scoring,
+ProteinMPNN callers share this adapter. Native sampling, scoring,
 argparse, iteration and output names remain owned by the installed runner.
 Feature axes retain native number gaps and insertion ordering; the pose is never
-reordered or renumbered. Historical antibody calls bypass this adapter.
+reordered or renumbered. Legacy preparation supplies explicit H/L roles.
 """
 import argparse
 import ast
@@ -17,7 +17,7 @@ import sys
 ROLE_REMARK = 'REMARK BMS_MPNN_ROLES '
 
 
-def pdb_domain(path, *, text=None):
+def pdb_domain(path, *, text=None, strict=True):
     """Exact ordered protein author identities supported by the native parser."""
     residues, atoms = {}, set()
     previous = None
@@ -25,21 +25,24 @@ def pdb_domain(path, *, text=None):
     for line in (Path(path).read_text() if text is None else text).splitlines():
         if line.startswith('MODEL '):
             models += 1
-            if models > 1:
+            if models > 1 and strict:
                 raise ValueError('multiple PDB models are ambiguous')
         if line.startswith('HETATM'):
-            raise ValueError('generic protein design cannot preserve unrecognized HETATM identity')
+            if strict:
+                raise ValueError('generic protein design cannot preserve unrecognized HETATM identity')
+            if line[17:20] == 'MSE':
+                line = 'ATOM  ' + line[6:]
         if not line.startswith('ATOM  '):
             continue
-        if len(line) < 54 or line[16].strip():
+        if strict and (len(line) < 54 or line[16].strip()):
             raise ValueError('malformed or alternate-location PDB atom')
         identity = (line[21], int(line[22:26]), line[26].strip())
-        if not re.fullmatch('[A-Za-z0-9]', identity[0]) or (identity[2] and not identity[2].isalpha()):
+        if strict and (not re.fullmatch('[A-Za-z0-9]', identity[0]) or (identity[2] and not identity[2].isalpha())):
             raise ValueError('native parser cannot represent this chain/residue identity')
         atom = identity, line[12:16].strip()
-        if atom in atoms or (identity != previous and identity in residues):
+        if strict and (atom in atoms or (identity != previous and identity in residues)):
             raise ValueError('duplicate or discontiguous PDB residue identity')
-        if identity in residues and residues[identity] != line[17:20]:
+        if strict and identity in residues and residues[identity] != line[17:20]:
             raise ValueError('ambiguous residue identity')
         atoms.add(atom)
         residues[identity] = line[17:20]
@@ -85,47 +88,57 @@ def fixed_residues(value, domain):
     return result
 
 
-def role_contract(path, request=None, *, data=None):
+def role_contract(path, request=None, *, data=None, strict=True):
     path = Path(path)
     data = path.read_bytes() if data is None else data
     text = data.decode()
-    domain = pdb_domain(path, text=text)
+    domain = pdb_domain(path, text=text, strict=strict)
     request = request or {}
     chains = list(dict.fromkeys(c for c, _, _ in domain))
     design_value = request.get('design_chain')
     if design_value is None:
-        design_value = request.get('binder_chain_ids')
+        design_value = request.get('binder_chain_ids') or request.get('binder_chains')
     target_value = request.get('target_chain')
     if target_value is None:
-        target_value = request.get('target_chain_ids')
+        target_value = request.get('target_chain_ids') or request.get('target_chains')
     if design_value is None and len(chains) == 1:
         design_value = chains[0]
     design = selected_chains(design_value, chains, 'design_chain')
     target = selected_chains(target_value, chains, 'target_chain')
-    if not design:
+    if not design and strict:
         raise ValueError('multi-chain ProteinMPNN requires explicit design_chain roles' if len(chains) > 1 else 'design_chain must select a present chain')
     if set(design) & set(target):
         raise ValueError('design_chain and target_chain overlap')
     fixed = fixed_residues(request.get('fixed_positions'), domain)
     # Preserve historical generic monomer FIXED author-number labels. A bare
     # label on a complex is resolved only when its author identity is unique.
+    transported = [json.loads(line[len('REMARK BMS_MPNN_FIXED '):]) for line in text.splitlines() if line.startswith('REMARK BMS_MPNN_FIXED ')]
+    for identities in transported:
+        fixed.update(tuple(r) for r in identities)
     for line in text.splitlines():
+        if transported:
+            continue  # accompanying Rosetta labels are pose indices, not author numbers
         if 'PDBinfo-LABEL:' not in line or 'FIXED' not in line:
             continue
         match = re.fullmatch(r'REMARK\s+PDBinfo-LABEL:\s*(-?\d+)\s+FIXED\s*', line)
-        matches = {r for r in domain if match and r[1] == int(match.group(1)) and not r[2]}
+        pose_labels = bool(request.get('binder_chains')) and request.get('design_chain') is None
+        if pose_labels and match:
+            index = int(match.group(1))
+            matches = {list(domain)[index - 1]} if 1 <= index <= len(domain) else set()
+        else:
+            matches = {r for r in domain if match and r[1] == int(match.group(1)) and not r[2]}
         if len(matches) != 1:
             raise ValueError('absent or ambiguous native FIXED residue label; use chain-qualified fixed_positions')
         fixed.update(matches)
-    return dict(source_pdb=path.name, source_pdb_sha256=hashlib.sha256(data).hexdigest(),
+    return dict(author_identity_validation=strict, source_pdb=path.name, source_pdb_sha256=hashlib.sha256(data).hexdigest(),
                 chains=chains, designed_chains=design, fixed_chains=[c for c in chains if c not in design],
                 target_chains=target, fixed_positions=[list(r) for r in domain if r in fixed],
                 source_residues=[list(r) for r in domain])
 
 
-def prepare(path, output, request=None):
+def prepare(path, output, request=None, *, strict=True):
     data = Path(path).read_bytes()
-    contract = role_contract(path, request, data=data)
+    contract = role_contract(path, request, data=data, strict=strict)
     # Inline transport follows the existing PDB-only channel; no extra manifest
     # path has to survive task staging. Preserve the original ATOM bytes.
     Path(output).write_bytes((ROLE_REMARK + json.dumps(contract, separators=(',', ':')) + '\n').encode() + data)
@@ -145,12 +158,37 @@ def feature_axes(identities):
     return result
 
 
-def install(namespace):
+def install_native_scoring(util):
+    """Use the scoring call shipped in native ProteinMPNN/protein_mpnn_run.py.
+
+    Keep the unused source forward and its RNG draws: backbone augmentation
+    can consume randomness inside that call even in eval mode. Only the scored
+    sample and its already-sampled decoding order change, not the RNG schedule.
+    """
+    import inspect
+    source = inspect.getsource(util.generate_sequences)
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == 'model' and len(node.args) == 7
+                and isinstance(node.args[-1], ast.Name) and node.args[-1].id == 'randn_2'):
+            node.args[1] = ast.Name(id='S_sample', ctx=ast.Load())
+            node.keywords = ast.parse(
+                "model(use_input_decoding_order=True, decoding_order=sample_dict['decoding_order'])",
+                mode='eval').body.keywords
+    # Bind to the original native globals (including the role featurizer hook).
+    local = {}
+    exec(compile(ast.fix_missing_locations(tree), util.__file__, 'exec'), util.__dict__, local)
+    util.generate_sequences = local['generate_sequences']
+
+
+def install(namespace, request=None):
     """Bind native classes after definition, before their unchanged main loop."""
     sample_cls = namespace['sample_features']
     runner_cls = namespace['ProteinMPNN_runner']
     manager_cls = namespace['StructManager']
     util = namespace['mpnn_util']
+    install_native_scoring(util)
     core = namespace['core']
     native_init = sample_cls.__init__
 
@@ -165,10 +203,10 @@ def install(namespace):
         # Do not truncate source names at their first dot.
         self.tag = Path(tag).stem
         lines = [line[len(ROLE_REMARK):] for line in Path(tag).read_text().splitlines() if line.startswith(ROLE_REMARK)]
-        self.bms_roles = json.loads(lines[0]) if lines else role_contract(tag)
+        self.bms_roles = json.loads(lines[0]) if lines else role_contract(tag, request)
         info = pose.pdb_info()
         self.bms_ids = [(info.chain(i), info.number(i), info.icode(i).strip()) for i in range(1, pose.total_residue() + 1)]
-        if self.bms_ids != [tuple(r) for r in self.bms_roles['source_residues']]:
+        if self.bms_roles.get('author_identity_validation', True) and self.bms_ids != [tuple(r) for r in self.bms_roles['source_residues']]:
             raise ValueError('native pose changed source author identity/order')
         self.bms_axes = feature_axes(self.bms_ids)
         self.bms_fixed = {tuple(r) for r in self.bms_roles['fixed_positions']}
@@ -245,6 +283,15 @@ def install(namespace):
             path = Path(self.outpdbdir) / f'mpnn_{tag}.json'
             payload = json.loads(path.read_text())
             payload.update({k: sample.bms_roles[k] for k in ('source_pdb', 'source_pdb_sha256', 'designed_chains', 'fixed_chains', 'target_chains')})
+            payload['score_contract'] = {
+                'id': 'proteinmpnn.sampled_sequence_autoregressive_nll.v1',
+                'scope': 'resolved_designed_nonfixed_residues',
+                'conditioning_sequence': 'sampled_sequence',
+                'scored_sequence': 'sampled_sequence',
+                'lower_is_better': True,
+                'decoding_order': 'native_sample_decoding_order',
+                'note': 'Native ProteinMPNN sequence-fit NLL, not binding confidence.',
+            }
             payload['input_chain_sequences'] = sample.bms_input_sequences
             payload['chain_sequences'] = chain_sequences(sample, pose)
             payload['native_designed_chain_order'] = sample.bms_native_order

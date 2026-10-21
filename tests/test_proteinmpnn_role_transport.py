@@ -49,10 +49,11 @@ def test_monomer_native_labels_and_legacy_prep(tmp_path):
     source = tmp_path/'monomer.pdb'
     source.write_text('REMARK PDBinfo-LABEL: 15 FIXED\n'+atom(1,'a',10)+atom(2,'a',15))
     assert binding.role_contract(source)['fixed_positions'] == [['a',15,'']]
-    # Historical antibody preparation remains on its original B-factor path.
+    # Legacy B-factor selection now transports full identities and pose labels.
     process_files(tmp_path, tmp_path/'legacy')
     text = (tmp_path/'legacy/monomer.pdb').read_text()
-    assert 'REMARK PDBinfo-LABEL: 10 FIXED' in text
+    assert 'REMARK PDBinfo-LABEL: 1 FIXED' in text
+    assert 'REMARK BMS_MPNN_FIXED' in text
     assert binding.ROLE_REMARK not in text
 
 
@@ -120,7 +121,7 @@ sys.path.insert(0, '/dl_binder_design/mpnn_fr')
 import torch
 import util_protein_mpnn as util
 class InertModel:
-    def __call__(self,X,S,*a):
+    def __call__(self,X,S,*a,**kw):
         return torch.full((*S.shape,21), -3.0, device=S.device)
     def sample(self,X,randn,S,chain_M,chain_encoding,residue_idx,**kw):
         movable=chain_M*kw['chain_M_pos']*kw['mask']
@@ -130,7 +131,7 @@ class InertModel:
         sample=torch.where(movable>0,(chain_encoding.long()+offset)%20,S)
         with Path(os.environ['BMS_FIXTURE_EVIDENCE'],'samples.jsonl').open('a') as f:
             f.write(json.dumps(dict(S=S.tolist(), chain_M=chain_M.tolist(), fixed_mask=kw['chain_M_pos'].tolist(), mask=kw['mask'].tolist(), output=sample.tolist(),temperature=kw['temperature'],bias=kw['bias_AAs_np'].tolist()))+'\n')
-        return {'S':sample}
+        return {'S':sample, 'decoding_order':torch.argsort(randn, dim=-1)}
 def initialize(*args,**kwargs):
     Path(os.environ['BMS_FIXTURE_EVIDENCE'],'model_args.json').write_text(json.dumps(kwargs))
     return InertModel()
@@ -161,7 +162,7 @@ args=sys.argv[1:]
 with Path({str(tmp_path/'calls.jsonl')!r}).open('a') as f: f.write(json.dumps(args)+'\\n')
 if args[0]=='/scripts/proteinmpnn_native_binding.py':
     args[0]={str(ROOT/'scripts/proteinmpnn_native_binding.py')!r}
-    cmd=['apptainer','exec','--cleanenv','--bind',{str(ROOT)+':'+str(ROOT)!r},'--bind',{str(tmp_path)+':'+str(tmp_path)!r},{image!r},'/usr/bin/env','PYTHONPATH='+{str(stubs)!r},'BMS_FIXTURE_EVIDENCE='+{str(tmp_path)!r},'/opt/conda/envs/mpnn/bin/python',*args]
+    cmd=['apptainer','exec','--cleanenv','--no-home','--bind',{str(ROOT)+':'+str(ROOT)+':ro'!r},'--bind',{str(tmp_path)+':'+str(tmp_path)!r},{image!r},'/usr/bin/env','PYTHONPATH='+{str(stubs)!r},'BMS_FIXTURE_EVIDENCE='+{str(tmp_path)!r},'/opt/conda/envs/mpnn/bin/python',*args]
     os.execvp(cmd[0],cmd)
 if args[0].startswith('/scripts/'): args[0]=str(Path({str(ROOT/'scripts')!r})/Path(args[0]).name)
 os.execv({sys.executable!r},[{sys.executable!r},*args])
