@@ -52,11 +52,11 @@ def test_cache_immutable_modes_cold_warm_concurrent_and_private(tmp_path, monkey
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(materialize, range(2)))
     materialize(2)
-    assert calls == [(item['sha256'], 0o555)]
-    assert len({(views / str(i)).stat().st_ino for i in range(3)}) == 1
+    assert calls == []  # Private allocator, not a new immutable mode projection.
+    assert len({(views / str(i)).stat().st_ino for i in range(3)}) == 3
     cas = tmp_path / 'cache/objects/sha256' / item['sha256'][:2] / item['sha256']
     storage.materialize(item, views / 'read', views, 0o444)
-    assert (views / 'read').stat().st_ino == cas.stat().st_ino
+    assert (views / 'read').stat().st_ino != cas.stat().st_ino
     assert cas.stat().st_mode & 0o777 == 0o444
     storage.materialize(item, views / 'private', views, 0o644)
     (views / 'private').write_bytes(b'changed')
@@ -76,13 +76,13 @@ def test_source_members_once_across_attempts_and_revisions(tmp_path, monkeypatch
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(lambda dest: storage.extract_source(one, dest, immutable=True), (a, b)))
     first = list(copies)
-    assert len(first) == 5  # Four bodies, one executable projection.
+    assert len(first) == 4  # Four CAS bodies; attempts use the private allocator.
     storage.extract_source(one, b, immutable=True)
     assert copies == first
     storage.extract_source(two, c, immutable=True)
     assert copies[len(first):] == [(hashlib.sha256(b'two').hexdigest(), 0o444)]
     for name in ('lib.py', 'bin/tool', 'containers/transport/proot/resource'):
-        assert len({(p / name).stat().st_ino for p in (a, b, c)}) == 1
+        assert len({(p / name).stat().st_ino for p in (a, b, c)}) == 3
     assert (a / 'bin/tool').stat().st_mode & 0o777 == 0o555
     (a / '.nextflow').mkdir()
     (a / '.nextflow/log').write_text('private log')
@@ -127,7 +127,7 @@ def test_streaming_controller_inventory_matches_worker_modes(tmp_path, monkeypat
     (attempt / worker.ENVELOPE_FILE).write_text(json.dumps(envelope))
     assert worker.verify_bundle(attempt) == envelope
     assert [r.mode for r in records if r.relative_path == 'source/bin/tool'] == [0o555]
-    assert (source / 'lib.py').stat().st_nlink >= 2
+    assert (source / 'lib.py').stat().st_nlink == 1
     assert not (source / '__pycache__').exists()
 
 

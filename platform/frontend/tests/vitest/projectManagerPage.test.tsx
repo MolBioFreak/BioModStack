@@ -4,6 +4,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const candidateApi = vi.hoisted(() => ({ useProjectCandidateData: vi.fn() }));
+vi.mock('../../src/components/project-manager/ProjectCandidateOverview', () => ({
+    useProjectCandidateData: candidateApi.useProjectCandidateData,
+    ProjectCandidateOverview: ({ onOpenRecords }: { onOpenRecords: () => void }) => <section aria-label="Candidate overview">Candidate validation table<button onClick={onOpenRecords}>Open all records</button></section>,
+}));
+
 const nativeApi = vi.hoisted(() => ({
     fetchMolBioNgsDomainState: vi.fn(),
     fetchProjectHub: vi.fn(),
@@ -256,6 +262,7 @@ async function renderAt(initialEntry: string) {
 }
 
 beforeEach(() => {
+    candidateApi.useProjectCandidateData.mockReset().mockReturnValue({ data: { supported: false }, isError: false, refetch: vi.fn() });
     Object.defineProperty(window, 'innerWidth', { value: 1600, writable: true, configurable: true });
     Object.values(nativeApi).forEach((mock) => mock.mockReset());
     Object.values(managerApi).forEach((mock) => mock.mockReset());
@@ -344,6 +351,43 @@ afterEach(async () => {
 });
 
 describe('ProjectManager', () => {
+    it('opens supported campaigns as a full-width candidate view and keeps records selectable', async () => {
+        candidateApi.useProjectCandidateData.mockReturnValue({ data: { supported: true }, isError: false, refetch: vi.fn() });
+        await renderAt('/projects/project-1?focus=global-1&selected=global_experiment%3Aglobal-1');
+        await waitUntil(() => expect(container.querySelector('[aria-label="Candidate overview"]')).not.toBeNull());
+        expect(container.querySelector('[aria-label="Project tree"]')).toBeNull();
+        expect(container.querySelector('[aria-label="Selected node inspector"]')).toBeNull();
+        expect(container.querySelector('[aria-label="Relationship map"]')).toBeNull();
+        await act(async () => Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Open all records')!.click());
+        await waitUntil(() => expect(container.querySelector('[aria-label="Relationship map"]')).not.toBeNull());
+        expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('view=records');
+        expect(container.querySelector('[aria-label="Project tree"]')).not.toBeNull();
+        await act(async () => Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Work links')!.click());
+        await waitUntil(() => expect(container.querySelector('[aria-label="Candidate overview"]')).not.toBeNull());
+    });
+
+    it('honors an explicit record view instead of replacing a saved selection', async () => {
+        candidateApi.useProjectCandidateData.mockReturnValue({ data: { supported: true }, isError: false, refetch: vi.fn() });
+        await renderAt('/projects/project-1?view=records&focus=global-1&selected=global_experiment%3Aglobal-1');
+        await waitUntil(() => expect(container.querySelector('[aria-label="Relationship map"]')).not.toBeNull());
+        expect(container.querySelector('[aria-label="Candidate overview"]')).toBeNull();
+    });
+
+    it('shows each research narrative once while retaining named links and technical details', async () => {
+        const text = 'Recorded source: [Original BC2](/designs/source-job)\nCandidate evidence.';
+        const value = summaryFor('domain_experiment:domain-1');
+        value.selection.subtitle = text;
+        value.selection.summary = { objective: text, domain_payload: { scientific_objective: text } };
+        value.selection.scientific_context = { scientific_objective: text };
+        managerApi.getProjectSummary.mockResolvedValue(normalizeProjectManagerReadModel(value));
+        await renderAt('/projects/project-1?view=records&focus=global-1&selected=domain_experiment%3Adomain-1');
+        await waitUntil(() => expect(container.querySelector('[aria-label="Selected node inspector"] a')).not.toBeNull());
+        const inspector = container.querySelector('[aria-label="Selected node inspector"]')!;
+        expect(inspector.querySelectorAll('a[href^="/designs/source-job?"]')).toHaveLength(1);
+        expect(inspector.querySelector('header')?.textContent).not.toContain('[Original BC2]');
+        expect(inspector.querySelector('details pre')?.textContent).toContain(JSON.stringify(text));
+    });
+
     it('keeps explicit tree collapse on mounted rerender and defaults new branches open', async () => {
         const nodes = normalizeProjectManagerReadModel(baseSummary).tree.nodes;
         const render = (next = nodes) => <ProjectTree nodes={next} selectedNodeKey="project:project-1" onSelect={() => undefined} />;
@@ -855,7 +899,7 @@ describe('ProjectManager', () => {
     });
 
     it('synchronizes map selection, URL, inspector, and server-issued canonical navigation', async () => {
-        await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
+        await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1&view=records&candidate_search=e8db269a&candidate_family=minibinder');
         await waitUntil(() => expect(container.textContent).toContain('Design stable variants'));
 
         const resultNode = container.querySelector<HTMLButtonElement>('[aria-label="Select PLM-07 result"]');
@@ -874,7 +918,11 @@ describe('ProjectManager', () => {
             'domain-1',
             expect.stringContaining('selected=external_entity_receipt%3Areceipt-9'),
         );
-        await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toBe('/designs/job-9?workspace_id=project-1&global_experiment_id=global-1&domain_experiment_id=domain-1&global_experiment_revision_id=gr&domain_revision_id=dr&return_uri=%2Fprojects%2Fproject-1%3Ffocus%3Dglobal-1%26selected%3Ddomain_experiment%253Adomain-1'));
+        const returnUri = managerApi.getProjectResultContext.mock.calls[0][3];
+        expect(new URL(returnUri, 'http://localhost').searchParams.get('view')).toBe('records');
+        expect(new URL(returnUri, 'http://localhost').searchParams.get('candidate_search')).toBe('e8db269a');
+        expect(new URL(returnUri, 'http://localhost').searchParams.get('candidate_family')).toBe('minibinder');
+        await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toBe('/designs/job-9?include_children=false&workspace_id=project-1&global_experiment_id=global-1&domain_experiment_id=domain-1&global_experiment_revision_id=gr&domain_revision_id=dr&return_uri=%2Fprojects%2Fproject-1%3Ffocus%3Dglobal-1%26selected%3Ddomain_experiment%253Adomain-1'));
         expect(container.textContent).toContain('Canonical destination');
     });
 

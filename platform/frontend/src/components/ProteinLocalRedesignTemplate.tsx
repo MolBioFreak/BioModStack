@@ -392,12 +392,12 @@ export function ProteinLocalRedesignTemplate({
                     modelNumber: typeof initialValues.model_number === 'number' ? initialValues.model_number : undefined,
                     designChainId: Array.isArray(initialValues.design_chains)
                         ? initialValues.design_chains.join(',')
-                        : typeof initialValues.design_chains === 'string' ? initialValues.design_chains : undefined,
+                        : typeof initialValues.design_chains === 'string' ? initialValues.design_chains : Object.hasOwn(initialValues, 'design_chains') ? '' : undefined,
                     contextChainIds: Array.isArray(initialValues.context_chains)
                         ? initialValues.context_chains
                         : typeof initialValues.context_chains === 'string'
                             ? normalizeChainList(initialValues.context_chains)
-                            : undefined,
+                            : Object.hasOwn(initialValues, 'context_chains') ? [] : undefined,
                 });
             }
         }
@@ -408,7 +408,8 @@ export function ProteinLocalRedesignTemplate({
             setSelectedTarget({ ...descriptor,
                 ...(text ? { file: new File([text], descriptor.name || 'source.pdb') } : {}),
                 modelNumber: typeof initialValues.model_number === 'number' ? initialValues.model_number : undefined,
-                designChainId: Array.isArray(initialValues.design_chains) ? initialValues.design_chains.join(',') : initialValues.design_chains as string,
+                designChainId: Array.isArray(initialValues.design_chains) ? initialValues.design_chains.join(',')
+                    : typeof initialValues.design_chains === 'string' ? initialValues.design_chains : Object.hasOwn(initialValues, 'design_chains') ? '' : undefined,
                 contextChainIds: Array.isArray(initialValues.context_chains) ? initialValues.context_chains as string[] : normalizeChainList(initialValues.context_chains),
             });
         }

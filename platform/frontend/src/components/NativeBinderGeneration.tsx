@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from 'react';
+import { nativeParameterLabel } from '../lib/nativeParameterLabel';
 import { BinderWorkflowWorkspace } from './BinderWorkflowWorkspace';
 import { NativeBinderSource } from './NativeBinderSource';
 import { NativeCovalentBonds, NativeDatasetInput, NativeFrameworkIdentity, NativeSequenceTemplate } from './NativeGenerationSpecialControls';
 import { nativeBinderField, nativeParameterKey, nativeParameterDisplay, nativeBinderSection, nativeBinderSections, type NativeBinderModel, type NativeBinderParameter } from '../lib/nativeBinderAuthoring';
 
 const input = 'w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-sm text-[var(--text-primary)]';
-const labelFor = (parameter: NativeBinderParameter) => parameter.label || parameter.name.replace(/^boltzgen_/, '').replaceAll('_', ' ').replace(/^./, letter => letter.toUpperCase());
+const labelFor = nativeParameterLabel;
 const sourceFields = new Set(['target_pdb', 'framework_pdb', 'scaffold_path', 'custom_framework_path', 'input_pdb', 'ligand_pdb']);
 
 function CdrRanges({ value, onChange }: { value: unknown; onChange: (value: string) => void }) {
@@ -108,11 +109,12 @@ export function NativeBinderGeneration({ model, mode, parameters, values, onPatc
         }
         return { primary, groups };
     };
-    const current = (name: string) => values[name] ?? values[`boltzgen_${name === 'target_pdb' ? 'target_pdb_path' : name}`];
+    const current = (name: string) => Object.hasOwn(values, name) ? values[name] : values[`boltzgen_${name === 'target_pdb' ? 'target_pdb_path' : name}`];
+    const sourceName = (value: unknown) => typeof value === 'string' && value ? value.split('/').pop() : 'not specified';
     return <BinderWorkflowWorkspace title={model === 'ppiflow' ? 'PPIFlow initial generation' : 'BoltzGen generation'}
         description={model === 'ppiflow' ? 'Native target-conditioned backbone generation. Antibody and nanobody modes use a separate framework; historical partial-flow refinement remains a separate editor.' : 'Native binder generation with separate target context and optional sequence or structural templates. Protein and peptide modes are not VHH presets.'}
         sections={sections} activeSection={active} onSectionChange={section => { setActive(section); onSectionChange?.(section); }}
-        summary={<span>{model} / {mode} · target: {current('target_pdb') || 'not specified'}{values.framework_pdb ? ` · framework: ${values.framework_pdb}` : ''}{current('scaffold_path') ? ` · scaffold: ${current('scaffold_path')}` : ''} · {values.samples_per_target ?? current('num_designs') ?? 'native'} requested samples</span>}>
+        summary={<span>{model} / {mode} · target: {sourceName(current('target_pdb'))}{values.input_csv ? ` · dataset: ${sourceName(values.input_csv)}` : ''}{values.framework_pdb ? ` · framework: ${sourceName(values.framework_pdb)}` : ''}{current('scaffold_path') ? ` · scaffold: ${sourceName(current('scaffold_path'))}` : ''} · {values.samples_per_target ?? current('num_designs') ?? 'native'} requested samples</span>}>
         {model === 'ppiflow' && <p className="text-sm text-[var(--text-secondary)]" data-native-required-summary>Required for the current native source choice: {controls.filter(parameter => nativeParameterDisplay(parameter, displayValues).required).map(labelFor).join(', ') || 'see source alternatives and field help'}. Source alternatives and conditional requirements are shown beside each input.</p>}
         {sections.map(section => <div key={section.id} hidden={active !== section.id} className="space-y-5" aria-label={section.label}>
             {section.id === 'Sources' && <p className="text-sm text-[var(--text-secondary)]">Native target binding positions and scaffold design ranges are 1-indexed chain-local positions. Legacy binding-site residues use their separately declared author-PDB grammar. Inspection never silently converts between them.</p>}

@@ -16,7 +16,8 @@ const jsonUrl = (v: unknown) => `data:application/json;charset=utf-8,${encodeURI
 
 /** No representative/best-child selection. Inspection is independent of bulk selection. */
 export function BinderPredictionEvidence(props: { jobId: string; sourceDesignId?: string; launchContextId?: string | null }) {
-    return <EvidenceBrowser key={`${props.jobId}:${props.sourceDesignId ?? ''}`} {...props} />;
+    const sourceDesignId = props.sourceDesignId || undefined;
+    return <EvidenceBrowser key={`${props.jobId}:${sourceDesignId ?? ''}`} {...props} sourceDesignId={sourceDesignId} />;
 }
 function EvidenceBrowser({ jobId, sourceDesignId, launchContextId }: { jobId: string; sourceDesignId?: string; launchContextId?: string | null }) {
     const [candidate, setCandidate] = useState(sourceDesignId ?? '');

@@ -20,7 +20,7 @@ const model = { params: [
     { name: 'samples', label: 'Native samples', type: 'integer', default: 1, minimum: 1, maximum: 8 },
     { name: 'pdb_paths', label: 'Owned inputs', type: 'string', hidden: true },
 ] };
-const open = vi.fn(), md = vi.fn();
+const open = vi.fn();
 async function mount(ids = ['page-1-state-a', 'page-2-state-b'], launchContextId?: string, discovered: any = model) {
     posted.length = 0;
     api.defaults.adapter = async config => {
@@ -38,12 +38,16 @@ async function mount(ids = ['page-1-state-a', 'page-2-state-b'], launchContextId
         return { data, status: 200, statusText: 'OK', headers: {}, config };
     };
     await act(async () => { renderer = create(<QueryClientProvider client={client}>
-        <BinderSelectedControls sourceJobId="round2" selectedDesignIds={ids} onOpenJob={open} onStartMD={md} launchContextId={launchContextId} />
+        <BinderSelectedControls sourceJobId="round2" selectedDesignIds={ids} onOpenJob={open} launchContextId={launchContextId} />
     </QueryClientProvider>); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+    // Legacy operations remain supported under their secondary disclosure.
+    const secondary = renderer!.root.findAllByType('details').find(node => node.findAllByType('summary')[0]?.children.join('') === 'Other model operations and source tools')!;
+    await act(async () => secondary.props.onToggle({ currentTarget: { open: true } }));
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
 }
 const button = (text: string) => renderer!.root.findAllByType('button').find(node => node.children.join('') === text)!;
-afterEach(async () => { if (renderer) await act(async () => renderer!.unmount()); renderer = undefined; api.defaults.adapter = original; client.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); sessionStorage.clear(); document.body.innerHTML = ''; });
+afterEach(async () => { if (renderer) await act(async () => renderer!.unmount()); renderer = undefined; api.defaults.adapter = original; client.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); sessionStorage.clear(); localStorage.clear(); document.body.innerHTML = ''; });
 
 it('mounts model-owned typed controls and submits ALL selected page/state identities with independent false values', async () => {
     await mount();
@@ -59,7 +63,7 @@ it('mounts model-owned typed controls and submits ALL selected page/state identi
     expect(open).toHaveBeenCalledWith('queued-child');
 });
 
-it('keeps modified model settings across operation switches and hands MD the exact selected state ID', async () => {
+it('keeps modified model settings across operation switches without binder MD shortcuts', async () => {
     await mount();
     const field = renderer!.root.findAllByType('input').find(node => node.props.type === 'number')!;
     await act(async () => field.props.onChange({ target: { value: '5' } }));
@@ -68,8 +72,8 @@ it('keeps modified model settings across operation switches and hands MD the exa
     await act(async () => select.props.onChange({ target: { value: 'refine' } }));
     expect(renderer!.root.findAllByType('input').find(node => node.props.type === 'number')!.props.value).toBe(5);
     const buttons = renderer!.root.findAllByType('button').filter(node => node.children.join('') === 'Use as GROMACS MD starting structure');
-    await act(async () => buttons[1].props.onClick());
-    expect(md).toHaveBeenCalledWith('page-2-state-b');
+    expect(buttons).toHaveLength(0);
+    expect(JSON.stringify(renderer!.toJSON())).not.toContain('GROMACS');
     expect(posted).toHaveLength(0);
 });
 

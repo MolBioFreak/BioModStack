@@ -7,6 +7,7 @@
 import { useParams, Link, Navigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import { sourceResultReturn } from '../lib/sourceResultReturn';
 import MolstarViewer from './MolstarViewer';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import type { Job } from '../lib/api';
@@ -43,6 +44,8 @@ interface StructureFile {
 export function JobDetailPage() {
     const { jobId } = useParams<{ jobId: string }>();
     const location = useLocation();
+    const returnParams = new URLSearchParams(location.search);
+    const returnTo = sourceResultReturn(returnParams.get('return_to'));
     const [selectedPose, setSelectedPose] = useState<number>(0);
 
     // Fetch job details
@@ -147,6 +150,7 @@ export function JobDetailPage() {
     return (
         <div className="max-w-6xl mx-auto px-4 py-8">
             {/* Back Link */}
+            {returnTo && <Link to={returnTo} className="block text-cyan-300 mb-3">← {returnParams.get('return_label')?.slice(0, 100) || 'Source candidate'}</Link>}
             <Link
                 to="/"
                 className="inline-flex items-center gap-2 text-slate-400 hover:text-white mb-6 transition-colors"

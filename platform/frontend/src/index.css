@@ -533,8 +533,7 @@ html.bms-cordova-compact .bms-layout-main {
 }
 
 html.bms-cordova-compact [data-molbio-mobile-layout='true'] {
-  bottom: calc(5.75rem + max(0.75rem, env(safe-area-inset-bottom)));
-  height: auto !important;
+  --molbio-mobile-dock-space: calc(5.75rem + max(0.75rem, env(safe-area-inset-bottom)));
 }
 
 html.bms-cordova-compact [data-bms-dev-issues-drawer='true'] {
@@ -567,6 +566,17 @@ html.bms-cordova-compact [data-bms-telemetry-canvas='true'] {
 html.bms-cordova-compact [data-bms-telemetry-axis='true'],
 html.bms-cordova-compact [data-bms-telemetry-lines='true'] {
   top: 0 !important;
+}
+
+/* Keep the phone's controls visible without spending two rows in landscape. */
+@media (min-width: 700px) and (max-height: 500px) {
+  [data-molbio-mobile-toolbar='true'] {
+    grid-template-columns: auto auto minmax(0, 1fr) minmax(360px, 1.6fr);
+  }
+
+  [data-molbio-mobile-toolbar='true'] nav {
+    grid-column: auto;
+  }
 }
 
 /* Android WebView can report a zero top inset after landscape rotation. */
@@ -1042,6 +1052,98 @@ input:focus,
 textarea:focus {
   border-color: var(--accent-primary) !important;
   outline-color: var(--accent-primary) !important;
+}
+
+/* Binder surfaces use this legacy token in their border utilities. Without
+   an explicit mapping, Tailwind 4 falls back to currentColor (near-white).
+   Keep the alias local so unrelated workspaces retain their existing styles. */
+.bms-binder-results,
+.bms-binder-controls {
+  --border-color: var(--border-primary);
+}
+
+:is(.bms-binder-results, .bms-binder-controls)
+  :is(button, summary)[class~="border-[var(--border-color)]"]:hover:not(:disabled) {
+  background-color: var(--bg-tertiary);
+  border-color: var(--border-secondary);
+}
+
+.bms-binder-controls button:disabled {
+  opacity: 0.5;
+}
+
+/* Idle borders are grouping, not focus. Keep keyboard focus explicit and
+   outside the control without changing its geometry or selected-state border. */
+:is(.bms-binder-results, .bms-binder-controls)
+  :is(button, summary, input, select, textarea):focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+/* Own BMS form sizing explicitly rather than relying on the layered reset
+   and inherited third-party styles. A 100% content-box input crosses gutters. */
+.bms-model-parameter :is(input, select, textarea),
+.bms-binder-controls :is(input, select, textarea, button),
+.bms-structure-workbench :is(input, select, textarea, button) {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+.bms-model-parameter,
+.bms-binder-controls {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.bms-binder-controls :is(section, fieldset, details, label) {
+  min-width: 0;
+}
+.bms-binder-controls label:has(> select) {
+  display: block;
+}
+.bms-binder-controls label > select {
+  display: block;
+  width: 100%;
+  margin-top: 0.25rem;
+}
+.bms-binder-controls button {
+  white-space: normal;
+}
+.bms-binder-controls [aria-label="Stage native editor"] {
+  display: grid;
+  gap: 0.75rem;
+}
+.bms-binder-controls [aria-label="Stage native editor"] > button {
+  justify-self: start;
+}
+/* Keep long native source identities readable without widening the page.
+   Tables retain their own explicit horizontal scrolling containers. */
+[aria-label="Native initial-generation results"] {
+  overflow-wrap: anywhere;
+}
+[aria-label="Native initial-generation results"] :is(input, select) {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Result controls own their layout; native selects must not run into labels. */
+.bms-cohort-ranking {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  align-items: end;
+  gap: 1rem;
+  margin-block: 1rem;
+}
+.bms-cohort-ranking > label {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.875rem;
+}
+.bms-cohort-ranking select { width: 100%; }
+.bms-cohort-search > input[type="search"] { flex-basis: 18rem; }
+@media (max-width: 640px) {
+  .bms-cohort-search > input[type="search"] { flex-basis: 100%; width: 100%; }
 }
 
 /* Option elements */

@@ -55,6 +55,14 @@ class ModelParameter(BaseModel):
     applicability: Optional[Dict[str, Any]] = None
     required_when: Optional[Dict[str, Any]] = None
     nullable_when: Optional[Dict[str, Any]] = None
+    # Protein partial-flow native compiler metadata, shared by UI and agents.
+    protein_native_cli: Optional[str] = None
+    protein_native_path: Optional[str] = None
+    protein_default: Optional[Any] = None
+    defaults_by_task: Optional[Dict[str, Any]] = None
+    read_only: bool = False
+    authority: Optional[str] = None
+    fixed_reason: Optional[str] = None
 
 
 class ModelMode(BaseModel):

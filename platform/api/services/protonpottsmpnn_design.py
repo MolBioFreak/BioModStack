@@ -192,4 +192,16 @@ async def read_result(session, job_id):
     if job is None or job.model_id != 'protonpottsmpnn' or job.mode != 'redesign':
         from fastapi import HTTPException
         raise HTTPException(404, 'ProtonPottsMPNN result Job not found')
-    return await read_published_native_results(job, session)
+    document = await read_published_native_results(job, session)
+    from sqlalchemy import select
+    from database import JobArtifact
+    publication = await session.scalar(select(JobArtifact).where(
+        JobArtifact.owner_job_id == job.id, JobArtifact.attempt == (job.retry_count or 0),
+        JobArtifact.logical_path == DIRECTORY + '/manifest.json'))
+    # Add transport identity only after the publication owner verified its bytes.
+    # Historical unregistered publications remain readable, not invented refs.
+    if publication is not None:
+        for row in document['designs']:
+            row['candidate_ref'] = {'kind': 'native_sequence', 'job_id': job.id,
+                'publication_ref': publication.id, 'native_output_id': row['design_id']}
+    return document

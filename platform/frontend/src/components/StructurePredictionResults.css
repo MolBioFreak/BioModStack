@@ -51,6 +51,10 @@
     .prediction-charts { grid-template-columns: minmax(240px, 360px) minmax(0, 1fr); }
 }
 .prediction-viewer-pane { min-width: 0; }
+/* The native tools/workbench can grow the embedded workspace. Let that growth
+   participate in flow instead of overflowing a fixed-height ancestor into charts. */
+.prediction-embedded-canvas { display: grid; grid-template-columns: minmax(0, 1fr); }
+.prediction-embedded-canvas > .bms-structure-workspace { display: grid; height: auto !important; }
 .prediction-viewer-toolbar { position: relative; flex: 0 0 auto; padding-block: 0.5rem; }
 .prediction-viewer-toolbar select { min-width: 0; max-width: 100%; }
 .prediction-companion { min-width: 0; flex: 0 0 auto; }

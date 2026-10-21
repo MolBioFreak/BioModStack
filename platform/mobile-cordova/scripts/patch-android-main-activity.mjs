@@ -22,12 +22,55 @@ if (!next.includes('webSettings.setSupportZoom(true);')) {
   );
 }
 
+// Android 15 enforces edge-to-edge for target 35. Inset the native content
+// container, not CSS in the shell document: the remote UI is a cross-origin
+// iframe and does not inherit shell styles or its safe-area variables.
+if (!next.includes('installBmsWindowInsets();')) {
+  next = next.replace('        init();', '        init();\n        installBmsWindowInsets();');
+}
+const insetMethod = `
+    private void installBmsWindowInsets() {
+        if (android.os.Build.VERSION.SDK_INT < 35) return;
+        final android.view.View content = findViewById(android.R.id.content);
+        final int left = content.getPaddingLeft();
+        final int top = content.getPaddingTop();
+        final int right = content.getPaddingRight();
+        final int bottom = content.getPaddingBottom();
+        content.setOnApplyWindowInsetsListener((view, insets) -> {
+            final int types = android.view.WindowInsets.Type.systemBars()
+                    | android.view.WindowInsets.Type.displayCutout()
+                    | android.view.WindowInsets.Type.ime();
+            final android.graphics.Insets safe = insets.getInsets(types);
+            view.setPadding(left + safe.left, top + safe.top,
+                    right + safe.right, bottom + safe.bottom);
+            // The native container owns these insets; descendants must not
+            // apply them again. Preserve all other inset types.
+            return new android.view.WindowInsets.Builder(insets)
+                    .setInsets(types, android.graphics.Insets.NONE).build();
+        });
+        content.requestApplyInsets();
+    }
+`;
+const existingInsets = /\n    private void installBmsWindowInsets\(\) \{[\s\S]*?\n    \}\n/;
+if (existingInsets.test(next)) {
+  next = next.replace(existingInsets, insetMethod);
+} else {
+  const end = next.lastIndexOf('}');
+  next = next.slice(0, end) + insetMethod + next.slice(end);
+}
+
 if (next !== source) {
   writeFileSync(mainActivityPath, next);
 }
 
 const required = [
   'init();',
+  'installBmsWindowInsets();',
+  'content.setOnApplyWindowInsetsListener',
+  'WindowInsets.Type.systemBars()',
+  'WindowInsets.Type.displayCutout()',
+  'WindowInsets.Type.ime()',
+  'content.requestApplyInsets();',
   'appView != null && appView.getView() instanceof WebView',
   'getSettings()',
   'setSupportZoom(true)',

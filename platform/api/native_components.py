@@ -113,7 +113,7 @@ PROCESS_CONTRACTS = {
     'modules/ppiflow.nf:IdentifyAnchorResidues': (('pyrosetta_tools',), ('tuple val(meta), path(complex_pdb)',), ('tuple val(meta), path(complex_pdb), path("${meta.id}_enriched_complex.pdb"), path("${meta.id}_anchors.json"), path("${meta.id}_ppiflow_positions.txt"), path("${meta.id}_cdr_positions.txt"), path("${meta.id}_cdr_positions_by_loop.json"), emit: anchor_inputs', 'tuple val(meta), path("${meta.id}_interface_score.json"), emit: interface_scores', 'tuple val(meta), path("${meta.id}_rotamer_enrichment.json"), emit: rotamer_enrichment'), ('scripts/prepare_ppiflow_maturation.py',), ()),
     'modules/ppiflow.nf:RunPartialFlow': (('gpu', 'PPIFlow'), ('tuple val(meta), path(original_complex_pdb), path(complex_pdb), path(anchors_json), path(ppiflow_positions), path(cdr_positions), path(cdr_positions_by_loop_json)',), ('tuple val(meta), path("ppiflow_backbones"), path("ppiflow_backbones_manifest.json"), emit: backbones', 'tuple val(meta), path("${meta.id}_ppiflow_accounting.json"), emit: accounting'), ('scripts/anchors_to_ppiflow_positions.py', 'scripts/maturation_native_adapter.py', 'scripts/ppiflow_sample_identity.py', 'scripts/validate_ppiflow_masks.py', 'scripts/validate_ppiflow_roles.py'), ()),
     'modules/ppiflow.nf:PrepMaturationRedesign': (('pyrosetta_tools',), ('tuple val(meta), path(backbone_pdbs), path(anchors_json), path(cdr_positions), path(cdr_positions_by_loop), path(comparison_requests)',), ('tuple val(meta), path("fampnn_input/*.pdb"), path("fampnn.csv"), path("fampnn_transport"), emit: prep',), ('scripts/anchors_to_ppiflow_positions.py', 'scripts/prep_antibody_constraints.py', 'scripts/prep_fampnn_designs.py'), ()),
-    'modules/ppiflow.nf:RunMaturationFAMPNN': (('FAMPNN', 'gpu_light'), ('tuple val(meta), path(pdbs), path(csv), path(transport_dir)',), ('tuple val(meta), path("matured_pdbs/*.pdb"), path("matured_jsons/*.json"), emit: redesigned',), ('scripts/analyse_fampnn.py', 'scripts/maturation_native_adapter.py'), ()),
+    'modules/ppiflow.nf:RunMaturationFAMPNN': (('FAMPNN', 'gpu_light'), ('tuple val(meta), path(pdbs), path(csv), path(transport_dir)',), ('tuple val(meta), path("matured_pdbs/*.pdb"), path("matured_jsons/*.json"), emit: redesigned',), ('scripts/analyse_fampnn.py', 'scripts/maturation_native_adapter.py', 'scripts/prep_fampnn_constraints_generic.py', 'scripts/fampnn_native_binding.py', 'scripts/prep_binder_fampnn_constraints.py'), ()),
     'modules/ppiflow.nf:ScoreMaturationImprovement': (('pyrosetta_tools',), ('tuple val(meta), path(original_pdb), path(matured_pdbs), path(ppiflow_positions), path(cdr_positions_by_loop_json)',), ('tuple val(meta), path("scores/*_maturation_score.json"), emit: scores',), ('scripts/score_maturation.py',), ()),
     'modules/ppiflow.nf:ScorePartialFlowImprovement': (('pyrosetta_tools',), ('tuple val(meta), path(original_pdb), path(matured_pdbs), path(ppiflow_positions), path(cdr_positions_by_loop_json)',), ('tuple val(meta), path("scores/*_partial_flow_score.json"), emit: scores',), ('scripts/score_maturation.py',), ()),
     'modules/ppiflow.nf:FilterByMaturation': (('process_low',), ('tuple val(meta), path(matured_pdbs), path(score_jsons)',), ('tuple val(meta), path("filtered_output/*.pdb"), emit: pdbs, optional: true', 'path ("filter_reports/*_maturation_filter.json"), emit: filter_reports'), ('scripts/filter_maturation.py',), ()),
@@ -244,6 +244,11 @@ PROCESS_CONTRACTS = {
 
 # Binder selected leaves reuse these exact native process declarations.
 PROCESS_CONTRACTS.update({
+    'modules/ppiflow.nf:RunProteinPartialFlow': (
+        ('gpu', 'PPIFlow'),
+        ('tuple val(meta), path(original_complex_pdb), path(complex_pdb), path(anchors_json), path(ppiflow_positions), path(cdr_positions), path(cdr_positions_by_loop_json)',),
+        ("tuple val(meta), path('ppiflow_backbones'), path('ppiflow_backbones_manifest.json'), emit: backbones", 'tuple val(meta), path("${meta.id}_ppiflow_accounting.json"), emit: accounting'),
+        ('scripts/run_ppiflow_protein_partial.py', 'scripts/run_ppiflow_generation.py', 'scripts/publish_binder_refinement.py', 'platform/api/config/models/binder_refinement.yaml'), ()),
     'modules/ppiflow.nf:RunPPIFlowGeneration': (
         ('gpu', 'PPIFlow'), ("path generation_request, stageAs: 'generation_request'",),
         ("path 'ppiflow_generation', emit: native_results",),
@@ -259,7 +264,7 @@ PROCESS_CONTRACTS.update({
     'workflows/binder_refinement.nf:PrepareBinderRedesign': (
         ('pyrosetta_tools',), ('tuple val(meta), path(pdb), path(anchors)',),
         ("tuple val(meta), path('fampnn_input/*.pdb'), path('fampnn.csv'), path('transport'), emit: prep",),
-        ('scripts/prep_fampnn_designs.py', 'scripts/prep_binder_fampnn_constraints.py'), ()),
+        ('scripts/prep_fampnn_designs.py', 'scripts/prep_binder_fampnn_constraints.py', 'scripts/prep_fampnn_constraints_generic.py'), ()),
     'workflows/binder_refinement.nf:PublishBinderRefinement': (
         ('CPU',), ('tuple val(meta), path(pdb)',),
         ("tuple val(meta), path('published/*.pdb'), emit: pdbs", "path('published/*.json'), emit: metadata"),
@@ -469,7 +474,7 @@ class _NativeAnnotations:
             if label in LABEL_ASSETS:
                 image, selector, weights, weight_selector = LABEL_ASSETS[label]
                 deps.append(self.asset('image', image, 'nextflow.config:process.withLabel.' + label, selector))
-                if weights and native_name not in {'RunPPIFlowGeneration', 'RunBoltz', 'RunShapeBoltzValidator', 'DoradoBasecall', 'PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets'}:
+                if weights and native_name not in {'RunProteinPartialFlow', 'RunPPIFlowGeneration', 'RunBoltz', 'RunShapeBoltzValidator', 'DoradoBasecall', 'PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets'}:
                     deps.append(self.asset('weights', weights, authority, weight_selector))
         for helper in helpers:
             deps.append(self.asset('support_tool', helper, authority))
@@ -1061,7 +1066,14 @@ def append_native_workflow_metadata(model_id, mode, params, entrypoint, componen
             prepared = a.chain(['PrepareBinderRefinementRegions'])
         after = prepared if repack else ()
         if flow:
-            after = a.chain(['RunPartialFlow'], prepared)
+            if p.get('ppiflow_task') == 'protein_binder_partial':
+                from component_runtime import SelectedDependency
+                key = 'weights:ppiflow/binder.ckpt'
+                dependencies[key] = SelectedDependency(key, 'weights', 'ppiflow/binder.ckpt',
+                    'modules/ppiflow.nf:RunProteinPartialFlow', selector='ppiflow_weights_dir', selector_subpath='binder.ckpt')
+                after = (a.stage('RunProteinPartialFlow', prepared, extra=(key,)),)
+            else:
+                after = a.chain(['RunPartialFlow'], prepared)
         if redesign:
             after = a.chain(['PrepareBinderRedesign', 'RunMaturationFAMPNN'],
                             tuple(dict.fromkeys((*after, *prepared))))

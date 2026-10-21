@@ -12,13 +12,17 @@ export interface PointLike {
 
 export const SEQVIZ_TOUCH_CONTROL_ATTRIBUTE = 'data-seqviz-touch-control';
 const DEFAULT_ROTATION_WHEEL_STEP = 240;
+const DOUBLE_TAP_INTERVAL_MS = 350;
+const DOUBLE_TAP_DISTANCE_PX = 24;
+const TAP_MOVEMENT_PX = 10;
+const TAP_DURATION_MS = 300;
 
 export function shouldEnableSeqVizTouchBridge(capability: SeqVizTouchCapability): boolean {
     return Boolean((capability.maxTouchPoints ?? 0) > 0 || capability.coarsePointer);
 }
 
-export function resolveSeqVizTouchGestureMode(touchCount: number): SeqVizTouchGestureMode {
-    return touchCount === 1 ? 'synthetic-mouse' : 'native';
+export function resolveSeqVizTouchGestureMode(touchCount: number, doubleTap = false): SeqVizTouchGestureMode {
+    return touchCount === 1 && doubleTap ? 'synthetic-mouse' : 'native';
 }
 
 export function buildSyntheticMouseEventInit(point: PointLike): MouseEventInit & { button: number; buttons: number } {
@@ -49,27 +53,37 @@ function findTouchByIdentifier(list: TouchList, identifier: number): Touch | nul
 }
 
 function resolveDispatchTarget(root: HTMLElement, fallback: Element | null, point: PointLike): Element {
-    return document.elementFromPoint(point.clientX, point.clientY) ?? fallback ?? root;
+    const hit = document.elementFromPoint(point.clientX, point.clientY);
+    return hit && root.contains(hit) ? hit : fallback ?? root;
 }
 
 function dispatchSyntheticMouseEvent(type: 'mousedown' | 'mousemove' | 'mouseup', target: Element, point: PointLike): void {
-    target.dispatchEvent(new MouseEvent(type, buildSyntheticMouseEventInit(point)));
+    target.dispatchEvent(new MouseEvent(type, {
+        ...buildSyntheticMouseEventInit(point),
+        buttons: type === 'mouseup' ? 0 : 1,
+    }));
 }
 
 export function installSeqVizTouchBridge(root: HTMLElement): () => void {
     const router = root.querySelector<HTMLElement>('.la-vz-viewer-event-router');
-    if (!router) {
-        return () => undefined;
-    }
+    if (!router) return () => undefined;
 
     let activeTouchId: number | null = null;
     let activeTarget: Element | null = null;
     let lastPoint: PointLike | null = null;
+    let startPoint: PointLike | null = null;
+    let startedAt = 0;
+    let moved = false;
+    let selecting = false;
+    let previousTap: { point: PointLike; endedAt: number } | null = null;
 
     const resetState = (): void => {
         activeTouchId = null;
         activeTarget = null;
         lastPoint = null;
+        startPoint = null;
+        moved = false;
+        selecting = false;
     };
 
     const shouldIgnoreEvent = (event: TouchEvent): boolean => {
@@ -78,96 +92,100 @@ export function installSeqVizTouchBridge(root: HTMLElement): () => void {
     };
 
     const finishActiveTouch = (point: PointLike | null): void => {
-        if (activeTouchId === null || !point) {
-            resetState();
-            return;
+        if (selecting && point) {
+            const target = resolveDispatchTarget(root, activeTarget ?? router, point);
+            dispatchSyntheticMouseEvent('mouseup', target, point);
         }
-
-        const target = resolveDispatchTarget(root, activeTarget ?? router, point);
-        dispatchSyntheticMouseEvent('mouseup', target, point);
         resetState();
     };
 
     const handleTouchStart = (event: TouchEvent): void => {
-        if (shouldIgnoreEvent(event)) {
-            return;
-        }
-
-        if (resolveSeqVizTouchGestureMode(event.touches.length) === 'native') {
+        if (shouldIgnoreEvent(event) || event.touches.length !== 1) {
             finishActiveTouch(lastPoint);
+            previousTap = null;
             return;
         }
 
         const touch = event.changedTouches.item(0);
-        if (!touch) {
-            return;
-        }
+        if (!touch) return;
 
         const point = { clientX: touch.clientX, clientY: touch.clientY };
+        const doubleTap = previousTap !== null
+            && event.timeStamp - previousTap.endedAt >= 0
+            && event.timeStamp - previousTap.endedAt <= DOUBLE_TAP_INTERVAL_MS
+            && Math.hypot(point.clientX - previousTap.point.clientX, point.clientY - previousTap.point.clientY) <= DOUBLE_TAP_DISTANCE_PX;
+        previousTap = null;
         activeTouchId = touch.identifier;
-        lastPoint = point;
+        startPoint = lastPoint = point;
+        startedAt = event.timeStamp;
+        moved = false;
+        selecting = resolveSeqVizTouchGestureMode(event.touches.length, doubleTap) === 'synthetic-mouse';
         activeTarget = resolveDispatchTarget(root, router, point);
 
-        event.preventDefault();
-        dispatchSyntheticMouseEvent('mousedown', activeTarget, point);
+        // Single-finger panning and momentum belong to the native scroller.
+        // Only the second tap starts SeqViz's mouse-based range selection.
+        if (selecting) {
+            event.preventDefault();
+            dispatchSyntheticMouseEvent('mousedown', activeTarget, point);
+        }
     };
 
     const handleTouchMove = (event: TouchEvent): void => {
-        if (activeTouchId === null || shouldIgnoreEvent(event)) {
-            return;
-        }
-
-        if (resolveSeqVizTouchGestureMode(event.touches.length) === 'native') {
+        if (activeTouchId === null) return;
+        if (event.touches.length !== 1) {
             finishActiveTouch(lastPoint);
+            previousTap = null;
             return;
         }
 
         const touch = findTouchByIdentifier(event.changedTouches, activeTouchId)
             ?? findTouchByIdentifier(event.touches, activeTouchId);
-        if (!touch) {
-            return;
-        }
+        if (!touch) return;
 
         const point = { clientX: touch.clientX, clientY: touch.clientY };
         lastPoint = point;
-        activeTarget = resolveDispatchTarget(root, activeTarget ?? router, point);
-
-        event.preventDefault();
-        dispatchSyntheticMouseEvent('mousemove', activeTarget, point);
+        if (startPoint && Math.hypot(point.clientX - startPoint.clientX, point.clientY - startPoint.clientY) > TAP_MOVEMENT_PX) {
+            moved = true;
+        }
+        if (selecting) {
+            activeTarget = resolveDispatchTarget(root, activeTarget ?? router, point);
+            event.preventDefault();
+            dispatchSyntheticMouseEvent('mousemove', activeTarget, point);
+        }
     };
 
     const handleTouchEnd = (event: TouchEvent): void => {
-        if (activeTouchId === null || shouldIgnoreEvent(event)) {
-            return;
-        }
-
+        if (activeTouchId === null) return;
         const touch = findTouchByIdentifier(event.changedTouches, activeTouchId);
-        const point = touch
-            ? { clientX: touch.clientX, clientY: touch.clientY }
-            : lastPoint;
-
-        if (!point) {
-            resetState();
-            return;
+        if (!touch) return;
+        const point = { clientX: touch.clientX, clientY: touch.clientY };
+        if (selecting) {
+            event.preventDefault();
+        } else if (!moved && startPoint
+            && Math.hypot(point.clientX - startPoint.clientX, point.clientY - startPoint.clientY) <= TAP_MOVEMENT_PX
+            && event.timeStamp - startedAt <= TAP_DURATION_MS) {
+            previousTap = { point, endedAt: event.timeStamp };
         }
-
-        event.preventDefault();
         finishActiveTouch(point);
     };
 
-    const handleTouchCancel = (): void => {
+    const cancelGesture = (): void => {
         finishActiveTouch(lastPoint);
+        previousTap = null;
     };
 
     root.addEventListener('touchstart', handleTouchStart, { capture: true, passive: false });
     root.addEventListener('touchmove', handleTouchMove, { capture: true, passive: false });
     root.addEventListener('touchend', handleTouchEnd, { capture: true, passive: false });
-    root.addEventListener('touchcancel', handleTouchCancel, { capture: true, passive: false });
+    root.addEventListener('touchcancel', cancelGesture, { capture: true, passive: false });
+    window.addEventListener('blur', cancelGesture);
 
     return () => {
+        cancelGesture();
         root.removeEventListener('touchstart', handleTouchStart, true);
         root.removeEventListener('touchmove', handleTouchMove, true);
         root.removeEventListener('touchend', handleTouchEnd, true);
-        root.removeEventListener('touchcancel', handleTouchCancel, true);
+        root.removeEventListener('touchcancel', cancelGesture, true);
+        window.removeEventListener('blur', cancelGesture);
     };
 }

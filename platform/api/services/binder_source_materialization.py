@@ -31,7 +31,7 @@ class StructureSourceRequest(BaseModel):
 def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, output_format: str,
                              model_number: int | None = None) -> dict:
     """Keep original bytes; explicitly select a model without renumbering authors."""
-    from Bio.PDB import MMCIFIO, MMCIFParser, PDBParser, PDBIO, Select
+    from Bio.PDB import MMCIFIO, PDBParser, PDBIO, Select
     from Bio.PDB.MMCIF2Dict import MMCIF2Dict
     from Bio.PDB.PDBExceptions import PDBConstructionException, PDBIOException
 
@@ -53,10 +53,14 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
     source = destination / f"native.{native_format}"
     source.write_bytes(raw)
     consumed = source
-    parser = MMCIFParser(QUIET=True) if native_format == "cif" else PDBParser(QUIET=True)
+    from services.md.starting_structures import _parse_mmcif_structure
+
+    def parse(data):
+        return (_parse_mmcif_structure(data) if native_format == "cif" else
+                PDBParser(QUIET=True).get_structure("source", io.StringIO(data.decode("utf-8"))))
     inspection_error = None
     try:
-        structure = parser.get_structure("source", io.StringIO(raw.decode("utf-8")))
+        structure = parse(raw)
     except (ValueError, KeyError, TypeError, PDBConstructionException) as exc:
         if output_format != "native" or model_number is not None:
             raise ValueError(f"Could not prepare the requested structure representation: {exc}") from exc
@@ -86,7 +90,7 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
             writer = PDBIO()
             writer.set_structure(structure)
             writer.save(str(consumed), select=ExactModel(), preserve_atom_numbering=True)
-    selected = parser.get_structure("selected", str(consumed)) if consumed != source else structure
+    selected = parse(consumed.read_bytes()) if consumed != source else structure
     identity = [{"model_number": int(model.serial_num), "auth_asym_id": chain.id,
                  "auth_seq_id": residue.id[1], "insertion_code": residue.id[2].strip(),
                  "residue_name": residue.resname}

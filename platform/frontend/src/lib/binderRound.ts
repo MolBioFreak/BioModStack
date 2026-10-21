@@ -46,7 +46,8 @@ export function roundStageParams(model: string, values: Record<string, UntypedAp
 export function hydrateBinderRound(values?: Record<string, UntypedApiValue>): BinderRoundDraft {
     const saved = values?.binder_round as BinderRoundRequest | undefined;
     const request: BinderRoundRequest = saved ? structuredClone(saved) : {
-        schema_version: 1, enabled: true,
+        // An explicit null is a retained generation-only request, not a fresh default.
+        schema_version: 1, enabled: !Object.hasOwn(values ?? {}, 'binder_round'),
         sequence_design: { model_id: 'fampnn', params: {} },
         prediction: { model_id: 'protenix', params: {} }, binder_chains: [], target_chains: [],
     };

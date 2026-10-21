@@ -1,6 +1,6 @@
 nextflow.enable.dsl = 2
 
-include { IdentifyAnchorResidues; RunPartialFlow; RunMaturationFAMPNN } from '../modules/ppiflow.nf'
+include { IdentifyAnchorResidues; RunProteinPartialFlow; RunPartialFlow; RunMaturationFAMPNN } from '../modules/ppiflow.nf'
 
 process PrepareBinderRefinementRegions {
     label 'CPU'
@@ -11,7 +11,7 @@ process PrepareBinderRefinementRegions {
     script:
     // Redesign consumes generic sequence masks, not a partial-flow region.
     // Keep the tuple transport without resolving unused CDRs or requiring ANARCII.
-    if (params.get('maturation_flow_enabled') != true) {
+    if (params.get('maturation_flow_enabled') != true || params.get('ppiflow_task') == 'protein_binder_partial') {
         return """
         cp '${pdb}' '${meta.id}_seed.pdb'
         printf '{"anchors":[],"analysis_status":"not_run","anchor_selection_method":"not_run"}' > '${meta.id}_anchors.json'
@@ -44,10 +44,11 @@ process PrepareBinderRedesign {
     output:
     tuple val(meta), path('fampnn_input/*.pdb'), path('fampnn.csv'), path('transport'), emit: prep
     script:
-    def request = [sequence_design_mode: 'binder_design', design_chain: params.binder_chains,
-                   target_chain: params.target_chains, fixed_positions: params.get('fixed_positions'),
+    def request = [sequence_design_mode: 'binder_design', design_chain: meta.binder_chains ? meta.binder_chains.join(',') : params.binder_chains,
+                   target_chain: meta.target_chains ? meta.target_chains.join(',') : params.target_chains, fixed_positions: params.get('fixed_positions'),
                    fampnn_fix_target_sidechains: params.get('fampnn_fix_target_sidechains')]
     def encoded = groovy.json.JsonOutput.toJson(request).bytes.encodeBase64().toString()
+    def metadata = groovy.json.JsonOutput.toJson(meta).bytes.encodeBase64().toString()
     """
     mkdir selected transport
     cp '${pdb}' selected/
@@ -55,7 +56,7 @@ process PrepareBinderRedesign {
         --input_dir selected --out_dir fampnn_input --generic_identity
     python3 '${params.code_root}/scripts/prep_binder_fampnn_constraints.py' \\
         --input-dir selected --prepared-dir fampnn_input --out-csv fampnn.csv \\
-        --request-base64 '${encoded}' --anchors '${anchors}'
+        --request-base64 '${encoded}' --anchors '${anchors}' --meta-base64 '${metadata}'
     """
 }
 
@@ -103,7 +104,7 @@ workflow {
         .map { pdb ->
             def source = byName[pdb.name]
             def sourceMeta = source?.source_meta instanceof Map ? source.source_meta : [:]
-            tuple([id: pdb.baseName, source_staged_name: pdb.name, source_meta: sourceMeta,
+            tuple([id: pdb.baseName, binder_refinement: true, prepared_pdb_model: source?.prepared_pdb_model, source_staged_name: pdb.name, source_meta: sourceMeta,
                    source_document_id: sourceMeta.id, source_structure_state: sourceMeta.structure_state ?: sourceMeta.target_state], pdb)
         }
     def prepared = Channel.empty()
@@ -123,10 +124,17 @@ workflow {
     if (flow) {
         // An off anchor stage provides an explicitly empty fixed-anchor mask.
         // No score, anchor-count exclusion or implicit redesign is added here.
-        RunPartialFlow(prepared)
-        candidates = RunPartialFlow.out.backbones.flatMap { meta, directory, manifest ->
+        def flowOutputs
+        if (params.get('ppiflow_task') == 'protein_binder_partial') {
+            RunProteinPartialFlow(prepared)
+            flowOutputs = RunProteinPartialFlow.out.backbones
+        } else {
+            RunPartialFlow(prepared)
+            flowOutputs = RunPartialFlow.out.backbones
+        }
+        candidates = flowOutputs.flatMap { meta, directory, manifest ->
             new groovy.json.JsonSlurper().parse(manifest).collect { row ->
-                tuple(meta + [id: file(row.path).baseName, parent_id: meta.id, sample_index: row.sample_index,
+                tuple(meta + row.findAll { key, value -> !(key in ['path', 'name', 'pdb_path']) } + [id: file(row.path).baseName, parent_id: meta.id, sample_index: row.sample_index,
                               validation_status: 'unvalidated', terminal_producer: 'ppiflow'], file(row.path))
             }
         }
@@ -140,7 +148,11 @@ workflow {
         RunMaturationFAMPNN(PrepareBinderRedesign.out.prep)
         candidates = RunMaturationFAMPNN.out.redesigned.flatMap { meta, pdbs, jsons ->
             (pdbs instanceof List ? pdbs : [pdbs]).collect { pdb ->
-                tuple(meta + [id: pdb.baseName, parent_id: meta.id, validation_status: 'unvalidated', terminal_producer: 'fampnn'], pdb)
+                def resultMeta = meta.findAll { key, value -> !(key in ['artifact_class', 'sequence_semantics', 'b_factor_semantics', 'native_output_id', 'native_input_id', 'producer', 'ppiflow_task', 'sample_index', 'effective_settings', 'source_sha256', 'sha256', 'bytes', 'residue_mapping']) }
+                def metadataFiles = jsons instanceof List ? jsons : [jsons]
+                def document = metadataFiles.find { it.baseName == pdb.baseName }
+                def actual = document ? new groovy.json.JsonSlurper().parse(document) : [:]
+                tuple(resultMeta + actual + [parent_native_output_id: meta.native_output_id, parent_sample_index: meta.sample_index, parent_artifact_class: meta.artifact_class, artifact_class: 'sequence_designed_complex', sequence_semantics: 'native_fampnn_output', id: pdb.baseName, parent_id: meta.id, validation_status: 'unvalidated', terminal_producer: 'fampnn'], pdb)
             }
         }
     }

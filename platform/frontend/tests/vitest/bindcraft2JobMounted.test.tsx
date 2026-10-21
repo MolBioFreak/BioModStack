@@ -34,6 +34,7 @@ it('mounts verified BC2-native pages without a generic Design results link', asy
       effective_settings: { save_failed_refolds: false, max_trajectories: 0 },
       request_sha256: 'request-fixture', effective_sha256: 'effective-fixture', sweep_budget: null,
     }) };
+    if (url.includes('/bindcraft2-navigation')) return { ok: true, json: async () => ({ job_id: 'bc2', arm: 'native_arm', trajectories: Array.from({ length: 26 }, (_, i) => ({ design: `native-${i + 1}`, trajectory: String(i + 1) })), draws: [], total: 0 }) };
     if (!url.includes('/bindcraft2-results?')) throw new Error(`Unexpected generic fetch: ${url}`);
     const query = new URL(url, 'http://example.test').searchParams;
     return { ok: true, json: async () => ({
@@ -50,16 +51,17 @@ it('mounts verified BC2-native pages without a generic Design results link', asy
   await act(async () => { mounted = create(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
     <MemoryRouter><JobDetailsPanel job={job} onClose={() => {}} /><BindCraft2JobResults jobId={job.id} resultsAvailable={job.status === 'completed'} /></MemoryRouter>
   </QueryClientProvider>); });
-  expect(paths).toHaveLength(1);
+  expect(paths.filter(path => path.includes('/bindcraft2-results?'))).toHaveLength(1);
+  expect(paths.filter(path => path.includes('/bindcraft2-navigation'))).toHaveLength(1);
   expect(paths).not.toContain('/api/models/bindcraft2/campaign/jobs/bc2/settings');
   expect(paths.find(path => path.includes('/bindcraft2-results?'))).not.toContain('arm=');
-  await vi.waitFor(() => expect(text(mounted!.root)).toContain('native-1'));
+  await vi.waitFor(() => expect(text(mounted!.root)).toContain('Design 1'));
   expect(text(mounted!.root)).not.toContain('Selection unavailable');
   expect(mounted!.root.findAllByType('a').some(a => a.props.href === '/designs/bc2')).toBe(true);
   expect(text(mounted!.root.findByType(BindCraft2JobResults))).not.toContain('Open in Results Viewer');
   await act(async () => mounted!.root.findByProps({ 'aria-label': 'Native records' }).props.onChange({ target: { value: 'attempt' } }));
-  await vi.waitFor(() => expect(paths.at(-1)).toContain('stage=attempt'));
-  expect(paths.at(-1)).toContain('arm=native_arm');
+  await vi.waitFor(() => expect(paths.filter(path => path.includes('/bindcraft2-results?')).at(-1)).toContain('stage=attempt'));
+  expect(paths.filter(path => path.includes('/bindcraft2-results?')).at(-1)).toContain('arm=native_arm');
   await vi.waitFor(() => expect(mounted!.root.findAllByType('button').some(n => text(n) === 'Next native records')).toBe(true));
   const before = paths.length;
   await act(async () => mounted!.root.findAllByType('button').find(n => text(n) === 'Next native records')!.props.onClick());

@@ -1464,7 +1464,10 @@ def _staged_source_archive(repo_root: Path, data_root: Path, revision: str,
         if _sha256_file(archive) != expected:
             _SOURCE_ARCHIVE_DIGESTS.pop(key, None)
             raise RemoteBundleError('Cached source archive changed during staging')
-        os.link(archive, staged)
+        # Each publisher needs a private inode: sibling staging links/unlinks
+        # and cache recency updates otherwise change its HF generation identity.
+        # Keep the broker's byte and metadata checks intact.
+        shutil.copy2(archive, staged)
         os.utime(archive, None, follow_symlinks=False)
         _prune_source_archives(cache_root)
     # Only the shared archive/copy needs serialization. Extraction writes into

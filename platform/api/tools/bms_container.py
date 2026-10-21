@@ -495,7 +495,8 @@ def execute(invocation, identity):
         raise ValueError('container stores must be absolute')
     image, digest = canonical_image(invocation.image, store)
     original_fds = inherited_fds()
-    with views.private_image_view(store, digest, workspace, extract_sif) as view:
+    shared_files = []
+    with views.private_image_view(store, digest, workspace, extract_sif, shared_files=shared_files) as view:
         rootfs = view['rootfs']
         private = rootfs.parent
         inputs = private / 'inputs'
@@ -554,7 +555,12 @@ def execute(invocation, identity):
         entry = rootfs / '.bms-exec.sh'
         entry.write_text('\n'.join(script) + '\n')
         entry.chmod(0o700)
+        mapping = private / 'lazy-files.map'
+        mapping.write_bytes(b''.join(os.fsencode(upper) + b'\0' + os.fsencode(lower) + b'\0'
+                                     for upper, lower in shared_files))
+        mapping.chmod(0o600)
         environment = dict(os.environ)
+        environment['BMS_PROOT_COW_MAP'] = str(mapping)
         environment.update(UDOCKER_DIR=str(private / 'udocker'), UDOCKER_TMP=str(private / 'tmp'),
                            UDOCKER_DEFAULT_EXECUTION_MODE='P1', UDOCKER_LOGLEVEL='0',
                            UDOCKER_TARBALL='file:///nonexistent/no-runtime-downloads')

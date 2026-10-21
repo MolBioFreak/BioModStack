@@ -49,14 +49,24 @@ def make_job(tmp_path):
 @pytest.mark.asyncio
 async def test_existing_native_terminal_owner_is_not_replaced(tmp_path, monkeypatch):
     from services import result_ingester
+    published(tmp_path)  # Inert coordinates, exercised through the real native filter owner.
     factory, engine = await setup(tmp_path)
+    attached = []
     try:
         async with factory() as db:
             job = make_job(tmp_path); db.add(job); await db.commit()
-            async def native_owner(*args, **kwargs):
+            async def component_owner(owner, output, session, **kwargs):
+                # Optional components attach after verified primary publication;
+                # their row count must never replace BoltzGen native accounting.
+                rows = list((await session.scalars(select(Design))).all())
+                assert [row.name for row in rows] == ['a']
+                assert owner.provenance['core_protein_candidate_publication']['summary']['published_count'] == 1
+                attached.append(owner.id)
                 return 7
-            monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', native_owner)
-            assert await result_ingester.ingest_job_results(job.id, str(tmp_path), db) == 7
+            monkeypatch.setattr(result_ingester, '_ingest_explicit_frustrampnn_results', component_owner)
+            assert await result_ingester.ingest_job_results(job.id, str(tmp_path), db) == 1
+            assert await result_ingester.ingest_job_results(job.id, str(tmp_path), db) == 0
+            assert attached == [job.id, job.id]
     finally:
         await engine.dispose()
 

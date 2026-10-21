@@ -1,5 +1,5 @@
 import type { BindCraft2NativePage, BindCraft2Stage } from '../components/BindCraft2NativeResults';
-import type { NativeGenerationPage, NativeGenerationRecord } from './nativeBinderResults';
+import { nativeDocumentLabel, uniqueBinderComplex, type NativeGenerationPage, type NativeGenerationRecord } from './nativeBinderResults';
 
 export const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 // Native CSV scalar decoding only. Empty cells are missing, never zero. JSON evidence is unchanged.
@@ -51,9 +51,75 @@ export function bc2Page(page: BindCraft2NativePage): NativeGenerationPage {
     return { ...page, records: page.rows.map(row => bc2Record(row, page)), receipt: { accounting: page.accounting, analytics: page.analytics },
         publication: page.metadata ?? {}, artifacts: page.artifacts?.map(file => ({ ...file, download_url: file.download_url ?? undefined })) };
 }
-export function bc2Label(row: NativeGenerationRecord): string {
-    const native = object(row.native_record), values = object(native.values);
-    return values.trajectory ? `Trajectory ${values.trajectory}` : String(native.design ?? native.path ?? 'Native record');
+export function bc2PreferredColumns(page: BindCraft2NativePage): string[] {
+    const records = page.rows.map(row => bc2Record(row, page));
+    const available = [...new Set(records.flatMap(row => Object.keys(object(row.metrics))))];
+    const present = (key: string) => records.some(row => object(row.metrics)[key] !== null && object(row.metrics)[key] !== undefined);
+    const confidence = ['i_pTM', 'pLDDT', 'pTM', 'i_pAE', 'Binder_RMSD'];
+    const phaseConfidence = available.filter(key => /^(?:refine|screen) · .+\.iptm · last recorded$/.test(key));
+    const preferred = page.stage === 'trajectory'
+        ? ['seq_length', ...phaseConfidence, 'duration_seconds', 'terminated', 'outcome']
+        : ['seq_length', ...confidence, ...available.filter(key => / · (?:i_pTM|pLDDT)$/.test(key)), 'outcome', 'rank'];
+    return preferred.filter(key => available.includes(key) && present(key));
+}
+export function bc2MetricLabel(key: string): string | undefined {
+    return ({ i_pTM: 'Interface pTM (0–1)', pLDDT: 'pLDDT (0–1)', pTM: 'pTM (0–1)',
+        i_pAE: 'Interface PAE loss (normalized)', i_pDAE: 'Interface pDAE', Binder_RMSD: 'Binder RMSD (Å)',
+        Unbound_Binder_pLDDT: 'Binder-only pLDDT (0–1)', Target_pLDDT: 'Target pLDDT (0–1)' } as Record<string, string>)[key];
+}
+export const bc2PreferredDocument = (row: NativeGenerationRecord) => uniqueBinderComplex(row.structures ?? []);
+
+export interface BC2Navigation {
+    job_id: string;
+    arm: string | null;
+    trajectories: { design: string; trajectory: string | null }[];
+    draws: { design: string; arm: string | null; trajectory_design: string | null; sequence: string | null;
+        structures: { artifact_id: string; target_state: string | null; binder_chains: string | string[] | null; target_chains: string | string[] | null }[] }[];
+    total: number;
+}
+export async function fetchBC2Navigation(jobId: string, arm: string | null, signal?: AbortSignal): Promise<BC2Navigation> {
+    const params = new URLSearchParams();
+    if (arm !== null) params.set('arm', arm);
+    const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/bindcraft2-navigation${params.size ? `?${params}` : ''}`, { signal });
+    if (!response.ok) throw new Error(`Native records unavailable (${response.status})`);
+    return response.json();
+}
+export function bc2TrajectoryNames(trajectories: BC2Navigation['trajectories']): Record<string, string> {
+    const names: Record<string, string> = {};
+    for (const row of trajectories) {
+        if (row.design && csvNumber(row.trajectory) !== undefined) names[row.design] = `Design ${row.trajectory}`;
+    }
+    return names;
+}
+export async function fetchBC2TrajectoryNames(jobId: string, arm: string | null, signal?: AbortSignal): Promise<Record<string, string>> {
+    return bc2TrajectoryNames((await fetchBC2Navigation(jobId, arm, signal)).trajectories);
+}
+/** Reuse only the document's explicit producer-row association. */
+export function bc2SourceRecord(row: NativeGenerationRecord): Record<string, unknown> {
+    const native = object(row.native_record);
+    if (typeof native.path !== 'string' || !native.producer_design) return native;
+    const linked = (row.structures ?? []).flatMap(item => {
+        const records = object(item).native_rows;
+        return Array.isArray(records) ? records.map(object).filter(record => record.design === native.producer_design) : [];
+    });
+    return linked.length === 1 ? linked[0] : native;
+}
+export function bc2Label(row: NativeGenerationRecord, names: Record<string, string> = {}): string {
+    const native = object(row.native_record);
+    const document = typeof native.path === 'string' && 'producer_design' in native;
+    const source = bc2SourceRecord(row);
+    const values = object(source.values);
+    const design = String(source.scored_design ?? source.design ?? native.producer_design ?? '');
+    const family = String(source.trajectory_design ?? design.replace(/_(?:candidate|seq)\d+$/, ''));
+    const variant = /_candidate(\d+)$/.exec(design)?.[1];
+    const name = names[family] ?? (values.trajectory ? `Design ${values.trajectory}` : document ? String(native.path).split('/').at(-1) : 'Candidate');
+    const length = csvNumber(values.length) ?? (typeof source.sequence === 'string' ? source.sequence.length : undefined);
+    return [name, variant ? `Variant ${variant}` : undefined, length ? `${length} aa` : undefined,
+        document && row.structures?.[0] ? nativeDocumentLabel(row.structures[0]) : undefined,
+        document && source.stage === 'trajectory' ? 'Backbone' : undefined,
+        document && source.stage === 'retained' ? 'Retained' : undefined,
+        document ? native.target_state : undefined,
+    ].filter(Boolean).join(' · ');
 }
 export interface BC2TracePage {
     design: string; arm: string | null; offset: number; limit: number; total: number;

@@ -18,10 +18,11 @@ test('touch bridge enables only on touch-capable or coarse-pointer devices', () 
     assert.equal(shouldEnableSeqVizTouchBridge({ maxTouchPoints: 0, coarsePointer: true }), true);
 });
 
-test('single-touch gestures synthesize mouse events while multi-touch gestures stay native', () => {
+test('single drags stay native; only a double-tap single-touch gesture selects', () => {
     assert.equal(resolveSeqVizTouchGestureMode(0), 'native');
-    assert.equal(resolveSeqVizTouchGestureMode(1), 'synthetic-mouse');
-    assert.equal(resolveSeqVizTouchGestureMode(2), 'native');
+    assert.equal(resolveSeqVizTouchGestureMode(1), 'native');
+    assert.equal(resolveSeqVizTouchGestureMode(1, true), 'synthetic-mouse');
+    assert.equal(resolveSeqVizTouchGestureMode(2, true), 'native');
 });
 
 test('synthetic mouse events preserve coordinates and primary-button semantics', () => {

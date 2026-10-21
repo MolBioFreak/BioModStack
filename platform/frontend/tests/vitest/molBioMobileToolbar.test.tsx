@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MobileMolBioToolbar } from '../../src/components/MolBioToolkit/MobileMolBioToolbar';
+import { MobileMolBioWorkspace, MobileMolBioReadPanel } from '../../src/components/MolBioToolkit/MobileMolBioWorkspace';
 
 describe('MobileMolBioToolbar', () => {
     let root: Root | undefined;
@@ -43,7 +44,8 @@ describe('MobileMolBioToolbar', () => {
         const rendered = await renderToolbar('map');
         const toolbar = rendered.container.querySelector<HTMLElement>('[data-molbio-mobile-toolbar="true"]');
         expect(toolbar).toBeTruthy();
-        expect(toolbar?.className).toContain('safe-area-inset-top');
+        expect(toolbar?.className).not.toContain('overflow-x-auto');
+        expect(rendered.container.querySelector('nav')?.className).toContain('grid-cols-5');
         expect(toolbar?.className).toContain('safe-area-inset-left');
         expect(toolbar?.className).toContain('safe-area-inset-right');
         expect(toolbar?.style.paddingTop).toContain('safe-area-inset-top');
@@ -57,6 +59,60 @@ describe('MobileMolBioToolbar', () => {
             expect(button.className).toContain('min-w-12');
         }
         expect(rendered.container.querySelector('button[aria-pressed="true"]')?.textContent).toContain('Map');
+    });
+
+    it.each(['details', 'qc'] as const)('keeps %s continuation inside its scrollable panel', async (mode) => {
+        const retry = vi.fn();
+        container = document.createElement('div');
+        document.body.appendChild(container);
+        root = createRoot(container);
+        await act(async () => root?.render(<MobileMolBioReadPanel
+            mode={mode} sequenceData={{ name: 'PL931', sequence: 'ACGT', sequenceType: 'dna', circular: true, features: [] }}
+            workups={[]} workupsStatus="unavailable"
+        ><button onClick={retry}>Retry workup history</button></MobileMolBioReadPanel>));
+        const scroll = container.querySelector('.overflow-y-auto');
+        const button = container.querySelector('button');
+        expect(scroll?.contains(button)).toBe(true);
+        await act(async () => button?.click());
+        expect(retry).toHaveBeenCalledOnce();
+    });
+
+    it('tracks the visible keyboard viewport and removes its listeners on exit', async () => {
+        const previous = Object.getOwnPropertyDescriptor(window, 'visualViewport');
+        const viewport = Object.assign(new EventTarget(), { height: 764, offsetTop: 0 });
+        const remove = vi.spyOn(viewport, 'removeEventListener');
+        Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport });
+        try {
+            container = document.createElement('div');
+            document.body.appendChild(container);
+            root = createRoot(container);
+            await act(async () => root?.render(<MobileMolBioWorkspace
+                constructName="PL931" digestIdentity="PL931" digestAvailable qcAvailable
+                hasSequence constructPickerOpen={false} surface="map"
+                onBack={vi.fn()} onOpenConstructs={vi.fn()} onSurfaceChange={vi.fn()}
+                constructs={null} map={<div>map</div>} sequence={null} details={null} digest={null} qc={null}
+            />));
+            const workspace = container.querySelector<HTMLElement>('[data-molbio-mobile-layout]')!;
+            expect(workspace.style.getPropertyValue('--molbio-viewport-height')).toBe('764px');
+            viewport.height = 404;
+            viewport.dispatchEvent(new Event('resize'));
+            expect(workspace.style.getPropertyValue('--molbio-viewport-height')).toBe('404px');
+            viewport.offsetTop = 32;
+            viewport.dispatchEvent(new Event('scroll'));
+            expect(workspace.style.getPropertyValue('--molbio-viewport-top')).toBe('32px');
+            viewport.height = 764;
+            viewport.offsetTop = 0;
+            viewport.dispatchEvent(new Event('resize'));
+            expect(workspace.style.getPropertyValue('--molbio-viewport-height')).toBe('764px');
+            await act(async () => root?.unmount());
+            root = undefined;
+            expect(remove).toHaveBeenCalledWith('resize', expect.any(Function));
+            expect(remove).toHaveBeenCalledWith('scroll', expect.any(Function));
+            expect(document.documentElement.classList.contains('bms-molbio-mobile-active')).toBe(false);
+        } finally {
+            if (previous) Object.defineProperty(window, 'visualViewport', previous);
+            else Reflect.deleteProperty(window, 'visualViewport');
+        }
     });
 
     it('publishes trusted toolbar actions through explicit callbacks', async () => {

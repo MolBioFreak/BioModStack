@@ -1,5 +1,6 @@
 import type { ProjectManagerReadModel } from '../../lib/projectManager';
 import { displayLabel, valueText } from './projectManagerState';
+import { ProjectNarrative } from './ProjectNarrative';
 
 interface ProjectInspectorProps {
     summary: ProjectManagerReadModel;
@@ -18,9 +19,24 @@ interface ProjectInspectorProps {
     onRecord: () => void;
 }
 
-function operatorFields(value: Record<string, unknown>): Record<string, unknown> {
+const narrativeKeys = new Set(['objective', 'research_objective', 'scientific_objective', 'description']);
+const normalizedNarrative = (value: string) => value.trim().replace(/\s+/g, ' ');
+const hasContent = (value: unknown): boolean => value !== null && value !== undefined && value !== ''
+    && (Array.isArray(value) ? value.some(hasContent) : typeof value === 'object' ? Object.values(value).some(hasContent) : true);
+const sameField = (left: unknown, right: unknown): boolean => {
+    if (left === right) return true;
+    if (Array.isArray(left) && Array.isArray(right)) return left.length === right.length && left.every((v, i) => sameField(v, right[i]));
+    if (left && right && typeof left === 'object' && typeof right === 'object') {
+        const a = Object.entries(left), b = Object.entries(right);
+        return a.length === b.length && a.every(([key, value]) => Object.hasOwn(right, key) && sameField(value, (right as Record<string, unknown>)[key]));
+    }
+    return false;
+};
+
+function operatorFields(value: Record<string, unknown>, existingNarratives = new Set<string>()): Record<string, unknown> {
     const technical = /(^schema$|(^|_)(id|ids|digest|generation|revision|receipt|receipts|adapter|raw|uri|route|payload)(_|$))/;
     const preferred = ['lifecycle_state', 'status', 'priority', 'objective', 'research_objective', 'scientific_objective', 'scientific_question', 'success_criteria'];
+    const seenNarratives = new Set(existingNarratives);
     const nested = value.domain_payload && typeof value.domain_payload === 'object' && !Array.isArray(value.domain_payload)
         ? value.domain_payload as Record<string, unknown> : {};
     const clean = (item: unknown): unknown => {
@@ -31,7 +47,38 @@ function operatorFields(value: Record<string, unknown>): Record<string, unknown>
     return Object.fromEntries(Object.entries({ ...nested, ...value }).filter(([key]) => !technical.test(key) && key !== 'name').map(([key, item]) => [key, clean(item)] as const).sort(([a], [b]) => {
         const rank = (key: string) => preferred.includes(key) ? preferred.indexOf(key) : preferred.length;
         return rank(a) - rank(b);
+    }).filter(([key, item]) => {
+        if (!hasContent(item)) return false;
+        if (!narrativeKeys.has(key) || typeof item !== 'string') return true;
+        const text = normalizedNarrative(item);
+        if (seenNarratives.has(text)) return false;
+        seenNarratives.add(text);
+        return true;
     }));
+}
+
+function ExternalReferences({ value }: { value: unknown[] }) {
+    return <ul className="space-y-2">{value.map((item, index) => {
+        if (!item || typeof item !== 'object') return <li key={index}>{valueText(item)}</li>;
+        const reference = item as Record<string, unknown>;
+        const raw = typeof reference.value === 'string' ? reference.value : '';
+        const label = typeof reference.label === 'string' && reference.label ? reference.label : raw;
+        let href: string | undefined;
+        // References are typed metadata, not arbitrary Markdown/HTML in notes.
+        // Preserve the stored URL exactly and leave unsupported schemes as text.
+        if (raw && !/[\\\s\u0000-\u001f\u007f]/.test(raw)) {
+            if (/^https?:\/\//i.test(raw)) {
+                try { const url = new URL(raw); if (!url.username && !url.password) href = raw; } catch { /* Display malformed URLs as text. */ }
+            } else if (/^\/(?:projects|designs|jobs|api\/files\/download|api\/files\/stream)\//.test(raw)) {
+                href = raw;
+            } else if (reference.kind === 'doi' && /^10\.\d{4,9}\/.+/.test(raw)) {
+                href = `https://doi.org/${raw}`;
+            }
+        }
+        return <li key={index}>{href
+            ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-accent underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">{label}</a>
+            : <span>{label}{raw && raw !== label ? ` · ${raw}` : ''}</span>}</li>;
+    })}</ul>;
 }
 
 function DetailGrid({ value }: { value: Record<string, unknown> }) {
@@ -42,7 +89,9 @@ function DetailGrid({ value }: { value: Record<string, unknown> }) {
             {entries.map(([key, item]) => (
                 <div key={key} className="py-1">
                     <dt className="text-xs font-semibold text-content-muted">{displayLabel(key)}</dt>
-                    <dd className="mt-1 break-words text-sm text-content-secondary">{valueText(item)}</dd>
+                    <dd className="mt-1 break-words text-sm text-content-secondary">{key === 'external_references' && Array.isArray(item)
+                        ? <ExternalReferences value={item} />
+                        : <ProjectNarrative text={valueText(item)} />}</dd>
                 </div>
             ))}
         </dl>
@@ -76,6 +125,13 @@ export function ProjectInspector({
     onRecord,
 }: ProjectInspectorProps) {
     const selection = summary.selection;
+    const summaryFields = operatorFields(selection.summary);
+    const narratives = new Set(Object.entries(summaryFields)
+        .filter(([key, value]) => narrativeKeys.has(key) && typeof value === 'string')
+        .map(([, value]) => normalizedNarrative(value as string)));
+    const scientificFields = Object.fromEntries(Object.entries(operatorFields(selection.scientific_context, narratives))
+        .filter(([key, value]) => hasContent(value) && !sameField(value, summaryFields[key])));
+    const subtitleRepeated = selection.subtitle && narratives.has(normalizedNarrative(selection.subtitle));
     const treeSelection = summary.tree.nodes.find((node) => node.node_key === selection.node_key);
     const actions = new Set([...selection.available_actions, ...(treeSelection?.allowed_actions ?? [])]);
     const surface = selection.canonical_surface;
@@ -100,7 +156,7 @@ export function ProjectInspector({
                     <div className="min-w-0">
                         <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Selected {displayLabel(selection.node_type)}</p>
                         <h2 className="mt-1 truncate text-lg font-semibold text-content">{selection.title}</h2>
-                        {selection.subtitle && <p className="mt-1 text-xs leading-5 text-content-secondary">{selection.subtitle}</p>}
+                        {selection.subtitle && !subtitleRepeated && <p className="mt-1 text-xs leading-5 text-content-secondary"><ProjectNarrative text={selection.subtitle} /></p>}
                     </div>
                     {onClose && <button type="button" onClick={onClose} className="rounded-md border border-border-primary px-2 py-1 text-xs text-content-secondary xl:hidden">Close</button>}
                 </div>
@@ -136,11 +192,11 @@ export function ProjectInspector({
                 )}
 
                 <section aria-label="Research summary">
-                    <DetailGrid value={operatorFields(selection.summary)} />
+                    <DetailGrid value={summaryFields} />
                 </section>
-                {Object.keys(selection.scientific_context).length > 0 && <section>
+                {Object.keys(scientificFields).length > 0 && <section>
                     <h3 className="mb-2 text-sm font-semibold text-content">Scientific context</h3>
-                    <DetailGrid value={operatorFields(selection.scientific_context)} />
+                    <DetailGrid value={scientificFields} />
                 </section>}
 
                 <section>

@@ -94,6 +94,8 @@ interface ViewerAnalysisBundle {
     chainPairIptmLoading?: boolean;
 }
 
+import { predictionDisplayLabel } from '../lib/designFriendlyLabel';
+
 interface Props {
     confidenceCompanion?: boolean;
     confidenceCharts?: React.ReactNode;
@@ -361,6 +363,9 @@ export default function StructureViewerPane({
     // The molecular structure is the primary scientific result. Keep auxiliary
     // metric/export controls collapsed until the operator asks for them.
     const [metricWorkbenchOpen, setMetricWorkbenchOpen] = useState(false);
+    const metricWorkbenchCurrent = useRef(metricWorkbenchOpen);
+    metricWorkbenchCurrent.current = metricWorkbenchOpen;
+    const metricWorkbenchBeforeFullscreen = useRef<boolean | null>(null);
     const [overlayView, setOverlayView] = useState<OverlayView>('metrics');
     const [conforNetsOverlayIds, setConforNetsOverlayIds] = useState<string[]>([]);
     const [focusedMetricSection, setFocusedMetricSection] = useState<StructureViewerSectionId>('summary');
@@ -1606,9 +1611,15 @@ export default function StructureViewerPane({
     // Listen to fullscreen changes
     useEffect(() => {
         const handleFullscreenChange = () => {
-            const fullscreen = document.fullscreenElement === containerRef.current;
+            const fullscreen = Boolean(containerRef.current && document.fullscreenElement === containerRef.current);
             setIsFullscreen(fullscreen);
-            setMetricWorkbenchOpen(!fullscreen);
+            if (fullscreen && metricWorkbenchBeforeFullscreen.current === null) {
+                metricWorkbenchBeforeFullscreen.current = metricWorkbenchCurrent.current;
+                setMetricWorkbenchOpen(false);
+            } else if (!fullscreen && metricWorkbenchBeforeFullscreen.current !== null) {
+                setMetricWorkbenchOpen(metricWorkbenchBeforeFullscreen.current);
+                metricWorkbenchBeforeFullscreen.current = null;
+            }
         };
         document.addEventListener('fullscreenchange', handleFullscreenChange);
         return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
@@ -2856,7 +2867,7 @@ export default function StructureViewerPane({
                 >
                     {designs.map(d => (
                         <option key={d.id} value={d.id}>
-                            {`${getDesignOriginLabel(d) ? `[${getDesignOriginLabel(d)}] ` : ''}${inferDesignOutputSource(d) === 'validation' ? (formatStructureValidationName(d) || d.name) : d.name}${inferDesignOutputSource(d) !== 'ppiflow' && d.plddt_overall ? ` (${d.plddt_overall.toFixed(0)})` : ''}`}
+                            {`${getDesignOriginLabel(d) ? `[${getDesignOriginLabel(d)}] ` : ''}${confidenceCompanion ? predictionDisplayLabel(d, designs.indexOf(d)) : inferDesignOutputSource(d) === 'validation' ? (formatStructureValidationName(d) || d.name) : d.name}${inferDesignOutputSource(d) !== 'ppiflow' && d.plddt_overall ? ` (${d.plddt_overall.toFixed(0)})` : ''}`}
                         </option>
                     ))}
                 </select>
@@ -3008,7 +3019,7 @@ export default function StructureViewerPane({
                     style={isFullscreen && viewportWidth < 700 ? {flex: '0 0 auto'} : undefined}>
                     {/* Toolbar - positioned differently based on mode */}
                     <div className="prediction-viewer-toolbar">
-                        {renderViewerToolbar(isFullscreen || viewerLayout.isStacked)}
+                        {renderViewerToolbar(confidenceCompanion || isFullscreen || viewerLayout.isStacked)}
                         {fampnnPsceProfile && <div className="text-[10px] text-slate-400">
                             {fampnnPsceProfile.policy
                                 ? `pSCE policy v${fampnnPsceProfile.policy.version} · ${fampnnPsceProfile.scope === 'all_chains' ? 'All chains' : `Chain ${fampnnPsceProfile.scope}`} · Cβ ${fampnnPsceProfile.ignore_cbeta ? 'excluded' : 'included'} · Å, residue-weighted`
@@ -3059,11 +3070,11 @@ export default function StructureViewerPane({
                     <div
                         className={isFullscreen
                             ? 'prediction-fullscreen-canvas relative'
-                            : 'relative rounded-lg border border-slate-700'
+                            : 'prediction-embedded-canvas relative rounded-lg border border-slate-700'
                         }
                         style={isFullscreen
                             ? viewportWidth < 700 ? {height: metricWorkbenchOpen ? '1320px' : '820px', flex: '0 0 auto'} : undefined
-                            : { height: confidenceCompanion ? (viewportWidth < 700 ? (metricWorkbenchOpen ? '1320px' : '820px') : 'clamp(560px, 72vh, 800px)') : viewerLayout.viewerHeight }}
+                            : { minHeight: confidenceCompanion ? (viewportWidth < 700 ? (metricWorkbenchOpen ? '1320px' : '820px') : 'clamp(560px, 72vh, 800px)') : viewerLayout.viewerHeight }}
                     >
                         {awaitingGovernedWorkbenchIdentity ? (
                             <div className="flex h-full items-center justify-center text-sm text-slate-400">Preparing governed structure resources…</div>

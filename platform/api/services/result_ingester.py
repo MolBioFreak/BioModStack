@@ -7079,7 +7079,10 @@ async def ingest_loose_files(
             # Generation is not validation. Keep confidence in the native record;
             # neither PDB B factors nor source metrics establish fresh evidence.
             fields["artifact_class"] = (
-                "sequence_designed_complex" if current_model_id == "caliby_binder" else None
+                normalize_antibody_artifact_class(payload.get("artifact_class"))
+                or ("sequence_designed_complex" if current_model_id == "caliby_binder"
+                    or producer in {"fampnn", "ligandmpnn", "proteinmpnn", "caliby"}
+                    else "backbone_complex" if producer == "ppiflow" else None)
             )
             fields["artifact_schema_version"] = 1 if fields["artifact_class"] else None
             session.add(Design(

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { JsonObject, ProjectManagerReadModel } from '../../lib/projectManager';
 import { displayLabel, valueText } from './projectManagerState';
+import { ProjectNarrative, hasProjectNarrativeLinks } from './ProjectNarrative';
 
 export type FolderKind = 'plans' | 'runs' | 'results' | 'datasets' | 'notes' | 'decisions' | 'activity' | 'lineage';
 
@@ -17,21 +18,39 @@ function text(item: JsonObject, key: string): string | null {
     return typeof value === 'string' && value ? value : null;
 }
 
-function RecordList({ items, empty, onSelect }: { items: JsonObject[]; empty: string; onSelect: (item: JsonObject) => void }) {
+function RecordList({ items, empty, onSelect, groupPrevious = true }: { items: JsonObject[]; empty: string; onSelect: (item: JsonObject) => void; groupPrevious?: boolean }) {
     if (!items.length) return <p className="text-xs text-content-muted">{empty}</p>;
+    const superseded = new Set(items.map(item => text(item, 'supersedes_record_id')).filter(Boolean));
+    const current = items.filter(item => !superseded.has(text(item, 'resource_id') ?? text(item, 'id')));
+    const previous = items.filter(item => superseded.has(text(item, 'resource_id') ?? text(item, 'id')));
+    if (groupPrevious && previous.length) return <>
+        <RecordList items={current} empty={empty} onSelect={onSelect} groupPrevious={false} />
+        <details className="mt-3 text-sm"><summary className="cursor-pointer text-content-secondary">Previous records ({previous.length})</summary>
+            <div className="mt-2"><RecordList items={previous} empty={empty} onSelect={onSelect} groupPrevious={false} /></div>
+        </details>
+    </>;
     return (
         <ul className="space-y-2">
             {items.map((item, index) => {
                 const id = text(item, 'id') ?? text(item, 'resource_id') ?? text(item, 'receipt_id') ?? `${index}`;
                 const title = text(item, 'record_kind') ?? text(item, 'event_type') ?? text(item, 'edge_mode') ?? text(item, 'entity_kind') ?? text(item, 'label') ?? id;
                 const detail = text(item, 'body') ?? text(item, 'entity_id') ?? text(item, 'edge_key') ?? text(item, 'unavailable_reason');
+                const linkedDetail = detail ? hasProjectNarrativeLinks(detail) : false;
+                const noteLines = text(item, 'body')?.split('\n');
+                const longNote = noteLines && noteLines.length > 3;
                 return (
                     <li key={id} className="rounded-lg border border-border-primary bg-surface">
                         <button type="button" onClick={() => onSelect(item)} className="w-full p-3 text-left outline-none focus:ring-2 focus:ring-accent">
                             <span className="block text-xs font-semibold text-content">{displayLabel(title)}</span>
-                            {detail ? <span className="mt-1 block text-[11px] text-content-secondary">{detail}</span> : null}
+                            {detail && !linkedDetail && !longNote ? <span className="mt-1 block text-[11px] text-content-secondary">{detail}</span> : null}
                             <span className="mt-1 block text-[9px] text-content-muted">{valueText(id)}</span>
                         </button>
+                        {longNote ? <div className="px-3 pb-3 text-sm text-content-secondary">
+                            <ProjectNarrative text={noteLines[0]} />
+                            <details className="mt-2"><summary className="cursor-pointer">Full note &amp; provenance</summary>
+                                <ProjectNarrative text={noteLines.slice(1).join('\n')} />
+                            </details>
+                        </div> : detail && linkedDetail ? <div className="px-3 pb-3 text-sm text-content-secondary"><ProjectNarrative text={detail} /></div> : null}
                     </li>
                 );
             })}

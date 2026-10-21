@@ -21,6 +21,7 @@ export interface BinderEvidencePage {
     records: BinderEvidenceRecord[];
 }
 export async function fetchBinderEvidence(jobId: string, offset: number, signal?: AbortSignal, sourceDesignId?: string): Promise<BinderEvidencePage> {
+    sourceDesignId = sourceDesignId || undefined;
     const { data } = await api.get<BinderEvidencePage>(`/api/designs/by-job/${encodeURIComponent(jobId)}/binder-evidence`, { params: { offset, limit: 100, ...(sourceDesignId !== undefined ? { source_design_id: sourceDesignId } : {}) }, signal });
     if (data.schema_version !== 1 || data.job_id !== jobId || data.offset !== offset || data.limit !== 100 || !Array.isArray(data.records)
         || (sourceDesignId !== undefined && (data.records.length !== 1 || data.records[0].source_design_id !== sourceDesignId))) throw Error('Binder evidence readback unavailable');

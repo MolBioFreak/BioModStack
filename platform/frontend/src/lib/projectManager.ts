@@ -448,7 +448,7 @@ export interface ResultComparison {
     authority: JsonObject | null;
 }
 
-export type ResultLineageEdgeKey = 'cloned-plan-intent' | `terminal-output:${string}`;
+export type ResultLineageEdgeKey = 'cloned-plan-intent' | `terminal-output:${string}` | `attachment:${string}`;
 
 export interface ResultSurface {
     schema: 'bms.result-surface.v1';
@@ -1135,6 +1135,8 @@ function requireLiteral<T extends string>(value: unknown, label: string, values:
 
 function requireResultLineageEdgeKey(value: unknown, label: string): ResultLineageEdgeKey {
     if (value === 'cloned-plan-intent') return value;
+    // Existing adapter-produced attachments are also native PM result edges.
+    if (typeof value === 'string' && /^attachment:[^:]+:[^:]+:produced$/.test(value)) return value as `attachment:${string}`;
     if (
         typeof value === 'string'
         && /^terminal-output:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
@@ -2037,6 +2039,31 @@ export interface ProjectResultContext {
 }
 
 /** Same hierarchy and safe-return contract for both Project result entrypoints. */
+// Navigation only: this conveys no launch context, receipt or scientific authority.
+export function safeProjectNavigationReturn(raw: string | null): string | null {
+    if (!raw || !raw.startsWith('/projects/') || /[\\\r\n]/.test(raw)) return null;
+    try {
+        const uri = new URL(raw, 'https://bms.local');
+        if (uri.origin !== 'https://bms.local' || !/^\/projects\/[^/\\\s]+$/.test(decodeURIComponent(uri.pathname))) return null;
+        return `${uri.pathname}${uri.search}${uri.hash}`;
+    } catch { return null; }
+}
+
+export function projectNavigationHref(href: string, returnTo: string): string {
+    const safeReturn = safeProjectNavigationReturn(returnTo);
+    if (!safeReturn || !/^\/(?:designs|jobs)\//.test(href)) return href;
+    const destination = new URL(href, 'https://bms.local');
+    if (destination.origin !== 'https://bms.local') return href;
+    // PM links name a record owner. Do not silently mix scheduler children into
+    // a note's validation result; an explicitly authored recursive scope wins.
+    if (/^\/designs\/[^/]+\/?$/.test(destination.pathname) && !destination.searchParams.has('include_children')) {
+        destination.searchParams.set('include_children', 'false');
+    }
+    destination.searchParams.set('return_to', safeReturn);
+    destination.searchParams.set('return_label', 'Return to Project');
+    return `${destination.pathname}${destination.search}${destination.hash}`;
+}
+
 export function verifiedProjectReturnUri(context: Pick<LaunchContext, 'project_id' | 'global_experiment_id' | 'domain_experiment_id' | 'return_uri'>): string | null {
     const raw = context.return_uri;
     if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) return null;
@@ -2047,7 +2074,7 @@ export function verifiedProjectReturnUri(context: Pick<LaunchContext, 'project_i
         const query = uri.searchParams;
         if (Array.from(query.keys()).length !== new Set(query.keys()).size) return null;
         if (path === `/projects/${context.project_id}`) {
-            if (Array.from(query.keys()).some(key => !['focus', 'selected'].includes(key))
+            if (Array.from(query.keys()).some(key => !['focus', 'selected', 'view', 'candidate_source', 'candidate_search', 'candidate_family', 'state_revision_id', 'map_cursor'].includes(key))
                 || query.get('focus') !== context.global_experiment_id || !query.get('selected')) return null;
         } else if (path === `/projects/${context.project_id}/experiments/${context.global_experiment_id}/domains/${context.domain_experiment_id}`) {
             if (Array.from(query.keys()).some(key => !['workspace', 'section'].includes(key))
@@ -2078,6 +2105,8 @@ export function projectResultHref(route: NonNullable<ResultSurface['route']>, co
     if (destination.origin !== window.location.origin) throw new Error('The canonical result route is not local to BioModStack.');
     destination.searchParams.delete('project_id');
     destination.searchParams.delete('launch_context_id');
+    // A receipt names its exact owner, not the owner's scheduler descendants.
+    if (/^\/designs\/[^/]+\/?$/.test(destination.pathname)) destination.searchParams.set('include_children', 'false');
     destination.searchParams.set('workspace_id', context.project_id);
     destination.searchParams.set('global_experiment_id', context.global_experiment_id);
     destination.searchParams.set('domain_experiment_id', context.domain_experiment_id);

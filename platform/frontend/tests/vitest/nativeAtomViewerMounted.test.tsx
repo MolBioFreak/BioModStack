@@ -21,6 +21,7 @@ vi.mock('../../src/structureViewer/StructureWorkbench',()=>({StructureWorkbench:
     state.layers=props.metricLayers;return <StructureViewerHost {...props} />;
 }}));
 let mounted:ReactTestRenderer|undefined;
+let fullscreenOwner: HTMLElement | undefined;
 const text=(node:any):string=>typeof node==='string'?node:(node.children??[]).map(text).join('');
 afterEach(async()=>{if(mounted)await act(async()=>mounted!.unmount());mounted=undefined;vi.unstubAllGlobals();state.layers=[];});
 const openMetrics=async()=>{await act(async()=>mounted!.root.findAllByType('button').find(el=>text(el)==='Show metrics')!.props.onClick());};
@@ -30,7 +31,7 @@ async function mount(payload=nativeAtomFixture(),extra:any={}) {
     const props:any={selectedDesignId:design.id,selectedDesign:design,designs:[design],setSelectedDesignId:vi.fn(),colorMode:'plddt',setColorMode:vi.fn(),structureFormat:'cif',activeJob:{id:'job',model_id:'protenix'},getMetricColor:()=>'',viewerAnalyses:{paeMatrixRun:{status:'missing',result:null},onRunPaeMatrix:vi.fn()},...extra.props};
     const fetcher=vi.fn(async (url:string)=>({ok:true,json:async()=>url.includes('residue-metrics')?payload.confidence:url.includes('/pae?')?payload.pae:unavailable('chain_metrics')}));
     vi.stubGlobal('fetch',extra.fetcher??fetcher);
-    await act(async()=>{mounted=create(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><StructureViewerPane {...props}/></QueryClientProvider>,{createNodeMock:el=>el.type==='canvas'?{getContext:()=>({createImageData:(w:number,h:number)=>({data:new Uint8ClampedArray(w*h*4)}),putImageData(){}})}:null});});
+    await act(async()=>{mounted=create(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><StructureViewerPane {...props}/></QueryClientProvider>,{createNodeMock:el=>typeof el.props.className === 'string' && el.props.className.startsWith('prediction-viewer-pane') ? (fullscreenOwner = document.createElement('div')) : el.type==='canvas'?{getContext:()=>({createImageData:(w:number,h:number)=>({data:new Uint8ClampedArray(w*h*4)}),putImageData(){}})}:null});});
     await settle(); await settle();
     return {fetcher,props};
 }
@@ -55,9 +56,9 @@ it('mixed atom confidence reaches actual shared atom palette and exact tooltip/s
     const workbenchClass = mounted!.root.findByProps({'aria-label':'Structure metric workbench'}).props.className;
     expect(workbenchClass).toContain('bms-structure-workbench');
     expect(workbenchClass).not.toContain('absolute');
-    expect(text(mounted!.root.findByProps({'aria-label':'Metric categories'}))).toContain('≥90%');
+    expect(text(mounted!.root.findByProps({'aria-label':'Metric categories'}))).toContain('≥90');
     const options=()=>mounted!.root.findByProps({'aria-label':'Linked atom track'}).findAllByProps({role:'option'});
-    expect(text(options()[3])).toBe('E:1:C125.0%');
+    expect(text(options()[3])).toBe('E:1:C125.0 / 100');
     await act(async()=>options()[3].props.onClick());
     expect(options()[3].props['aria-selected']).toBe(true);
     expect(options()[4].props['aria-selected']).toBe(false);
@@ -99,7 +100,7 @@ it('fullscreen starts clear but explicit Show metrics and minimize remain usable
     await mount();
     const descriptor=Object.getOwnPropertyDescriptor(document,'fullscreenElement');
     try {
-        Object.defineProperty(document,'fullscreenElement',{configurable:true,value:document.body});
+        Object.defineProperty(document,'fullscreenElement',{configurable:true,value:fullscreenOwner});
         await act(async()=>document.dispatchEvent(new Event('fullscreenchange')));
         expect(mounted!.root.findAllByProps({'aria-label':'Structure metric workbench'})).toHaveLength(0);
         expect(mounted!.root.findAllByType('button').find(el=>text(el)==='Show metrics')!.props.className).toContain('bottom-2');
@@ -112,6 +113,26 @@ it('fullscreen starts clear but explicit Show metrics and minimize remain usable
     } finally {
         if(descriptor)Object.defineProperty(document,'fullscreenElement',descriptor);
         else Reflect.deleteProperty(document,'fullscreenElement');
+    }
+});
+it.each([false, true])('fullscreen restores the previous metrics visibility (%s) and ignores other owners', async initiallyOpen => {
+    await mount();
+    if (initiallyOpen) await openMetrics();
+    const descriptor = Object.getOwnPropertyDescriptor(document, 'fullscreenElement');
+    const setOwner = async (value: Element | null) => {
+        Object.defineProperty(document, 'fullscreenElement', { configurable: true, value });
+        await act(async () => document.dispatchEvent(new Event('fullscreenchange')));
+    };
+    const visible = () => mounted!.root.findAllByProps({ 'aria-label': 'Structure metric workbench' }).length;
+    try {
+        await setOwner(document.body); expect(visible()).toBe(initiallyOpen ? 1 : 0);
+        for (let cycle = 0; cycle < 2; cycle++) {
+            await setOwner(fullscreenOwner!); expect(visible()).toBe(0);
+            await setOwner(null); expect(visible()).toBe(initiallyOpen ? 1 : 0);
+        }
+    } finally {
+        if (descriptor) Object.defineProperty(document, 'fullscreenElement', descriptor);
+        else Reflect.deleteProperty(document, 'fullscreenElement');
     }
 });
 it('full 588-token matrix uses dense shared storage and selects distinct ligand atoms',async()=>{

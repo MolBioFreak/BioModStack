@@ -39,7 +39,7 @@ export interface PHDesignOutput {
     energy_trajectory: PHDesignTrajectory[] | null;
 }
 export interface PHDesignTrajectory { step: number; selective_energy: number | null; global_protonation_dH: number | null; potts_energy: number; canonical_sequence: string; extended_tokens: string | string[] }
-export interface ProtonPottsResults { contract: 'protonpottsmpnn_design.v1'; source: Record<string, unknown>; request: { contract: 'protonpottsmpnn_design.v1'; options: Omit<ProtonPottsParams, 'target_pdb'>; source: { requested_path: string; sha256: string } }; designs: { design_id: string; criteria_index: number; native_design_id: string; native: PHDesignOutput }[]; runtime: Record<string, unknown>; artifacts: string[] }
+export interface ProtonPottsResults { contract: 'protonpottsmpnn_design.v1'; source: Record<string, unknown>; request: { contract: 'protonpottsmpnn_design.v1'; options: Omit<ProtonPottsParams, 'target_pdb'>; source: { requested_path: string; sha256: string } }; designs: { candidate_ref?: import('./binderSelectedRound').CandidateRef; design_id: string; criteria_index: number; native_design_id: string; native: PHDesignOutput }[]; runtime: Record<string, unknown>; artifacts: string[] }
 export function parseProtonPottsResults(value: unknown): ProtonPottsResults {
     const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
     if (!object(value) || value.contract !== 'protonpottsmpnn_design.v1' || !object(value.request) || !object(value.source) || !object(value.runtime) || !Array.isArray(value.artifacts) || !value.artifacts.every(v => typeof v === 'string') || !Array.isArray(value.designs)) throw new Error('Invalid ProtonPottsMPNN result contract');

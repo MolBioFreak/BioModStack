@@ -166,3 +166,25 @@ async def test_declared_contradictions_before_association(tmp_path, monkeypatch,
     manifest.write_text(json.dumps(document))
     await seed(store, root, "ligandmpnn", "ligand_aware", params)
     await assert_refused(store, root, match="differs")
+
+
+@pytest.mark.asyncio
+async def test_retained_sequence_observation_preserves_native_identity_without_finalization(tmp_path, monkeypatch, store):
+    from database import Design
+    from services.binder_result_observation import observe_retained_binder_results
+    root, _, document, params = emitted(tmp_path, monkeypatch, 'ligand_aware',
+        controls={'write_fasta': False, 'write_structures': False})
+    await seed(store, root, 'ligandmpnn', 'ligand_aware', params, status='cancelled', remote=True)
+    shutil.rmtree(tmp_path / 'controller')
+    async with store() as session:
+        job = await session.get(Job, 'native')
+        lifecycle = (job.status, job.queue_status, job.remote_state, job.completed_at)
+        result = await observe_retained_binder_results(session, job, root, commit=True)
+        assert result['available'] and result['document_count'] == 0
+        assert result['publication_ref'] == 'ligandmpnn_design'
+        assert result['native_document']['records'] == document['records']
+        assert result['native_document']['request'] == document['request']
+        assert result['native_record_count'] == len(document['records'])
+        assert not list((await session.scalars(select(Design))).all())
+        assert await observe_retained_binder_results(session, job, root, commit=True) == result
+        assert (job.status, job.queue_status, job.remote_state, job.completed_at) == lifecycle

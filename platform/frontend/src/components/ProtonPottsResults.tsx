@@ -10,7 +10,8 @@ import { SequenceManager } from './SequenceManager';
 import { fetchModelById, type Job } from '../lib/api';
 import { fetchProtonPottsResults, predictProtonPottsSelected, type PHDesignOutput } from '../lib/protonPottsResults';
 import type { NativeGenerationPage, NativeGenerationRecord } from '../lib/nativeBinderResults';
-import { readBinderSelection } from '../lib/binderContinuation';
+import { readBinderSelection, writeBinderSelection } from '../lib/binderContinuation';
+import { candidateKey, readRoundStorage, type CandidateRef } from '../lib/binderSelectedRound';
 const CohortPlot = lazy(() => import('./CohortAnalytics').then(m => ({ default: m.CohortPlot })));
 
 function NativeDesign({ value }: { value: PHDesignOutput }) {
@@ -26,6 +27,21 @@ const systemInputs = new Set(['input_pdb', 'pdb_paths', 'target_pdb', 'sequence'
 export default function ProtonPottsResultsView({ job, launchContextId, onOpenJob }: { job: Pick<Job, 'id' | 'status'> & Partial<Pick<Job, 'params'>>; launchContextId?: string | null; onOpenJob?: (id: string) => void }) {
     const query = useQuery({ queryKey: ['protonpottsmpnn-results', job.id], queryFn: ({ signal }) => fetchProtonPottsResults(job.id, signal), retry: false, refetchInterval: ['queued', 'running'].includes(job.status) ? 2000 : false });
     const [selected, setSelected] = useState<string[]>(() => readBinderSelection(`${job.id}:records:protonpottsmpnn`));
+    useEffect(() => {
+        const receive = (refs: CandidateRef[], replace = false) => setSelected(previous => {
+            const rows = query.data?.designs;
+            if (!rows) return previous;
+            const keys = new Set(refs.map(candidateKey));
+            const next = [...(replace ? [] : previous.filter(id => !rows.some(row => row.design_id === id && row.candidate_ref))),
+                ...rows.filter(row => row.candidate_ref && keys.has(candidateKey(row.candidate_ref))).map(row => row.design_id)];
+            writeBinderSelection(`${job.id}:records:protonpottsmpnn`, next);
+            return next;
+        });
+        receive(readRoundStorage<CandidateRef[]>(job.id, 'selection', []));
+        const sync = (event: Event) => { const detail = (event as CustomEvent).detail; if (detail.jobId === job.id) receive(detail.refs, detail.replace); };
+        window.addEventListener('bms:binder-round-selection', sync);
+        return () => window.removeEventListener('bms:binder-round-selection', sync);
+    }, [job.id, query.data]);
     const [predictor, setPredictor] = useState<'protenix' | 'boltz2'>('protenix');
     const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
     const [target, setTarget] = useState<string | null>(null);
@@ -47,7 +63,7 @@ export default function ProtonPottsResultsView({ job, launchContextId, onOpenJob
     const adapter = useMemo<NativeWorkbenchAdapter | undefined>(() => {
         const data = query.data;
         if (!data) return undefined;
-        const records: NativeGenerationRecord[] = data.designs.map(row => ({ candidate_key: row.design_id, native_record: row, native: row.native, metrics: { ...row.native, criteria_index: row.criteria_index }, structures: [] }));
+        const records: NativeGenerationRecord[] = data.designs.map(row => ({ candidate_key: row.design_id, candidate_ref: row.candidate_ref, native_record: row, native: row.native, metrics: { ...row.native, criteria_index: row.criteria_index }, structures: [] }));
         return { key: 'protonpottsmpnn', title: 'ProtonPottsMPNN native redesign results', recordLabel: 'native designs', label: row => String(row.candidate_key),
             preferredColumns: ['canonical_sequence', 'extended_tokens', 'center_res_ids', 'center_protonation_types', 'final_potts_energy', 'selective_energy', 'global_protonation_dH', 'criteria_index'],
             initialMetrics: () => ({ x: 'final_potts_energy', y: 'selective_energy', distribution: 'global_protonation_dH' }),

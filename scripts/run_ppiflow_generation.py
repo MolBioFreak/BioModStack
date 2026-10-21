@@ -263,7 +263,13 @@ def record_sample(values):
     # Retain the native CSV too; these are the exact row values before its rounding.
     with (ctx["output"] / "samples.jsonl").open("a") as handle:
         handle.write(json.dumps(record, allow_nan=False) + "\n")
-    Path(str(candidate) + ".sample.json").write_text(json.dumps(record, indent=2, allow_nan=False) + "\n")
+    annotation = json.dumps(record, indent=2, allow_nan=False) + "\n"
+    Path(str(candidate) + ".sample.json").write_text(annotation)
+    # The native file is also retained by publishDir and selectable through
+    # retained-publication receiving. Keep its actual writer roles, too. Native
+    # names may be reused: overwrite this sidecar with the same latest event as
+    # the native bytes, while canonical candidate snapshots remain independent.
+    Path(str(path) + ".sample.json").write_text(annotation)
     ctx["receipt"]["emitted_samples"] += 1
 
 

@@ -6,6 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from schemas import SelectedRoundRequest
 from database import Job, get_session
 from experiment_database import get_experiment_session
 from services.binder_continuation import individual_model_requests, model_request, resolve_selection, resolve_candidate_documents, snapshot_selection
@@ -16,14 +17,21 @@ router = APIRouter()
 
 
 @router.get('/{job_id}/round')
-async def get_round(job_id: str, session: AsyncSession = Depends(get_session)):
+async def get_round(job_id: str, round_id: str | None = None, session: AsyncSession = Depends(get_session)):
     from services.binder_round import read_round
-    return await read_round(session, job_id)
+    from services.binder_continuation import resolve_root
+    _, root = await resolve_root(session, job_id)
+    return await read_round(session, root.id, round_id=round_id)
 
 
 @router.post('/{job_id}/round/retry')
-async def retry_round(job_id: str, session: AsyncSession = Depends(get_session),
+async def retry_round(job_id: str, round_id: str | None = None, session: AsyncSession = Depends(get_session),
                       experiment_session: AsyncSession = Depends(get_experiment_session)):
+    if round_id is not None:
+        from services.binder_continuation import resolve_root
+        from services.binder_selected_round import reconcile
+        _, root = await resolve_root(session, job_id)
+        return await reconcile(session, experiment_session, root.id, round_id, retry=True)
     from services.binder_round import reconcile_round
     return await reconcile_round(session, experiment_session, job_id, retry=True)
 
@@ -132,9 +140,17 @@ async def _launch_selected(request: SelectedOperationRequest, background_tasks: 
 
 
 @router.post('/selected', status_code=201)
-async def launch_selected(request: SelectedOperationRequest, background_tasks: BackgroundTasks,
+async def launch_selected(request: SelectedRoundRequest | SelectedOperationRequest, background_tasks: BackgroundTasks,
                           session: AsyncSession = Depends(get_session),
                           experiment_session: AsyncSession = Depends(get_experiment_session)):
+    if isinstance(request, SelectedRoundRequest):
+        from services.binder_selected_round import submit, response
+        try:
+            retained = await submit(session, experiment_session, request)
+            return await response(session, retained)
+        except (ValueError, OSError) as exc:
+            await session.rollback()
+            raise HTTPException(422, str(exc)) from exc
     if not request.launch_context_id or not request.idempotency_key:
         return await _launch_selected(request, background_tasks, session, experiment_session)
     from fastapi.encoders import jsonable_encoder

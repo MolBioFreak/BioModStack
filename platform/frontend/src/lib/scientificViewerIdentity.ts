@@ -108,7 +108,7 @@ const fraction = (v: unknown): number => {
     return v;
 };
 /** Native arrays remain native fractions. Only a labeled display may use percent. */
-export function parseScientificNativeMetric(raw: unknown, expected: StructureDocumentRef | null | undefined, metric: 'residue_plddt' | 'chain_metrics', selectedCandidateId = expected?.candidateId): ScientificNativeMetric {
+export function parseScientificNativeMetric(raw: unknown, expected: StructureDocumentRef | null | undefined, metric: 'residue_plddt' | 'chain_metrics', selectedCandidateId = expected?.candidateId, nativeSource?: { job_id: string; artifact_id: string }): ScientificNativeMetric {
     try {
         if (raw == null) return {status:'unavailable',reason:'Native metric not loaded'};
         const initial = record(raw);
@@ -116,8 +116,15 @@ export function parseScientificNativeMetric(raw: unknown, expected: StructureDoc
         const p = exact(raw, initial.status === 'unavailable' ? envelopeKeys : [...nativeBaseKeys,
             ...(metric === 'residue_plddt' ? ['units','values'] : ['chain_index_map','chains_ptm','pair_chains_iptm','role_assignment','role_reason'])]);
         if (p.schema_name !== 'core_protein_viewer_metric' || p.schema_version !== 1 || p.contract_revision !== 1 || p.metric !== actualMetric) throw Error('unsupported native metric schema');
-        text(p.design_id); text(p.design_name);
-        if (!selectedCandidateId || p.design_id !== selectedCandidateId) throw Error('selected candidate mismatch');
+        text(p.design_name);
+        if (nativeSource) {
+            const candidateId = `native:${text(nativeSource.job_id)}:${text(nativeSource.artifact_id)}`;
+            if (p.design_id !== null || selectedCandidateId !== candidateId) throw Error('selected native candidate mismatch');
+            if (expected && (expected.candidateId !== candidateId || expected.documentId !== `artifact:${nativeSource.artifact_id}`)) throw Error('selected native structure mismatch');
+        } else {
+            text(p.design_id);
+            if (!selectedCandidateId || p.design_id !== selectedCandidateId) throw Error('selected candidate mismatch');
+        }
         if (p.status === 'unavailable') {
             if (nullableFields.some(k => p[k] !== null)) throw Error('contradictory unavailable metric');
             return {status:'unavailable',reason:text(p.reason)};
@@ -128,6 +135,7 @@ export function parseScientificNativeMetric(raw: unknown, expected: StructureDoc
         if (doc.documentId !== expected.documentId || doc.candidateId !== expected.candidateId || hash(doc.contentSha256) !== hash(expected.contentSha256) || doc.sourceKind !== expected.sourceKind) throw Error('selected structure mismatch');
         const binding=exact(p.producer_binding,['candidate_id','document_id']);
         text(binding.candidate_id);text(binding.document_id);
+        if (nativeSource && binding.candidate_id !== nativeSource.artifact_id) throw Error('native artifact binding mismatch');
         const rawAxis=record(p.axis);
         if (!Array.isArray(rawAxis.residues) || !rawAxis.residues.length) throw Error('empty axis');
         const rawResidues = rawAxis.residues;

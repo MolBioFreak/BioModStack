@@ -66,6 +66,18 @@ describe('ProjectReturnBanner', () => {
         });
     });
 
+    it.each(['/designs/source', '/jobs/failed'])('receives safe PM navigation at %s without issuing a launch context', async destination => {
+        const returnTo = '/projects/p?view=candidates&candidate_source=s&candidate_search=e8db269a&candidate_family=family';
+        const rendered = await renderAt(`${destination}?${new URLSearchParams({ return_to: returnTo, return_label: 'Return to Project' })}`);
+        expect(rendered.querySelector<HTMLAnchorElement>('a')?.getAttribute('href')).toBe(returnTo);
+        expect(mockedGetLaunchContext).not.toHaveBeenCalled();
+    });
+
+    it.each(['//evil.test/projects/p', '/projects/%5cevil', '/designs/source', 'https://evil.test/projects/p'])('rejects non-PM or unsafe navigation return %s', async returnTo => {
+        const rendered = await renderAt(`/jobs/failed?${new URLSearchParams({ return_to: returnTo })}`);
+        expect(rendered.querySelector('a')).toBeNull();
+    });
+
     it('fails closed for unknown context and caller-authored return_uri', async () => {
         mockedGetLaunchContext.mockResolvedValue({
             schema: 'bms.launch-context.v1',

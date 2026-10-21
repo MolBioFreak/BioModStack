@@ -2822,7 +2822,15 @@ async def _diagnostic_write_fence(session, job, identity):
 
 
 async def _project_remote_diagnostics(session, job, status, manifest, destination):
-    relative, _, _ = _native_result_view(job, status, destination, manifest)
+    relative, native_output, _ = _native_result_view(job, status, destination, manifest)
+    # The caller has verified the immutable returned tree and acquired the
+    # current-attempt write fence. Partial native publication is observational:
+    # no success finalizer, scientific retry, or terminal lifecycle transition.
+    from services.binder_result_observation import observe_retained_binder_results
+
+    from services.binder_publication_roots import receiving_native_root
+    with receiving_native_root(job, native_output):
+        await observe_retained_binder_results(session, job, native_output, commit=False)
     if (relative / '.bms-components.json').as_posix() not in {
             artifact.relative_path for artifact in manifest.artifacts}:
         return  # A pre-runtime failure can seal logs without executed children.

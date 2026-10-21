@@ -61,6 +61,88 @@ async def _ppiflow_feature_targets(job, prepared, session):
     return list(targets.values())
 
 
+def independent_structure_components(path, chain_ids=None):
+    """Read typed polymers from an independent source, never a generated pose."""
+    import io
+    from Bio.PDB import PDBParser
+    from services.md.starting_structures import _parse_mmcif_structure
+    from scripts.run_esmfold2_inference import _classify_pdb_chain, _map_residue_to_letter
+    from services.binder_round_inputs import chains
+    path = Path(path)
+    raw = path.read_bytes()
+    structure = (_parse_mmcif_structure(raw) if path.suffix.lower() in {'.cif', '.mmcif'} else
+                 PDBParser(QUIET=True).get_structure('target', io.StringIO(raw.decode())))
+    models = list(structure)
+    if len(models) != 1:
+        raise ValueError('Independent target needs an exact structural model')
+    selected = chains(chain_ids)
+    components = []
+    for chain in models[0]:
+        if selected and chain.id not in selected:
+            continue
+        names = [r.resname.strip().upper() for r in chain if r.id[0] != 'W']
+        kind = _classify_pdb_chain(names)
+        if kind is None:
+            raise ValueError('Independent nonpolymer structure needs an explicit SMILES or CCD identity')
+        letters = [_map_residue_to_letter(name, kind) for name in names]
+        if not names or not all(letters):
+            raise ValueError('Independent target has an unrepresented residue identity')
+        components.append({'id': chain.id, 'type': kind, 'sequence': ''.join(letters)})
+    if selected and set(selected) != {c['id'] for c in components}:
+        raise ValueError('Independent target chain selection differs from source')
+    return components
+
+
+def boltzgen_targets(job):
+    """Decode fixed target entities from the retained native preparation."""
+    import yaml
+    from paths import resolve_runtime_data_path
+    from scripts.lib.boltzgen_inputs import input_identity, identity_digest
+    params = job.params or {}
+    directory = resolve_runtime_data_path(params['boltzgen_yaml_config'])
+    config = directory / 'boltzgen_input.yaml' if directory.is_dir() else directory
+    identity = input_identity(config)
+    expected = params.get('boltzgen_prepared_sha256')
+    if expected and identity_digest(identity) != expected:
+        raise ValueError('BoltzGen prepared independent inputs changed')
+    document = yaml.safe_load(config.read_text())
+    components = []
+    for entity in document.get('entities', []):
+        kind, spec = next(iter(entity.items()))
+        if kind == 'file':
+            # A designable file or scaffold-YAML choice is binder input, not target.
+            if spec.get('design') or isinstance(spec.get('path'), list):
+                continue
+            path = config.parent / spec['path']
+            if path.suffix.lower() in {'.yaml', '.yml'}:
+                continue
+            if spec.get('exclude') or any(set(r.get('chain', {})) - {'id'} for r in spec.get('include', [])):
+                raise ValueError('Independent target file residue subsets are not represented')
+            ids = [r['chain']['id'] for r in spec.get('include', [])]
+            components.extend(independent_structure_components(path, ids))
+        elif kind in {'protein', 'dna', 'rna', 'ligand'}:
+            # Only the typed compiler's explicit binder sequence is a known
+            # fixed-sequence binder. User YAML chain names alone imply no role.
+            if (kind == 'protein' and job.mode in {'protein_binder', 'peptide_binder'}
+                    and params.get('boltzgen_binder_sequence')
+                    and spec.get('id') == 'B'
+                    and spec.get('sequence') == params['boltzgen_binder_sequence']):
+                continue
+            if kind == 'ligand':
+                component = {k: spec[k] for k in ('id', 'smiles', 'ccd') if k in spec}
+                if not (component.get('smiles') or component.get('ccd')):
+                    raise ValueError('Independent ligand needs native SMILES or CCD identity')
+            else:
+                sequence = spec.get('sequence')
+                if not isinstance(sequence, str) or not sequence.isalpha():
+                    continue  # Native generated length/range entity, not a fixed target.
+                component = {'id': spec['id'], 'sequence': sequence}
+            components.append({'type': kind, **component})
+    return [dict(owner_job_id=job.id, name=None, components=components,
+                 chains=[c['id'] for c in components], source_bindings=identity,
+                 sha256=identity_digest(identity))] if components else []
+
+
 async def declared_targets(source, session):
     """Nearest independently declared inputs, following persisted ancestry only."""
     pending, seen = [source], set()
@@ -88,13 +170,32 @@ async def declared_targets(source, session):
             return [dict(owner_job_id=job.id, name=t.get('name'), target_path=t.get('target_path'),
                          chains=t.get('chains'))
                     for t in targets if isinstance(t, dict)]
+        if job.model_id == 'boltzgen' and params.get('boltzgen_yaml_config'):
+            return boltzgen_targets(job)
+        if job.model_id == 'boltzgen':
+            components = []
+            for key, kind, label in [('boltzgen_dna_template_seq', 'dna', 'B'),
+                                      ('boltzgen_dna_primer_seq', 'dna', 'C')]:
+                if params.get(key):
+                    components.append({'id': label, 'type': kind, 'sequence': params[key]})
+            if params.get('boltzgen_ligand_smiles'):
+                components.append({'id': 'L', 'type': 'ligand', 'smiles': params['boltzgen_ligand_smiles']})
+            if components:
+                target_path = params.get('boltzgen_target_pdb_path') or params.get('target_pdb')
+                if target_path:
+                    from paths import resolve_runtime_data_path
+                    components = independent_structure_components(resolve_runtime_data_path(target_path),
+                        params.get('boltzgen_target_chains', params.get('target_chains'))) + components
+                return [dict(owner_job_id=job.id, name=None, components=components,
+                             chains=[c['id'] for c in components])]
         if params.get('boltzgen_target_pdb_path'):
             return [dict(owner_job_id=job.id, name=None, target_path=params['boltzgen_target_pdb_path'],
-                         chains=params.get('target_chains'))]
+                         chains=params.get('boltzgen_target_chains', params.get('target_chains')))]
         if params.get('target_pdb'):
             saved = (params.get('blind_pose_selected') or {}).get('target_context') or {}
             return [dict(owner_job_id=saved.get('owner_job_id', job.id),
-                         name=saved.get('name'), target_path=params['target_pdb'])]
+                         name=saved.get('name'), target_path=params['target_pdb'],
+                         chains=params.get('antigen_chains') or params.get('target_chains'))]
         ancestors = [params.get('selection_source_job_id'), getattr(job, 'parent_job_id', None),
                      params.get('iteration_source_job_id'), params.get('parent_job_id'), root_id(job)]
         parents = [await session.get(Job, identity)

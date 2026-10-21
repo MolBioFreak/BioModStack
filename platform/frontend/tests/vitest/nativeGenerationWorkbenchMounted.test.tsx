@@ -10,6 +10,8 @@ import Plot from 'react-plotly.js';
 import { api } from '../../src/lib/api';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
 import type { NativeGenerationRecord } from '../../src/lib/nativeBinderResults';
+import { BinderCandidateSets } from '../../src/components/BinderCandidateSets';
+import { readRoundStorage, writeRoundStorage, type CandidateSet, type CandidateRef } from '../../src/lib/binderSelectedRound';
 import { document as evidenceDocument, fixture as paeFixture } from '../fixtures/scientificViewerFixture';
 vi.mock('../../src/components/MolstarViewerImpl', () => ({ default: (props: any) => <div data-shared-workbench data-structure-url={props.structureUrl} /> }));
 vi.mock('react-plotly.js', () => ({ default: () => <div data-native-chart /> }));
@@ -21,23 +23,141 @@ const records = [
     { candidate_key: 'historical', metrics: { seq_length: 10, dsasa: null }, structures: [primary] },
 ];
 const original = api.defaults.adapter;
-beforeEach(() => { vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))); });
+beforeEach(() => { localStorage.clear(); sessionStorage.clear(); window.history.replaceState({}, '', '/'); vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))); });
 let tree: ReactTestRenderer;
 let client: QueryClient;
 const flush = async () => { for (let i = 0; i < 10; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); }); };
 const text = (node: any): string => typeof node === 'string' ? node : (node.children ?? []).map(text).join('');
 const button = (name: string) => tree.root.findAllByType('button').find(node => text(node) === name)!;
 async function mount(props: Partial<React.ComponentProps<typeof NativeBinderGenerationResults>> = {}, rows: NativeGenerationRecord[] = records) {
-    api.defaults.adapter = async config => ({ config, status: 200, statusText: 'OK', headers: {}, data: { records: rows.slice(config.params.offset, config.params.offset + config.params.limit), total: rows.length, offset: config.params.offset, limit: config.params.limit, receipt: { settings: { enabled: false } }, publication: { source: 'native' }, artifacts: [] } });
+    api.defaults.adapter = async config => {
+        let data: unknown;
+        if (config.method !== 'get') throw new Error(`Unexpected ${config.method} ${config.url}`);
+        if (config.url === '/api/jobs/job') data = { id: 'job', saved_selection_sets: [] };
+        else if (config.url === '/api/binder-continuation/job/round') data = { job_id: 'job', state: 'not_requested', steps: {}, errors: {} };
+        else if (config.url === '/api/jobs/job/binder-evidence') data = { records: [], total: 0, offset: 0, limit: 100 };
+        else if (config.url === '/api/jobs/job/generation-results') data = { records: rows.slice(config.params.offset, config.params.offset + config.params.limit), total: rows.length, offset: config.params.offset, limit: config.params.limit, receipt: { settings: { enabled: false } }, publication: { source: 'native' }, artifacts: [] };
+        else throw new Error(`Unexpected ${config.method} ${config.url}`);
+        return { config, status: 200, statusText: 'OK', headers: {}, data };
+    };
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     await act(async () => { tree = create(<QueryClientProvider client={client}><ThemeProvider><NativeBinderGenerationResults jobId="job" {...props} /></ThemeProvider></QueryClientProvider>); });
     await flush();
 }
 afterEach(async () => { await act(async () => tree?.unmount()); client?.clear(); api.defaults.adapter = original; vi.unstubAllGlobals(); });
 
+it('uses page scrolling for candidates and readable measurements below the full-width molecule', async () => {
+    await mount({}, [{ ...records[0], metrics: { seq_length: 80, native_identity: 'unbroken-native-value-'.repeat(20) } }]);
+    const scroll = tree.root.findByProps({ 'aria-label': 'Candidate table horizontal scroll' });
+    expect(scroll.props.className).toBe('overflow-x-auto');
+    expect(tree.root.findByProps({ 'aria-label': 'Native result pages' })).toBeTruthy();
+    const inspector = tree.root.findByProps({ 'aria-label': 'Candidate structure inspector' });
+    expect(inspector.parent!.props.className).toContain('items-start');
+    const molecule = tree.root.findByProps({ 'aria-label': 'Published molecule and measurements' });
+    expect(molecule.props.className).not.toContain('grid-cols');
+    const metrics = tree.root.findByProps({ 'aria-label': 'Native measurements' });
+    expect(metrics.props.className).not.toMatch(/overflow|max-h/);
+    expect(text(metrics)).toContain('unbroken-native-value-'.repeat(20));
+    expect(metrics.findAllByType('dd').every(node => node.props.className.includes('[overflow-wrap:anywhere]'))).toBe(true);
+    expect(tree.root.findByType(StructureWorkbench).props.structureDocumentId).toBe('primary');
+    await act(async () => tree.root.findByProps({ 'aria-label': 'Published document' }).props.onChange({ target: { value: '1' } }));
+    expect(tree.root.findByType(StructureWorkbench).props.structureDocumentId).toBe('alternate');
+});
+
+it('advances read-back revisions and removes the most recently designated final set', async () => {
+    const original = api.defaults.adapter;
+    const sets: CandidateSet[] = [];
+    const requests: any[] = [];
+    const candidates: CandidateRef[] = [{ kind: 'native_document', job_id: 'child', artifact_id: 'exact', target_state: 'B' }];
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    let tree: ReactTestRenderer | undefined;
+    api.defaults.adapter = async config => {
+        if (config.method === 'post' && config.url === '/api/jobs/job/review-filter-sets') {
+            const payload = JSON.parse(config.data);
+            requests.push(payload);
+            sets.unshift({ ...payload, id: `set-${requests.length}` });
+        } else if (config.method !== 'get' || config.url !== '/api/jobs/job') throw Error(`Unexpected ${config.method} ${config.url}`);
+        return { config, status: 200, statusText: 'OK', headers: {}, data: { id: 'job', saved_selection_sets: [...sets] } };
+    };
+    const flush = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); }); };
+    const click = async (label: string) => {
+        await act(async () => tree!.root.findAllByType('button').find(button => button.children.join('') === label)!.props.onClick());
+        await flush();
+    };
+    try {
+        await act(async () => { tree = create(<QueryClientProvider client={client}><BinderCandidateSets jobId="job" candidates={candidates} onLoad={() => {}} /></QueryClientProvider>); });
+        await flush();
+        await click('Mark final');
+        await click('Remove final');
+        expect(requests).toEqual([
+            expect.objectContaining({ revision: 1, candidate_refs: candidates, design_ids: [], final_designation: { designated: true } }),
+            expect.objectContaining({ revision: 2, candidate_refs: candidates, design_ids: [], final_designation: { designated: false, supersedes_set_id: 'set-1' } }),
+        ]);
+        expect(tree!.root.findAllByType('button').some(button => button.children.join('').includes('revision 2'))).toBe(true);
+    } finally {
+        await act(async () => tree?.unmount());
+        client.clear(); api.defaults.adapter = original;
+    }
+});
+
+it('honors an explicit native candidate link over a previously persisted inspection', async () => {
+    writeRoundStorage('job', 'inspection:native', { scope: '[null,null,null]', key: 'first', document: primary });
+    window.history.replaceState({}, '', '/?native_candidate=second');
+    await mount();
+    expect(tree.root.findByType(StructureWorkbench).props.structureUrl).toBe(alternate.download_url);
+    expect(text(tree.root.findByProps({ 'aria-label': 'Candidate structure inspector' }))).toContain('Candidate 2');
+});
+
+it('searches native candidate IDs independently of friendly row labels', async () => {
+    await mount({}, [{ ...records[0], candidate_key: 'publication-key', candidate_id: 'producer-ID-731' }, records[1]]);
+    for (const value of ['publication-key', 'PRODUCER-id-731']) {
+        await act(async () => tree.root.findByProps({ 'aria-label': 'Search candidates' }).props.onChange({ target: { value } }));
+        const table = tree.root.findByProps({ 'aria-label': 'Candidate data table' });
+        expect(table.findByType('tbody').findAllByType('tr')).toHaveLength(1);
+        expect(text(table)).toContain('Candidate 1');
+        expect(text(table)).not.toContain('Candidate 2');
+    }
+});
+
+it('deselects matching exact refs without removing other states, off-view rows or descendant refs', async () => {
+    const current: CandidateRef = { kind: 'native_document', job_id: 'job', artifact_id: 'primary', target_state: 'A' };
+    const otherState: CandidateRef = { ...current, target_state: 'B' };
+    const descendant: CandidateRef = { ...current, job_id: 'child' };
+    const offView: CandidateRef = { kind: 'design', job_id: 'job', design_id: 'd2' };
+    writeRoundStorage('job', 'selection', [current, otherState, descendant, offView]);
+    const onChange = vi.fn();
+    await mount({ onSelectedNativeSourcesChange: onChange }, [
+        { candidate_key: 'current-only', candidate_ref: current, structures: [primary], metrics: {} }, records[1],
+    ]);
+    await act(async () => tree.root.findByProps({ 'aria-label': 'Search candidates' }).props.onChange({ target: { value: 'current-only' } }));
+    await act(async () => button('Deselect matching').props.onClick());
+    expect(readRoundStorage('job', 'selection', [])).toEqual([otherState, descendant, offView]);
+    expect(tree.root.findByProps({ 'aria-label': 'Select Candidate 1' }).props.checked).toBe(false);
+    await act(async () => button('Clear filters').props.onClick());
+    expect(tree.root.findByProps({ 'aria-label': 'Select Candidate 2' }).props.checked).toBe(true);
+});
+
+it('navigates the filtered ranking and keeps exact document links without changing selection', async () => {
+    const inspect = vi.fn(), selected = vi.fn();
+    await mount({ onInspectDocument: inspect, onSelectedDesignIdsChange: selected });
+    await act(async () => button('Add metric filter').props.onClick());
+    await act(async () => tree.root.findByProps({ 'aria-label': 'Filter 1 minimum' }).props.onChange({ target: { value: '80' } }));
+    await act(async () => tree.root.findByProps({ 'aria-label': 'Sort by seq_length' }).props.onClick());
+    await act(async () => tree.root.findByProps({ 'aria-label': 'Sort by seq_length' }).props.onClick());
+    await act(async () => button('Candidate 2').props.onClick());
+    expect(button('Previous candidate').props.disabled).toBe(true);
+    await act(async () => button('Next candidate').props.onClick());
+    expect(inspect).toHaveBeenLastCalledWith(records[0], primary);
+    expect(button('Next candidate').props.disabled).toBe(true);
+    expect(new URLSearchParams(window.location.search).get('native_candidate')).toBe('first');
+    expect(tree.root.findAllByType('a').find(node => text(node) === 'Download exact native document')?.props.href).toBe(primary.download_url);
+    expect(selected).not.toHaveBeenCalled();
+});
+
 it('opens the published structure on first demand with no confidence or viewer-local artifact invention', async () => {
     const selected = vi.fn(); await mount({ onSelectedDesignIdsChange: selected });
-    expect(tree.root.findAllByType(StructureWorkbench)).toHaveLength(0);
+    // Candidate-first landing now supplies the first inspection demand.
+    expect(tree.root.findAllByType(StructureWorkbench)).toHaveLength(1);
     await act(async () => button('Structure').props.onClick()); await flush();
     const props = tree.root.findByType(StructureWorkbench).props;
     expect(props).toMatchObject({ mode: 'standard', structureUrl: primary.download_url, structureContentSha256: primary.sha256, alphafoldView: false, showSequenceTrack: true, showMeasurements: true, showM6Workbench: true, hideControls: false });
@@ -49,6 +169,22 @@ it('opens the published structure on first demand with no confidence or viewer-l
     expect(tree.root.findAllByType('details').filter(node => ['Native receipt and accounting', 'Native files and provenance', 'Selected record: complete native readback'].includes(text(node.findByType('summary')))).every(node => !node.props.open)).toBe(true);
     expect(props.workbenchCollapsed).toBe(true);
 });
+it('a BC2 display preference opens the unique complex without selecting it for execution', async () => {
+    const binder = { artifact_id: 'binder', binder_chains: 'A', target_chains: null, download_url: '/binder.cif' };
+    const complex = { artifact_id: 'complex', binder_chains: 'B', target_chains: 'A', download_url: '/complex.cif' };
+    const changed = vi.fn();
+    await mount({ onSelectedNativeSourcesChange: changed, adapter: {
+        key: 'bc2-display', title: 'BC2', label: () => 'Design 61 · Variant 1',
+        preferredDocument: row => row.structures!.find(doc => doc.artifact_id === 'complex'),
+        fetchPage: async () => ({ records: [{ candidate_key: 'exact', structures: [binder, complex] }], total: 1, offset: 0, limit: 100, receipt: {}, publication: {} }),
+    } });
+    expect(tree.root.findByType(StructureWorkbench).props.structureDocumentId).toBe('complex');
+    expect(tree.root.findByProps({ 'aria-label': 'Published document' }).props.value).toBe('1');
+    expect(changed).not.toHaveBeenCalled();
+    await act(async () => tree.root.findByProps({ 'aria-label': 'Published document' }).props.onChange({ target: { value: '0' } }));
+    expect(tree.root.findByType(StructureWorkbench).props.structureDocumentId).toBe('binder');
+    expect(changed).not.toHaveBeenCalled();
+});
 it('matches exact artifact AND state and keeps the exact download', async () => {
     await mount({ selectedDesignId: 'd1', artifactId: 'alternate', targetState: 'B' });
     expect(tree.root.findByType(StructureWorkbench).props).toMatchObject({ structureUrl: alternate.download_url, format: 'cif' });
@@ -59,20 +195,22 @@ it.each([{ selectedDesignId: 'absent' }, { selectedDesignId: 'd1', artifactId: '
 });
 it('separates ordinary inspection, document inspection and parent bulk selection', async () => {
     const inspect = vi.fn(), selected = vi.fn(); await mount({ onInspectDocument: inspect, onSelectedDesignIdsChange: selected, selectedDesignIds: ['other-page'] });
-    await act(async () => button('second').props.onClick()); expect(inspect).toHaveBeenLastCalledWith(records[1], undefined); expect(selected).not.toHaveBeenCalled();
+    await act(async () => button('Candidate 2').props.onClick()); expect(inspect).toHaveBeenLastCalledWith(records[1], alternate); expect(selected).not.toHaveBeenCalled();
+    await act(async () => button('Data table').props.onClick());
+    await act(async () => button('Candidate 1').props.onClick());
     await act(async () => tree.root.findByProps({ 'aria-label': 'Published document' }).props.onChange({ target: { value: '1' } })); expect(inspect).toHaveBeenLastCalledWith(records[0], alternate);
     await act(async () => button('Data table').props.onClick());
     const checkbox = tree.root.findByProps({ 'aria-label': 'Select this page' });
     await act(async () => checkbox.props.onChange({ target: { checked: true } })); expect(selected).toHaveBeenLastCalledWith(['other-page', 'd1', 'd2']);
 });
 it('supports local inspection for historical records and documents without callbacks', async () => {
-    await mount(); await act(async () => button('second').props.onClick()); expect(tree.root.findByType(StructureWorkbench).props.structureUrl).toBe(alternate.download_url);
+    await mount(); await act(async () => button('Candidate 2').props.onClick()); expect(tree.root.findByType(StructureWorkbench).props.structureUrl).toBe(alternate.download_url);
     await act(async () => button('Data table').props.onClick());
-    await act(async () => button('historical').props.onClick()); expect(tree.root.findByType(StructureWorkbench).props.structureUrl).toBe(primary.download_url);
+    await act(async () => button('Candidate 3').props.onClick()); expect(tree.root.findByType(StructureWorkbench).props.structureUrl).toBe(primary.download_url);
     expect(tree.root.findAllByType('a').filter(node => String(node.props.href).startsWith('/designs/'))).toHaveLength(0);
 });
 it('plots native zeros, omits missing numeric pairs, and selects the actual row from the chart', async () => {
-    await mount(); await act(async () => button('Custom charts').props.onClick());
+    await mount(); await act(async () => button('Custom charts').props.onClick()); await flush();
     const chart = tree.root.findAllByType(Plot).find(node => node.props.data[0].type === 'scatter')!;
     expect(chart.props.data[0]).toMatchObject({ x: [80, 90], y: [0, 12], customdata: ['first', 'second'] });
     expect(text(tree.root)).toContain('2 plotted · 1 omitted');
@@ -127,7 +265,8 @@ it('keeps sequence, prediction sample, native PAE and persisted directional evid
     api.defaults.adapter = async config => {
         requests.push(config);
         let data: unknown;
-        if (config.url?.endsWith('/generation-results')) data = { records, total: records.length, offset: 0, limit: 1000, receipt: {}, publication: {} };
+        if (config.url === '/api/jobs/job' && config.method === 'get') data = { id: 'job', saved_selection_sets: [] };
+        else if (config.url?.endsWith('/generation-results')) data = { records, total: records.length, offset: 0, limit: 1000, receipt: {}, publication: {} };
         else if (config.url?.endsWith('/round')) data = { job_id: 'job', state: 'not_requested', steps: {}, errors: {} };
         else if (config.url?.endsWith('/binder-evidence')) data = { schema_version: 1, job_id: 'job', records: [record], total: 1, offset: 0, limit: 100 };
         else if (config.url === '/api/designs/prediction') data = { id: evidenceDocument.candidateId, scientific_structure_document: evidenceDocument };

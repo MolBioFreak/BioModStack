@@ -108,9 +108,25 @@ class RemoteTelemetry:
         observed = started
         try:
             connection = RemoteConnection.from_target(target)
-            response = await run_remote(connection, ['python3', '-', connection.remote_root],
-                                        input_bytes=PROBE, timeout=6, establishment_timeout=ESTABLISHMENT_SECONDS)
-            observed = getattr(response, "command_started", None) or started
+            # Initial collection plus three retries, only for command timeouts.
+            # Publish once below; intermediate failures must not reset counters or
+            # replace the last sample while other workers continue independently.
+            retries = 0
+            while True:
+                attempt_started = time.monotonic()
+                try:
+                    response = await run_remote(
+                        connection, ['python3', '-', connection.remote_root],
+                        input_bytes=PROBE, timeout=15,
+                        establishment_timeout=ESTABLISHMENT_SECONDS)
+                    break
+                except RemoteExecutionTimeout:
+                    if retries == 3:
+                        raise
+                    retries += 1
+            observed = getattr(response, "command_started", None)
+            if observed is None:
+                observed = attempt_started
             sample["observed_at"] = (datetime.fromisoformat(sample["observed_at"]) +
                                      timedelta(seconds=observed - started)).isoformat()
             if len(response.stdout.encode()) > 65536:

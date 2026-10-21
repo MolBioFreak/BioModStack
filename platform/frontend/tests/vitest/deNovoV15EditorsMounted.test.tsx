@@ -381,6 +381,15 @@ it.each(['native', 'validated'] as const)('selected %s Redesign submits retained
     expect(posts.filter(p => p.url === '/api/jobs').at(-1)?.body.execution_target_id).toBeNull();
 });
 
+it.each([[null], [''], [[]]])('exact Redesign preserves an explicit cleared design role (%j) instead of selecting the first chain', async cleared => {
+    await selectedTransport(); const changed = vi.fn();
+    const prepared = await prepareDeNovoContinuation(source, 'redesign');
+    await mount(<ProteinLocalRedesignTemplate onBack={vi.fn()} initialValues={{ ...prepared, design_chains: cleared, context_chains: [] }} onDraftChange={changed} />);
+    await waitForViewer();
+    expect(changed.mock.lastCall![0].design_chains).toEqual([]);
+    expect(changed.mock.lastCall![0].context_chains).toEqual([]);
+});
+
 it('Redesign clear ignores a late selected-source read and replacement drops old ancestry', async () => {
     await selectedTransport(); const changed = vi.fn();
     let finish!: (value: unknown) => void;

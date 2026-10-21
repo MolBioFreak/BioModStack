@@ -5,6 +5,8 @@ import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { afterEach, expect, test, vi } from 'vitest';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
 import StructureViewerPane from '../../src/components/StructureViewerPane';
+import { BinderResultComparison } from '../../src/components/BinderResultComparison';
+import { BatchComparePane } from '../../src/components/BatchComparePane';
 import { DesignComparePane } from '../../src/components/DesignComparePane';
 // GPU canvas is outside this routing test; actual StructureViewerPane remains mounted.
 vi.mock('../../src/components/MolstarViewer', () => ({ default: () => <div data-test-gpu-canvas /> }));
@@ -28,18 +30,22 @@ let renderer: ReactTestRenderer | undefined;
 let client: QueryClient;
 const original = api.defaults.adapter;
 
-test('ResultsViewer mounts both optional selected actions without a selection', async () => {
+test('ResultsViewer demand-mounts optional selected actions and forwards the exact selection', async () => {
     await setup('/designs/parent');
-    const actions = renderer!.root.findByType(BlindPoseSelectedControls);
-    expect(actions.props.sourceJobId).toBe('parent');
-    expect(actions.props.selectedDesignIds).toEqual([]);
-    expect(text(actions)).toContain('Blind pose (experimental)');
-    expect(text(actions)).toContain('LigandMPNN interface context (experimental)');
+    expect(renderer!.root.findAllByType(BlindPoseSelectedControls)).toHaveLength(0);
+    const disclosure = renderer!.root.findAllByType('details').find(node => node.findAllByType('summary').some(summary => text(summary).startsWith('Selected candidate operations')))!;
+    await act(async () => disclosure.props.onToggle({ currentTarget: { open: true } })); await flush();
+    expect(renderer!.root.findAllByType(BlindPoseSelectedControls)).toHaveLength(0);
     const tableTab = renderer!.root.findAllByType('button').find(button => text(button).includes('Data Table'))!;
     await act(async () => tableTab.props.onClick()); await flush();
     const row = renderer!.root.findAllByType('tr').find(candidate => text(candidate).includes('a-0'))!;
     await act(async () => row.findByType('input').props.onChange({ target: { checked: true } }));
-    expect(renderer!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(['a-0']);
+    await flush();
+    const actions = renderer!.root.findByType(BlindPoseSelectedControls);
+    expect(actions.props.sourceJobId).toBe('parent');
+    expect(actions.props.selectedDesignIds).toEqual(['a-0']);
+    expect(text(actions)).toContain('Blind pose (experimental)');
+    expect(text(actions)).toContain('LigandMPNN interface context (experimental)');
 });
 
 test('BC2 native records supplement the mounted Design selection and comparison workbench', async () => {
@@ -49,33 +55,56 @@ test('BC2 native records supplement the mounted Design selection and comparison 
         if (url.endsWith('/settings')) return { ok: true, json: async () => ({ requested_settings: {}, effective_settings: {} }) };
         if (!url.includes('/bindcraft2-results?')) throw new Error(`Unexpected native request ${url}`);
         return { ok: true, json: async () => ({ schema: 'bindcraft2.native-readback.v1', arm: 'arm-A',
-            stage: new URL(url, 'http://test').searchParams.get('stage'), offset: 0, limit: 25, total: 1,
+            stage: new URL(url, 'http://test').searchParams.get('stage'), offset: 0, limit: 25, total: 2,
             arms: [{ name: 'arm-A', accounting: {} }], accounting: {}, metadata: null,
-            rows: [{ design: 'native-evidence', native_score: 0 }],
+            rows: [{ design: 'native-evidence', design_id: 'bc2-1', native_score: 0 }, { design: 'second-native', design_id: 'bc2-2', native_score: 1 }],
         }) };
     }));
     try {
         await setup('/designs/parent?launch_context_id=context', false, [design('bc2-1', 'bindcraft2'), design('bc2-2', 'bindcraft2')], { ...job, model_id: 'bindcraft2', mode: 'campaign', design_count: 2 });
         expect(renderer!.root.findByType(BindCraft2NativeActions).props.launchContextId).toBe('context');
-        expect(text(renderer!.root)).toContain('native-evidence');
+        const readback = renderer!.root.findAllByType('details').find(node => text(node.findByType('summary')) === 'Selected record: complete native readback')!;
+        await act(async () => readback.props.onToggle({ currentTarget: { open: true } }));
+        expect(text(readback)).toContain('native-evidence');
+        const settings = renderer!.root.findAllByType('details').find(node => text(node.findByType('summary')) === 'Native campaign settings')!;
+        expect(paths).not.toContain('/api/models/bindcraft2/campaign/jobs/parent/settings');
+        await act(async () => settings.props.onToggle({ currentTarget: { open: true } })); await flush();
         expect(paths).toContain('/api/models/bindcraft2/campaign/jobs/parent/settings');
         await act(async () => renderer!.root.findByProps({ 'aria-label': 'Native records' }).props.onChange({ target: { value: 'retained' } }));
         await flush();
         expect(paths.some(path => path.includes('stage=retained'))).toBe(true);
         const button = (label: string) => renderer!.root.findAllByType('button').find(node => text(node).includes(label))!;
-        await act(async () => button('Data Table').props.onClick()); await flush();
-        const row = renderer!.root.findAllByType('tr').find(node => text(node).includes('bc2-1'))!;
+        await act(async () => button('Data table').props.onClick()); await flush();
+        const row = renderer!.root.findAllByType('tr').find(node => text(node).includes('native-evidence'))!;
         await act(async () => row.findByType('input').props.onChange({ target: { checked: true } }));
         expect(renderer!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(['bc2-1']);
-        expect(button('Compare Designs')).toBeDefined();
-        expect(button('Compare Jobs')).toBeDefined();
-        await act(async () => button('Compare Designs').props.onClick()); await flush();
+        await act(async () => button('Compare result sets').props.onClick()); await flush();
+        await act(async () => renderer!.root.findAllByType('button').find(node => text(node) === 'Candidates' && node.props['aria-pressed'] !== undefined)!.props.onClick()); await flush();
         expect(renderer!.root.findByType(DesignComparePane).props.designs.map((row: { id: string }) => row.id)).toEqual(['bc2-1', 'bc2-2']);
         expect(text(renderer!.root)).toContain('native-evidence');
-        await act(async () => button('Data Table').props.onClick()); await flush();
+        await act(async () => button('Return to results').props.onClick()); await flush();
         expect(renderer!.root.findByType(BlindPoseSelectedControls).props.selectedDesignIds).toEqual(['bc2-1']);
         expect(calls.some(call => call.url === '/api/designs' && call.params.job_id === 'parent')).toBe(true);
     } finally { vi.unstubAllGlobals(); }
+});
+
+test('new run selections open Runs even after Candidates was selected, without discarding candidates', async () => {
+    await setup('/designs/parent');
+    const mountComparison = (jobIds: string[]) => <MemoryRouter><QueryClientProvider client={client}><ThemeProvider><BinderResultComparison jobId="parent" jobIds={jobIds} selectedDesignIds={['a-0']} /></ThemeProvider></QueryClientProvider></MemoryRouter>;
+    await act(async () => renderer!.update(mountComparison(['parent']))); await flush();
+    const button = (label: string) => renderer!.root.findAllByType('button').find(node => text(node) === label)!;
+    await act(async () => button('Compare result sets').props.onClick()); await flush();
+    await act(async () => button('Candidates').props.onClick()); await flush();
+    expect(renderer!.root.findByType(DesignComparePane).props.selectedDesignIds).toEqual(['a-0']);
+    await act(async () => button('Return to results').props.onClick());
+    await act(async () => renderer!.update(mountComparison(['parent', 'child']))); await flush();
+    expect(button('Runs').props['aria-pressed']).toBe(true);
+    expect(renderer!.root.findByType(BatchComparePane).props.jobIds).toEqual(['parent', 'child']);
+    expect(renderer!.root.findAllByType(DesignComparePane)).toHaveLength(0);
+    await act(async () => button('Candidates').props.onClick()); await flush();
+    expect(renderer!.root.findByType(DesignComparePane).props.selectedDesignIds).toEqual(['a-0']);
+    await act(async () => renderer!.update(mountComparison(['parent', 'child']))); await flush();
+    expect(button('Candidates').props['aria-pressed']).toBe(true);
 });
 
 test('mounted selected actions submit exact independent subsets and read native result', async () => {
@@ -171,7 +200,9 @@ test.each([null, 'context'])('Results MD handoff preserves explicit destination 
     const source = { ...job, id: sourceId, params: { launch_context_id: 'source-not-destination' } };
     const candidate = { ...design(designId, 'boltz2'), job_id: sourceId };
     await setup(`/designs/${sourceId}?design_id=${designId}${destination ? `&launch_context_id=${destination}` : ''}`, false, [candidate], source);
-    await act(async () => renderer!.root.findByType(BinderSelectedControls).props.onStartMD(designId));
+    const mdButton = renderer!.root.findAllByType('button').find(button => text(button) === 'Use as MD starting structure')!;
+    expect(mdButton).toBeDefined();
+    await act(async () => mdButton.props.onClick());
     await flush();
     const location = renderer!.root.findAllByType('span').find(node => node.props['data-location'])!.props['data-location'];
     const url = new URL(location, 'http://test');
@@ -184,20 +215,52 @@ test.each([null, 'context'])('Results MD handoff preserves explicit destination 
     expect(url.searchParams.has('artifact_id')).toBe(false); // Existing MD seam explicitly uses Design primary.
 });
 
+test.each([
+    ['bindcraft2', 'campaign', {}],
+    ['boltzgen', 'protein_binder', {}],
+    ['boltzgen', 'nanobody_binder', {}],
+    ['boltzgen', 'peptide_binder', {}],
+    ['ppiflow', 'protein_binder', {}],
+    ['ppiflow', 'antibody_binder', {}],
+    ['ppiflow', 'nanobody_binder', {}],
+    ['rfantibody', 'design', {}],
+    ['rfantibody2', 'design', {}],
+    ['esmfold2', 'blind_pose', {}],
+    ['ligandmpnn', 'interface_context', {}],
+    ['binder_refinement', 'refine', {}],
+    ['fampnn', 'binder_design', {}],
+    ['esmfold2', 'blind_pose', { binder_round_step: { root_job_id: 'root' } }],
+    ['boltz2', 'complex', { binder_round_request: {} }],
+])('mounted binder Results %s/%s has no MD entry, with implicit and exact candidate selection', async (model_id, mode, provenance) => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ requested_settings: {}, effective_settings: {}, arms: [], rows: [], accounting: {}, total: 0 }) })));
+    try {
+        for (const exact of [false, true]) {
+            await setup(`/designs/parent${exact ? '?design_id=candidate' : ''}`, false, [design('candidate', model_id)], { ...job, model_id, mode, provenance } as typeof job);
+            expect(text(renderer!.root)).toContain('TEST mixed models');
+            expect(text(renderer!.root)).not.toContain('Use as MD starting structure');
+            expect(text(renderer!.root)).not.toContain('Use as GROMACS MD starting structure');
+            expect(renderer!.root.findAllByType(BinderSelectedControls).every(control => !('onStartMD' in control.props))).toBe(true);
+            await act(async () => renderer!.unmount()); client.clear();
+        }
+    } finally { vi.unstubAllGlobals(); }
+});
+
 const returnUri = '/projects/p/experiments/g/domains/d?workspace=protein&section=results';
 const setup = async (entry: string, children = false, suppliedRows = rows, selectedJob = job, extraJobs: typeof job[] = []) => {
     calls.length = 0;
+    window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener() {}, removeEventListener() {} });
     api.defaults.adapter = async config => {
-        const url = String(config.url); const params = config.params ?? {};
+        const url = String(config.url); const params = url === '/api/designs/query' && config.method === 'post' ? JSON.parse(String(config.data)) : config.params ?? {};
         calls.push({ url, params });
         let data: unknown;
         const jobs = (children ? [{ ...selectedJob, design_count: 0 }, { ...selectedJob, id: 'child', parent_job_id: 'parent' }] : [selectedJob]).concat(extraJobs);
         if (url === '/api/jobs') data = { jobs, total: jobs.length };
+        else if (url.endsWith('/generation-results')) data = { records: [], total: 0, offset: 0, limit: 100, publication: {}, receipt: {} };
         else if (url.endsWith('/workflow-results')) data = { job: selectedJob, composition: { sha256: 'c'.repeat(64) }, tabs: [], source: { artifacts: [{ artifact_id: 'source', label: 'Source structure', content_url: '/api/jobs/parent/workflow-results/artifacts/source', bytes: 100 }] }, artifacts: [], receipt: { schema_version: 1, validator_summaries: [{ validator: 'esmfold2', state: 'complete' }] }, counts: { persisted_design_rows: suppliedRows.length } };
         else if (url.startsWith('/api/jobs/') && !url.includes('/backbones')) data = jobs.find(item => item.id === url.split('/').pop()) ?? job;
         else if (url === '/api/models/frustrampnn/integration') data = { model_id: 'frustrampnn', enabled: false };
         else if (url === '/api/launch-contexts/context') data = { schema: 'bms.launch-context.v1', launch_context_id: 'context', project_id: 'p', global_experiment_id: 'g', domain_experiment_id: 'd', workflow_id: null, workflow_revision_id: null, pinned_gpu: null, return_uri: returnUri, source_receipt_id: 'r', state: 'issued', issued_at: '2026-08-09T00:00:00Z', expires_at: '2026-08-09T00:30:00Z' };
-        else if (url === '/api/designs') {
+        else if ((url === '/api/designs' && config.method === 'get') || (url === '/api/designs/query' && config.method === 'post')) {
             const modelOf = (row: typeof suppliedRows[number]) => (row.provenance as Record<string, unknown>).producer_model_id;
             let selected = params.model_id ? suppliedRows.filter(row => modelOf(row) === params.model_id) : suppliedRows;
             if (extraJobs.length) selected = selected.filter(row => row.job_id === params.job_id);
@@ -216,12 +279,12 @@ const setup = async (entry: string, children = false, suppliedRows = rows, selec
     await act(async () => { renderer = create(<MemoryRouter initialEntries={[entry]}><QueryClientProvider client={client}><ThemeProvider><Location /><ProjectReturnBanner /><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></ThemeProvider></QueryClientProvider></MemoryRouter>); });
     await flush();
 };
-afterEach(async () => { await act(async () => renderer?.unmount()); client?.clear(); api.defaults.adapter = original; sessionStorage.clear(); });
+afterEach(async () => { await act(async () => renderer?.unmount()); client?.clear(); api.defaults.adapter = original; sessionStorage.clear(); localStorage.clear(); });
 
 test('mounted off-first-page model scopes on server without a bulk load and survives switching', async () => {
     await setup('/designs/parent?result_model=protenix&launch_context_id=context');
-    expect(calls.some(call => call.url === '/api/designs' && call.params.model_id === 'protenix')).toBe(true);
-    expect(calls.filter(call => call.url === '/api/designs').every(call => call.params.limit < 500)).toBe(true);
+    expect(calls.some(call => call.url === '/api/designs/query' && call.params.model_id === 'protenix')).toBe(true);
+    expect(calls.filter(call => call.url === '/api/designs' || call.url === '/api/designs/query').every(call => call.params.limit < 500)).toBe(true);
     const modelNav = renderer!.root.findByProps({ 'aria-label': 'Workflow model results' });
     expect(modelNav.findAllByType('button').find(button => text(button) === 'Protenix')?.props['aria-pressed']).toBe(true);
     const link = renderer!.root.findAllByType('a').find(item => item.props['aria-label'] === 'Return to Project context');
@@ -329,7 +392,7 @@ test.each(plrModels)('PLR %s opens the exact producer-scoped Design without conf
     const nav = renderer!.root.findByProps({ 'aria-label': 'Workflow model results' });
     expect(nav.findAllByType('button').map(text)).toEqual(expect.arrayContaining(['All results', ...plrModels.map(([, modelLabel]) => modelLabel)]));
     expect(nav.findAllByType('button').find(button => text(button) === label)?.props['aria-pressed']).toBe(true);
-    expect(calls.filter(call => call.url === '/api/designs').every(call => call.params.model_id === model)).toBe(true);
+    expect(calls.filter(call => call.url === '/api/designs' || call.url === '/api/designs/query').every(call => call.params.model_id === model)).toBe(true);
     const pane = renderer!.root.findByType(StructureViewerPane);
     expect(pane.props.selectedDesignId).toBe(`${model}-0`);
     expect(pane.props.selectedDesign.provenance.model_id).toBe('protein_modification_experimental');

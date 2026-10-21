@@ -24,6 +24,29 @@ export function continuationHref(source: StructureSourceSelection, destination: 
     return `/submit?${query}`;
 }
 
+// Read only the selected materialization's producer document, never Job/input roles.
+export function continuationRoleDefaults(native: StructureMaterialization, destination: DeNovoDestination, draft: Record<string, unknown> = {}): Record<string, unknown> {
+    const document = native.source_identity?.producer_document as Record<string, unknown> | undefined;
+    const read = (key: string): string[] | undefined => {
+        const value = document?.[key];
+        return typeof value === 'string' ? value.split(',').map(v => v.trim()).filter(Boolean)
+            : Array.isArray(value) && value.every(v => typeof v === 'string') ? [...value] : undefined;
+    };
+    const binder = read('binder_chains'), target = read('target_chains');
+    const defaults: Record<string, unknown> = destination === 'redesign'
+        // Missing evidence leaves the existing editor defaults alone; it is not
+        // an authored clear or a new requirement to choose a chain again.
+        ? binder?.length === 1 ? {
+            design_chains: binder[0],
+            ...(target === undefined ? {} : { context_chains: target }),
+        } : {}
+        : destination === 'sequence' && binder?.length ? {
+            binder_chains: binder.join(','), design_chain: binder.join(','),
+            ...(target === undefined ? {} : { target_chains: target.join(','), target_chain: target.join(',') }),
+        } : {};
+    return { ...defaults, ...draft }; // Own-property clears, nulls and edits win.
+}
+
 export function nativeSequenceInput(model: string, prepared: StructureMaterialization, native: StructureMaterialization = prepared): Record<string, unknown> {
     return model === 'caliby_experimental'
         ? { ensembles: [{ ensemble_id: 'selected-candidate', states: [{ state_id: 'selected-structure', path: native.path }] }] }
@@ -36,7 +59,7 @@ export async function prepareDeNovoContinuation(source: StructureSourceSelection
     const prepared = destination !== 'redesign' || native.format === 'pdb' ? native
         : await materializeExactStructure({ path: native.path, expected_sha256: native.sha256, output_format: 'pdb', ...(native.model_number == null ? {} : { model_number: native.model_number }) });
     const retainedSource = native.source_structure ?? source;
-    const common = { source_structure: retainedSource, _source_prepared: prepared, _source_native_prepared: native };
+    const common = { ...continuationRoleDefaults(native, destination), source_structure: retainedSource, _source_prepared: prepared, _source_native_prepared: native };
     if (destination === 'sequence') return { ...common, ...nativeSequenceInput('proteinmpnn', prepared) };
     if (destination === 'redesign') return { ...common, input_structure: prepared.path,
         model_number: prepared.model_number ?? source.model_number,

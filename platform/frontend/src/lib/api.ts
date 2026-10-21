@@ -1106,7 +1106,18 @@ export interface NativeConfidenceArtifacts {
 }
 export const fetchNativeConfidenceArtifacts = (id: string) => api.get<NativeConfidenceArtifacts>(`/api/designs/${id}/confidence-artifacts`);
 
-export const fetchDesignById = (id: string, jobId?: string) => api.get<Design>(`/api/designs/${id}`, { params: { job_id: jobId } });
+export interface DesignDocumentSelection { artifact_id?: string; target_state?: string }
+export const fetchDesignById = (id: string, jobId?: string, document?: DesignDocumentSelection) =>
+    api.get<Design>(`/api/designs/${id}`, { params: { job_id: jobId, ...document } });
+export interface NativeStructureDocumentResponse {
+    status: 'ok' | 'unavailable'; reason: string | null;
+    candidate_ref: { kind: 'native_document'; job_id: string; artifact_id: string };
+    document: import('../structureViewer/contracts/structureIdentity').StructureDocumentRef | null;
+}
+export const fetchNativeStructureDocument = (jobId: string, artifactId: string, targetState?: string | null) =>
+    api.get<NativeStructureDocumentResponse>(`/api/designs/native/${encodeURIComponent(jobId)}/${encodeURIComponent(artifactId)}/document`, { params: { target_state: targetState } });
+export const fetchNativeResidueMetrics = (jobId: string, artifactId: string, targetState?: string | null) =>
+    api.get<unknown>(`/api/designs/native/${encodeURIComponent(jobId)}/${encodeURIComponent(artifactId)}/residue-metrics`, { params: { target_state: targetState } });
 export interface ProteinBaseBundleImportRequest {
     bundle_path: string;
     dataset_name: string;
@@ -2803,8 +2814,12 @@ export const fetchBackboneSummary = (jobId: string, artifactGroup?: string) =>
 export const toggleDesignFavorite = (designId: string, isFavorite: boolean) =>
     api.post(`/api/designs/${designId}/favorite`, { is_favorite: isFavorite });
 
-export const downloadDesignPdb = (designId: string) =>
-    `/api/designs/${designId}/pdb`;
+export const downloadDesignPdb = (designId: string, document?: DesignDocumentSelection) => {
+    const query = new URLSearchParams();
+    if (document?.artifact_id !== undefined) query.set('artifact_id', document.artifact_id);
+    if (document?.target_state !== undefined) query.set('target_state', document.target_state);
+    return `/api/designs/${designId}/pdb${query.size ? `?${query}` : ''}`;
+};
 
 // Per-residue metrics for charts
 export interface ResidueMetrics {
@@ -2816,8 +2831,8 @@ export interface ResidueMetrics {
 }
 
 // Fetch per-residue metrics for a design
-export const fetchDesignResidueMetrics = (designId: string) =>
-    api.get<ResidueMetrics>(`/api/designs/${designId}/residue-metrics`);
+export const fetchDesignResidueMetrics = (designId: string, document?: DesignDocumentSelection) =>
+    api.get<ResidueMetrics>(`/api/designs/${designId}/residue-metrics`, { params: document });
 
 export interface ChainMetric {
     type: 'protein' | 'dna' | 'rna' | 'ligand' | 'unknown';
@@ -2852,8 +2867,8 @@ export interface FampnnPsceProfile {
 }
 
 // Fetch per-chain metrics for a design
-export const fetchChainMetrics = (designId: string) =>
-    api.get<unknown>(`/api/designs/${designId}/chain-metrics`);
+export const fetchChainMetrics = (designId: string, document?: DesignDocumentSelection) =>
+    api.get<unknown>(`/api/designs/${designId}/chain-metrics`, { params: document });
 
 // Power control (eco mode + manual)
 export const fetchPowerProfile = () =>

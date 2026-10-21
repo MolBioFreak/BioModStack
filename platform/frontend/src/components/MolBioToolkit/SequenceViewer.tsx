@@ -5,6 +5,7 @@
  */
 
 import { SeqViz } from "seqviz";
+import { restrictionSpecialCase } from '../../lib/restrictionSpecialCases';
 import {
     useCallback,
     useEffect,
@@ -126,14 +127,17 @@ export function buildRestrictionMapAnnotations({ occurrences, selectedEnzymes, s
         ? occurrence.site_segments.map(([start, end], segmentIndex) => {
             const range = transformRangeForDisplayStrand(start, end, sequenceLength, sourceDisplayStrand, resolvedDisplayStrand);
             const sourceDirection = occurrence.orientation === 'forward' ? 1 : -1;
+            const special = restrictionSpecialCase(occurrence.enzyme_id);
             const semantic = occurrence.nicks.length > 0 ? 'nick' : occurrence.double_strand_events.length > 0 ? 'DSB' : 'recognition';
             return {
-                name: `${occurrence.canonical_name} · ${occurrence.certainty} ${semantic}`,
+                name: occurrence.canonical_name,
+                description: `${occurrence.canonical_name} · ${occurrence.certainty} ${special ? 'motif match (special case)' : semantic} · ${occurrence.orientation} · recognition ${start}–${end} (0-based, end-exclusive)${special ? ` · ${special}` : ''}`,
+                labelLane: true,
                 start: range.start,
                 end: range.end,
                 direction: transformDirectionForDisplayStrand(sourceDirection, sourceDisplayStrand, resolvedDisplayStrand),
-                color: occurrence.certainty === 'possible' ? '#f59e0b' : semantic === 'nick' ? '#f472b6' : '#22d3ee',
-                type: `restriction_${semantic}`,
+                color: special || occurrence.certainty === 'possible' ? '#f59e0b' : semantic === 'nick' ? '#f472b6' : '#22d3ee',
+                type: special ? 'restriction_special_case' : `restriction_${semantic}`,
                 id: `${occurrence.occurrence_id}:segment:${segmentIndex}`,
             };
         })

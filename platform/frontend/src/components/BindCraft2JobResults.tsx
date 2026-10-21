@@ -1,7 +1,8 @@
 import { useState } from 'react';
+import { BinderResultFamily } from './BinderResultFamily';
 import { NativeBinderGenerationResults, type Props as WorkbenchProps } from './NativeBinderGenerationResults';
 import { BindCraft2Trajectory, BindCraft2OutcomeSummary } from './BindCraft2Trajectory';
-import { bc2Page, bc2Label, fetchBC2Page } from '../lib/bindcraft2Results';
+import { bc2Page, bc2Label, bc2SourceRecord, bc2MetricLabel, bc2PreferredColumns, bc2PreferredDocument, fetchBC2Page, fetchBC2TrajectoryNames } from '../lib/bindcraft2Results';
 import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { isAxiosError } from 'axios';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
@@ -112,7 +113,7 @@ export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchCon
       const saved = JSON.parse(new URLSearchParams(window.location.search).get('native_scope') ?? 'null');
       if (Array.isArray(saved) && saved[0] === 'bindcraft2' && ['trajectory', 'draw', 'retained', 'document', 'attempt'].includes(saved[2])) return { arm: saved[1], stage: saved[2], offset: 0, limit: 100 };
     } catch { /* ordinary results route */ }
-    return { arm: null, stage: workbench.selectedDesignId || workbench.artifactId ? 'retained' : 'trajectory', offset: 0, limit: 100 };
+    return { arm: null, stage: workbench.selectedDesignId || workbench.artifactId ? 'retained' : 'draw', offset: 0, limit: 100 };
   });
   const settings = useQuery<CampaignSettings>({
     queryKey: ['bindcraft2-campaign-settings', jobId], enabled: settingsOpen,
@@ -128,6 +129,9 @@ export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchCon
     queryFn: ({ signal }) => fetchBC2Page(jobId, query.arm, query.stage, 0, signal),
     retry: false, refetchOnWindowFocus: false,
   });
+  const names = useQuery({ queryKey: ['bindcraft2-design-names', jobId, query.arm],
+    enabled: resultsAvailable, retry: false, refetchOnWindowFocus: false,
+    queryFn: ({ signal }) => fetchBC2TrajectoryNames(jobId, query.arm, signal) });
   return <div className="space-y-2 min-w-0">
     {data && <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
       <div className="flex flex-wrap items-center gap-3">
@@ -151,10 +155,11 @@ export function BindCraft2JobResults({ jobId, resultsAvailable = true, launchCon
             const screen = keys.find(key => /^screen · .+\.iptm · last recorded$/.test(key));
             const refine = (screen && keys.includes(screen.replace(/^screen/, 'refine')) ? screen.replace(/^screen/, 'refine') : undefined)
               ?? keys.find(key => /^refine · .+\.iptm · last recorded$/.test(key));
-            return { x: screen, y: refine ?? screen, distribution: refine ?? screen, headline: [refine ?? screen, 'duration_seconds'].filter((key): key is string => !!key) };
+            return screen ? { x: screen, y: refine ?? screen, distribution: refine ?? screen, headline: [refine ?? screen, 'duration_seconds'].filter((key): key is string => !!key) }
+              : { x: keys.includes('pLDDT') ? 'pLDDT' : undefined, y: keys.includes('i_pTM') ? 'i_pTM' : undefined, distribution: keys.includes('i_pTM') ? 'i_pTM' : undefined, headline: ['i_pTM', 'pLDDT'].filter(key => keys.includes(key)) };
           },
           fetchPage: async (offset, signal) => bc2Page(offset === 0 ? data : await fetchBC2Page(jobId, data.arm, query.stage, offset, signal)),
-          label: bc2Label, preferredColumns: ['seq_length', 'duration_seconds', 'terminated', ...Object.keys(bc2Page(data).records[0]?.metrics ?? {}).filter(key => /^(?:refine|screen) · .+\.iptm · last recorded$/.test(key)).sort((a, b) => Number(b.startsWith('refine · ')) - Number(a.startsWith('refine · '))).slice(0, 1), ...(query.stage === 'trajectory' ? [] : ['outcome', 'rank'])],
+          label: row => bc2Label(row, names.data), related: row => <BinderResultFamily jobId={jobId} candidate={{ ...row, native_record: bc2SourceRecord(row) }} candidateLabel={bc2Label(row, names.data)} />, preferredColumns: bc2PreferredColumns(data), metricLabel: bc2MetricLabel, preferredDocument: bc2PreferredDocument,
           inspect: row => <BindCraft2Trajectory key={row.candidate_key} jobId={jobId} row={row} arm={data.arm} />,
           summary: rows => <><BindCraft2OutcomeSummary rows={rows} />{data.analytics?.complete === false && <p role="status">Trajectory analytics are incomplete. Plots cover available recorded observations only.</p>}</>,
         }} />}

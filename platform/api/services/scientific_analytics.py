@@ -133,10 +133,13 @@ def projection(design, *, records=(), invalid_reason=None, model_id=None, source
         if model_id == 'protenix':
             from services.protenix_scientific_consumer import SCALAR_DESCRIPTORS
             expected = {d['metric_key']: (d['unit'], d['scope']) for d in SCALAR_DESCRIPTORS}
+        if model_id == 'bindcraft2':
+            from services.bindcraft2_scientific_consumer import DESCRIPTORS
+            expected = {k: (unit, scope) for k, (unit, scope, _) in DESCRIPTORS.items()}
         for key, (unit, scope) in expected.items():
             states[key] = MetricState(state='unavailable' if invalid_reason in ('missing_scalar_source', 'missing_native_scalar_authority') else 'invalid', value=None, reason_code=invalid_reason)
             descriptors[key] = MetricDescriptor(metric_id=key, source=source_kind, scope=scope,
-                unit=unit, direction='lower' if key in ('filter_rmsd', 'gpde', 'complex_pde', 'complex_ipde') else 'higher',
+                unit=unit, direction='lower' if key in ('filter_rmsd', 'gpde', 'complex_pde', 'complex_ipde', 'i_pAE', 'Binder_RMSD') else 'higher',
                 producer_version='unverified', derivation_version='unverified')
             sources[key] = None
     signature = json.dumps({k:d.model_dump() for k,d in sorted(descriptors.items())}, sort_keys=True, separators=(',',':'))
@@ -150,7 +153,7 @@ def projection(design, *, records=(), invalid_reason=None, model_id=None, source
 
 def native_scalar_owner(job):
     return job is not None and (revision_for_job(job) == 1
-        or job.model_id == 'boltz_cp_experimental'
+        or job.model_id in ('boltz_cp_experimental', 'bindcraft2')
         or ((job.provenance or {}).get('external_import') or {}).get('provider') == 'boltz_api')
 
 
@@ -182,6 +185,9 @@ async def persisted_projection(design, session):
         if job is None or not native_scalar_owner(job):
             raise ValueError('native projection requires owning Job')
         try:
+            if job.model_id == 'bindcraft2':
+                from services.bindcraft2_scientific_consumer import scalar_projections
+                return (await scalar_projections([design], job, session))[design.id]
             if revision_for_job(job) != 1:
                 # Plotly's compact query defers structure/provenance columns.
                 # Resolve them asynchronously, never trigger implicit ORM I/O.
@@ -289,7 +295,7 @@ async def bulk_scalar_projections(designs, owners, session):
 
         for design in designs:
             job = owners.get(design.job_id)
-            if not native_scalar_owner(job):
+            if not native_scalar_owner(job) or job.model_id == 'bindcraft2':
                 continue
             try:
                 if revision_for_job(job) != 1:
@@ -314,6 +320,11 @@ async def bulk_scalar_projections(designs, owners, session):
         return result
 
     result = await run_in_threadpool(collect)
+    from services.bindcraft2_scientific_consumer import scalar_projections
+    for job in owners.values():
+        selected = [d for d in designs if d.job_id == job.id]
+        if job.model_id == 'bindcraft2' and selected:
+            result.update(await scalar_projections(selected, job, session))
     for design in designs:
         if native_scalar_owner(owners.get(design.job_id)) and design.id not in result:
             result[design.id] = await persisted_projection(await session.get(Design, design.id), session)

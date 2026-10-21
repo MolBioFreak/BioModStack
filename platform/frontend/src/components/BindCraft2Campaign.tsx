@@ -156,7 +156,7 @@ export function BindCraft2Campaign({
     };
     const sources = Array.isArray(display.targets) ? display.targets : [];
     const targetNames = sources.map((target: unknown, index: number) => {
-        if (target && typeof target === 'object' && 'name' in target && target.name) return String(target.name);
+        if (target && typeof target === 'object' && 'name' in target && target.name) return String(target.name).split('/').pop()!;
         return `Target ${index + 1}`;
     });
     const modality = shortValue(display.modality);
@@ -209,7 +209,8 @@ export function BindCraft2Campaign({
                         <dl className="mt-4 space-y-3 text-sm">
                             <div><dt style={{ color: 'var(--text-secondary)' }}>Binder modality</dt><dd className="mt-0.5 font-medium">{modality}</dd></div>
                             <div><dt style={{ color: 'var(--text-secondary)' }}>Targets</dt><dd className="mt-0.5 font-medium">{targetNames.length ? targetNames.join(' · ') : shortValue(display.target, 'Choose sources or a native target preset')}</dd></div>
-                            <div><dt style={{ color: 'var(--text-secondary)' }}>Binder lengths</dt><dd className="mt-0.5 font-medium">{shortValue(display.binder_lengths)}</dd></div>
+                            {sources.map((source, index) => { const target = (source && typeof source === 'object' ? source : {}) as Record<string, unknown>; return <div key={index}><dt style={{ color: 'var(--text-secondary)' }}>{targetNames[index]} · binding site</dt><dd className="mt-0.5">Chains: {shortValue(target.chains, 'native selection')} · Hotspots: {shortValue(target.hotspots, 'not specified')}</dd></div>; })}
+                            <div><dt style={{ color: 'var(--text-secondary)' }}>Binder lengths (residues)</dt><dd className="mt-0.5 font-medium">{shortValue(display.binder_lengths)}</dd></div>
                             <div className="grid grid-cols-2 gap-3">
                                 <div><dt style={{ color: 'var(--text-secondary)' }}>Attempt budget</dt><dd className="mt-0.5 font-medium">{missingAttempt ? 'Required: explicit positive integer; no default' : shortValue(attempt)}</dd></div>
                                 <div><dt style={{ color: 'var(--text-secondary)' }}>Retained designs</dt><dd className="mt-0.5 font-medium">{shortValue(display.number_of_final_designs)}</dd></div>

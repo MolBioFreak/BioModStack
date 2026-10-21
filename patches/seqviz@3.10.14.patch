@@ -1,8 +1,59 @@
 diff --git a/dist/index.js b/dist/index.js
-index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..68c350c02e2dd28380277ebe766f1a470d509c23 100644
+index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..d19ecc171848ff86be76d8728781828b4ca1bfe9 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -1823,6 +1823,9 @@ var InfiniteScroll = /** @class */ (function (_super) {
+@@ -352,7 +352,11 @@ var Circular = /** @class */ (function (_super) {
+     Circular.contextType = centralIndexContext_1.default;
+     Circular.getDerivedStateFromProps = function (nextProps) {
+         var lineHeight = 14;
+-        var annotationsInRows = (0, elementsToRows_1.stackElements)(nextProps.annotations, nextProps.seq.length);
++        // Recognition sites share a track: stacking thousands inward otherwise drops
++        // native IDs at negative radii. Their individual names remain in the label owner.
++        var annotationsInRows = (0, elementsToRows_1.stackElements)(nextProps.annotations.filter(function (a) { return !a.labelLane; }), nextProps.seq.length);
++        var recognitionSites = nextProps.annotations.filter(function (a) { return a.labelLane; });
++        if (recognitionSites.length) annotationsInRows.unshift(recognitionSites);
+         /**
+          * find the element labels that need to be rendered outside the plasmid. This is done for
+          * annotation names/etc for element titles that don't fit within the width of the element
+@@ -377,13 +381,13 @@ var Circular = /** @class */ (function (_super) {
+                 if (ann.start >= ann.end)
+                     annLengthBases += seqLength; // crosses zero-index
+                 var annLengthPixels = 2 * circumf * (annLengthBases / seqLength);
+-                if (annNameLengthPixels < annLengthPixels) {
++                if (!ann.labelLane && annNameLengthPixels < annLengthPixels) {
+                     inlinedLabels.push(ann.id);
+                 }
+                 else {
+                     var end = ann.end, id = ann.id, name_1 = ann.name, start = ann.start;
+                     var type = "annotation";
+-                    outerLabels.push({ end: end, id: id, name: name_1, start: start, type: type });
++                    outerLabels.push({ end: end, id: id, name: name_1, description: ann.description, start: start, type: type });
+                 }
+             });
+             innerRadius -= lineHeight;
+@@ -1140,6 +1144,12 @@ var Linear = /** @class */ (function (_super) {
+         var primerFwdRows = (0, elementsToRows_1.createMultiRows)((0, elementsToRows_1.stackElements)(vetAnnotations(primers.filter(function (p) { return p.direction === 1; })), seq.length), bpsPerBlock, arrSize);
+         var primerRevRows = (0, elementsToRows_1.createMultiRows)((0, elementsToRows_1.stackElements)(vetAnnotations(primers.filter(function (p) { return p.direction === -1; })), seq.length), bpsPerBlock, arrSize);
+         var annotationRows = (0, elementsToRows_1.createMultiRows)((0, elementsToRows_1.stackElements)(vetAnnotations(annotations), seq.length), bpsPerBlock, arrSize);
++        // Label lanes are display layout only: never expand native feature coordinates.
++        annotationRows = annotationRows.map(function (rows) {
++            var ordinary = rows.map(function (row) { return row.filter(function (a) { return !a.labelLane; }); }).filter(function (row) { return row.length; });
++            var lanes = rows.reduce(function (all, row) { return all.concat(row.filter(function (a) { return a.labelLane; }).map(function (a) { return [a]; })); }, []);
++            return ordinary.concat(lanes);
++        });
+         var searchRows = search && search.length ? (0, elementsToRows_1.createSingleRows)(search, bpsPerBlock, arrSize) : new Array(arrSize).fill([]);
+         var highlightRows = (0, elementsToRows_1.createSingleRows)(highlights, bpsPerBlock, arrSize);
+         var translationRows = translations.length
+@@ -1174,7 +1184,7 @@ var Linear = /** @class */ (function (_super) {
+                 blockHeight += translationRows[i].length * elementHeight * 2; // * 2 to account for the translation handle
+             }
+             if (annotationRows[i].length) {
+-                blockHeight += annotationRows[i].length * elementHeight;
++                blockHeight += annotationRows[i].reduce(function (n, row) { return n + (row[0].labelLane ? 2 : 1); }, 0) * elementHeight;
+             }
+             if (cutSiteRows[i].length) {
+                 blockHeight += lineHeight; // space for cutsite name
+@@ -1823,6 +1833,9 @@ var InfiniteScroll = /** @class */ (function (_super) {
          _this.componentDidMount = function () {
              _this.handleScrollOrResize(); // ref should now be set
              window.addEventListener("resize", _this.handleScrollOrResize);
@@ -12,7 +63,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..68c350c02e2dd28380277ebe766f1a47
          };
          _this.componentDidUpdate = function (prevProps, prevState, snapshot) {
              if (!_this.scroller.current) {
-@@ -1843,6 +1846,10 @@ var InfiniteScroll = /** @class */ (function (_super) {
+@@ -1843,6 +1856,10 @@ var InfiniteScroll = /** @class */ (function (_super) {
          };
          _this.componentWillUnmount = function () {
              window.removeEventListener("resize", _this.handleScrollOrResize);
@@ -23,7 +74,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..68c350c02e2dd28380277ebe766f1a47
          };
          /**
           * more info at: https://reactjs.org/docs/react-component.html#getsnapshotbeforeupdate
-@@ -1956,18 +1963,24 @@ var InfiniteScroll = /** @class */ (function (_super) {
+@@ -1956,18 +1973,24 @@ var InfiniteScroll = /** @class */ (function (_super) {
          };
          _this.incrementScroller = function (incAmount) {
              _this.stopIncrementingScroller();
@@ -54,7 +105,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..68c350c02e2dd28380277ebe766f1a47
              }
          };
          /**
-@@ -1985,7 +1998,7 @@ var InfiniteScroll = /** @class */ (function (_super) {
+@@ -1985,7 +2008,7 @@ var InfiniteScroll = /** @class */ (function (_super) {
              }
              // not relevant, some other type of event, not a selection drag
              if (e.buttons !== 1) {
@@ -63,7 +114,57 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..68c350c02e2dd28380277ebe766f1a47
                      _this.stopIncrementingScroller();
                  }
                  return;
-@@ -3840,6 +3853,11 @@ var SelectionHandler = /** @class */ (function (_super) {
+@@ -2370,7 +2393,7 @@ var SeqBlock = /** @class */ (function (_super) {
+         }
+         // height and yDiff of annotations
+         var annYDiff = translationYDiff + translationHeight;
+-        var annHeight = elementHeight * annotationRows.length;
++        var annHeight = elementHeight * annotationRows.reduce(function (n, row) { return n + (row[0].labelLane ? 2 : 1); }, 0);
+         // height and ydiff of the index row
+         var elementGap = primerRevRows.length + primerRevRows.length + annotationRows.length + translationRows.length ? 3 : 0;
+         var indexRowYDiff = annYDiff + annHeight + elementGap;
+@@ -2450,7 +2473,7 @@ var hoverOtherAnnotationRows = function (className, opacity) {
+  * Render each row of annotations into its own row.
+  * This is not a default export for sake of the React component displayName.
+  */
+-var AnnotationRows = function (props) { return (React.createElement("g", null, props.annotationRows.map(function (anns, i) { return (React.createElement(AnnotationRow, { key: "annotation-linear-row-".concat(anns[0].id, "-").concat(props.firstBase, "-").concat(props.lastBase), annotations: anns, bpsPerBlock: props.bpsPerBlock, findXAndWidth: props.findXAndWidth, firstBase: props.firstBase, fullSeq: props.fullSeq, height: props.elementHeight, inputRef: props.inputRef, lastBase: props.lastBase, seqBlockRef: props.seqBlockRef, width: props.width, y: props.yDiff + props.elementHeight * i })); }))); };
++var AnnotationRows = function (props) { var laneY = props.yDiff; return (React.createElement("g", null, props.annotationRows.map(function (anns, i) { var y = laneY + (anns[0].labelLane ? props.elementHeight : 0); laneY += props.elementHeight * (anns[0].labelLane ? 2 : 1); return (React.createElement(AnnotationRow, { key: "annotation-linear-row-".concat(anns[0].id, "-").concat(props.firstBase, "-").concat(props.lastBase), annotations: anns, bpsPerBlock: props.bpsPerBlock, findXAndWidth: props.findXAndWidth, firstBase: props.firstBase, fullSeq: props.fullSeq, height: props.elementHeight, inputRef: props.inputRef, lastBase: props.lastBase, seqBlockRef: props.seqBlockRef, width: props.width, y: y })); }))); };
+ exports["default"] = AnnotationRows;
+ /**
+  * A single row of annotations. Multiple of these may be in one seqBlock
+@@ -2515,7 +2538,7 @@ var SingleNamedElement = function (props) {
+     var availableCharacters = Math.floor((width - 40) / annotationCharacterWidth);
+     // Ellipsize or hide the name if it's too long.
+     var displayName = name;
+-    if (name.length > availableCharacters) {
++    if (!element.labelLane && name.length > availableCharacters) {
+         var charactersToShow = availableCharacters - 1;
+         if (charactersToShow < 3) {
+             // If we can't show at least three characters, don't show any.
+@@ -2525,8 +2548,11 @@ var SingleNamedElement = function (props) {
+             displayName = "".concat(name.slice(0, charactersToShow), "\u2026");
+         }
+     }
+-    return (React.createElement("g", { id: element.id, transform: "translate(".concat(x, ", ").concat(0.1 * height, ")") },
+-        React.createElement("title", null, name),
++    // A full-width reserved lane lets even one-base recognition spans keep their name.
++    var labelX = element.labelLane ? Math.max(name.length * annotationCharacterWidth / 2 + 4, Math.min(props.width - name.length * annotationCharacterWidth / 2 - 4, x + width / 2)) - x : width / 2;
++    return (React.createElement("g", { id: element.id, "aria-label": element.description || name, transform: "translate(".concat(x, ", ").concat(0.1 * height, ")") },
++        React.createElement("title", null, element.description || name),
++        element.labelLane && React.createElement("path", { d: "M" + (width / 2) + " 0 L" + labelX + " " + (-height / 2 + 7), stroke: color, fill: "none", pointerEvents: "none" }),
+         React.createElement("path", { ref: inputRef(element.id, {
+                 end: end,
+                 name: element.name,
+@@ -2539,7 +2565,7 @@ var SingleNamedElement = function (props) {
+             }, onFocus: function () {
+                 // do nothing
+             }, onMouseOut: function () { return hoverOtherAnnotationRows(element.id, 0.7); }, onMouseOver: function () { return hoverOtherAnnotationRows(element.id, 1.0); } }),
+-        React.createElement("text", { className: "la-vz-annotation-label", cursor: "pointer", dominantBaseline: "middle", fontSize: fontSize, id: element.id, style: style_1.annotationLabel, textAnchor: "middle", x: width / 2, y: height / 2 + 1, onBlur: function () {
++        React.createElement("text", { className: "la-vz-annotation-label", cursor: "pointer", dominantBaseline: "middle", fontSize: fontSize, id: element.id, style: style_1.annotationLabel, textAnchor: "middle", x: labelX, y: element.labelLane ? -height / 2 : height / 2 + 1, "aria-label": element.description || name, onBlur: function () {
+                 // do nothing
+             }, onFocus: function () {
+                 // do nothing
+@@ -3840,6 +3866,11 @@ var SelectionHandler = /** @class */ (function (_super) {
          _this.selectionStarted = false;
          /* was the last selection action a shift click, used for shift-click catch up */
          _this.shiftSelection = false;
@@ -75,7 +176,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..68c350c02e2dd28380277ebe766f1a47
          /* unix time of the last click (awful attempt at detecting double clicks) */
          _this.lastClick = Date.now();
          /** a map between the id of child elements and their associated SelectRanges */
-@@ -3853,10 +3871,41 @@ var SelectionHandler = /** @class */ (function (_super) {
+@@ -3853,10 +3884,41 @@ var SelectionHandler = /** @class */ (function (_super) {
              if (!document)
                  return;
              document.removeEventListener("mouseup", _this.stopDrag);
@@ -117,7 +218,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..68c350c02e2dd28380277ebe766f1a47
          };
          /**
           * Called at start of drag to make sure checkers are reset to default state
-@@ -3959,15 +4008,17 @@ var SelectionHandler = /** @class */ (function (_super) {
+@@ -3959,15 +4021,17 @@ var SelectionHandler = /** @class */ (function (_super) {
          _this.handleLinearSeqEvent = function (e, knownRange) {
              var selection = _this.context;
              var currBase = _this.calculateBaseLinear(e, knownRange);
@@ -138,7 +239,7 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..68c350c02e2dd28380277ebe766f1a47
              }
          };
          /**
-@@ -4054,7 +4105,7 @@ var SelectionHandler = /** @class */ (function (_super) {
+@@ -4054,7 +4118,7 @@ var SelectionHandler = /** @class */ (function (_super) {
                      end = currBase; // nothing special just update the selection
                  }
                  _this.shiftSelection = false;
@@ -147,3 +248,177 @@ index 77fb4fd349799dda9e111887c9b2484fefe4c1e8..68c350c02e2dd28380277ebe766f1a47
              }
          };
          /**
+@@ -4262,7 +4326,7 @@ var SingleAnnotation = function (props) {
+         sweepFWD: true,
+     });
+     var circAnnID = "la-vz-".concat(a.id, "-circular");
+-    return (React.createElement("g", { id: "la-vz-".concat(a.id, "-annotation-circular"), transform: rotation },
++    return (React.createElement("g", { id: "la-vz-".concat(a.id, "-annotation-circular"), "aria-label": a.description || a.name, transform: rotation }, React.createElement("title", null, a.description || a.name),
+         React.createElement("path", { d: namePath, fill: "transparent", id: circAnnID, stroke: "transparent" }),
+         React.createElement("path", { ref: inputRef(a.id, {
+                 direction: a.direction,
+@@ -4631,12 +4695,13 @@ var Labels = /** @class */ (function (_super) {
+         var _this = _super.call(this, props) || this;
+         // set the currently hovered group
+         _this.setHoveredGroup = function (hoveredGroup) {
+-            if (hoveredGroup !== _this.state.hoveredGroup) {
++            if (!_this.state.pinned && hoveredGroup !== _this.state.hoveredGroup) {
+                 _this.setState({ hoveredGroup: hoveredGroup });
+             }
+         };
+         _this.state = {
+             hoveredGroup: "",
++            pinned: false,
+             labelGroups: [],
+         };
+         return _this;
+@@ -4657,22 +4722,24 @@ var Labels = /** @class */ (function (_super) {
+                     g.forkCoor && (React.createElement("path", { className: "la-vz-label-line", d: "M".concat(fC.x, " ").concat(fC.y, " L").concat(g.textCoor.x, " ").concat(g.textCoor.y), style: style_1.circularLabelLine }))));
+                 if (!g.grouped) {
+                     // just a single name in this position
+-                    return (React.createElement("g", { key: first.id },
++                    return (React.createElement("g", { key: first.id, "aria-label": first.description || first.name }, React.createElement("title", null, first.description || first.name),
+                         labelLines,
+                         React.createElement("text", __assign({ className: "la-vz-circular-label", id: first.id }, g.textCoor, { dominantBaseline: "middle", style: style_1.circularLabel, textAnchor: g.textAnchor, onMouseEnter: function () { return (0, WrappedGroupLabel_1.setHoveredLabelUnderline)(first.id || "", true); }, onMouseLeave: function () { return (0, WrappedGroupLabel_1.setHoveredLabelUnderline)(first.id || "", false); } }), g.name)));
+                 }
+-                else if (first.id === hoveredGroup) {
+-                    // return nothing, this group block needs to be rendered last to be on top of the other elements in the SVG
+-                    return null;
+-                }
+                 // a group of names which should render an overlap block
+-                return (React.createElement("g", { key: "".concat(first.id, "-listener"), id: "".concat(first.id, "-label") },
++                return (React.createElement("g", { key: "".concat(first.id, "-listener"), id: "".concat(first.id, "-label"), "data-seqviz-touch-control": true,
++                    role: "button", tabIndex: 0, "aria-label": "Show annotation names: " + g.labels.map(function (l) { return l.description || l.name; }).join(", "), "aria-expanded": first.id === hoveredGroup,
++                    onMouseDown: function (e) { e.stopPropagation(); }, onMouseUp: function (e) { e.stopPropagation(); },
++                    onClick: function (e) { e.stopPropagation(); _this.setState({ hoveredGroup: first.id, pinned: true }); },
++                    onKeyDown: function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); _this.setState({ hoveredGroup: first.id, pinned: true }); } } },
+                     labelLines,
+                     React.createElement("text", __assign({ className: "la-vz-circular-label", dominantBaseline: "middle", id: first.id, style: style_1.circularLabel, textAnchor: g.textAnchor, onMouseEnter: function () { return _this.setHoveredGroup(first.id || ""); } }, g.textCoor), g.name)));
+             }),
+-            hovered && (React.createElement(WrappedGroupLabel_1.WrappedGroupLabel, { group: hovered, lineHeight: lineHeight, setHoveredGroup: this.setHoveredGroup, size: size }))));
++            hovered && (React.createElement(WrappedGroupLabel_1.WrappedGroupLabel, { group: hovered, yDiff: this.props.yDiff, pinned: this.state.pinned, closeGroup: function () { _this.setState({ hoveredGroup: "", pinned: false }); }, lineHeight: lineHeight, setHoveredGroup: this.setHoveredGroup, size: size }))));
+     };
+     Labels.getDerivedStateFromProps = function (nextProps, prevState) {
++        // Opening/closing a disclosure must not regroup every native site again.
++        if (prevState.labelProps === nextProps) return null;
+         // I'm storing the name position groups in state because hovering and
+         // leaving a hover both trigger a change in whether to render and show
+         // the annotation block, it would be expensive to regroup labels
+@@ -4680,6 +4747,7 @@ var Labels = /** @class */ (function (_super) {
+         return {
+             hoveredGroup: prevState.hoveredGroup,
+             labelGroups: Labels.groupOverlappingLabels(nextProps),
++            labelProps: nextProps,
+         };
+     };
+     /**
+@@ -4898,81 +4966,34 @@ var style_1 = __webpack_require__(15);
+  * the height and width of the resulting annotaiton block
+  */
+ var WrappedGroupLabel = function (props) {
+-    var group = props.group, lineHeight = props.lineHeight, setHoveredGroup = props.setHoveredGroup, _a = props.size, height = _a.height, width = _a.width;
+-    // utility function for calculating the width of the last row before this one
+-    // the +1 after name.length is for a comma
+-    var calcRowWidth = function (row) { return row.reduce(function (acc, label) { return acc + (label.name.length + 1) * SeqViewerContainer_1.CHAR_WIDTH; }, 0); };
+-    // group the labels into rows with a preference with widths less than 200px
+-    var lastRow = function (acc) { return acc[acc.length - 1]; };
+-    var labelRows = group.labels.reduce(function (acc, l) {
+-        var nameWidth = l.name.length * SeqViewerContainer_1.CHAR_WIDTH;
+-        if (nameWidth > width) {
+-            // handle an edge case where the annotation name is MASSIVE and
+-            // greater than the width of the sequence viewer
+-            // split the name into separate rows so it's at max 75% of the
+-            // seq viewer's width, but each still referencing the original label
+-            var maxCharPerRow = Math.floor((width * 0.75) / SeqViewerContainer_1.CHAR_WIDTH);
+-            var splitRegex = new RegExp(".{1,".concat(maxCharPerRow, "}"), "g");
+-            var splitLabelNameRows = l.name.match(splitRegex) || [];
+-            if (splitLabelNameRows.length) {
+-                splitLabelNameRows.forEach(function (splitLabel) {
+-                    acc.push([__assign(__assign({}, l), { name: splitLabel.trim() })]);
+-                });
+-                return acc;
+-            }
+-        }
+-        if (lastRow(acc)) {
+-            // this isn't the first element, check width of last label row
+-            var lastRowWidth = calcRowWidth(lastRow(acc));
+-            if (lastRowWidth + nameWidth <= 200) {
+-                // there's space in the last row for this label as well
+-                acc[acc.length - 1].push(l);
+-                return acc;
+-            }
+-        }
+-        acc.push([l]); // need to make a new row for this label
+-        return acc;
+-    }, []);
+-    // find the grouping's height and width (max row width)
+-    var groupHeight = labelRows.length * lineHeight;
+-    var groupWidth = labelRows.reduce(function (max, row, i) { return Math.max(max, calcRowWidth(row) - (i === labelRows.length - 1 ? SeqViewerContainer_1.CHAR_WIDTH : 0)); }, // no comma on last row, correct
+-    0);
+-    // add one CHAR_WIDTH padding to all sides of label box
+-    var _b = [groupHeight, groupWidth].map(function (x) { return x + 2 * SeqViewerContainer_1.CHAR_WIDTH; }), rectHeight = _b[0], rectWidth = _b[1];
+-    // generate the line between the name and plasmid surface
+-    var forkCoor = group.forkCoor || group.textCoor;
+-    var linePath = group.forkCoor
+-        ? "M".concat(group.textCoor.x, " ").concat(group.textCoor.y, " L").concat(forkCoor.x, " ").concat(forkCoor.y)
+-        : "M".concat(group.lineCoor.x, " ").concat(group.lineCoor.y, " L").concat(forkCoor.x, " ").concat(forkCoor.y);
+-    // find the upper left coordinate for the group. if this is on the right
+-    // side of the plasmid, this is upper left. if it's on the left side of
+-    // the plasmid, it should be upper right
+-    var _c = group.textCoor, x = _c.x, y = _c.y;
+-    x = group.textAnchor === "end" ? x - (group.labels[0].name.length + 3) * SeqViewerContainer_1.CHAR_WIDTH : x; // the +3) is for ",+#"
+-    y -= SeqViewerContainer_1.CHAR_WIDTH;
+-    x = Math.max(x, 2 * SeqViewerContainer_1.CHAR_WIDTH); // prevent overflow of left or right side
+-    x = Math.min(x, width - 2 * SeqViewerContainer_1.CHAR_WIDTH - groupWidth);
+-    y = Math.max(y, 2 * SeqViewerContainer_1.CHAR_WIDTH); // prevent overflow of top and bottom
+-    y = Math.min(y, height - 2 * SeqViewerContainer_1.CHAR_WIDTH - groupHeight);
+-    // add padding to the box by adding/subbing a CHAR_WIDTH from edges
+-    var groupCoor = { x: x, y: y };
+-    var rectCoor = { x: x - SeqViewerContainer_1.CHAR_WIDTH, y: y - SeqViewerContainer_1.CHAR_WIDTH - 2 };
+-    var key = "".concat(group.labels[0].id, "_overlay");
+-    return (React.createElement("g", { key: key, onMouseLeave: function () { return setHoveredGroup(""); } },
+-        React.createElement("path", { className: "la-vz-label-line", d: linePath }),
+-        React.createElement("rect", __assign({ fill: "white", height: rectHeight, stroke: "none", width: rectWidth }, rectCoor)),
+-        React.createElement("text", __assign({}, groupCoor, { style: style_1.svgText }), labelRows.map(function (r, i) { return (
+-        // turn each group of label rows into a text span
+-        // that's vertically spaced from the row above it
+-        // add a comma to all but the last label
+-        React.createElement("tspan", { key: "".concat(key, "_").concat(i), dominantBaseline: "middle", x: groupCoor.x, y: groupCoor.y + (i + 0.5) * lineHeight }, r.map(function (l, i2) { return (
+-        // every label should have its own id (used by selection
+-        // handler) and trigger the hoverCutSite function
+-        // if it's an enzyme
+-        React.createElement(React.Fragment, { key: l.id },
+-            React.createElement("tspan", { className: "la-vz-circular-label", dominantBaseline: "middle", id: l.id, style: style_1.circularLabel, tabIndex: -1, y: groupCoor.y + (i + 0.5) * lineHeight, onMouseLeave: function () { return (0, exports.setHoveredLabelUnderline)(l.id || "", false); }, onMouseOver: function () { return (0, exports.setHoveredLabelUnderline)(l.id || "", true); } }, l.name),
+-            i2 < r.length - 1 || i !== labelRows.length - 1 ? "," : "")); }))); })),
+-        React.createElement("rect", __assign({ fill: "none", height: rectHeight, stroke: "black", strokeWidth: 1.5, width: rectWidth }, rectCoor))));
++    var group = props.group, size = props.size;
++    var width = Math.max(1, Math.min(320, size.width - 16));
++    var height = Math.max(1, Math.min(300, size.height - 16));
++    // HTML scrolling inside the existing SVG label owner keeps arbitrarily dense groups reachable.
++    // Mark controls so host touch bridges never turn menu scrolling into sequence selection.
++    return React.createElement("foreignObject", { x: 8, y: 8 - (props.yDiff || 0), width: width, height: height,
++        "data-seqviz-touch-control": true, className: "la-vz-label-disclosure",
++        onMouseLeave: function () { if (!props.pinned) props.setHoveredGroup(""); },
++        onMouseDown: function (e) { e.stopPropagation(); },
++        onMouseMove: function (e) { e.stopPropagation(); },
++        onMouseUp: function (e) { e.stopPropagation(); },
++        onWheel: function (e) { e.stopPropagation(); },
++        onKeyDown: function (e) { if (e.key === "Escape") props.closeGroup(); }
++    }, React.createElement("div", { xmlns: "http://www.w3.org/1999/xhtml", role: "dialog", "aria-label": "Annotation names", style: { boxSizing: "border-box", height: "100%", display: "flex", flexDirection: "column", background: "white", color: "#222", border: "1px solid #555", borderRadius: 4, font: "12px monospace" } },
++        React.createElement("button", { type: "button", onClick: props.closeGroup, style: { minHeight: 44, flexShrink: 0, cursor: "pointer" } }, "Close annotation names"),
++        React.createElement("div", { tabIndex: 0, "aria-label": "Scrollable annotation names", style: { overflowY: "auto", minHeight: 0, overscrollBehavior: "contain", touchAction: "pan-y" } }, group.labels.map(function (l) {
++            return React.createElement("button", { key: l.id, id: l.id, type: "button", className: "la-vz-circular-label", title: l.description || l.name, "aria-label": l.description || l.name,
++                style: { display: "block", width: "100%", minHeight: 44, textAlign: "left", padding: 8, background: "white", color: "#222", border: 0, borderBottom: "1px solid #ddd", font: "inherit", cursor: "pointer" },
++                onClick: function (e) {
++                    // Selection remains owned by SeqViz's registered native annotation ID.
++                    var router = e.currentTarget.closest(".la-vz-viewer-event-router");
++                    if (router) {
++                        var target = Array.from(router.querySelectorAll("path[id]")).find(function (el) { return el.id === l.id; });
++                        if (target) ["mousedown", "mouseup"].forEach(function (type) { target.dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0, buttons: type === "mousedown" ? 1 : 0 })); });
++                    }
++                }
++            }, l.name);
++        }))));
+ };
+ exports.WrappedGroupLabel = WrappedGroupLabel;
+ var setHoveredLabelUnderline = function (id, underline) {

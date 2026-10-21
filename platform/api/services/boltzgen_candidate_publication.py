@@ -343,7 +343,8 @@ async def _generation_publication(job, output, session, *, publish=False, offset
     by_key = {d.name: d for d in designs}
     records = [{**record, **({'native_metrics': scalar_block(prepared[record['candidate_id']], by_key[record['candidate_id']].id)}
                 if record['candidate_id'] in prepared else {})} for record in report['dispositions']]
-    return generation_workbench({'receipt': report, 'records': records}, publication, offset=offset, limit=limit)
+    page = generation_workbench({'receipt': report, 'records': records}, publication, offset=offset, limit=limit)
+    return await _observation_refs(job, session, page)
 
 
 async def read_published_generation_page(job, session, *, offset=0, limit=100):
@@ -434,7 +435,19 @@ async def read_published_generation_page(job, session, *, offset=0, limit=100):
                    for record, entry in zip(records, index[offset:offset + limit])
                    if 'native_publication' in entry}}
     page = generation_workbench({'receipt': receipt, 'records': records}, subset, limit=limit)
-    return {**page, 'total': len(index), 'offset': offset}
+    return await _observation_refs(job, session, {**page, 'total': len(index), 'offset': offset})
+
+
+async def _observation_refs(job, session, page):
+    from database import JobArtifact
+    artifact = await session.scalar(select(JobArtifact).where(
+        JobArtifact.owner_job_id == job.id, JobArtifact.attempt == (job.retry_count or 0),
+        JobArtifact.logical_path == 'boltzgen/native/filter_summary.json'))
+    if artifact is not None:
+        for record in page['records']:
+            record['candidate_ref'] = {'kind': 'native_observation', 'job_id': job.id,
+                'publication_ref': artifact.id, 'native_record_id': record['candidate_id']}
+    return page
 
 
 async def read_published_generation_results(job, session, *, offset=0, limit=100):

@@ -28,7 +28,7 @@ async function mount(stage = 'draw') {
     await flush();
 }
 async function close() { await act(async () => tree.unmount()); client.clear(); }
-beforeEach(() => { sessionStorage.clear(); posts.length = 0; api.defaults.adapter = async config => {
+beforeEach(() => { localStorage.clear(); sessionStorage.clear(); window.history.replaceState({}, '', '/'); posts.length = 0; api.defaults.adapter = async config => {
     let data: any = [];
     if (config.url?.startsWith('/api/models/')) data = { params: [{ name: 'samples', label: 'Samples', type: 'integer', default: 1 }] };
     if (config.url?.startsWith('/api/designs/')) data = { job_id: 'accepted-owner' };
@@ -75,7 +75,10 @@ it('submits restored mixed or native-only sources through the editable existing 
     await close();
     for (const designIds of [['accepted-design'], []]) {
         client = new QueryClient();
-        await act(async () => { tree = create(<QueryClientProvider client={client}><BinderSelectedControls sourceJobId="job" selectedDesignIds={designIds} selectedNativeSources={readBinderNativeSources('job')} onOpenJob={() => {}} onStartMD={() => {}} /></QueryClientProvider>); });
+        await act(async () => { tree = create(<QueryClientProvider client={client}><BinderSelectedControls sourceJobId="job" selectedDesignIds={designIds} selectedNativeSources={readBinderNativeSources('job')} onOpenJob={() => {}} /></QueryClientProvider>); });
+        await flush();
+        const tools = tree.root.findAllByType('details').find(node => node.findAllByType('summary').some(summary => text(summary) === 'Other model operations and source tools'))!;
+        await act(async () => tools.props.onToggle({ currentTarget: { open: true } }));
         await flush();
         await act(async () => tree.root.findAllByType('input').find(n => n.props.type === 'number')!.props.onChange({ target: { value: '7' } }));
         expect(button('Run selected operation').props.disabled).toBe(false);
@@ -90,7 +93,10 @@ it('inspects only the chosen registered source and reports missing download with
     vi.stubGlobal('fetch', fetcher);
     for (const available of [true, false]) {
         client = new QueryClient();
-        await act(async () => { tree = create(<QueryClientProvider client={client}><BinderSelectedControls sourceJobId="job" selectedDesignIds={[]} selectedNativeSources={[{ job_id: 'job', artifact_id: 'alternate', document: available ? doc('alternate') : undefined }]} onOpenJob={() => {}} onStartMD={() => {}} /></QueryClientProvider>); });
+        await act(async () => { tree = create(<QueryClientProvider client={client}><BinderSelectedControls sourceJobId="job" selectedDesignIds={[]} selectedNativeSources={[{ job_id: 'job', artifact_id: 'alternate', document: available ? doc('alternate') : undefined }]} onOpenJob={() => {}} /></QueryClientProvider>); });
+        await flush();
+        const tools = tree.root.findAllByType('details').find(node => node.findAllByType('summary').some(summary => text(summary) === 'Other model operations and source tools'))!;
+        await act(async () => tools.props.onToggle({ currentTarget: { open: true } }));
         await flush();
         await act(async () => button('Inspect exact native source alternate').props.onClick());
         await flush();

@@ -1,4 +1,6 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { candidateKey, readRoundStorage } from '../lib/binderSelectedRound';
+import { BinderNextRound, type NativeRoundEditorProps } from './BinderNextRound';
 import { useQueries } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { downloadDesignPdb, fetchDesignById, fetchJobById, fetchModelById, fetchFiles } from '../lib/api';
@@ -12,6 +14,9 @@ import { CDRRangeSelector, type CDRDefinition } from './CDRRangeSelector';
 import { EpitopeSelector } from './EpitopeSelector';
 import { parseBC2Document, type BC2Document } from '../lib/bindcraft2StructureInputs';
 import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
+import { blindFixedParameters, roundParameterIsBound } from '../lib/binderRound';
+import { declaredBinderRoleDefaults, type DeclaredDocumentRoles } from '../lib/binderSourceRoles';
+import { nativeParameterDisplay } from '../lib/nativeBinderAuthoring';
 import { ParamField } from './ModelParameterField';
 import { SequenceDesignerSettings } from './SequenceDesignerSettings';
 const ProtonPottsSettings = lazy(() => import('./ProtonPottsSettings').then(module => ({ default: module.ProtonPottsSettings })));
@@ -19,8 +24,9 @@ import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel';
 import { hydrateFrustraMpnnSettings } from './frustrampnn/frustraMpnnSettingsState';
 
-const models = { refine: 'binder_refinement', caliby: 'caliby_binder', fampnn: 'fampnn', proteinmpnn: 'proteinmpnn', protonpottsmpnn: 'protonpottsmpnn', predict_boltz2: 'boltz2', predict_protenix: 'protenix' } as const;
-const modes = { refine: 'refine', caliby: 'design', fampnn: 'binder_design', proteinmpnn: 'design', protonpottsmpnn: 'redesign', predict_boltz2: 'complex', predict_protenix: 'complex' } as const;
+const models = { refine: 'binder_refinement', caliby: 'caliby_binder', fampnn: 'fampnn', proteinmpnn: 'proteinmpnn', protonpottsmpnn: 'protonpottsmpnn', predict_boltz2: 'boltz2', predict_protenix: 'protenix', predict_esmfold2: 'esmfold2' } as const;
+const modes = { refine: 'refine', caliby: 'design', fampnn: 'binder_design', proteinmpnn: 'design', protonpottsmpnn: 'redesign', predict_boltz2: 'complex', predict_protenix: 'complex', predict_esmfold2: 'predict' } as const;
+const roleFields = new Set(['binder_chains', 'design_chain', 'target_chains', 'target_chain']);
 const systemInputs = new Set(['pdb_paths', 'source_identity_json', 'selected_input_dir', 'selected_input_manifest', 'input_pdb', 'sequence', 'sequence_name']);
 const modelFields = (model: UntypedApiValue, operation: Exclude<BinderOperation, 'frustrampnn'>) => {
     const mode = model?.modes?.find((item: UntypedApiValue) => item.id === modes[operation]);
@@ -28,20 +34,24 @@ const modelFields = (model: UntypedApiValue, operation: Exclude<BinderOperation,
         && !(operation === 'protonpottsmpnn' && p.name === 'target_pdb')
         && (!mode?.params?.length || mode.params.includes(p.name)));
 };
-interface Props {
+export interface BinderSelectedControlsProps {
     sourceJobId: string;
     selectedDesignIds: string[];
     selectedNativeSources?: NativeCandidateSource[];
     onOpenJob: (id: string) => void;
-    onStartMD: (designId: string) => void;
     candidateDocuments?: CandidateDocuments;
     launchContextId?: string | null;
     inspectDesignId?: string;
+    editor?: NativeRoundEditorProps;
+    onLegacyFullLoop?: () => void;
+    onClearSelection?: () => void;
 }
 
 /** Reuse global model parameter metadata and native FrustraMPNN settings. */
-export default function BinderSelectedControls({ sourceJobId, selectedDesignIds, selectedNativeSources = [], onOpenJob, onStartMD, candidateDocuments, launchContextId, inspectDesignId }: Props) {
-    const [section, setSection] = useState('sources');
+export function BinderOperationEditor({ sourceJobId, selectedDesignIds, selectedNativeSources = [], onOpenJob, candidateDocuments, launchContextId, inspectDesignId, editor }: BinderSelectedControlsProps) {
+    const editorRef = useRef(editor);
+    editorRef.current = editor;
+    const [section, setSection] = useState(editor ? 'settings' : 'sources');
     const [inspectId, setInspectId] = useState<string | null>(inspectDesignId ?? null);
     useEffect(() => { if (inspectDesignId) { setInspectId(inspectDesignId); setSection('sources'); } }, [inspectDesignId]);
     const [inspectionDocument, setInspectionDocument] = useState<BC2Document | null>(null);
@@ -87,7 +97,9 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
             .catch(reason => { if (current) setSourceError(String(reason)); });
         return () => { current = false; };
     }, [sourceJobId, selectedKey]);
-    const [operation, setOperation] = useState<BinderOperation>('refine');
+    const [legacyOperation, setOperation] = useState<BinderOperation>('refine');
+    const operation = editor?.operation ?? legacyOperation;
+    const touchedRoles = useRef<Record<string, Set<string>>>({ [operation]: new Set(Object.keys(editor?.params ?? {})) });
     const [model, setModel] = useState<UntypedApiValue | null>(null);
     const [settings, setSettings] = useState<Record<string, Record<string, UntypedApiValue>>>({});
     const [frustra, setFrustra] = useState(() => hydrateFrustraMpnnSettings(undefined));
@@ -140,19 +152,47 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
             if (!current) return;
             setModel(data);
             const defaults = Object.fromEntries(modelFields(data, operation)
-                .filter((p: UntypedApiValue) => p.default !== undefined)
-                .map((p: UntypedApiValue) => [p.name, p.default]));
-            setSettings(previous => ({ ...previous, [operation]: { ...defaults, ...previous[operation] } }));
+                .filter((p: UntypedApiValue) => p.default !== undefined && !roleFields.has(p.name) && !(p.defaults_by_task && p.default === null))
+                .map((p: UntypedApiValue) => [p.name, editorRef.current && operation.startsWith('predict_') && blindFixedParameters.has(p.name) ? false : p.default]));
+            if (editorRef.current) editorRef.current.onChange({ ...defaults, ...editorRef.current.params });
+            else setSettings(previous => ({ ...previous, [operation]: { ...defaults, ...previous[operation] } }));
         }).catch(reason => { if (current) setError(String(reason)); });
         return () => { current = false; };
     }, [operation]);
-    const params = settings[operation] ?? {};
-    const updateParam = (key: string, value: UntypedApiValue) => setSettings(previous => ({ ...previous, [operation]: { ...previous[operation], [key]: value } }));
+    const params = editor?.params ?? settings[operation] ?? {};
+    const updateParam = (key: string, value: UntypedApiValue) => {
+        (touchedRoles.current[operation] ??= new Set()).add(key);
+        if (editor) editor.onChange({ ...params, [key]: value });
+        else setSettings(previous => ({ ...previous, [operation]: { ...previous[operation], [key]: value } }));
+    };
+    const roleDocuments = [
+        ...selectedDesignIds.map(id => {
+            const selector = documentSelections[id];
+            const inventory = sourceRows[id]?.documents ?? [];
+            const exact = selector ? inventory.filter(doc => (!selector.artifact_id || doc.artifact_id === selector.artifact_id) && (selector.target_state === undefined || doc.target_state === selector.target_state)) : inventory.filter(doc => doc.primary);
+            const document = exact.length === 1 ? exact[0] : !selector && inventory.length === 1 ? inventory[0] : undefined;
+            return document as DeclaredDocumentRoles | undefined;
+        }),
+        ...selectedNativeSources.map(source => source.document as DeclaredDocumentRoles | undefined),
+    ];
+    const declaredRoleKey = JSON.stringify(operation === 'frustrampnn' ? {} : declaredBinderRoleDefaults(roleDocuments, modelFields(model, operation)));
+    useEffect(() => {
+        const declared = JSON.parse(declaredRoleKey) as Record<string, string | string[]>;
+        const current = editorRef.current?.params ?? settings[operation] ?? {};
+        const updates = Object.fromEntries(Object.entries(declared).filter(([key, value]) => !touchedRoles.current[operation]?.has(key) && JSON.stringify(current[key]) !== JSON.stringify(value)));
+        if (!Object.keys(updates).length) return;
+        if (editorRef.current) editorRef.current.onChange({ ...current, ...updates });
+        else setSettings(previous => ({ ...previous, [operation]: { ...previous[operation], ...updates } }));
+    }, [declaredRoleKey, operation]);
+    const displayParameter = (param: UntypedApiValue) => (roleFields.has(param.name) && !Object.hasOwn(params, param.name)) || (Object.hasOwn(params, param.name) && params[param.name] === null)
+        ? { ...param, default: undefined }
+        : param.defaults_by_task && params.ppiflow_task && !Object.hasOwn(params, param.name)
+            ? { ...param, default: param.defaults_by_task[params.ppiflow_task] ?? param.default } : param;
     const browseFiles = async (path: string) => {
         try { const { data } = await fetchFiles(path); setFileFolder(path); setFileEntries(data.entries); }
         catch (reason) { setError(String(reason)); }
     };
-    const fields = operation === 'frustrampnn' ? [] : modelFields(model, operation);
+    const fields = operation === 'frustrampnn' ? [] : modelFields(model, operation).filter((field: UntypedApiValue) => nativeParameterDisplay(field, params).applicable && (!editor || !(roundParameterIsBound(field.name) || field.name === 'target_pdb') || ['binder_chains', 'target_chains', 'design_chain', 'target_chain'].includes(field.name)));
     const inspectedModel = inspectionDocument?.models.find(model => model.number === inspectionModel) ?? (inspectionDocument?.models.length === 1 ? inspectionDocument.models[0] : undefined);
     const run = async () => {
         setBusy(true); setError(null); setChildren([]);
@@ -171,14 +211,14 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
                 : reason instanceof Error ? reason.message : String(reason));
         } finally { setBusy(false); }
     };
-    return <section aria-label="Selected binder continuation" className="mb-4 text-sm"><BinderWorkflowWorkspace
-        title="Selected candidate workspace" sections={['Sources', 'Operations', 'Settings', 'Review'].map(label => ({ id: label.toLowerCase(), label }))}
+    return <section aria-label="Selected binder continuation" className="bms-binder-controls mb-4 min-w-0 text-sm"><BinderWorkflowWorkspace
+        title={editor ? 'Native settings' : 'Selected candidate workspace'} sections={(editor ? ['Sources', 'Settings'] : ['Sources', 'Operations', 'Settings', 'Review']).map(label => ({ id: label.toLowerCase(), label }))}
         activeSection={section} onSectionChange={setSection}
         summary={<p>Destination: {launchContextId ? `explicit Project launch context ${launchContextId}` : 'standalone (no Project destination)'}. Source ancestry is unchanged.</p>}>
-        <h3 className="font-semibold">Continue selected candidates</h3>
+        {!editor && <h3 className="font-semibold">Continue selected candidates</h3>}
         <p>{selectedCount} selected saved molecules across all pages. Each action starts a separate model-owned round from these exact states; no diagnostic is required.</p>
         <div hidden={section !== 'sources'}><details open className="mt-2"><summary>Selected sources</summary>
-            <ul>{selectedDesignIds.map(id => <li key={id}>{id} · Source Job {sourceRows[id]?.owner ?? sourceJobId}
+            <ul className="space-y-3">{selectedDesignIds.map(id => <li className="space-y-2" key={id}>{id} · Source Job {sourceRows[id]?.owner ?? sourceJobId}
                 <label>Document / state <select aria-label={`Document for ${id}`} value={JSON.stringify(documentSelections[id] ?? {})}
                     onChange={event => chooseDocument(id, event.target.value)}>
                     <option value="{}">Primary document (native default)</option>
@@ -190,11 +230,10 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
                         && Object.keys(documentSelections[id]).length > 0 && <option value={JSON.stringify(documentSelections[id])}>{documentSelections[id].target_state ?? 'Selected state'} · {documentSelections[id].artifact_id ?? 'Producer-bound document'}</option>}
                 </select></label>
                 <button type="button" onClick={() => setInspectId(id)}>Inspect exact source {id}</button>
-                <button type="button" onClick={() => onStartMD(id)}>Use as GROMACS MD starting structure</button></li>)}</ul>
-            <ul>{selectedNativeSources.map(source => <li key={nativeSourceKey(source)}>{source.document?.logical_path ?? source.artifact_id} · Source Job {source.job_id} · Exact artifact {source.artifact_id} · {source.document?.target_state ?? 'Native state'}
+                </li>)}</ul>
+            <ul className="space-y-3">{selectedNativeSources.map(source => <li className="space-y-2" key={nativeSourceKey(source)}>{source.document?.logical_path ?? source.artifact_id} · Source Job {source.job_id} · Exact artifact {source.artifact_id} · {source.document?.target_state ?? 'Native state'}
                 <button type="button" onClick={() => setInspectId(nativeSourceKey(source))}>Inspect exact native source {source.artifact_id}</button>
             </li>)}</ul>
-            <p>GROMACS uses its separate Design starting-structure handoff; this document choice applies to the selected operation.</p>
             {sourceError && <p>Document inventory unavailable: {sourceError}. Primary selection and submitted exact identities remain available.</p>}
         </details>
         {inspectionDocument && <section aria-label="Exact selected source inspection">
@@ -202,10 +241,10 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
             {inspectionDocument.format !== 'fasta' && <EpitopeMolstarViewer pdbData={inspectedModel?.content ?? inspectionDocument.content} format={inspectionDocument.format} documentId={`${firstSelectedId}:${inspectedDocument?.artifact_id ?? 'primary'}:${inspectedModel?.number ?? 'all-models'}`} defaultFullView selectedResidues={inspectionResidues} onResidueClick={residue => setInspectionResidues(current => { const next = new Set(current); if (next.has(residue)) next.delete(residue); else next.add(residue); return next; })} />}
             {inspectionDocument.models.length > 1 && <label>Inspected model<select aria-label="Inspected model" value={inspectionModel ?? ''} onChange={event => { setInspectionModel(Number(event.target.value)); setInspectionResidues(new Set()); }}><option value="" disabled>Choose a model for residue inspection</option>{inspectionDocument.models.map(model => <option key={model.number} value={model.number}>{model.number}</option>)}</select></label>}
             <EpitopeSelector chains={inspectedModel?.chains ?? []} selectedResidues={inspectionResidues} onSelectionChange={setInspectionResidues} selectedLabel="Inspected author residues" />
-            {fields.some((field: UntypedApiValue) => field.name === 'fixed_positions') && <button type="button" onClick={() => {
+            {fields.filter((field: UntypedApiValue) => ['fixed_positions', 'ppiflow_fixed_positions', 'epitope_residues'].includes(field.name)).map((field: UntypedApiValue) => <button key={field.name} type="button" onClick={() => {
                 const positions = (inspectedModel?.chains ?? []).flatMap(chain => chain.residues.filter(residue => inspectionResidues.has(`${chain.id}${residue.resNum}${residue.iCode || ''}`)).map(residue => `${chain.id}:${residue.resNum}${residue.iCode || ''}`));
-                updateParam('fixed_positions', positions.join(','));
-            }}>Use inspected author residues as fixed positions</button>}
+                updateParam(field.name, positions.join(','));
+            }}>Use inspected author residues as {field.label || field.name.replaceAll('_', ' ')}</button>)}
             <p>Native masks remain explicit settings. No CDR, interface or chain-role inference is performed.</p>
         </section>}
         {inspectionError && operation !== 'frustrampnn' && <p>Source inspection unavailable: {inspectionError}</p>}
@@ -225,9 +264,9 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
                 governedSource={inspectionSource ? { kind: 'upload', file: inspectionSource } : null} />
             {inspectionError && <p role="status">Source inspection unavailable: {inspectionError}. The model owner resolves the selected inputs at submission.</p>}
         </> : operation === 'protonpottsmpnn' ? <Suspense fallback={<p>Loading native redesign settings…</p>}><ProtonPottsSettings selected parameters={fields.filter((p: UntypedApiValue) => p.name !== 'target_pdb')} values={params} onChange={updateParam}
-            renderScalar={param => <ParamField key={param.name} param={param} params={params} updateParam={updateParam} setShowFileBrowser={setFileField} setActiveSequenceField={setSequenceField} setShowSequenceManager={setShowSequences} ligandPresets={[]} />} /></Suspense> : <>
+            renderScalar={param => <ParamField key={param.name} param={displayParameter(param)} params={params} updateParam={updateParam} setShowFileBrowser={setFileField} setActiveSequenceField={setSequenceField} setShowSequenceManager={setShowSequences} ligandPresets={[]} />} /></Suspense> : <>
             {!model && !error && <p role="status">Loading model settings…</p>}
-            <SequenceDesignerSettings fields={fields} renderField={(param: UntypedApiValue) => param.name === 'manual_cdr_definitions' ? <section key={param.name} aria-label="Manual native CDR definitions">
+            <SequenceDesignerSettings fields={fields} renderField={(param: UntypedApiValue) => param.read_only ? <p key={param.name}>{param.label || param.name}: {String(Object.hasOwn(params, param.name) ? params[param.name] : displayParameter(param).default ?? 'Not specified')} · profile fixed{param.fixed_reason || param.unavailable_reason ? ` · ${param.fixed_reason || param.unavailable_reason}` : ''}{param.authority ? ` · ${param.authority}` : ''}</p> : editor && operation.startsWith('predict_') && blindFixedParameters.has(param.name) ? <p key={param.name}>{param.label || param.name}: off · blind prediction uses the current sequence and independent target, not this pose.</p> : param.name === 'ppiflow_protein_scaffold_contig' ? <section key={param.name}><label>{param.label || param.name}<input aria-label={param.name} type="text" value={params[param.name] ?? ''} onChange={event => updateParam(param.name, event.target.value)} /></label><p>{param.description}</p></section> : param.name === 'manual_cdr_definitions' ? <section key={param.name} aria-label="Manual native CDR definitions">
                 <h4>Manual native CDR definitions</h4><p>Assign author residues from the inspected source; no automatic region inference.</p>
                 <label>CDR source chain<select aria-label="CDR source chain" value={cdrChain} onChange={event => setCdrChain(event.target.value)}><option value="">First inspected chain</option>{inspectedModel?.chains.map(chain => <option key={chain.id} value={chain.id}>{chain.id}</option>)}</select></label>
                 <CDRRangeSelector activeChain={cdrChain || undefined} chains={inspectedModel?.chains ?? []} cdrDefinitions={(Array.isArray(params[param.name]) ? params[param.name] : []).map((row: UntypedApiValue) => ({ ...row, residues: new Set<string>(row.residues ?? []) }))}
@@ -244,11 +283,12 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
                 {inspectedModel?.chains.map(chain => <button key={chain.id} type="button" onClick={() => updateParam(param.name, chain.sequence)}>Use inspected chain {chain.id} sequence for {param.label || param.name}</button>)}
                 <p>Sequence selection changes only this native field; it does not assign chain roles or create coordinates.</p>
             </section> : <ParamField
-                key={param.name} param={param} params={params}
+                key={param.name} param={displayParameter(param)} params={params}
                 updateParam={updateParam}
                 setShowFileBrowser={name => { setFileField(name); if (name) void browseFiles('/'); }} setActiveSequenceField={setSequenceField} setShowSequenceManager={setShowSequences} ligandPresets={[]} />} />
         </>}
-        <ExecutionTargetPicker value={target} onChange={setTarget} disabled={busy} />
+        {fields.filter((field: UntypedApiValue) => nativeParameterDisplay(field, params).nullable).map((field: UntypedApiValue) => <button key={`null:${field.name}`} type="button" onClick={() => updateParam(field.name, null)}>Clear {field.label || field.name} (null)</button>)}
+        {!editor && <ExecutionTargetPicker value={target} onChange={setTarget} disabled={busy} />}
         {fileField && <section aria-label="Native input file browser"><h4>Choose {fileField}</h4>
             <StructuralSourceFiles allowSequence onSelect={source => { updateParam(fileField, source.path); setFileField(null); }} />
             <p>{fileFolder}</p>{fields.find((field: UntypedApiValue) => field.name === fileField)?.type === 'directory' && <button type="button" onClick={() => { updateParam(fileField, fileFolder); setFileField(null); }}>Use this native input directory</button>}<button type="button" onClick={() => void browseFiles('/' + fileFolder.split('/').filter(Boolean).slice(0, -1).join('/'))}>Parent folder</button>
@@ -260,9 +300,19 @@ export default function BinderSelectedControls({ sourceJobId, selectedDesignIds,
             <p>Source Job {sourceJobId}; {selectedCount} exact selected candidates. Operation: {operation}.</p>
             <BindCraft2SettingsReadback value={{ design_ids: selectedDesignIds, native_sources: selectedNativeSources.map(({ job_id, artifact_id }) => ({ job_id, artifact_id })), candidate_documents: Object.fromEntries(selectedDesignIds.filter(id => documentSelections[id]).map(id => [id, documentSelections[id]])), execution_target_id: target, ...(operation === 'frustrampnn' ? { frustrampnn_settings: frustra } : { params }) }} />
         </div>
-        <button type="button" disabled={busy || !selectedCount || (operation !== 'frustrampnn' && !model)} onClick={() => void run()}>Run selected operation</button>
+        {!editor && <button type="button" disabled={busy || !selectedCount || (operation !== 'frustrampnn' && !model)} onClick={() => void run()}>Run selected operation</button>}
         {busy && <p role="status">Submitting selected operation…</p>}
         {error && <p role="alert">{error}</p>}
         {children.map((child, index) => <p role="status" key={child.id}>{childQueries[index]?.data?.status ?? 'Queued'} {child.name} ({child.id}). <button type="button" onClick={() => onOpenJob(child.id)}>Open child Job</button></p>)}
     </BinderWorkflowWorkspace></section>;
+}
+
+export default function BinderSelectedControls(props: BinderSelectedControlsProps) {
+    const [legacyOpen, setLegacyOpen] = useState(false);
+    return <><BinderNextRound {...props} renderEditor={editor => <BinderOperationEditor {...props}
+        selectedDesignIds={editor.candidateRefs?.flatMap(ref => ref.kind === 'design' ? [ref.design_id] : []) ?? props.selectedDesignIds}
+        selectedNativeSources={editor.candidateRefs?.flatMap(ref => ref.kind === 'native_document' ? [props.selectedNativeSources?.find(source => source.job_id === ref.job_id && source.artifact_id === ref.artifact_id) ?? readRoundStorage<Record<string, NativeCandidateSource>>(props.sourceJobId, 'native-documents', {})[candidateKey(ref)] ?? { job_id: ref.job_id, artifact_id: ref.artifact_id }] : []) ?? props.selectedNativeSources}
+        candidateDocuments={{ ...props.candidateDocuments, ...Object.fromEntries(editor.candidateRefs?.flatMap(ref => ref.kind === 'design' && ref.document ? [[ref.design_id, ref.document]] : []) ?? []) }}
+        editor={editor} />} />
+        <details onToggle={event => { if (event.currentTarget.open) setLegacyOpen(true); }}><summary>Other model operations and source tools</summary>{props.onLegacyFullLoop && <button type="button" onClick={props.onLegacyFullLoop}>Legacy full-loop refinement</button>}{legacyOpen && <BinderOperationEditor {...props} />}</details></>;
 }

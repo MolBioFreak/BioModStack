@@ -185,7 +185,7 @@ def comparison_reference(owner, design, path):
 def _reference_residues(component, *, bound, mapping=None):
     residues = component.get('source_residues')
     if not bound or not isinstance(residues, list) or len(residues) != len(component['sequence']):
-        return [None] * len(component['sequence'])
+        return [None] * len(component.get('sequence', ''))
     return [dict(chain_id=row['chain_id'], auth_seq_id=row['residue_number'],
                  insertion_code=row['insertion_code']) if mapping is None else
             mapping.get((row['chain_id'], row['residue_number'], row['insertion_code']))
@@ -228,7 +228,7 @@ def prediction_request(root, owner, design, request, binder, target, target_sour
         targets = source_components(target_path, target_ids, 'target')
         target_binding = {**target_source, 'sha256': hashlib.sha256(target_path.read_bytes()).hexdigest()}
     if not targets:
-        raise ValueError('No independently declared target protein sequence')
+        raise ValueError('No independently declared target components')
     # Input labels may collide across independent documents. Emit unique native
     # labels and record exact source roles/order; output labels are model-owned.
     reference_hash = hashlib.sha256(reference.read_bytes()).hexdigest() if reference else None
@@ -243,12 +243,12 @@ def prediction_request(root, owner, design, request, binder, target, target_sour
         for component in group:
             index = len(components)
             label = chr(65 + index) if index < 26 else f'C{index}'
-            components.append({'id': label, 'type': 'protein', 'sequence': component['sequence']})
+            components.append({**{k:v for k,v in component.items() if k not in {'source_residues', 'source'}}, 'id': label})
             mapping.append({'index': index, 'id': label, 'source_chain': component['id'],
-                            'role': role, 'sequence': component['sequence'],
+                            'role': role, 'sequence': component.get('sequence'),
                             'source_residues': component.get('source_residues'),
                             'reference_residues': _reference_residues(component,
-                                bound=reference is not None,
+                                bound=reference is not None and component.get('type') == 'protein',
                                 mapping=binder_mapping if role == 'binder' else target_correspondence)})
     settings = settings or request.prediction_stages[0]
     params = deepcopy(settings.params)
@@ -256,7 +256,7 @@ def prediction_request(root, owner, design, request, binder, target, target_sour
     # complex. The producer-bound components remain the sole native complex input.
     summary = (''.join(c['sequence'] for c in binder_components)
                if settings.model_id == 'esmfold2'
-               else ':'.join(c['sequence'] for c in components))
+               else ':'.join(c['sequence'] for c in components if c.get('type') == 'protein'))
     params.update(complex_components=components, sequence=summary,
                   sequence_name=design.id, lineage_root_job_id=root.id,
                   iteration_source_root_job_id=root.id, iteration_source_job_id=owner.id,

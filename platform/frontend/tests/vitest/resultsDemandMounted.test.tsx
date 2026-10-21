@@ -60,6 +60,7 @@ async function mount(element: React.ReactNode, route = '/') {
     await flush();
 }
 beforeEach(() => {
+    localStorage.clear(); sessionStorage.clear();
     downloads.mockClear(); engines.mounts = 0; engines.urls = []; vi.stubGlobal('fetch', downloads);
     vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
 });
@@ -83,14 +84,15 @@ it('zero-yield native publication initializes no Plotly or structure workbench',
     expect(downloads).not.toHaveBeenCalled();
 });
 
-it('dashboard defers candidate PDB work until first inspection, then retains the opened session and axes', async () => {
+it('candidate preview loads its primary once and retains the opened session and chart axes', async () => {
     transport(); await mount(<NativeBinderGenerationResults jobId="parent" status="completed" />);
     expect(downloads).not.toHaveBeenCalled();
-    expect(tree!.root.findAllByProps({ 'aria-label': 'Published document' })).toHaveLength(0);
+    expect(tree!.root.findByProps({ 'aria-label': 'Published document' }).props.value).toBe('0');
+    expect(engines.mounts).toBe(1);
     await click('Custom charts');
     const axis = () => tree!.root.findAllByType(CohortMetricPicker).find(node => node.props.label === '2D X metric')!;
     await act(async () => axis().props.onChange('count'));
-    await click('producer:exact');
+    await click('Structure');
     expect(engines.mounts).toBe(1);
     expect(engines.urls).toEqual([doc.download_url]);
     const inspector = tree!.root.findByProps({ 'aria-label': 'Published document' });
@@ -113,14 +115,17 @@ it('deep links beyond the first cohort page demand only the exact alternate docu
     expect(tree!.root.findByProps({ 'aria-label': 'Published document' }).props.value).toBe('1');
     expect(tree!.root.findAllByProps({ 'data-plot': true })).toHaveLength(0);
     expect(engines.plotImports).toBe(plotImportsBefore);
-    expect(text(tree!.root)).toContain('row:1000');
+    const readback = tree!.root.findAllByType('details').find(node => node.findAllByType('summary').some(summary => text(summary) === 'Selected record: complete native readback'))!;
+    await act(async () => readback.props.onToggle({ currentTarget: { open: true } }));
+    expect(text(readback)).toContain('row:1000');
 });
 
-it('collapsed candidate operations do no picker discovery; first open preserves drafts and exact submission across close/reopen', async () => {
+it('native round target picker stays available while other operation tools preserve exact drafts across close/reopen', async () => {
     transport();
     await mount(<Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes>, '/designs/parent?design_id=exact&artifact_id=native-alternate&target_state=B&launch_context_id=destination');
-    const disclosure = () => tree!.root.findAllByType('details').find(node => text(node.findAllByType('summary')[0]).startsWith('Selected candidate operations'))!;
-    expect(calls.filter(call => /selection-context|execution-targets/.test(call.url))).toHaveLength(0);
+    const disclosure = () => tree!.root.findAllByType('details').find(node => text(node.findAllByType('summary')[0]) === 'Other model operations and source tools')!;
+    expect(calls.filter(call => /selection-context/.test(call.url))).toHaveLength(0);
+    expect(calls.filter(call => /execution-targets/.test(call.url))).toHaveLength(1);
     expect(button('Run selected operation')).toBeUndefined();
     await act(async () => disclosure().props.onToggle({ currentTarget: { open: true } })); await flush();
     expect(calls.some(call => call.url.endsWith('/selection-context'))).toBe(true);

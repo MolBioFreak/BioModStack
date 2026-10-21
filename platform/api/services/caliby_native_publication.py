@@ -24,8 +24,9 @@ DIRECTORY = "caliby_native"
 
 
 def publication_root(job, root=None):
-    supplied = Path(root if root is not None else job.output_dir)
-    owned = Path(job.output_dir)
+    from services.binder_publication_roots import returned_native_root
+    owned = returned_native_root(job) or Path(job.output_dir)
+    supplied = Path(root if root is not None else owned)
     def resolve(path):
         return resolve_runtime_data_path(path) if path.is_absolute() else get_data_root() / path
     if resolve(supplied) != resolve(owned):

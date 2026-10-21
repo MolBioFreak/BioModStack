@@ -2824,7 +2824,15 @@ async def list_designs(
     owners = await owning_jobs(session, designs)
     responses = await run_in_threadpool(
         lambda: [_design_to_response(d, job=owners.get(d.job_id)) for d in designs])
+    bc2_documents = {}
+    for owner in owners.values():
+        if owner.model_id == 'bindcraft2':
+            from services.bindcraft2_scientific_consumer import scientific_documents
+            bc2_documents.update(await scientific_documents(
+                [d for d in designs if d.job_id == owner.id], owner, session))
     for design, response in zip(designs, responses):
+        if design.id in bc2_documents:
+            response.scientific_structure_document = bc2_documents[design.id]
         response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
             or (1 if response.native_sample and response.scientific_structure_document else None))
         if response.core_protein_scientific_contract == 1 and not response.native_sample:
@@ -3042,6 +3050,8 @@ async def get_design(
     design_id: str,
     session: AsyncSession = Depends(get_session),
     job_id: Optional[str] = None,
+    artifact_id: Optional[str] = None,
+    target_state: Optional[str] = None,
 ):
     """Get a specific design by ID."""
     result = await session.execute(select(Design).where(Design.id == design_id))
@@ -3057,6 +3067,10 @@ async def get_design(
     owners = await owning_jobs(session, [design])
     response = await run_in_threadpool(_design_to_response, design, include_fampnn_structure_fallback=True,
                                    job=owners.get(design.job_id))
+    if owners.get(design.job_id) and owners[design.job_id].model_id == 'bindcraft2':
+        from services.bindcraft2_scientific_consumer import scientific_document
+        response.scientific_structure_document = await scientific_document(
+            design, session, artifact_id=artifact_id, target_state=target_state)
     response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
             or (1 if response.native_sample and response.scientific_structure_document else None))
     if response.core_protein_scientific_contract == 1 and not response.native_sample:
@@ -3068,7 +3082,9 @@ async def get_design(
 @router.get("/{design_id}/pdb")
 async def get_design_pdb(
     design_id: str,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    artifact_id: Optional[str] = None,
+    target_state: Optional[str] = None,
 ):
     """Download the PDB file for a design."""
     result = await session.execute(select(Design).where(Design.id == design_id))
@@ -3081,6 +3097,16 @@ async def get_design_pdb(
         raise HTTPException(status_code=404, detail="No PDB file for this design")
     
     owner = await session.get(Job, design.job_id)
+    if artifact_id is not None or target_state is not None:
+        if owner is None or owner.model_id != 'bindcraft2':
+            raise HTTPException(400, 'Selected document download is not supported for this model')
+        from services.bindcraft2_scientific_consumer import selected_document, ERRORS
+        from fastapi.responses import Response
+        try:
+            _, _, raw = await selected_document(design, session, artifact_id=artifact_id, target_state=target_state)
+        except ERRORS:
+            raise HTTPException(404, 'Selected native document unavailable')
+        return Response(content=raw, media_type='chemical/x-mmcif', headers={'Cache-Control': 'no-store'})
     from services.core_protein_scientific_contract import native_spatial_consumer, verified_native_spatial_design
     native_consumer = await native_spatial_consumer(design, session) if revision_for_job(owner) == 1 else None
     if native_consumer is not None:
@@ -3136,10 +3162,39 @@ class ResidueMetrics(BaseModel):
     length: int
 
 
+@router.get("/native/{job_id}/{artifact_id}/document")
+async def get_native_comparison_document(job_id: str, artifact_id: str,
+        session: AsyncSession = Depends(get_session), target_state: Optional[str] = None):
+    from services.bindcraft2_scientific_consumer import native_document_metadata, ERRORS
+    try:
+        return dict(status='ok', reason=None,
+            **await native_document_metadata(session, job_id, artifact_id, target_state=target_state))
+    except ERRORS:
+        return dict(status='unavailable', reason='missing_or_invalid_bindcraft2_native_evidence',
+            candidate_ref=dict(kind='native_document', job_id=job_id, artifact_id=artifact_id),
+            document=None, target_state=None)
+
+
+@router.get("/native/{job_id}/{artifact_id}/residue-metrics", response_model=Union[ScientificViewerMetric, ScientificResidueMetric])
+async def get_native_residue_metrics(job_id: str, artifact_id: str,
+        session: AsyncSession = Depends(get_session), target_state: Optional[str] = None):
+    from services.bindcraft2_scientific_consumer import native_artifact_metric
+    return await native_artifact_metric(session, job_id, artifact_id, 'residue_plddt', target_state=target_state)
+
+
+@router.get("/native/{job_id}/{artifact_id}/chain-metrics", response_model=ScientificViewerMetric)
+async def get_native_chain_metrics(job_id: str, artifact_id: str,
+        session: AsyncSession = Depends(get_session), target_state: Optional[str] = None):
+    from services.bindcraft2_scientific_consumer import native_artifact_metric
+    return await native_artifact_metric(session, job_id, artifact_id, 'chain_metrics', target_state=target_state)
+
+
 @router.get("/{design_id}/residue-metrics", response_model=Union[ResidueMetrics, ScientificViewerMetric, ScientificResidueMetric, ScientificAtomMetric])
 async def get_residue_metrics(
     design_id: str,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    artifact_id: Optional[str] = None,
+    target_state: Optional[str] = None,
 ):
     """Get per-residue metrics for a design (for line charts)."""
     result = await session.execute(select(Design).where(Design.id == design_id))
@@ -3148,11 +3203,18 @@ async def get_residue_metrics(
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
     
+    owner = await session.get(Job, design.job_id)
+    if owner and owner.model_id == 'bindcraft2':
+        from services.bindcraft2_scientific_consumer import compute_persisted_native_metric
+        return await compute_persisted_native_metric(design, 'residue_plddt', session,
+            artifact_id=artifact_id, target_state=target_state)
+    if artifact_id is not None or target_state is not None:
+        from services.bindcraft2_scientific_consumer import unavailable
+        return unavailable(design, 'residue_plddt', 'selected_document_metrics_not_supported')
     if await scientific_contract_revision(design, session) == 1:
         from services.core_protein_scientific_contract import compute_persisted_native_metric
         return await compute_persisted_native_metric(design, "residue_plddt", session)
 
-    owner = await session.get(Job, design.job_id)
     if owner and owner.model_id == 'boltz_cp_experimental':
         from services.boltz_scientific_consumer import retained_cp_metric
         return retained_cp_metric(design, owner, 'residue_plddt')
@@ -3173,7 +3235,8 @@ async def get_residue_metrics(
 
 
 @router.get("/{design_id}/chain-metrics", response_model=Union[ScientificViewerMetric, ScientificChainMetric, Dict[str, Any]])
-async def get_chain_metrics(design_id: str, session: AsyncSession = Depends(get_session)):
+async def get_chain_metrics(design_id: str, session: AsyncSession = Depends(get_session),
+                            artifact_id: Optional[str] = None, target_state: Optional[str] = None):
     """Return per-chain pLDDT and type information."""
     result = await session.execute(select(Design).where(Design.id == design_id))
     design = result.scalar_one_or_none()
@@ -3181,11 +3244,18 @@ async def get_chain_metrics(design_id: str, session: AsyncSession = Depends(get_
     if not design:
         raise HTTPException(status_code=404, detail="Design not found")
 
+    owner = await session.get(Job, design.job_id)
+    if owner and owner.model_id == 'bindcraft2':
+        from services.bindcraft2_scientific_consumer import compute_persisted_native_metric
+        return await compute_persisted_native_metric(design, 'chain_metrics', session,
+            artifact_id=artifact_id, target_state=target_state)
+    if artifact_id is not None or target_state is not None:
+        from services.bindcraft2_scientific_consumer import unavailable
+        return unavailable(design, 'chain_metrics', 'selected_document_metrics_not_supported')
     if await scientific_contract_revision(design, session) == 1:
         from services.core_protein_scientific_contract import compute_persisted_native_metric
         return await compute_persisted_native_metric(design, "chain_metrics", session)
 
-    owner = await session.get(Job, design.job_id)
     if owner and owner.model_id == 'boltz_cp_experimental':
         from services.boltz_scientific_consumer import retained_cp_metric
         return retained_cp_metric(design, owner, 'chain_metrics')
@@ -3307,7 +3377,15 @@ async def get_designs_for_job(
     owners = await owning_jobs(session, designs)
     responses = await run_in_threadpool(
         lambda: [_design_to_response(d, job=owners.get(d.job_id)) for d in designs])
+    bc2_documents = {}
+    for owner in owners.values():
+        if owner.model_id == 'bindcraft2':
+            from services.bindcraft2_scientific_consumer import scientific_documents
+            bc2_documents.update(await scientific_documents(
+                [d for d in designs if d.job_id == owner.id], owner, session))
     for design, response in zip(designs, responses):
+        if design.id in bc2_documents:
+            response.scientific_structure_document = bc2_documents[design.id]
         response.core_protein_scientific_contract = (await scientific_contract_revision(design, session)
             or (1 if response.native_sample and response.scientific_structure_document else None))
         if response.core_protein_scientific_contract == 1 and not response.native_sample:
@@ -3478,6 +3556,7 @@ async def get_confidence_artifacts(design_id: str, session: AsyncSession = Depen
         raise HTTPException(status_code=404, detail='Design not found')
     job = await session.get(Job, design.job_id)
     entries, producer = [], None
+    native_snapshots = None
     try:
         if job and revision_for_job(job) == 1 and job.model_id in ('boltz', 'boltz2'):
             selected = await verified_boltz_design(design, session)
@@ -3488,6 +3567,15 @@ async def get_confidence_artifacts(design_id: str, session: AsyncSession = Depen
             # for PAE and never inferred from a launch/save flag.
             structure_key = Path(keys['structure'])
             keys['pde'] = (structure_key.parent / f'pde_{structure_key.stem}.npz').as_posix()
+        elif job and revision_for_job(job) == 1 and job.model_id == 'protenix':
+            from services.protenix_scientific_consumer import verified_native_design
+            selected = await verified_native_design(design, session)
+            native_snapshots = {role: (selected['artifacts'][role], selected['snapshots'][role])
+                                for role in ('structure', 'metrics', 'pae')}
+            producer = 'protenix'
+            root = selected['publication_root']
+            keys = {role: Path(selected['artifacts'][role]['path']).relative_to(root).as_posix()
+                    for role in ('structure', 'metrics', 'pae')}
         else:
             found = retained_cp_paths(design, job)
             if found is None:
@@ -3495,7 +3583,7 @@ async def get_confidence_artifacts(design_id: str, session: AsyncSession = Depen
             root, keys, producer = found
         for role, key in keys.items():
             try:
-                artifact, content = _snapshot(root, key)
+                artifact, content = native_snapshots[role] if native_snapshots is not None else _snapshot(root, key)
                 relative = _safe_allowed_relative(artifact['path'])
                 entries.append(dict(role=role, filename=Path(key).name, retained=True,
                     artifact_sha256=artifact['sha256'], size_bytes=len(content),

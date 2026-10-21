@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ProjectMapNode, ProjectManagerReadModel } from '../../lib/projectManager';
 import { compactCountLabel, displayLabel } from './projectManagerState';
 
@@ -34,7 +34,7 @@ function MapNodeButton({ node, selected, onSelect, region }: {
             <span className="flex items-start justify-between gap-3">
                 <span className="min-w-0">
                     <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-content-muted">{displayLabel(node.node_type)}</span>
-                    <span className="mt-1 block truncate text-sm font-semibold text-content">{node.label}</span>
+                    <span className="mt-1 block break-words text-sm font-semibold text-content">{node.label}</span>
                 </span>
                 <span className="shrink-0 rounded-full border border-border-primary px-2 py-0.5 text-[10px] text-content-secondary">{displayLabel(node.normalized_state)}</span>
             </span>
@@ -56,6 +56,19 @@ export function RelationshipMap({ summary, selectedNodeKey, onSelect, onLoadMore
     const groupedKeys = new Set([projectNode?.node_key, ...globalNodes.map((node) => node.node_key), ...domainNodes.map((node) => node.node_key)]);
     const evidenceNodes = summary.map.nodes.filter((node) => !groupedKeys.has(node.node_key));
     const hasSelectedTarget = index.has(selectedNodeKey);
+    const [revealedKey, setRevealedKey] = useState<string | null>(null);
+    const selected = summary.selection;
+    const canReveal = selected.node_key === selectedNodeKey && selected.node_type !== 'virtual_folder';
+    const focusedNode: ProjectMapNode | null = !hasSelectedTarget && canReveal && revealedKey === selectedNodeKey ? {
+        node_key: selected.node_key, node_type: selected.node_type, label: selected.title,
+        normalized_state: summary.tree.nodes.find(node => node.node_key === selectedNodeKey)?.lifecycle_state
+            ?? (typeof selected.summary.lifecycle_state === 'string' ? selected.summary.lifecycle_state : 'selected'),
+        canonical_identity: selected.canonical_identity, reconciliation: selected.reconciliation,
+        counts: {}, allowed_actions: [],
+    } : null;
+    useEffect(() => {
+        if (revealedKey === selectedNodeKey) viewportRef.current?.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
+    }, [revealedKey, selectedNodeKey]);
 
     const evidenceByDomain = new Map<string, ProjectMapNode[]>();
     for (const domain of domainNodes) {
@@ -82,11 +95,12 @@ export function RelationshipMap({ summary, selectedNodeKey, onSelect, onLoadMore
                     <h3 className="mb-2 text-xs font-semibold text-content-secondary">{group.label} · {group.items.length}</h3>
                     <div className="space-y-1">{group.items.map((record) => <MapNodeButton key={record.node_key} node={record} selected={selectedNodeKey === record.node_key} onSelect={onSelect} region="record" />)}</div>
                 </section>)}
-                {!records.length && <p className="text-xs text-content-muted">No external records are attached to this Domain Experiment. Domain-owned data is separate from this relationship list.</p>}
+                {!records.length && <p className="text-xs text-content-muted">Records are not shown in this map page. Select the experiment to inspect its results and notes.</p>}
             </div>
         </section>;
     };
     const fitToFocus = () => {
+        if (!hasSelectedTarget) setRevealedKey(selectedNodeKey);
         viewportRef.current?.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
     };
 
@@ -99,13 +113,17 @@ export function RelationshipMap({ summary, selectedNodeKey, onSelect, onLoadMore
                 </div>
                 <div className="flex items-center gap-2">
                     <span className="rounded-full border border-border-primary px-2 py-1 text-[10px] text-content-secondary">{summary.map.nodes.length} nodes</span>
-                    <button type="button" onClick={fitToFocus} disabled={!hasSelectedTarget} className="rounded-lg border border-border-primary bg-surface-tertiary px-3 py-1.5 text-xs font-medium text-content-secondary outline-none hover:text-content focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-50">Show selected item</button>
+                    <button type="button" onClick={fitToFocus} disabled={!hasSelectedTarget && !canReveal} className="rounded-lg border border-border-primary bg-surface-tertiary px-3 py-1.5 text-xs font-medium text-content-secondary outline-none hover:text-content focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-50">Show selected item</button>
                 </div>
             </header>
-            {!hasSelectedTarget && <p className="px-4 pt-3 text-xs text-content-muted">{selectedNodeKey.endsWith(':activity') ? 'Activity is shown in the records panel below.' : 'This selection has no card in the loaded map. See its records or inspector.'}</p>}
+            {!hasSelectedTarget && !focusedNode && <p className="px-4 pt-3 text-xs text-content-muted">{selectedNodeKey.endsWith(':activity') ? 'Activity is shown in the records panel below.' : 'This selection has no card in the loaded map. See its records or inspector.'}</p>}
             <div ref={viewportRef} className="relative min-w-0 p-3 sm:p-5" tabIndex={0}>
 
                 <div className="relative mx-auto flex min-w-0 w-full max-w-5xl flex-col gap-5">
+                    {focusedNode && <section aria-label="Selected item outside map page" className="rounded-xl border border-accent p-3">
+                        <p className="mb-2 text-xs text-content-muted">Selected record · outside this bounded map page</p>
+                        <MapNodeButton node={focusedNode} selected onSelect={onSelect} />
+                    </section>}
                     {projectNode && (
                         <div className="mx-auto w-[min(100%,30rem)]">
                             <MapNodeButton node={projectNode} selected={selectedNodeKey === projectNode.node_key} onSelect={onSelect} region="project" />
@@ -122,7 +140,7 @@ export function RelationshipMap({ summary, selectedNodeKey, onSelect, onLoadMore
                                 <div aria-hidden="true" className="mx-auto h-5 w-px bg-border-secondary" />
                                 <div className="grid gap-5 lg:grid-cols-2">
                                     {domains.map((domain) => renderDomain(domain))}
-                                    {!domains.length && <p className="col-span-full text-center text-xs text-content-muted">This Global Experiment has no visible Domain Experiments.</p>}
+                                    {!domains.length && <p className="col-span-full text-center text-xs text-content-muted">Select this group to view its experiments.</p>}
                                 </div>
                             </section>;
                         })}

@@ -85,7 +85,9 @@ def test_selected_pinned_alias_transports_concrete_bytes_under_native_name(tmp_p
     roots = [tmp_path / 'worker' / n for n in ('attempt-a', 'attempt-b')]
     for root in roots:
         storage.materialize(item, root / 'native/checkpoint.bin', root, record.mode)
-    assert (roots[0] / 'native/checkpoint.bin').stat().st_ino == (roots[1] / 'native/checkpoint.bin').stat().st_ino
+    # Explicit attempt materialization owns private inodes; installed weight
+    # layouts use weights_install instead and retain their one-copy owner.
+    assert (roots[0] / 'native/checkpoint.bin').stat().st_ino != (roots[1] / 'native/checkpoint.bin').stat().st_ino
     assert not (roots[0] / 'native/checkpoint.bin').is_symlink()
     assert obj.stat().st_nlink == 1 and obj.stat().st_mode & 0o777 == 0o400
 

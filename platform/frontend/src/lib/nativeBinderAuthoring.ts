@@ -67,7 +67,7 @@ export function nativeDisplayMatches(condition: NativeDisplayCondition, values: 
 }
 export function nativeParameterDisplay(parameter: NativeBinderParameter, values: Record<string, unknown>) {
     return {
-        required: parameter.display_required ?? (parameter.required_when ? nativeDisplayMatches(parameter.required_when, values) : parameter.required === true),
+        required: parameter.required_when ? nativeDisplayMatches(parameter.required_when, values) : parameter.display_required ?? parameter.required === true,
         applicable: parameter.display_applicable ?? (typeof parameter.applicability === 'boolean' ? parameter.applicability : parameter.applicability ? nativeDisplayMatches(parameter.applicability, values) : parameter.applicable_when ? nativeDisplayMatches(parameter.applicable_when, values) : true),
         nullable: parameter.display_nullable ?? (parameter.nullable_when ? nativeDisplayMatches(parameter.nullable_when, values) : parameter.nullable ?? parameter.default === null),
     };
@@ -116,9 +116,30 @@ export function portableNativeSource(source: BC2Source): Omit<BC2Source, 'file'>
     return { ...reference, ...(derivedFrom ? { derivedFrom: portableNativeSource(derivedFrom) } : {}) };
 }
 
-/** PPIFlow consumes PDB author tokens. Never turn viewer ordinals into numbers.
- * BoltzGen chain-local indexing needs a producer-qualified native residue map,
- * which the current source parser does not export. Keep that selection as context. */
+/** Author selectors are resolved by the native input-position owner, not viewer order. */
+export interface BoltzgenSourcePositions {
+    schema_version: 1; source_sha256: string;
+    positions: Array<{ model_number: number; auth_asym_id: string; auth_seq_id: number; insertion_code: string; native_chain: string; native_position: number }>;
+}
+export async function fetchBoltzgenSourcePositions(path: string, signal?: AbortSignal): Promise<BoltzgenSourcePositions> {
+    return (await api.post<BoltzgenSourcePositions>('/api/boltzgen/source-positions', { path }, { signal, timeout: 30000 })).data;
+}
+export async function boltzgenPositionsFromSelection(document: BC2Document, documentId: string, refs: readonly ResidueRef[], mapping: BoltzgenSourcePositions, chain?: string): Promise<string> {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(document.content));
+    const sha256 = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+    if (mapping.source_sha256 !== sha256) throw new Error('The source changed since inspection. Reopen the exact document before adopting residues.');
+    if (document.models.length !== 1) throw new Error('Choose a single-model document before adopting native positions.');
+    const selected = refs.map(ref => {
+        if (ref.documentId !== documentId) throw new Error('Selection belongs to another document.');
+        const rows = mapping.positions.filter(row => row.model_number === document.models[0].number && row.auth_asym_id === ref.authAsymId && row.auth_seq_id === ref.authSeqId && row.insertion_code === (ref.insertionCode || ''));
+        if (rows.length !== 1) throw new Error('The selected author residue has no unique native position. The native settings are unchanged.');
+        if (chain !== undefined && rows[0].native_chain !== chain) throw new Error('Choose residues on the declared native scaffold chain.');
+        return rows[0];
+    });
+    return [...new Set(selected.map(row => chain === undefined ? `${row.native_chain}:${row.native_position}` : String(row.native_position)))].join(',');
+}
+
+/** PPIFlow consumes PDB author tokens. Never turn viewer ordinals into numbers. */
 export function ppiflowHotspotsFromSelection(document: BC2Document, documentId: string, refs: readonly ResidueRef[], chain: string, mode: string): string {
     if (document.format !== 'pdb' || document.models.length !== 1) throw new Error('PPIFlow hotspot mapping requires the exact single-model PDB consumed by the sampler.');
     if (!chain || chain.length !== 1) throw new Error('Choose the exact native target/antigen chain first.');

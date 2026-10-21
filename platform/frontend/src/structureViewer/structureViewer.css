@@ -25,6 +25,66 @@
   }
 }
 
+/* Embedded Mol* responds to its actual panel width, not the browser orientation.
+   Keep the native hide/collapse classes and fullscreen layout authoritative. */
+.bms-structure-canvas { container-type: inline-size; }
+/* Only embedded viewers grow to their tools. In browser fullscreen the caller
+   supplies a definite height; auto here collapses its scene to the 540px floor. */
+.bms-structure-workspace:not(:fullscreen, :fullscreen *):has(.msp-layout-standard-reactive > :first-child:not(.msp-layout-hide-right)) {
+  height: auto !important;
+}
+.bms-structure-workspace:not(:fullscreen, :fullscreen *):has(.msp-layout-standard-reactive > :first-child:not(.msp-layout-hide-right)) > .bms-structure-workspace-layout {
+  height: auto;
+  grid-template-rows: auto;
+}
+.bms-structure-canvas [data-bms-molstar-adapter]:not(:fullscreen, :fullscreen *):has(.msp-layout-standard-reactive > :first-child:not(.msp-layout-hide-right)) {
+  min-height: 540px;
+}
+.bms-structure-workbench { scrollbar-gutter: stable; overflow-wrap: anywhere; }
+[data-bms-molstar-adapter] .msp-plugin .msp-log { right: 0; scrollbar-gutter: stable; }
+[data-bms-molstar-adapter] .msp-plugin .msp-log li { display: flex; flex-wrap: wrap; }
+[data-bms-molstar-adapter] .msp-plugin .msp-log-entry { margin-left: 0; min-width: 0; flex: 1 1 14rem; overflow-wrap: anywhere; }
+.bms-structure-workbench dl { min-width: 0; }
+.bms-structure-workbench :is(dt, dd) { min-width: 0; overflow-wrap: anywhere; }
+
+@container (max-width: 56rem) {
+  /* 100px sequence + 360px scene + 80px log + 280px native tools.
+     Growing the embed avoids stealing the canvas height to fit open panels. */
+  .bms-structure-canvas [data-bms-molstar-adapter]:has(.msp-layout-standard-reactive > :first-child:not(.msp-layout-hide-right)) {
+    height: 820px !important;
+  }
+  [data-bms-molstar-adapter] .msp-plugin .msp-layout-standard-reactive {
+    --bms-native-top: 100px;
+    --bms-native-log: 80px;
+    --bms-native-tools: 280px;
+  }
+  [data-bms-molstar-adapter] .msp-plugin .msp-layout-standard-reactive .msp-layout-hide-top { --bms-native-top: 0px; }
+  [data-bms-molstar-adapter] .msp-plugin .msp-layout-standard-reactive .msp-layout-hide-bottom { --bms-native-log: 0px; }
+  [data-bms-molstar-adapter] .msp-plugin .msp-layout-standard-reactive .msp-layout-hide-left.msp-layout-hide-right { --bms-native-tools: 0px; }
+  [data-bms-molstar-adapter] .msp-plugin .msp-layout-standard-reactive .msp-layout-main {
+    left: 0; right: 0;
+    top: var(--bms-native-top);
+    bottom: calc(var(--bms-native-log) + var(--bms-native-tools));
+  }
+  [data-bms-molstar-adapter] .msp-plugin .msp-layout-standard-reactive .msp-layout-top {
+    left: 0; right: 0; top: 0; width: auto; height: var(--bms-native-top);
+  }
+  [data-bms-molstar-adapter] .msp-plugin .msp-layout-standard-reactive .msp-layout-bottom {
+    left: 0; right: 0; top: auto; bottom: var(--bms-native-tools);
+    width: auto; height: var(--bms-native-log);
+  }
+  [data-bms-molstar-adapter] .msp-plugin .msp-layout-standard-reactive :is(.msp-layout-left, .msp-layout-right) {
+    top: auto; bottom: 0; height: var(--bms-native-tools); width: 50%;
+  }
+  [data-bms-molstar-adapter] .msp-plugin .msp-layout-standard-reactive .msp-layout-left { left: 0; right: auto; }
+  [data-bms-molstar-adapter] .msp-plugin .msp-layout-standard-reactive .msp-layout-right { left: auto; right: 0; }
+  [data-bms-molstar-adapter] .msp-plugin .msp-layout-standard-reactive .msp-layout-collapse-left .msp-layout-left { width: 32px; }
+  [data-bms-molstar-adapter] .msp-plugin .msp-layout-standard-reactive .msp-layout-collapse-left .msp-layout-right { left: 32px; width: auto; }
+  [data-bms-molstar-adapter] .msp-plugin .msp-layout-standard-reactive .msp-layout-hide-left .msp-layout-right { left: 0; width: 100%; }
+  [data-bms-molstar-adapter] .msp-plugin .msp-layout-standard-reactive .msp-layout-hide-right .msp-layout-left { width: 100%; }
+  [data-bms-molstar-adapter] .msp-plugin .msp-layout-standard-reactive .msp-layout-hide-right.msp-layout-collapse-left .msp-layout-left { width: 32px; }
+}
+
 /* Mol* ships a fixed beige UI palette. Map its chrome, not scientific colors,
    to BMS's existing tokens. The renderer background is updated separately. */
 [data-bms-molstar-adapter] .msp-plugin,

@@ -308,6 +308,13 @@ async def cancel_job_lineage(
         )
     for job in [*cancellable, *already_cancelled]:
         await session.refresh(job)
+        if (not job.execution_target_id and job.output_dir
+                and str(job.id) in stopped_run_ids):
+            # The existing cancellation owner has proved the local writer stopped
+            # and won terminal publication. Observe bytes without success handling.
+            from services.nextflow import _observe_local_terminal_binder_results
+
+            await _observe_local_terminal_binder_results(session, str(job.id), job.output_dir)
 
     from services.rfd3_local_redesign import terminalize_cancelled_request_for_job
 

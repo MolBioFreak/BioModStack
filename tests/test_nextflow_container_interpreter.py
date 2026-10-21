@@ -293,15 +293,24 @@ def test_nested_missing_image_never_acquires_or_executes(tmp_path, monkeypatch):
     (True, 'local', True, True, False),
     (True, 'local', False, True, True),
     (True, 'local', False, False, False),
-    (False, 'neurosnap_api', True, True, True),
+    (False, 'neurosnap_api', True, True, False),
+    (False, 'neurosnap_api', False, True, False),
+    (False, 'neurosnap', False, True, False),
+    (False, 'colabfold_api', False, True, False),
+    (False, 'local', True, True, False),
+    (False, 'local', False, True, True),
+    (False, 'local', False, False, False),
 ])
 def test_real_protenix_profile_requests_only_selected_msa_bind(
         tmp_path, monkeypatch, remote, backend, prepared, use_msa, needs_db):
     """Evaluate actual production label/profile, not a copied option expression."""
     import shlex
     cmd, env = prepare(tmp_path, monkeypatch)
-    env.update(BMS_REMOTE_EXECUTION='1' if remote else '0',
-               BMS_DATA=str(tmp_path/'data'), XDG_CACHE_HOME=str(tmp_path/'cache'))
+    env.update(BMS_DATA=str(tmp_path/'data'), XDG_CACHE_HOME=str(tmp_path/'cache'))
+    if remote:
+        env['BMS_REMOTE_EXECUTION'] = '1'
+    else:
+        env.pop('BMS_REMOTE_EXECUTION', None)
     cmd[cmd.index('-profile')+1] = 'workstation_ryzen7960x'
     # Use the production file as a top-level config, as the actual launcher
     # does; includeConfig changes Groovy helper-method/profile resolution.
@@ -338,9 +347,13 @@ def test_real_protenix_profile_requests_only_selected_msa_bind(
     outputs = list((tmp_path/'work').glob('*/*/options.json'))
     assert len(outputs) == 1
     options = shlex.split(json.loads(outputs[0].read_text())['options'])
-    assert (f'{db}:{db}' in options) is needs_db
-    assert f'{weights}:/protenix_weights' in options
-    assert f"{tmp_path/'msa-cache'}:{tmp_path/'msa-cache'}" in options
-    assert f'{ROOT}/scripts:/scripts' in options
+    binds = [mount for index, option in enumerate(options[:-1]) if option == '--bind'
+             for mount in options[index + 1].split(',')]
+    assert (f'{db}:{db}' in binds) is needs_db
+    assert f'{weights}:/protenix_weights:ro' in binds
+    assert f'{weights}:{weights}:ro' in binds
+    assert f"{tmp_path/'msa-cache'}:{tmp_path/'msa-cache'}" in binds
+    assert f"{tmp_path/'support'}:{tmp_path/'support'}:ro" in binds
+    assert f'{ROOT}/scripts:/scripts' in binds
     assert '--nv' in options and 'CUDA_VISIBLE_DEVICES=0' in options
     assert not db.exists(), 'Selection must not create an empty pretend database'

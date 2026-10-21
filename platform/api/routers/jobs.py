@@ -74,6 +74,8 @@ from runtime_policy import (
     workflow_launches_allowed,
 )
 from schemas import ExecutionPolicy, JobCreate, JobResponse, JobList, JobSummaryResponse, JobSummaryList, JobStatus
+from schemas import BinderNavigationJob, BinderNavigationJobList, BC2NavigationResponse
+from services.binder_navigation_jobs import navigation_columns, navigation_job
 from services.job_control import cancel_job_lineage, reject_generic_md_lifecycle_control
 from services import alignment_access, ont_submission_trust, stage_reporting, ont_ngs_contract
 from services.md.chemistry_catalog import ChemistryCatalogError, ChemistryProfileSelectionError
@@ -814,6 +816,9 @@ class OpenStageGateRequest(BaseModel):
     payload: Dict[str, Any] = Field(default_factory=dict)
 
 
+from schemas import CandidateRef
+
+
 class SaveReviewFilterSetRequest(BaseModel):
     """Persist a named frozen review dataset on the parent job."""
     name: Optional[str] = None
@@ -821,6 +826,10 @@ class SaveReviewFilterSetRequest(BaseModel):
     source_total_count: Optional[int] = None
     design_ids: List[str] = Field(default_factory=list)
     filter_state: Dict[str, Any] = Field(default_factory=dict)
+    candidate_refs: list[CandidateRef] = Field(default_factory=list)
+    revision: int = Field(default=1, ge=1)
+    ranking: Dict[str, Any] = Field(default_factory=dict)
+    final_designation: Dict[str, Any] | None = None
 
 
 class SavedReviewFilterSet(BaseModel):
@@ -832,6 +841,10 @@ class SavedReviewFilterSet(BaseModel):
     source_total_count: Optional[int] = None
     design_ids: List[str] = Field(default_factory=list)
     filter_state: Dict[str, Any] = Field(default_factory=dict)
+    candidate_refs: list[CandidateRef] = Field(default_factory=list)
+    revision: int = Field(default=1, ge=1)
+    ranking: Dict[str, Any] = Field(default_factory=dict)
+    final_designation: Dict[str, Any] | None = None
 
 
 class SaveReviewFilterSetResponse(BaseModel):
@@ -3112,9 +3125,10 @@ def _extract_chain_records_from_structure(path: Path) -> Dict[str, List[Dict[str
 
 def _cif_selection_pdb(source: Path, destination: Path) -> Path:
     """Materialize only representable CIF coordinates for a PDB-only consumer."""
-    from Bio.PDB import MMCIFParser, PDBIO
+    from Bio.PDB import PDBIO
     from Bio.PDB.PDBParser import PDBParser
-    structure = MMCIFParser(QUIET=True).get_structure('selected', str(source))
+    from services.md.starting_structures import _parse_mmcif_structure
+    structure = _parse_mmcif_structure(source.read_bytes())
     def identity(model):
         return [(chain.id, residue.id, residue.resname,
                  tuple((atom.id, atom.coord.tolist()) for atom in residue))
@@ -5435,7 +5449,7 @@ def _scientific_family_ids(job_id: str):
     return select(family.c.id)
 
 
-@router.get("", response_model=JobList | JobSummaryList)
+@router.get("", response_model=JobList | JobSummaryList | BinderNavigationJobList)
 async def list_jobs(
     status: Optional[JobStatus] = None,
     q: Optional[str] = None,
@@ -5449,6 +5463,7 @@ async def list_jobs(
     include_children: bool = False,  # New param: show child jobs if True
     scientific_family_job_id: Optional[str] = None,
     summary: bool = False,  # Mobile/list views: omit heavyweight detail fields until a job is opened
+    projection: Optional[Literal["binder_navigation"]] = None,
     session: AsyncSession = Depends(get_session),
     *,
     request: Request = None,
@@ -5559,6 +5574,11 @@ async def list_jobs(
         filters.append(~or_(model_identity.in_(ngs_models), and_(
             model_identity == "", or_(workflow_identity.in_(ngs_workflows),
                                       mode_identity.in_((*ngs_workflows, "nanopore_methylation"))))))
+    if projection == "binder_navigation":
+        rows = (await session.execute(select(*navigation_columns()).where(*filters).order_by(
+            Job.created_at.desc(), Job.id).limit(limit).offset(offset))).mappings().all()
+        total = (await session.execute(select(func.count(Job.id)).where(*filters))).scalar_one()
+        return BinderNavigationJobList(jobs=[navigation_job(row) for row in rows], total=total)
     if summary:
         # Bound the Jobs scope before counting Designs. The existing job_id
         # index serves one exact count per displayed row, not a global GROUP BY
@@ -9077,7 +9097,9 @@ async def get_rfd3_generation_artifact(
         raise HTTPException(status_code=409, detail="RFD3 generation artifact hash mismatch")
     headers = {"Content-Encoding": "gzip"} if path.name.endswith(".gz") else None
     media_type = "chemical/x-mmcif" if path.name.endswith(".cif.gz") else str(descriptor.get("media_type"))
-    return FileResponse(str(path), media_type=media_type, filename=path.name, headers=headers)
+    # HTTP clients decode Content-Encoding before saving the attachment.
+    filename = path.name.removesuffix(".gz") if headers else path.name
+    return FileResponse(str(path), media_type=media_type, filename=filename, headers=headers)
 
 
 @router.get("/{job_id}/rfd3-local-redesign")
@@ -9263,17 +9285,23 @@ async def get_rfd3_local_redesign_artifact(
     return FileResponse(
         str(path),
         media_type=response_media_type,
-        filename=path.name,
+        filename=path.name.removesuffix(".gz") if response_headers else path.name,
         headers=response_headers,
     )
 
 
-@router.get("/{job_id}", response_model=JobResponse)
+@router.get("/{job_id}", response_model=JobResponse | BinderNavigationJob)
 async def get_job(
     job_id: str,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    projection: Optional[Literal["binder_navigation"]] = None,
 ):
     """Get details of a specific job."""
+    if projection == "binder_navigation":
+        row = (await session.execute(select(*navigation_columns()).where(Job.id == job_id))).mappings().one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return navigation_job(row)
     result = await session.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     
@@ -9508,6 +9536,29 @@ async def get_native_generation_results(
     except (ValueError, RuntimeError, OSError) as exc:
         logger.warning("Native generation results unavailable for job %s: %s", job_id, exc)
         raise HTTPException(status_code=409, detail="Native generation results unavailable") from exc
+
+
+@router.get("/{job_id}/bindcraft2-navigation", response_model=BC2NavigationResponse)
+async def get_bindcraft2_navigation(
+    job_id: str,
+    arm: Optional[str] = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Compact navigation, with the same fresh publication authority as results."""
+    from services.bindcraft2_result_readback import read_bindcraft2_navigation
+    from services.bindcraft2_publication import PublicationError
+    from services.bindcraft2_native_results import NativeResultError
+
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.model_id != "bindcraft2":
+        raise HTTPException(status_code=400, detail="Job is not a BindCraft2 campaign")
+    try:
+        return await read_bindcraft2_navigation(job, session, arm=arm)
+    except (PublicationError, NativeResultError, OSError) as exc:
+        logger.warning("BC2 native navigation unavailable for job %s: %s", job_id, exc)
+        raise HTTPException(status_code=409, detail="Verified native results unavailable") from exc
 
 
 @router.get("/{job_id}/bindcraft2-results")
@@ -10280,6 +10331,15 @@ async def save_review_filter_set(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    if request.candidate_refs:
+        from services.binder_continuation import resolve_root
+        from services.binder_selected_round import resolve_ref
+        _, root = await resolve_root(session, job.id)
+        try:
+            for ref in request.candidate_refs:
+                await resolve_ref(session, root, ref, snapshot=False)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, str(exc)) from exc
     filter_sets = _saved_review_filter_entries(job)
 
     filter_name = str(request.name or "").strip() or f"Saved dataset {len(filter_sets) + 1}"
@@ -10291,6 +10351,9 @@ async def save_review_filter_set(
         "source_total_count": request.source_total_count,
         "design_ids": _normalize_design_ids(request.design_ids),
         "filter_state": dict(request.filter_state or {}),
+        "candidate_refs": [r.model_dump(mode="json", exclude_none=True) for r in request.candidate_refs],
+        "revision": request.revision, "ranking": dict(request.ranking),
+        "final_designation": request.final_designation,
     }
     filter_sets.insert(0, saved_entry)
     _persist_saved_review_filter_entries(job, filter_sets)
