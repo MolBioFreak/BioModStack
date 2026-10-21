@@ -33,6 +33,16 @@ class DistributionBoundaryTests(unittest.TestCase):
         for prefix in ('/api/msa', '/api/bioxp', '/api/frustrampnn', '/api/blind-pose', '/api/designs'):
             self.assertFalse(any(path.startswith(prefix) for path in paths), prefix)
 
+    def test_rootless_client_receives_session_context_without_unrelated_secrets(self):
+        import os
+        from unittest.mock import patch
+        from services.ont_signal_worker import _container_cli_env
+        with patch.dict(os.environ, {"HOME": "/home/operator", "XDG_RUNTIME_DIR": "/run/user/1234", "PRIVATE_TOKEN": "secret"}, clear=True):
+            context = _container_cli_env()
+        self.assertEqual(context['HOME'], '/home/operator')
+        self.assertEqual(context['XDG_RUNTIME_DIR'], '/run/user/1234')
+        self.assertNotIn('PRIVATE_TOKEN', context)
+
     def test_installed_registry_contains_only_local_science(self):
         from model_registry import get_registry
         ids = {model.id for model in get_registry().list_models()}
