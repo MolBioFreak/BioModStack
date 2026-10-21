@@ -10,6 +10,7 @@ No assertion about installed model/checkpoint qualification is made here.
 import gzip
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 SCHEMA = 'bms.rf3-native-pair.v1'
@@ -37,11 +38,22 @@ def export_pairs(native_root, output):
     structures = sorted([*native_root.rglob('*_model.cif'), *native_root.rglob('*_model.cif.gz')])
     if not structures:
         raise ValueError('RF3 native structure inventory empty')
+    # Foundry writes a top-level best alias in addition to per-sample leaves.
+    # Identify by its native directory/name contract, not coordinate equality:
+    # distinct samples can legitimately have identical coordinates/confidence.
+    aliases = []
     for structure in structures:
+        identity = structure.name.removesuffix('.gz').removesuffix('.cif').removesuffix('_model')
+        samples = list(structure.parent.glob(f'seed-*_sample-*/{identity}_seed-*_sample-*_model.cif*'))
+        if samples:
+            aliases.append(structure)
         stem = structure.name.removesuffix('.gz').removesuffix('.cif')
         summary = structure.with_name(stem.removesuffix('_model') + '_summary_confidences.json')
         if not summary.is_file() or summary.is_symlink() or structure.is_symlink():
             raise ValueError('RF3 native pair missing or symlinked')
+        if structure in aliases:
+            summaries.add(summary)
+            continue
         target = stem + '.cif.gz'
         if target in names:
             raise ValueError('RF3 duplicate flattened candidate identity')
@@ -59,10 +71,43 @@ def export_pairs(native_root, output):
         (output / name).write_bytes(raw)
         (output / summary_name).write_bytes(summary_raw)
         binding_path(output / name).write_text(json.dumps(binding, sort_keys=True))
-    for summary in summaries:
+    # Preserve native aliases/rankings separately, not as candidate records.
+    archive = output / 'native_artifacts'
+    for source in [*aliases, *native_root.rglob('*_ranking_scores.csv')]:
+        destination = archive / source.relative_to(native_root)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+    for alias in aliases:
+        identity = alias.name.removesuffix('.gz').removesuffix('.cif').removesuffix('_model')
+        for source in alias.parent.glob(identity + '*confidences.json'):
+            destination = archive / source.relative_to(native_root)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+    alias_summaries = {p.with_name(p.name.removesuffix('.gz').removesuffix('.cif').removesuffix('_model') + '_summary_confidences.json') for p in aliases}
+    for summary in summaries - alias_summaries:
         full = summary.with_name(summary.name.replace('_summary_confidences.json', '_confidences.json'))
         if full.is_file():
             (output / full.name).write_bytes(full.read_bytes())
+
+
+def archive_top_aliases(native_root, output):
+    """Legacy staging: remove only redundant native aliases, adding no gates."""
+    native_root, output = Path(native_root), Path(output)
+    structures = sorted([*native_root.rglob('*_model.cif'), *native_root.rglob('*_model.cif.gz')])
+    sources = set(native_root.rglob('*_ranking_scores.csv'))
+    for structure in structures:
+        identity = structure.name.removesuffix('.gz').removesuffix('.cif').removesuffix('_model')
+        if list(structure.parent.glob(f'seed-*_sample-*/{identity}_seed-*_sample-*_model.cif*')):
+            sources.add(structure)
+            for suffix in ('_summary_confidences.json', '_confidences.json'):
+                sibling = structure.with_name(identity + suffix)
+                if sibling.is_file():
+                    sources.add(sibling)
+    output.mkdir(parents=True, exist_ok=True)
+    for source in sources:
+        destination = output / source.relative_to(native_root)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(destination))
 
 
 if __name__ == '__main__':
@@ -70,5 +115,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--native-root', required=True)
     parser.add_argument('--output', required=True)
+    parser.add_argument('--archive-aliases-only', action='store_true')
     args = parser.parse_args()
-    export_pairs(args.native_root, args.output)
+    (archive_top_aliases if args.archive_aliases_only else export_pairs)(args.native_root, args.output)

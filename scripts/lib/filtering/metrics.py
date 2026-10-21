@@ -139,6 +139,17 @@ def extract_confidence_metrics(metadata: dict, core_protein_scientific_contract=
     Returns:
         Normalized dict with 'plddt', 'ptm', 'pae' keys
     """
+    # Foundry b02eed6: atom-mean pLDDT is a fraction; PAE is Angstrom.
+    # Normalize by native key, never by a value-range heuristic (zero is valid).
+    if 'overall_plddt' in metadata or 'overall_pae' in metadata:
+        metadata = dict(metadata)
+        if metadata.get('overall_plddt') is not None:
+            from numbers import Real
+            value = metadata['overall_plddt']
+            metadata['plddt'] = value * 100.0 if isinstance(value, Real) and not isinstance(value, bool) else value
+            metadata['plddt_units'] = 'percent'
+        if metadata.get('overall_pae') is not None:
+            metadata['pae'] = metadata['overall_pae']
     if core_protein_scientific_contract == 1:
         aliases = {'plddt': ('plddt', 'mean_plddt', 'pLDDT'), 'ptm': ('ptm', 'pTM'), 'pae': ('pae', 'mean_pae', 'PAE'), 'rmsd': ('rmsd', 'rmsd_overall'), 'rmsd_binder': ('rmsd_binder', 'binder_rmsd')}
         from .evidence import alias_value
@@ -146,9 +157,9 @@ def extract_confidence_metrics(metadata: dict, core_protein_scientific_contract=
         result['plddt_units'] = metadata.get('plddt_units')
         return result
     return {
-        'plddt': metadata.get('plddt') or metadata.get('mean_plddt') or metadata.get('pLDDT'),
-        'ptm': metadata.get('ptm') or metadata.get('pTM'),
-        'pae': metadata.get('pae') or metadata.get('mean_pae') or metadata.get('PAE'),
-        'rmsd': metadata.get('rmsd') or metadata.get('rmsd_overall'),
-        'rmsd_binder': metadata.get('rmsd_binder') or metadata.get('binder_rmsd'),
+        'plddt': next((metadata[k] for k in ('plddt', 'mean_plddt', 'pLDDT') if metadata.get(k) is not None), None),
+        'ptm': next((metadata[k] for k in ('ptm', 'pTM') if metadata.get(k) is not None), None),
+        'pae': next((metadata[k] for k in ('pae', 'mean_pae', 'PAE') if metadata.get(k) is not None), None),
+        'rmsd': next((metadata[k] for k in ('rmsd', 'rmsd_overall') if metadata.get(k) is not None), None),
+        'rmsd_binder': next((metadata[k] for k in ('rmsd_binder', 'binder_rmsd') if metadata.get(k) is not None), None),
     }
