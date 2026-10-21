@@ -43,6 +43,25 @@ def test_child_result_uses_existing_prediction_contract(mode):
     assert resolve_result_contract(model_type='unrelated', stage_mode=mode).analysis_contract_id is None
 
 
+@pytest.mark.parametrize('mode', ['flexible', 'conditioned', 'frozen'])
+@pytest.mark.parametrize('requested', [False, True, None])
+def test_geometry_normalization_preserves_generic_template_intent(mode, requested):
+    from routers.jobs import _normalize_structure_geometry_params
+    params = {'protenix_target_geometry_mode': mode}
+    if requested is not None:
+        params['protenix_use_template'] = requested
+    normalized = _normalize_structure_geometry_params(params)
+    assert normalized['protenix_anchor_target'] is (mode != 'flexible')
+    assert ('protenix_use_template' in normalized) is (requested is not None)
+    if requested is not None:
+        assert normalized['protenix_use_template'] is requested
+
+
+def test_generic_templates_do_not_invent_target_anchoring():
+    from routers.jobs import _normalize_structure_geometry_params
+    assert _normalize_structure_geometry_params({'protenix_use_template': True}) == {'protenix_use_template': True}
+
+
 def test_parent_protenix_selector_reaches_selected_component():
     metadata = selected_execution_metadata('antibody_denovo', 'antibody_denovo_pipeline',
         {'structure_validator': 'protenix', 'protenix_use_msa': False, 'run_frustrampnn': False},

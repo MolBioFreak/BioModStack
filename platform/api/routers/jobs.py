@@ -2005,10 +2005,7 @@ def _normalize_structure_geometry_params(params: Optional[Dict[str, Any]]) -> Di
 
     if boltz_mode is None and _to_bool(normalized.get("boltz_anchor_target")):
         boltz_mode = "conditioned"
-    if protenix_mode is None and (
-        _to_bool(normalized.get("protenix_anchor_target"))
-        or _to_bool(normalized.get("protenix_use_template"))
-    ):
+    if protenix_mode is None and _to_bool(normalized.get("protenix_anchor_target")):
         protenix_mode = "conditioned"
 
     if global_mode is None:
@@ -2023,10 +2020,9 @@ def _normalize_structure_geometry_params(params: Optional[Dict[str, Any]]) -> Di
     if protenix_mode is not None:
         normalized["protenix_target_geometry_mode"] = protenix_mode
         normalized["protenix_anchor_target"] = protenix_mode in {"conditioned", "frozen"}
-        normalized["protenix_use_template"] = (
-            protenix_mode in {"conditioned", "frozen"}
-            or _to_bool(normalized.get("protenix_use_template"))
-        )
+        # Generic template search and selected-target anchoring are independent.
+        # The native caller enables template features for anchoring itself;
+        # do not turn an explicit false (or omitted search) into a corpus search.
 
     if global_mode is not None:
         normalized["target_geometry_mode"] = global_mode
