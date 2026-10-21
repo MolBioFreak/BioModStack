@@ -7649,6 +7649,8 @@ async def _create_job(
         # In particular MD materialization and NGS path normalization must not
         # replace the submitted settings with scheduler-effective values.
         provenance_payload['core_protein_requested_params'] = deepcopy(original_requested_params)
+        provenance_payload['parameter_diagnostics'] = get_registry().parameter_diagnostics(
+            job_data.model_id, original_requested_params)
         if job_data.source_structure is not None:
             provenance_payload['source_structure'] = job_data.source_structure.model_dump(mode='json', exclude_none=True)
             provenance_payload['source_structure_identity'] = selected_structure_identity
@@ -9772,6 +9774,8 @@ async def resubmit_job(
         resubmit_params, resubmit_provenance = scientific_contract.admitted_payload(
             resubmit_params, {}, resubmit_revision,
         )
+        resubmit_provenance['parameter_diagnostics'] = get_registry().parameter_diagnostics(
+            original_job.model_id, resubmit_params)
         original_round = (original_job.provenance or {}).get('binder_round_request')
         if original_round is not None:
             resubmit_provenance['binder_round_request'] = deepcopy(original_round)
@@ -11225,6 +11229,8 @@ async def resume_job(
         merged_params, resume_provenance = scientific_contract.admitted_payload(
             merged_params, {}, resume_revision,
         )
+        resume_provenance['parameter_diagnostics'] = get_registry().parameter_diagnostics(
+            job.model_id, merged_params)
         original_request = (job.provenance or {}).get('core_protein_requested_params')
         if original_request is not None:
             resume_provenance['core_protein_requested_params'] = {

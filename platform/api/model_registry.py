@@ -968,6 +968,22 @@ class ModelRegistry:
         
         return errors
     
+    def parameter_diagnostics(self, model_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Non-gating catalog coverage, not a claim that an extension is unused.
+
+        Shared workflow and native extensions can legitimately be outside this
+        catalog. Preserve their values; expose the coverage boundary rather than
+        silently certifying their scientific consumption or rejecting them.
+        """
+        model = self.get_model(model_id)
+        declared = {field.name for field in model.params} if model is not None else set()
+        return {
+            'schema_version': 1,
+            'scope': 'model_parameter_catalog',
+            'settings_outside_catalog': sorted(key for key in params if key not in declared),
+            'native_consumption': 'not_established_by_catalog_validation',
+        }
+
     def reload(self) -> None:
         """Atomically reload all model definitions from disk."""
         self._load_models()

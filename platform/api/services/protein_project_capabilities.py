@@ -323,30 +323,31 @@ def _source_receipt_field(title: str = "Source structure receipt") -> dict[str, 
 
 def _model_sequence_design_schema(capability_id: str, model: str) -> dict[str, Any]:
     source = {"source_structure_receipt_id": _source_receipt_field()}
-    if model == "fampnn":
-        source.update({
-            "mode": _field(title="Design mode", kind="string", description="FA-MPNN design role.", default="design", enum=["design", "fixed_backbone", "binder_design"], control="select", group="Design", order=20),
-            "design_chain": _field(title="Design chains", kind="string", description="Comma-separated source chain identifiers to redesign.", default="A", pattern="^[A-Za-z0-9]+(?:,[A-Za-z0-9]+)*$", control="chain_selector", group="Design", order=30),
-            "target_chain": _field(title="Fixed target chains", kind="string", description="Optional fixed target chain identifiers.", default="", pattern="^(?:|[A-Za-z0-9]+(?:,[A-Za-z0-9]+)*)$", control="chain_selector", group="Design", order=40, applicability="binder_design"),
-            "fixed_positions": _field(title="Fixed residues", kind="string", description="Typed chain/residue ranges retained during redesign.", default="", control="residue_range_selector", group="Constraints", order=50, applicability="fixed_backbone"),
-            "fampnn_temperature": _field(title="Sampling temperature", kind="number", description="FA-MPNN sequence sampling temperature.", default=0.1, minimum=0.01, maximum=2.0, control="bounded_number", group="Sampling", order=60),
-            "fampnn_exclude_cys": _field(title="Exclude cysteine", kind="boolean", description="Exclude cysteine from sampled positions.", default=True, control="checkbox", group="Constraints", order=70),
-            "fampnn_fix_target_sidechains": _field(title="Fix target sidechains", kind="boolean", description="Keep target sidechain coordinates fixed.", default=False, control="checkbox", group="Constraints", order=80),
-            "fampnn_psce_threshold": _field(title="PSCE threshold", kind="number", description="Sidechain-confidence filtering threshold.", default=0.3, minimum=0.0, maximum=1.0, control="bounded_number", group="Filtering", order=90),
-            "fampnn_seq_only": _field(title="Sequence-only mode", kind="boolean", description="Skip sidechain diffusion.", default=False, control="checkbox", group="Sampling", order=100),
-            "fampnn_num_steps": _field(title="Denoising steps", kind="integer", description="FA-MPNN denoising timesteps.", default=100, minimum=10, maximum=500, control="integer", group="Sampling", order=110),
-            "fampnn_batch_size": _field(title="Batch size", kind="integer", description="FA-MPNN inference batch size.", default=16, minimum=1, maximum=64, control="integer", group="Execution", order=120),
-            "fampnn_repack_last": _field(title="Final sidechain repack", kind="boolean", description="Repack sidechains after denoising.", default=True, control="checkbox", group="Sampling", order=130),
-        })
-    elif model == "proteinmpnn":
-        source.update({
-            "mpnn_temperature": _field(title="Sampling temperature", kind="number", description="ProteinMPNN sampling temperature.", default=0.1, minimum=0.01, maximum=2.0, control="bounded_number", group="Sampling", order=20),
-            "mpnn_omitAAs": _field(title="Excluded amino acids", kind="string", description="One-letter amino acids excluded from sampling.", default="CX", pattern="^[ACDEFGHIKLMNPQRSTVWYX]*$", control="amino_acid_selector", group="Constraints", order=30),
-            "mpnn_checkpoint_type": _field(title="Checkpoint family", kind="string", description="Installed ProteinMPNN checkpoint family.", default="soluble", enum=["vanilla", "soluble"], control="select", group="Model authority", order=40),
-            "mpnn_checkpoint_model": _field(title="Checkpoint noise model", kind="string", description="Installed ProteinMPNN backbone-noise checkpoint.", default="v_48_020", enum=["v_48_002", "v_48_010", "v_48_020", "v_48_030"], control="select", group="Model authority", order=50),
-            "mpnn_backbone_noise": _field(title="Backbone noise", kind="number", description="Gaussian backbone noise used during design.", default=0, minimum=0, maximum=1, control="bounded_number", group="Sampling", order=60, units="angstrom"),
-            "mpnn_relax_max_cycles": _field(title="FastRelax cycles", kind="integer", description="Maximum post-design FastRelax cycles; zero disables refinement.", default=0, minimum=0, maximum=10, control="integer", group="Refinement", order=70),
-        })
+    if model in {"fampnn", "proteinmpnn"}:
+        # Discovery-only Project descriptors share the native model catalog.
+        # Direct Project dispatch remains unavailable; this does not enable it.
+        from model_registry import get_registry
+        definition = get_registry().get_model(model)
+        source["mode"] = _field(title="Design mode", kind="string",
+            description="Native sequence-design mode.", default=definition.modes[0].id,
+            enum=[mode.id for mode in definition.modes], control="select", order=20)
+        for index, parameter in enumerate(definition.params, start=3):
+            if parameter.type in {"file", "directory"}:
+                continue  # Source bytes are selected by the existing receipt.
+            kind = {"text": "string", "textarea": "string", "float": "number",
+                    "string_list": "array"}.get(parameter.type, parameter.type)
+            field = _field(title=parameter.label or parameter.name, kind=kind,
+                description=parameter.description, default=copy.deepcopy(parameter.default),
+                enum=parameter.enum, minimum=parameter.minimum, maximum=parameter.maximum,
+                pattern=parameter.pattern, units=parameter.units,
+                control=parameter.ui_control or ("select" if parameter.enum else
+                    {"boolean": "checkbox", "integer": "integer", "number": "bounded_number"}.get(kind, "typed_control")),
+                group=parameter.group or "Scientific settings", order=index * 10)
+            if kind == "array":
+                field["items"] = {"type": "string"} if parameter.type == "string_list" else {}
+            if parameter.default is None and not parameter.required:
+                field["type"] = [kind, "null"]
+            source[parameter.name] = field
     else:
         source.update({
             "mode": _field(title="LigandMPNN mode", kind="string", description="Foundry-owned LigandMPNN scientific context.", default="ligand_aware", enum=["ligand_aware", "ntp_aware", "metal_aware", "dna_aware"], control="select", group="Design", order=20),

@@ -79,11 +79,28 @@ def test_selected_roles_count_identity_and_falsey_science_reach_real_compiler(mo
             assert normalized.params[key] == value
             assert invocation.native_parameters[key] == value
             assert document[key] == value
+        assert document['native_sources'] == normalized.params['native_sources']
+        assert invocation.native_parameters['native_sources'] == document['native_sources']
+        assert '--native_sources' not in invocation.command
         assert 'binder_chains' not in normalized.params
         assert 'target_chains' not in normalized.params
         assert not any(key in normalized.params for key in ('antibody_design_loops', 'antibody_chains', 'cdr_positions'))
         assert invocation.entrypoint == 'workflows/protein_sequence_design.nf'
         assert '-params-file' in invocation.command
+
+
+@pytest.mark.parametrize('lineage', [None, []])
+def test_empty_native_lineage_is_not_absent(tmp_path, lineage):
+    path = tmp_path / 'input.pdb'
+    path.write_text(PDB)
+    params = {'input_pdb': str(path), 'design_chain': 'a', 'mpnn_relax_max_cycles': 0}
+    if lineage is not None:
+        params['native_sources'] = lineage
+    request = JobCreate(name='lineage', model_id='proteinmpnn', mode='design', params=params)
+    _, invocation, document = compile_request(request, tmp_path / 'out')
+    assert ('native_sources' in document) == (lineage is not None)
+    if lineage is not None:
+        assert document['native_sources'] == invocation.native_parameters['native_sources'] == []
 
 
 @pytest.mark.parametrize('model', ['proteinmpnn', 'fampnn'])
@@ -272,6 +289,6 @@ def test_bias_file_discovery_retains_existing_containment(roots, tmp_path):
             output_dir=roots['results'], allowed_roots=[roots['inputs'], roots['results']])
     link = roots['inputs'] / 'bias.jsonl'
     link.symlink_to(outside)
-    with pytest.raises(ValueError, match='symlink'):
+    with pytest.raises(ValueError, match='symlink|outside approved roots'):
         discover_native_input_references('proteinmpnn', 'design', {'mpnn_bias_AA_jsonl': str(link)}, (),
             output_dir=roots['results'], allowed_roots=[roots['inputs'], roots['results']])

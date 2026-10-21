@@ -2087,7 +2087,8 @@ def _design_to_response(
         data["binder_length"] = None
 
     capabilities = set(contract.viewer_capabilities)
-    if job is not None and job.model_id in ('boltz', 'boltz2', 'boltz_cp_experimental'):
+    if job is not None and job.model_id in ('boltz', 'boltz2', 'boltz_cp_experimental',
+                                            'protenix', 'esmfold2', 'esmfold2_experimental', 'biohub_esmfold2'):
         # A prediction is not a FAMPNN coordinate product. Preserve persisted
         # upstream sequence/mutation evidence; a missing sidecar says nothing
         # about its validity. Filename matches cannot establish producer identity.
@@ -3567,15 +3568,19 @@ async def get_confidence_artifacts(design_id: str, session: AsyncSession = Depen
             # for PAE and never inferred from a launch/save flag.
             structure_key = Path(keys['structure'])
             keys['pde'] = (structure_key.parent / f'pde_{structure_key.stem}.npz').as_posix()
-        elif job and revision_for_job(job) == 1 and job.model_id == 'protenix':
-            from services.protenix_scientific_consumer import verified_native_design
+        elif job and revision_for_job(job) == 1 and job.model_id in ('protenix', 'esmfold2', 'esmfold2_experimental'):
+            if job.model_id == 'protenix':
+                from services.protenix_scientific_consumer import verified_native_design
+            else:
+                from services.esmfold2_scientific_consumer import verified_native_design
             selected = await verified_native_design(design, session)
-            native_snapshots = {role: (selected['artifacts'][role], selected['snapshots'][role])
-                                for role in ('structure', 'metrics', 'pae')}
-            producer = 'protenix'
+            native_snapshots = {role: (artifact, selected['snapshots'][role])
+                                for role, artifact in selected['artifacts'].items()
+                                if role in selected['snapshots']}
+            producer = 'protenix' if job.model_id == 'protenix' else 'esmfold2'
             root = selected['publication_root']
-            keys = {role: Path(selected['artifacts'][role]['path']).relative_to(root).as_posix()
-                    for role in ('structure', 'metrics', 'pae')}
+            keys = {role: Path(artifact['path']).relative_to(root).as_posix()
+                    for role, (artifact, _) in native_snapshots.items()}
         else:
             found = retained_cp_paths(design, job)
             if found is None:
@@ -3588,8 +3593,10 @@ async def get_confidence_artifacts(design_id: str, session: AsyncSession = Depen
                 entries.append(dict(role=role, filename=Path(key).name, retained=True,
                     artifact_sha256=artifact['sha256'], size_bytes=len(content),
                     scope='original_native_artifact',
-                    download_url='/api/files/download/' + quote(relative, safe='/') if relative else None,
-                    download_reason=None if relative else 'outside_existing_download_owner'))
+                    download_url=('/api/files/download/' + quote(relative, safe='/') if relative else
+                        f'/api/designs/{design_id}/confidence-artifacts/{quote(role, safe="")}/download'
+                        if native_snapshots is not None else None),
+                    download_reason=None if relative or native_snapshots is not None else 'outside_existing_download_owner'))
             except (ValueError, OSError):
                 entries.append(dict(role=role, filename=Path(key).name, retained=False,
                     scope='original_native_artifact', download_url=None, download_reason='not_retained'))
@@ -3598,6 +3605,38 @@ async def get_confidence_artifacts(design_id: str, session: AsyncSession = Depen
             saved_write_full_pae=(job.params or {}).get('write_full_pae'))
     except (ValueError, TypeError, KeyError, OSError):
         return dict(design_id=design_id, status='unavailable', reason='native_inventory_unverified', artifacts=[])
+
+
+@router.get("/{design_id}/confidence-artifacts/{role}/download")
+async def download_confidence_artifact(design_id: str, role: str, session: AsyncSession = Depends(get_session)):
+    """Download exact verified snapshots, never an arbitrary imported path.
+
+    Reuse native custody verification at download time, including external
+    imports. Returning the verified bytes avoids a path reopen/TOCTOU window.
+    """
+    from fastapi.responses import Response
+    from urllib.parse import quote
+    design = await session.get(Design, design_id)
+    job = await session.get(Job, design.job_id) if design is not None else None
+    if job is None or revision_for_job(job) != 1:
+        raise HTTPException(status_code=404, detail='Native artifact not found')
+    if job.model_id == 'protenix':
+        from services.protenix_scientific_consumer import verified_native_design
+    elif job.model_id in ('esmfold2', 'esmfold2_experimental'):
+        from services.esmfold2_scientific_consumer import verified_native_design
+    else:
+        raise HTTPException(status_code=404, detail='Native artifact not found')
+    try:
+        selected = await verified_native_design(design, session)
+        artifact = selected['artifacts'][role]
+        content = selected['snapshots'][role]
+    except (ValueError, TypeError, KeyError, OSError):
+        raise HTTPException(status_code=404, detail='Native artifact unavailable or unverified')
+    filename = quote(Path(artifact['path']).name, safe='')
+    return Response(content=content, media_type='application/octet-stream', headers={
+        'Content-Disposition': "attachment; filename*=UTF-8''" + filename,
+        'ETag': '"' + artifact['sha256'] + '"',
+    })
 
 
 @router.get("/{design_id}/pae", response_model=Union[PAEData, ScientificViewerMetric])

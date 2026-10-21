@@ -61,6 +61,7 @@ async def test_http_sqlite_clone_resubmit_compiled_chemistry(admission, monkeypa
     monkeypatch.setattr('services.gpu_config.read_scheduler_config', lambda: {})
     monkeypatch.setattr('services.msa_server.read_server_settings', lambda: {})
     science = params()
+    science['unexpected_nested_science'] = {'iterations': 999}
     payload = {'name': 'chemistry-roundtrip', 'model_id': 'protenix', 'mode': 'complex',
                'params': science, 'execution_target_id': None}
     identities = []
@@ -95,6 +96,7 @@ async def test_http_sqlite_clone_resubmit_compiled_chemistry(admission, monkeypa
                 row = await session.get(Job, job_id)
                 for key, value in science.items():
                     assert row.params[key] == value
+                assert 'unexpected_nested_science' in row.provenance['parameter_diagnostics']['settings_outside_catalog']
                 requested = row.provenance['core_protein_requested_params']
                 for key in ('complex_components', 'covalent_bonds', 'constraint'):
                     assert requested[key] == science[key]

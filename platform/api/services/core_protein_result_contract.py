@@ -180,7 +180,7 @@ def prepare_esmfold2_publication(job, root, existing):
         block = scalar_block(payload, candidate_id=candidate, document_id=entry['metrics'],
                              artifact_sha256=metrics['sha256'])
         artifacts = {'structure': structure, 'metrics': metrics}
-        snapshots = {'structure': structure_bytes}
+        snapshots = {'structure': structure_bytes, 'metrics': metrics_bytes}
         if payload.get('native_confidence') is not None:
             if payload['native_confidence'] != entry.get('native_confidence'):
                 raise CandidateIntegrityError('foreign_candidate_artifact', 'confidence differs from declared sample')

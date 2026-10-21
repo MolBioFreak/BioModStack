@@ -991,7 +991,9 @@ def _write_sequence_batch_payloads(
             if str(component.get("type") or "").strip().lower() in {"protein", "peptide"}
         ]
 
-        if len(protein_components) == 1:
+        if len(protein_components) == 1 and not any(
+            params.get(key) for key in ('sequence_batch_component_id', 'binder_chains', 'primary_chain_id')
+        ):
             used_ids = {
                 str(component.get("id") or "").strip()
                 for component in normalized_components
@@ -1042,11 +1044,20 @@ def _write_sequence_batch_payloads(
             variant_name = sanitize_filename(f"{entry['name']}")
             variant_components: List[Dict[str, Any]] = []
             replaced = False
+            invalidated_annotations = {}
             for component in normalized_components:
                 copied = dict(component)
                 component_id = str(copied.get("id") or "").strip()
                 component_type = str(copied.get("type") or "").strip().lower()
                 if component_id == replace_component_id and component_type in {"protein", "peptide"}:
+                    if copied.get('sequence') != entry['sequence']:
+                        # These records describe the old sequence, not the new
+                        # variant. Keep their original values in the manifest
+                        # for provenance, without feeding stale conditioning.
+                        for key in ('modifications', 'msa', 'unpairedMsa', 'pairedMsa',
+                                    'unpairedMsaPath', 'pairedMsaPath', 'templatesPath'):
+                            if key in copied:
+                                invalidated_annotations[key] = copied.pop(key)
                     copied["sequence"] = entry["sequence"]
                     replaced = True
                 variant_components.append(copied)
@@ -1067,6 +1078,8 @@ def _write_sequence_batch_payloads(
                     "label": entry["label"],
                     "sequence": entry["sequence"],
                     "complex_json": str(variant_path),
+                    "replaced_component_id": replace_component_id,
+                    "invalidated_sequence_annotations": invalidated_annotations,
                 }
             )
         sequence_batch_json_path = out_root / "sequence_batch_manifest.json"
@@ -6175,7 +6188,7 @@ def compile_nextflow_invocation(
         }
         # Selected-source identity uses the same typed params document rather
         # than falling through to the scalar-only runtime argv transport.
-        settings_keys = science_keys | {'iteration_source_design_ids'}
+        settings_keys = science_keys | {'iteration_source_design_ids', 'native_sources'}
         settings = {key: value for key, value in params.items() if key in settings_keys}
         settings_path = Path(output_dir) / '.sequence-design-settings.json'
         plan_input(settings_path, json.dumps(settings, allow_nan=False, sort_keys=True).encode('utf-8'))
@@ -6444,14 +6457,18 @@ def compile_nextflow_invocation(
         'nampnn_seed': 'nampnn_seed',
     }
     
-    # Protenix owns its nested chemistry; do not alter other models' documents.
-    task_chemistry = {}
+    # Validation remains native-model-owned; ensemble transport must not apply
+    # Protenix's PTM dialect to Boltz records. Preserve the shared document and
+    # stage managed FILE selections when Protenix is an actual consumer.
     if model_id == 'protenix':
         from scripts.protenix_chemistry import validate_chemistry
-        from services.protenix_chemistry import stage_component_files
         validate_chemistry(params)
+    if model_id == 'protenix' or params.get('pred_method') == 'boltz_protenix':
+        from services.protenix_chemistry import stage_component_files
         params = stage_component_files(params, output_dir=output_dir, write_input=plan_input)
-        task_chemistry = {key: params.pop(key) for key in ('covalent_bonds', 'constraint') if key in params}
+    task_chemistry = {}
+    if model_id == 'protenix' or params.get('complex_components'):
+        task_chemistry = {key: params.pop(key) for key in ('covalent_bonds', 'constraint', 'constraints') if key in params}
     # Handle complex_components specially - write JSON file for BoltzFromComplex process
     complex_components = params.pop('complex_components', None)
     sequence_batch_json_path, complex_batch_dir, complex_components = _write_sequence_batch_payloads(
