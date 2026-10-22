@@ -377,7 +377,7 @@ def install():
     try:
         spec = importlib.machinery.PathFinder.find_spec("boltzgen")
         package = Path(spec.origin).parent
-        manifest = json.loads((Path(__file__).parent / "lib/boltzgen_native_source.json").read_text())
+        from lib.boltzgen_native import CONTRACTS
         codes = {}
         for module in MODULES:
             name = "boltzgen." + module
@@ -386,8 +386,9 @@ def install():
             relative = module.replace(".", "/") + ".py"
             path = package / relative
             raw = path.read_bytes()
-            expected = manifest["files"]["opt/venv/lib/python3.11/site-packages/boltzgen/" + relative]
-            if digest(raw) != expected:
+            key = "opt/venv/lib/python3.11/site-packages/boltzgen/" + relative
+            expected = {contract["files"][key] for contract in CONTRACTS}
+            if digest(raw) not in expected:
                 return False
             codes[name] = compile_instrumented(module, raw, str(path))
         sys.meta_path.insert(0, Finder(codes))

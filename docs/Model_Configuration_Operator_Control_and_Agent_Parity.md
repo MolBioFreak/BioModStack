@@ -128,14 +128,16 @@ closeout commits are incorporated and qualified together, not pending handoffs.
 Fold-CP and Caliby candidate images passed their documented CPU contracts;
 publication, installed selection and managed release remain separate operations.
 
-BoltzGen is in scope; RFD3 is out of scope. All eight public BoltzGen modes now
+BoltzGen is in scope; RF3 and RFD3 are explicitly out of scope. All eight public BoltzGen modes now
 reach the existing typed discovery, settings editor, compiler and native input
 preparation. [BoltzGen capability mapping](BoltzGen_Public_Capabilities.md)
 identifies the official pinned protocols, current-upstream differences and actual
-native limitations. In particular, the ligand-only PDB parser failure is not
-repaired, and the retained backbone-conditioned sampling alias is not proof of
-a docking optimizer. RF3 is a different model from RFD3; its standalone sequence
-routing mismatch is not closed by excluding RFD3.
+native behavior. The ligand-only PDB/mmCIF parsing defect is repaired by the
+[local native parser candidate](BoltzGen_Ligand_Parser_Repair.md), without fabricated
+polymer context. Runtime publication and installed selection remain separate.
+The retained backbone-conditioned sampling alias is not proof of
+a docking optimizer. RF3 and RFD3 are excluded from this repair and its closeout;
+no changes to either model are included.
 
 The original 176 lane record keys remain preserved; the separate prior Protenix
 parent records are not merged into that denominator. Historical remaining-owner

@@ -1,0 +1,52 @@
+--- a/src/boltzgen/data/parse/mmcif.py
++++ b/src/boltzgen/data/parse/mmcif.py
+@@ -975,26 +975,29 @@
+ 
+     # We can parse the "_entity_poly_seq" directly from the block.
+     # [[[index_id, mon_id], ...], [[index_id, mon_id], ...], ..]
+-    entity_poly_seq_block_idx = block.get_index("_entity_poly_seq.entity_id")
+-    eps_loop = block[entity_poly_seq_block_idx].loop
+-
+-    eps_label_id_idx = eps_loop.tags.index("_entity_poly_seq.num")
+-    eps_entity_id_idx = eps_loop.tags.index("_entity_poly_seq.entity_id")
+-    eps_mon_id_idx = eps_loop.tags.index("_entity_poly_seq.mon_id")
+-
+-    entity_poly_seq, curr_seqid_mon = {}, []
+-    curr_entity_id = eps_loop[0, eps_entity_id_idx]
+-    for i in range(eps_loop.length()):
+-        entity_id = eps_loop[i, eps_entity_id_idx]
+-        num = eps_loop[i, eps_label_id_idx]
+-        mon_id = eps_loop[i, eps_mon_id_idx]
+-
+-        if entity_id != curr_entity_id:
+-            entity_poly_seq[str(curr_entity_id)] = curr_seqid_mon
+-            curr_entity_id = entity_id
+-            curr_seqid_mon = []
+-        curr_seqid_mon.append([int(num), mon_id])
+-    entity_poly_seq[str(curr_entity_id)] = curr_seqid_mon
++    # Non-polymer-only structures have no polymer sequence rows. Keep their
++    # real entities/coordinates and use the ordinary native non-polymer parser.
++    # A polymer with missing sequence still fails at its existing lookup below.
++    entity_poly_seq = {}
++    eps_loop = block.find_loop("_entity_poly_seq.entity_id").get_loop()
++    if eps_loop is not None and eps_loop.length():
++        eps_label_id_idx = eps_loop.tags.index("_entity_poly_seq.num")
++        eps_entity_id_idx = eps_loop.tags.index("_entity_poly_seq.entity_id")
++        eps_mon_id_idx = eps_loop.tags.index("_entity_poly_seq.mon_id")
++
++        curr_seqid_mon = []
++        curr_entity_id = eps_loop[0, eps_entity_id_idx]
++        for i in range(eps_loop.length()):
++            entity_id = eps_loop[i, eps_entity_id_idx]
++            num = eps_loop[i, eps_label_id_idx]
++            mon_id = eps_loop[i, eps_mon_id_idx]
++
++            if entity_id != curr_entity_id:
++                entity_poly_seq[str(curr_entity_id)] = curr_seqid_mon
++                curr_entity_id = entity_id
++                curr_seqid_mon = []
++            curr_seqid_mon.append([int(num), mon_id])
++        entity_poly_seq[str(curr_entity_id)] = curr_seqid_mon
+ 
+     # Load structure object
+     structure = gemmi.make_structure_from_block(block)
