@@ -16,7 +16,7 @@ vi.mock('../../src/lib/api', async original => ({ ...await original<typeof impor
     submitJob: mocks.submit, uploadFile: mocks.upload,
     materializeExactStructure: vi.fn(async () => { throw new Error('Fixture checked PDB conversion rejected: empty atom-site document'); }),
     materializeStructureTarget: vi.fn(async (source: { path?: string; file?: File }, destination: string) => source.path || (await mocks.upload(destination, source.file!)).data.path),
-    fetchModels: vi.fn(async () => ({ data: mocks.models })), fetchTemplates: vi.fn(async () => ({ data: [] })),
+    fetchModels: vi.fn(async () => ({ data: mocks.models.map(model => ({ ...model, modes: model.modes.filter((mode: any) => !mode.compatibility_only) })) })), fetchTemplates: vi.fn(async () => ({ data: [] })),
     fetchInputPresets: vi.fn(async (type: string) => ({ data: type === 'pdb' ? mocks.presets : [] })),
     fetchExecutionTargets: vi.fn(async () => ({ data: [] })), fetchTemplateById: vi.fn(async () => ({ data: null })),
     fetchModel: vi.fn(async (id: string) => ({ data: mocks.models.find(model => model.id === id) })),
@@ -80,7 +80,7 @@ beforeEach(() => {
     mocks.inventory = {};
     mocks.models = [
         { id: 'ppiflow', name: 'PPIFlow', params: protein, modes: ['protein_binder', 'antibody_binder', 'nanobody_binder'].map(id => ({ id, name: id, params: (id === 'protein_binder' ? protein : id === 'antibody_binder' ? [...antibody, { name: 'light_chain' }] : antibody).map(p => p.name) })) },
-        { id: 'boltzgen', name: 'BoltzGen', params: boltz, modes: ['protein_binder', 'peptide_binder', 'nanobody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'].map(id => ({ id, name: id, compatibility_only: id === 'backbone_docking', description: id === 'backbone_docking' ? 'Zero-design inputs fail the pinned pipeline analysis; retained request only.' : '', params: boltz.map(p => p.name) })) },
+        { id: 'boltzgen', name: 'BoltzGen', params: boltz, modes: ['protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'].map(id => ({ id, name: id, compatibility_only: id === 'backbone_docking', description: id === 'backbone_docking' ? 'Zero-design inputs fail the pinned pipeline analysis; retained request only.' : '', params: boltz.map(p => p.name) })) },
     ];
     for (const model of mocks.models) for (const mode of model.modes) mocks.inventory[`${model.id}:${mode.id}`] = { schema_version: 'fixture', mode: mode.id, parameters: model.id === 'boltzgen' ? boltz : mode.id === 'protein_binder' ? protein : mode.id === 'antibody_binder' ? [...antibody, { name: 'light_chain', type: 'string', default: null }] : antibody, profile: { fixture: 'checkpoint owned' }, native_behavior: ['no native sampling in this test'] };
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
@@ -123,7 +123,7 @@ it('BoltzGen chooser offers documented design variants, never legacy docking', a
     expect(route.mock.calls.map(([value]) => value.mode)).not.toContain('backbone_docking');
 });
 
-it.each(['protein_binder', 'peptide_binder', 'nanobody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'])('BoltzGen parent destination %s preserves the request and omits the unused ligand catalog', async modeName => {
+it.each(['protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'])('BoltzGen parent destination %s preserves the request and omits the unused ligand catalog', async modeName => {
     const { fetchInputPresets } = await import('../../src/lib/api');
     const values = { target_pdb: '', alpha: 0, binder_sequence: '', target_binding_positions: null, num_designs: 7 };
     // Historical nanobody clones intentionally return to dedicated authoring.

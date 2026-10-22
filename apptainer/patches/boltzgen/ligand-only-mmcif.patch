@@ -1,9 +1,6 @@
 --- a/src/boltzgen/data/parse/mmcif.py
 +++ b/src/boltzgen/data/parse/mmcif.py
-@@ -975,26 +975,29 @@
- 
-     # We can parse the "_entity_poly_seq" directly from the block.
-     # [[[index_id, mon_id], ...], [[index_id, mon_id], ...], ..]
+@@ -978,20 +978,23 @@
 -    entity_poly_seq_block_idx = block.get_index("_entity_poly_seq.entity_id")
 -    eps_loop = block[entity_poly_seq_block_idx].loop
 -
@@ -47,6 +44,3 @@
 +                curr_seqid_mon = []
 +            curr_seqid_mon.append([int(num), mon_id])
 +        entity_poly_seq[str(curr_entity_id)] = curr_seqid_mon
- 
-     # Load structure object
-     structure = gemmi.make_structure_from_block(block)

@@ -128,7 +128,12 @@ closeout commits are incorporated and qualified together, not pending handoffs.
 Fold-CP and Caliby candidate images passed their documented CPU contracts;
 publication, installed selection and managed release remain separate operations.
 
-BoltzGen is in scope; RF3 and RFD3 are explicitly out of scope. All eight public BoltzGen modes now
+BoltzGen is in scope; RF3 and RFD3 are explicitly off limits. Seven fresh public
+BoltzGen input variants map to the five pinned native protocols. The historical
+`backbone_docking` request remains accepted, editable and replayable but is no
+longer advertised as a native capability: CPU execution of the installed
+analysis method proves zero-design inputs fail at its designed-token lookup.
+No request refusal or silent scientific substitution was added. These contracts
 reach the existing typed discovery, settings editor, compiler and native input
 preparation. [BoltzGen capability mapping](BoltzGen_Public_Capabilities.md)
 identifies the official pinned protocols, current-upstream differences and actual
