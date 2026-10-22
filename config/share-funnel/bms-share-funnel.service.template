@@ -1,0 +1,23 @@
+[Unit]
+Description=BioModStack share Funnel controller (tailscale funnel --https=8443 on/off by active grants)
+Documentation=file:__BMS_INSTALL_ROOT__/README.md
+After=tailscaled.service
+
+[Service]
+Type=oneshot
+# The Tailscale operator user (the account already allowed to run `tailscale serve`).
+User=__BMS_TAILSCALE_OPERATOR__
+ExecStart=__BMS_INSTALL_ROOT__/python/bin/python3 -s -B -m share_server.funnel_controller
+WorkingDirectory=__BMS_INSTALL_ROOT__/app/platform/api
+Environment=PYTHONPATH=__BMS_INSTALL_ROOT__/app/platform/api
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=BMS_SHARE_PUBLISH_DIR=__BMS_SHARE_PUBLISH_DIR__
+Environment=BMS_SHARE_PORT=__BMS_SHARE_PORT__
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadOnlyPaths=__BMS_INSTALL_ROOT__ __BMS_SHARE_PUBLISH_DIR__
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+SystemCallFilter=@system-service

@@ -1,0 +1,17 @@
+[Unit]
+Description=BioModStack public MolBio share listener (loopback; Tailscale Funnel :8443 target)
+Documentation=file:__BMS_INSTALL_ROOT__/README.md
+
+[Socket]
+# Loopback only. Tailscale Funnel (https :8443) is the only intended client.
+ListenStream=127.0.0.1:__BMS_SHARE_PORT__
+BindIPv6Only=default
+NoDelay=true
+Backlog=128
+# Defence in depth: refuse non-loopback peers at the cgroup BPF layer.
+IPAddressAllow=localhost
+IPAddressDeny=any
+Service=bms-share.service
+
+[Install]
+WantedBy=sockets.target

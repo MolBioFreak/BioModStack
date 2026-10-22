@@ -1,0 +1,9 @@
+[Unit]
+Description=Reconcile BioModStack share Funnel immediately when the grant index changes
+
+[Path]
+PathChanged=__BMS_SHARE_PUBLISH_DIR__/grants.json
+Unit=bms-share-funnel.service
+
+[Install]
+WantedBy=paths.target

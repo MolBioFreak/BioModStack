@@ -1,0 +1,76 @@
+[Unit]
+Description=BioModStack public MolBio share server (read-only, no network)
+Documentation=file:__BMS_INSTALL_ROOT__/README.md
+Requires=bms-share.socket
+After=bms-share.socket
+
+[Service]
+Type=simple
+User=bms-share
+Group=bms-share
+ExecStart=__BMS_INSTALL_ROOT__/python/bin/python3 -s -B -m share_server
+WorkingDirectory=__BMS_INSTALL_ROOT__/app/platform/api
+Environment=PYTHONPATH=__BMS_INSTALL_ROOT__/app/platform/api:__BMS_INSTALL_ROOT__/site-packages
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONNOUSERSITE=1
+Environment=BMS_SHARE_PUBLISH_DIR=__BMS_SHARE_PUBLISH_DIR__
+Environment=BMS_SHARE_ACCESS_LOG_DIR=/var/log/bms-share
+Environment=BMS_SHARE_STATIC_DIR=__BMS_INSTALL_ROOT__/static
+StandardInput=null
+Restart=on-failure
+RestartSec=2s
+
+# --- Network: none. The listener is inherited from bms-share.socket. ---
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+# --- Filesystem ---
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadOnlyPaths=__BMS_INSTALL_ROOT__ __BMS_SHARE_PUBLISH_DIR__
+InaccessiblePaths=-/run/tailscale -/var/lib/tailscale -/run/docker.sock -/var/run/docker.sock
+# The share server's only write: its append-only access log.
+LogsDirectory=bms-share
+LogsDirectoryMode=0750
+UMask=0027
+
+# --- Privilege ---
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SecureBits=noroot-locked
+PrivateUsers=yes
+RemoveIPC=yes
+KeyringMode=private
+ProtectProc=invisible
+ProcSubset=pid
+
+# --- Kernel / system surface ---
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @mount @debug @cpu-emulation @obsolete @raw-io @reboot @swap @module @clock
+SystemCallErrorNumber=EPERM
+DevicePolicy=closed
+
+# --- Resources ---
+MemoryMax=1G
+TasksMax=32
+LimitNOFILE=1024
+CPUQuota=200%
+
+[Install]
+Also=bms-share.socket
