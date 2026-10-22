@@ -63,3 +63,14 @@ async def test_history_limit_fails_instead_of_returning_an_incomplete_history(hi
     monkeypatch.setattr(history, 'MAX_HISTORY_ITEMS', 1)
     with pytest.raises(OverflowError, match='nothing was truncated'):
         await history.project_export_history(session, 'sequence', second)
+
+
+@pytest.mark.asyncio
+async def test_saved_operation_receipt_uses_the_pm_lineage_digest_contract(history_store):
+    from services.global_experiments.adapters import MolBioOperationAdapter
+    session, _, _, operation = history_store
+    receipt = await MolBioOperationAdapter(molbio_session_factory=lambda: session).verify(session, operation)
+    lineage = receipt['metadata']['native_lineage']
+    assert lineage
+    assert all(item['receipt_content_digest'] == item['content_digest'] for item in lineage)
+    assert all(len(item['receipt_content_digest']) == 64 for item in lineage)

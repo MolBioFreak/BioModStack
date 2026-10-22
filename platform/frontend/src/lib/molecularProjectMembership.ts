@@ -42,7 +42,7 @@ export async function addMolecularProjectMember(
     if (!domain.current_revision_id) throw new Error('The current Domain revision is unavailable.');
     const members = (current?.members ?? []).filter((member) => {
         const params = member.reopen_destination?.params as { sequence_id?: string } | undefined;
-        return !(member.role === 'molecular_expected_construct' && member.entity_kind === 'molecular_revision' && params?.sequence_id === sequenceId);
+        return !(member.role === 'molecular_expected_construct' && member.sample_revision_id === null && member.entity_kind === 'molecular_revision' && params?.sequence_id === sequenceId);
     }).map(({ receipt_id, role, ordinal, sample_revision_id }) => ({ receipt_id, role, ordinal, sample_revision_id }));
     members.push({ receipt_id: receipt.receipt_id, role: 'molecular_expected_construct',
         ordinal: Math.max(-1, ...members.map((member) => member.ordinal)) + 1, sample_revision_id: null });
@@ -85,7 +85,7 @@ export async function exportMolecularProjectHistory(
         `Selected revision: ${history.selected_revision_id}`, `History manifest SHA-256: ${history.manifest_sha256}`,
         'Saved molecular revisions, related saved operations and PCR reviews captured at export:', ''];
     for (const entry of history.entries) {
-        if (entry.adapter_id && entry.entity_id && entry.id !== history.selected_revision_id) {
+        if (entry.adapter_id && entry.entity_id) {
             const project = await getProject(projectId);
             const receipt = await attachExistingEntity(projectId, globalExperimentId, domainExperimentId, {
                 adapter_id: entry.adapter_id, entity_id: entry.entity_id, operation: 'attach_reference', role: 'references',

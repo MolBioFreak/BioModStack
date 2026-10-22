@@ -1403,7 +1403,7 @@ class MolBioOperationAdapter:
                 "implementation": operation.implementation,
                 "input_count": len(inputs),
                 "output_count": len(outputs),
-                "native_lineage": lineage,
+                "native_lineage": [{**item, "receipt_content_digest": item["content_digest"]} for item in lineage],
                 "result_contract_id": "molbio_operation_v1",
             },
         )

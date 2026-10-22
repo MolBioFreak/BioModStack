@@ -76,7 +76,7 @@ describe('native molecular Project export', () => {
             schema: 'bms.global.attachment-receipt.v1', attachment_receipt_id: 'attachment', project_id: 'project', global_experiment_id: 'experiment', domain_experiment_id: 'domain', adapter_id: 'bms.molbio.revision-reference.adapter.v1', adapter_version: 1, source_receipt_id: 'old-receipt', source_receipt: {}, lineage_edge_id: 'edge', operation: 'attach_reference', role: 'references', note: null, project_head_generation: 10, normalized_request_sha256: 'f'.repeat(64), attached_at: '2026-10-22T00:00:00Z',
         } : data } as never));
         await exportMolecularProjectHistory('project', 'experiment', 'domain', history, [{ timestamp: '2026-10-22', label: 'Annotate', summary: 'Added promoter feature' }], 'current-receipt');
-        expect(post.mock.calls.filter(([url]) => String(url).endsWith('/attach'))).toHaveLength(1);
+        expect(post.mock.calls.filter(([url]) => String(url).endsWith('/attach'))).toHaveLength(2);
         const note = post.mock.calls.find(([url]) => String(url).endsWith('/records'))?.[1] as { body: string; source_receipt_ids: string[] };
         expect(note.body).toContain('Added promoter feature');
         expect(note.body).toContain('molbio_revision_id=old');
