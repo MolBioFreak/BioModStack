@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Source this before using BMS's supported management commands.
+bms_local_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+export BMS_HOME="$bms_local_root/source"
+export BMS_RUNTIME_MODE=dev
+export BMS_PYTHON_ROOT="$bms_local_root/python-v2"
+export BMS_FRONTEND_ROOT="$bms_local_root/frontend"
+export BMS_FRONTEND_NODE="$bms_local_root/node/bin/node"
+export PATH="$bms_local_root/base-python/bin:$bms_local_root/node/bin:$bms_local_root/python-v2/toolchain/bin:$PATH"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}/bns-plasmid-development-toolkit"
+export PYTHONDONTWRITEBYTECODE=1
+export BMS_PLANNOTATE_BIN="$bms_local_root/annotation/bin/plannotate"
+unset bms_local_root

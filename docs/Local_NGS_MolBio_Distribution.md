@@ -25,7 +25,7 @@ source identity and native launcher checks. Browser rendering has not been
 verified through the browser approval gate. This does not qualify scientific execution:
 model containers, tools and data must be provisioned and verified separately.
 
-This edition is prepared on `bns-plasmid-development-toolkit`. No changes are pushed to the full upstream BMS branches.
+This edition is published on `bns-plasmid-development-toolkit-test`. The original local integration history is retained on `bns-plasmid-development-toolkit`. Do not push this edition to the full upstream BMS `test` or `main` branch.
 Do not replace it with the full upstream checkout through auto-deployment.
 
 
