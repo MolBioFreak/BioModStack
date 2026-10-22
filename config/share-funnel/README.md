@@ -15,8 +15,9 @@ ancestors) for at most 24 hours. Nothing here is enabled automatically.
 
 Data flow is one-way: the BMS API writes `grants.json` and frozen
 `bundles/<grant>.json` into `BMS_SHARE_PUBLISH_DIR`; the share server reads
-them read-only and appends only to `/var/log/bms-share/access.jsonl`, which
-the BMS API reads for the share list's access log.
+them read-only. Its only writable application state is the bounded access log
+and persistent network bans/share locks under `/var/lib/bms-share`. The BMS API
+reads the access log for the share dialog.
 
 ## Brute-force protection
 
@@ -30,15 +31,42 @@ the BMS API reads for the share list's access log.
   `StateDirectory`), so restarting the service does not reset them.
 * The client address comes from Tailscale's `X-Forwarded-For` (trusted only
   from the loopback proxy). Loopback requests without it are never banned.
+* Queued guesses are serialized per network and grant. Ban, lock and current
+  grant state are rechecked after waiting and before authorization succeeds.
+* Cross-site browser API requests are rejected before recording strikes.
+  Browser create/revoke requests must come from the private node origin or
+  the existing configured frontend/CORS origins. Native API calls remain supported.
 * Every failure, ban and lock is appended to `access.jsonl`. The tailnet share
-  list (`GET /api/molbio/shares` → `security`) shows failed attempts in the
-  last 24 h, active bans and recent failures, including attempts that did not
-  match any share.
+  list (`GET /api/molbio/shares` → `security`) is a bounded recent-log summary,
+  not an authoritative live ban inventory. Rotated history can be omitted and
+  manually lifted bans can remain in that historical summary.
+* Storage errors are monitoring evidence, not a new authentication gate:
+  in-memory bans remain enforced if persistence fails, but restart durability
+  is then not assured. `ban_state_error`/`ban_state_recovered` events expose it.
+* This host uses a separate, script-only Hermes monitor to deliver new ban,
+  grant-lock and ban-storage-health events to Telegram. It reads the log outside
+  the network-isolated service, tracks rotation and stays quiet when unchanged.
+  Its configured interval is one minute; actual delivery depends on scheduler
+  ticks and Telegram availability. It does not send link keys or passcodes.
 * A per-IP request rate limit (120/min) and per-share limit (600/min) still
   apply on top.
 
 To lift a ban early: `sudo systemctl stop bms-share.service`, edit or delete
 `/var/lib/bms-share/bans.json`, then let the socket restart it.
+
+## Disclosure and retention
+
+Domain-state scopes select exact attached revisions, not newer document heads.
+Full ancestor sequences, experiment parameters and applicable project notes are
+included intentionally; the creation dialog explains this before publishing.
+Nested stored metadata is not a secret-redaction service: do not place credentials
+in scientific record fields. A guest can retain data already downloaded; expiry
+and revocation only prevent new access.
+
+Revocation removes its frozen bundle. Expired bundles are removed by the existing
+prune pass on a subsequent share creation, not by a scheduled deletion task.
+An already-open guest holds its downloaded snapshot in memory, and the link key
+remains in browser URL history; the app does not persist credentials to web storage.
 
 ## Secrets
 

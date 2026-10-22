@@ -75,10 +75,14 @@ else
     ok "/home is empty/inaccessible inside the bms-share mount namespace"
 fi
 publish_dir="$(systemctl show -p Environment --value bms-share.service | tr ' ' '\n' | sed -n 's/^BMS_SHARE_PUBLISH_DIR=//p')"
-if [[ -n "$publish_dir" ]] && grep -E "[[:space:]]$publish_dir[[:space:]]" "/proc/$pid/mountinfo" | grep -qE '(^|[ ,])ro([ ,]|$)'; then
-    ok "publish dir $publish_dir is mounted read-only for the service"
+# ProtectSystem=strict may make the containing filesystem read-only without
+# giving publish_dir its own mountinfo entry. Query the effective filesystem
+# flags inside the service's mount namespace rather than requiring that entry.
+if [[ -n "$publish_dir" ]] && nsenter --target "$pid" --mount -- "$py" -I -c \
+    'import os,sys; sys.exit(0 if os.statvfs(sys.argv[1]).f_flag & os.ST_RDONLY else 1)' "$publish_dir"; then
+    ok "publish dir $publish_dir is read-only for the service"
 else
-    bad "publish dir ${publish_dir:-unset} is not a read-only mount for the service"
+    bad "publish dir ${publish_dir:-unset} is not read-only for the service"
 fi
 
 # 6. Process identity.
@@ -89,9 +93,26 @@ caps="$(awk '/^CapEff:/ {print $2}' "/proc/$pid/status")"
 grep -q '^NoNewPrivs:[[:space:]]*1' "/proc/$pid/status" && ok "NoNewPrivs set" || bad "NoNewPrivs not set"
 
 # 7. Funnel never on 443 from this subsystem.
-if tailscale funnel status --json 2>/dev/null | grep -qE '"[^"]+:443"[[:space:]]*:[[:space:]]*true'; then
-    bad "Funnel is enabled on :443 (this subsystem only manages :8443)"
+if funnel_status="$(tailscale funnel status --json 2>/dev/null)"; then
+    if "$py" -I -c 'import json,sys
+try:
+    state=json.load(sys.stdin)
+    if not isinstance(state,dict): raise ValueError("status is not an object")
+    allowed=state.get("AllowFunnel", {})
+    if not isinstance(allowed,dict): raise ValueError("AllowFunnel is not an object")
+except (ValueError,TypeError) as exc:
+    print(f"Cannot inspect Funnel status: {exc}", file=sys.stderr); sys.exit(2)
+sys.exit(1 if any(str(k).endswith(":443") and v is True for k,v in allowed.items()) else 0)' <<<"$funnel_status"; then
+        ok "current Funnel status has no public :443 mapping"
+    else
+        inspect_status=$?
+        if (( inspect_status == 1 )); then
+            bad "Funnel is enabled on :443 (this subsystem only manages :8443)"
+        else
+            bad "Funnel status could not be inspected; :443 exposure is unknown"
+        fi
+    fi
 else
-    ok "no Funnel on :443"
+    bad "Funnel status command failed; :443 exposure is unknown"
 fi
 exit "$status"

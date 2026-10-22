@@ -62,6 +62,8 @@ describe('ShareDialog', () => {
             if (init?.method === 'POST') return json({ grant: grant(), link: 'https://x.example/s/abc', passcode: 'ABCD-EFGH', notice: 'once' });
             return json({ schema: 'bms.molbio.share-list.v1', active_count: 0, items: [] });
         });
+        expect(container!.textContent).toContain('Includes full ancestor sequences, experiment parameters, and applicable notes.');
+        expect(container!.textContent).toContain('Recipients can keep downloaded data after expiry or revocation.');
         await act(async () => button('4h').click());
         await act(async () => button('Create link').click());
         const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')!;
@@ -107,8 +109,8 @@ describe('ShareDialog', () => {
         });
         const security = container!.querySelector('[data-share-security]') as HTMLDetailsElement;
         expect(security.open).toBe(false);
-        expect(security.querySelector('summary')?.textContent).toBe('Failed attempts: 3 in 24h · 1 banned');
-        expect(security.textContent).toContain('banned 203.0.113.9 until 2026-10-29T18:00:00Z');
+        expect(security.querySelector('summary')?.textContent).toBe('Recent log: 3 failed attempts · 1 recorded bans');
+        expect(security.textContent).toContain('recorded ban 203.0.113.9 until 2026-10-29T18:00:00Z');
         const summary = [...container!.querySelectorAll('summary')].find((s) => s.textContent?.startsWith('Active shares'))!;
         expect(summary.textContent).toBe('Active shares (1)');
         expect((summary.parentElement as HTMLDetailsElement).open).toBe(false);

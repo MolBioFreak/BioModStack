@@ -156,14 +156,15 @@ function ShareSecurity({ security }: { security: MolBioShareSecurity }) {
     return (
         <details className="text-sm" data-share-security>
             <summary className={`cursor-pointer w-fit text-xs ${quiet ? 'text-slate-400' : 'text-amber-300'} hover:text-slate-200`}>
-                Failed attempts: {security.failed_attempts_24h} in 24h · {security.active_bans.length} banned
+                Recent log: {security.failed_attempts_24h} failed attempts · {security.active_bans.length} recorded bans
             </summary>
             <div className="mt-1 space-y-1 text-xs text-slate-400">
                 <p>Three failed attempts from one network ban it for 7 days. Three wrong passcodes lock that share.</p>
+                <p>This is a bounded recent-log summary, not a live ban inventory. Rotated events may be absent and manual unbans may still appear here.</p>
                 {security.active_bans.length > 0 && (
                     <ul className="space-y-0.5 font-mono">
                         {security.active_bans.map((ban) => (
-                            <li key={ban.network} className="break-all">banned {ban.network} until {ban.until}</li>
+                            <li key={ban.network} className="break-all">recorded ban {ban.network} until {ban.until}</li>
                         ))}
                     </ul>
                 )}
@@ -337,6 +338,7 @@ export function ShareDialog({ open, onClose, currentSequence, sequences, operati
                             <p className="text-xs text-amber-200">
                                 The passcode is shown only once. Send it separately from the link.
                             </p>
+                            <p className="text-xs text-slate-400">{describeShareScope(created.grant.scope)}. Full ancestor sequences and experiment details are included.</p>
                             <div className="flex justify-end gap-2">
                                 <button type="button" onClick={() => setCreated(null)} className="min-h-9 rounded px-3 text-sm text-slate-300 hover:bg-slate-700">New share</button>
                                 <button type="button" onClick={onClose} className="min-h-9 rounded bg-blue-600 px-3 text-sm text-white hover:bg-blue-500">Done</button>
@@ -346,6 +348,7 @@ export function ShareDialog({ open, onClose, currentSequence, sequences, operati
                         <div className="space-y-3">
                             <fieldset className="space-y-2">
                                 <legend className="text-xs text-slate-400">What to share</legend>
+                                <p className="text-xs text-amber-200">Includes full ancestor sequences, experiment parameters, and applicable notes. Recipients can keep downloaded data after expiry or revocation.</p>
                                 <div className="flex flex-wrap gap-1">
                                     {modes.filter((m) => m.available).map((m) => (
                                         <button
@@ -363,7 +366,7 @@ export function ShareDialog({ open, onClose, currentSequence, sequences, operati
                                     <div className="truncate text-sm text-slate-300">{currentSequence.name}</div>
                                 )}
                                 {mode === 'domain' && (
-                                    <div className="text-sm text-slate-300">All sequences and experiments in the open project view.</div>
+                                    <div className="text-sm text-slate-300">The exact sequence revisions and experiments in the selected project state.</div>
                                 )}
                                 {mode === 'project' && (
                                     projectsError ? <div className="text-sm text-red-300">{projectsError}</div>

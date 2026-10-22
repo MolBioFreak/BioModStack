@@ -79,7 +79,13 @@ while pending:
         source = Path(dist.locate_file(file))
         if not source.is_file() or "__pycache__" in source.parts:
             continue
-        destination = target / file
+        # RECORD also lists console launchers such as ../../../bin/uvicorn.
+        # They are not importable packages and must never escape staging when
+        # this installer runs as root. The service uses python -m, not scripts.
+        relative = Path(str(file))
+        if relative.is_absolute() or ".." in relative.parts:
+            continue
+        destination = target / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
 print("copied:", ", ".join(sorted(seen)))

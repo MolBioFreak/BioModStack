@@ -13,7 +13,7 @@ import sys
 import types
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 _API_ROOT = Path(__file__).resolve().parents[1]
 
@@ -162,7 +162,11 @@ def _inline_source(source: Any) -> tuple[str, Literal["linear", "circular"], dic
     name, dna, topology = source["name"], source["dna"], source["topology"]
     if not isinstance(name, str) or not name.strip() or len(name) > 128:
         raise ComputeError(422, "invalid_request", "source name is invalid")
-    if topology not in {"linear", "circular"}:
+    try:
+        name.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ComputeError(422, "invalid_request", "source name is invalid") from exc
+    if not isinstance(topology, str) or topology not in {"linear", "circular"}:
         raise ComputeError(422, "invalid_request", "topology is invalid")
     if not isinstance(dna, str) or not dna or len(dna) > SHARE_MAX_SEQUENCE_LENGTH:
         raise ComputeError(413, "request_too_large", "sequence exceeds the guest limit")
@@ -176,7 +180,7 @@ def _inline_source(source: Any) -> tuple[str, Literal["linear", "circular"], dic
         "revision_number": None, "content_sha256": digest, "content_length": len(sequence),
         "topology": topology,
     }
-    return sequence, topology, receipt
+    return sequence, cast(Literal["linear", "circular"], topology), receipt
 
 
 def _enzyme_ids(value: Any, maximum: int) -> list[str]:

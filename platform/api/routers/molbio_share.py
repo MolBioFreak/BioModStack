@@ -19,8 +19,10 @@ import os
 import stat
 from pathlib import Path
 from typing import Annotated, Any, Literal, Union
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -137,6 +139,42 @@ def share_creator(authorization: Annotated[str | None, Header()] = None) -> str:
     return f"agent:{label}"
 
 
+def _origin(value: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            return None
+        return parsed.scheme, parsed.hostname.casefold(), parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return None
+
+
+def browser_mutation_origin(request: Request) -> None:
+    """Reject browser CSRF, without adding credentials to tailnet/agent use.
+
+    Respect the existing CORS origin owner and configured frontend. The private
+    HTTPS node origin is distinct from the public guest origin on port 8443.
+    Non-browser callers without Origin/Fetch Metadata retain their API path.
+    """
+    supplied = request.headers.get("origin")
+    fetch_site = request.headers.get("sec-fetch-site", "").casefold()
+    if supplied is None:
+        if fetch_site in {"cross-site", "same-site"}:
+            raise _error(403, "share_origin_denied", "cross-site share changes are not allowed")
+        return
+    trusted = {_origin(str(request.base_url)), _origin(os.environ.get("BMS_FRONTEND_HEALTH_URL", ""))}
+    for middleware in request.app.user_middleware:
+        if middleware.cls is CORSMiddleware:
+            trusted.update(_origin(value) for value in middleware.kwargs.get("allow_origins", []))
+    try:
+        trusted.add(_origin(f"https://{G.public_host()}"))
+    except G.ShareConfigurationError:
+        pass
+    trusted.discard(None)
+    if _origin(supplied) not in trusted:
+        raise _error(403, "share_origin_denied", "untrusted browser origin cannot change shares")
+
+
 # ---------------------------------------------------------------------------
 # Storage helpers
 # ---------------------------------------------------------------------------
@@ -214,7 +252,7 @@ async def share_config() -> dict[str, Any]:
     }
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(browser_mutation_origin)])
 async def create_share(
     payload: CreateShareRequest,
     creator: str = Depends(share_creator),
@@ -288,7 +326,7 @@ async def list_shares(creator: str = Depends(share_creator)) -> dict[str, Any]:
     }
 
 
-@router.post("/{grant_id}/revoke")
+@router.post("/{grant_id}/revoke", dependencies=[Depends(browser_mutation_origin)])
 async def revoke_share(grant_id: str, creator: str = Depends(share_creator)) -> dict[str, Any]:
     if not G.well_formed_grant_id(grant_id):
         raise _error(404, "share_not_found", "share was not found")
