@@ -536,6 +536,9 @@ def test_panel_preserves_installation_selectors_when_starting_after_reboot(monke
         "BMS_PYTHON_ROOT": "/installed/python",
         "BMS_FRONTEND_ROOT": "/installed/frontend",
         "BMS_FRONTEND_NODE": "/installed/node/bin/node",
+        "BMS_MICROMAMBA_BIN": "/installed/annotation/bin/micromamba",
+        "BMS_MICROMAMBA_ROOT_PREFIX": "/installed/annotation/envs",
+        "BMS_PLANNOTATE_ENV": "plannotate",
     }
     for key, value in selectors.items():
         monkeypatch.setenv(key, value)

@@ -1130,6 +1130,8 @@ class BioModStackPanel(Adw.Application):
             # lane, image and credential overrides still come from configuration.
             if (key.startswith("BMS_") and key not in {
                 "BMS_PYTHON_ROOT", "BMS_FRONTEND_ROOT", "BMS_FRONTEND_NODE",
+                "BMS_MICROMAMBA_BIN", "BMS_MICROMAMBA_ROOT_PREFIX",
+                "BMS_PLANNOTATE_ENV", "BMS_PLANNOTATE_BIN",
             }) or key == "COMPOSE_PROJECT_NAME":
                 env.pop(key, None)
         return env

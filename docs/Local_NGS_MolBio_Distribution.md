@@ -33,3 +33,14 @@ The Control Panel preserves the explicitly selected managed Python/frontend
 installation roots while discarding inherited runtime, image and credential
 overrides. Database status and backup actions use the selected local lane's
 Core, MolBio, NGS and Experiment stores rather than a fixed production path.
+
+Native auto-annotation uses the same pLannotate 2.0.0 explicit Conda lock and
+reference bundle as `docker/api.Dockerfile`. Install micromamba using the version
+and SHA256 in that recipe, create `plannotate` from
+`docker/plannotate-conda-linux-64.lock`, and run `plannotate setupdb` in that
+environment. Export `BMS_MICROMAMBA_BIN`, `BMS_MICROMAMBA_ROOT_PREFIX`, and
+`BMS_PLANNOTATE_ENV=plannotate` in the installation launcher environment before
+starting the managed runtime. The Control Panel and generated API unit preserve
+these installation selectors across restarts. An existing direct installation
+may use `BMS_PLANNOTATE_BIN` instead. Package versions, reference availability,
+and a real API annotation must be checked before accepting the installation.
