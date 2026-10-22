@@ -6,6 +6,8 @@ from fastapi import FastAPI
 
 from experiment_database import get_experiment_session
 from routers.projects import router
+from routers.projects import _complete_domain_v4_attestations
+from services.ngs_molbio_capabilities import validate_domain_experiment, NgsMolBioCapabilityError
 from routers.project_manager import list_domain_adapters, _edition_adapter
 from services.global_experiments.adapters import AdapterError
 from tests.test_project_manager_hierarchy import project_store, _app, _project_payload
@@ -15,6 +17,17 @@ def payload(**changes):
     return {'schema': 'bns.ngs-data-record.v1', 'record_key': str(uuid4()), 'title': 'QA plasmid reads',
             'sample_name': 'QA plasmid', 'data_format': 'fastq', 'use_case': 'sequence_identity',
             'workflow_stage': 'basecalled', 'data_location': '', 'notes': 'Operator intake only', 'files': [], **changes}
+
+
+def test_inventory_workspace_is_draft_without_invented_execution_policy():
+    domain = {'schema': 'bms.domain-experiment.v4', 'domain_kind': 'ngs_molbio', 'domain_contract_version': '3',
+              'name': 'Sequences and NGS data', 'objective': '', 'status': 'draft', 'tags': [],
+              'source_receipt_ids': [], 'dataset_revision_ids': [], 'created_by': 'operator', 'change_summary': 'Opened Project tools',
+              'domain_payload': {'schema': 'bms.ngs-molbio-experiment.v2', 'experiment_mode': 'molecular_design',
+                                 'scientific_objective': '', 'planned_capability_ids': [], 'grouping_intent': [], 'acceptance_criteria': [], 'evidence_plan': []}}
+    validate_domain_experiment(_complete_domain_v4_attestations(domain))
+    with pytest.raises(NgsMolBioCapabilityError):
+        validate_domain_experiment(_complete_domain_v4_attestations({**domain, 'status': 'active'}))
 
 
 @pytest.mark.asyncio

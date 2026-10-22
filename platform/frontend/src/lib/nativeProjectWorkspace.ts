@@ -33,7 +33,7 @@ export function ensureNativeProjectWorkspace(projectId: string, preferred?: Nati
         });
         const domain = await createDomainExperiment(projectId, global.id, {
             schema: 'bms.domain-experiment.v4', domain_kind: 'ngs_molbio', domain_contract_version: '3',
-            name: 'Sequences and NGS data', objective: '', status: 'active', tags: ['bns-project-workspace'],
+            name: 'Sequences and NGS data', objective: '', status: 'draft', tags: ['bns-project-workspace'],
             source_receipt_ids: [], dataset_revision_ids: [], change_summary: 'Opened native Project tools',
             domain_payload: { schema: 'bms.ngs-molbio-experiment.v2', experiment_mode: 'molecular_design',
                 scientific_objective: '', planned_capability_ids: [], grouping_intent: [], acceptance_criteria: [], evidence_plan: [] },
