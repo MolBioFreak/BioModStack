@@ -115,7 +115,7 @@ esac
 
 # No client input selects a user, command, or service. The user unit runs only
 # as its non-root owner; this helper does not execute checkout code as root.
-if ! native_agent restart bns-minknow-host-agent.service >/dev/null 2>&1; then
+if ! native_agent restart bns-minknow-host-agent.service >/dev/null; then
     host_agent_recreate='failed'
     emit_receipt failed
     exit 1
