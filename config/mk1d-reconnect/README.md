@@ -82,3 +82,31 @@ BMS core/API/web automatically.
 Disable the socket and remove the installed root files only under an approved
 host-change procedure. Removing the socket leaves the API endpoint fail-closed
 with `Reconnect helper unavailable/not installed`.
+
+## Native MinKNOW bridge
+
+A native installation may run `scripts/bms_host_agent.py` with the vendor
+MinKNOW Python environment in the fixed user service
+`bns-minknow-host-agent.service`, listening only on `127.0.0.1:18798`.
+Configure the API with `BMS_ONT_MINKNOW_ENABLED=1`, the local
+`BMS_HOST_AGENT_URL`, and `BMS_ONT_EXTERNAL_POD5_ROOT` set to the actual MinKNOW
+output root. Keep these in managed systemd configuration so desktop restarts
+preserve them.
+
+For that installation, use the native recovery installer as root:
+
+```bash
+python3 config/mk1d-reconnect/install-native-root-helper.py --api-user <native-api-user>
+```
+
+It installs the same bounded, serialized root-owned socket contract. It starts
+MinKNOW only if inactive/failed, never restarts active MinKNOW, and restarts only
+the fixed native bridge as the validated non-root owner. It verifies loopback
+health/status and never executes checkout code as root. This installer does
+not start a recovery transaction or instrument operation.
+
+The local development proxy additionally needs matching server-only
+`BMS_MK1D_RECONNECT_LOCAL_PROXY_SECRET` (API) and
+`BMS_DEV_MK1D_RECONNECT_PROXY_SECRET` (Vite). Store these in a private environment
+file read by the managed services. Neither value belongs in browser code.
+Native recovery preserves the same local-proxy authorization as container mode.
