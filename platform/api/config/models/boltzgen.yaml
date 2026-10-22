@@ -54,8 +54,9 @@ modes:
       - batch_size
 
   - id: backbone_docking
-    name: Backbone-conditioned Ligand Sampling
-    description: Native file-conditioned complex sampling with a ligand; legacy mode ID, not a dedicated docking optimizer
+    name: Legacy backbone / ligand request (compatibility only)
+    compatibility_only: true
+    description: Retained request transport, not a native docking or sampling capability. Zero-design inputs fail the pinned pipeline analysis; use an explicit protein design specification for new work. No automatic redesign or protocol substitution.
     params:
       - input_pdb
       - ntp_type

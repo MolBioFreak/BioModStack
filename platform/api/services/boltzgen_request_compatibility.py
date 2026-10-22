@@ -63,6 +63,8 @@ def compile_boltzgen_settings(params):
 
 # Native protocol/entity mapping from boltzgen 617e549e, parse/schema.py and
 # the vanilla-protein / linear-peptide examples. Peptides are protein entities.
+# Accepted request IDs include the historical zero-design path. This is a
+# compatibility map, not the fresh capability inventory (registry modes owns it).
 BOLTZGEN_GENERATION_PROTOCOLS = {
     'protein_binder': 'protein-anything',
     'antibody_binder': 'antibody-anything',
@@ -161,8 +163,10 @@ def boltzgen_generation_inventory(mode: str) -> dict:
     contract = _generation_contract()
     return {'schema_version': contract['schema_version'], 'model_id': 'boltzgen',
             'source_revision': contract['source_revision'], 'mode': mode,
+            'compatibility_only': mode == 'backbone_docking',
             'parameters': parameter_contract(mode),
             'native_behavior': {
+                'zero_design': 'Not a docking operation: the pinned analysis indexes the first designed token and fails for an empty design mask. Legacy requests are preserved without adding design residues or changing the pipeline.',
                 'defaults': 'Null optional run overrides defer to the native protocol, not antibody-form recommendations.',
                 'plddt': 'Unavailable in the native CSV/NPZ producer; explicit non-null thresholds are incompatible.',
                 'aliases': 'Equal aliases accepted; conflicting names rejected. Explicit values precede defaults.',

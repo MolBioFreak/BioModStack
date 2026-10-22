@@ -40,6 +40,7 @@ vi.mock('../../src/components/MolecularDynamicsTemplate', () => ({ MolecularDyna
 // component, sequence selector, full-view toggle and native parent are mounted.
 vi.mock('../../src/structureViewer/StructureWorkbench', () => ({ StructureWorkbench: (props: any) => <output data-viewer={props.structureDocumentId} data-format={props.format}>{props.structureData}</output> }));
 import { JobSubmission } from '../../src/components/JobSubmission';
+import { BinderGeneratorChooser } from '../../src/components/BinderGeneratorChooser';
 import { hydrateBinderRound } from '../../src/lib/binderRound';
 import { ppiflowHotspotsFromSelection } from '../../src/lib/nativeBinderAuthoring';
 import { parseBC2Document } from '../../src/lib/bindcraft2StructureInputs';
@@ -79,7 +80,7 @@ beforeEach(() => {
     mocks.inventory = {};
     mocks.models = [
         { id: 'ppiflow', name: 'PPIFlow', params: protein, modes: ['protein_binder', 'antibody_binder', 'nanobody_binder'].map(id => ({ id, name: id, params: (id === 'protein_binder' ? protein : id === 'antibody_binder' ? [...antibody, { name: 'light_chain' }] : antibody).map(p => p.name) })) },
-        { id: 'boltzgen', name: 'BoltzGen', params: boltz, modes: ['protein_binder', 'peptide_binder', 'nanobody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'].map(id => ({ id, name: id, params: boltz.map(p => p.name) })) },
+        { id: 'boltzgen', name: 'BoltzGen', params: boltz, modes: ['protein_binder', 'peptide_binder', 'nanobody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'].map(id => ({ id, name: id, compatibility_only: id === 'backbone_docking', description: id === 'backbone_docking' ? 'Zero-design inputs fail the pinned pipeline analysis; retained request only.' : '', params: boltz.map(p => p.name) })) },
     ];
     for (const model of mocks.models) for (const mode of model.modes) mocks.inventory[`${model.id}:${mode.id}`] = { schema_version: 'fixture', mode: mode.id, parameters: model.id === 'boltzgen' ? boltz : mode.id === 'protein_binder' ? protein : mode.id === 'antibody_binder' ? [...antibody, { name: 'light_chain', type: 'string', default: null }] : antibody, profile: { fixture: 'checkpoint owned' }, native_behavior: ['no native sampling in this test'] };
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
@@ -108,6 +109,20 @@ it.each(['protein_binder', 'antibody_binder', 'nanobody_binder'])('mounted PPIFl
     if (modeName === 'nanobody_binder') expect(request.params).not.toHaveProperty('light_chain');
 });
 
+it('BoltzGen chooser offers documented design variants, never legacy docking', async () => {
+    const route = vi.fn();
+    const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+    await act(async () => root!.render(<BinderGeneratorChooser generator={null} onSelect={vi.fn()} onOpenNativeRoute={route} />));
+    await click('BoltzGen · antibody CDR design');
+    expect(route).toHaveBeenLastCalledWith({ modelId: 'boltzgen', mode: 'antibody_binder' });
+    const select = document.querySelector<HTMLSelectElement>('[aria-label="Binder format / objective"]')!;
+    await act(async () => { select.value = 'ligand'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    const buttons = [...document.querySelectorAll('button')].filter(item => item.textContent?.startsWith('BoltzGen'));
+    expect(buttons.map(item => item.textContent)).toEqual(['BoltzGen · ligand binder', 'BoltzGen · nucleotide binder', 'BoltzGen · scaffold around ligand']);
+    for (const item of buttons) await act(async () => item.click());
+    expect(route.mock.calls.map(([value]) => value.mode)).not.toContain('backbone_docking');
+});
+
 it.each(['protein_binder', 'peptide_binder', 'nanobody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'])('BoltzGen parent destination %s preserves the request and omits the unused ligand catalog', async modeName => {
     const { fetchInputPresets } = await import('../../src/lib/api');
     const values = { target_pdb: '', alpha: 0, binder_sequence: '', target_binding_positions: null, num_designs: 7 };
@@ -124,6 +139,12 @@ it.each(['protein_binder', 'peptide_binder', 'nanobody_binder', 'ligand_binder',
     await click('Launch Experiment');
     expect(mocks.submit).toHaveBeenCalledTimes(1);
     expect(mocks.submit.mock.calls[0][0]).toMatchObject({ model_id: 'boltzgen', mode: modeName, params: values });
+    expect(document.querySelector('option[value="backbone_docking"]') !== null).toBe(modeName === 'backbone_docking');
+    if (modeName === 'backbone_docking') {
+        expect(document.body.textContent).toContain('Zero-design inputs fail the pinned pipeline analysis');
+        await mode('ligand_binder');
+        expect(document.querySelector('option[value="backbone_docking"]')).toBeNull();
+    }
 });
 
 it.each(['protein_binder', 'antibody_binder', 'nanobody_binder'])('PPIFlow parent destination %s preserves native defaults without unused ligand reads', async modeName => {

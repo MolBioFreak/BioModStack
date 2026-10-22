@@ -2075,7 +2075,7 @@ export function JobSubmission() {
                                     >
                                         <option value="" disabled>Select a mode...</option>
                                         {(selectedModel.modes || [])
-                                            .filter((mode: UntypedApiValue) => mode.id !== 'dna_complex' && !mode.selected_only) // Selected-only operations use the Results selection.
+                                            .filter((mode: UntypedApiValue) => mode.id !== 'dna_complex' && !mode.selected_only && (!mode.compatibility_only || mode.id === selectedModeId)) // Keep an explicitly reopened legacy request, never offer it for new selection.
                                             .map((mode: UntypedApiValue) => (
                                                 <option key={mode.id} value={mode.id}>
                                                     {mode.name}
@@ -2083,7 +2083,7 @@ export function JobSubmission() {
                                             ))}
                                     </select>
                                     {selectedMode && (
-                                        <p className="mt-2 text-sm text-slate-500">{compactUiCopy(selectedMode.description, 120)}</p>
+                                        <p className="mt-2 text-sm text-slate-500">{selectedMode.compatibility_only ? selectedMode.description : compactUiCopy(selectedMode.description, 120)}</p>
                                     )}
                                 </div>
 

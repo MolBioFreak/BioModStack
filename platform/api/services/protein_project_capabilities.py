@@ -713,6 +713,8 @@ for _model_id, _modes in _NATIVE_BINDER_SETUP_PAIRS.items():
             result_adapter_ids=[f'bms.native-binder.{_model_id}.adapter.v1'] if _model_id != 'antibody_denovo' else ['bms.core-job.antibody_denovo.adapter.v1'],
             result_contracts=['native_binder_result'], viewer_id='job_results', accepted_source_roles=[],
             receipt_contracts=[], project_setup_destination=_destination, project_native_owner_id=_owner))
+        if _model_id == 'boltzgen' and _mode == 'backbone_docking':
+            _CAPABILITIES[-1]['label'] = 'BoltzGen · legacy backbone / ligand request (compatibility only)'
 
 
 # Shape authoring retains its submitted request, not browser-created staged paths.
@@ -748,10 +750,14 @@ if set(_CAPABILITY_BY_ID) != set(_PARAMETER_SCHEMAS):
 
 
 def protein_capability_inventory(*, project_ready_only: bool = False) -> dict[str, Any]:
-    ready_capability_ids = _project_ready_capability_ids(_CAPABILITIES)
+    # Historical editor lookup/normalization remains intact. Do not advertise a
+    # zero-design request as a new native BoltzGen operation or follow-up.
+    public_records = [record for record in _CAPABILITIES
+                      if record['capability_id'] != 'protein.native.boltzgen.backbone_docking']
+    ready_capability_ids = _project_ready_capability_ids(public_records)
     capabilities = [
         _with_project_setup_state(record, ready_capability_ids=ready_capability_ids)
-        for record in _CAPABILITIES
+        for record in public_records
     ]
     if project_ready_only:
         picker_capabilities = [

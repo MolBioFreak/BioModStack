@@ -340,7 +340,7 @@ async def list_models(
                         "parameter_schema": _native_parameter_schema(m.id, mode.id),
                     })
                 }
-                for mode in m.modes
+                for mode in m.modes if not mode.compatibility_only
             ],
             **({} if compact else {"params": [
                 p.model_dump()
@@ -471,6 +471,7 @@ async def get_model(model_id: str):
                 "id": mode.id,
                 "name": mode.name,
                 "description": mode.description,
+                "compatibility_only": mode.compatibility_only,
                 "params": mode.params,
                 "parameter_schema": _native_parameter_schema(model.id, mode.id),
             }
@@ -544,10 +545,11 @@ async def get_model_modes(model_id: str):
                 "id": mode.id,
                 "name": mode.name,
                 "description": mode.description,
+                "compatibility_only": mode.compatibility_only,
                 "params": mode.params,
                 "parameter_schema": _native_parameter_schema(model.id, mode.id),
             }
-            for mode in model.modes
+            for mode in model.modes if not mode.compatibility_only
         ]
     }
 

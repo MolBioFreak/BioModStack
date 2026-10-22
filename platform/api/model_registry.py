@@ -72,6 +72,7 @@ class ModelMode(BaseModel):
     description: str
     params: List[str] = []  # Parameter names required for this mode
     selected_only: bool = False  # Launched from an owned Design selection, not a manual Job draft.
+    compatibility_only: bool = False  # Retained requests, not a fresh capability; never an admission gate.
 
 
 class NTPTemplate(BaseModel):

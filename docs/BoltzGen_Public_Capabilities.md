@@ -28,17 +28,34 @@ All modes use the existing typed `native_generation` schema, model discovery end
 | `ligand_binder` | `protein-small_molecule` | Designed protein plus SMILES ligand; optional file-conditioned ligand/context. |
 | `ntp_binder` | `protein-small_molecule` | Designed protein plus the requested existing NTP SMILES template. Optional `catalytic_site` adds only `[Mg+2]`, not coordination distances, catalytic geometry or polymerase activity. |
 | `scaffold_around_ligand` | `protein-small_molecule` | Designed protein plus native **file** entity (not unsupported `ligand.path`). `ligand_chains` selects exact native chains; omitted means retain all source context. Coordinates condition the model, not a rigid-pose guarantee. |
-| `backbone_docking` | `protein-small_molecule` | Retained legacy ID, visibly labeled **Backbone-conditioned Ligand Sampling**. Native file backbone plus requested ligand/NTP, which was previously omitted. Binding positions address the backbone when no separate target is supplied. **Not an official docking protocol or a qualified docking optimizer.** No design mask is fabricated. |
+| `backbone_docking` (**compatibility only**) | `protein-small_molecule` | Historical file backbone plus ligand/NTP, retained without rewriting its mask, protocol, or requested input. **Not offered as a fresh public operation:** zero-design analysis fails at this pin. Explicitly reopened requests remain editable and transportable; the label is not a claim of docking or complex-sampling support. |
 
 Targets may retain DNA/RNA/ligands via native file entities and exact chain selection. Native input trees are preserved rather than rewritten into sequence-only or antibody approximations. No new readiness/admission gate was added. Native pLDDT is unavailable in the known CSV/NPZ result path; neither the typed contract nor historical catalog now injects `min_plddt=70`.
 
 ## Concrete limits and unresolved native behavior
 
 1. **Ligand-only PDB input at this pin:** native `mmcif_from_block` unconditionally indexes the first `_entity_poly_seq` row and raises `IndexError` for the tested ligand-only PDB. A real source containing polymer context with `ligand_chains` selecting the ligand succeeds. No dummy scientific context, coordinate loss, new refusal gate, or image patch was substituted. Supporting arbitrary ligand-only files requires a native parser repair/version decision; the failed attempt is retained.
-2. **Legacy docking:** the schema parses backbone plus ATP with zero designed residues. This proves entity/coordinate/argv transport, not that the full design/inverse-fold/folding/selection pipeline is scientifically meaningful with a zero-design mask. The official pin has no docking protocol. Dedicated docking capability remains unproven and is not advertised as such.
+2. **Legacy zero-design path is not a complete native operation:** `tests/qualify_boltzgen_zero_design.py` constructs the actual installed `protein-small_molecule` pipeline with device discovery and checkpoint path resolution stubbed (no loading). It still schedules design, inverse folding, folding, design folding, affinity, analysis and filtering. Executing the complete installed inverse-fold `sample` method on synthetic CPU zero-mask features skips every decoder iteration and retains the sequence. Executing the complete installed `compute_metrics` method on zero-mask features raises `IndexError: index 0 is out of bounds for dimension 0 with size 0` at the first designed-chain lookup (`analyze.py:541-545`). The generated-data design-folding branch also extracts only design-chain residues; a zero mask selects none. There is no native zero-design docking branch. This proves a deterministic downstream failure, not diffusion/folding success or molecular accuracy. Skipping inverse folding cannot repair the mandatory analysis. Fresh model lists/mode lists and the binder chooser omit the legacy ID; full model detail and direct settings retain it with `compatibility_only=true` for historical readback/editing. No launch refusal, forced design mask, altered protocol, or silent reduced-stage substitute was added. New protein/ligand design uses the documented explicit designed protein/file ranges under the existing modes.
+
+   Reproducible CPU evidence: `integration/closeout/boltzgen-native-modes/zero-design-cpu-third.log`, alongside exact installed sources in `native-control-flow-sources.json`. The script hashes the installed methods it executes; synthetic feature fixtures are explicitly not inference output.
 3. This is scoped public-mode reconciliation, not a claim of exhaustive editor parity for every nested native YAML field or every upstream CLI option. No inference, affinity/quality validation, experimental activity validation, live launch, image installation or publication occurred.
 
 ## Qualification and evidence
+
+### Zero-design mode alignment
+
+Evidence: `integration/closeout/boltzgen-native-modes/` under the same task-evidence root.
+
+- Installed CPU method/pipeline probe: `zero-design-cpu-third.log` (expected zero-mask analysis failure reproduced, unchanged inverse-fold sequence).
+- Fresh model/project discovery and retained normalization: `discovery-final.log`, **3 passed**.
+- Legacy saved-template create/reopen/update: `legacy-template-final.log`, **1 passed**.
+- Input materialization: `prep.log`, **9 passed**; zero-mask file/ligand semantics unchanged.
+- Mounted JobSubmission and binder chooser: `ui-final.log`, **8 passed, 19 skipped**; reopened legacy requests remain submit-able and disappear from fresh selection after choosing another mode.
+- TypeScript build passed; isolated Vite artifact build passed (`build.log`). No deployment.
+
+The earlier combined API run passed 10 tests (`api-third.log`). Later combined/template runs intermittently timed out in the existing async SQLite fixture; those logs remain, and the final discovery and legacy-template subsets passed independently. No fixture or production lifecycle behavior was weakened. Historical evidence below predates compatibility-only classification and uses “eight modes” to count accepted request IDs, not fresh public capabilities.
+
+### Earlier input transport qualification
 
 Evidence root:
 `/home/dalab/.local/state/biomodstack/task-evidence/structure-workflow-fidelity-repair/integration/closeout/boltzgen-capabilities/`

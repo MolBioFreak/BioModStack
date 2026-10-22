@@ -42,9 +42,10 @@ export function BinderGeneratorChooser({ generator, onSelect, onOpenNativeRoute 
                 <button type="button" className="rounded-lg border p-3 text-left" onClick={() => onOpenNativeRoute({ modelId: 'boltzgen', mode: 'peptide_binder' })}>BoltzGen · peptide</button>
                 <button type="button" className="rounded-lg border p-3 text-left" onClick={() => onOpenNativeRoute({ modelId: 'ppiflow', mode: 'protein_binder' })}>PPIFlow · protein binder generation</button>
             </>}
+            {format === 'antibody' && onOpenNativeRoute && <button type="button" className="rounded-lg border p-3 text-left" onClick={() => onOpenNativeRoute({ modelId: 'boltzgen', mode: 'antibody_binder' })}>BoltzGen · antibody CDR design</button>}
             {format === 'ligand' && onOpenNativeRoute && [
-                ['antibody_binder', 'BoltzGen · antibody CDR design'], ['ligand_binder', 'BoltzGen · ligand binder'], ['ntp_binder', 'BoltzGen · nucleotide binder'],
-                ['scaffold_around_ligand', 'BoltzGen · scaffold around ligand'], ['backbone_docking', 'BoltzGen · backbone-conditioned ligand sampling'],
+                ['ligand_binder', 'BoltzGen · ligand binder'], ['ntp_binder', 'BoltzGen · nucleotide binder'],
+                ['scaffold_around_ligand', 'BoltzGen · scaffold around ligand'],
             ].map(([mode, label]) => <button key={mode} type="button" className="rounded-lg border p-3 text-left" onClick={() => onOpenNativeRoute({ modelId: 'boltzgen', mode })}>{label}</button>)}
         </div>
         <p className="text-sm text-[var(--text-secondary)]">Choose an engine explicitly. Changing this filter does not rewrite the current request. Native model settings and route limits remain in effect.</p>
