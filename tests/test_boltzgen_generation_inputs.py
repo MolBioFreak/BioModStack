@@ -225,11 +225,10 @@ def test_legacy_preparation_meanings_are_not_reclassified(tmp_path, kind):
     if kind in ('ligand', 'ntp'):
         assert 'smiles' in result['entities'][1]['ligand']
     elif kind == 'fixed_ligand':
-        assert result['entities'][1]['ligand']['path'].endswith('ligand.pdb')
+        assert result['entities'][1]['file']['path'].endswith('ligand.pdb')
     elif kind == 'backbone':
-        # Existing omission is recorded for the parent, not silently converted
-        # into a different docking protocol in this generation implementation.
-        assert len(result['entities']) == 1
-        assert result['entities'][0]['protein']['sequence'] == 'AAA'
+        assert len(result['entities']) == 2
+        assert result['entities'][0]['file']['path'].endswith('backbone.pdb')
+        assert 'smiles' in result['entities'][1]['ligand']
     else:
         assert result['entities'] == [{'protein': {'id': 'A', 'sequence': 'AAA'}}, {'dna': {'id': 'B', 'sequence': 'AAA'}}]

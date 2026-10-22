@@ -3303,7 +3303,7 @@ class NativeBinderJobResultAdapter:
         "ligandmpnn": {"interface_context"},
         "esmfold2": {"blind_pose"},
         "ppiflow": {"protein_binder", "antibody_binder", "nanobody_binder"},
-        "boltzgen": {"protein_binder", "nanobody_binder", "peptide_binder"},
+        "boltzgen": {"protein_binder", "nanobody_binder", "peptide_binder", "antibody_binder", "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking"},
     }
 
     def __init__(self, model_id: str):

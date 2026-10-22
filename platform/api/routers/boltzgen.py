@@ -42,7 +42,7 @@ def source_positions(request: BoltzGenSourcePositionsRequest) -> dict:
 class BoltzGenPreviewRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    mode: Literal['protein_binder', 'peptide_binder', 'nanobody_binder'] | None = None
+    mode: Literal['protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'] | None = None
     params: Dict[str, Any] = Field(default_factory=dict)
     run_check: bool = Field(True, alias="validate")
 

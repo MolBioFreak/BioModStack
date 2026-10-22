@@ -36,7 +36,7 @@ modes:
 
   - id: ntp_binder
     name: NTP Binder Generation
-    description: Generate a protein for nucleotide binding (DNA/RNA polymerase design)
+    description: Design nucleotide-binding proteins; not a polymerase activity or catalytic geometry predictor
     params:
       - ntp_type
       - num_designs
@@ -46,7 +46,7 @@ modes:
 
   - id: scaffold_around_ligand
     name: Scaffold Around Ligand
-    description: Build protein scaffold around fixed ligand pose
+    description: Design protein around file-conditioned ligand coordinates; native conditioning is not a rigid-pose guarantee
     params:
       - ligand_pdb
       - scaffold_length
@@ -54,8 +54,8 @@ modes:
       - batch_size
 
   - id: backbone_docking
-    name: Dock NTP to Existing Backbone
-    description: Dock nucleotides to an existing protein structure (e.g., polymerase active site)
+    name: Backbone-conditioned Ligand Sampling
+    description: Native file-conditioned complex sampling with a ligand; legacy mode ID, not a dedicated docking optimizer
     params:
       - input_pdb
       - ntp_type
@@ -110,6 +110,11 @@ modes:
       - batch_size
       - scaffold_length
       - binding_site_residues
+
+  - id: antibody_binder
+    name: Antibody CDR Design
+    description: Native antibody-anything protocol with explicit structural design ranges or sequence template; no inferred antibody numbering or framework
+    params: [target_pdb, target_chains, target_binding_positions, scaffold_path, scaffold_chain, scaffold_design_ranges, binder_sequence, num_designs]
 
   # DEPRECATED: dna_complex mode has been moved to Boltz-2 Complex Prediction
   # Use Boltz-2 with DNA/RNA complex components instead
@@ -273,7 +278,7 @@ params:
   - name: min_plddt
     type: number
     description: "Minimum structure confidence (pLDDT) threshold"
-    default: 70
+    default: null
     minimum: 0
     maximum: 100
 
@@ -340,10 +345,10 @@ ntp_templates:
 enabled: true
 experimental: false
 
-# Model-owned public generation contract. Legacy params/defaults above are unchanged.
+# Model-owned public generation contract; unavailable legacy pLDDT defaults to null.
 # Consumers must use parameter_contract(mode), not expand the historical params list.
 native_generation:
-  schema_version: boltzgen-generation/1
+  schema_version: boltzgen-generation/2
   source_revision: 617e549edf70787d899f47bc39e3746d8f10ffff
   parameters:
   - name: boltzgen_target_pdb_path
@@ -356,6 +361,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     source: scripts/prep_boltzgen.py:preparation_parser
     default: null
     nullable: true
@@ -369,6 +379,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     source: scripts/prep_boltzgen.py:preparation_parser
     default: null
     nullable: true
@@ -382,6 +397,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     source: scripts/prep_boltzgen.py:preparation_parser
     default: null
     nullable: true
@@ -396,6 +416,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     source: scripts/prep_boltzgen.py:preparation_parser
     nullable: false
     group: run
@@ -408,6 +433,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     source: scripts/prep_boltzgen.py:preparation_parser
     nullable: false
     group: source
@@ -419,6 +449,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     source: scripts/prep_boltzgen.py:preparation_parser
     default: null
     nullable: true
@@ -432,6 +467,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     source: modules/boltzgen.nf:RunBoltzGen/FilterBoltzGen
     nullable: false
     group: run
@@ -444,6 +484,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     source: modules/boltzgen.nf:RunBoltzGen/FilterBoltzGen
     default: null
     nullable: true
@@ -458,6 +503,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     source: modules/boltzgen.nf:RunBoltzGen/FilterBoltzGen
     nullable: false
     group: selection
@@ -470,6 +520,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     source: modules/boltzgen.nf:RunBoltzGen/FilterBoltzGen
     default: null
     nullable: true
@@ -485,6 +540,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     source: modules/boltzgen.nf:RunBoltzGen/FilterBoltzGen
     nullable: true
     group: selection
@@ -496,6 +556,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     source: scripts/prep_boltzgen.py:preparation_parser
     default: null
     nullable: true
@@ -515,12 +580,22 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     source: scripts/prep_boltzgen.py:preparation_parser
     nullable: false
     default_by_mode:
       protein_binder: protein-anything
+      antibody_binder: antibody-anything
       peptide_binder: peptide-anything
       nanobody_binder: nanobody-anything
+      ligand_binder: protein-small_molecule
+      ntp_binder: protein-small_molecule
+      scaffold_around_ligand: protein-small_molecule
+      backbone_docking: protein-small_molecule
     group: run
   - name: boltzgen_binder_sequence
     type: string
@@ -530,6 +605,10 @@ native_generation:
     modes:
     - protein_binder
     - peptide_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
     source: scripts/prep_boltzgen.py:preparation_parser
     default: null
     nullable: true
@@ -543,6 +622,10 @@ native_generation:
     modes:
     - protein_binder
     - peptide_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
     source: scripts/prep_boltzgen.py:preparation_parser
     default: null
     nullable: true
@@ -554,6 +637,10 @@ native_generation:
     modes:
     - protein_binder
     - peptide_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
     source: scripts/prep_boltzgen.py:preparation_parser
     default: null
     nullable: true
@@ -566,6 +653,10 @@ native_generation:
     modes:
     - protein_binder
     - peptide_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
     source: scripts/prep_boltzgen.py:preparation_parser
     default: null
     nullable: true
@@ -619,6 +710,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     minimum: 1
   - name: boltzgen_step_scale
     type: number
@@ -632,6 +728,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
   - name: boltzgen_noise_scale
     type: number
     default: null
@@ -644,6 +745,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
   - name: boltzgen_checkpoint_mode
     type: string
     default: both
@@ -655,6 +761,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     enum:
     - both
     - diverse
@@ -671,6 +782,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
   - name: boltzgen_inverse_fold_num_sequences
     type: integer
     default: null
@@ -682,6 +798,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     minimum: 1
   - name: boltzgen_skip_inverse_folding
     type: boolean
@@ -694,6 +815,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
   - name: boltzgen_reuse
     type: boolean
     default: false
@@ -705,6 +831,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
   - name: boltzgen_min_conf_score
     type: number
     default: null
@@ -717,6 +848,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
   - name: boltzgen_refolding_rmsd_threshold
     type: number
     default: null
@@ -728,6 +864,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     minimum: 0
   - name: boltzgen_filter_biased
     type: boolean
@@ -740,6 +881,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
   - name: boltzgen_metrics_override
     type: string
     default: null
@@ -752,6 +898,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
   - name: boltzgen_additional_filters
     type: string
     default: null
@@ -763,6 +914,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
   - name: boltzgen_size_buckets
     type: string
     default: null
@@ -774,6 +930,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
   - name: boltzgen_rank_design_ptm_weight
     type: number
     default: 1.0
@@ -786,6 +947,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     exclusiveMinimum: 0
   - name: boltzgen_rank_affinity_probability_weight
     type: number
@@ -799,6 +965,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     exclusiveMinimum: 0
   - name: boltzgen_rank_filter_rmsd_weight
     type: number
@@ -812,7 +983,20 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
     exclusiveMinimum: 0
+  - name: boltzgen_cyclic
+    type: boolean
+    default: false
+    nullable: false
+    description: Native cyclic protein/peptide entity; structural scaffolds map to native add_cyclization on the selected chain
+    source: scripts/prep_boltzgen.py:preparation_parser
+    group: source
+    modes: [protein_binder, peptide_binder, antibody_binder, ligand_binder, ntp_binder, scaffold_around_ligand]
   - name: boltzgen_covalent_bonds
     type: string
     default: null
@@ -824,6 +1008,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
   - name: boltzgen_yaml_config
     type: file
     default: null
@@ -836,6 +1025,11 @@ native_generation:
     - protein_binder
     - peptide_binder
     - nanobody_binder
+    - antibody_binder
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
   - name: boltzgen_use_framework_template
     type: boolean
     default: false
@@ -888,3 +1082,79 @@ native_generation:
     group: source
     modes:
     - nanobody_binder
+  - name: boltzgen_ligand_smiles
+    type: string
+    default: null
+    nullable: true
+    description: Small molecule SMILES; retained as a native ligand entity.
+    source: scripts/prep_boltzgen.py:preparation_parser
+    group: source
+    modes:
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
+  - name: boltzgen_ligand_chains
+    type: string
+    default: null
+    nullable: true
+    description: Exact comma-separated chain IDs to include from the ligand file. Native pin requires polymer context in the source file even when only ligand chains are selected.
+    source: scripts/prep_boltzgen.py:preparation_parser
+    group: source
+    modes: [ligand_binder, ntp_binder, scaffold_around_ligand, backbone_docking]
+  - name: boltzgen_ligand_pdb
+    type: file
+    default: null
+    nullable: true
+    description: PDB/mmCIF file entity retaining ligand coordinates and all included
+      context; not ligand.path.
+    source: scripts/prep_boltzgen.py:preparation_parser
+    group: source
+    modes:
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking
+  - name: boltzgen_ntp_type
+    type: string
+    default: null
+    nullable: true
+    description: Nucleotide triphosphate SMILES template; binding design does not establish
+      polymerase activity.
+    source: scripts/prep_boltzgen.py:preparation_parser
+    group: source
+    modes:
+    - ntp_binder
+    - backbone_docking
+    enum:
+    - dATP
+    - dTTP
+    - dGTP
+    - dCTP
+    - ATP
+    - UTP
+    - GTP
+    - CTP
+  - name: boltzgen_input_pdb
+    type: file
+    default: null
+    nullable: true
+    description: Native file-conditioned complex sampling. Not an independent docking
+      optimizer; no catalytic geometry inferred.
+    source: scripts/prep_boltzgen.py:preparation_parser
+    group: source
+    modes:
+    - backbone_docking
+  - name: boltzgen_catalytic_site
+    type: boolean
+    default: false
+    nullable: false
+    description: Include Mg2+ as an additional entity only; no coordination distances,
+      catalytic geometry or activity are imposed.
+    source: scripts/prep_boltzgen.py:preparation_parser
+    group: source
+    modes:
+    - ligand_binder
+    - ntp_binder
+    - scaffold_around_ligand
+    - backbone_docking

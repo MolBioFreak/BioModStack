@@ -74,7 +74,7 @@ PROJECT_NATIVE_OWNER_REGISTRY: dict[str, dict[str, Any]] = {
 
 # JobSubmission's native generation forms report/reopen these exact modes.
 for _model, _modes in {
-    "boltzgen": ("protein_binder", "nanobody_binder", "peptide_binder"),
+    "boltzgen": ("protein_binder", "nanobody_binder", "peptide_binder", "antibody_binder", "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking"),
     "ppiflow": ("protein_binder", "antibody_binder", "nanobody_binder"),
 }.items():
     for _mode in _modes:

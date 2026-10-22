@@ -875,8 +875,10 @@ export function JobSubmission() {
 
     const models = (modelsData?.data ?? []).filter((model: UntypedApiValue) => !['protein_modification_experimental', 'protein_cad_experimental', 'protein_local_redesign', 'protein_hunter_experimental', 'boltz_cp_experimental', 'confornets_experimental', 'conformational_mapping', 'esmfold2', 'esmfold2_experimental'].includes(model.id));
     const isNativeBinderGeneration = wizardMode === 'manual' && ['ppiflow', 'boltzgen'].includes(selectedModelId ?? '') && !!selectedModeId;
-    const hasNativeGenerationInventory = isNativeBinderGeneration
+    const hasProteinBinderRound = isNativeBinderGeneration
         && ['protein_binder', 'peptide_binder', 'antibody_binder', 'nanobody_binder'].includes(selectedModeId ?? '');
+    const hasNativeGenerationInventory = isNativeBinderGeneration
+        && (selectedModelId === 'boltzgen' || ['protein_binder', 'peptide_binder', 'antibody_binder', 'nanobody_binder'].includes(selectedModeId ?? ''));
     // Choices are metadata only; resolve complete settings for the selected
     // model, including explicit experimental deep links omitted from the list.
     const selectedNativeModelQuery = useQuery({
@@ -1461,7 +1463,7 @@ export function JobSubmission() {
                 execution_target_id: sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) || null,
                 model_id: selectedModelId,
                 mode: selectedModeId,
-                ...(hasNativeGenerationInventory ? { binder_round: hydrateBinderRound(params).binder_round } : {}),
+                ...(hasProteinBinderRound ? { binder_round: hydrateBinderRound(params).binder_round } : {}),
                 params: finalParams,
                 ...(selectedModelId === 'fampnn' ? fampnnOverridePayload(fampnnOverrides) : {}),
             };
@@ -2100,7 +2102,7 @@ export function JobSubmission() {
                                     }}>Change generation engine</button>
                                     {nativeGenerationQuery.error && <p role="status" className="text-sm text-amber-500">{nativeGenerationQuery.error.message} Catalog controls remain available; the native inventory may contain additional settings.</p>}
                                     <NativeBinderGeneration key={`${selectedModelId}:${selectedModeId}`} model={selectedModelId as NativeBinderModel} mode={selectedModeId!}
-                                        generationSlot={hasNativeGenerationInventory ? <BinderRoundSettings values={params} onChange={draft => setParams(previous => ({ ...previous, ...draft }))} /> : undefined}
+                                        generationSlot={hasProteinBinderRound ? <BinderRoundSettings values={params} onChange={draft => setParams(previous => ({ ...previous, ...draft }))} /> : undefined}
                                         parameters={visibleParams} values={params} profile={nativeGenerationInventory ? { profile: nativeGenerationInventory.profile, assets: nativeGenerationInventory.assets } : undefined} nativeBehavior={nativeGenerationInventory?.native_behavior} onBrowse={setShowFileBrowser}
                                         onPatch={patch => setParams(previous => {
                                             const next = { ...previous, ...patch };

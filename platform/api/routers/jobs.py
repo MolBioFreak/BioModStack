@@ -6667,7 +6667,7 @@ async def _create_job(
         _require_prepared_remote_review(job_data, {'model_id': 'ppiflow', 'mode': normalized_mode})
 
     if (normalized_model_id == 'boltzgen'
-            and normalized_mode in {'protein_binder', 'peptide_binder', 'nanobody_binder'}
+            and normalized_mode in {'protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'}
             and selected_execution_target is not None
             and not (job_data.params.get('boltzgen_yaml_config') and job_data.params.get('boltzgen_prepared_sha256'))):
         from services.boltzgen_scaffolding import prepare_boltzgen_generation_input
@@ -7393,7 +7393,7 @@ async def _create_job(
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         if normalized_model_id == 'boltzgen' and normalized_mode in {
-                'protein_binder', 'peptide_binder', 'nanobody_binder'}:
+                'protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'}:
             from services.boltzgen_scaffolding import prepare_boltzgen_generation_input
             try:
                 job_params = await prepare_boltzgen_generation_input(job_params,
@@ -9523,7 +9523,7 @@ async def get_native_generation_results(
     job = await session.get(Job, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.model_id == "boltzgen" and job.mode in {"protein_binder", "nanobody_binder", "peptide_binder"}:
+    if job.model_id == "boltzgen" and job.mode in {"protein_binder", "nanobody_binder", "peptide_binder", "antibody_binder", "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking"}:
         from services.boltzgen_candidate_publication import read_published_generation_page
     elif job.model_id == "ppiflow" and job.mode in {"protein_binder", "antibody_binder", "nanobody_binder"}:
         from services.ppiflow_generation import read_published_generation_page

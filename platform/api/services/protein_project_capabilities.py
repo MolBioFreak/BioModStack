@@ -683,7 +683,7 @@ def _with_project_setup_state(
 # The executable Plan is built by normalized_job_plan_contract at preparation;
 # this is only the existing setup's editor-state transport schema.
 _NATIVE_BINDER_SETUP_PAIRS = {
-    'boltzgen': ('protein_binder', 'nanobody_binder', 'peptide_binder'),
+    'boltzgen': ('protein_binder', 'nanobody_binder', 'peptide_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'),
     'ppiflow': ('protein_binder', 'antibody_binder', 'nanobody_binder'),
     'bindcraft2': ('campaign',),
     'antibody_denovo': ('antibody_denovo_pipeline',),

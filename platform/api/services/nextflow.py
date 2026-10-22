@@ -515,7 +515,7 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     **{('caliby_experimental', native_mode): 'workflows/caliby_native.nf'
        for native_mode in CALIBY_NATIVE_MODES},
     **{('boltzgen', generation_mode): 'workflows/boltzgen_generation.nf'
-       for generation_mode in ('protein_binder', 'peptide_binder', 'nanobody_binder')},
+       for generation_mode in ('protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking')},
     **{('ppiflow', generation_mode): 'workflows/ppiflow_generation.nf'
        for generation_mode in ('protein_binder', 'antibody_binder', 'nanobody_binder')},
     **{pair: 'workflows/protein_sequence_design.nf' for pair in PUBLIC_SEQUENCE_MODES},
@@ -2925,7 +2925,7 @@ async def launch_nextflow_job(
             checkpoint_resume = ((job.provenance or {}).get('component_md_resume')
                 or (job.provenance or {}).get('component_checkpoint_resume') or component_retry)
             if checkpoint_resume or (
-                    model_id == 'boltzgen' and job.mode in {'protein_binder', 'peptide_binder', 'nanobody_binder'}
+                    model_id == 'boltzgen' and job.mode in {'protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'}
                     and launch_params.get('boltzgen_yaml_config')):
                 # Public generation was already resolved and snapshotted by
                 # admission. Do not redownload/reannotate the original scaffold.
@@ -5697,7 +5697,7 @@ def compile_nextflow_invocation(
         **{('caliby_experimental', native_mode): 'protein_sequence_design'
            for native_mode in CALIBY_NATIVE_MODES},
         **{('boltzgen', generation_mode): 'boltzgen'
-           for generation_mode in ('protein_binder', 'peptide_binder', 'nanobody_binder')},
+           for generation_mode in ('protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking')},
         **{('ppiflow', generation_mode): 'workstation_ryzen7960x'
            for generation_mode in ('protein_binder', 'antibody_binder', 'nanobody_binder')},
         ('ligandmpnn', 'interface_context'): 'ligandmpnn_interface_context',
@@ -6081,7 +6081,7 @@ def compile_nextflow_invocation(
             native_parameters[key] = value
         return finish_command(cmd)
 
-    if model_id == 'boltzgen' and mode in {'protein_binder', 'peptide_binder', 'nanobody_binder'}:
+    if model_id == 'boltzgen' and mode in {'protein_binder', 'peptide_binder', 'nanobody_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'}:
         from services.boltzgen_request_compatibility import parameter_contract, normalize_boltzgen_generation_request
         fields = parameter_contract(mode)
         accepted = {field['name'] for field in fields}

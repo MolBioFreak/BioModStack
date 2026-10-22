@@ -1,7 +1,7 @@
 import { api } from './api';
 
 export const isNativeBinderGeneration = (job: { model_id: string; mode: string } | undefined) => Boolean(job && (
-    (job.model_id === 'boltzgen' && ['protein_binder', 'nanobody_binder', 'peptide_binder'].includes(job.mode))
+    (job.model_id === 'boltzgen' && ['protein_binder', 'nanobody_binder', 'peptide_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'].includes(job.mode))
     || (job.model_id === 'ppiflow' && ['protein_binder', 'antibody_binder', 'nanobody_binder'].includes(job.mode))));
 export interface NativeGenerationDocument {
     artifact_id: string; target_state?: string | null; logical_path?: string; download_url?: string; primary?: boolean; sha256?: string;
