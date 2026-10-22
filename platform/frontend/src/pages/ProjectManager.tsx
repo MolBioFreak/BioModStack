@@ -111,9 +111,10 @@ function selectedDomainIsProtein(summary: ProjectManagerReadModel): boolean {
         || payloadSchema === 'bms.protein-in-silico-experiment.v1';
 }
 
-export function NativeProjectDataPanel({ summary, stateRevisionId, onCreateExperiment, onCreateWorkspace, onSelectNode }: {
+export function NativeProjectDataPanel({ summary, stateRevisionId, onCreateExperiment, onCreateWorkspace, onSelectNode, actionsDisabled = false }: {
     summary: ProjectManagerReadModel;
     stateRevisionId: string | null;
+    actionsDisabled?: boolean;
     onCreateExperiment: () => void;
     onCreateWorkspace: () => void;
     onSelectNode: (nodeKey: string, nodeType: string, subjectId: string | null) => void;
@@ -154,9 +155,9 @@ export function NativeProjectDataPanel({ summary, stateRevisionId, onCreateExper
                         ? 'Select an experiment and add its NGS/MolBio workspace to organize DNA sequences and NGS data.'
                         : 'Create an experiment, then add its NGS/MolBio workspace to organize DNA sequences and NGS data.'}</p>
                 <div className="mt-4 flex flex-wrap gap-2">
-                    {summary.allowed_actions.includes('create_global_experiment') && <button type="button" onClick={onCreateExperiment} className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white">New experiment</button>}
-                    {selectedExperiment && <button type="button" onClick={onCreateWorkspace} className="rounded-lg border border-accent px-3 py-2 text-sm text-accent">Add NGS/MolBio workspace</button>}
-                    {(workspaces.length ? workspaces : experiments).map((node) => <button key={node.node_key} type="button" onClick={() => onSelectNode(node.node_key, node.node_type, node.subject_id)} className="rounded-lg border border-border-primary px-3 py-2 text-sm text-content">Open {node.label}</button>)}
+                    {summary.allowed_actions.includes('create_global_experiment') && <button type="button" disabled={actionsDisabled} onClick={onCreateExperiment} className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white">New experiment</button>}
+                    {selectedExperiment && <button type="button" disabled={actionsDisabled} onClick={onCreateWorkspace} className="rounded-lg border border-accent px-3 py-2 text-sm text-accent">Add NGS/MolBio workspace</button>}
+                    {(workspaces.length ? workspaces : experiments).map((node) => <button key={node.node_key} type="button" disabled={actionsDisabled} onClick={() => onSelectNode(node.node_key, node.node_type, node.subject_id)} className="rounded-lg border border-border-primary px-3 py-2 text-sm text-content">Open {node.label}</button>)}
                 </div>
             </section>
         );
@@ -940,7 +941,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 )}
                 {projectTreeVisible && <div role="separator" aria-orientation="vertical" aria-label="Resize Project tree" tabIndex={0} onPointerDown={(event) => startRailResize('tree', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setTreeWidth((value) => Math.max(208, value - 16)); if (event.key === 'ArrowRight') setTreeWidth((value) => Math.min(400, value + 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent md:block" />}
                 <main className="flex min-h-0 min-w-0 flex-col md:overflow-y-auto">
-                    <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} onCreateExperiment={() => setDialogMode('create_global')} onCreateWorkspace={() => setDialogMode('create_domain')} onSelectNode={setSelection} />
+                    <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} onCreateExperiment={() => setDialogMode('create_global')} onCreateWorkspace={() => setDialogMode('create_domain')} onSelectNode={setSelection} actionsDisabled={!selectionReady} />
                     {loadingCandidateOverview && <p role="status" className="p-6 text-sm text-content-secondary">Loading candidate sources and validation results… <button type="button" onClick={() => switchProjectView('records')} className="text-accent underline">Open records now</button></p>}
                     {showCandidates && candidates.data && <ProjectCandidateOverview data={candidates.data} onOpenRecords={() => switchProjectView('records')} />}
                     {!isStandaloneNativeProject && !showCandidates && !loadingCandidateOverview && (
