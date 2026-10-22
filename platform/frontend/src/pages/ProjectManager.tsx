@@ -120,12 +120,13 @@ export function NativeProjectDataPanel({ summary, stateRevisionId, onCreateExper
     onSelectNode: (nodeKey: string, nodeType: string, subjectId: string | null) => void;
 }) {
     const context = useMemo(() => nativeProjectContext(summary), [summary]);
-    const isNativeProject = summary.project.project_scope === 'ngs_molbio_local';
+    const isNativeProject = summary.project.project_scope === 'ngs_molbio_local' || context !== null;
     const stateQuery = useQuery({
         queryKey: ['project-manager', 'native-domain-state', context?.domainExperimentId ?? null],
         queryFn: () => fetchMolBioNgsDomainState(context?.domainExperimentId as string),
         enabled: isNativeProject && context !== null,
-        retry: false,
+        retry: (count, error) => count < 5 && (error as { response?: { status?: number } }).response?.status === 404,
+        retryDelay: 1000,
     });
     const selectedStateRevisionId = stateRevisionId ?? stateQuery.data?.current_state_revision_id ?? null;
     const projectHubQuery = useQuery({
@@ -161,6 +162,10 @@ export function NativeProjectDataPanel({ summary, stateRevisionId, onCreateExper
                 </div>
             </section>
         );
+    }
+    if (stateQuery.isSuccess && stateQuery.data.current_state_revision_id === null) {
+        const params = new URLSearchParams({ workspace_id: summary.project.id, global_experiment_id: context!.globalExperimentId, domain_experiment_id: context!.domainExperimentId, action: 'add-plasmid' });
+        return <section className="m-4 rounded-xl border border-border-primary bg-surface-secondary p-5" aria-label="Empty DNA sequence workspace"><h2 className="font-semibold text-content">No DNA sequences attached yet</h2><p className="mt-2 text-sm text-content-secondary">Import or save a DNA sequence in MolBio, then use Add to Project. You can also attach a saved sequence with Attach existing record above.</p><Link to={`/designer?${params}`} className="mt-3 inline-block rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white">Open MolBio to add DNA sequences</Link></section>;
     }
     if (stateQuery.isPending || (selectedStateRevisionId !== null && projectHubQuery.isPending)) {
         return <section aria-busy="true" className="border-b border-border-primary bg-surface-secondary px-4 py-3 text-xs text-content-secondary">Loading Project DNA sequences…</section>;

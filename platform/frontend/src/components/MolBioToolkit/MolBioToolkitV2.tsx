@@ -5,7 +5,7 @@
  */
 
 import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 const GoldenGateRetainedWorkspace = lazy(() => import('./panels/golden-gate/GoldenGateWorkflowWorkspace'));
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ngsResultHref } from '../../lib/ngsResultRouting';
@@ -25,6 +25,8 @@ import {
 } from '../../lib/restrictionAnalysis';
 import { SequenceViewer, type ColorPaletteName } from './SequenceViewer';
 import { DEFAULT_VISIBILITY } from './sequenceViewerConstants';
+import { ProjectAttachmentDialog, type ProjectAttachmentSource } from '../project-manager/ProjectAttachmentDialog';
+import { MOLECULAR_MEMBER_ADAPTER } from '../../lib/molecularProjectMembership';
 import { SequenceHeader } from './SequenceHeader';
 import {
     MobileMolBioWorkspace,
@@ -71,6 +73,7 @@ import {
     calculatePrimerTm,
     fetchProjectHub,
     fetchMolecularRevision,
+    fetchMolecularRevisionSummaries,
     fetchNucleotideSequence,
     fetchNucleotideSequences,
     fetchPrimerTmOptions,
@@ -615,6 +618,10 @@ function assertExactMolecularRevisionIdentity(
 export function MolBioToolkitV2() {
     const location = useLocation();
     const { workspaceId, globalExperimentId, domainExperimentId, stateRevisionId, updateQueryParams, contextHref } = useGlobalExperimentContext();
+    const [projectAttachmentSource, setProjectAttachmentSource] = useState<ProjectAttachmentSource | null>(null);
+    const [projectAttachmentError, setProjectAttachmentError] = useState<string | null>(null);
+    const projectAttachmentRequestRef = useRef(0);
+    const [projectExportHref, setProjectExportHref] = useState<string | null>(null);
     const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
     const requestedCanonicalMolecularSequenceId = queryParams.get('molbio_sequence_id')?.trim() || null;
     const requestedCanonicalMolecularRevisionId = queryParams.get('molbio_revision_id')?.trim() || null;
@@ -643,7 +650,7 @@ export function MolBioToolkitV2() {
     const [exactMolecularError, setExactMolecularError] = useState<string | null>(null);
     const deepLinkSequenceId = requestedLegacyMolecularSequenceId;
     const deepLinkRevisionId = requestedLegacyMolecularRevisionId;
-    const deepLinkOperationId = queryParams.get('operation_id')?.trim() || null;
+    const deepLinkOperationId = queryParams.get('molbio_operation_id')?.trim() || queryParams.get('operation_id')?.trim() || null;
     const deepLinkReceiptId = queryParams.get('receipt_id')?.trim() || null;
     const [goldenGateLinkedOperation,setGoldenGateLinkedOperation]=useState<string | null>(null);
     const [showLinkedGoldenGate,setShowLinkedGoldenGate]=useState(false);
@@ -656,6 +663,11 @@ export function MolBioToolkitV2() {
     const [selectedSequenceId, setSelectedSequenceId] = useState<string | null>(null);
     const [shareOpen, setShareOpen] = useState(false);
     const [showInputModal, setShowInputModal] = useState(false);
+    useEffect(() => {
+        if (queryParams.get('action') !== 'add-plasmid') return;
+        setShowInputModal(true);
+        updateQueryParams({ action: null }, { replace: true });
+    }, [queryParams, updateQueryParams]);
     const [visibility, setVisibility] = useState<VisibilityState>(DEFAULT_VISIBILITY);
     const [activePanel, setActivePanel] = useState<ActivePanel>('view');
     const [selection, setSelection] = useState<SelectionInfo | null>(null);
@@ -1653,6 +1665,34 @@ export function MolBioToolkitV2() {
         // A transition must not discard edits which were not part of this save.
         return unchanged;
     }, [activeWorkspaceId, createSequence, historyState, hydrate, loadLibrary, sequenceData, updateSequence, workspaceTabs]);
+
+    useEffect(() => {
+        projectAttachmentRequestRef.current += 1;
+        setProjectAttachmentSource(null);
+        setProjectAttachmentError(null);
+    }, [selectedSequenceId, selectedExactMolecularRevision?.revision_id, isDirty]);
+
+    const openProjectExport = async () => {
+        const sequenceId = selectedExactMolecularRevision?.sequence_id ?? selectedSequenceId;
+        if (!sequenceId || isDirty) return;
+        setProjectAttachmentError(null);
+        const requestId = ++projectAttachmentRequestRef.current;
+        try {
+            const pinned = selectedExactMolecularRevision;
+            const revisions = pinned ? [] : await fetchMolecularRevisionSummaries(sequenceId, 1);
+            if (requestId !== projectAttachmentRequestRef.current) return;
+            const revision = pinned ?? revisions.find((item) => item.is_current);
+            if (!revision) throw new Error('The saved molecular revision is unavailable.');
+            setProjectAttachmentSource({
+                adapterId: MOLECULAR_MEMBER_ADAPTER,
+                entityId: new URLSearchParams({ sequence_id: sequenceId, revision_id: revision.revision_id }).toString(),
+                label: sequenceData.name, revision: revision.revision_id, digest: revision.content_sha256, availability: 'available',
+                historyJournal: historyState.journal.map(({ timestamp, label, summary }) => ({ timestamp, label, summary })),
+            });
+        } catch (error) {
+            if (requestId === projectAttachmentRequestRef.current) setProjectAttachmentError(error instanceof Error ? error.message : 'Unable to load saved revision.');
+        }
+    };
 
     const saveSequence = useCallback(
         (): Promise<boolean> => saveWorkspace(activeWorkspaceId),
@@ -3304,10 +3344,25 @@ export function MolBioToolkitV2() {
 
                 {/* Center: Viewer */}
                 <div className="relative flex-1 flex flex-col min-w-0 overflow-hidden">
+                    {!isViewerFullscreen && <div className="flex flex-wrap items-center justify-end gap-2 border-b border-slate-700 px-3 py-2">
+                        {projectExportHref && <span role="status" className="text-xs text-emerald-300">Exported. <Link to={projectExportHref} className="underline">Open destination Project</Link></span>}
+                        {projectAttachmentError && <span role="alert" className="text-xs text-red-300">{projectAttachmentError}</span>}
+                        <button type="button" disabled={!(selectedExactMolecularRevision || selectedSequenceId) || isDirty} className="rounded border border-cyan-600 px-3 py-1 text-xs font-semibold text-cyan-300 disabled:opacity-50" title="Save the sequence before attaching its exact revision" onClick={() => void openProjectExport()}>Add to Project</button>
+                    </div>}
+                    <ProjectAttachmentDialog open={projectAttachmentSource !== null} source={projectAttachmentSource ?? undefined} initialProjectId={workspaceId ?? undefined}
+                        destination={globalExperimentId && domainExperimentId ? { globalExperimentId, domainExperimentId, stateRevisionId } : undefined}
+                        onClose={() => setProjectAttachmentSource(null)} onAttached={(_receiptId, revisionId, destination) => {
+                            setProjectAttachmentSource(null);
+                            if (destination) setProjectExportHref(`/projects/${destination.projectId}?${new URLSearchParams({ selected: `domain_experiment:${destination.domainExperimentId}`, ...(revisionId ? { state_revision_id: revisionId } : {}) })}`);
+                            if (revisionId && destination?.projectId === workspaceId && destination.domainExperimentId === domainExperimentId) updateQueryParams({ state_revision_id: revisionId });
+                            void loadLibrary();
+                        }} />
                     {!isViewerFullscreen && (
                         <SequenceHeader
                             sequenceData={sequenceData}
                             onSave={isExactMolecularAuthority ? undefined : saveSequence}
+                            onExportToProject={() => void openProjectExport()}
+                            projectExportDisabled={!(selectedExactMolecularRevision || selectedSequenceId) || isDirty}
                             onUndo={isExactMolecularAuthority ? undefined : undo}
                             onRedo={isExactMolecularAuthority ? undefined : redo}
                             onAutoAnnotate={isExactMolecularAuthority ? undefined : handleAutoAnnotate}
