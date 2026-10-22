@@ -27,7 +27,7 @@ it.skipIf(!origin || !projectId || (!setup && (!experimentId || !domainId)) || !
                 let body = ''; response.setEncoding('utf8'); response.on('data', (chunk) => body += chunk);
                 response.on('end', () => {
                     const data = body ? JSON.parse(body) : null;
-                    if ((response.statusCode ?? 500) >= 400) return reject(Object.assign(new Error(JSON.stringify(data)), { response: { status: response.statusCode, data } }));
+                    if ((response.statusCode ?? 500) >= 400) return reject(Object.assign(new Error(JSON.stringify(data)), { isAxiosError: true, response: { status: response.statusCode, data } }));
                     resolve({ data, status: response.statusCode!, statusText: response.statusMessage!, headers: {}, config });
                 });
             });
@@ -56,6 +56,8 @@ it.skipIf(!origin || !projectId || (!setup && (!experimentId || !domainId)) || !
         async function until(check: () => boolean, timeout = 15000) {
             const deadline = Date.now() + timeout;
             while (!check()) {
+                const failure = host.querySelector('[role="alert"]');
+                if (failure?.textContent) throw new Error(`Mounted export failed: ${failure.textContent}`);
                 if (Date.now() > deadline) throw new Error(`Mounted export did not complete: ${host.textContent}`);
                 await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
             }

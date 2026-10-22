@@ -121,7 +121,7 @@ export function NativeProjectDataPanel({ summary, stateRevisionId, onCreateExper
         queryKey: ['project-manager', 'native-domain-state', context?.domainExperimentId ?? null],
         queryFn: () => fetchMolBioNgsDomainState(context?.domainExperimentId as string),
         enabled: isNativeProject && context !== null,
-        retry: (count, error) => count < 5 && (error as { response?: { status?: number } }).response?.status === 404,
+        retry: (count, error) => count < 5 && (error as { status?: number }).status === 404,
         retryDelay: 1000,
     });
     const selectedStateRevisionId = stateRevisionId ?? stateQuery.data?.current_state_revision_id ?? null;
