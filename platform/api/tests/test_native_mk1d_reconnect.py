@@ -32,13 +32,12 @@ def test_native_recovery_preserves_active_minknow_and_has_one_fixed_user_service
     tools = tmp_path / 'bin'; tools.mkdir()
     for name, body in {
         'systemctl': 'echo "systemctl $*" >> "$COMMAND_LOG"\nif [ "$1" = show ]; then echo "$MINKNOW_STATE"; fi\n',
-        'setpriv': 'echo "setpriv $*" >> "$COMMAND_LOG"\n',
         'curl': 'echo "curl $*" >> "$COMMAND_LOG"\n',
     }.items():
         path = tools / name; path.write_text('#!/bin/sh\n'+body); path.chmod(0o755)
     # Redirect only the fixed host executables/lock in this isolated copy.
     text = text.replace('PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', f'PATH={tools}:/usr/bin:/bin')
-    text = text.replace('/usr/bin/setpriv', str(tools / 'setpriv'))
+    text = text.replace('/usr/bin/systemctl', str(tools / 'systemctl'))
     text = text.replace("readonly LOCK_FILE='/run/biomodstack/mk1d-reconnect.lock'", f"readonly LOCK_FILE='{tmp_path / 'lock'}'")
     script = tmp_path / 'helper'; script.write_text(text)
     result = subprocess.run(['bash', str(script)], capture_output=True, text=True,
@@ -49,8 +48,8 @@ def test_native_recovery_preserves_active_minknow_and_has_one_fixed_user_service
     assert 'systemctl restart minknow.service' not in commands
     if minknow_state == 'deactivating':
         assert receipt['status'] == 'blocked'
-        assert 'setpriv' not in commands
+        assert '--machine=' not in commands
     else:
         assert receipt['status'] == 'completed'
-        assert '--user restart bns-minknow-host-agent.service' in commands
+        assert f'--user --machine={owner.pw_name}@.host restart bns-minknow-host-agent.service' in commands
         assert 'curl --fail --silent --show-error --max-time 2 http://127.0.0.1:18798/ont/status' in commands
