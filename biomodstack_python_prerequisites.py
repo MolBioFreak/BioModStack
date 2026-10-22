@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,47 @@ ACTIONS = {"python-plan", "python-bootstrap", "python-verify"}
 SETUP_ACTIONS = {"discover", "plan", "configure-preview", "configure", "recover",
                  "resume", "provision-plan", "provision", "verify"}
 MANIFESTS = ("pyproject.toml", "uv.lock", "README.md")
+DOCOPT_SOURCE = {
+    "name": "docopt", "version": "0.6.2",
+    "url": "https://files.pythonhosted.org/packages/a2/55/8f8cab2afd404cf578136ef2cc5dfb50baa1761b68c9da1fb1e4eed343c9/docopt-0.6.2.tar.gz",
+    "hash": "sha256:49b3a825280bd66b3aa83585ef59c4a8c82f2c8a522dbe754a8bc8d08c85c491",
+}
+
+
+def locked_build_policy(lock: Path) -> tuple[list[str], list[dict]]:
+    """Allow only the reviewed source-only dependency; otherwise forbid builds.
+
+    Read the canonical uv-generated package stanzas without adding a TOML
+    dependency to the stdlib-only Python 3.10 bootstrap. Unknown formatting
+    retains the stricter global no-build policy. uv still validates the full
+    frozen lock and its distribution hashes before installation.
+    """
+    blocks = re.findall(r"(?ms)^\[\[package\]\]\n(.*?)(?=^\[\[package\]\]|\Z)", lock.read_text())
+    packages = []
+    for block in blocks:
+        names = re.findall(r'^name = "([a-z0-9][a-z0-9._-]*)"$', block, re.M)
+        if len(names) != 1:
+            return ["--no-build"], []
+        packages.append((names[0], block))
+    candidates = [block for name, block in packages if name == "docopt"]
+    if len(candidates) != 1:
+        return ["--no-build"], []
+    block = candidates[0]
+    versions = re.findall(r'^version = "([^"]+)"$', block, re.M)
+    sources = re.findall(r'^source = (.+)$', block, re.M)
+    sdists = re.findall(r'^sdist = (.+)$', block, re.M)
+    if (versions != [DOCOPT_SOURCE["version"]]
+            or sources != ['{ registry = "https://pypi.org/simple" }']
+            or len(sdists) != 1
+            or re.findall(r'\burl = "([^"]+)"', sdists[0]) != [DOCOPT_SOURCE["url"]]
+            or re.findall(r'\bhash = "([^"]+)"', sdists[0]) != [DOCOPT_SOURCE["hash"]]):
+        return ["--no-build"], []
+    flags = [part for name in sorted({name for name, _ in packages} - {"docopt"})
+             for part in ("--no-build-package", name)]
+    # A lone/empty synthetic lock must not turn into unrestricted source builds.
+    if not flags:
+        return ["--no-build"], []
+    return flags, [dict(DOCOPT_SOURCE)]
 
 
 class PrerequisiteError(RuntimeError):
@@ -44,11 +86,13 @@ def location(project_root: Path) -> Path:
 
 def identity(project_root: Path) -> dict:
     source = project_root.resolve()
+    _, approved = locked_build_policy(source / "platform/api/uv.lock")
     return {"source_root": str(source), "manifests": {
         name: hashlib.sha256((source / "platform/api" / name).read_bytes()).hexdigest()
         for name in MANIFESTS}, "uv_version": UV_VERSION,
         "python": f"{sys.version_info.major}.{sys.version_info.minor}",
-        "policy": "frozen-no-dev-no-build-no-install-project-v1"}
+        "policy": ("frozen-no-dev-docopt-source-no-install-project-v2" if approved
+                   else "frozen-no-dev-no-build-no-install-project-v1")}
 
 
 def validate_owned_paths(root: Path) -> None:
@@ -108,7 +152,8 @@ def save(root: Path, state: dict) -> None:
 
 def subprocess_env(root: Path) -> dict:
     # Neither inherited package indexes nor an activated developer venv may
-    # redirect this operation. No interpreter download or source builds.
+    # redirect this operation. Source builds stay off unless locked-sync
+    # explicitly applies the reviewed package policy.
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("UV_", "PIP_", "PYTHON")) and k != "VIRTUAL_ENV"}
     env.update(UV_PYTHON_DOWNLOADS="never", UV_NO_BUILD="1",
@@ -155,14 +200,16 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
             raise PrerequisiteError("action_invalid", "Unsupported Python prerequisite action")
         root = location(project_root)
         expected = identity(project_root)
+        build_flags, approved_builds = locked_build_policy(project_root / "platform/api/uv.lock")
         report.update(root=str(root), identity=expected,
+                      approved_source_builds=approved_builds,
                       resume_command="./start_ui.sh python-bootstrap --json")
         state = read_state(root, expected)
         report["operation_status"] = state.get("status") if state else "absent"
         if action == "python-plan":
             report.update(status="planned", steps=[
                 {"step": "pinned-uv", "version": UV_VERSION, "network": True},
-                {"step": "locked-sync", "flags": ["--frozen", "--no-dev", "--no-build", "--no-install-project"], "network": True},
+                {"step": "locked-sync", "flags": ["--frozen", "--no-dev", *build_flags, "--no-install-project"], "network": True},
                 {"step": "offline-check", "network": False}])
             return report
         if action == "python-verify":
@@ -205,13 +252,14 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
                 raise PrerequisiteError("source_changed", "Source manifests changed during bootstrap")
             (staging / name).write_bytes(data)
         env = subprocess_env(root)
-        def run(step: str, command: list[str], timeout: int) -> None:
+        def run(step: str, command: list[str], timeout: int, *, approved_source: bool = False) -> None:
             row = {"step": step, "status": "running", "command": command,
                    "log": str(root / (step + ".log"))}
             state["steps"].append(row)
             save(root, state)
             with open(row["log"], "w") as log:
-                p = subprocess.run(command, cwd=staging, env=env, stdout=log,
+                command_env = {**env, "UV_NO_BUILD": "false"} if approved_source else env
+                p = subprocess.run(command, cwd=staging, env=command_env, stdout=log,
                                    stderr=subprocess.STDOUT, timeout=timeout)
             row.update(exit_code=p.returncode, status="complete" if p.returncode == 0 else "failed")
             save(root, state)
@@ -223,8 +271,9 @@ def prerequisite_report(action: str, *, project_root: Path) -> dict:
                           "--no-deps", "--upgrade", "--index-url", "https://pypi.org/simple",
                           "--target", str(root / "toolchain"), f"uv=={UV_VERSION}"], 180)
         run("locked-sync", [str(root / "toolchain/bin/uv"), "sync", "--frozen",
-                            "--no-dev", "--no-build", "--no-install-project",
-                            "--python", sys.executable, "--no-python-downloads"], 900)
+                            "--no-dev", *build_flags, "--no-install-project",
+                            "--python", sys.executable, "--no-python-downloads"], 900,
+            approved_source=bool(approved_builds))
         fingerprint = check_environment(root)
         if identity(project_root) != expected:
             raise PrerequisiteError("source_changed", "Source identity changed during bootstrap")

@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy import select
 
 from database import OntInstrumentRun
+from services.container_cli_environment import container_cli_environment
 from services.ont_raw_signal import (
     EXTERNAL_BLOW5_VALIDATION_PROFILE_ID,
     claim_next_derivation,
@@ -235,7 +236,7 @@ class OntRawSignalWorker:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+                env=container_cli_environment(),
                 start_new_session=True,
             )
             admission_lost = False

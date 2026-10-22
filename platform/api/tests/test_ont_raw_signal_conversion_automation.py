@@ -1405,6 +1405,9 @@ class _LookupSession:
 
 @pytest.mark.asyncio
 async def test_waveform_execute_rechecks_policy_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", "/operator/home")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setenv("BMS_SUDO_PASSWORD", "do-not-forward")
     policy_digest = "d" * 64
     admitted: list[tuple[str, str]] = []
 
@@ -1428,6 +1431,9 @@ async def test_waveform_execute_rechecks_policy_command(monkeypatch: pytest.Monk
             return b"", b""
 
     async def fake_create_subprocess_exec(*_command, **_kwargs):
+        assert _kwargs["env"]["HOME"] == "/operator/home"
+        assert _kwargs["env"]["XDG_RUNTIME_DIR"] == "/run/user/1000"
+        assert "BMS_SUDO_PASSWORD" not in _kwargs["env"]
         return Child()
 
     monkeypatch.setattr(ont_raw_signal_worker.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
@@ -1459,7 +1465,7 @@ async def test_waveform_claim_uses_checked_in_runtime_identity(
     index = tmp_path / "source.blow5.idx"
     blow5.write_bytes(b"blow5")
     index.write_bytes(b"index")
-    representation = OntRawSignalRepresentation(id="representation-1")
+    representation = OntRawSignalRepresentation(id="representation-1", artifact_manifest={})
     lookup = OntRawSignalLookup(
         id="lookup-1",
         representation_id=representation.id,
@@ -2604,9 +2610,15 @@ def test_raw_runtime_admission_inspects_exact_local_image_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     inspected: list[list[str]] = []
+    monkeypatch.setenv("HOME", "/operator/home")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setenv("BMS_SUDO_PASSWORD", "do-not-forward")
     monkeypatch.setattr(ont_raw_signal.shutil, "which", lambda runtime: f"/usr/bin/{runtime}")
 
     def inspect(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        assert _kwargs["env"]["HOME"] == "/operator/home"
+        assert _kwargs["env"]["XDG_RUNTIME_DIR"] == "/run/user/1000"
+        assert "BMS_SUDO_PASSWORD" not in _kwargs["env"]
         inspected.append(command)
         return subprocess.CompletedProcess(command, 0, stdout="sha256:" + "a" * 64 + "\n", stderr="")
 
@@ -2768,3 +2780,24 @@ async def test_publication_rejects_expired_or_cancelled_claim_before_commit(
     with pytest.raises(ValueError, match="lease|cancellation"):
         await ont_raw_signal.publish_derivation(session, job, source, commands)
     assert session.commits == 0
+
+
+def test_external_candidates_ignore_unreadable_vendor_state(monkeypatch, tmp_path):
+    root = tmp_path / "minknow-data"
+    private = root / "private-state"
+    reads = root / "reads"
+    private.mkdir(parents=True)
+    reads.mkdir()
+    (reads / "closed.pod5").write_bytes(b"candidate")
+    (private / "hidden.pod5").write_bytes(b"not-authorized")
+    monkeypatch.setenv(ont_raw_signal.EXTERNAL_POD5_ROOT_ENV, str(root))
+    real_open = ont_raw_signal.os.open
+
+    def guarded_open(path, flags, *args, **kwargs):
+        if path == "private-state":
+            raise PermissionError("private vendor state")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(ont_raw_signal.os, "open", guarded_open)
+    candidates = ont_raw_signal.list_external_pod5_candidates()
+    assert [entry["display_name"] for entry in candidates] == ["reads/closed.pod5"]

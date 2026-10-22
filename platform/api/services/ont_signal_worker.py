@@ -42,6 +42,7 @@ from database import (
 from molbio_ngs_models import MolBioNGSReferenceArtifact, MolBioNGSReferenceRevision
 from paths import get_allowed_roots, get_molbio_ngs_reference_root, get_results_dir
 from services import ngs_alignment_sessions, ont_raw_signal, ont_signal_workbench
+from services.container_cli_environment import container_cli_environment as _container_cli_env
 from services.file_lease_signals import lease_break_generation
 
 logger = logging.getLogger(__name__)
@@ -679,7 +680,7 @@ class OntSignalWorker:
                 text=True,
                 check=False,
                 timeout=30,
-                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+                env=_container_cli_env(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError("local approved Squigualiser image inspection failed") from exc
@@ -1014,7 +1015,7 @@ class OntSignalWorker:
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+            env=_container_cli_env(),
         )
         try:
             _stdout, stderr = await asyncio.wait_for(cleanup.communicate(), timeout=30)
@@ -1036,7 +1037,7 @@ class OntSignalWorker:
             process = await asyncio.create_subprocess_exec(
                 runtime, "ps", "-aq", "--filter", f"label={WORKER_LABEL}",
                 stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+                env=_container_cli_env(),
             )
         except FileNotFoundError as exc:
             # Only failure to spawn the selected executable is optional. Discovery
@@ -1190,7 +1191,7 @@ class OntSignalWorker:
             self._child = await asyncio.create_subprocess_exec(
                 *command, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+                env=_container_cli_env(),
                 start_new_session=True,
             )
             await self._send_fd_request(broker_socket, parents, operation_argv)

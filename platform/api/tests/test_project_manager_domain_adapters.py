@@ -942,7 +942,7 @@ async def test_md_molbio_receipt_sequence_qc_and_alignment_use_native_verifiers(
     assert expected_reference_receipt["content_digest"] == receipt_digest
     assert expected_reference_receipt["reopen_uri"] == "/designer?sequence_id=sequence-1&revision_id=revision-1&receipt_id=receipt-1"
     assert revision_receipt["content_digest"] == hashlib.sha256(b"ATGC").hexdigest()
-    assert revision_receipt["reopen_uri"] == "/designer?sequence_id=sequence-1&revision_id=revision-1"
+    assert revision_receipt["reopen_uri"] == "/designer?molbio_sequence_id=sequence-1&molbio_revision_id=revision-1"
     assert qc_receipt["content_digest"] == qc_digest
     assert qc_receipt["metadata"]["workflow_id"] == "ont_fastq_qc"
     assert qc_receipt["metadata"]["input_mode"] == "fastq"

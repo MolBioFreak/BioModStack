@@ -265,7 +265,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
     const [successCriteria, setSuccessCriteria] = useState('');
     const [reviewSummary, setReviewSummary] = useState('');
     const [conclusion, setConclusion] = useState('');
-    const [domainKind, setDomainKind] = useState<'protein_in_silico' | 'ngs_molbio'>('protein_in_silico');
+    const [domainKind, setDomainKind] = useState<'protein_in_silico' | 'ngs_molbio'>('ngs_molbio');
     const [ngsExperimentMode, setNgsExperimentMode] = useState('analysis');
     const [proteinExperimentMode, setProteinExperimentMode] = useState<ProteinExperimentMode>('design');
     const [proteinTargets, setProteinTargets] = useState<ProteinTargetDraft[]>([blankProteinTarget()]);
@@ -335,7 +335,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
     useEffect(() => {
         if (!mode) return;
         setName('');
-        setProjectScope('global');
+        setProjectScope('ngs_molbio_local');
         setDescription('');
         setObjective('');
         setQuestion('');
@@ -348,7 +348,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
         setSuccessCriteria('');
         setReviewSummary('');
         setConclusion('');
-        setDomainKind('protein_in_silico');
+        setDomainKind('ngs_molbio');
         setNgsExperimentMode('analysis');
         setProteinExperimentMode('design');
         setProteinTargets([blankProteinTarget()]);
@@ -393,7 +393,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
         setConclusion(typeof payload.conclusion === 'string' ? payload.conclusion : '');
         const proteinPayload = jsonRecord(payload.domain_payload);
         if (selection?.node_type === 'domain_experiment' && proteinPayload?.schema === 'bms.protein-in-silico-experiment.v3') {
-            setDomainKind('protein_in_silico');
+            setDomainKind('ngs_molbio');
             const modeValue = proteinPayload.experiment_mode;
             if (typeof modeValue === 'string' && ['exploration', 'design', 'redesign', 'prediction', 'validation', 'comparison', 'simulation', 'analysis'].includes(modeValue)) {
                 setProteinExperimentMode(modeValue as ProteinExperimentMode);
@@ -756,6 +756,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                         <>
                             {mode === 'create_project' && <label className="block text-xs font-semibold text-content-secondary">Project type
                                 <select aria-label="Project type" value={projectScope} onChange={(event) => setProjectScope(event.target.value as 'global' | 'ngs_molbio_local')} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-sm text-content">
+
                                     <option value="global">Global Project</option>
                                     <option value="ngs_molbio_local">Standalone NGS/MolBio Project</option>
                                 </select>
@@ -804,7 +805,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                             )}
                             {mode === 'create_domain' && <label className="block text-xs font-semibold text-content-secondary">Domain type
                                 <select value={domainKind} onChange={(event) => setDomainKind(event.target.value as typeof domainKind)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-content">
-                                    <option value="protein_in_silico">Protein In Silico</option><option value="ngs_molbio">NGS / MolBio</option>
+                                    <option value="ngs_molbio">NGS / MolBio</option>
                                 </select>
                             </label>}
                             {((mode === 'create_domain' && domainKind === 'protein_in_silico') || proteinEditing) && (

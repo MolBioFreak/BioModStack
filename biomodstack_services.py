@@ -1366,6 +1366,15 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         "Environment=" + systemd_value(f"BMS_PYTHON_ROOT={python_environment['root']}")
         if python_environment is not None else ""
     )
+    # Preserve annotation installation selectors in the managed API, including
+    # subsequent desktop starts. Scientific search settings remain API-owned.
+    annotation_environment = "\n        ".join(
+        "Environment=" + systemd_value(f"{key}={os.environ[key]}")
+        for key in (
+            "BMS_MICROMAMBA_BIN", "BMS_MICROMAMBA_ROOT_PREFIX",
+            "BMS_PLANNOTATE_ENV", "BMS_PLANNOTATE_BIN",
+        ) if os.environ.get(key)
+    )
     from biomodstack_local_resources import configured_local_policy
     local_policy = configured_local_policy()
     shared_data_root = Path(str(resolved.get("data_root", Path("/mnt/BioModStack")))).expanduser().resolve()
@@ -1786,6 +1795,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}")}
         Environment={systemd_value(f"BMS_CM_API_RUNTIME_DIR={support_payload_root}")}
         {python_root_directive}
+        {annotation_environment}
         Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_URL={workflow_adapter_url_for_lane(DEVELOPMENT_LANE)}")}
         Environment={systemd_value(f"BMS_FRONTEND_HEALTH_URL=http://127.0.0.1:{dev_web_host_port}/")}
@@ -2493,7 +2503,6 @@ def start_all(
         if not skip_api_wait:
             wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
         wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
-        ensure_mobile_update_publisher_running(root)
         return
 
     ensure_target_enabled(root, runtime_mode=mode)
@@ -2597,7 +2606,6 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
         )
         wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
         wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
-        ensure_mobile_update_publisher_running(root, restart=True)
         return
 
     ensure_target_enabled(root, runtime_mode=mode)

@@ -399,3 +399,39 @@ def test_host_stop_requires_literal_true(invalid_confirmation) -> None:
     )
 
     assert status == 400
+
+
+@pytest.mark.parametrize(
+    ("acquisition_state", "protocol", "expected_running"),
+    [("READY", None, False), ("PROCESSING", None, True),
+     ("STARTING", None, True), ("FINISHING", None, True),
+     ("UNKNOWN", None, True), ("READY", {"run_id": "active-run", "state": "running"}, True)],
+)
+def test_host_position_service_running_is_not_acquisition_running(
+    acquisition_state, protocol, expected_running,
+) -> None:
+    from types import SimpleNamespace
+    from lib import ont_minknow_host
+
+    def current_protocol():
+        if protocol is None:
+            raise RuntimeError("No current protocol")
+        return protocol
+
+    connection = SimpleNamespace(
+        device=SimpleNamespace(
+            get_sample_rate=lambda: {"sample_rate": 5000},
+            get_flow_cell_info=lambda: {"has_flow_cell": True},
+            get_device_info=lambda: {"device_type": "MINION_MK1D"},
+            get_device_state=lambda: {},
+        ),
+        instance=SimpleNamespace(get_output_directories=lambda: {"output": "/reads"}),
+        acquisition=SimpleNamespace(current_status=lambda: {"status": acquisition_state}),
+        protocol=SimpleNamespace(get_current_protocol_run=current_protocol),
+    )
+    position = SimpleNamespace(name="MD-test", state="running", running=True, connect=lambda: connection)
+    result = ont_minknow_host.normalize_position(position)
+    assert result["device_type"] == "mk1d"
+    assert result["state"] == acquisition_state
+    assert result["running"] is expected_running
+    assert result["available_for_run"] is (not expected_running)

@@ -453,7 +453,7 @@ export default function ProjectHubShell({ model, canMutate, mutationBlocker, sel
         if (requested === 'experiments') return <ExperimentsTab model={model} selectedPlasmidId={selectedPlasmidId} onNavigate={onNavigate} />;
         if (requested === 'results') return <ResultsTab model={model} />;
         if (requested === 'activity') return <ActivityTab model={model} />;
-        return <Overview model={model} canMutate={effectiveCanMutate} onEdit={openEdit} onAttach={(plasmid) => setAttachmentSource({ adapterId: 'bms.molbio.member-molecular-revision.adapter.v1', entityId: plasmid.revision_id, label: `${plasmid.name} saved revision ${plasmid.revision_number}`, revision: plasmid.revision_id, digest: plasmid.content_digest, availability: plasmid.availability })} onNavigate={onNavigate} />;
+        return <Overview model={model} canMutate={effectiveCanMutate} onEdit={openEdit} onAttach={(plasmid) => setAttachmentSource({ adapterId: 'bms.molbio.member-molecular-revision.adapter.v1', entityId: new URLSearchParams({ sequence_id: plasmid.sequence_id, revision_id: plasmid.revision_id }).toString(), label: `${plasmid.name} saved revision ${plasmid.revision_number}`, revision: plasmid.revision_id, digest: plasmid.content_digest, availability: plasmid.availability })} onNavigate={onNavigate} />;
     }, [effectiveCanMutate, model, requested, selectedPlasmidId, onNavigate]);
     return (
         <div className="w-full px-4 pb-6 sm:px-5 lg:px-6">

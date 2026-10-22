@@ -177,6 +177,11 @@ async def test_project_hub_read_model_is_exact_linked_typed_and_bulk_free(hub_st
     payload = response.json()
     assert payload["schema"] == "bms.project-hub.v1"
     assert payload["project"]["name"] == "Syenex New Plasmids"
+    add_href = payload["project"]["add_plasmid_href"]
+    assert f"workspace_id={project.id}" in add_href
+    assert f"global_experiment_id={experiment.id}" in add_href
+    assert f"domain_experiment_id={domain.id}" in add_href
+    assert "state_revision_id=state-current" in add_href
     assert payload["identity"]["selected_state_revision_id"] == "state-current"
     assert payload["identity"]["current_state_revision_id"] == "state-current"
     assert payload["plasmids"][0]["sequence_id"] == "sequence-pl1480"

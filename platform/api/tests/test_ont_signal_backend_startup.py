@@ -179,7 +179,6 @@ async def test_api_lifespan_yields_with_absent_backend(store, monkeypatch, caplo
     for name in ("async_session", "experiment_session_factory", "molbio_ngs_session_factory"):
         monkeypatch.setattr(main, name, store)
     monkeypatch.setattr(main, "reconcile_startup_admissions", AsyncMock(return_value=0))
-    monkeypatch.setattr(main, "install_feature_enabled", lambda _: False)
 
     class IdleWorker:
         def __init__(self, *args, **kwargs):
@@ -193,8 +192,6 @@ async def test_api_lifespan_yields_with_absent_backend(store, monkeypatch, caplo
         async def close(self):
             pass
 
-    for name in ("AnalysisWorker", "ExternalImportWorker", "BoltzApiJobWorker", "FrustraMPNNStatisticsWorker"):
-        monkeypatch.setattr(main, name, IdleWorker)
     monkeypatch.setattr(targets, "AttachmentController", IdleWorker)
     monkeypatch.setattr(preloading, "PreloadController", IdleWorker)
     monkeypatch.setattr(targets, "invalidate_vast_inventory", AsyncMock())
