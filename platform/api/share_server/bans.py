@@ -51,6 +51,8 @@ class BanStore:
     def __init__(self, state_dir: Path | None) -> None:
         self.path = None if state_dir is None else state_dir / STATE_FILENAME
         self._lock = threading.Lock()
+        # Writers preserve snapshot order; readers never wait for disk I/O.
+        self._writer_lock = threading.Lock()
         self.strikes: dict[str, list[float]] = {}
         self.ip_bans: dict[str, dict[str, Any]] = {}
         self.grant_strikes: dict[str, list[float]] = {}
@@ -60,42 +62,50 @@ class BanStore:
 
     # -- persistence -----------------------------------------------------------
     def _load(self) -> None:
-        if self.path is None or not self.path.exists():
+        if self.path is None:
             return
         try:
+            if not self.path.exists():
+                return
             if self.path.stat().st_size > MAX_STATE_BYTES:
                 raise ValueError("ban state is too large")
             document = json.loads(self.path.read_bytes())
             if not isinstance(document, dict) or document.get("schema") != STATE_SCHEMA:
                 raise ValueError("unknown ban state schema")
-            self.strikes = {str(k): [float(t) for t in v] for k, v in (document.get("strikes") or {}).items()}
-            self.ip_bans = {str(k): dict(v) for k, v in (document.get("ip_bans") or {}).items()}
-            self.grant_strikes = {str(k): [float(t) for t in v] for k, v in (document.get("grant_strikes") or {}).items()}
-            self.grant_locks = {str(k): dict(v) for k, v in (document.get("grant_locks") or {}).items()}
+            strikes = {str(k): [float(t) for t in v] for k, v in (document.get("strikes") or {}).items()}
+            ip_bans = {str(k): dict(v) for k, v in (document.get("ip_bans") or {}).items()}
+            grant_strikes = {str(k): [float(t) for t in v] for k, v in (document.get("grant_strikes") or {}).items()}
+            grant_locks = {str(k): dict(v) for k, v in (document.get("grant_locks") or {}).items()}
+            self.strikes, self.ip_bans = strikes, ip_bans
+            self.grant_strikes, self.grant_locks = grant_strikes, grant_locks
         except (OSError, ValueError, TypeError, AttributeError) as exc:
             # Keep the unreadable file for inspection and start a fresh record.
             self.load_error = f"{exc.__class__.__name__}: {exc}"
             with contextlib.suppress(OSError):
                 os.replace(self.path, self.path.with_name(self.path.name + ".unreadable"))
 
-    def _save(self) -> None:
+    def _save(self, data: bytes) -> str | None:
         if self.path is None:
             return
-        document = {
-            "schema": STATE_SCHEMA, "strikes": self.strikes, "ip_bans": self.ip_bans,
-            "grant_strikes": self.grant_strikes, "grant_locks": self.grant_locks,
-        }
-        data = json.dumps(document, separators=(",", ":"), sort_keys=True).encode("utf-8")
-        fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=self.path.parent)
+        tmp = None
         try:
+            fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=self.path.parent)
             with os.fdopen(fd, "wb") as handle:
                 handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, self.path)
-        except OSError:
-            with contextlib.suppress(OSError):
-                os.unlink(tmp)
+            directory = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except OSError as exc:
+            if tmp is not None:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+            return f"{exc.__class__.__name__}: {exc}"
+        return None
 
     def _prune(self, now: float) -> None:
         cutoff = now - STRIKE_WINDOW_SECONDS
@@ -130,20 +140,29 @@ class BanStore:
         """Record one failed attempt; return which bans/locks it triggered."""
         key = network_key(ip)
         result: dict[str, Any] = {"network": key, "ip_strikes": 0, "ip_banned": False, "grant_locked": False}
-        with self._lock:
-            self._prune(now)
-            if key is not None:
-                hits = self.strikes.setdefault(key, [])
-                hits.append(now)
-                result["ip_strikes"] = len(hits)
-                if len(hits) >= STRIKE_LIMIT and key not in self.ip_bans:
-                    self.ip_bans[key] = {"at": now, "until": now + IP_BAN_SECONDS, "reason": reason, "strikes": len(hits)}
-                    result["ip_banned"] = True
-            if grant_id is not None and reason == "wrong_passcode":
-                hits = self.grant_strikes.setdefault(grant_id, [])
-                hits.append(now)
-                if len(hits) >= STRIKE_LIMIT and grant_id not in self.grant_locks:
-                    self.grant_locks[grant_id] = {"at": now, "strikes": len(hits)}
-                    result["grant_locked"] = True
-            self._save()
+        with self._writer_lock:
+            with self._lock:
+                self._prune(now)
+                if key is not None:
+                    hits = self.strikes.setdefault(key, [])
+                    hits.append(now)
+                    result["ip_strikes"] = len(hits)
+                    if len(hits) >= STRIKE_LIMIT and key not in self.ip_bans:
+                        self.ip_bans[key] = {"at": now, "until": now + IP_BAN_SECONDS, "reason": reason, "strikes": len(hits)}
+                        result["ip_banned"] = True
+                if grant_id is not None and reason == "wrong_passcode":
+                    hits = self.grant_strikes.setdefault(grant_id, [])
+                    hits.append(now)
+                    if len(hits) >= STRIKE_LIMIT and grant_id not in self.grant_locks:
+                        self.grant_locks[grant_id] = {"at": now, "strikes": len(hits)}
+                        result["grant_locked"] = True
+                snapshot = {
+                    "schema": STATE_SCHEMA,
+                    "strikes": {k: list(v) for k, v in self.strikes.items()},
+                    "ip_bans": {k: dict(v) for k, v in self.ip_bans.items()},
+                    "grant_strikes": {k: list(v) for k, v in self.grant_strikes.items()},
+                    "grant_locks": {k: dict(v) for k, v in self.grant_locks.items()},
+                }
+            data = json.dumps(snapshot, separators=(",", ":"), sort_keys=True).encode("utf-8")
+            result["save_error"] = self._save(data)
         return result

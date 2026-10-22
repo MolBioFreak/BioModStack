@@ -21,10 +21,11 @@ import secrets
 import threading
 import time
 from collections import OrderedDict, deque
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from share_server import bans as B
 from share_server import grants as G
@@ -108,6 +109,35 @@ class _Window:
     def clear(self, key: str) -> None:
         with self._lock:
             self._hits.pop(key, None)
+
+
+class _KeyedLocks:
+    """Bounded active keys, removed after the last holder/waiter leaves.
+
+    Capacity waits are scheduling, not a new rejection policy. Separate pools
+    and network-before-grant acquisition avoid cycles and global serialization.
+    """
+    def __init__(self) -> None:
+        self.entries: dict[str, tuple[asyncio.Lock, int]] = {}
+        self.changed = asyncio.Condition()
+
+    @asynccontextmanager
+    async def hold(self, key: str):
+        async with self.changed:
+            await self.changed.wait_for(lambda: key in self.entries or len(self.entries) < TRACKED_KEYS)
+            lock, users = self.entries.get(key, (asyncio.Lock(), 0))
+            self.entries[key] = (lock, users + 1)
+        try:
+            async with lock:
+                yield
+        finally:
+            async with self.changed:
+                _, users = self.entries[key]
+                if users == 1:
+                    del self.entries[key]
+                    self.changed.notify_all()
+                else:
+                    self.entries[key] = (lock, users - 1)
 
 
 @dataclass
@@ -244,6 +274,10 @@ class ShareApp:
         self._process_key = secrets.token_bytes(32)
         self._compute = asyncio.Semaphore(COMPUTE_CONCURRENCY)
         self._scrypt = asyncio.Semaphore(SCRYPT_CONCURRENCY)
+        self._network_auth = _KeyedLocks()
+        self._grant_auth = _KeyedLocks()
+        self._load_error_logged = False
+        self._auth_tasks: set[asyncio.Task] = set()
 
     # -- lazy configuration -------------------------------------------------
     @property
@@ -301,6 +335,9 @@ class ShareApp:
         """Record a failed authentication as a strike and log what it triggered."""
         result = await asyncio.to_thread(self.bans.strike, request.client_ip, grant_id, reason, now)
         self.log(request, grant_id, reason, strike=result["ip_strikes"], limit=B.STRIKE_LIMIT)
+        if result.get("save_error"):
+            self.log(request, grant_id, "ban_state_error", operation="save",
+                     error_class=result["save_error"].split(":", 1)[0], reason="persistence_unavailable")
         if result["ip_banned"]:
             self.log(request, grant_id, "ip_banned", network=result["network"],
                      until=G.iso(now + B.IP_BAN_SECONDS))
@@ -310,14 +347,22 @@ class ShareApp:
 
     # -- authorization ----------------------------------------------------------
     async def authorize(self, request: Request) -> dict[str, Any]:
+        # Keep ownership through worker completion even if the HTTP task is
+        # cancelled: a running scrypt/strike must not outlive its keyed locks.
+        task = asyncio.create_task(self._authorize_serialized(request))
+        self._auth_tasks.add(task)
+        def finished(done):
+            self._auth_tasks.discard(done)
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(finished)
+        return await asyncio.shield(task)
+
+    def current_grant(self, request: Request, key: str) -> dict[str, Any]:
         now = time.time()
-        if not self.limits.ip_rate.hit(request.client_ip, now):
-            raise HTTPError(429, "rate_limited", "too many requests", ((b"retry-after", b"60"),))
-        key = request.headers.get(KEY_HEADER, b"").decode("ascii", "replace")[:MAX_HEADER_VALUE]
-        passcode = request.headers.get(PASSCODE_HEADER, b"").decode("ascii", "replace")[:MAX_HEADER_VALUE]
+        self.reject_banned(request, now)
         grant = self.index.find_by_key(key)
         if grant is None:
-            await self.fail(request, None, "unknown_key", now)
             raise HTTPError(404, "share_not_found", "this share link is not valid")
         grant_id = str(grant["grant_id"])
         state = G.grant_state(grant, now=int(now))
@@ -327,29 +372,100 @@ class ShareApp:
         if self.bans.grant_locked(grant_id):
             self.log(request, grant_id, "locked")
             raise HTTPError(423, "share_locked", "this share is locked after too many incorrect passcodes")
-        if not self.limits.grant_rate.hit(grant_id, now):
-            raise HTTPError(429, "rate_limited", "too many requests for this share", ((b"retry-after", b"60"),))
-        token = hmac.new(self._process_key, f"{grant_id}\0{key}\0{passcode}".encode("utf-8", "replace"), hashlib.sha256).digest()
-        cached = self._verified.get(token)
-        if cached is not None and cached > now:
-            return grant
-        async with self._scrypt:
-            ok = await asyncio.to_thread(G.verify_passcode, passcode, grant.get("passcode") or {})
-        if not ok:
-            result = await self.fail(request, grant_id, "wrong_passcode", now)
-            if result["ip_banned"]:
-                raise HTTPError(403, "share_client_banned", "access from this network is blocked")
-            if result["grant_locked"]:
-                raise HTTPError(423, "share_locked", "this share is locked after too many incorrect passcodes")
-            remaining = max(0, B.STRIKE_LIMIT - int(result["ip_strikes"]))
-            raise HTTPError(401, "share_passcode_incorrect",
-                            f"the passcode is incorrect ({remaining} attempt{'s' if remaining != 1 else ''} left)")
-        if len(self._verified) > TRACKED_KEYS:
-            self._verified = {k: v for k, v in self._verified.items() if v > now}
-            if len(self._verified) > TRACKED_KEYS:
-                self._verified.clear()
-        self._verified[token] = min(now + VERIFIED_CACHE_SECONDS, float(grant["expires_at"]))
         return grant
+
+    def verifier_token(self, grant: dict[str, Any], key: str, passcode: str) -> bytes:
+        verifier = json.dumps(grant.get("passcode") or {}, sort_keys=True, separators=(",", ":"))
+        return hmac.new(self._process_key,
+                        f"{grant['grant_id']}\0{key}\0{passcode}\0{verifier}".encode("utf-8", "replace"),
+                        hashlib.sha256).digest()
+
+    async def _authorize_serialized(self, request: Request) -> dict[str, Any]:
+        network = B.network_key(request.client_ip) or request.client_ip
+        async with self._network_auth.hold(network):
+            now = time.time()
+            self.reject_banned(request, now)
+            if not self.limits.ip_rate.hit(request.client_ip, now):
+                raise HTTPError(429, "rate_limited", "too many requests", ((b"retry-after", b"60"),))
+            key = request.headers.get(KEY_HEADER, b"").decode("ascii", "replace")[:MAX_HEADER_VALUE]
+            passcode = request.headers.get(PASSCODE_HEADER, b"").decode("ascii", "replace")[:MAX_HEADER_VALUE]
+            grant = self.index.find_by_key(key)
+            if grant is None:
+                await self.fail(request, None, "unknown_key", now)
+                raise HTTPError(404, "share_not_found", "this share link is not valid")
+            async with self._grant_auth.hold(str(grant["grant_id"])):
+                grant = self.current_grant(request, key)
+                grant_id = str(grant["grant_id"])
+                if not self.limits.grant_rate.hit(grant_id, time.time()):
+                    raise HTTPError(429, "rate_limited", "too many requests for this share", ((b"retry-after", b"60"),))
+                while True:
+                    token = self.verifier_token(grant, key, passcode)
+                    if self._verified.get(token, 0) > time.time():
+                        current = self.current_grant(request, key)
+                        if self.verifier_token(current, key, passcode) != token:
+                            grant = current
+                            continue
+                        # No await between current-state validation and success.
+                        return current
+                    async with self._scrypt:
+                        # The semaphore itself may have waited while revoked,
+                        # expired, or while the verifier was replaced.
+                        grant = self.current_grant(request, key)
+                        token = self.verifier_token(grant, key, passcode)
+                        ok = await asyncio.to_thread(G.verify_passcode, passcode, grant.get("passcode") or {})
+                    current = self.current_grant(request, key)
+                    if self.verifier_token(current, key, passcode) != token:
+                        grant = current
+                        continue
+                    grant = current
+                    break
+                now = time.time()
+                if not ok:
+                    result = await self.fail(request, grant_id, "wrong_passcode", now)
+                    if result["ip_banned"]:
+                        raise HTTPError(403, "share_client_banned", "access from this network is blocked")
+                    if result["grant_locked"]:
+                        raise HTTPError(423, "share_locked", "this share is locked after too many incorrect passcodes")
+                    remaining = max(0, B.STRIKE_LIMIT - int(result["ip_strikes"]))
+                    raise HTTPError(401, "share_passcode_incorrect",
+                                    f"the passcode is incorrect ({remaining} attempt{'s' if remaining != 1 else ''} left)")
+                if len(self._verified) >= TRACKED_KEYS:
+                    self._verified = {k: v for k, v in self._verified.items() if v > now}
+                    if len(self._verified) >= TRACKED_KEYS:
+                        self._verified.clear()
+                self._verified[token] = min(now + VERIFIED_CACHE_SECONDS, float(grant["expires_at"]))
+                return grant
+
+    def reject_cross_site(self, request: Request, scope: dict[str, Any]) -> None:
+        if not request.path.startswith("/api/"):
+            return
+        headers = request.headers
+        site = headers.get(b"sec-fetch-site", b"").decode("latin-1").lower()
+        rejected = site in {"cross-site", "same-site"}
+        origin = headers.get(b"origin")
+        if origin is not None:
+            # Funnel terminates HTTPS and forwards the original Host over
+            # loopback HTTP. Never trust forwarded scheme on direct clients.
+            peer = scope.get("client") or (None,)
+            funnel = _loopback(peer[0]) and bool(headers.get(b"x-forwarded-for"))
+            scheme = "https" if funnel else scope.get("scheme", "http")
+            if funnel:
+                scheme = headers.get(b"x-forwarded-proto", scheme.encode()).decode("latin-1")
+            try:
+                supplied = urlsplit(origin.decode("ascii"))
+                expected = urlsplit(f"{scheme}://{headers.get(b'host', b'').decode('ascii')}")
+                def identity(value):
+                    return (value.scheme.lower(), value.hostname,
+                            value.port if value.port is not None else (443 if value.scheme == "https" else 80))
+                rejected |= (supplied.scheme not in {"http", "https"} or not supplied.hostname
+                             or supplied.username is not None or supplied.password is not None
+                             or bool(supplied.path or supplied.query or supplied.fragment)
+                             or identity(supplied) != identity(expected))
+            except (ValueError, UnicodeError):
+                rejected = True
+        if rejected:
+            self.log(request, None, "cross_site_rejected")
+            raise HTTPError(403, "cross_site_request", "cross-origin public API requests are not allowed")
 
     # -- ASGI -------------------------------------------------------------------
     async def __call__(self, scope: dict[str, Any], receive: Callable, send: Callable) -> None:
@@ -371,6 +487,11 @@ class ShareApp:
             headers=headers, client_ip=client_ip(scope, headers),
         )
         try:
+            if self.bans.load_error and not self._load_error_logged:
+                self._load_error_logged = True
+                self.log(request, None, "ban_state_error", operation="load",
+                         error_class=self.bans.load_error.split(":", 1)[0], reason="persistence_unavailable")
+            self.reject_cross_site(request, scope)
             self.reject_banned(request, time.time())
             status, body, content_type, extra = await self.dispatch(request, receive)
         except HTTPError as exc:
