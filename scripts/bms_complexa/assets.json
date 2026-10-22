@@ -13,16 +13,18 @@
           "name": "complexa.ckpt",
           "bytes": 2934289381,
           "sha256": "589db1741f29838c7961386f6b873087238c72682e56189b89e0ae02610c19e9",
-          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files/complexa.ckpt"
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files/complexa.ckpt",
+          "hf_key": "sha256/589db1741f29838c7961386f6b873087238c72682e56189b89e0ae02610c19e9/artifact"
         },
         {
           "name": "complexa_ae.ckpt",
           "bytes": 4100101779,
           "sha256": "35f8865efd269995eeaf1670e1c1085acfe2988c40abdeda8e09a0e15eb40816",
-          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files/complexa_ae.ckpt"
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa/versions/1.0/files/complexa_ae.ckpt",
+          "hf_key": "sha256/35f8865efd269995eeaf1670e1c1085acfe2988c40abdeda8e09a0e15eb40816/artifact"
         }
       ],
-      "verification": "NGC metadata; payloads not downloaded"
+      "verification": "Canonical full-byte SHA256 acquisition and immutable layout; exact HF key/size and beginning/end range readback"
     },
     "proteina_complexa_ligand": {
       "version": "1.0",
@@ -32,16 +34,18 @@
           "name": "complexa_ligand.ckpt",
           "bytes": 1790554392,
           "sha256": "8175213eac5ec6433fed1756d055ce3f867129bfdb033040e1a0560ca558bfe5",
-          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files/complexa_ligand.ckpt"
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files/complexa_ligand.ckpt",
+          "hf_key": "sha256/8175213eac5ec6433fed1756d055ce3f867129bfdb033040e1a0560ca558bfe5/artifact"
         },
         {
           "name": "complexa_ligand_ae.ckpt",
           "bytes": 4100184649,
           "sha256": "898da17022cdeaaaea7caace41c8b6fe7bfcb78be4876b0113127eb9bb1527e6",
-          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files/complexa_ligand_ae.ckpt"
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ligand/versions/1.0/files/complexa_ligand_ae.ckpt",
+          "hf_key": "sha256/898da17022cdeaaaea7caace41c8b6fe7bfcb78be4876b0113127eb9bb1527e6/artifact"
         }
       ],
-      "verification": "NGC metadata; payloads not downloaded"
+      "verification": "Canonical full-byte SHA256 acquisition and immutable layout; exact HF key/size and beginning/end range readback"
     },
     "proteina_complexa_ame": {
       "version": "1.0",
@@ -51,32 +55,109 @@
           "name": "complexa_ame.ckpt",
           "bytes": 1792013880,
           "sha256": "d11319693d024d0427abc356a86350a694a1cb7dceb8db642c8041e5a20a9f7b",
-          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files/complexa_ame.ckpt"
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files/complexa_ame.ckpt",
+          "hf_key": "sha256/d11319693d024d0427abc356a86350a694a1cb7dceb8db642c8041e5a20a9f7b/artifact"
         },
         {
           "name": "complexa_ame_ae.ckpt",
           "bytes": 4100197925,
           "sha256": "63b1358c5459e968628094fdc9a2a6a95ac003606fcf7b1a3a21174458a69734",
-          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files/complexa_ame_ae.ckpt"
+          "url": "https://api.ngc.nvidia.com/v2/models/nvidia/clara/proteina_complexa_ame/versions/1.0/files/complexa_ame_ae.ckpt",
+          "hf_key": "sha256/63b1358c5459e968628094fdc9a2a6a95ac003606fcf7b1a3a21174458a69734/artifact"
         }
       ],
-      "verification": "NGC metadata; payloads not downloaded"
+      "verification": "Canonical full-byte SHA256 acquisition and immutable layout; exact HF key/size and beginning/end range readback"
     }
   },
   "build": {
-    "base": "nvcr.io/nvidia/pytorch@sha256:60cc7c9cf24b423c28f621287779ebe5e52cd39cfd284df04983df52566c1e39",
+    "base": "nvidia/cuda@sha256:61f6c08f2b59036cb935e56d1e31a6b64e3ae2c7ddb86d33fa0b044c7917b719",
     "upstream_base_tag": "24.08-py3",
-    "python": "3.12",
-    "torch": "2.7.0+cu126",
+    "python": "3.12.13",
+    "torch": "2.7.0+cu128",
     "jax": "0.4.29",
     "tmol_revision": "d8a6f7f9649d36e74440bca25246ee7c467ce490",
-    "status": "recipe_not_built_or_dependency_locked",
+    "status": "built_cpu_qualified_and_published; not activated",
     "unresolved": [
-      "Upstream pyproject ranges and unpinned atomworks/rc-foundry/PyG/uv/apt packages need a resolved build lock before reproducible image publication.",
-      "Full import closure must be tested even for no-reward generation.",
+      "JAX/JAXlib 0.4.29 failed the retained tiny sm120 GPU probe; native AF2 reward/refinement on Blackwell remains unqualified. No CPU fallback, JAX upgrade, reward removal or admission gate is added.",
       "SC/DSSP/HBPLUS binaries are not distributed by upstream. Foldseek/MMseqs are not installed by its public builder.",
-      "Optional AF2/RF3/ESM/MPNN checkpoint identities must be acquired only for selected native operations."
-    ]
+      "Optional AF2/RF3/ESM/MPNN checkpoint identities are acquired only for selected native operations; none acquired by this packaging continuation.",
+      "No checkpoint-backed inference, native oracle scoring or remote scientific acceptance has been run."
+    ],
+    "cuda": "12.8.1",
+    "jaxlib": "0.4.29+cuda12.cudnn91",
+    "uv": "0.11.26",
+    "inputs": {
+      "apptainer/complexa.def": "e8a7f6873e23527703cfc7f188036e5f20b63c13ffe0b65e334569d735e0eef8",
+      "apptainer/locks/complexa-NOTICES.md": "a1ffc15c678c8501ff054088467141866795c3397b1969f4784e1505eb8d67e0",
+      "apptainer/locks/complexa-build.txt": "463df3594dc482c49381e9c950f11d1b76d31a9154441fb03b3572e9bd8a492f",
+      "apptainer/locks/complexa-requirements.txt": "820a9d1234ca032d9dda0b99bc6cad9f415085bb8e7abf6685c374b1c57b2a70"
+    },
+    "dependency_metadata_conflicts": [
+      {
+        "package": "bioservices",
+        "requires": "tqdm>=4.67.1,<5.0.0",
+        "installed": "4.66.4"
+      },
+      {
+        "package": "atomworks",
+        "requires": "biotite==1.4.0",
+        "installed": "1.6.0"
+      },
+      {
+        "package": "proteinfoundation",
+        "requires": "einops==0.6",
+        "installed": "0.8.2"
+      },
+      {
+        "package": "proteinfoundation",
+        "requires": "scipy==1.12.0",
+        "installed": "1.13.1"
+      }
+    ],
+    "image": {
+      "sha256": "49d75dc1d9c9e50051953df1d30e033cc4e83a91c8e47194e40ccec8d2044eac",
+      "bytes": 10889400320,
+      "hf_key": "sha256/49d75dc1d9c9e50051953df1d30e033cc4e83a91c8e47194e40ccec8d2044eac/image.sif",
+      "filesystem": "squashfs-zstd",
+      "activation": "unchanged"
+    },
+    "installed_inventory_sha256": {
+      "installed-packages.txt": "366ad384ba5b8f98f3421fc65e299b2822c2a9e1b108ec9d5bddab469efff7de",
+      "installed-debian-packages.txt": "125f39b6a17b0b08f913764a3b765ac9c70266291a7a0ed8e61cf2024bde3688"
+    },
+    "tmol_version": "0.0.2.post1.dev231",
+    "qualification": {
+      "scope": "actual final SIF; CPU-only; no checkpoint inference",
+      "packaging_tests": 3,
+      "native_contract_cases": 10,
+      "profiles": [
+        "protein_binder",
+        "ligand_binder",
+        "AME",
+        "monomer_motif_indexed",
+        "monomer_motif_unindexed"
+      ],
+      "search_algorithms": [
+        "single-pass",
+        "best-of-n",
+        "beam-search",
+        "fk-steering",
+        "mcts"
+      ],
+      "profile_search_compositions": 25,
+      "installed_distributions_checked": 266,
+      "cli_commands": [
+        "design",
+        "generate",
+        "filter",
+        "evaluate",
+        "analyze",
+        "analysis"
+      ],
+      "embedded_recipe_locks_and_notices_match": true,
+      "evidence_ref": "de-novo-full-20261021/lanes/complexa-build/final-report.json"
+    },
+    "packaging": "Pinned Apptainer sandbox build; final recipe post-section replay for complete TMOL build closure; native mksquashfs and apptainer sif assembly. No scientific source edits."
   },
   "upstream_files": {
     "env/docker/Dockerfile": "679f5b2c21e4eaa93c306de17d4a81465571c6cbae79491c786d9f30c5570f02",
@@ -127,5 +208,28 @@
       "source": "env/download_startup.sh:104,120",
       "selected_by": "native designability or explicit mpnn/mpnn_fixed; choose required weight only"
     }
+  },
+  "layout": {
+    "relative_path": "complexa",
+    "digest": "83251bdd523240ebf9ecba634a0acf38835c58eacf8a0a4877fae4c2ed8366f5",
+    "members": [
+      "complexa.ckpt",
+      "complexa_ae.ckpt",
+      "complexa_ame.ckpt",
+      "complexa_ame_ae.ckpt",
+      "complexa_ligand.ckpt",
+      "complexa_ligand_ae.ckpt"
+    ],
+    "status": "materialized; not activated"
+  },
+  "publication": {
+    "backend": "existing controller HF asset broker",
+    "bucket": "Professionalcatlover/bms-runtime-images",
+    "object_count": 7,
+    "exact_metadata_and_range_readback": true,
+    "shared_ae_objects_reused": [
+      "898da17022cdeaaaea7caace41c8b6fe7bfcb78be4876b0113127eb9bb1527e6",
+      "63b1358c5459e968628094fdc9a2a6a95ac003606fcf7b1a3a21174458a69734"
+    ]
   }
 }

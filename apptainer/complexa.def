@@ -1,28 +1,51 @@
 Bootstrap: docker
-From: nvcr.io/nvidia/pytorch@sha256:60cc7c9cf24b423c28f621287779ebe5e52cd39cfd284df04983df52566c1e39
+From: nvidia/cuda@sha256:61f6c08f2b59036cb935e56d1e31a6b64e3ae2c7ddb86d33fa0b044c7917b719
 
 %labels
     org.biomodstack.model complexa
     org.biomodstack.source.revision acf55a89a9a7206d5ce9abc0bf2246c3b3829f92
-    org.biomodstack.recipe.status unbuilt-upstream-dependency-resolution-required
+    org.biomodstack.cuda 12.8.1
+
+%files
+    apptainer/locks/complexa-requirements.txt /opt/locks/requirements.txt
+    apptainer/locks/complexa-build.txt /opt/locks/build.txt
+    apptainer/locks/complexa-NOTICES.md /opt/locks/NOTICES.md
 
 %post
     set -eu
+    export DEBIAN_FRONTEND=noninteractive
+    mkdir -p /opt/build-tmp
+    export TMPDIR=/opt/build-tmp
     apt-get update
-    apt-get install -y --no-install-recommends git curl rsync libxrender1 libxext6
-    git clone https://github.com/NVIDIA-BioNeMo/Proteina-Complexa.git /opt/complexa
+    apt-get install -y --no-install-recommends git=1:2.34.1-1ubuntu1.18 git-lfs=3.0.2-1ubuntu0.3 curl=7.81.0-1ubuntu1.30 ca-certificates=20260816ubuntu0.22.04.1 rsync=3.2.7-0ubuntu0.22.04.7 libxrender1=1:0.9.10-1build4 libxext6=2:1.3.4-1build1 build-essential=12.9ubuntu3
+    curl -fL https://github.com/astral-sh/uv/releases/download/0.11.26/uv-x86_64-unknown-linux-gnu.tar.gz -o /opt/build-tmp/uv.tar.gz
+    printf '%s  %s\n' 6426a73c3837e6e2483ee344cbc00f36394d179afcba6183cb77437e67db4af0 /opt/build-tmp/uv.tar.gz | sha256sum -c -
+    tar -xzf /opt/build-tmp/uv.tar.gz -C /opt/build-tmp
+    install /opt/build-tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv
+    export UV_PYTHON_INSTALL_DIR=/opt/uv-python UV_CACHE_DIR=/opt/build-tmp/uv-cache
+    uv python install 3.12.13
+    git lfs install --system
+    if [ ! -d /opt/complexa/.git ]; then
+        git clone https://github.com/NVIDIA-BioNeMo/Proteina-Complexa.git /opt/complexa
+    fi
     cd /opt/complexa
     git checkout --detach acf55a89a9a7206d5ce9abc0bf2246c3b3829f92
-    # Official full import environment. This does NOT download oracle weights.
-    # Upstream has unpinned dependency ranges; see bms_complexa/assets.json.
-    export PATH=/root/.local/bin:$PATH
-    bash env/build_uv_env.sh --root /opt/complexa --python 3.12
+    git lfs pull
+    printf '%s\n' 'Licensed by NVIDIA Corporation under the NVIDIA Open Model License' > /opt/complexa/licenses/NOTICE.txt
+    uv venv --allow-existing --python 3.12.13 /opt/complexa/.venv
+    uv pip install --no-config --python /opt/complexa/.venv/bin/python --default-index https://pypi.org/simple --no-deps --require-hashes -r /opt/locks/build.txt
+    # Upstream sequential installs deliberately override incompatible metadata.
+    # Exact overrides and qualification limits are recorded in assets.json.
+    uv pip install --no-config --python /opt/complexa/.venv/bin/python --no-deps --require-hashes --no-build-isolation --default-index https://pypi.org/simple --find-links https://download.pytorch.org/whl/cu128/torch --find-links https://download.pytorch.org/whl/cu128/torchaudio --find-links https://download.pytorch.org/whl/cu128/torchvision --find-links https://download.pytorch.org/whl/cu128/triton --find-links https://data.pyg.org/whl/torch-2.7.0+cu128.html --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html -r /opt/locks/requirements.txt
+    uv pip install --no-config --python /opt/complexa/.venv/bin/python --no-deps --no-build-isolation --reinstall-package tmol 'tmol @ git+https://github.com/uw-ipd/tmol.git@d8a6f7f9649d36e74440bca25246ee7c467ce490' -e /opt/complexa -e /opt/complexa/community_models/colabdesign
     uv pip freeze --python /opt/complexa/.venv/bin/python > /opt/complexa/installed-packages.txt
+    dpkg-query -W > /opt/complexa/installed-debian-packages.txt
+    rm -rf /opt/build-tmp /var/lib/apt/lists/*
 
 %environment
     export COMPLEXA_ROOT=/opt/complexa
-    export PATH=/opt/complexa/.venv/bin:$PATH
-    export PYTHONPATH=/opt/complexa/src:$PYTHONPATH
+    export PATH=/opt/complexa/.venv/bin:/usr/local/cuda/bin:$PATH
+    export PYTHONPATH=/opt/complexa/src:/opt/complexa:$PYTHONPATH
     export DATA_PATH=/opt/complexa/assets
 
 %test
