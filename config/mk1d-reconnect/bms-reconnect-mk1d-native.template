@@ -6,8 +6,7 @@ set -euo pipefail
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 readonly MINKNOW_SERVICE='__MINKNOW_SYSTEMD_SERVICE__'
-readonly NATIVE_UID='__BMS_NATIVE_API_UID__'
-readonly NATIVE_GID='__BMS_NATIVE_API_GID__'
+readonly NATIVE_USER='__BMS_NATIVE_API_USER__'
 readonly LOCK_FILE='/run/biomodstack/mk1d-reconnect.lock'
 readonly MINKNOW_WAIT_SECONDS=45
 readonly HOST_AGENT_WAIT_SECONDS=45
@@ -44,10 +43,7 @@ wait_for_minknow_active() {
 }
 
 native_agent() {
-    /usr/bin/setpriv --reuid "$NATIVE_UID" --regid "$NATIVE_GID" --init-groups -- /usr/bin/env \
-        XDG_RUNTIME_DIR="/run/user/$NATIVE_UID" \
-        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$NATIVE_UID/bus" \
-        /usr/bin/systemctl --user "$@"
+    /usr/bin/systemctl --user --machine="$NATIVE_USER@.host" "$@"
 }
 
 host_agent_is_verified() {
