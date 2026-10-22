@@ -79,7 +79,9 @@ def share(publish, tmp_path):
     static = tmp_path / "static"
     static.mkdir()
     (static / "share.html").write_text("<!doctype html><title>share</title>")
-    return ShareApp(ShareSettings(publish_dir=publish, access_log=logs / G.ACCESS_LOG_FILENAME, static_dir=static))
+    state = tmp_path / "state"
+    state.mkdir()
+    return ShareApp(ShareSettings(publish_dir=publish, access_log=logs / G.ACCESS_LOG_FILENAME, static_dir=static, state_dir=state))
 
 
 def tree_digest(root: Path) -> dict[str, str]:
@@ -165,25 +167,98 @@ async def test_expired_and_revoked_grants_are_refused(share, publish, kind):
     assert json.loads(body)["detail"]["code"] == f"share_{kind}"
 
 
+PUBLIC = ("127.0.0.1", 50000)
+
+
+def via_funnel(ip):
+    return (("X-Forwarded-For", ip),)
+
+
 @pytest.mark.asyncio
-async def test_wrong_key_and_wrong_passcode_and_lockout(share, publish):
+async def test_unknown_link_three_strikes_bans_the_network(share, publish):
     _, key, passcode = write_grant(publish)
-    wrong_key = G.new_link_key()
-    status, _, _ = await asgi(share, "GET", "/api/share/bundle", headers=creds(wrong_key, passcode))
-    assert status == 404
-    status, _, _ = await asgi(share, "GET", "/api/share/bundle", headers=creds("not-a-key", passcode))
-    assert status == 404
+    attacker = via_funnel("203.0.113.9")
+    for attempt in range(share_app_module.B.STRIKE_LIMIT):
+        status, _, _ = await asgi(share, "GET", "/api/share/bundle", headers=(*attacker, *creds(G.new_link_key(), passcode)))
+        assert status == 404, attempt
+    # Hard ban: every route, even a correct key+passcode and static files.
+    for path, headers in (("/api/share/bundle", creds(key, passcode)), ("/s", ()), ("/api/share/health", ())):
+        status, _, body = await asgi(share, "GET", path, headers=(*attacker, *headers))
+        assert status == 403 and json.loads(body)["detail"]["code"] == "share_client_banned", path
+    # Same IPv6 /64 is one network; a different network is unaffected.
+    status, _, _ = await asgi(share, "GET", "/api/share/bundle", headers=(*via_funnel("198.51.100.7"), *creds(key, passcode)))
+    assert status == 200
+    outcomes = [json.loads(line) for line in share.settings.access_log.read_text().splitlines()]
+    assert [o["outcome"] for o in outcomes].count("unknown_key") == 3
+    ban = next(o for o in outcomes if o["outcome"] == "ip_banned")
+    assert ban["network"] == "203.0.113.9" and ban["ip"] == "203.0.113.9"
+    assert sum(1 for o in outcomes if o["outcome"] == "banned_request") == 1  # rate-limited log
+    assert all(passcode not in line and key not in line for line in share.settings.access_log.read_text().splitlines())
+
+
+@pytest.mark.asyncio
+async def test_three_wrong_passcodes_lock_grant_and_ban_ipv6_slash64(share, publish):
+    _, key, passcode = write_grant(publish)
     wrong = next(c * 8 for c in G.PASSCODE_ALPHABET if c * 8 != passcode)
-    for attempt in range(share_app_module.FAILED_PASSCODE_LIMIT):
-        status, _, _ = await asgi(share, "GET", "/api/share/bundle", headers=creds(key, wrong))
-        assert status == 401, attempt
-    # Locked: even the correct passcode is refused now.
-    status, _, body = await asgi(share, "GET", "/api/share/bundle", headers=creds(key, passcode))
+    messages = []
+    for index in range(share_app_module.B.STRIKE_LIMIT):
+        attacker = via_funnel(f"2001:db8:1:2::{index + 1}")  # rotating within one /64
+        status, _, body = await asgi(share, "GET", "/api/share/bundle", headers=(*attacker, *creds(key, wrong)))
+        messages.append((status, json.loads(body)["detail"]["message"]))
+    assert messages[0] == (401, "the passcode is incorrect (2 attempts left)")
+    assert messages[1] == (401, "the passcode is incorrect (1 attempt left)")
+    assert messages[2][0] == 403
+    status, _, _ = await asgi(share, "GET", "/s", headers=via_funnel("2001:db8:1:2::ffff"))
+    assert status == 403
+    # The grant itself is locked for every other network, even with the right passcode.
+    status, _, body = await asgi(share, "GET", "/api/share/bundle", headers=(*via_funnel("198.51.100.7"), *creds(key, passcode)))
     assert status == 423 and json.loads(body)["detail"]["code"] == "share_locked"
-    log = (share.settings.access_log).read_text().splitlines()
-    outcomes = [json.loads(line)["outcome"] for line in log]
-    assert "wrong_passcode_locked" in outcomes and "unknown_key" in outcomes
-    assert all(passcode not in line and key not in line for line in log)
+
+
+@pytest.mark.asyncio
+async def test_grant_lock_from_distributed_wrong_passcodes(share, publish):
+    _, key, passcode = write_grant(publish)
+    wrong = next(c * 8 for c in G.PASSCODE_ALPHABET if c * 8 != passcode)
+    for index in range(share_app_module.B.STRIKE_LIMIT):
+        await asgi(share, "GET", "/api/share/bundle", headers=(*via_funnel(f"192.0.2.{index + 1}"), *creds(key, wrong)))
+    status, _, _ = await asgi(share, "GET", "/api/share/bundle", headers=(*via_funnel("198.51.100.7"), *creds(key, passcode)))
+    assert status == 423
+
+
+@pytest.mark.asyncio
+async def test_bans_survive_restart_and_loopback_is_never_banned(publish, tmp_path):
+    state = tmp_path / "state"
+    state.mkdir()
+    settings = ShareSettings(publish_dir=publish, access_log=tmp_path / "access.jsonl", static_dir=None, state_dir=state)
+    _, key, passcode = write_grant(publish)
+    first = ShareApp(settings)
+    for _ in range(share_app_module.B.STRIKE_LIMIT):
+        await asgi(first, "GET", "/api/share/bundle", headers=(*via_funnel("203.0.113.9"), *creds(G.new_link_key(), passcode)))
+        await asgi(first, "GET", "/api/share/bundle", headers=creds(G.new_link_key(), passcode))  # loopback, no XFF
+    restarted = ShareApp(settings)
+    status, _, _ = await asgi(restarted, "GET", "/api/share/bundle", headers=(*via_funnel("203.0.113.9"), *creds(key, passcode)))
+    assert status == 403
+    status, _, _ = await asgi(restarted, "GET", "/api/share/bundle", headers=creds(key, passcode))
+    assert status == 200
+    assert oct((state / "bans.json").stat().st_mode & 0o777) in {"0o600", "0o640", "0o644"}
+
+
+def test_security_summary_reports_failures_and_active_bans(tmp_path):
+    log = tmp_path / "access.jsonl"
+    now = G.utc_now()
+    for entry in (
+        {"time": G.iso(now - 30), "ip": "203.0.113.9", "grant_id": None, "outcome": "unknown_key", "route": "/x"},
+        {"time": G.iso(now - 20), "ip": "203.0.113.9", "grant_id": None, "outcome": "ip_banned", "route": "/x",
+         "network": "203.0.113.9", "until": G.iso(now + 3600)},
+        {"time": G.iso(now - 10), "ip": "198.51.100.7", "grant_id": None, "outcome": "ip_banned", "route": "/x",
+         "network": "198.51.100.7", "until": G.iso(now - 1)},
+        {"time": G.iso(now - 5), "ip": "203.0.113.10", "grant_id": None, "outcome": "bundle_ok", "route": "/x"},
+    ):
+        G.append_access_log(log, entry)
+    summary = G.read_security_summary(log, now=now)
+    assert summary["failed_attempts_24h"] == 1 and summary["bans_24h"] == 2
+    assert [b["network"] for b in summary["active_bans"]] == ["203.0.113.9"]
+    assert [e["outcome"] for e in summary["recent_failures"]] == ["ip_banned", "ip_banned", "unknown_key"]
 
 
 @pytest.mark.asyncio
@@ -416,6 +491,7 @@ async def test_router_create_list_revoke_end_to_end(tmp_path, monkeypatch, publi
 
             listing = (await client.get("/api/molbio/shares")).json()
             assert listing["active_count"] == 2
+            assert listing["security"]["failed_attempts_24h"] == 0 and listing["security"]["active_bans"] == []
             mine = next(item for item in listing["items"] if item["grant_id"] == payload["grant"]["grant_id"])
             assert [entry["outcome"] for entry in mine["access_log"]] == ["bundle_ok"]
             assert "passcode" not in json.dumps(listing["items"]) and "key_sha256" not in json.dumps(listing)

@@ -96,8 +96,19 @@ describe('ShareDialog', () => {
         const fetchMock = await render(async (url) => {
             if (url.endsWith('/config')) return json({ configured: true, max_expiry_seconds: 86400, min_expiry_seconds: 60, public_port: null });
             if (url.endsWith('/revoke')) return json({ grant: grant({ active: false, state: 'revoked', revoked_at: new Date().toISOString() }) });
-            return json({ schema: 'bms.molbio.share-list.v1', active_count: 1, items: [grant()] });
+            return json({
+                schema: 'bms.molbio.share-list.v1', active_count: 1, items: [grant()],
+                security: {
+                    failed_attempts_24h: 3, bans_24h: 1,
+                    active_bans: [{ network: '203.0.113.9', since: '2026-10-22T18:00:00Z', until: '2026-10-29T18:00:00Z' }],
+                    recent_failures: [{ time: '2026-10-22T18:00:00Z', ip: '203.0.113.9', outcome: 'ip_banned', grant_id: null }],
+                },
+            });
         });
+        const security = container!.querySelector('[data-share-security]') as HTMLDetailsElement;
+        expect(security.open).toBe(false);
+        expect(security.querySelector('summary')?.textContent).toBe('Failed attempts: 3 in 24h · 1 banned');
+        expect(security.textContent).toContain('banned 203.0.113.9 until 2026-10-29T18:00:00Z');
         const summary = [...container!.querySelectorAll('summary')].find((s) => s.textContent?.startsWith('Active shares'))!;
         expect(summary.textContent).toBe('Active shares (1)');
         expect((summary.parentElement as HTMLDetailsElement).open).toBe(false);

@@ -15,6 +15,7 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONNOUSERSITE=1
 Environment=BMS_SHARE_PUBLISH_DIR=__BMS_SHARE_PUBLISH_DIR__
 Environment=BMS_SHARE_ACCESS_LOG_DIR=/var/log/bms-share
+Environment=BMS_SHARE_STATE_DIR=/var/lib/bms-share
 Environment=BMS_SHARE_STATIC_DIR=__BMS_INSTALL_ROOT__/static
 StandardInput=null
 Restart=on-failure
@@ -35,6 +36,9 @@ InaccessiblePaths=-/run/tailscale -/var/lib/tailscale -/run/docker.sock -/var/ru
 # The share server's only write: its append-only access log.
 LogsDirectory=bms-share
 LogsDirectoryMode=0750
+# Persistent three-strike ban state (survives restarts).
+StateDirectory=bms-share
+StateDirectoryMode=0700
 UMask=0027
 
 # --- Privilege ---

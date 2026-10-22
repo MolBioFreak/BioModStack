@@ -371,3 +371,63 @@ def read_access_log(path: Path | None, *, limit_per_grant: int = 50) -> dict[str
             "outcome": str(entry.get("outcome", ""))[:40],
         })
     return {key: rows[-limit_per_grant:] for key, rows in grouped.items()}
+
+
+def _parse_iso(value: object) -> float | None:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+FAILED_OUTCOMES = frozenset({"unknown_key", "wrong_passcode"})
+
+
+def read_security_summary(path: Path | None, *, now: float, recent_limit: int = 50) -> dict[str, Any]:
+    """Failed attempts and bans across all grants, including attempts with no valid link."""
+    summary: dict[str, Any] = {
+        "failed_attempts_24h": 0, "bans_24h": 0, "active_bans": [], "recent_failures": [],
+    }
+    if path is None or not path.exists():
+        return summary
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - ACCESS_LOG_READ_TAIL_BYTES))
+            raw = handle.read()
+    except OSError:
+        return summary
+    day_ago = now - 24 * 3600
+    bans: dict[str, dict[str, Any]] = {}
+    recent: list[dict[str, Any]] = []
+    for line in raw.splitlines()[-20000:]:
+        try:
+            entry = json.loads(line)
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(entry, dict):
+            continue
+        outcome = str(entry.get("outcome", ""))[:40]
+        at = _parse_iso(entry.get("time"))
+        if at is None:
+            continue
+        row = {"time": str(entry.get("time", ""))[:40], "ip": str(entry.get("ip", ""))[:64], "outcome": outcome,
+               "grant_id": entry.get("grant_id") if well_formed_grant_id(entry.get("grant_id")) else None}
+        if outcome in FAILED_OUTCOMES:
+            recent.append(row)
+            if at >= day_ago:
+                summary["failed_attempts_24h"] += 1
+        elif outcome == "ip_banned":
+            if at >= day_ago:
+                summary["bans_24h"] += 1
+            recent.append(row)
+            network = str(entry.get("network", ""))[:64]
+            until = str(entry.get("until", ""))[:40]
+            until_at = _parse_iso(until)
+            if network and until_at is not None and until_at > now:
+                bans[network] = {"network": network, "since": row["time"], "until": until}
+        elif outcome in {"grant_locked", "banned_request"}:
+            recent.append(row)
+    summary["active_bans"] = sorted(bans.values(), key=lambda b: b["since"], reverse=True)
+    summary["recent_failures"] = recent[-recent_limit:][::-1]
+    return summary

@@ -16,6 +16,7 @@ import {
     type MolBioShareCreated,
     type MolBioShareGrant,
     type MolBioShareScope,
+    type MolBioShareSecurity,
 } from '../../lib/molbioShares';
 
 export interface ShareableItem {
@@ -150,6 +151,34 @@ function ShareRow({ grant, now, onRevoked }: { grant: MolBioShareGrant; now: num
     );
 }
 
+function ShareSecurity({ security }: { security: MolBioShareSecurity }) {
+    const quiet = security.failed_attempts_24h === 0 && security.active_bans.length === 0;
+    return (
+        <details className="text-sm" data-share-security>
+            <summary className={`cursor-pointer w-fit text-xs ${quiet ? 'text-slate-400' : 'text-amber-300'} hover:text-slate-200`}>
+                Failed attempts: {security.failed_attempts_24h} in 24h · {security.active_bans.length} banned
+            </summary>
+            <div className="mt-1 space-y-1 text-xs text-slate-400">
+                <p>Three failed attempts from one network ban it for 7 days. Three wrong passcodes lock that share.</p>
+                {security.active_bans.length > 0 && (
+                    <ul className="space-y-0.5 font-mono">
+                        {security.active_bans.map((ban) => (
+                            <li key={ban.network} className="break-all">banned {ban.network} until {ban.until}</li>
+                        ))}
+                    </ul>
+                )}
+                {security.recent_failures.length > 0 && (
+                    <ul className="max-h-32 space-y-0.5 overflow-y-auto font-mono">
+                        {security.recent_failures.map((event, index) => (
+                            <li key={index} className="break-all">{event.time} {event.ip} {event.outcome}</li>
+                        ))}
+                    </ul>
+                )}
+            </div>
+        </details>
+    );
+}
+
 export function ShareDialog({ open, onClose, currentSequence, sequences, operations, projectContext }: ShareDialogProps) {
     const defaultMode: ScopeMode = currentSequence ? 'sequence' : projectContext ? 'domain' : 'project';
     const [mode, setMode] = useState<ScopeMode>(defaultMode);
@@ -166,13 +195,16 @@ export function ShareDialog({ open, onClose, currentSequence, sequences, operati
     const [error, setError] = useState<string | null>(null);
     const [created, setCreated] = useState<MolBioShareCreated | null>(null);
     const [shares, setShares] = useState<MolBioShareGrant[] | null>(null);
+    const [security, setSecurity] = useState<MolBioShareSecurity | null>(null);
     const [sharesError, setSharesError] = useState<string | null>(null);
     const [now, setNow] = useState(() => Date.now());
 
     const refreshShares = useCallback(async () => {
         setSharesError(null);
         try {
-            setShares((await listMolBioShares()).items);
+            const list = await listMolBioShares();
+            setShares(list.items);
+            setSecurity(list.security);
         } catch (err) {
             setSharesError(errorText(err));
         }
@@ -452,6 +484,7 @@ export function ShareDialog({ open, onClose, currentSequence, sequences, operati
                                     />
                                 ))}
                             </ul>
+                            {security && <ShareSecurity security={security} />}
                             {endedShares.length > 0 && (
                                 <details className="text-sm">
                                     <summary className="cursor-pointer w-fit text-xs text-slate-400 hover:text-slate-200">Ended ({endedShares.length})</summary>

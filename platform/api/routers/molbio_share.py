@@ -284,6 +284,7 @@ async def list_shares(creator: str = Depends(share_creator)) -> dict[str, Any]:
         "schema": "bms.molbio.share-list.v1",
         "active_count": sum(1 for view in views if view["active"]),
         "items": views,
+        "security": G.read_security_summary(G.access_log_path(), now=now),
     }
 
 

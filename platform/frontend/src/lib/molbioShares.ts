@@ -69,10 +69,25 @@ export interface MolBioShareCreated {
     notice: string;
 }
 
+export interface MolBioShareSecurityEvent {
+    time: string;
+    ip: string;
+    outcome: string;
+    grant_id: string | null;
+}
+
+export interface MolBioShareSecurity {
+    failed_attempts_24h: number;
+    bans_24h: number;
+    active_bans: Array<{ network: string; since: string; until: string }>;
+    recent_failures: MolBioShareSecurityEvent[];
+}
+
 export interface MolBioShareList {
     schema: 'bms.molbio.share-list.v1';
     active_count: number;
     items: MolBioShareGrant[];
+    security: MolBioShareSecurity;
 }
 
 export interface CreateMolBioShareRequest {
@@ -179,6 +194,22 @@ export async function listMolBioShares(transport: Transport = fetch): Promise<Mo
         schema: 'bms.molbio.share-list.v1',
         active_count: typeof body.active_count === 'number' ? body.active_count : items.filter((g) => g.active).length,
         items,
+        security: parseShareSecurity(body.security),
+    };
+}
+
+function parseShareSecurity(value: unknown): MolBioShareSecurity {
+    const s = isObject(value) ? value : {};
+    const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+    return {
+        failed_attempts_24h: count(s.failed_attempts_24h),
+        bans_24h: count(s.bans_24h),
+        active_bans: (Array.isArray(s.active_bans) ? s.active_bans : []).filter(isObject).map((b) => ({
+            network: str(b.network) ?? '', since: str(b.since) ?? '', until: str(b.until) ?? '',
+        })),
+        recent_failures: (Array.isArray(s.recent_failures) ? s.recent_failures : []).filter(isObject).map((e) => ({
+            time: str(e.time) ?? '', ip: str(e.ip) ?? '', outcome: str(e.outcome) ?? '', grant_id: str(e.grant_id),
+        })),
     };
 }
 

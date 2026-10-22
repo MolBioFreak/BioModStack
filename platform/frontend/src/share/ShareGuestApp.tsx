@@ -567,8 +567,9 @@ export function ShareGuestApp({ hash = typeof window !== 'undefined' ? window.lo
     if (share && credentials) {
         return <ShareWorkspace share={share} credentials={credentials} now={now} />;
     }
-    if (error && (error.kind === 'ended' || error.kind === 'invalid_link')) {
-        return <Message title={error.kind === 'ended' ? 'Share ended' : 'Link not valid'} body={error.message} />;
+    if (error && (error.kind === 'ended' || error.kind === 'invalid_link' || error.kind === 'blocked' || error.kind === 'locked')) {
+        const title = { ended: 'Share ended', invalid_link: 'Link not valid', blocked: 'Access blocked', locked: 'Share locked' }[error.kind];
+        return <Message title={title} body={error.message} />;
     }
     return (
         <div className="min-h-dvh bg-slate-900 px-4">

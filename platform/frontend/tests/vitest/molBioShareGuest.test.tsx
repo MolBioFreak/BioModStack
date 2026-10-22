@@ -89,7 +89,7 @@ describe('share guest API', () => {
     });
 
     it.each([
-        [401, 'wrong_passcode'], [404, 'invalid_link'], [410, 'ended'], [423, 'locked'], [429, 'rate_limited'], [500, 'unavailable'],
+        [401, 'wrong_passcode'], [403, 'blocked'], [404, 'invalid_link'], [410, 'ended'], [423, 'locked'], [429, 'rate_limited'], [500, 'unavailable'],
     ])('maps HTTP %s to %s', async (status, kind) => {
         const base: Transport = async () => json({ detail: { code: 'x', message: 'server said' } }, status);
         await expect(fetchGuestShare({ key: KEY, passcode: 'ABCDEFGH' }, base)).rejects.toMatchObject({ kind });
@@ -153,10 +153,20 @@ describe('ShareGuestApp', () => {
     });
 
     it('shows the wrong-passcode message and keeps the gate', async () => {
-        await render(`#${KEY}`, async () => json({ detail: { code: 'share_passcode_incorrect', message: 'x' } }, 401));
+        await render(`#${KEY}`, async () => json({ detail: { code: 'share_passcode_incorrect', message: 'the passcode is incorrect (2 attempts left)' } }, 401));
         await enterPasscode('ABCD-EFGH');
-        expect(container!.querySelector('[role="alert"]')?.textContent).toBe('That passcode is not correct.');
+        expect(container!.querySelector('[role="alert"]')?.textContent).toBe('the passcode is incorrect (2 attempts left)');
         expect(container!.querySelector('input[aria-label="Passcode"]')).not.toBeNull();
+    });
+
+    it.each([
+        [403, 'share_client_banned', 'Access blocked'],
+        [423, 'share_locked', 'Share locked'],
+    ])('replaces the gate when HTTP %s (%s)', async (status, code, title) => {
+        await render(`#${KEY}`, async () => json({ detail: { code, message: 'x' } }, status));
+        await enterPasscode('ABCDEFGH');
+        expect(container!.textContent).toContain(title);
+        expect(container!.querySelector('input[aria-label="Passcode"]')).toBeNull();
     });
 
     it('replaces the gate with an ended message for revoked shares', async () => {

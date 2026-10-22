@@ -18,6 +18,28 @@ Data flow is one-way: the BMS API writes `grants.json` and frozen
 them read-only and appends only to `/var/log/bms-share/access.jsonl`, which
 the BMS API reads for the share list's access log.
 
+## Brute-force protection
+
+* Every failed authentication (unknown link key or wrong passcode) is a strike
+  against the client network: the IPv4 address, or the IPv6 /64.
+* Three strikes within 24 h ban that network from every route (including the
+  static page) for 7 days: HTTP 403 `share_client_banned`.
+* Three wrong passcodes for one share, from any networks, lock that share for
+  the rest of its life: HTTP 423 `share_locked`. Create a new share instead.
+* Strikes and bans are kept in `/var/lib/bms-share/bans.json` (the unit's
+  `StateDirectory`), so restarting the service does not reset them.
+* The client address comes from Tailscale's `X-Forwarded-For` (trusted only
+  from the loopback proxy). Loopback requests without it are never banned.
+* Every failure, ban and lock is appended to `access.jsonl`. The tailnet share
+  list (`GET /api/molbio/shares` → `security`) shows failed attempts in the
+  last 24 h, active bans and recent failures, including attempts that did not
+  match any share.
+* A per-IP request rate limit (120/min) and per-share limit (600/min) still
+  apply on top.
+
+To lift a ban early: `sudo systemctl stop bms-share.service`, edit or delete
+`/var/lib/bms-share/bans.json`, then let the socket restart it.
+
 ## Secrets
 
 * Link key: 256-bit random, URL fragment only (`https://<host>:8443/s#<key>`),

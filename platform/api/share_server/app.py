@@ -26,15 +26,12 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qs
 
+from share_server import bans as B
 from share_server import grants as G
 
 MAX_BODY_BYTES = 2 * 1024 * 1024
 MAX_HEADER_VALUE = 256
 VERIFIED_CACHE_SECONDS = 300
-FAILED_PASSCODE_LIMIT = 5
-FAILED_WINDOW_SECONDS = 15 * 60
-LOCKOUT_SECONDS = 15 * 60
-IP_FAILED_LIMIT = 30
 IP_RATE_PER_MINUTE = 120
 GRANT_RATE_PER_MINUTE = 600
 COMPUTE_CONCURRENCY = 2
@@ -117,9 +114,8 @@ class _Window:
 class _Limits:
     ip_rate: _Window = field(default_factory=lambda: _Window(IP_RATE_PER_MINUTE, 60))
     grant_rate: _Window = field(default_factory=lambda: _Window(GRANT_RATE_PER_MINUTE, 60))
-    ip_failures: _Window = field(default_factory=lambda: _Window(IP_FAILED_LIMIT, 3600))
-    grant_failures: _Window = field(default_factory=lambda: _Window(FAILED_PASSCODE_LIMIT, FAILED_WINDOW_SECONDS))
-    locked_until: dict[str, float] = field(default_factory=dict)
+    # At most one access-log line per banned network per minute.
+    banned_log: _Window = field(default_factory=lambda: _Window(1, 60))
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +127,7 @@ class ShareSettings:
     publish_dir: Path
     access_log: Path | None
     static_dir: Path | None
+    state_dir: Path | None = None
 
     @classmethod
     def from_env(cls) -> "ShareSettings":
@@ -139,6 +136,7 @@ class ShareSettings:
             publish_dir=G.publish_dir(),
             access_log=G.access_log_path(),
             static_dir=Path(static) if static else None,
+            state_dir=G._env_path("BMS_SHARE_STATE_DIR"),
         )
 
 
@@ -240,6 +238,7 @@ class ShareApp:
         self._settings = settings
         self._index: GrantIndex | None = None
         self._static: dict[str, tuple[bytes, str]] | None = None
+        self._bans: B.BanStore | None = None
         self.limits = _Limits()
         self._verified: dict[bytes, float] = {}
         self._process_key = secrets.token_bytes(32)
@@ -259,6 +258,12 @@ class ShareApp:
             self._index = GrantIndex(self.settings.publish_dir)
         return self._index
 
+    @property
+    def bans(self) -> B.BanStore:
+        if self._bans is None:
+            self._bans = B.BanStore(self.settings.state_dir)
+        return self._bans
+
     def static_files(self) -> dict[str, tuple[bytes, str]]:
         """Snapshot the guest build into memory once; only these paths are served."""
         if self._static is None:
@@ -277,34 +282,51 @@ class ShareApp:
         return self._static
 
     # -- logging --------------------------------------------------------------
-    def log(self, request: Request, grant_id: str | None, outcome: str) -> None:
+    def log(self, request: Request, grant_id: str | None, outcome: str, **extra: Any) -> None:
         G.append_access_log(self.settings.access_log, {
             "time": G.iso(time.time()), "ip": request.client_ip, "grant_id": grant_id,
-            "route": request.path[:64], "outcome": outcome,
+            "route": request.path[:64], "outcome": outcome, **extra,
         })
+
+    def reject_banned(self, request: Request, now: float) -> None:
+        """Hard ban: a banned network gets 403 on every route, including static files."""
+        if not self.bans.banned(request.client_ip, now):
+            return
+        network = B.network_key(request.client_ip) or request.client_ip
+        if self.limits.banned_log.hit(network, now):
+            self.log(request, None, "banned_request")
+        raise HTTPError(403, "share_client_banned", "access from this network is blocked")
+
+    def fail(self, request: Request, grant_id: str | None, reason: str, now: float) -> dict[str, Any]:
+        """Record a failed authentication as a strike and log what it triggered."""
+        result = self.bans.strike(request.client_ip, grant_id, reason, now)
+        self.log(request, grant_id, reason, strike=result["ip_strikes"], limit=B.STRIKE_LIMIT)
+        if result["ip_banned"]:
+            self.log(request, grant_id, "ip_banned", network=result["network"],
+                     until=G.iso(now + B.IP_BAN_SECONDS))
+        if result["grant_locked"]:
+            self.log(request, grant_id, "grant_locked")
+        return result
 
     # -- authorization ----------------------------------------------------------
     async def authorize(self, request: Request) -> dict[str, Any]:
         now = time.time()
         if not self.limits.ip_rate.hit(request.client_ip, now):
             raise HTTPError(429, "rate_limited", "too many requests", ((b"retry-after", b"60"),))
-        if self.limits.ip_failures.count(request.client_ip, now) >= IP_FAILED_LIMIT:
-            raise HTTPError(429, "rate_limited", "too many failed attempts", ((b"retry-after", b"3600"),))
         key = request.headers.get(KEY_HEADER, b"").decode("ascii", "replace")[:MAX_HEADER_VALUE]
         passcode = request.headers.get(PASSCODE_HEADER, b"").decode("ascii", "replace")[:MAX_HEADER_VALUE]
         grant = self.index.find_by_key(key)
         if grant is None:
-            self.limits.ip_failures.hit(request.client_ip, now)
-            self.log(request, None, "unknown_key")
+            self.fail(request, None, "unknown_key", now)
             raise HTTPError(404, "share_not_found", "this share link is not valid")
         grant_id = str(grant["grant_id"])
         state = G.grant_state(grant, now=int(now))
         if not state.active:
             self.log(request, grant_id, state.reason)
             raise HTTPError(410, f"share_{state.reason}", "this share link is no longer available")
-        if self.limits.locked_until.get(grant_id, 0) > now:
+        if self.bans.grant_locked(grant_id):
             self.log(request, grant_id, "locked")
-            raise HTTPError(423, "share_locked", "too many incorrect passcodes; try again later")
+            raise HTTPError(423, "share_locked", "this share is locked after too many incorrect passcodes")
         if not self.limits.grant_rate.hit(grant_id, now):
             raise HTTPError(429, "rate_limited", "too many requests for this share", ((b"retry-after", b"60"),))
         token = hmac.new(self._process_key, f"{grant_id}\0{key}\0{passcode}".encode("utf-8", "replace"), hashlib.sha256).digest()
@@ -314,14 +336,14 @@ class ShareApp:
         async with self._scrypt:
             ok = await asyncio.to_thread(G.verify_passcode, passcode, grant.get("passcode") or {})
         if not ok:
-            self.limits.ip_failures.hit(request.client_ip, now)
-            if not self.limits.grant_failures.hit(grant_id, now) or self.limits.grant_failures.count(grant_id, now) >= FAILED_PASSCODE_LIMIT:
-                self.limits.locked_until[grant_id] = now + LOCKOUT_SECONDS
-                self.limits.grant_failures.clear(grant_id)
-                self.log(request, grant_id, "wrong_passcode_locked")
-            else:
-                self.log(request, grant_id, "wrong_passcode")
-            raise HTTPError(401, "share_passcode_incorrect", "the passcode is incorrect")
+            result = self.fail(request, grant_id, "wrong_passcode", now)
+            if result["ip_banned"]:
+                raise HTTPError(403, "share_client_banned", "access from this network is blocked")
+            if result["grant_locked"]:
+                raise HTTPError(423, "share_locked", "this share is locked after too many incorrect passcodes")
+            remaining = max(0, B.STRIKE_LIMIT - int(result["ip_strikes"]))
+            raise HTTPError(401, "share_passcode_incorrect",
+                            f"the passcode is incorrect ({remaining} attempt{'s' if remaining != 1 else ''} left)")
         if len(self._verified) > TRACKED_KEYS:
             self._verified = {k: v for k, v in self._verified.items() if v > now}
             if len(self._verified) > TRACKED_KEYS:
@@ -349,6 +371,7 @@ class ShareApp:
             headers=headers, client_ip=client_ip(scope, headers),
         )
         try:
+            self.reject_banned(request, time.time())
             status, body, content_type, extra = await self.dispatch(request, receive)
         except HTTPError as exc:
             status, body, content_type, extra = exc.status, _json_bytes({"detail": {"code": exc.code, "message": exc.message}}), "application/json", exc.headers

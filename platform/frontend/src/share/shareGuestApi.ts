@@ -87,7 +87,7 @@ export interface GuestShare {
     bundle: GuestBundle;
 }
 
-export type GuestErrorKind = 'invalid_link' | 'wrong_passcode' | 'locked' | 'ended' | 'rate_limited' | 'unavailable';
+export type GuestErrorKind = 'invalid_link' | 'wrong_passcode' | 'blocked' | 'locked' | 'ended' | 'rate_limited' | 'unavailable';
 
 export class GuestShareError extends Error {
     readonly kind: GuestErrorKind;
@@ -128,10 +128,11 @@ export function shareTransport(credentials: ShareCredentials, base: Transport = 
 }
 
 function errorFor(status: number, message: string | null): GuestShareError {
-    if (status === 401) return new GuestShareError('wrong_passcode', 'That passcode is not correct.', status);
+    if (status === 401) return new GuestShareError('wrong_passcode', message || 'That passcode is not correct.', status);
+    if (status === 403) return new GuestShareError('blocked', 'Access from your network is blocked after too many failed attempts.', status);
     if (status === 404) return new GuestShareError('invalid_link', 'This share link is not valid.', status);
     if (status === 410) return new GuestShareError('ended', 'This share has expired or was revoked.', status);
-    if (status === 423) return new GuestShareError('locked', 'Too many incorrect passcodes. Try again in 15 minutes.', status);
+    if (status === 423) return new GuestShareError('locked', 'This share is locked after too many incorrect passcodes. Ask the sender for a new link.', status);
     if (status === 429) return new GuestShareError('rate_limited', 'Too many requests. Wait a minute and try again.', status);
     return new GuestShareError('unavailable', message || 'The share is unavailable right now.', status);
 }
