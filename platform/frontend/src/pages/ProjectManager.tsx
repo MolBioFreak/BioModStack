@@ -95,7 +95,7 @@ function nativeProjectContext(summary: ProjectManagerReadModel): { globalExperim
         ? domainNodes.find((node) => node.subject_id === selectedDomainId)
         : focusedDomains.length === 1
             ? focusedDomains[0]
-            : undefined;
+            : domainNodes.length === 1 ? domainNodes[0] : undefined;
     if (!domain?.subject_id || !domain.parent_node_key) return null;
     const globalExperiment = summary.tree.nodes.find((node) => node.node_key === domain.parent_node_key && node.node_type === 'global_experiment');
     if (!globalExperiment?.subject_id) return null;
@@ -111,7 +111,13 @@ function selectedDomainIsProtein(summary: ProjectManagerReadModel): boolean {
         || payloadSchema === 'bms.protein-in-silico-experiment.v1';
 }
 
-function NativeProjectDataPanel({ summary, stateRevisionId }: { summary: ProjectManagerReadModel; stateRevisionId: string | null }) {
+export function NativeProjectDataPanel({ summary, stateRevisionId, onCreateExperiment, onCreateWorkspace, onSelectNode }: {
+    summary: ProjectManagerReadModel;
+    stateRevisionId: string | null;
+    onCreateExperiment: () => void;
+    onCreateWorkspace: () => void;
+    onSelectNode: (nodeKey: string, nodeType: string, subjectId: string | null) => void;
+}) {
     const context = useMemo(() => nativeProjectContext(summary), [summary]);
     const isNativeProject = summary.project.project_scope === 'ngs_molbio_local';
     const stateQuery = useQuery({
@@ -136,7 +142,24 @@ function NativeProjectDataPanel({ summary, stateRevisionId }: { summary: Project
 
     if (!isNativeProject) return null;
     if (!context) {
-        return <section role="status" className="border-b border-warning/40 bg-warning/10 px-4 py-3 text-xs text-content-secondary"><span className="font-semibold text-warning">DNA sequence workspace unavailable.</span> Select the Project's NGS/MolBio Domain Experiment to restore its exact workspace context.</section>;
+        const experiments = summary.tree.nodes.filter((node) => node.node_type === 'global_experiment');
+        const workspaces = summary.tree.nodes.filter((node) => node.node_type === 'domain_experiment');
+        const selectedExperiment = globalExperimentForNode(summary, summary.selection.node_key);
+        return (
+            <section className="m-4 rounded-xl border border-border-primary bg-surface-secondary p-5" aria-label="Project workspace setup">
+                <h2 className="text-base font-semibold text-content">{workspaces.length ? 'Choose a workspace' : 'Set up this project'}</h2>
+                <p className="mt-2 text-sm text-content-secondary">{workspaces.length
+                    ? 'Select the workspace whose DNA sequences and NGS data you want to open.'
+                    : experiments.length
+                        ? 'Select an experiment and add its NGS/MolBio workspace to organize DNA sequences and NGS data.'
+                        : 'Create an experiment, then add its NGS/MolBio workspace to organize DNA sequences and NGS data.'}</p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                    {summary.allowed_actions.includes('create_global_experiment') && <button type="button" onClick={onCreateExperiment} className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white">New experiment</button>}
+                    {selectedExperiment && <button type="button" onClick={onCreateWorkspace} className="rounded-lg border border-accent px-3 py-2 text-sm text-accent">Add NGS/MolBio workspace</button>}
+                    {(workspaces.length ? workspaces : experiments).map((node) => <button key={node.node_key} type="button" onClick={() => onSelectNode(node.node_key, node.node_type, node.subject_id)} className="rounded-lg border border-border-primary px-3 py-2 text-sm text-content">Open {node.label}</button>)}
+                </div>
+            </section>
+        );
     }
     if (stateQuery.isPending || (selectedStateRevisionId !== null && projectHubQuery.isPending)) {
         return <section aria-busy="true" className="border-b border-border-primary bg-surface-secondary px-4 py-3 text-xs text-content-secondary">Loading Project DNA sequences…</section>;
@@ -917,7 +940,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 )}
                 {projectTreeVisible && <div role="separator" aria-orientation="vertical" aria-label="Resize Project tree" tabIndex={0} onPointerDown={(event) => startRailResize('tree', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setTreeWidth((value) => Math.max(208, value - 16)); if (event.key === 'ArrowRight') setTreeWidth((value) => Math.min(400, value + 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent md:block" />}
                 <main className="flex min-h-0 min-w-0 flex-col md:overflow-y-auto">
-                    <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} />
+                    <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} onCreateExperiment={() => setDialogMode('create_global')} onCreateWorkspace={() => setDialogMode('create_domain')} onSelectNode={setSelection} />
                     {loadingCandidateOverview && <p role="status" className="p-6 text-sm text-content-secondary">Loading candidate sources and validation results… <button type="button" onClick={() => switchProjectView('records')} className="text-accent underline">Open records now</button></p>}
                     {showCandidates && candidates.data && <ProjectCandidateOverview data={candidates.data} onOpenRecords={() => switchProjectView('records')} />}
                     {!isStandaloneNativeProject && !showCandidates && !loadingCandidateOverview && (
