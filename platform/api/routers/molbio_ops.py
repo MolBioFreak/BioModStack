@@ -2278,6 +2278,21 @@ async def update_pcr_experiment_review_state(
     return _pcr_revision_payload(revision)
 
 
+@router.get("/sequences/{sequence_id}/project-export-history")
+async def read_project_export_history(
+    sequence_id: str,
+    revision_id: str = Query(min_length=1, max_length=128),
+    session: AsyncSession = Depends(get_molbio_session),
+) -> dict[str, Any]:
+    from services.molbio_project_history import project_export_history
+    try:
+        return await project_export_history(session, sequence_id, revision_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except OverflowError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+
+
 @router.get("/operations/{operation_id}")
 async def get_molecular_operation(
     operation_id: str,

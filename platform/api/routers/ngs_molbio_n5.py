@@ -650,9 +650,9 @@ async def project_hub(
 
     operation_receipts, operation_page = await _project_hub_linked_receipts(
         session, project_id=project_id, domain_id=domain_id,
-        kinds={"molecular_operation", "pcr_experiment_revision"}, cursor=operations_cursor, state_revision_id=selected.id,
+        kinds={"molecular_operation", "molbio_operation", "pcr_experiment_revision"}, cursor=operations_cursor, state_revision_id=selected.id,
     )
-    operation_ids = [row.entity_id for row in operation_receipts if row.entity_kind == "molecular_operation"]
+    operation_ids = [row.entity_id for row in operation_receipts if row.entity_kind in {"molecular_operation", "molbio_operation"}]
     operations = {
         row.id: row for row in (await molbio.scalars(
             select(MolecularOperation).options(load_only(MolecularOperation.id, MolecularOperation.operation_kind, MolecularOperation.status, MolecularOperation.parameters)).where(MolecularOperation.id.in_(operation_ids))
@@ -896,7 +896,7 @@ async def project_hub(
         "project": {
             "id": project_id, "name": project.display_name, "objective": project.description,
             "lifecycle_state": project.lifecycle_state, "created_at": project.created_at, "plasmid_count": member_page["total_count"],
-            "settings_href": f"/projects/{project_id}", "add_plasmid_href": f"/designer?workspace_id={project_id}&section=plasmids&action=add-plasmid",
+            "settings_href": f"/projects/{project_id}", "add_plasmid_href": f"/designer?workspace_id={project_id}&global_experiment_id={experiment_id}&domain_experiment_id={domain_id}&state_revision_id={selected.id}&section=plasmids&action=add-plasmid",
         },
         "identity": {
             "workspace_id": project_id, "global_experiment_id": experiment_id, "domain_experiment_id": domain_id,

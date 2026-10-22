@@ -13,6 +13,8 @@ type ViewMode = 'linear' | 'circular' | 'both';
 interface SequenceHeaderProps {
     sequenceData: SequenceData;
     onSave?: () => void;
+    onExportToProject?: () => void;
+    projectExportDisabled?: boolean;
     onUndo?: () => void;
     onRedo?: () => void;
     onAutoAnnotate?: () => void;
@@ -47,6 +49,8 @@ function calculateGC(sequence: string): number {
 export function SequenceHeader({
     sequenceData,
     onSave,
+    onExportToProject,
+    projectExportDisabled,
     onUndo,
     onRedo,
     onAutoAnnotate,
@@ -235,7 +239,7 @@ export function SequenceHeader({
                 )}
 
                 {/* Export */}
-                <ExportDropdown sequenceData={sequenceData} historyJournal={historyJournal} />
+                <ExportDropdown sequenceData={sequenceData} historyJournal={historyJournal} onExportToProject={onExportToProject} projectExportDisabled={projectExportDisabled} />
 
                 {/* Save */}
                 {onSave && (

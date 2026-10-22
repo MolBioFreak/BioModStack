@@ -1196,7 +1196,7 @@ class MolBioRevisionAdapter:
             if normalized:
                 pattern = f"%{normalized}%"
                 statement = statement.where(
-                    or_(MolecularRevision.id.ilike(pattern), MolecularRevision.document_id.ilike(pattern))
+                    or_(MolecularRevision.id.ilike(pattern), MolecularRevision.document_id.ilike(pattern), MolecularRevision.snapshot["name"].as_string().ilike(pattern))
                 )
             rows = list((await session.scalars(statement.order_by(MolecularRevision.created_at.desc()).limit(limit))).all())
         return [
@@ -1236,7 +1236,7 @@ class MolBioRevisionAdapter:
             entity_id=entity_id,
             content_digest=digest,
             contract_digest=digest,
-            reopen_uri=_query_uri("/designer", sequence_id=revision.document_id, revision_id=revision.id),
+            reopen_uri=_query_uri("/designer", molbio_sequence_id=revision.document_id, molbio_revision_id=revision.id),
             metadata={
                 "canonical_state": "immutable",
                 "sequence_id": revision.document_id,
@@ -1385,12 +1385,12 @@ class MolBioOperationAdapter:
             output_revision = revisions[first_output.revision_id]
             reopen_uri = _query_uri(
                 "/designer",
-                sequence_id=output_revision.document_id,
-                revision_id=output_revision.id,
-                operation_id=operation.id,
+                molbio_sequence_id=output_revision.document_id,
+                molbio_revision_id=output_revision.id,
+                molbio_operation_id=operation.id,
             )
         else:
-            reopen_uri = _query_uri("/designer", operation_id=operation.id)
+            reopen_uri = _query_uri("/designer", molbio_operation_id=operation.id)
         return _receipt(
             self,
             entity_id=operation.id,
@@ -2347,7 +2347,7 @@ class ExactMolecularRevisionMemberAdapter:
             statement = select(MolecularRevision)
             if normalized:
                 pattern = f"%{normalized}%"
-                statement = statement.where(or_(MolecularRevision.id.ilike(pattern), MolecularRevision.document_id.ilike(pattern)))
+                statement = statement.where(or_(MolecularRevision.id.ilike(pattern), MolecularRevision.document_id.ilike(pattern), MolecularRevision.snapshot["name"].as_string().ilike(pattern)))
             rows = list((await session.scalars(statement.order_by(MolecularRevision.created_at.desc()).limit(limit))).all())
         return [EntityProjection(
             entity_id=urlencode({"sequence_id": row.document_id, "revision_id": row.id}),
@@ -2382,7 +2382,7 @@ class ExactMolecularRevisionMemberAdapter:
                 "sequence_id": identity["sequence_id"],
                 "revision_id": identity["revision_id"],
             }), member=member,
-            reopen_uri=_query_uri("/designer", **identity),
+            reopen_uri=_query_uri("/designer", molbio_sequence_id=identity["sequence_id"], molbio_revision_id=identity["revision_id"]),
             metadata={
                 "sequence_id": identity["sequence_id"],
                 "revision_id": identity["revision_id"],

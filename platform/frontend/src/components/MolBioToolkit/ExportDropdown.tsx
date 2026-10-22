@@ -47,6 +47,8 @@ interface ExportDropdownProps {
         sequenceType?: 'dna' | 'rna' | 'protein';
     };
     historyJournal?: HistoryEntry[];
+    onExportToProject?: () => void;
+    projectExportDisabled?: boolean;
     className?: string;
 }
 
@@ -67,7 +69,7 @@ function formatNotes(feature: NonNullable<ExportDropdownProps['sequenceData']['f
     };
 }
 
-export function ExportDropdown({ sequenceData, historyJournal = [], className }: ExportDropdownProps) {
+export function ExportDropdown({ sequenceData, historyJournal = [], className, onExportToProject, projectExportDisabled = false }: ExportDropdownProps) {
     const [isOpen, setIsOpen] = useState(false);
     const [exportError, setExportError] = useState<string | null>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -229,6 +231,7 @@ export function ExportDropdown({ sequenceData, historyJournal = [], className }:
                 <div ref={popupRef} id={popupId} role="group" aria-label="Export formats"
                     style={{ ...position, maxWidth: 'calc(100vw - 16px)', maxHeight: 'calc(100vh - 16px)' }}
                     className="fixed w-56 overflow-y-auto bg-slate-700 border border-slate-600 rounded shadow-lg z-[100]">
+                    {onExportToProject && <button type="button" disabled={projectExportDisabled} onClick={() => { setIsOpen(false); onExportToProject(); }} className="w-full border-b border-slate-600 px-3 py-2 text-left text-sm font-semibold text-cyan-300 hover:bg-slate-600 disabled:opacity-50" title={projectExportDisabled ? 'Save this sequence before exporting it to a Project' : 'Add this saved sequence and optional history to a Project'}>Export to Project…</button>}
                     <button
                         onClick={() => exportAs('genbank')}
                         className="w-full text-left px-3 py-2 text-sm text-slate-200 hover:bg-slate-600 transition-colors"
