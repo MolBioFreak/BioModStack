@@ -139,10 +139,12 @@ preparation. [BoltzGen capability mapping](BoltzGen_Public_Capabilities.md)
 identifies the official pinned protocols, current-upstream differences and actual
 native behavior. The ligand-only PDB/mmCIF parsing defect is repaired by the
 [local native parser candidate](BoltzGen_Ligand_Parser_Repair.md), without fabricated
-polymer context. Runtime publication and installed selection remain separate.
-The retained backbone-conditioned sampling alias is not proof of
-a docking optimizer. RF3 and RFD3 are excluded from this repair and its closeout;
-no changes to either model are included.
+polymer context. The completed candidate SIF passed native PDB/mmCIF, polymer/mixed
+parity, authoring-position and correspondence/publication CPU checks; all installed
+package versions are unchanged. Runtime publication and installed selection remain
+separate. The retained `backbone_docking` ID is compatibility-only, not a supported
+sampling or docking operation. RF3 and RFD3 are excluded from this repair and its
+closeout; no changes to either model are included.
 
 The original 176 lane record keys remain preserved; the separate prior Protenix
 parent records are not merged into that denominator. Historical remaining-owner
@@ -153,7 +155,10 @@ Evidence is retained under
 `~/.local/state/biomodstack/task-evidence/structure-workflow-fidelity-repair/`.
 The `integration/closeout/integrated-055c820-run1` and
 `integration/closeout/integrated-boltzgen-1dc8f09-run1` packets bind commands,
-results and tested file hashes to integrated source. Failed attempts and original
+results and tested file hashes to integrated source. The final BoltzGen follow-up
+is recorded in `integration/closeout/boltzgen-final-verification.json`,
+`integration/closeout/integrated-boltzgen-final-run1/` and
+`integration/closeout/boltzgen-ligand-parser/`. Failed attempts and original
 failed runtime artifacts remain preserved. CPU parsing, inert model boundaries,
 scratch API/template operations and mounted UI tests are not GPU inference,
 predictive-accuracy or deployed acceptance. This checkpoint does not declare the

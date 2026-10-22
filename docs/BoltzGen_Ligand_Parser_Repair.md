@@ -54,3 +54,19 @@ are compared with the original image. The existing observer regression checks
 native writer byte parity and source mapping. No weights, GPU, inference,
 affinity/accuracy claims, publication, installation or service restart are part
 of this qualification.
+
+The completed local candidate is retained at
+`~/.local/state/biomodstack/task-evidence/structure-workflow-fidelity-repair/integration/closeout/boltzgen-ligand-parser/boltzgen-ligand-parser.sif`.
+Its SHA-256 is
+`e4c9cfe3ca127de46de50a1a5e1533ee341231229e0f956f4bd45c671402712f`
+and its size is 10,443,853,824 bytes. Build and inspection completed successfully.
+The candidate passed 12 combined parser/correspondence/authoring-position tests,
+the real native fixture's API publication/readback check, eight request-schema
+and CLI parses (seven fresh variants plus the retained historical request), and
+the zero-design diagnostic branch probe. The latter confirms the unsupported
+analysis branch; it does not establish docking support. All 117 installed package
+versions are unchanged; only the intended native parser source digest changed.
+
+Exact commands, results, retained failures, inventories and archived native fixtures
+are beside the candidate in `candidate-verification.json`, command receipts, logs
+and `native-fixtures.tar.gz`. The installed image remains the original base above.
