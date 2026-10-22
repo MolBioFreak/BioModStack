@@ -18,10 +18,13 @@
   These map to canonical pLDDT, CA RMSD, and TM-align respectively. TM-align is
   not pTM. Multiple samples from a shared backbone must join by output stem,
   not by the repeated input example ID. Native pLDDT units are retained.
-- The Caliby recipe now includes upstream's pinned optional ColabDesign/JAX
-  extra with a resolved transitive lock constrained by the original runtime.
-  Resolution is not import/build/GPU qualification. Existing installed images
-  remain unchanged until separately built and explicitly adopted.
+- The Caliby recipe includes upstream's pinned optional ColabDesign/JAX
+  extra with Haiku 0.0.13, compatible with retained JAX/JAXlib 0.4.34.
+  The candidate image passed installed AF2 imports and five CPU configuration,
+  dispatch and serializer contracts (`tests/native_caliby_af2.py`), with model
+  construction/inference intercepted. Candidate build/CPU qualification is not
+  GPU or initialized-model qualification; installed selection remains unchanged
+  until the release owner explicitly adopts the candidate.
 - Active `RunAF2` uses an in-memory wrapper over installed dl_binder_design
   `predict.py`: template target indices start at `feat_holder.binderlen`, not
   one residue later. Initial-guess coordinates, features, recycles and native
@@ -30,7 +33,10 @@
   native score-folder confidence averaging. It retains the native scale
   convention. This is not a change to AF2 prediction metrics, native campaign
   acceptance or coordinate-only prediction confidence availability.
-- Standalone AF2 and legacy AF2_BACKPROP remain retired/disabled. Native BC2
+- Standalone AF2 is not reactivated. The optional AF2_BACKPROP source branch
+  remains conditional; default false is not proof of retirement or public
+  reachability. Explicit multimer false transport is preserved without changing
+  activation or inventing a CDR-redesign capability. Native BC2
   validation-pool exhaustion and Fold-CP 1D CP>1 numerical caveats are not
   converted into new refusal gates or silently changed scientific methods.
 

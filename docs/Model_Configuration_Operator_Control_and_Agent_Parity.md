@@ -118,3 +118,36 @@ A model reaches 100% integration only when all of these are accepted:
 10. Focused and live acceptance proves request-to-result agreement for the exact released revision.
 
 If one gate is incomplete, report the model as incomplete and identify that gate. Do not average away a missing parameter, UI, API, data, or result surface.
+
+## Structure-workflow fidelity repair checkpoint
+
+The scoped source integration includes the frontend CCD scalar/list receiving,
+selected FAMPNN helper closure, ESM batch dispatch/copy identity, Boltz seed
+catalogue and Caliby AF2 dependency corrections. The previously separate three
+closeout commits are incorporated and qualified together, not pending handoffs.
+Fold-CP and Caliby candidate images passed their documented CPU contracts;
+publication, installed selection and managed release remain separate operations.
+
+BoltzGen is in scope; RFD3 is out of scope. All eight public BoltzGen modes now
+reach the existing typed discovery, settings editor, compiler and native input
+preparation. [BoltzGen capability mapping](BoltzGen_Public_Capabilities.md)
+identifies the official pinned protocols, current-upstream differences and actual
+native limitations. In particular, the ligand-only PDB parser failure is not
+repaired, and the retained backbone-conditioned sampling alias is not proof of
+a docking optimizer. RF3 is a different model from RFD3; its standalone sequence
+routing mismatch is not closed by excluding RFD3.
+
+The original 176 lane record keys remain preserved; the separate prior Protenix
+parent records are not merged into that denominator. Historical remaining-owner
+lists predate these integrated corrections and must be read with the later owner
+and integrated qualification evidence. Records are not counts of unique defects.
+
+Evidence is retained under
+`~/.local/state/biomodstack/task-evidence/structure-workflow-fidelity-repair/`.
+The `integration/closeout/integrated-055c820-run1` and
+`integration/closeout/integrated-boltzgen-1dc8f09-run1` packets bind commands,
+results and tested file hashes to integrated source. Failed attempts and original
+failed runtime artifacts remain preserved. CPU parsing, inert model boundaries,
+scratch API/template operations and mounted UI tests are not GPU inference,
+predictive-accuracy or deployed acceptance. This checkpoint does not declare the
+whole policy complete or add a submission gate or stricter runtime success rule.
