@@ -459,7 +459,16 @@ def _launch_context_error(exc: LaunchContextError) -> HTTPException:
 
 @router.get("/api/domain-adapters")
 async def list_domain_adapters() -> dict:
-    return {"schema": "bms.global.adapter-registry.v1", "adapters": registry.list()}
+    return {"schema": "bms.global.adapter-registry.v1", "adapters": [
+        item for item in registry.list() if item["domain_kind"] == "ngs_molbio"
+    ]}
+
+
+def _edition_adapter(adapter_id: str):
+    adapter = registry.get(adapter_id)
+    if adapter.domain_kind != "ngs_molbio":
+        raise AdapterError("unknown_adapter", "adapter is not available in the NGS/MolBio edition")
+    return adapter
 
 
 @router.get("/api/protein-project-capabilities")
@@ -775,7 +784,7 @@ async def search_adapter_entities(
     core_session: AsyncSession = Depends(get_core_session),
 ) -> dict:
     try:
-        adapter = registry.get(adapter_id)
+        adapter = _edition_adapter(adapter_id)
         projections = await adapter.search(core_session, query=q, limit=limit)
         items: list[dict] = []
         for projection in projections:
@@ -819,7 +828,7 @@ async def issue_adapter_receipt(
 ) -> dict:
     try:
         await _require_mutation_owner(request, experiment_session, resource_id=payload.project_id)
-        adapter = registry.get(adapter_id)
+        adapter = _edition_adapter(adapter_id)
         receipt = await adapter.verify(core_session, entity_id)
         receipt["verified_at"] = datetime.now(timezone.utc).isoformat()
         digest = receipt.get("content_digest") or receipt.get("contract_digest")
@@ -862,6 +871,7 @@ async def attach_domain_entity(
 ) -> dict:
     try:
         await _require_mutation_owner(request, experiment_session, resource_id=project_id)
+        _edition_adapter(payload.adapter_id)
         receipt = await attach_verified_entity(
             experiment_session,
             core_session,

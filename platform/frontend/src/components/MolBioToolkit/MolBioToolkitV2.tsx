@@ -3858,7 +3858,7 @@ export function MolBioToolkitV2() {
                     <button
                         type="button"
                         aria-label="Close quick add menu"
-                        className="fixed inset-0 z-40 cursor-default bg-transparent"
+                        className="fixed inset-0 z-[80] cursor-default bg-transparent"
                         onClick={closeQuickAddMenuAndRestoreFocus}
                     />
                     <div
@@ -3871,10 +3871,11 @@ export function MolBioToolkitV2() {
                                 closeQuickAddMenuAndRestoreFocus();
                             }
                         }}
-                        className="fixed z-50 w-64 rounded-xl border border-slate-700 bg-slate-900/95 p-2 shadow-2xl backdrop-blur"
+                        className="fixed z-[85] w-64 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900/95 p-2 shadow-2xl backdrop-blur"
                         style={{
                             left: Math.max(12, Math.min(quickAddMenu.x, window.innerWidth - 280)),
                             top: Math.max(12, Math.min(quickAddMenu.y, window.innerHeight - 280)),
+                            maxHeight: Math.max(0, window.innerHeight - Math.max(12, Math.min(quickAddMenu.y, window.innerHeight - 280)) - 12),
                         }}
                     >
                         <div className="border-b border-slate-700 px-2 pb-2">

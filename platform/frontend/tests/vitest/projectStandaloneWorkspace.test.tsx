@@ -35,18 +35,12 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(() => root.unmount()); client.clear(); host.remove(); });
 describe('standalone NGS/MolBio Projects', () => {
-    it('gives a new project an actionable setup instead of a dead-end warning', async () => {
+    it('shows sequence intake guidance without requiring generic experiment setup', async () => {
         await render(summary([project]));
-        expect(host.textContent).toContain('Set up this project');
-        expect(host.textContent).not.toContain('workspace unavailable');
-        await act(() => button('New experiment').click());
-        expect(create).toHaveBeenCalledOnce();
+        expect(host.textContent).toContain('No DNA sequences attached yet');
+        expect(host.textContent).not.toContain('New experiment');
+        expect(host.textContent).not.toContain('Global');
         expect(api.fetchProjectHub).not.toHaveBeenCalled();
-    });
-    it('allows adding the selected experiment workspace without a global-project link', async () => {
-        await render(summary([project, experiment], experiment));
-        await act(() => button('Add NGS/MolBio workspace').click());
-        expect(add).toHaveBeenCalledOnce();
     });
     it('opens the single exact workspace from the project root', async () => {
         api.fetchMolBioNgsDomainState.mockResolvedValue({ current_state_revision_id: 'state-current' });

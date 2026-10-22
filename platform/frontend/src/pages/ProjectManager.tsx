@@ -36,6 +36,7 @@ import { ProjectCandidateOverview, useProjectCandidateData } from '../components
 import { RunPanel } from '../components/project-manager/RunPanel';
 import { VirtualFolderPanel, type FolderKind } from '../components/project-manager/VirtualFolderPanel';
 import { focusIdFromReadModel, globalExperimentForNode } from '../components/project-manager/projectManagerState';
+import { NativeProjectTools } from '../components/project-manager/NativeProjectTools';
 import { ProteinProjectWorkspace } from '../components/project-manager/protein/ProteinProjectWorkspace';
 import { NewProjectExperimentDialog } from '../components/project-manager/ProjectWorkflowSetup';
 
@@ -885,6 +886,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     {busy && <span role="status" className="text-[10px] font-medium text-accent">Refreshing…</span>}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                    {summary.project.project_scope === 'ngs_molbio_local' && <NativeProjectTools key={projectId} projectId={projectId} projectName={summary.project.name} context={nativeProjectContext(summary)} disabled={!selectionReady} />}
                     {summary.project.project_scope === 'global' && <details ref={creationRef} className="relative">
                         <summary className="cursor-pointer rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">New experiment</summary>
                         <div className="absolute right-0 z-40 mt-2 w-72 max-w-[85vw] space-y-2 rounded-lg border border-border-primary bg-surface-secondary p-3 shadow-xl">
