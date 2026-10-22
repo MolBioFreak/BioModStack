@@ -23,7 +23,7 @@ def test_native_recovery_rejects_root_or_invalid_owner(user):
 def test_native_recovery_preserves_active_minknow_and_has_one_fixed_user_service(
     tmp_path, minknow_state, expected_start,
 ):
-    owner = pwd.getpwnam('nanoporeadmin')
+    owner = pwd.getpwnam('nobody')
     files = INSTALLER['render_native_helper'](SOURCE, owner.pw_name)
     text = files['/usr/local/sbin/bms-reconnect-mk1d'][0]
     assert 'docker' not in text.lower().replace('minknow or docker', '')
