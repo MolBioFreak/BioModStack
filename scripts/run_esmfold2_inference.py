@@ -784,11 +784,13 @@ def build_structure_prediction_input(
                     conditioning.setdefault(key, []).extend(document[key])
     reserved_ids = set(used_ids)
     for component in json_components:
-        if component.get('id') or component.get('chain_id'):
-            reserved_ids.update(iter_chain_ids(parse_chain_ids(component.get('id') or component['chain_id'])))
+        authored_ids = component.get('copy_ids') or component.get('id') or component.get('chain_id')
+        if authored_ids:
+            reserved_ids.update(iter_chain_ids(parse_chain_ids(authored_ids)))
     for index, component in enumerate(json_components, start=1):
         mol_type = component["type"]
-        chain_id = component.get("id") or component.get("chain_id") or _next_chain_id(used_ids | reserved_ids, "")
+        chain_id = (component.get("copy_ids") or component.get("id") or component.get("chain_id")
+                    or _next_chain_id(used_ids | reserved_ids, ""))
         ids = list(iter_chain_ids(parse_chain_ids(chain_id)))
         for _ in range(max(0, int(component.get('count', len(ids))) - len(ids))):
             copy_id = _next_chain_id(reserved_ids | used_ids | set(ids), '')

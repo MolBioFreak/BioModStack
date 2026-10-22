@@ -8,6 +8,23 @@ from services import nextflow
 from test_protenix_chemistry_transport import compiler_environment
 
 
+@pytest.mark.parametrize('mode', ['predict', 'complex'])
+@pytest.mark.parametrize('seed', [None, 0, 17])
+def test_boltz_seed_catalog_and_compiler_preserve_native_default(mode, seed, tmp_path, compiler_environment):
+    from model_registry import get_registry
+    registry = get_registry()
+    definition = registry.get_model('boltz2')
+    assert definition is not None
+    field = next(p for p in definition.params if p.name == 'boltz_seed')
+    assert field.default is None and field.required is False
+    assert 'boltz_seed' in next(m for m in definition.modes if m.id == mode).params
+    params = {'sequence': 'ACG', 'boltz_use_msa': False, 'run_frustrampnn': False,
+              'boltz_seed': seed}
+    assert registry.validate_job_params('boltz2', mode, params) == []
+    invocation = nextflow.compile_nextflow_invocation('boltz2', mode, params, str(tmp_path))
+    assert invocation.native_parameters.get('boltz_seed') == seed
+
+
 def test_boltz_native_copies_and_msa_intent():
     from scripts.lib.boltz_fidelity import component_copies
     from services.model_msa_handoff import _boltz_task_proteins

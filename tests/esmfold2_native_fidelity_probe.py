@@ -84,6 +84,33 @@ def run(output):
     results['pdb'] = components
     results['batch'] = requests
     results['copies'] = serialize_structure_prediction_input(copies)
+    # Authored copy order takes precedence over display IDs and is never
+    # truncated by count. Reserve later IDs before expanding earlier entities.
+    copy_document = {'components': [
+        {'type': 'protein', 'sequence': 'GG', 'count': 2},
+        {'type': 'protein', 'id': 'display', 'chain_id': 'legacy',
+         'copy_ids': ['B', 'A'], 'count': 1, 'sequence': 'ACMS',
+         'modifications': [{'position': 2, 'ccd': 'MSE'}]},
+        {'type': 'dna', 'copy_ids': ['Z', 'Y'], 'count': 3, 'sequence': 'ACGT'},
+        {'type': 'ligand', 'copy_ids': ['L', 'K'], 'count': 1, 'smiles': 'CCO'}]}
+    expected_document = {'sequences': [
+        {'type': 'protein', 'id': ['C', 'D'], 'sequence': 'GG'},
+        {'type': 'protein', 'id': ['B', 'A'], 'sequence': 'ACMS',
+         'modifications': [{'position': 2, 'ccd': 'MSE'}]},
+        {'type': 'dna', 'id': ['Z', 'Y', 'E'], 'sequence': 'ACGT'},
+        {'type': 'ligand', 'id': ['L', 'K'], 'smiles': 'CCO'}]}
+    actual = build(copy_document)
+    expected = deserialize_structure_prediction_input(expected_document)
+    assert serialize_structure_prediction_input(actual) == serialize_structure_prediction_input(expected)
+    a, _ = ESMFold2InputBuilder().prepare_input(actual, seed=0, device='cpu')
+    b, _ = ESMFold2InputBuilder().prepare_input(expected, seed=0, device='cpu')
+    copy_tensor_keys = []
+    for key, value in a.items():
+        if isinstance(value, torch.Tensor):
+            assert torch.equal(value, b[key]), ('copy_ids', key)
+            copy_tensor_keys.append(key)
+    results['copy_ids'] = {'parsed': serialize_structure_prediction_input(actual),
+                           'equal_tensor_keys': copy_tensor_keys}
     # Inert model boundary: exercise actual writer and resident caller, not inference.
     from types import SimpleNamespace
     from unittest.mock import patch

@@ -51,11 +51,18 @@ def test_direct_boltz_selected_helpers(entry):
         assert selected[helper] in component.dependency_ids
 
 
-def test_legacy_esm_batch_selects_same_process_as_dispatcher():
+@pytest.mark.parametrize('params,process', [
+    ({}, 'ESMFold2Predict'),
+    ({'sequence_batch_json_path': ''}, 'ESMFold2Predict'),
+    ({'sequence_batch_json_path': '/logical/manifest.json'}, 'ESMFold2MSAPredict'),
+    ({'core_protein_scientific_contract': None}, 'ESMFold2MSAPredict'),
+    ({'core_protein_scientific_contract': 1}, 'ESMFold2MSAPredict'),
+])
+def test_legacy_esm_batch_selects_same_process_as_dispatcher(params, process):
     metadata = selected_execution_metadata('esmfold2', 'predict',
-        {'pred_method': 'esmfold2', 'sequence_batch_json_path': '/logical/manifest.json',
-         'run_frustrampnn': False}, 'workflows/structure_prediction.nf')
-    assert 'ESMFold2MSAPredict' in {row.component_key for row in metadata.static_components}
+        {'pred_method': 'esmfold2', 'run_frustrampnn': False, **params},
+        'workflows/structure_prediction.nf')
+    assert {row.component_key for row in metadata.static_components} == {process}
 
 
 @pytest.mark.parametrize('owner,required', [

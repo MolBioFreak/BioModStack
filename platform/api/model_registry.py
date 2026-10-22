@@ -1064,6 +1064,14 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
     def native_stage(key, module, deps, inputs=(), outputs=(), *, after=(),
                      condition=None, label='CPU', optional_outputs=(), optional_inputs=()):
         source = module + ':' + key
+        # Manual child stages consume the same source helpers as their public
+        # process owner. Managed image bindings alone omit these files.
+        from native_components import PROCESS_CONTRACTS
+        for helper in PROCESS_CONTRACTS.get(source, ((), (), (), (), ()))[3]:
+            helper_id = 'support_tool:' + helper
+            dependencies[helper_id] = SelectedDependency(
+                helper_id, 'support_tool', helper, source)
+            deps = (*deps, helper_id)
         input_ids = tuple(key + ':input:' + name for name in inputs)
         output_ids = tuple(key + ':output:' + name for name in outputs)
         for direction, names, ids in (('input', inputs, input_ids), ('output', outputs, output_ids)):
@@ -1194,7 +1202,8 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
                        'BoltzFromSequenceTask')
         else:
             module = 'modules/esmfold2_experimental.nf'
-            process = 'ESMFold2MSAPredict' if 'core_protein_scientific_contract' in p else 'ESMFold2Predict'
+            process = ('ESMFold2MSAPredict' if 'core_protein_scientific_contract' in p
+                       or p.get('sequence_batch_json_path') else 'ESMFold2Predict')
 
         deps = managed(predictor)
         selected_weights, weight_blockers = native_checkpoint_dependencies(process, p)
