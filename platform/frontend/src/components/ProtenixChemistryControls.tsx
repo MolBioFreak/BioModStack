@@ -65,7 +65,18 @@ export function ProtenixChemistryControls({ components, onComponentChange, bonds
                         <p className="text-xs">templatesPath is a managed HHR/A3M template-hit file, not a coordinate directory. Empty inline MSA is explicit; Omit restores absence.</p>
                     </>}
                     {(component.type === 'ligand' || component.type === 'ion') && <>
-                        {(component.type === 'ion' ? ['ccd', 'ion', 'element'] as const : ['ccd', 'smiles', 'ligand_file'] as const).map(key => <Field key={key} label={`Entity ${entity + 1} ${key}`} value={component[key]} onChange={value => change(component.type === 'ligand' ? { ccd: undefined, smiles: undefined, ligand_file: undefined, [key]: value || undefined } : { [key]: value || undefined })} />)}
+                        {(component.type === 'ion' ? ['ccd', 'ion', 'element'] as const : ['ccd', 'smiles', 'ligand_file'] as const).map(key => {
+                            const value = component[key];
+                            // The shared roster also retains ESMFold2 CCD lists. Protenix
+                            // takes a scalar; never implicitly join or select a list entry.
+                            return <div key={key}>
+                                {Array.isArray(value) && <div>
+                                    <p>Retained ordered CCD list ({value.length} entries). Edit the list in ESMFold2 controls, or explicitly replace it with a Protenix scalar below. Unchanged lists remain retained.</p>
+                                    <ol aria-label={`Entity ${entity + 1} retained CCD list`}>{value.map((ccd, index) => <li key={index}>{ccd}</li>)}</ol>
+                                </div>}
+                                <Field label={`Entity ${entity + 1} ${key}`} value={Array.isArray(value) ? undefined : value} onChange={next => change(component.type === 'ligand' ? { ccd: undefined, smiles: undefined, ligand_file: undefined, [key]: next || undefined } : { [key]: next || undefined })} />
+                            </div>;
+                        })}
                         {component.type === 'ligand' && <label>Upload managed ligand conformer<input aria-label={`Entity ${entity + 1} ligand upload`} type="file" accept=".mol,.mol2,.sdf,.pdb" onChange={async e => {
                             const file = e.target.files?.[0]; if (!file) return;
                             try { const response = await uploadFile('inputs/structure_prediction', file); change({ ccd: undefined, smiles: undefined, ligand_file: response.data.path }); setFileError(''); }

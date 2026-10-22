@@ -7,7 +7,6 @@ import { AVAILABLE_LIGANDS, componentIdFromIndex } from './ligandSelectorData';
 export interface LigandEntry extends ProtenixComponent {
     id: string;
     type: 'ligand' | 'ion' | 'dna' | 'rna' | 'peptide' | 'protein';
-    ccd?: string;
     smiles?: string;
     sequence?: string;  // For DNA/RNA/peptide sequences
     name: string;

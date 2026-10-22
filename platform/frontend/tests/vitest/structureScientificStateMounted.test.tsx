@@ -62,6 +62,37 @@ afterEach(async () => {
     if (renderer) await close(); api.defaults.adapter = oldAdapter; vi.restoreAllMocks(); });
 
 
+it.each([{ ccd: [] }, { ccd: ['ATP'] }, { ccd: ['NAG', 'MAN', 'NAG'] }])('retains CCD list $ccd across Protenix inspection, unrelated edits and serialized reopen', async ({ ccd }) => {
+    await mount({ pred_method: 'esmfold2', esmf_use_msa: false, run_frustrampnn: false,
+        complex_components: [{ id: 'A', type: 'protein', sequence: 'ACDE' }, { id: 'L', type: 'ligand', ccd }] });
+    await switchPredictor('protenix');
+    const retained = renderer.root.findByProps({ 'aria-label': 'Entity 2 retained CCD list' });
+    expect(retained.findAllByType('li').map(text)).toEqual(ccd);
+    expect(renderer.root.findByProps({ 'aria-label': 'Entity 2 ccd' }).props.value).toBe('');
+    await change('Entity 2 name', 'retained ligand');
+    expect(preview().complex_components[1].ccd).toEqual(ccd);
+    const saved = await save(); await close(); await mount(saved);
+    expect(preview().complex_components[1].ccd).toEqual(ccd);
+    await switchPredictor('esmfold');
+    await click('Launch Prediction');
+    expect(posts).toHaveLength(1);
+    expect(posts[0].params.complex_components[1].ccd).toEqual(ccd);
+});
+
+it('only an explicit Protenix CCD edit replaces a retained list with its exact scalar dialect', async () => {
+    await mount({ pred_method: 'protenix', protenix_use_msa: false, run_frustrampnn: false,
+        complex_components: [{ id: 'A', type: 'protein', sequence: 'ACDE' }, { id: 'L', type: 'ligand', ccd: ['NAG', 'MAN'] }, { id: 'I', type: 'ion', ccd: 'ZN' }] });
+    expect(renderer.root.findByProps({ 'aria-label': 'Entity 3 ccd' }).props.value).toBe('ZN');
+    await change('Entity 2 ccd', 'CCD_NAG_MAN');
+    await change('Entity 3 ccd', 'MG');
+    expect(renderer.root.findAllByProps({ 'aria-label': 'Entity 2 retained CCD list' })).toHaveLength(0);
+    const saved = await save(); await close(); await mount(saved);
+    await click('Launch Prediction');
+    expect(posts).toHaveLength(1);
+    expect(posts[0].params.complex_components[1].ccd).toBe('CCD_NAG_MAN');
+    expect(posts[0].params.complex_components[2].ccd).toBe('MG');
+});
+
 it('ESMFold2 exact zero-based chemistry, inline MSA and chain conditioning survive inactive save/reopen and Axios', async () => {
     const components = [
         { id: 'A', type: 'protein', sequence: 'ACDE', modifications: [{ position: 0, ccd: 'MSE' }], msa: { sequences: ['ACDE', 'A-DE'] }, count: 2, copy_ids: ['A2', 'A1'] },
