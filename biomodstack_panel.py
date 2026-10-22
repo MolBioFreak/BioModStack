@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-BioModStack Control Panel
+BNS Plasmid Development Toolkit
 
 A GTK4/Libadwaita control panel for managing BioModStack services.
 Provides a native GNOME-style interface for:
@@ -36,6 +36,7 @@ from gi.repository import Gtk, Adw, GLib, Gio, Pango
 API_ROOT = Path(__file__).parent / "platform" / "api"
 sys.path.insert(0, str(API_ROOT))
 from paths import get_code_root, get_db_path, get_results_dir  # noqa: E402
+from biomodstack_runtime_profile import resolve_runtime_paths
 from biomodstack_panel_compat import build_toggle_row  # noqa: E402
 from biomodstack_services import desktop_exec_arg
 from biomodstack_services import (  # noqa: E402
@@ -66,7 +67,20 @@ API_PORT = 8000
 API_URL = f"http://localhost:{API_PORT}"
 
 # Paths
-DB_PATH = get_db_path()
+def panel_database_paths() -> dict[str, Path]:
+    """Use the same selected lane and storage profile as the managed API."""
+    resolved = resolve_runtime_paths(project_root=PROJECT_ROOT)
+    mode = os.environ.get("BMS_RUNTIME_MODE") or (CONTAINER_RUNTIME_MODE if resolved["core_runtime_mode"] else DEV_RUNTIME_MODE)
+    prefix = "dev_" if mode == DEV_RUNTIME_MODE else ""
+    data_root = Path(str(resolved[f"{prefix}data_root"]))
+    return {
+        "Core": Path(str(resolved[f"{prefix}db_path"])),
+        "MolBio": Path(os.environ.get("BMS_MOLBIO_DB_PATH") or data_root / "molbio.db"),
+        "NGS": Path(os.environ.get("BMS_MOLBIO_NGS_DB_PATH") or data_root / "molbio_ngs.db"),
+        "Experiments": Path(os.environ.get("BMS_EXPERIMENT_DB_PATH") or data_root / "experiments.db"),
+    }
+
+DB_PATH = panel_database_paths()["Core"]
 RESULTS_DIR = get_results_dir()
 API_LOG = API_LOG_PATH
 FRONTEND_LOG = FRONTEND_LOG_PATH
@@ -378,10 +392,7 @@ def check_frontend_status(runtime_mode: str | None = None) -> bool:
 STATUS_DB_TIMEOUT_SECONDS = 0.25
 
 def _connect_status_db() -> sqlite3.Connection:
-    try:
-        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=STATUS_DB_TIMEOUT_SECONDS)
-    except Exception:
-        conn = sqlite3.connect(str(DB_PATH), timeout=STATUS_DB_TIMEOUT_SECONDS)
+    conn = sqlite3.connect(DB_PATH.resolve().as_uri() + "?mode=ro", uri=True, timeout=STATUS_DB_TIMEOUT_SECONDS)
     conn.execute("PRAGMA busy_timeout = 250")
     return conn
 
@@ -399,28 +410,23 @@ def get_job_counts() -> tuple:
         return (0, 0, 0)
 
 def get_db_info() -> dict:
-    try:
-        if not DB_PATH.exists():
-            return {"error": "Not found"}
-        size_mb = DB_PATH.stat().st_size / (1024 * 1024)
-        conn = _connect_status_db()
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM jobs")
-        jobs = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM designs")
-        designs = cur.fetchone()[0]
-        journal_mode = cur.execute("PRAGMA journal_mode").fetchone()[0]
-        busy_timeout = cur.execute("PRAGMA busy_timeout").fetchone()[0]
-        conn.close()
-        return {
-            "size_mb": round(size_mb, 2),
-            "jobs": jobs,
-            "designs": designs,
-            "journal_mode": journal_mode,
-            "busy_timeout": busy_timeout,
-        }
-    except Exception as e:
-        return {"error": str(e)}
+    stores = []
+    for name, path in panel_database_paths().items():
+        entry = {"name": name, "path": str(path), "exists": path.is_file()}
+        if entry["exists"]:
+            try:
+                with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True,
+                                     timeout=STATUS_DB_TIMEOUT_SECONDS) as connection:
+                    tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                    entry["tables"] = len(tables)
+                    entry["size_mb"] = round(path.stat().st_size / (1024 * 1024), 2)
+                    if name == "MolBio" and "nucleotide_sequences" in tables:
+                        entry["sequences"] = connection.execute("SELECT COUNT(*) FROM nucleotide_sequences").fetchone()[0]
+            except sqlite3.Error as exc:
+                entry["error"] = str(exc)
+        stores.append(entry)
+    return {"stores": stores}
+
 
 def read_log_tail(log_path: Path, lines: int = 30) -> str:
     try:
@@ -509,7 +515,7 @@ def show_notification(title: str, message: str):
     try:
         subprocess.run([
             "notify-send", "-i", str(ICON_PATH) if ICON_PATH.exists() else "dialog-information",
-            f"BioModStack: {title}", message
+            f"BNS Toolkit: {title}", message
         ], timeout=5)
     except Exception:
         pass
@@ -532,7 +538,7 @@ class BioModStackPanel(Adw.Application):
             return
         
         self.window = Adw.ApplicationWindow(application=self)
-        self.window.set_title("BioModStack Control Panel")
+        self.window.set_title("BNS Plasmid Development Toolkit")
         self.window.set_default_size(500, 650)
         self.window.set_icon_name("biomodstack")
         
@@ -551,7 +557,7 @@ class BioModStackPanel(Adw.Application):
         
         # Header bar
         header = Adw.HeaderBar()
-        header.set_title_widget(Gtk.Label(label="BioModStack Control Panel"))
+        header.set_title_widget(Gtk.Label(label="BNS Plasmid Development Toolkit"))
         main_box.append(header)
         
         # Scrollable content
@@ -598,7 +604,7 @@ class BioModStackPanel(Adw.Application):
         self._update_status_rows()
 
         self.jobs_row = Adw.ActionRow()
-        self.jobs_row.set_title("Production database rows")
+        self.jobs_row.set_title("Local database jobs")
         self._update_jobs_row()
         group.add(self.jobs_row)
 
@@ -634,7 +640,7 @@ class BioModStackPanel(Adw.Application):
     def _update_jobs_row(self):
         running, queued, total = get_job_counts()
         self.jobs_row.set_subtitle(
-            f"{running} running  |  {queued} queued  |  {total:,} raw production DB rows"
+            f"{running} running  |  {queued} queued  |  {total:,} local DB rows"
         )
 
     def _load_runtime_port_settings(self) -> dict:
@@ -1120,7 +1126,11 @@ class BioModStackPanel(Adw.Application):
     def _script_env(self) -> dict:
         env = os.environ.copy()
         for key in list(env):
-            if key.startswith("BMS_") or key == "COMPOSE_PROJECT_NAME":
+            # Installation selectors survive a desktop launch/reboot. Runtime,
+            # lane, image and credential overrides still come from configuration.
+            if (key.startswith("BMS_") and key not in {
+                "BMS_PYTHON_ROOT", "BMS_FRONTEND_ROOT", "BMS_FRONTEND_NODE",
+            }) or key == "COMPOSE_PROJECT_NAME":
                 env.pop(key, None)
         return env
     
@@ -1243,7 +1253,7 @@ class BioModStackPanel(Adw.Application):
         
         # Info row
         self.db_info_row = Adw.ActionRow()
-        self.db_info_row.set_title("Statistics")
+        self.db_info_row.set_title("Local databases")
         self._update_db_info()
         group.add(self.db_info_row)
         
@@ -1257,7 +1267,7 @@ class BioModStackPanel(Adw.Application):
         button_box.append(btn_backup)
         
         btn_location = Gtk.Button(label="📂 Open Location")
-        btn_location.connect("clicked", lambda _: subprocess.Popen(["xdg-open", str(DB_PATH.parent)]))
+        btn_location.connect("clicked", lambda _: subprocess.Popen(["xdg-open", str(panel_database_paths()["Core"].parent)]))
         button_box.append(btn_location)
         
         row_buttons = Adw.ActionRow()
@@ -1267,38 +1277,36 @@ class BioModStackPanel(Adw.Application):
         return group
     
     def _update_db_info(self):
-        info = get_db_info()
-        if "error" in info:
-            self.db_info_row.set_subtitle(f"Error: {info['error']}")
-        else:
-            journal = info.get("journal_mode", "?")
-            busy = info.get("busy_timeout", "?")
-            self.db_info_row.set_subtitle(
-                f"Jobs: {info['jobs']:,}  |  Designs: {info['designs']:,}  |  Size: {info['size_mb']} MB  |  {journal.upper()}  |  busy {busy}ms"
-            )
-    
+        details = []
+        for store in get_db_info()["stores"]:
+            if not store["exists"]:
+                details.append(f"{store['name']}: not initialized ({store['path']})")
+            elif store.get("error"):
+                details.append(f"{store['name']}: {store['error']}")
+            else:
+                sequences = f" · {store['sequences']} sequences" if "sequences" in store else ""
+                details.append(f"{store['name']}: ready · {store['tables']} tables{sequences}")
+        self.db_info_row.set_subtitle("\n".join(details))
+        self.db_info_row.set_subtitle_lines(0)
+
     def _on_backup_db(self, button):
-        if not DB_PATH.exists():
-            show_notification("Error", "Database not found")
-            return
-        
-        backup_dir = PROJECT_ROOT / "backups"
-        backup_dir.mkdir(exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = backup_dir / f"biomodstack_backup_{timestamp}.db"
-        
+        paths = panel_database_paths()
+        backup_dir = paths["Core"].parent / "backups" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         try:
-            # Load the stdlib leaf, not services.__init__ (API/science imports).
             import runpy
             copy_sqlite_database = runpy.run_path(
                 str(API_ROOT / "services" / "sqlite_backup.py")
             )["copy_sqlite_database"]
-            copy_sqlite_database(DB_PATH, backup_path)
-            size_mb = backup_path.stat().st_size / (1024 * 1024)
-            show_notification("Backup Complete", f"Saved: {backup_path.name} ({size_mb:.1f} MB)")
-        except Exception as e:
-            show_notification("Backup Failed", str(e))
-    
+            available = [path for path in paths.values() if path.is_file()]
+            if not available:
+                raise FileNotFoundError("The selected runtime has no initialized databases")
+            backup_dir.mkdir(parents=True)
+            for path in available:
+                copy_sqlite_database(path, backup_dir / path.name)
+            show_notification("Backup Complete", f"Saved {len(available)} databases to {backup_dir}")
+        except Exception as exc:
+            show_notification("Backup Failed", str(exc))
+
     def _build_storage_compute_row(self) -> Gtk.Widget:
         row = Adw.ExpanderRow()
         row.set_title("Storage and compute")
@@ -1442,7 +1450,7 @@ class BioModStackPanel(Adw.Application):
             desktop_entry = f"""[Desktop Entry]
 Type=Application
 Name=BioModStack Panel
-Comment=BioModStack Control Panel
+Comment=BNS Plasmid Development Toolkit
 Exec=python3 {desktop_exec_arg(Path(__file__).resolve())}
 Icon={ICON_PATH}
 Terminal=false

@@ -1,4 +1,4 @@
-# Local NGS / MolBio distribution
+# BNS Plasmid Development Toolkit
 
 This checkout installs the MolBio Viewer, the NGS workspace, and their shared
 Projects. The home route opens MolBio. The native BioModStack Control Panel
@@ -21,8 +21,15 @@ refactor. Dependency locks and scientific parameter schemas are unchanged.
 
 Validation: frontend TypeScript/production build; existing MolBio sequence and
 NGS launch/clone tests; distribution API boundary tests; managed runtime health,
-source identity and browser checks. This does not qualify scientific execution:
+source identity and native launcher checks. Browser rendering has not been
+verified through the browser approval gate. This does not qualify scientific execution:
 model containers, tools and data must be provisioned and verified separately.
 
-This is a local derivative. No changes are pushed to the upstream BMS project.
+This edition is prepared on `bns-plasmid-development-toolkit`. No changes are pushed to the full upstream BMS branches.
 Do not replace it with the full upstream checkout through auto-deployment.
+
+
+The Control Panel preserves the explicitly selected managed Python/frontend
+installation roots while discarding inherited runtime, image and credential
+overrides. Database status and backup actions use the selected local lane's
+Core, MolBio, NGS and Experiment stores rather than a fixed production path.

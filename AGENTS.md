@@ -6,11 +6,12 @@ BioModStack is operated as a managed service. Keep the repository limited to cod
 
 ## Branch model
 
-- `test` is the sole development and integration branch.
-- `main` is the production/default branch.
-- Develop, test, and integrate on `test`; create a reviewed `test → main` promotion only when the release owner authorizes it.
-- Before any push, fetch the remote branch, rebase or otherwise reconcile with its current tip, run focused validation, and verify the remote SHA after the push.
-- Never force-push, reset shared branches, or bulk-merge historical experimental branches. Port only current, tested behavior.
+- This is **BNS Plasmid Development Toolkit**, the NGS/ONT/MolBio edition of BMS.
+- `bns-plasmid-development-toolkit` is this edition's integration branch. Work in isolated worktrees and integrate tested changes here.
+- Upstream `test` and `main` belong to the complete BioModStack product. Never push this trimmed implementation into either branch.
+- Keep the UI limited to Projects, MolBio and NGS plus the native runtime Control Panel. Shared persistence and scientific authorities remain dependencies.
+- Before a user-authorized publication, reconcile the target edition branch, run focused validation and verify the remote SHA after pushing. Do not force-push.
+- Scientific runtime qualification remains a separate required acceptance gate; a healthy viewer/API alone does not qualify NGS processing.
 
 ## Standard service operation
 
@@ -47,7 +48,7 @@ not `import.meta.env.DEV`, for Development-specific UI defaults.
 - **Development:** use `test`, development configuration, isolated development state, and local/managed development services. Validate behavior here first.
 - **Production:** use `main`, production configuration, managed persistent state, and the approved deployment path. Do not make direct source edits or ad-hoc service substitutions in production.
 - **Development sync interval is intentionally 60 seconds.** `biomodstack-dev-sync.timer` checks `origin/test` once every 60 seconds; that expected delay is not a fault.
-- Canonical Development is deployment-owned and must never be edited directly. Create a worktree from current `origin/test`, reconcile again immediately before integration, rerun affected tests, and push only a fast-forward update to `test`.
+- Canonical Development is deployment-owned and must never be edited directly. Create a worktree from this edition branch, reconcile again immediately before integration, rerun affected tests, and use only fast-forward integration. Upstream full-BMS auto-deployment must remain disabled for this edition.
 - A service is not deployed merely because code was pushed. Prove the deployed revision and runtime ownership separately.
 
 ## Tailnet / Tailscale Serve

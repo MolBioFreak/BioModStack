@@ -12,7 +12,7 @@ const NGSToolkit = lazy(() => import('./components/NGSToolkit').then((module) =>
 function RouteLoadingFallback() {
   return (
     <div className="flex min-h-[24rem] items-center justify-center px-6 text-sm text-content-secondary">
-      Loading BioModStack workspace…
+      Loading BNS workspace…
     </div>
   );
 }

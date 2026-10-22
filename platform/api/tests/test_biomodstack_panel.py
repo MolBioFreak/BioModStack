@@ -229,45 +229,20 @@ def test_panel_status_section_labels_dev_and_production_separately(monkeypatch) 
     assert [row.title for row in group.rows[:2]] == ["Development", "Production"]
 
 
-def test_bioxp_summary_requires_runtime_and_hardware_readiness(monkeypatch) -> None:
-    module = load_module(monkeypatch)
-    base = {
-        "connection": {
-            "configured": True,
-            "active": True,
-            "fresh": True,
-            "reachable": True,
-            "runtime_ready": False,
-            "hardware_ready": True,
-            "generation": 7,
-        }
-    }
-
-    assert module.summarize_bioxp_status(base).startswith("API REACHABLE / RUNTIME NOT READY")
-    base["connection"]["runtime_ready"] = None
-    assert module.summarize_bioxp_status(base).startswith("API REACHABLE / RUNTIME UNKNOWN")
-    base["connection"]["runtime_ready"] = True
-    base["connection"]["hardware_ready"] = False
-    assert module.summarize_bioxp_status(base).startswith("API REACHABLE / HARDWARE NOT READY")
-    base["connection"]["hardware_ready"] = None
-    assert module.summarize_bioxp_status(base).startswith("API REACHABLE / HARDWARE UNKNOWN")
-    base["connection"]["hardware_ready"] = True
-    assert module.summarize_bioxp_status(base).startswith("READY")
 
 
-def test_panel_periodic_refresh_calls_read_only_bioxp_refresh_without_obsolete_argument(monkeypatch) -> None:
+def test_panel_periodic_refresh_updates_local_runtime_and_databases(monkeypatch) -> None:
     module = load_module(monkeypatch)
     calls: list[str] = []
     panel = SimpleNamespace(
         _update_status_rows=lambda: calls.append("status"),
         _update_jobs_row=lambda: calls.append("jobs"),
         _update_db_info=lambda: calls.append("db"),
-        _update_bioxp_row=lambda: calls.append("bioxp"),
         _update_dev_updates_control=lambda: calls.append("updates"),
     )
 
     assert module.BioModStackPanel._refresh_status(panel) is True
-    assert calls == ["status", "jobs", "db", "bioxp", "updates"]
+    assert calls == ["status", "jobs", "db", "updates"]
 
 
 def test_panel_open_browser_uses_explicit_runtime_frontend_url(monkeypatch) -> None:
@@ -291,7 +266,7 @@ def test_panel_open_browser_uses_explicit_runtime_frontend_url(monkeypatch) -> N
     assert captured == ["http://127.0.0.1:18082/", "http://127.0.0.1:18080/bms/"]
 
 
-def test_panel_jobs_row_labels_raw_production_database_scope(monkeypatch) -> None:
+def test_panel_jobs_row_labels_local_database_scope(monkeypatch) -> None:
     module = load_module(monkeypatch)
 
     class Row:
@@ -306,7 +281,7 @@ def test_panel_jobs_row_labels_raw_production_database_scope(monkeypatch) -> Non
 
     module.BioModStackPanel._update_jobs_row(panel)
 
-    assert row.subtitle == "0 running  |  1 queued  |  1,733 raw production DB rows"
+    assert row.subtitle == "0 running  |  1 queued  |  1,733 local DB rows"
 
 
 def test_panel_source_checkout_owns_control_scripts_even_with_inherited_bms_home(monkeypatch) -> None:
@@ -553,3 +528,72 @@ def test_panel_contains_no_robot_host_lifecycle_or_remote_log_actions(monkeypatc
         "BIOXP_SERVER_URL",
     ):
         assert forbidden not in source
+
+
+def test_panel_preserves_installation_selectors_when_starting_after_reboot(monkeypatch):
+    module = load_module(monkeypatch)
+    selectors = {
+        "BMS_PYTHON_ROOT": "/installed/python",
+        "BMS_FRONTEND_ROOT": "/installed/frontend",
+        "BMS_FRONTEND_NODE": "/installed/node/bin/node",
+    }
+    for key, value in selectors.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("BMS_DB_PATH", "/stale/lane.db")
+    monkeypatch.setenv("BMS_SUDO_PASSWORD", "discard")
+    env = module.BioModStackPanel._script_env(SimpleNamespace())
+    assert {key: env[key] for key in selectors} == selectors
+    assert "BMS_DB_PATH" not in env
+    assert "BMS_SUDO_PASSWORD" not in env
+
+
+def test_panel_database_paths_use_the_development_lane(monkeypatch, tmp_path):
+    module = load_module(monkeypatch)
+    monkeypatch.setenv("BMS_RUNTIME_MODE", "dev")
+    monkeypatch.setattr(module, "resolve_runtime_paths", lambda **kwargs: {
+        "dev_data_root": str(tmp_path / "dev"), "dev_db_path": str(tmp_path / "dev/core.db"),
+        "data_root": str(tmp_path / "prod"), "db_path": str(tmp_path / "prod/core.db"),
+        "core_runtime_mode": False,
+    })
+    paths = module.panel_database_paths()
+    assert paths["Core"] == tmp_path / "dev/core.db"
+    assert paths["MolBio"] == tmp_path / "dev/molbio.db"
+    assert paths["NGS"] == tmp_path / "dev/molbio_ngs.db"
+    assert paths["Experiments"] == tmp_path / "dev/experiments.db"
+
+
+def test_panel_reports_molbio_records_and_does_not_create_missing_databases(monkeypatch, tmp_path):
+    import sqlite3
+    module = load_module(monkeypatch)
+    molbio = tmp_path / "molbio.db"
+    with sqlite3.connect(molbio) as connection:
+        connection.execute("CREATE TABLE nucleotide_sequences (id TEXT)")
+        connection.execute("INSERT INTO nucleotide_sequences VALUES ('saved-sequence')")
+    absent = tmp_path / "missing-ngs.db"
+    monkeypatch.setattr(module, "panel_database_paths", lambda: {"MolBio": molbio, "NGS": absent})
+    info = module.get_db_info()["stores"]
+    assert info[0]["sequences"] == 1
+    assert info[0]["tables"] == 1
+    assert not info[1]["exists"]
+    assert not absent.exists()
+
+
+def test_panel_backup_includes_committed_molbio_wal_records(monkeypatch, tmp_path):
+    import sqlite3
+    module = load_module(monkeypatch)
+    source = tmp_path / "molbio.db"
+    connection = sqlite3.connect(source)
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("CREATE TABLE nucleotide_sequences (id TEXT)")
+    connection.execute("INSERT INTO nucleotide_sequences VALUES ('saved-sequence')")
+    connection.commit()
+    monkeypatch.setattr(module, "panel_database_paths", lambda: {"Core": source, "MolBio": source})
+    notifications = []
+    monkeypatch.setattr(module, "show_notification", lambda *args: notifications.append(args))
+    module.BioModStackPanel._on_backup_db(SimpleNamespace(), None)
+    backups = list((tmp_path / "backups").glob("*/molbio.db"))
+    assert len(backups) == 1
+    with sqlite3.connect(backups[0]) as saved:
+        assert saved.execute("SELECT id FROM nucleotide_sequences").fetchone()[0] == 'saved-sequence'
+    assert notifications[-1][0] == 'Backup Complete'
+    connection.close()
