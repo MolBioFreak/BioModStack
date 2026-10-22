@@ -8,7 +8,6 @@ refers back to live BMS state; the share server serves these bytes verbatim.
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime
 from typing import Any, Iterable
 
@@ -17,8 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from experiment_models import (
     ExperimentAggregateHead,
-    ExperimentExternalEntityReceipt,
-    ExperimentLineageEdge,
     ExperimentRevision,
 )
 from molbio_models import (
@@ -138,13 +135,15 @@ class _Collector:
         )).all())
         return inputs, outputs
 
-    async def close_lineage(self) -> None:
+    async def close_lineage(self, *, include_scoped_outputs: bool = True) -> None:
         """Add ancestors until the revision/operation set is closed under lineage."""
-        # Scoped operations: their outputs are scoped results, inputs are ancestors.
+        # Item shares select operation results too. Domain-state shares select
+        # only attached revisions, not every output of a member operation.
         scoped_ops = [key for key, role in self.operation_role.items() if role == "scoped"]
         inputs, outputs = await self.edges(scoped_ops)
-        for row in outputs:
-            await self.add_revision(row.revision_id, "scoped")
+        if include_scoped_outputs:
+            for row in outputs:
+                await self.add_revision(row.revision_id, "scoped")
         for row in inputs:
             await self.add_revision(row.revision_id, "ancestor")
         pending = list(self.revisions)
@@ -182,7 +181,7 @@ class _Collector:
             snapshot = revision.snapshot if isinstance(revision.snapshot, dict) else {}
             record = {field: _json(snapshot.get(field)) for field in _SEQUENCE_FIELDS}
             source_file = snapshot.get("source_file")
-            record["source_file"] = os.path.basename(str(source_file)) if source_file else None
+            record["source_file"] = str(source_file).replace("\\", "/").rsplit("/", 1)[-1] if source_file else None
             meta = self.metadata.get(revision.document_id) or {}
             meta_applies = meta.get("revision_id") == revision.id
             sequences.append({
@@ -260,9 +259,7 @@ async def _collect_domain(
         if attached is None:
             continue
         document_ids.append(attached.document_id)
-        await collector.add_document_head(attached.document_id, "scoped")
-        if attached.id not in collector.revisions:
-            await collector.add_revision(attached.id, "ancestor")
+        await collector.add_revision(attached.id, "scoped")
     metadata_rows = (await collector.molbio.scalars(select(ProjectPlasmidMetadata).where(
         ProjectPlasmidMetadata.project_id == project_id,
         ProjectPlasmidMetadata.domain_experiment_id == domain_id,
@@ -272,23 +269,23 @@ async def _collect_domain(
         collector.metadata[row.sequence_id] = {
             "tags": list(row.tags or []), "notes": str(row.notes or ""), "revision_id": row.molecular_revision_id,
         }
-    operation_ids = (await experiment.execute(
-        select(ExperimentExternalEntityReceipt.entity_id).where(
-            ExperimentExternalEntityReceipt.workspace_id == project_id,
-            ExperimentExternalEntityReceipt.entity_kind == "molecular_operation",
-            select(ExperimentLineageEdge.id).where(
-                ExperimentLineageEdge.target_resource_id == ExperimentExternalEntityReceipt.id,
-                ExperimentLineageEdge.workspace_id == project_id,
-                ExperimentLineageEdge.source_resource_id == domain_id,
-            ).exists(),
-        ).limit(MAX_SCOPED_ITEMS + 1)
+    # Native state membership supports operation receipts. Project/Domain
+    # lineage receipts are historical observations, not this state's members.
+    operation_ids = (await native.execute(
+        select(MolBioNGSMemberReceipt.entity_id).distinct()
+        .join(MolBioNGSDomainStateMember, MolBioNGSDomainStateMember.receipt_id == MolBioNGSMemberReceipt.receipt_id)
+        .where(MolBioNGSDomainStateMember.state_revision_id == selected_id,
+               MolBioNGSMemberReceipt.entity_kind == "molecular_operation")
+        .limit(MAX_SCOPED_ITEMS + 1)
     )).scalars().all()
     if len(operation_ids) > MAX_SCOPED_ITEMS:
         raise ShareScopeError(413, "share_scope_too_large", "share scope exceeds the item limit")
     for operation_id in operation_ids:
         await collector.add_operation(operation_id, "scoped")
     return {"domain_experiment_id": domain_id, "state_revision_id": selected_id,
-            "sequence_count": len(set(document_ids)), "operation_count": len(operation_ids)}
+            "sequence_count": len(set(document_ids)), "operation_count": len(operation_ids),
+            "sequence_selection": "exact_state_member_revisions",
+            "operation_selection": "exact_state_member_operations"}
 
 
 async def _require_project(experiment: AsyncSession, project_id: str) -> ExperimentAggregateHead:
@@ -367,7 +364,12 @@ async def build_share_bundle(
     else:
         raise ShareScopeError(422, "invalid_share_scope", "unknown share scope kind")
 
-    await collector.close_lineage()
+    await collector.close_lineage(include_scoped_outputs=kind == "items")
+    summary["lineage_disclosure"] = (
+        "Full ancestor sequence records and operations are included, including "
+        "operation inputs and parent derivations outside the selected scope; "
+        "they are labelled ancestor."
+    )
     sequences, operations = await collector.serialize()
     if not sequences and not operations:
         raise ShareScopeError(422, "empty_share_scope", "the selected scope contains no shareable items")
