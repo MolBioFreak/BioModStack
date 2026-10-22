@@ -606,3 +606,23 @@ def test_panel_contains_no_robot_host_lifecycle_or_remote_log_actions(monkeypatc
         "BIOXP_SERVER_URL",
     ):
         assert forbidden not in source
+
+
+def test_panel_preserves_installation_selectors_when_starting_after_reboot(monkeypatch):
+    module = load_module(monkeypatch)
+    selectors = {
+        "BMS_PYTHON_ROOT": "/installed/python",
+        "BMS_FRONTEND_ROOT": "/installed/frontend",
+        "BMS_FRONTEND_NODE": "/installed/node/bin/node",
+        "BMS_MICROMAMBA_BIN": "/installed/annotation/bin/micromamba",
+        "BMS_MICROMAMBA_ROOT_PREFIX": "/installed/annotation/envs",
+        "BMS_PLANNOTATE_ENV": "plannotate",
+    }
+    for key, value in selectors.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("BMS_DB_PATH", "/stale/lane.db")
+    monkeypatch.setenv("BMS_SUDO_PASSWORD", "discard")
+    env = module.BioModStackPanel._script_env(SimpleNamespace())
+    assert {key: env[key] for key in selectors} == selectors
+    assert "BMS_DB_PATH" not in env
+    assert "BMS_SUDO_PASSWORD" not in env

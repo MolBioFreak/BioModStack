@@ -428,7 +428,17 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
         raising=False,
     )
 
+    monkeypatch.setenv("BMS_MICROMAMBA_BIN", "/installed/annotation/bin/micromamba")
+    monkeypatch.setenv("BMS_MICROMAMBA_ROOT_PREFIX", "/installed/annotation/envs")
+    monkeypatch.setenv("BMS_PLANNOTATE_ENV", "plannotate")
     units = services.render_user_units(project_root, runtime_mode="dev")
+    for assignment in (
+        "BMS_MICROMAMBA_BIN=/installed/annotation/bin/micromamba",
+        "BMS_MICROMAMBA_ROOT_PREFIX=/installed/annotation/envs",
+        "BMS_PLANNOTATE_ENV=plannotate",
+    ):
+        assert "Environment=" + assignment in units[services.API_SERVICE]
+
 
     assert "Environment=BMS_API_BIND_PORT=18279" in units[services.API_SERVICE]
     assert "Environment=BMS_DATA=/srv/biomodstack-dev" in units[services.API_SERVICE]
@@ -769,7 +779,8 @@ def test_mobile_update_publisher_unit_is_outside_both_runtime_targets(tmp_path: 
     assert "WantedBy=default.target" in unit
     assert f"EnvironmentFile=-{Path.home() / '.config' / 'biomodstack' / 'mobile-update-publisher.env'}" in unit
     assert "core-runtime.env" not in unit
-    assert f"Wants=network-online.target {services.TAILNET_GLOBAL_SERVICE}" in unit
+    assert "Wants=network-online.target" in unit
+    assert f"Wants=network-online.target {services.TAILNET_GLOBAL_SERVICE}" not in unit
     assert f"Before={services.TAILNET_GLOBAL_SERVICE}" in unit
     assert f"PartOf={services.DEV_TARGET_UNIT}" not in unit
     assert f"PartOf={services.TARGET_UNIT}" not in unit
@@ -780,7 +791,7 @@ def test_mobile_update_publisher_unit_is_outside_both_runtime_targets(tmp_path: 
     assert service_name not in development_units[services.DEV_TARGET_UNIT]
 
 
-def test_start_all_dev_enables_global_publisher_without_runtime_ownership(monkeypatch, tmp_path: Path) -> None:
+def test_start_all_dev_keeps_mobile_publisher_disabled(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "repo"
     calls: list[tuple[str, object]] = []
     monkeypatch.setattr(services, "install_profile_snapshot", lambda project_root=None: {"resolved": {}})
@@ -819,9 +830,6 @@ def test_start_all_dev_enables_global_publisher_without_runtime_ownership(monkey
     assert calls == [
         ("ensure", "dev"),
         ("wait", "http://127.0.0.1:18082/"),
-        ("systemctl", ("enable", services.MOBILE_UPDATE_PUBLISHER_SERVICE)),
-        ("systemctl", ("start", services.MOBILE_UPDATE_PUBLISHER_SERVICE)),
-        ("wait", services.MOBILE_UPDATE_PUBLISHER_HEALTH_URL),
     ]
 
 
@@ -1400,9 +1408,6 @@ def test_start_all_dev_mode_keeps_container_runtime_and_starts_only_dev_frontend
         ("wait", services.workflow_adapter_health_url_for_lane(services.DEVELOPMENT_LANE)),
         ("wait", services.runtime_api_health_url("dev", project_root=project_root)),
         ("wait", "http://127.0.0.1:18082/"),
-        ("systemctl", ("enable", services.MOBILE_UPDATE_PUBLISHER_SERVICE)),
-        ("systemctl", ("start", services.MOBILE_UPDATE_PUBLISHER_SERVICE)),
-        ("wait", services.MOBILE_UPDATE_PUBLISHER_HEALTH_URL),
     ]
 
 
@@ -1437,9 +1442,6 @@ def test_start_all_dev_mode_starts_missing_telemetry_when_api_and_frontend_are_a
         ("wait", services.workflow_adapter_health_url_for_lane(services.DEVELOPMENT_LANE)),
         ("wait", services.runtime_api_health_url("dev", project_root=project_root)),
         ("wait", services.runtime_frontend_url("dev")),
-        ("systemctl", ("enable", services.MOBILE_UPDATE_PUBLISHER_SERVICE)),
-        ("systemctl", ("start", services.MOBILE_UPDATE_PUBLISHER_SERVICE)),
-        ("wait", services.MOBILE_UPDATE_PUBLISHER_HEALTH_URL),
     ]
 
 
@@ -1740,13 +1742,6 @@ def test_restart_all_dev_waits_for_adapter_before_api_and_frontend(
             (
                 services.runtime_frontend_url("dev", project_root=project_root),
                 services.DEV_HTTP_WAIT_TIMEOUT_SECONDS,
-            ),
-        ),
-        (
-            "wait",
-            (
-                services.MOBILE_UPDATE_PUBLISHER_HEALTH_URL,
-                services.DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS,
             ),
         ),
     ]
