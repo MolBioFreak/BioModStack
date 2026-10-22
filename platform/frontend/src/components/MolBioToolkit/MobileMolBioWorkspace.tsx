@@ -51,6 +51,7 @@ interface MobileMolBioWorkspaceProps {
     onBack: () => void;
     onOpenConstructs: () => void;
     onSurfaceChange: (surface: MolBioMobileSurface) => void;
+    onShare?: () => void;
     constructs: ReactNode;
     map: ReactNode;
     sequence: ReactNode;
@@ -79,6 +80,7 @@ export function MobileMolBioWorkspace({
     onBack,
     onOpenConstructs,
     onSurfaceChange,
+    onShare,
     constructs,
     map,
     sequence,
@@ -141,6 +143,7 @@ export function MobileMolBioWorkspace({
                 onBack={onBack}
                 onOpenConstructs={onOpenConstructs}
                 onSurfaceChange={onSurfaceChange}
+                onShare={onShare}
             />
             <main
                 data-molbio-mobile-surface={activeSurface}
