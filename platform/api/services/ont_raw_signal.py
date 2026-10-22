@@ -441,9 +441,17 @@ def _descriptor_pod5_candidates(directory_fd: int, prefix: Path = Path()) -> lis
     with os.scandir(directory_fd) as entries:
         for entry in entries:
             relative = prefix / entry.name
-            info = entry.stat(follow_symlinks=False)
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue  # MinKNOW may retire an intermediate file while listing.
             if stat.S_ISDIR(info.st_mode):
-                child_fd = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
+                try:
+                    child_fd = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
+                except (PermissionError, FileNotFoundError):
+                    # Shared output roots also contain private vendor state
+                    # (e.g. crash dumps). It is outside this reader's authority.
+                    continue
                 try:
                     candidates.extend(_descriptor_pod5_candidates(child_fd, relative))
                 finally:

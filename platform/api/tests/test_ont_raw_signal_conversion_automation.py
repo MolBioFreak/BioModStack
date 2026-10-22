@@ -2780,3 +2780,24 @@ async def test_publication_rejects_expired_or_cancelled_claim_before_commit(
     with pytest.raises(ValueError, match="lease|cancellation"):
         await ont_raw_signal.publish_derivation(session, job, source, commands)
     assert session.commits == 0
+
+
+def test_external_candidates_ignore_unreadable_vendor_state(monkeypatch, tmp_path):
+    root = tmp_path / "minknow-data"
+    private = root / "private-state"
+    reads = root / "reads"
+    private.mkdir(parents=True)
+    reads.mkdir()
+    (reads / "closed.pod5").write_bytes(b"candidate")
+    (private / "hidden.pod5").write_bytes(b"not-authorized")
+    monkeypatch.setenv(ont_raw_signal.EXTERNAL_POD5_ROOT_ENV, str(root))
+    real_open = ont_raw_signal.os.open
+
+    def guarded_open(path, flags, *args, **kwargs):
+        if path == "private-state":
+            raise PermissionError("private vendor state")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(ont_raw_signal.os, "open", guarded_open)
+    candidates = ont_raw_signal.list_external_pod5_candidates()
+    assert [entry["display_name"] for entry in candidates] == ["reads/closed.pod5"]

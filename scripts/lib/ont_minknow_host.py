@@ -252,6 +252,14 @@ def normalize_position(position: Any) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - MinKNOW/grpc exceptions vary by version
         connection_error = str(exc)
 
+    # Manager.position.running means the position's MinKNOW service is up,
+    # not that sequencing is active. Only positive READY + no current protocol
+    # evidence makes an otherwise running position idle; unknown states block.
+    acquisition_state = str(acquisition_status.get("status") or "").upper()
+    if not connection_error and acquisition_state == "READY" and current_protocol is None:
+        running = False
+    state = str(acquisition_status.get("status") or state or "unknown")
+
     product_code = flow_cell.get("user_specified_product_code") or flow_cell.get("product_code")
     inferred_type = infer_ont_device_type(
         position_name=position_name,
