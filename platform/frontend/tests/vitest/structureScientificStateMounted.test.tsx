@@ -61,6 +61,76 @@ afterEach(async () => {
     }
     if (renderer) await close(); api.defaults.adapter = oldAdapter; vi.restoreAllMocks(); });
 
+
+it('ESMFold2 exact zero-based chemistry, inline MSA and chain conditioning survive inactive save/reopen and Axios', async () => {
+    const components = [
+        { id: 'A', type: 'protein', sequence: 'ACDE', modifications: [{ position: 0, ccd: 'MSE' }], msa: { sequences: ['ACDE', 'A-DE'] }, count: 2, copy_ids: ['A2', 'A1'] },
+        { id: 'D', type: 'dna', sequence: 'AC', modifications: [{ position: 0, ccd: '5CM' }] },
+        { id: 'R', type: 'rna', sequence: 'AC', modifications: [{ position: 1, ccd: 'PSU' }] },
+        { id: 'L', type: 'ligand', ccd: ['ATP'] },
+    ];
+    const bonds = [{ chain_id1: 'A2', res_idx1: 0, atom_idx1: 0, chain_id2: 'L', res_idx2: 0, atom_idx2: 3 }];
+    const distograms = [{ chain_id: 'A2', distogram: [[0, 4], [4, 0]] }];
+    await mount({ pred_method: 'esmfold2', complex_components: components, esmf_use_msa: false, run_frustrampnn: false,
+        esmf_covalent_bonds: bonds, esmf_distogram_conditioning: distograms });
+    await change('ESMFold2 entity 1 modification 1 position', '1');
+    await change('ESMFold2 bond 1 atom_idx2', '0');
+    await change('ESMFold2 distogram 1 row 1 column 2', '6');
+    await switchPredictor('boltz-2');
+    expect(preview().complex_components[0]).not.toHaveProperty('modifications');
+    expect(preview()).not.toHaveProperty('esmf_covalent_bonds');
+    await click('Add Boltz modification to A'); await change('Boltz entity 1 modification 1 CCD', 'SEP');
+    const saved = await save(); await close(); await mount(saved); await switchPredictor('esmfold');
+    expect(preview().complex_components[0]).toMatchObject({ modifications: [{ position: 1, ccd: 'MSE' }], msa: components[0].msa, copy_ids: ['A2', 'A1'] });
+    expect(preview().complex_components.slice(1)).toMatchObject(components.slice(1));
+    await click('Launch Prediction'); expect(posts).toHaveLength(1);
+    expect(posts[0].params.esmf_covalent_bonds[0]).toMatchObject({ atom_idx1: 0, atom_idx2: 0, res_idx1: 0 });
+    expect(posts[0].params.esmf_distogram_conditioning[0].distogram).toEqual([[0, 6], [4, 0]]);
+    for (const key of ['covalent_bonds', 'constraint', 'templates', 'constraints', 'esmfold2_component_settings']) expect(posts[0].params).not.toHaveProperty(key);
+    await switchPredictor('boltz-2'); expect(preview().complex_components[0].modifications).toEqual([{ position: 1, ccd: 'SEP' }]);
+});
+it('ESMFold2 native ordered ID lists retain copy identity and explicit null MSA through cold reopen', async () => {
+    await mount({ pred_method: 'esmfold2', complex_components: [{ id: ['Z2', 'Z1'], type: 'protein', sequence: 'ACDE', msa: null, modifications: [{ position: 0, ccd: 'MSE' }] }, { id: ['L2', 'L1'], type: 'ligand', ccd: ['ATP'] }], esmf_use_msa: false, run_frustrampnn: false });
+    expect(preview().complex_components[0]).toMatchObject({ id: 'Z2', copy_ids: ['Z2', 'Z1'], msa: null });
+    expect(preview().complex_components[1]).toMatchObject({ id: 'L2', copy_ids: ['L2', 'L1'], ccd: ['ATP'] });
+    await change('ESMFold2 entity 1 copy IDs', 'Z1,Z2');
+    const saved = await save(); await close(); await mount(saved); await click('Launch Prediction');
+    expect(posts[0].params.complex_components[0]).toMatchObject({ copy_ids: ['Z1', 'Z2'], msa: null, modifications: [{ position: 0, ccd: 'MSE' }] });
+});
+
+it.each(['components', 'sequences'])('ESMFold2 native %s document clone retains ordered ID lists and task-level conditioning', async key => {
+    const bond = { chain_id1: 'B', res_idx1: 0, atom_idx1: 0, chain_id2: 'L', res_idx2: 0, atom_idx2: 1 };
+    const distogram = { chain_id: 'B', distogram: [[0]] };
+    await mount({ pred_method: 'esmfold2', esmf_use_msa: false, run_frustrampnn: false, complex_components: {
+        [key]: [{ id: ['B', 'A'], type: 'protein', sequence: 'ACDE', msa: null, modifications: [{ position: 0, ccd: 'MSE' }] }, { id: 'L', type: 'ligand', ccd: ['ATP'] }],
+        covalent_bonds: [bond], distogram_conditioning: [distogram],
+    } });
+    await change('ESMFold2 entity 1 copy IDs', 'B,A');
+    const saved = await save(); await close(); await mount(saved); await click('Launch Prediction');
+    expect(posts).toHaveLength(1);
+    expect(posts[0].params.complex_components[0]).toMatchObject({ id: 'B', copy_ids: ['B', 'A'], msa: null, modifications: [{ position: 0, ccd: 'MSE' }] });
+    expect(posts[0].params).toMatchObject({ esmf_covalent_bonds: [bond], esmf_distogram_conditioning: [distogram] });
+});
+
+it('fresh ESMFold2 controls submit explicit null and empty inline MSA without borrowing Boltz numeric positions', async () => {
+    await mount({ pred_method: 'boltz', complex_components: [{ id: 'A', type: 'protein', sequence: 'ACDE', modifications: [{ position: 1, ccd: 'SEP' }], msa: 'empty' }], boltz_use_msa: false, esmf_use_msa: false, run_frustrampnn: false });
+    await switchPredictor('esmfold'); expect(preview().complex_components[0]).not.toHaveProperty('modifications');
+    await click('Add ESMFold2 modification to A'); await change('ESMFold2 entity 1 modification 1 CCD', 'MSE');
+    await change('ESMFold2 entity 1 MSA mode', 'none');
+    expect(preview().complex_components[0]).toMatchObject({ modifications: [{ position: 0, ccd: 'MSE' }], msa: null });
+    await change('ESMFold2 entity 1 MSA mode', 'inline');
+    await click('Launch Prediction'); expect(posts[0].params.complex_components[0].msa).toEqual({ sequences: [] });
+});
+it('ESMFold2 sequence edits clear derived alignments but retain exact positional intent across saved reopen', async () => {
+    await mount({ pred_method: 'esmfold2', complex_components: [{ id: 'A', type: 'protein', sequence: 'ACDE', modifications: [{ position: 0, ccd: 'MSE' }], msa: { sequences: ['ACDE'] }, msa_path: 'inputs/old.a3m' }], esmf_use_msa: false, run_frustrampnn: false });
+    await act(async () => renderer.root.findAllByType('textarea').find(n => n.props.value === 'ACDE')!.props.onChange({ target: { value: 'ACDF' } }));
+    const saved = await save(); await close(); await mount(saved);
+    expect(preview().complex_components[0]).not.toHaveProperty('msa');
+    expect(preview().complex_components[0]).not.toHaveProperty('msa_path');
+    expect(preview().complex_components[0].modifications).toEqual([{ position: 0, ccd: 'MSE' }]);
+    await click('Launch Prediction'); expect(posts).toHaveLength(1);
+});
+
 it('Boltz native dialect controls preserve copy order, chemistry, constraints, affinity and seed zero across switch/save/clone', async () => {
     const constraints = [{ bond: { atom1: ['P2', 2, 'CA'], atom2: ['L', 1, 'C1'] } }, { contact: { token1: ['P1', 3], token2: ['L', 'C2'], max_distance: 6, force: false } }, { pocket: { binder: 'L', contacts: [['P1', 4]], max_distance: 8 } }];
     const components = [{ id: 'P', type: 'protein', sequence: 'ACDE', count: 2, copy_ids: ['P1', 'P2'], cyclic: true, modifications: [{ position: 2, ccd: 'CSO' }], msa: 'empty' }, { id: 'L', type: 'ligand', ccd: ['ATP'], name: 'ligand' }];

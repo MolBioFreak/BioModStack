@@ -1,4 +1,5 @@
-import { api } from './api.js';
+import { api, type Job } from './api.js';
+import { submitPreparedSelectedMutation } from './binderContinuation';
 import type { CmLandscapePage, CmLandscapeRow } from '../components/conformationalMapping/conformationalMappingApi.js';
 import type { FrustraMpnnStructureMap } from '../components/conformationalMapping/frustraMpnnViewerMetrics.js';
 import { parseFrustraMpnnMultidimensionalPage, type FrustraMpnnResultPage } from '../components/frustraMpnnMultidimensionalModel.js';
@@ -598,7 +599,24 @@ export interface FrustraMpnnDesignSelection {
     source_sha256: string;
 }
 
-export interface FrustraMpnnAnalyzeRequest {
+export interface FrustraMpnnLaunchOptions {
+    launch_context_id?: string | null;
+    execution_target_id?: string | null;
+    idempotency_key?: string | null;
+}
+const launchTransport = (options: FrustraMpnnLaunchOptions, signal?: AbortSignal) => ({ signal, headers: {
+    'X-BMS-Skip-Launch-Context': '1',
+    ...(options.launch_context_id ? { 'X-BMS-Launch-Context-ID': options.launch_context_id } : {}),
+} });
+export type FrustraMpnnAnalysisSubmission = Pick<FrustraMpnnStructureDatasetFanout, 'child_jobs' | 'selected_structure_count' | 'structures_per_job'>;
+
+// Reuse the selected-action review owner. It submits prepared snapshots once;
+// read authoritative receipts after approval rather than replaying the mutation.
+async function submitFrustraAction<T>(action: () => Promise<T>, readApproved: (jobs: Job[]) => Promise<T>): Promise<T> {
+    const result = await submitPreparedSelectedMutation<{ value?: T; launched_jobs: Job[] }>(async () => ({ value: await action(), launched_jobs: [] }));
+    return result.value !== undefined ? result.value : readApproved(result.launched_jobs);
+}
+export interface FrustraMpnnAnalyzeRequest extends FrustraMpnnLaunchOptions {
     selections: FrustraMpnnDesignSelection[];
     frustrampnn_settings: FrustraMpnnRequestedSettings;
 }
@@ -3457,46 +3475,53 @@ export const analyzeFrustraMpnnUpload = async (
     file: File,
     settings: FrustraMpnnRequestedSettings,
     signal?: AbortSignal,
+    options: FrustraMpnnLaunchOptions = {},
 ): Promise<FrustraMpnnChildReceipt> => {
     const form = new FormData();
     form.append('pdb_file', file);
     form.append('frustrampnn_settings', JSON.stringify(parseFrustraMpnnRequestedSettings(settings)));
-    return parseFrustraMpnnChildReceipt((await api.post<unknown>(
-        '/api/frustrampnn/jobs/uploads/analyze',
-        form,
-        { signal },
-    )).data);
+    for (const key of ['launch_context_id', 'execution_target_id', 'idempotency_key'] as const) {
+        if (options[key] !== undefined && (options[key] !== null || key === 'execution_target_id')) form.append(key, options[key] ?? '');
+    }
+    return submitFrustraAction(async () => parseFrustraMpnnChildReceipt((await api.post<unknown>(
+        '/api/frustrampnn/jobs/uploads/analyze', form, launchTransport(options, signal),
+    )).data), jobs => fetchFrustraMpnnReceipt(jobs[0].id, signal));
 };
 
 export const analyzeFrustraMpnnDesigns = async (
     parentJobId: string,
     payload: FrustraMpnnAnalyzeRequest,
     signal?: AbortSignal,
-): Promise<FrustraMpnnStructureDatasetFanout> => {
+): Promise<FrustraMpnnAnalysisSubmission> => {
     const normalizedPayload = {
+        launch_context_id: payload.launch_context_id,
+        execution_target_id: payload.execution_target_id,
+        idempotency_key: payload.idempotency_key,
         selections: payload.selections,
         frustrampnn_settings: parseFrustraMpnnRequestedSettings(payload.frustrampnn_settings),
     };
-    return parseFrustraMpnnStructureDatasetFanout((
-    await api.post<unknown>(
-        `/api/frustrampnn/jobs/${encodeURIComponent(parentJobId)}/analyze`,
-        normalizedPayload,
-        { signal },
-    )
-    ).data);
+    return submitFrustraAction<FrustraMpnnAnalysisSubmission>(async () => parseFrustraMpnnStructureDatasetFanout((
+        await api.post<unknown>(`/api/frustrampnn/jobs/${encodeURIComponent(parentJobId)}/analyze`, normalizedPayload, launchTransport(payload, signal))
+    ).data), async jobs => {
+        const receipts = await Promise.all(jobs.map(job => fetchFrustraMpnnReceipt(job.id, signal)));
+        return { child_jobs: receipts.map(receipt => ({ ...receipt, structure_count: receipt.candidates.length })),
+            selected_structure_count: payload.selections.length,
+            structures_per_job: payload.frustrampnn_settings.batching_enabled ? payload.frustrampnn_settings.structures_per_job : 1 };
+    });
 };
 
 export const reanalyzeFrustraMpnn = async (
     childJobId: string,
     settings: FrustraMpnnRequestedSettings,
     signal?: AbortSignal,
-): Promise<FrustraMpnnChildReceipt> => parseFrustraMpnnChildReceipt((
+    options: FrustraMpnnLaunchOptions = {},
+): Promise<FrustraMpnnChildReceipt> => submitFrustraAction(async () => parseFrustraMpnnChildReceipt((
     await api.post<unknown>(
         `/api/frustrampnn/jobs/${encodeURIComponent(childJobId)}/reanalyze`,
-        { frustrampnn_settings: parseFrustraMpnnRequestedSettings(settings) },
-        { signal },
+        { ...options, frustrampnn_settings: parseFrustraMpnnRequestedSettings(settings) },
+        launchTransport(options, signal),
     )
-).data);
+).data), jobs => fetchFrustraMpnnReceipt(jobs[0].id, signal));
 
 export const fetchFrustraMpnnReceipt = async (childJobId: string, signal?: AbortSignal): Promise<FrustraMpnnChildReceipt> => parseFrustraMpnnChildReceipt((
     await api.get<unknown>(

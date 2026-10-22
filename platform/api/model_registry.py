@@ -1210,6 +1210,7 @@ def selected_execution_metadata(model_id: str, mode: str, effective_params: Dict
                 helpers.extend(('prepare_protenix_constraints.py', 'protenix_constraint_utils.py', 'write_structure_producer_manifest.py',
                     'extract_target_templates.py', 'prepare_protenix_exact_templates.py', 'finalize_target_geometry.py'))
         elif predictor == 'boltz2':
+            helpers.extend(('run_boltz_wrapper.py', 'lib/boltz_fidelity.py'))
             helpers.append('write_structure_producer_manifest.py' if complex_input else
                            'write_sequence_producer_manifest.py')
             if complex_input:

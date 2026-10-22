@@ -40,7 +40,12 @@ def test_fampnn_complete_effective_controls_and_falsey_values(tmp_path):
                   fampnn_seed=0, fampnn_presort_by_length=False, fampnn_seq_only=False,
                   fampnn_repack_last=True, fampnn_exclude_cys=False, fampnn_batch_size=3,
                   fampnn_scn_num_steps=7, fampnn_extra_config='',
-                  fampnn_analysis_declaration={'scope': 'old'})
+                  fampnn_analysis_declaration={'scope': 'old'},
+                  antibody_design_mode='custom', antibody_design_loops=['H3'],
+                  protect_vhh_tetrad=False, antibody_chains='H,L',
+                  lock_target_chains=True, lock_antibody_framework=False,
+                  manual_mutation_fixed_positions_json='{"H": ["42A"]}',
+                  vhh_mode=False, antibody_format='scfv')
     contract = {'core_protein_scientific_contract': 1,
                 'fampnn_analysis_declaration': {'scope': 'producer-owned'}}
     child = project(tmp_path, params, 'fampnn', contract)

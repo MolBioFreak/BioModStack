@@ -14,7 +14,7 @@ export interface ProtenixComponent {
     count?: number;
     copy_ids?: string[];
     modifications?: ProtenixModification[];
-    ccd?: string;
+    ccd?: string | string[];
     smiles?: string;
     ligand_file?: string;
     ion?: string;

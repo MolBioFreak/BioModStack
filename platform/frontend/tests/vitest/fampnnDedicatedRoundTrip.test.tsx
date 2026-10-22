@@ -2,7 +2,7 @@ import React, { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ submit: vi.fn(async (_body: any) => ({ data: {} })), iteration: vi.fn(async (_body: any) => ({ data: {} })), select: null as any }));
 vi.mock('../../src/lib/api', async original => ({ ...await original<typeof import('../../src/lib/api')>(), uploadImmutableFile: vi.fn(async () => ({ data: { path: 'inputs/protein_local_redesign/source.pdb' } })), uploadFile: vi.fn(async () => ({ data: { path: 'source.pdb' } })), submitJob: mocks.submit, fetchExecutionTargets: vi.fn(async () => ({ data: [] })), launchAntibodyIteration: mocks.iteration, completeCurrentLaunchContext: vi.fn(async () => null) }));
 vi.mock('../../src/components/useLiveGpuCatalog', () => ({ useLiveGpuCatalog: () => ({ gpuOptions: [], isLoading: false, isError: false }) }));
@@ -15,8 +15,13 @@ vi.mock('../../src/components/Rfd3SourceSelector', () => ({ Rfd3SourceSelector: 
 import { api } from '../../src/lib/api';
 import { AntibodyDenovoTemplate } from '../../src/components/AntibodyDenovoTemplate';
 import { ProteinLocalRedesignTemplate } from '../../src/components/ProteinLocalRedesignTemplate';
+import { execFileSync } from 'node:child_process';
+const catalogs = JSON.parse(execFileSync(process.env.BMS_TEST_PYTHON || 'python3', ['-c', "import json,yaml; from pathlib import Path; p=Path('../api/config/models'); print(json.dumps([yaml.safe_load((p/(x+'.yaml')).read_text()) for x in ['fampnn','proteinmpnn','protenix','boltz2']]))"], { encoding: 'utf8' }));
+const originalAdapter = api.defaults.adapter;
+beforeEach(() => { api.defaults.adapter = async config => ({ data: config.url?.startsWith('/api/models/') ? catalogs.find((m: any) => config.url === `/api/models/${m.id}`) ?? { id: config.url.split('/').at(-1), params: [], modes: [] } : [], status: 200, statusText: 'OK', headers: {}, config }); });
+const round = { schema_version: 1, enabled: true, sequence_design: { model_id: 'fampnn', params: { fampnn_seed: 0, seqs_per_design: 3 } }, prediction: { model_id: 'protenix', params: {} }, binder_chains: ['H'], target_chains: ['A'] };
 let root: Root; let client: QueryClient;
-afterEach(async () => { if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); localStorage.clear(); sessionStorage.clear(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(async () => { api.defaults.adapter = originalAdapter; if (root) await act(async () => root.unmount()); client?.clear(); document.body.replaceChildren(); localStorage.clear(); sessionStorage.clear(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 async function mount(node: React.ReactNode, refinement = false) {
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const host = document.createElement('div'); document.body.append(host); root = createRoot(host);
@@ -35,17 +40,20 @@ it('local validated launcher sends hydrated scope through its actual submit call
     sourceFetch();
     const overrides = { summary: [], mutation: [{ chain_id: 'A', author_number: 1, insertion_code: '' }] };
     await mount(<ProteinLocalRedesignTemplate onBack={() => {}} submissionModelId="protein_modification_experimental" initialValues={{ input_pdb: 'data/source.pdb', design_chains: 'A', redesign_ranges: 'A1-1', sequence_redesign_ranges: 'A1-1', seq_method: 'fampnn', fampnn_analysis_overrides: overrides }} />);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)); });
     await click('Launch RFD3 + Sequence + Validation');
+    await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); }); expect(mocks.submit).toHaveBeenCalledTimes(1); });
     expect(mocks.submit, document.body.textContent || '').toHaveBeenCalledTimes(1);
     expect(mocks.submit.mock.calls[0][0].fampnn_analysis_overrides).toEqual(overrides);
 });
-it('antibody de novo clone restores selected sequence stage and sends scope through submitJob', async () => {
+it('antibody de novo clone retains legacy scope in its draft and submits the independent native round', async () => {
     sourceFetch();
-    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ seq_design_fampnn: true, target_pdb: 'data/source.pdb', antigen_chains: 'A', epitope_residues: 'A1', fampnn_analysis_overrides: { mutation: [] } }} />);
-    expect(document.querySelector('[aria-label="Override mutation scope"]')).not.toBeNull();
-    await click('Launch De Novo Nanobody Pipeline');
+    await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ seq_design_fampnn: true, binder_round: round, target_pdb: 'data/source.pdb', antigen_chains: 'A', epitope_residues: 'A1', fampnn_analysis_overrides: { mutation: [] } }} />);
+    expect(JSON.parse(document.querySelector('[data-saved]')!.textContent!).fampnn_analysis_overrides).toEqual({ mutation: [] });
+    expect(document.body.textContent).toContain('Sequence');
+    await click('Launch RFantibody Batch');
     expect(mocks.submit, document.body.textContent || '').toHaveBeenCalledTimes(1);
-    expect(mocks.submit.mock.calls[0][0].params.fampnn_analysis_overrides).toEqual({ mutation: [] });
+    expect(mocks.submit.mock.calls[0][0].binder_round).toMatchObject(round);
 });
 it('mounted BoltzGen clone sends its own mode and saved native controls, not RFantibody defaults', async () => {
     sourceFetch();
@@ -101,17 +109,18 @@ it('mounted BC2 saved campaign keeps native draft separate and never submits ant
     await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ denovo_generator: 'bindcraft2', bindcraft2_settings: settings }} />);
     expect(document.querySelector('[aria-label="BindCraft2 campaign"]')).not.toBeNull();
     expect(document.querySelector('[aria-label="max_trajectories"]')).not.toBeNull();
-    expect(document.body.textContent).toContain('Model execution is not enabled.');
+    expect(document.body.textContent).toContain('Campaign execution is unavailable in this installation.');
     expect(document.body.textContent).not.toContain('Launch BindCraft2 campaign');
+    await click('Save campaign draft');
     expect(JSON.parse(document.querySelector('[data-saved]')!.textContent!)).toMatchObject({
         denovo_generator: 'bindcraft2', bindcraft2_settings: settings,
     });
     expect(document.body.textContent).not.toContain('Launch Antibody Refinement');
     expect(mocks.submit).not.toHaveBeenCalled();
     expect(mocks.iteration).not.toHaveBeenCalled();
-    expect(discovery).toHaveBeenCalledWith('/api/models/bindcraft2/native-settings', expect.any(Object));
+    expect(discovery.mock.calls[0][0]).toMatch(/^\/api\/models\/bindcraft2\/native-settings(?:\?|$)/);
     await act(async () => mocks.select({ name: 'reopened', params: { denovo_generator: 'bindcraft2', bindcraft2_settings: { max_trajectories: 0, trajectory_only: false } } }));
-    expect(JSON.parse(document.querySelector('[data-saved]')!.textContent!).bindcraft2_settings).toEqual({ max_trajectories: 0, trajectory_only: false });
+    expect(JSON.parse(document.querySelector('[data-saved]')!.textContent!).bindcraft2_settings).toMatchObject({ max_trajectories: 0, trajectory_only: false });
 });
 it('mounted available BC2 campaign submits its own saved native settings and placement surface', async () => {
     const settings = { max_trajectories: 2, targets: [{ name: 'target', target_path: 'inputs/target.pdb' }], trajectory_only: false };
@@ -125,8 +134,8 @@ it('mounted available BC2 campaign submits its own saved native settings and pla
     await click('Preview native campaign');
     await click('Launch BindCraft2 campaign');
     expect(mocks.submit).toHaveBeenCalledTimes(1);
-    expect(mocks.submit.mock.calls[0][0]).toEqual({ name: expect.any(String), model_id: 'bindcraft2', mode: 'campaign',
-        params: { bindcraft2_settings: settings, bc2_preview_digest: 'native-preview' } });
+    expect(mocks.submit.mock.calls[0][0]).toMatchObject({ name: expect.any(String), model_id: 'bindcraft2', mode: 'campaign',
+            params: { bindcraft2_settings: { ...settings, subbatch_size: null }, bc2_preview_digest: 'native-preview' }, binder_round: { enabled: true, sequence_design: { model_id: 'fampnn' }, prediction: { model_id: 'protenix' } } });
     expect(mocks.iteration).not.toHaveBeenCalled();
 });
 it('BC2 campaign shows a submission refusal without translating it into antibody refinement', async () => {
@@ -153,24 +162,26 @@ it('antibody refinement preserves mutation-only scope through actual iteration a
     expect(mocks.iteration).toHaveBeenCalledTimes(1);
     expect(mocks.iteration.mock.calls[0][0].param_overrides.fampnn_analysis_overrides).toEqual(mutation);
 });
-it('antibody rerun prefill arriving after mount restores FA-MPNN and its exact request', async () => {
+it('antibody rerun prefill arriving after mount restores the independent native FA-MPNN round', async () => {
     sourceFetch();
-    function Harness() { const [values, setValues] = React.useState<any>(); return <><button onClick={() => setValues({ seq_design_fampnn: true, target_pdb: 'data/source.pdb', antigen_chains: 'A', epitope_residues: 'A1', fampnn_analysis_overrides: mutation })}>Load rerun request</button><AntibodyDenovoTemplate onBack={() => {}} initialValues={values} /></>; }
+    function Harness() { const [values, setValues] = React.useState<any>(); return <><button onClick={() => setValues({ seq_design_fampnn: true, binder_round: round, target_pdb: 'data/source.pdb', antigen_chains: 'A', epitope_residues: 'A1', fampnn_analysis_overrides: mutation })}>Load rerun request</button><AntibodyDenovoTemplate onBack={() => {}} initialValues={values} /></>; }
     await mount(<Harness />);
     await click('Load rerun request');
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
-    expect(document.querySelector('[aria-label="Override mutation scope"]')).not.toBeNull();
-    await click('Launch De Novo Nanobody Pipeline');
-    expect(mocks.submit.mock.calls.at(-1)?.[0].params.fampnn_analysis_overrides).toEqual(mutation);
+    expect(JSON.parse(document.querySelector('[data-saved]')!.textContent!).fampnn_analysis_overrides).toEqual(mutation);
+    expect(document.body.textContent).toContain('Sequence');
+    await click('Launch RFantibody Batch');
+    expect(mocks.submit.mock.calls.at(-1)?.[0].binder_round).toMatchObject(round);
 });
-it('antibody de novo saved-template selection restores the FA-MPNN stage and request', async () => {
+it('antibody saved-template selection restores native FA-MPNN round without translating legacy scopes', async () => {
     sourceFetch();
     await mount(<AntibodyDenovoTemplate onBack={() => {}} />);
-    await act(async () => mocks.select({ name: 'saved', params: { seq_designer: 'fampnn', target_pdb: 'data/source.pdb', antigen_chains: 'A', epitope_residues: 'A1', fampnn_analysis_overrides: mutation } }));
+    await act(async () => mocks.select({ name: 'saved', params: { seq_designer: 'fampnn', binder_round: round, target_pdb: 'data/source.pdb', antigen_chains: 'A', epitope_residues: 'A1', fampnn_analysis_overrides: mutation } }));
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
-    expect(document.querySelector('[aria-label="Override mutation scope"]')).not.toBeNull();
-    await click('Launch De Novo Nanobody Pipeline');
-    expect(mocks.submit.mock.calls.at(-1)?.[0].params.fampnn_analysis_overrides).toEqual(mutation);
+    expect(JSON.parse(document.querySelector('[data-saved]')!.textContent!).fampnn_analysis_overrides).toEqual(mutation);
+    expect(document.body.textContent).toContain('Sequence');
+    await click('Launch RFantibody Batch');
+    expect(mocks.submit.mock.calls.at(-1)?.[0].binder_round).toMatchObject(round);
 });
 it('antibody saved template reload replaces mutation scope without copying protected declarations', async () => {
     await mount(<AntibodyDenovoTemplate onBack={() => {}} initialValues={{ seq_designer: 'fampnn', fampnn_analysis_overrides: mutation }} />, true);

@@ -98,62 +98,33 @@ process BatchBoltzValidation {
         export HOME="\$BOLTZ_HOME_FALLBACK"
     fi
     
-    boltz predict yamls/ \\
+    python3 ${params.code_root}/scripts/run_boltz_wrapper.py predict yamls/ \\
         --cache "\$BOLTZ_CACHE_DIR" \\
         --output_format pdb \\
-        --diffusion_samples 1 \\
-        ${params.boltz_max_parallel_samples ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
+        --write_full_pae \\
+        --diffusion_samples ${params.boltz_diffusion_samples != null ? params.boltz_diffusion_samples : (params.boltz_num_samples != null ? params.boltz_num_samples : 1)} \\
+        --recycling_steps ${params.boltz_recycling_steps != null ? params.boltz_recycling_steps : 3} \\
+        --sampling_steps ${params.boltz_sampling_steps != null ? params.boltz_sampling_steps : 50} \\
+        ${params.boltz_seed != null ? '--seed ' + params.boltz_seed : ''} \\
+        ${params.boltz_max_parallel_samples != null ? '--max_parallel_samples ' + params.boltz_max_parallel_samples : ''} \\
+        ${params.boltz_step_scale != null ? '--step_scale ' + params.boltz_step_scale : ''} \\
+        ${params.boltz_use_potentials ? '--use_potentials' : ''} \\
+        ${params.boltz_method ? '--method ' + params.boltz_method : ''} \\
         --out_dir . \\
+        ${params.boltz_extra_config ?: ''} \\
         2>&1 | tee boltz_batch.log
-        
-    # Move and rename outputs for align_boltz.py to find them
-    # Boltz outputs structure: boltz_results_yamls/predictions/{name}/{name}_model_0.pdb
-    # align_boltz.py expects: {name}_boltzpred.pdb and {name}_boltzpred.json
-    boltz_dirs=(boltz_results_yamls/predictions/*)
-    if [ \${#boltz_dirs[@]} -eq 0 ]; then
-        echo "[BatchBoltzValidation] ERROR: No Boltz prediction directories found in boltz_results_yamls/predictions" >&2
-        exit 1
-    fi
 
-    boltz_pdb_count=0
-    boltz_json_count=0
-    boltz_npz_count=0
-    for dir in "\${boltz_dirs[@]}"; do
-        [ -d "\$dir" ] || continue
-        name="\$(basename "\$dir")"
+    python3 ${params.code_root}/scripts/publish_boltz_samples.py \\
+        --native-root boltz_results_yamls/predictions --inputs yamls --output .
 
-        pdb_src="\$dir/\${name}_model_0.pdb"
-        if [ -f "\$pdb_src" ]; then
-            cp "\$pdb_src" "\${name}_boltzpred.pdb"
-            boltz_pdb_count=\$((boltz_pdb_count + 1))
-        fi
-
-        json_src=""
-        if [ -f "\$dir/confidence_\${name}_model_0.json" ]; then
-            json_src="\$dir/confidence_\${name}_model_0.json"
-        elif [ -f "\$dir/\${name}_model_0.json" ]; then
-            json_src="\$dir/\${name}_model_0.json"
-        fi
-
-        if [ -n "\$json_src" ]; then
-            cp "\$json_src" "\${name}_boltzpred.json"
-            boltz_json_count=\$((boltz_json_count + 1))
-        fi
-
-        npz_src="\$dir/pae_\${name}_model_0.npz"
-        if [ -f "\$npz_src" ]; then
-            cp "\$npz_src" "\${name}_boltzpred.pae.npz"
-            boltz_npz_count=\$((boltz_npz_count + 1))
-        fi
-    done
-
+    boltz_pdb_count=\$(find . -maxdepth 1 -name '*_boltzpred.pdb' | wc -l)
+    boltz_npz_count=\$(find . -maxdepth 1 -name '*_boltzpred.pae.npz' | wc -l)
     if [ "\$boltz_pdb_count" -eq 0 ]; then
         echo "[BatchBoltzValidation] ERROR: No Boltz PDB predictions were copied for RMSD alignment" >&2
         exit 1
     fi
-    echo "[BatchBoltzValidation] Prepared \$boltz_pdb_count Boltz PDBs, \$boltz_json_count confidence JSONs, and \$boltz_npz_count PAE NPZs for alignment"
     if [ "\$boltz_npz_count" -eq 0 ] || [ "\$boltz_npz_count" -lt "\$boltz_pdb_count" ]; then
-        echo "[BatchBoltzValidation] ERROR: Missing Boltz PAE NPZ sidecars; strict ipSAE requires one raw aligned-error artifact per prediction" >&2
+        echo "[BatchBoltzValidation] ERROR: Missing Boltz PAE NPZ sidecars" >&2
         exit 1
     fi
 
@@ -509,40 +480,28 @@ process BatchESMFold2Validation {
     path "predictions/*_esmfold2.pdb", emit: pdbs
     path "predictions/*_esmfold2.cif", emit: cifs
     path "predictions/*_esmfold2.metrics.json", emit: metrics
+    path "predictions/*.confidence.npz", optional: true, emit: native_confidence
+    path "raw_predictions/*/effective_settings.json", emit: effective_settings
     path "predictions/esmfold2_validation_summary.json", emit: summary
     path "esmfold2_batch.log", emit: log
 
     script:
-    def variant = params.esmfold2_validation_variant ?: params.esmf_model_variant ?: 'fast'
-    def modelId = params.esmf_model_id_or_path ?: ''
-    def modelArg = modelId ? "--model-id-or-path '${modelId}'" : ''
-    def loops = params.esmfold2_validation_num_loops ?: params.esmf_num_loops ?: 1
-    def steps = params.esmfold2_validation_num_sampling_steps ?: params.esmf_num_sampling_steps ?: 25
-    def samples = params.esmfold2_validation_num_diffusion_samples ?: params.esmf_num_diffusion_samples ?: 1
     def codeRoot = params.code_root ?: workflow.projectDir
+    def pdbList = pdbs instanceof Collection ? pdbs : [pdbs]
+    def msaList = msa_files instanceof Collection ? msa_files : [msa_files]
+    def payload = groovy.json.JsonOutput.toJson([pdbs: pdbList.collect { it.toString() }, msa_files: msaList.collect { it.toString() }, settings: params.findAll { k, v -> k.toString().startsWith('esmf_') || k.toString().startsWith('esmfold2_') || ['model_variant', 'model_id_or_path', 'local_files_only', 'num_loops', 'num_sampling_steps', 'num_diffusion_samples', 'seed', 'device', 'msa_path', 'msa_format', 'msa_max_sequences', 'msa_remove_insertions', 'complex_components', 'complex_components_json', 'complex_components_file', 'covalent_bonds', 'distogram_conditioning', 'pdb_chain_ids', 'pdb_include_dna_rna', 'dna_sequence', 'dna_chain_id', 'rna_sequence', 'rna_chain_id', 'ligand_smiles', 'ligand_ccd', 'ligand_chain_id'].contains(k) }]).bytes.encodeBase64().toString()
     """
     set -euo pipefail
     mkdir -p validation_designs raw_predictions predictions
     cp ${pdbs} validation_designs/
     : > esmfold2_batch.log
 
-    for design_pdb in validation_designs/*.pdb; do
-        design_name=\$(basename "\$design_pdb" .pdb)
-        echo "[BatchESMFold2Validation] folding \$design_name" | tee -a esmfold2_batch.log
-        python3 ${codeRoot}/scripts/run_esmfold2_inference.py \\
-            --pdb-sequence-path "\$design_pdb" \\
-            --pdb-chain-ids "" \\
-            --sequence-name "\$design_name" \\
-            --model-variant "${variant}" \\
-            ${modelArg} \\
-            --output-dir "raw_predictions/\$design_name" \\
-            --num-loops ${loops} \\
-            --num-sampling-steps ${steps} \\
-            --num-diffusion-samples ${samples} \\
-            --device cuda \\
-            --local-files-only true \\
-            2>&1 | tee -a esmfold2_batch.log
-    done
+    python3 - <<'ESM_BATCH_INPUTS'
+import base64
+from pathlib import Path
+Path('esmfold2_batch_inputs.json').write_bytes(base64.b64decode('${payload}'))
+ESM_BATCH_INPUTS
+    python3 ${codeRoot}/scripts/run_esmfold2_batch.py --validation-inputs esmfold2_batch_inputs.json --raw-root raw_predictions 2>&1 | tee -a esmfold2_batch.log
 
     python3 ${codeRoot}/scripts/normalize_esmfold2_validation.py \\
         --design-dir validation_designs \\

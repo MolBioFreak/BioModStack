@@ -251,6 +251,9 @@ def native_reference_fields(document, format):
     elif format == "boltz-yaml":
         for i, entry in enumerate(document.get("sequences", [])):
             yield from field(entry.get("protein", {}), "msa", ("sequences", i, "protein"), "msa")
+            ligand = entry.get("ligand", {})
+            if not ligand.get("smiles") and not ligand.get("ccd"):
+                yield from field(ligand, "path", ("sequences", i, "ligand"), "ligand")
         for i, entry in enumerate(document.get("templates", [])):
             for key in ("cif", "pdb"):
                 yield from field(entry, key, ("templates", i), "template")

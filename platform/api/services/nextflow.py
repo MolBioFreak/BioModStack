@@ -994,11 +994,12 @@ def _write_sequence_batch_payloads(
         if len(protein_components) == 1 and not any(
             params.get(key) for key in ('sequence_batch_component_id', 'binder_chains', 'primary_chain_id')
         ):
-            used_ids = {
-                str(component.get("id") or "").strip()
-                for component in normalized_components
-                if str(component.get("id") or "").strip()
-            }
+            used_ids = set()
+            for component in normalized_components:
+                identities = component.get('id') or []
+                identities = identities if isinstance(identities, list) else [identities]
+                used_ids.update(str(value).strip() for value in identities if str(value).strip())
+                used_ids.update(component.get('copy_ids') or [])
             implicit_component_id = ""
             for candidate_ord in range(ord("A"), ord("Z") + 1):
                 candidate = chr(candidate_ord)
@@ -1047,14 +1048,16 @@ def _write_sequence_batch_payloads(
             invalidated_annotations = {}
             for component in normalized_components:
                 copied = dict(component)
-                component_id = str(copied.get("id") or "").strip()
+                component_ids = copied.get('id') or []
+                component_ids = component_ids if isinstance(component_ids, list) else [component_ids]
+                component_ids = [str(value).strip() for value in component_ids] + list(copied.get('copy_ids') or [])
                 component_type = str(copied.get("type") or "").strip().lower()
-                if component_id == replace_component_id and component_type in {"protein", "peptide"}:
+                if replace_component_id in component_ids and component_type in {"protein", "peptide"}:
                     if copied.get('sequence') != entry['sequence']:
                         # These records describe the old sequence, not the new
                         # variant. Keep their original values in the manifest
                         # for provenance, without feeding stale conditioning.
-                        for key in ('modifications', 'msa', 'unpairedMsa', 'pairedMsa',
+                        for key in ('modifications', 'msa', 'msa_path', 'unpairedMsa', 'pairedMsa',
                                     'unpairedMsaPath', 'pairedMsaPath', 'templatesPath'):
                             if key in copied:
                                 invalidated_annotations[key] = copied.pop(key)
@@ -1207,29 +1210,30 @@ def _build_boltz_cp_sequence_entry(
             protein_payload["msa"] = str(component["msa_path"])
         elif not use_msa:
             protein_payload["msa"] = "empty"
+        for key in ("cyclic", "modifications"):
+            if key in component:
+                protein_payload[key] = component[key]
         return {"protein": protein_payload}
 
     if component_type == "dna":
         sequence = _normalize_boltz_cp_sequence(component.get("sequence"))
         if not sequence:
             raise ValueError(f"Boltz-CP DNA component {component_id[0]!r} is missing a sequence")
-        return {
-            "dna": {
-                "id": component_id,
-                "sequence": sequence,
-            }
-        }
+        payload = {"id": component_id, "sequence": sequence}
+        for key in ("cyclic", "modifications"):
+            if key in component:
+                payload[key] = component[key]
+        return {"dna": payload}
 
     if component_type == "rna":
         sequence = _normalize_boltz_cp_sequence(component.get("sequence"))
         if not sequence:
             raise ValueError(f"Boltz-CP RNA component {component_id[0]!r} is missing a sequence")
-        return {
-            "rna": {
-                "id": component_id,
-                "sequence": sequence,
-            }
-        }
+        payload = {"id": component_id, "sequence": sequence}
+        for key in ("cyclic", "modifications"):
+            if key in component:
+                payload[key] = component[key]
+        return {"rna": payload}
 
     if component_type in {"ligand", "small_molecule"}:
         ligand_payload: Dict[str, Any] = {"id": component_id}
@@ -6467,8 +6471,21 @@ def compile_nextflow_invocation(
         from services.protenix_chemistry import stage_component_files
         params = stage_component_files(params, output_dir=output_dir, write_input=plan_input)
     task_chemistry = {}
+    if model_id in {'esmfold2', 'esmfold2_experimental'} and isinstance(params.get('complex_components'), dict):
+        document = params['complex_components']
+        params['complex_components'] = document.get('components', document.get('sequences', []))
+        for key in ('covalent_bonds', 'distogram_conditioning'):
+            if key in document:
+                params.setdefault(key, document[key])
     if model_id == 'protenix' or params.get('complex_components'):
         task_chemistry = {key: params.pop(key) for key in ('covalent_bonds', 'constraint', 'constraints') if key in params}
+    if model_id == 'boltz2' or params.get('pred_method') in {'boltz', 'boltz_protenix'}:
+        task_chemistry.update({key: params.pop(key) for key in ('constraints', 'templates', 'properties') if key in params})
+    if model_id in {'esmfold2', 'esmfold2_experimental'}:
+        # Keep the ESM-native numeric atom/index dialect at its own compiler.
+        for key in ('covalent_bonds', 'distogram_conditioning'):
+            if key in params or 'esmf_' + key in params:
+                task_chemistry[key] = params.pop(key, params.pop('esmf_' + key, None))
     # Handle complex_components specially - write JSON file for BoltzFromComplex process
     complex_components = params.pop('complex_components', None)
     sequence_batch_json_path, complex_batch_dir, complex_components = _write_sequence_batch_payloads(
@@ -6903,6 +6920,7 @@ def compile_nextflow_invocation(
             runner_module = importlib.util.module_from_spec(runner_spec)
             runner_spec.loader.exec_module(runner_module)
             requested = dict(params)
+            requested.update(task_chemistry)
             requested.pop('esmf_requested_settings_json', None)
             if complex_components:
                 if requested.get('msa_path') or requested.get('esmf_msa_path'):
@@ -6916,6 +6934,8 @@ def compile_nextflow_invocation(
             raw_components = requested.get('complex_components_json') or requested.get('esmf_complex_components_json')
             if raw_components:
                 components_for_validation = json.loads(raw_components)
+            if isinstance(components_for_validation, dict):
+                components_for_validation = components_for_validation.get('components', components_for_validation.get('sequences', []))
             for component in components_for_validation:
                 if isinstance(component, dict) and component.get('msa_path'):
                     paths[component['msa_path']] = component['msa_path']
@@ -7002,7 +7022,7 @@ def compile_nextflow_invocation(
         if complex_components:
             esmfold2_complex_path = Path(output_dir) / "esmfold2_complex_components.json"
             plan_input(esmfold2_complex_path,
-                json.dumps({"components": complex_components}, indent=2).encode('utf-8'))
+                json.dumps({"components": complex_components, **task_chemistry}, indent=2).encode('utf-8'))
             params['esmf_complex_components_file'] = str(esmfold2_complex_path)
             # The canonical structure launcher includes the primary protein in complex_components.
             # Passing both --esmf_sequence and a components file would duplicate chain IDs in the

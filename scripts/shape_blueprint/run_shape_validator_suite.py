@@ -160,6 +160,8 @@ def _capture_native(validator: str, output_dir: Path, argv: list[str]) -> None:
         _write(output_dir / "shape_native_samples.json", {"samples": samples})
 
     if validator == "boltz2":
+        from lib.boltz_fidelity import install_native_chemistry_fix
+        install_native_chemistry_fix()
         import torch
         from boltz.data.write.writer import BoltzWriter
         original = BoltzWriter.write_on_batch_end

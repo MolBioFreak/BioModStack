@@ -248,10 +248,10 @@ def run_sequence_lane(
             ]
             if settings.get("mpnn_bias_AA_jsonl"):
                 command += ["--bias_AA_jsonl", str(settings["mpnn_bias_AA_jsonl"])]
-            if settings.get("fixed_positions"):
-                sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-                from proteinmpnn_native_binding import role_contract, feature_axes
-                roles = role_contract(backbone_path, settings)
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from proteinmpnn_native_binding import role_contract, feature_axes
+            roles = role_contract(backbone_path, settings)
+            if roles["fixed_positions"]:
                 axes = feature_axes(roles["source_residues"])
                 fixed = {tuple(value) for value in roles["fixed_positions"]}
                 indices = {chain: [axis.index(index + 1) + 1 for index, residue in enumerate(roles["source_residues"])
@@ -328,7 +328,11 @@ def run_sequence_lane(
             input_dir.mkdir()
             staged_backbone = input_dir / backbone_path.name
             staged_backbone.symlink_to(backbone_path.resolve())
-            command = _command_prefix(runner) + [
+            launcher = _command_prefix(runner)
+            if runner == DEFAULT_RUNNERS['fampnn']:
+                launcher = [sys.executable, str(Path(__file__).resolve().parents[1] / 'prep_fampnn_constraints_generic.py'),
+                            '--native-script', runner, '--']
+            command = launcher + [
                 f"seed={effective_seed}",
                 f"batch_size={settings['fampnn_batch_size']}",
                 f"checkpoint_path={settings.get('fampnn_checkpoint_path') or '/app/fampnn/weights/' + settings.get('fampnn_checkpoint', 'fampnn_0_3.pt')}",
@@ -372,7 +376,7 @@ def run_sequence_lane(
                 helper = Path(__file__).resolve().parents[1] / "prep_fampnn_constraints_generic.py"
                 constraints = output_dir / "constraints.csv"
                 subprocess.run([sys.executable, str(helper), "--input_dir", str(input_dir),
-                                "--out_csv", str(constraints), "--request_base64",
+                                "--prepared_dir", str(input_dir), "--out_csv", str(constraints), "--request_base64",
                                 base64.b64encode(_canonical({"sequence_design_mode": "design", "design_chain": "A", **settings})).decode()], check=True, env=run_environment)
                 command.append(f"fixed_pos_csv={constraints}")
             import shlex
@@ -397,11 +401,18 @@ def run_sequence_lane(
                 indexed[index] = path
             if sorted(indexed) != list(range(count)):
                 raise ValueError("FAMPNN did not emit the exact sample index set")
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from fampnn_shape_analysis import analyze_sample
             records = []
+            sample_analysis = []
             for index in sorted(indexed):
                 source_records = _read_fasta(_regular(indexed[index], "FAMPNN FASTA"))
                 if len(source_records) != 1 or source_records[0][0] != f"{backbone_path.stem}_sample{index}":
                     raise ValueError("FAMPNN FASTA header is invalid")
+                analysis = analyze_sample(runtime_dir, source_records[0][0], settings)
+                sample_analysis.append(analysis)
+                if not analysis['passes_psce_filter']:
+                    continue
                 records.append(
                     {
                         "engine": engine,
@@ -410,9 +421,10 @@ def run_sequence_lane(
                         "sample_index": index,
                         "sequence_name": f"{candidate_id}__fampnn__{index:03d}",
                         "sequence": _validate_sequence(source_records[0][1], expected_length),
-                        "metadata": {"header": source_records[0][0]},
+                        "metadata": {"header": source_records[0][0], "fampnn_analysis": analysis},
                     }
                 )
+            _write_json(output_dir / "fampnn_sample_analysis.json", {"samples": sample_analysis})
         source_backbone = output_dir / "source_backbone.pdb"
         retain_file(backbone_path, source_backbone)
         for record in records:

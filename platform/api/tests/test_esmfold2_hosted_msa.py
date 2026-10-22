@@ -93,7 +93,7 @@ def test_provider_to_native_staged_receipt_and_tamper(provider, tmp_path):
         runner.compile_workflow_request(swapped, {msa: str(relocated)})
     native = vars(runner.build_parser().parse_args(argv))
     assert (native['model_variant'], native['num_loops'], native['num_sampling_steps'], native['num_diffusion_samples']) == ('full', 3, 200, 1)
-    assert json.loads(native['complex_components_json'])[0]['msa_path'] == str(relocated)
+    assert json.loads(native['complex_components_json'])['components'][0]['msa_path'] == str(relocated)
     path = tmp_path / 'effective_settings.json'
     path.write_text(json.dumps(receipt))
     job = SimpleNamespace(provenance={'core_protein_requested_params': original, 'esmf_msa_preparation': authority})
@@ -128,9 +128,9 @@ def test_fast_hosted_fails_before_provider(provider, tmp_path, variant):
         params.pop('model_variant')
     else:
         params['model_variant'] = variant
-    with pytest.raises(ValueError, match='not MSA-conditioned'):
+    with pytest.raises(ValueError, match='Hosted ESMFold2 MSA policy requires Full'):
         JobCreate(name='fast', model_id='esmfold2', mode='predict', params=params)
-    with pytest.raises(ValueError, match='not MSA-conditioned'):
+    with pytest.raises(ValueError, match='Hosted ESMFold2 MSA policy requires Full'):
         prepare_launch_msa('esmfold2', {**params, 'core_protein_scientific_contract': 1}, tmp_path)
     assert not provider
 

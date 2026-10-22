@@ -855,7 +855,13 @@ process SpawnFAMPNNJobs {
     ] : [:]
     // Keep the complete model-owned effective settings through child fan-out.
     // In particular, explicit zero and nullable pSCE are not fallback requests.
-    def modelParams = params.findAll { key, value -> key.toString().startsWith('fampnn_') }
+    def modelParams = params.findAll { key, value ->
+        key.toString().startsWith('fampnn_') || [
+            'antibody_design_mode', 'antibody_design_loops', 'protect_vhh_tetrad',
+            'antibody_chains', 'lock_target_chains', 'lock_antibody_framework',
+            'manual_mutation_fixed_positions_json', 'vhh_mode', 'antibody_format'
+        ].contains(key.toString())
+    }
     if (!params.containsKey('fampnn_temperature')) modelParams.fampnn_temperature = 0.0001
     if (!params.containsKey('fampnn_num_steps')) modelParams.fampnn_num_steps = 500
     if (!params.containsKey('fampnn_psce_threshold')) modelParams.fampnn_psce_threshold = 0.15

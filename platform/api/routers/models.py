@@ -282,6 +282,9 @@ def _frustrampnn_discovery_metadata() -> dict:
 
 def _native_parameter_schema(model_id: str, mode_id: str) -> dict | None:
     """Discovery metadata only; scientific validation stays model-owned."""
+    if model_id in {'boltz2', 'esmfold2', 'esmfold2_experimental'} and mode_id in ('predict', 'complex'):
+        from services.structure_native_schemas import parameter_schema
+        return parameter_schema(model_id)
     if model_id == 'protenix' and mode_id in ('predict', 'complex'):
         from scripts.protenix_chemistry import parameter_schema
         return parameter_schema()

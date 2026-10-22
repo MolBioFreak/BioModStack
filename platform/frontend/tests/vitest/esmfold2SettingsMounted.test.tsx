@@ -86,13 +86,15 @@ it('populated actual launcher preserves native settings and molecules in draft/t
     expect(saved.complex_components).toHaveLength(5);
     expect(saved.complex_components.filter((v: any) => v.ccd === 'MN')).toHaveLength(2);
     expect(wire.preview.params).toMatchObject(expected);
-    expect(wire.preview.params.complex_components).toEqual(saved.complex_components);
+    const nativeComponents = structuredClone(wire.preview.params.complex_components);
+    expect(nativeComponents.filter((v: any) => v.ccd === 'MN')).toHaveLength(2);
     await click('Launch Prediction');
     expect(requests).toHaveLength(1); expect(requests[0].params).toMatchObject(expected);
-    expect(requests[0].params.complex_components).toEqual(saved.complex_components);
+    expect(requests[0].params.complex_components).toEqual(JSON.parse(JSON.stringify(nativeComponents)));
     if (process.env.BMS_ESMFOLD2_WIRE_DIR) writeFileSync(`${process.env.BMS_ESMFOLD2_WIRE_DIR}/frontend-mounted-wire.json`, JSON.stringify({ fixture: 'offline populated synthetic complex; not a live submission', draft: saved, preview: wire.preview, submitted: requests[0] }, null, 2));
     await act(async () => renderer.unmount()); client.clear();
     await mount(saved);
+    expect(wire.preview.params.complex_components).toEqual(nativeComponents);
     expect(drafts.at(-1).editor_state).toMatchObject(expected);
     expect(wire.preview.params).toMatchObject(expected);
     const msaToggle = renderer.root.findAllByType('label').find(n => text(n) === 'Use ESMFold2 MSA')!.findByType('input');
@@ -114,7 +116,7 @@ it('native presets reveal actual counts, custom edits and invalid input block pr
 it('Fast plus MSA stays visibly selected but blocks preview/submit until Full is explicitly chosen', async () => {
     await mount({ ...fixture, model_variant: 'fast' });
     expect(drafts.at(-1).editor_state).toMatchObject({ model_variant: 'fast', esmf_use_msa: true });
-    expect(text(renderer.root)).toContain('Choose Full to use MSA');
+    expect(text(renderer.root)).toContain('Hosted MSA requires Full under BMS policy');
     expect(wire.preview).toBeNull();
     await click('Launch Prediction'); expect(requests).toHaveLength(0);
     await edit('Model Variant', 'full');

@@ -20,6 +20,8 @@ def component_copies(components):
     for comp in result:
         comp.setdefault('type', 'protein')
         comp.setdefault('id', 'A')
+        if comp.get('copy_ids'):
+            comp['id'] = list(comp['copy_ids'])
         if comp['type'] == 'ion' and 'smiles' not in comp:
             comp.setdefault('ccd', 'MG')
     used = {i for c in result for i in (c.get('id', []) if isinstance(c.get('id'), list) else [c.get('id')])}

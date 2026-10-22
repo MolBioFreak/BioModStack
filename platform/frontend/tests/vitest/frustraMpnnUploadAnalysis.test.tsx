@@ -1,12 +1,15 @@
 import React, { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '../../src/lib/api';
 import { CANONICAL_FRUSTRAMPNN_SETTINGS } from '../../src/components/frustrampnn/frustraMpnnSettingsState';
 import FrustraMpnnAnalysisControls from '../../src/components/FrustraMpnnAnalysisControls';
 
+const originalAdapter = api.defaults.adapter;
+beforeEach(() => { api.defaults.adapter = async config => ({ data: [], status: 200, statusText: 'OK', headers: {}, config }); });
+afterEach(() => { api.defaults.adapter = originalAdapter; window.history.replaceState({}, '', '/'); });
 const inspection = {
     source_models: [1],
     selected_source_model: 1,
@@ -110,6 +113,8 @@ describe('uploaded FrustraMPNN operator analysis', () => {
             candidates: [], results: [], structure_count: structureCount,
         });
         const receiptPolls: string[] = [];
+        const launchBodies: any[] = [];
+        window.history.replaceState({}, '', '/?launch_context_id=independent-destination');
         (api as unknown as { get: (url: string) => Promise<{ data: unknown }> }).get = async (url) => {
             const childId = ['child-1', 'child-2'].find((id) => url.includes(`/jobs/${id}/receipt`));
             if (childId) {
@@ -117,11 +122,12 @@ describe('uploaded FrustraMPNN operator analysis', () => {
                 const { structure_count: _structureCount, ...receipt } = childReceipt(childId, childId === 'child-1' ? 2 : 1);
                 return { data: { ...receipt, status: 'completed', completed_at: '2026-08-27T00:01:00Z' } };
             }
-            return { data: {} };
+            return { data: url === '/api/execution-targets' ? [] : {} };
         };
-        (api as unknown as { post: (url: string) => Promise<{ data: unknown }> }).post = async (url) => {
+        (api as unknown as { post: (url: string, body?: any) => Promise<{ data: unknown }> }).post = async (url, body) => {
             if (url.endsWith('/sources/inspect/upload')) return { data: inspection };
             if (url.endsWith('/settings/validate/upload')) return { data: validationPreview };
+            if (url.endsWith('/jobs/parent-1/analyze')) launchBodies.push(body);
             if (url.endsWith('/jobs/parent-1/analyze')) return { data: {
                 schema_name: 'bms.structure-dataset-fanout.v1', fanout_id: 'f'.repeat(64),
                 parent_job_id: 'parent-1', selected_structure_count: 3, structures_per_job: 2,
@@ -155,8 +161,15 @@ describe('uploaded FrustraMPNN operator analysis', () => {
             ));
             await settle(250);
             const launch = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Analyze 3 selected'))!;
+            await act(async () => {
+                const destination = container.querySelector<HTMLSelectElement>('[aria-label="FrustraMPNN destination"]')!;
+                destination.value = 'independent-destination'; destination.dispatchEvent(new Event('change', { bubbles: true }));
+                [...container.querySelectorAll('button')].find(button => button.textContent === 'Local')!.click();
+            });
             await act(async () => launch.click());
             await settle(100);
+            expect(launchBodies[0]).toMatchObject({ execution_target_id: null, launch_context_id: 'independent-destination' });
+            expect(launchBodies[0].frustrampnn_settings).not.toHaveProperty('execution_target_id');
             expect(container.textContent).toContain('2 scheduler children for 3 structures');
             expect(container.textContent).toContain('Child 1/2 · 2 structures');
             expect(container.textContent).toContain('Child 2/2 · 1 structure');

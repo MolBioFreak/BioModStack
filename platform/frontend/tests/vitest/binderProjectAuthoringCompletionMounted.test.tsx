@@ -1,3 +1,5 @@
+import '../../src/components/AntibodyDenovoTemplate';
+import '../../src/components/NativeBinderGeneration';
 import React, { act } from 'react';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -168,6 +170,7 @@ it('real parent four-generator round trip preserves native drafts and independen
     await edit('caliby_num_seqs_per_pdb', '9');
     await click('Change generation engine');
     await click('BindCraft2 campaign'); await click('Generation'); await edit('max_trajectories', '0');
+    await act(async () => { const format = document.querySelector<HTMLSelectElement>('[aria-label="Binder format / objective"]')!; format.value = 'antibody'; format.dispatchEvent(new Event('change', { bubbles: true })); }); await settle();
     await click('RFantibody Stack');
     await click('BoltzGen');
     await edit('Native binder job name', 'Boltz retained');

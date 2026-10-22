@@ -1,3 +1,5 @@
+import { FrustraMpnnLaunchControls } from './frustrampnn/FrustraMpnnLaunchControls';
+import type { FrustraMpnnLaunchOptions } from '../lib/frustraMpnnApi';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
@@ -131,6 +133,7 @@ export default function FrustraMpnnResultsViewer({
     const pendingRestoreInvocation = useRef<string | null>(null);
     const [selectedLandscapeKey, setSelectedLandscapeKey] = useState<string | null>(null);
     const [restoredPresentation, setRestoredPresentation] = useState<StructureScenePresentation | null>(null);
+    const [launchOptions, setLaunchOptions] = useState<FrustraMpnnLaunchOptions>({});
     const [frustrampnnSettings, setFrustrampnnSettings] = useState<FrustraMpnnRequestedSettings>(CANONICAL_FRUSTRAMPNN_SETTINGS);
 
     const receipt = useQuery({
@@ -421,7 +424,7 @@ export default function FrustraMpnnResultsViewer({
                 job_id: job.id,
                 invocation_id: selectedInvocation,
             });
-            return reanalyzeFrustraMpnn(job.id, frustrampnnSettings);
+            return reanalyzeFrustraMpnn(job.id, frustrampnnSettings, undefined, launchOptions);
         },
     });
     const newChildId = reanalysis.data?.child_job_id ?? null;
@@ -552,6 +555,7 @@ export default function FrustraMpnnResultsViewer({
                 {resultContext.canReanalyzePersistedInputs && detail.data && <details aria-label="FrustraMPNN reanalysis settings" className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
                     <summary className="cursor-pointer font-semibold">Reanalysis settings</summary>
                     <p className="mt-1 text-xs text-slate-500">Settings for the next analysis.</p>
+                    <FrustraMpnnLaunchControls value={launchOptions} onChange={setLaunchOptions} disabled={reanalysis.isPending} />
                     <FrustraMpnnSettingsPanel
                         value={frustrampnnSettings}
                         onChange={setFrustrampnnSettings}

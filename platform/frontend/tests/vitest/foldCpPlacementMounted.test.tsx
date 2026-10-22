@@ -1,3 +1,4 @@
+import '../../src/components/ExecutionPlanApproval';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';

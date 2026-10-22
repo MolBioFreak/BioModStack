@@ -1,3 +1,4 @@
+import '../../src/components/NativeBinderGenerationResults';
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -39,8 +40,9 @@ async function mount() {
     client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
     await act(async () => { tree = create(<MemoryRouter initialEntries={['/designs/parent']}><QueryClientProvider client={client}><ThemeProvider><Routes><Route path="/designs/:jobId" element={<ResultsViewer />} /></Routes></ThemeProvider></QueryClientProvider></MemoryRouter>); });
     const deadline = Date.now() + 10000;
-    while (!tree!.root.findAllByProps({ 'aria-label': 'Candidate data table' }).length && Date.now() < deadline) await flush();
-    expect(tree!.root.findAllByProps({ 'aria-label': 'Candidate data table' })).toHaveLength(1);
+    while (!text(tree!.root).includes('32 loaded') && Date.now() < deadline) await flush();
+    // Reopen can intentionally restore the exact-document Structure view.
+    expect(text(tree!.root)).toContain('32 loaded');
 }
 async function close() { await act(async () => tree?.unmount()); tree = undefined; client?.clear(); }
 beforeEach(() => {

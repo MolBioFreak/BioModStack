@@ -38,7 +38,7 @@ export function hydrateEsmfold2Settings(saved?: Record<string, unknown>): Esmfol
 }
 export function esmfold2SettingsError(settings: Esmfold2Settings): string | null {
     if (!['fast', 'full'].includes(settings.model_variant)) return 'Unsupported ESMFold2 model variant.';
-    if (settings.use_msa && settings.model_variant !== 'full') return 'ESMFold2 Fast is not MSA-conditioned. Choose Full to use MSA; your MSA selection has been preserved.';
+    if (settings.use_msa && settings.model_variant !== 'full') return 'Hosted MSA requires Full under BMS policy. Fast has no dedicated MSA encoder but accepts supplied MSA-derived features; your selection has been preserved.';
     if (!['smoke', 'standard', 'thorough', 'custom'].includes(settings.quality_preset)) return 'Unsupported ESMFold2 quality preset.';
     for (const [key, min, max] of [
         ['num_loops', 1, 12], ['num_sampling_steps', 1, 1000], ['num_diffusion_samples', 1, 8],

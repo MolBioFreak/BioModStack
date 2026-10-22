@@ -1,3 +1,4 @@
+import '../../src/components/ExecutionPlanApproval';
 import React from 'react';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
