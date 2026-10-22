@@ -4,6 +4,7 @@
 
 import { COLOR_PALETTES } from './sequenceViewerConstants';
 import type { ColorPaletteName } from './SequenceViewer';
+import { readableTextColor } from '../../lib/readableColors';
 
 interface VisibilityState {
     features: boolean;
@@ -158,7 +159,7 @@ export function VisibilityPanel({
                         ))}
                     </select>
                     <p className="text-xs text-slate-500 mt-1">
-                        {COLOR_PALETTES[colorPalette].description}
+                        {COLOR_PALETTES[colorPalette].description}. Sequence text adapts to the current theme for readability.
                     </p>
 
                     {/* Color preview */}
@@ -169,8 +170,8 @@ export function VisibilityPanel({
                                 className="flex-1 flex flex-col items-center"
                             >
                                 <div
-                                    className="w-6 h-6 rounded font-bold text-xs flex items-center justify-center text-black/60"
-                                    style={{ backgroundColor: COLOR_PALETTES[colorPalette].colors[base] }}
+                                    className="w-6 h-6 rounded font-bold text-xs flex items-center justify-center"
+                                    style={{ backgroundColor: COLOR_PALETTES[colorPalette].colors[base], color: readableTextColor('#000000', COLOR_PALETTES[colorPalette].colors[base]) }}
                                 >
                                     {base}
                                 </div>
