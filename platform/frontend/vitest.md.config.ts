@@ -187,6 +187,7 @@ export default defineConfig({
             './tests/vitest/projectManagerPage.test.tsx',
             './tests/vitest/projectManagerRevisionLifecycle.test.tsx',
             './tests/vitest/projectStandaloneWorkspace.test.tsx',
+            './tests/vitest/nativeProjectEntryPoints.test.tsx',
             './tests/vitest/molecularProjectExport.test.tsx',
             './tests/vitest/projectMolecularExportLive.test.tsx',
             './tests/vitest/projectNavigationRepair.test.tsx',

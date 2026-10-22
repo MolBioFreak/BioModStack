@@ -52,7 +52,7 @@ it.skipIf(!origin || !projectId || (!setup && (!experimentId || !domainId)) || !
                 label: 'Public QA plasmid', availability: 'available', revision: revision.revision_id,
                 historyJournal: [{ timestamp: '2026-10-22', label: 'QA annotation', summary: 'Recorded local journal preserved by Project export' }],
             }} destination={experimentId && domainId ? { globalExperimentId: experimentId, domainExperimentId: domainId, stateRevisionId: state?.current_state_revision_id } : undefined}
-            onClose={() => {}} onAttached={(_receipt, nextState) => { attachedState = nextState; }} /></QueryClientProvider></MemoryRouter>));
+            onClose={() => {}} onAttached={(_receipt, nextState, destination) => { attachedState = nextState; activeExperimentId = destination?.globalExperimentId; activeDomainId = destination?.domainExperimentId; }} /></QueryClientProvider></MemoryRouter>));
         async function until(check: () => boolean, timeout = 15000) {
             const deadline = Date.now() + timeout;
             while (!check()) {
@@ -62,31 +62,8 @@ it.skipIf(!origin || !projectId || (!setup && (!experimentId || !domainId)) || !
                 await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
             }
         }
-        if (setup) {
-            function button(text: string) { return [...host.querySelectorAll('button')].find((element) => element.textContent === text)!; }
-            async function setField(label: string, value: string) {
-                await act(() => {
-                    const field = [...host.querySelectorAll('label')].find((element) => element.textContent?.trim().startsWith(label))?.querySelector('input, textarea') as HTMLInputElement | HTMLTextAreaElement;
-                    Object.getOwnPropertyDescriptor(field instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype, 'value')!.set!.call(field, value);
-                    field.dispatchEvent(new Event('input', { bubbles: true }));
-                });
-            }
-            await until(() => Boolean(button('New experiment')));
-            await act(() => button('New experiment').click());
-            await until(() => Boolean(host.querySelector('[aria-labelledby="manager-action-title"]')));
-            await setField('Name', 'QA experiment created during export');
-            await setField('Objective', 'Verify native Project export from an empty Project');
-            await act(() => button('Save immutable revision').click());
-            await until(() => Boolean((host.querySelector('[aria-label="Attachment Global Experiment"]') as HTMLSelectElement)?.value));
-            activeExperimentId = (host.querySelector('[aria-label="Attachment Global Experiment"]') as HTMLSelectElement).value;
-            await act(() => button('Add NGS/MolBio workspace').click());
-            await until(() => Boolean(host.querySelector('[aria-labelledby="manager-action-title"]')));
-            await setField('Name', 'QA workspace created during export');
-            await setField('Objective', 'Verify native sequence membership and history');
-            await act(() => button('Save immutable revision').click());
-            await until(() => Boolean((host.querySelector('[aria-label="Attachment Domain Experiment"]') as HTMLSelectElement)?.value));
-            activeDomainId = (host.querySelector('[aria-label="Attachment Domain Experiment"]') as HTMLSelectElement).value;
-        }
+        expect(host.querySelector('[aria-label="Attachment Global Experiment"]')).toBeNull();
+        expect(host.textContent).not.toContain('Global Project');
         await until(() => [...host.querySelectorAll('button')].some((button) => button.textContent === 'Export to Project' && !button.disabled));
         if (includeHistory) await act(() => host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
         await act(() => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Export to Project')!.click());

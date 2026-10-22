@@ -4,10 +4,10 @@ import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
-    navigate: null as any, revision: vi.fn(), primer: {} as any, feature: {} as any, digest: {} as any, input: {} as any, header: {} as any, annotation: {} as any, visibility: {} as any, orfs: vi.fn(),
+    viewer: {} as any, navigate: null as any, revision: vi.fn(), primer: {} as any, feature: {} as any, digest: {} as any, input: {} as any, header: {} as any, annotation: {} as any, visibility: {} as any, orfs: vi.fn(),
     create: vi.fn(), update: vi.fn(), get: vi.fn(), catalog: vi.fn(), products: vi.fn(), analyze: vi.fn(), tmOptions: vi.fn(), demos: vi.fn(), annotationDownload: vi.fn(),
 }));
-vi.mock('../../src/components/MolBioToolkit/SequenceViewer', () => ({SequenceViewer:()=>null}));
+vi.mock('../../src/components/MolBioToolkit/SequenceViewer', () => ({SequenceViewer:(props:any)=>{mocks.viewer=props;return <div data-qa-sequence-viewer onContextMenu={props.onContextMenu}><button data-qa-select-range onClick={()=>props.onSelection({start:2,end:22})}>Select QA range</button></div>}}));
 vi.mock('../../src/components/MolBioToolkit/VisibilityPanel', () => ({VisibilityPanel:(props:any)=>{mocks.visibility=props;return null}}));
 vi.mock('../../src/components/MolBioToolkit/utils/orfs', () => ({findOpenReadingFrames:mocks.orfs}));
 vi.mock('../../src/components/MolBioToolkit/GCContentTrack', () => ({GCContentTrack:()=>null}));
@@ -30,7 +30,7 @@ vi.mock('../../src/components/experiments/GlobalExperimentContext', async () => 
 });
 vi.mock('../../src/components/MolBioToolkit/utils/annotationSources', async (original) => ({...await original<any>(),fetchAnnotationSourceStatus:vi.fn().mockResolvedValue({}),retrieveNcbiAnnotationSource:mocks.annotationDownload}));
 vi.mock('../../src/lib/restrictionAnalysis', async (original) => ({...await original<any>(),fetchRestrictionCatalogBrowse:mocks.catalog,fetchRestrictionProducts:mocks.products,fetchRestrictionAnalysisBatch:mocks.analyze}));
-vi.mock('../../src/lib/api', async (original) => ({...await original<any>(),fetchNucleotideSequences:vi.fn().mockResolvedValue({data:[]}),fetchNucleotideSequence:mocks.get,fetchMolecularRevision:mocks.revision,createNucleotideSequence:mocks.create,updateNucleotideSequence:mocks.update,fetchPrimerTmOptions:mocks.tmOptions}));
+vi.mock('../../src/lib/api', async (original) => ({...await original<any>(),fetchNucleotideSequences:vi.fn().mockResolvedValue({data:[]}),fetchNucleotideSequence:mocks.get,fetchMolecularRevision:mocks.revision,createNucleotideSequence:mocks.create,updateNucleotideSequence:mocks.update,fetchPrimerTmOptions:mocks.tmOptions,calculatePrimerTm:vi.fn().mockResolvedValue({data:[{tm:62,gc_percent:50,algorithm:'nn_santalucia_hicks_2004'}]})}));
 import { RECEIPT, SUMMARY } from './molBioRestrictionCatalogFixture';
 import { MolBioToolkitV2 } from '../../src/components/MolBioToolkit/MolBioToolkitV2';
 let root:Root, host:HTMLDivElement, client:QueryClient;
@@ -71,4 +71,33 @@ it('failed selection cannot publish a workspace or its URL', async () => {
  expect(mocks.header.sequenceData.sequence).toBe(priorSequence);
  expect(host.querySelectorAll('button[title="Close workspace"]')).toHaveLength(1);
  expect(host.querySelector('[data-route-search]')!.textContent).toBe(before);
+});
+
+
+it('keeps focus-view Quick Add above the viewer and opens working primer and feature dialogs', async () => {
+ await act(async()=>mocks.input.onCreateSequence({name:'Focus QA',sequence:'ACGT'.repeat(30),sequenceType:'dna',circular:true}));
+ await act(()=>host.querySelector<HTMLButtonElement>('button[title="Focus Viewer"]')!.click());
+ const focus = host.querySelector<HTMLElement>('[data-molbio-viewer-fullscreen="true"]')!;
+ expect(focus).toBeTruthy();
+ await act(()=>host.querySelector<HTMLButtonElement>('[data-qa-select-range]')!.click());
+ const viewer=host.querySelector('[data-qa-sequence-viewer]')!;
+ const layer=(element:Element)=>Number(element.className.match(/z-\[?(\d+)/)?.[1]??0);
+ for (const action of ['Configure Forward Primer…','Configure Reverse Primer…','Configure Marker / Feature…']) {
+  await act(()=>viewer.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:400,clientY:300,cancelable:true})));
+  const menu=host.querySelector('[role="menu"]')!;
+  expect(menu).toBeTruthy(); expect(layer(menu)).toBeGreaterThan(layer(focus));
+  expect(layer(host.querySelector('[aria-label="Close quick add menu"]')!)).toBeGreaterThan(layer(focus));
+  const item=[...menu.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent===action)!;
+  expect(item.disabled).toBe(false);
+  await act(()=>item.click());
+  const dialog=host.querySelector('[aria-labelledby="selection-action-dialog-title"]')!;
+  expect(dialog).toBeTruthy(); expect(layer(dialog.parentElement!)).toBeGreaterThan(layer(focus));
+  if(action.includes('Forward')) {
+   const input=dialog.querySelector('input')!;
+   await act(()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'QA forward');input.dispatchEvent(new Event('input',{bubbles:true}));});
+   await act(async()=>dialog.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+   expect(mocks.viewer.sequenceData.primers).toEqual(expect.arrayContaining([expect.objectContaining({name:'QA forward',strand:1})]));
+  } else await act(()=>dialog.querySelector<HTMLButtonElement>('[aria-label="Close creation dialog"]')!.click());
+  expect(host.querySelector('[data-molbio-viewer-fullscreen="true"]')).toBeTruthy();
+ }
 });

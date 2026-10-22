@@ -49,7 +49,7 @@ export default function NgsMolBioProjectHub({ presentation = 'inline' }: NgsMolB
             {hasScientificContext ? <DomainExperimentWorkspace /> : (
                 <div className="rounded-xl border border-dashed border-border-primary bg-surface-secondary p-6 text-center">
                     <h2 className="text-lg font-semibold text-content-primary">Choose an NGS/MolBio Project</h2>
-                    <p className="mt-2 text-sm text-content-secondary">Project creation, Experiment setup, and global links are managed in Project Manager.</p>
+                    <p className="mt-2 text-sm text-content-secondary">Choose a Project to organize sequences and NGS data, or work with a sequence below and use Add to Project.</p>
                 </div>
             )}
         </section>

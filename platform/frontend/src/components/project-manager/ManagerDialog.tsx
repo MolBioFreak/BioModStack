@@ -252,7 +252,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
     const selectedGlobalId = summary && selection ? globalExperimentForNode(summary, selection.node_key) : null;
     const domainContext = summary ? selectedDomainContext(summary) : null;
     const [name, setName] = useState('');
-    const [projectScope, setProjectScope] = useState<'global' | 'ngs_molbio_local'>('global');
+    const [projectScope, setProjectScope] = useState<'global' | 'ngs_molbio_local'>('ngs_molbio_local');
     const [description, setDescription] = useState('');
     const [objective, setObjective] = useState('');
     const [question, setQuestion] = useState('');
@@ -754,14 +754,6 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                         </>
                     ) : (
                         <>
-                            {mode === 'create_project' && <label className="block text-xs font-semibold text-content-secondary">Project type
-                                <select aria-label="Project type" value={projectScope} onChange={(event) => setProjectScope(event.target.value as 'global' | 'ngs_molbio_local')} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-sm text-content">
-
-                                    <option value="global">Global Project</option>
-                                    <option value="ngs_molbio_local">Standalone NGS/MolBio Project</option>
-                                </select>
-                                <span className="mt-1 block font-normal text-content-muted">Standalone NGS/MolBio Projects can be linked to a Global Project later.</span>
-                            </label>}
                             <label className="block text-xs font-semibold text-content-secondary">Name
                                 <input aria-label={mode === 'create_project' ? 'Project name' : 'Name'} autoFocus value={name} onChange={(event) => setName(event.target.value)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-sm text-content outline-none focus:border-accent focus:ring-2 focus:ring-accent/30" />
                             </label>

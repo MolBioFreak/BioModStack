@@ -34,6 +34,22 @@ installation roots while discarding inherited runtime, image and credential
 overrides. Database status and backup actions use the selected local lane's
 Core, MolBio, NGS and Experiment stores rather than a fixed production path.
 
+Projects expose MolBio, NGS, Add DNA sequence and Add NGS data record directly.
+Export to Project requires a Project only; a managed native workspace is reused
+or prepared through the existing connector. Multiple workspaces require an
+explicit selection. Global experiment setup and Global Project linking are not
+part of this edition's intake flow. New inventory workspaces carry no invented
+analysis capabilities, acceptance criteria or acquisition authorization.
+The public attachment catalogue exposes NGS/MolBio adapters only.
+
+The versioned `bns.ngs-data-record.v1` API at
+`/api/projects/{project_id}/ngs-data-records` stores operational intake in the
+existing append-only Project record authority. It accepts a typed format, use
+case and workflow stage, optional sample name, data location, notes, and uploaded
+Project input references. A data location is an operator reference, not verified
+artifact availability. An intake record or operator-recorded completion is not a
+scientific result or pass. Actual processing remains in the NGS runtime.
+
 Native auto-annotation uses the same pLannotate 2.0.0 explicit Conda lock and
 reference bundle as `docker/api.Dockerfile`. Install micromamba using the version
 and SHA256 in that recipe, create `plannotate` from
