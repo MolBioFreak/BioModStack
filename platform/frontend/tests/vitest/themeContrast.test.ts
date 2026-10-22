@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { readableTextColor } from '../../src/lib/readableColors';
+import { COLOR_PALETTES } from '../../src/components/MolBioToolkit/sequenceViewerConstants';
 
 /**
  * Theme contrast guard.
@@ -80,6 +82,33 @@ describe('theme contrast', () => {
             const secondary = tokens['--text-secondary'];
             if (!muted || !secondary) continue;
             expect(muted, `${block.name} muted must differ from secondary`).not.toBe(secondary);
+        }
+    });
+});
+
+
+describe('native MolBio and Project readability', () => {
+    it('keeps action and status text readable on every theme surface', () => {
+        for (const block of blocks) {
+            const tokens = { ...rootTokens, ...block.tokens };
+            for (const token of ['--text-action', '--text-success', '--text-warning', '--text-error']) {
+                expect(tokens[token], `${block.name} ${token}`).toBeTruthy();
+                for (const surface of [...SURFACES, '--card-bg', '--card-hover']) if (tokens[surface])
+                    expect(contrastRatio(tokens[token], tokens[surface]), `${block.name} ${token} on ${surface}`).toBeGreaterThanOrEqual(4.5);
+            }
+            expect(contrastRatio(tokens['--text-on-accent'], tokens['--accent-primary']), block.name).toBeGreaterThanOrEqual(4.5);
+        }
+    });
+    it('keeps every nucleotide palette readable in all 14 themes, including the selected region', () => {
+        for (const block of blocks) {
+            const tokens = { ...rootTokens, ...block.tokens };
+            const background = tokens['--bg-secondary'];
+            const foreground = tokens['--text-primary'];
+            const selected = '#' + [1,3,5].map((offset) => Math.round(parseInt(background.slice(offset, offset+2),16)*.92 + parseInt(foreground.slice(offset, offset+2),16)*.08).toString(16).padStart(2,'0')).join('');
+            for (const [palette, definition] of Object.entries(COLOR_PALETTES)) for (const [base, color] of Object.entries(definition.colors)) if (color) {
+                const adjusted = readableTextColor(color, background, 6.5);
+                for (const surface of [background, selected]) expect(contrastRatio(adjusted, surface), `${block.name} ${palette}/${base} on ${surface}`).toBeGreaterThanOrEqual(4.5);
+            }
         }
     });
 });

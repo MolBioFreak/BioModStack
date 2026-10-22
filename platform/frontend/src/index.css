@@ -28,6 +28,7 @@
 
   /* Semantic text colors */
   --color-content: var(--text-primary);
+  --color-content-primary: var(--text-primary);
   --color-content-secondary: var(--text-secondary);
   --color-content-muted: var(--text-muted);
   --color-text-primary: var(--text-primary);
@@ -84,8 +85,12 @@
   --control-track: #2a3855;
   --control-thumb: #83a7ff;
   --overlay-scrim: rgba(3, 7, 18, 0.76);
-  --text-on-accent: #071020;
   --shadow-card: 0 10px 28px rgba(2, 7, 20, 0.25);
+  --text-action: #83a7ff;
+  --text-on-accent: #000000;
+  --text-success: #54d8a2;
+  --text-warning: #ffb84a;
+  --text-error: #ff6c79;
 }
 
 /* Theme: Black - True black/charcoal for OLED and dark mode purists */
@@ -124,8 +129,12 @@
   --control-track: #252b33;
   --control-thumb: #54d6bf;
   --overlay-scrim: rgba(0, 0, 0, 0.78);
-  --text-on-accent: #04110e;
   --shadow-card: none;
+  --text-action: #54d6bf;
+  --text-on-accent: #000000;
+  --text-success: #4ad6a1;
+  --text-warning: #f2b13c;
+  --text-error: #ff6673;
 }
 
 
@@ -156,6 +165,11 @@
   --link-hover: #1d4ed8;
   --surface-control: #f8fafc;
   --surface-control-strong: #e2e8f0;
+  --text-action: #7c3aed;
+  --text-on-accent: #ffffff;
+  --text-success: #107837;
+  --text-warning: #9d5604;
+  --text-error: #ca2323;
 }
 
 /* Theme: Clean Light - Bright white with blue accents (no purple) */
@@ -194,8 +208,12 @@
   --control-track: #e8edf4;
   --control-thumb: #2768d8;
   --overlay-scrim: rgba(23, 32, 51, 0.34);
-  --text-on-accent: #ffffff;
   --shadow-card: 0 3px 14px rgba(27, 46, 78, 0.05);
+  --text-action: #2768d8;
+  --text-on-accent: #ffffff;
+  --text-success: #0c7e53;
+  --text-warning: #a05f00;
+  --text-error: #c53c4c;
 }
 
 /* Theme: Slate Dark - Dark gray with teal accents (no purple) */
@@ -225,6 +243,11 @@
   --link-hover: #7dd3fc;
   --surface-control: #334155;
   --surface-control-strong: #475569;
+  --text-action: #7cd8ce;
+  --text-on-accent: #000000;
+  --text-success: #78dc9c;
+  --text-warning: #f8be5a;
+  --text-error: #f9b7b7;
 }
 
 /* Theme: Desert - Warm adobe parchment with clay and mineral accents */
@@ -254,6 +277,11 @@
   --link-hover: #466459;
   --surface-control: #eadfcd;
   --surface-control-strong: #e2d5bf;
+  --text-action: #87502c;
+  --text-on-accent: #000000;
+  --text-success: #566145;
+  --text-warning: #7f5423;
+  --text-error: #8c4c3a;
 }
 
 /* Theme: Solarized Dark - Classic developer color scheme */
@@ -283,6 +311,11 @@
   --link-hover: #6cb9e6;
   --surface-control: #073642;
   --surface-control-strong: #0a4050;
+  --text-action: #61abde;
+  --text-on-accent: #000000;
+  --text-success: #9cad31;
+  --text-warning: #c3a031;
+  --text-error: #eb8886;
 }
 
 /* Theme: Nord - Arctic blue-gray palette */
@@ -312,6 +345,11 @@
   --link-hover: #8fbcbb;
   --surface-control: #3b4252;
   --surface-control-strong: #434c5e;
+  --text-action: #8fc4d3;
+  --text-on-accent: #000000;
+  --text-success: #abc395;
+  --text-warning: #ebcb8b;
+  --text-error: #dfb0b4;
 }
 
 /* Theme: Dracula - Gothic purple and pink */
@@ -341,6 +379,11 @@
   --link-hover: #a4f0ff;
   --surface-control: #343746;
   --surface-control-strong: #44475a;
+  --text-action: #c9a7fa;
+  --text-on-accent: #000000;
+  --text-success: #50fa7b;
+  --text-warning: #f1fa8c;
+  --text-error: #ff9a9a;
 }
 
 /* Theme: Forest - Deep woodland greens */
@@ -370,6 +413,11 @@
   --link-hover: #a5d6a7;
   --surface-control: #253024;
   --surface-control-strong: #324030;
+  --text-action: #61b965;
+  --text-on-accent: #000000;
+  --text-success: #8bc34a;
+  --text-warning: #cddc39;
+  --text-error: #ea8c8c;
 }
 
 /* Theme: Ember - Warm sunset oranges and reds */
@@ -399,6 +447,11 @@
   --link-hover: #ffb88c;
   --surface-control: #2d1c14;
   --surface-control-strong: #3d281c;
+  --text-action: #ff6b35;
+  --text-on-accent: #000000;
+  --text-success: #8bc34a;
+  --text-warning: #f7931e;
+  --text-error: #ff5a5a;
 }
 
 /* Theme: Retro Terminal - CRT workstation with phosphor mint and amber */
@@ -428,6 +481,11 @@
   --link-hover: #c7f2e6;
   --surface-control: #161b18;
   --surface-control-strong: #202823;
+  --text-action: #68e39b;
+  --text-on-accent: #000000;
+  --text-success: #74e5a2;
+  --text-warning: #d9a85f;
+  --text-error: #d97869;
 }
 
 /* Theme: Cyberpunk - Neon pink & cyan on deep purple */
@@ -457,6 +515,11 @@
   --link-hover: #67e8f9;
   --surface-control: #1a0f2e;
   --surface-control-strong: #2d1b4e;
+  --text-action: #f0abfc;
+  --text-on-accent: #000000;
+  --text-success: #22d3ee;
+  --text-warning: #fde047;
+  --text-error: #fb7185;
 }
 
 /* Theme: Ocean Depths - Deep blues with teal accents */
@@ -486,6 +549,11 @@
   --link-hover: #7dd3fc;
   --surface-control: #0f2744;
   --surface-control-strong: #1e3a5f;
+  --text-action: #14b8a6;
+  --text-on-accent: #000000;
+  --text-success: #2dd4bf;
+  --text-warning: #fbbf24;
+  --text-error: #f97d7d;
 }
 
 } /* End @layer base */
@@ -1318,4 +1386,125 @@ input[type="range"]::-webkit-slider-thumb {
 
 .ngs-readable-igv .igv-navbar {
   min-height: 40px;
+}
+
+/* Text accents need a different luminance from filled controls. The source
+   palettes remain color encodings; only UI text and sequence glyphs adapt. */
+.text-accent {
+  color: var(--text-action, var(--text-primary)) !important;
+}
+.bg-accent.text-white,
+.bg-accent .text-white {
+  color: var(--text-on-accent, #ffffff) !important;
+}
+
+:is([data-theme="light"], [data-theme="clean_light"], [data-theme="desert"]) :is(
+  .text-cyan-100,
+  .text-cyan-200,
+  .text-cyan-300,
+  .text-cyan-400,
+  .text-cyan-500,
+  .text-teal-100,
+  .text-teal-200,
+  .text-teal-300,
+  .text-teal-400,
+  .text-teal-500,
+  .text-sky-100,
+  .text-sky-200,
+  .text-sky-300,
+  .text-sky-400,
+  .text-sky-500,
+  .text-blue-100,
+  .text-blue-200,
+  .text-blue-300,
+  .text-blue-400,
+  .text-blue-500,
+  .text-purple-100,
+  .text-purple-200,
+  .text-purple-300,
+  .text-purple-400,
+  .text-purple-500,
+  .text-violet-100,
+  .text-violet-200,
+  .text-violet-300,
+  .text-violet-400,
+  .text-violet-500,
+  .text-indigo-100,
+  .text-indigo-200,
+  .text-indigo-300,
+  .text-indigo-400,
+  .text-indigo-500,
+  .text-pink-100,
+  .text-pink-200,
+  .text-pink-300,
+  .text-pink-400,
+  .text-pink-500,
+  .text-cyan-300\/70,
+  .text-cyan-100\/70,
+  .text-cyan-300\/80
+) {
+  color: var(--text-action) !important;
+}
+
+:is([data-theme="light"], [data-theme="clean_light"], [data-theme="desert"]) :is(
+  .text-green-100,
+  .text-green-200,
+  .text-green-300,
+  .text-green-400,
+  .text-green-500,
+  .text-emerald-100,
+  .text-emerald-200,
+  .text-emerald-300,
+  .text-emerald-400,
+  .text-emerald-500
+) {
+  color: var(--text-success) !important;
+}
+
+:is([data-theme="light"], [data-theme="clean_light"], [data-theme="desert"]) :is(
+  .text-amber-100,
+  .text-amber-200,
+  .text-amber-300,
+  .text-amber-400,
+  .text-amber-500,
+  .text-yellow-100,
+  .text-yellow-200,
+  .text-yellow-300,
+  .text-yellow-400,
+  .text-yellow-500
+) {
+  color: var(--text-warning) !important;
+}
+
+:is([data-theme="light"], [data-theme="clean_light"], [data-theme="desert"]) :is(
+  .text-red-100,
+  .text-red-200,
+  .text-red-300,
+  .text-red-400,
+  .text-red-500,
+  .text-rose-100,
+  .text-rose-200,
+  .text-rose-300,
+  .text-rose-400,
+  .text-rose-500
+) {
+  color: var(--text-error) !important;
+}
+
+/* Keep selected bases on the same readable surface and give labels a halo
+   where an imported feature color passes behind the text. */
+.sequence-viewer [data-testid="la-vz-selection-block"],
+.sequence-viewer .la-vz-selection {
+  fill: color-mix(in srgb, var(--text-primary) 8%, var(--bg-secondary)) !important;
+}
+.sequence-viewer .la-vz-selection-edge {
+  fill: var(--text-primary) !important;
+  stroke: var(--text-primary) !important;
+}
+.sequence-viewer .la-vz-annotation-label,
+.sequence-viewer .la-vz-translation-amino-acid-label {
+  paint-order: stroke;
+  stroke: var(--bg-secondary) !important;
+  stroke-width: 2.5px;
+  stroke-linejoin: round;
 }

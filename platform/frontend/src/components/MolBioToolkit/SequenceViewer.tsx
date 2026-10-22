@@ -22,7 +22,7 @@ import {
     installSeqVizTouchBridge,
     shouldEnableSeqVizTouchBridge,
 } from './utils/seqVizTouch';
-import { COLOR_PALETTES } from './sequenceViewerConstants';
+import { useSequencePalette } from './useSequencePalette';
 import {
     displayStrandForMoleculeOrientation,
     sequenceForDisplayStrand,
@@ -623,7 +623,7 @@ export function SequenceViewer({
     const [circularCentralIndex, setCircularCentralIndex] = useState(0);
     const [viewerSize, setViewerSize] = useState({ width: 0, height: 0 });
     const [nickingLabelOffsets, setNickingLabelOffsets] = useState<Record<string, { x: number; y: number }>>({});
-    const activePaletteColors = COLOR_PALETTES[colorPalette].colors as Record<string, string>;
+    const activePaletteColors = useSequencePalette(colorPalette) as Record<string, string>;
 
     const displayHighlightedRegions = useMemo(() => {
         if (!highlightedRegions || highlightedRegions.length === 0) {
