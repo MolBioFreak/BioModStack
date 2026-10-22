@@ -5,11 +5,14 @@ import base64
 import binascii
 import json
 from datetime import date
+from pathlib import PurePosixPath
 from typing import Any, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+from paths import resolve_allowed_path
 import rfc8785
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -354,6 +357,26 @@ class ResearchRecordRequest(StrictRequestModel):
     supersedes_record_id: str | None = None
 
 
+class NgsDataFile(StrictRequestModel):
+    name: str = Field(min_length=1, max_length=255)
+    path: str = Field(min_length=1, max_length=2048)
+    size: int = Field(ge=0)
+
+
+class NgsDataRecordRequest(StrictRequestModel):
+    """Operational intake; it never asserts scientific acceptance or job completion."""
+    schema_: Literal["bns.ngs-data-record.v1"] = Field(alias="schema")
+    record_key: UUID
+    title: str = Field(min_length=1, max_length=255)
+    sample_name: str = Field(default="", max_length=255)
+    data_format: Literal["fastq", "pod5", "bam", "fasta", "results", "other"]
+    use_case: Literal["sequence_identity", "clone_selection", "plasmid_screening", "plasmid_onboarding", "transcriptomics", "genomic_sequencing", "other"]
+    workflow_stage: Literal["planned", "acquired", "basecalled", "analysing", "review", "complete"]
+    data_location: str = Field(default="", max_length=2048)
+    notes: str = Field(default="", max_length=8192)
+    files: list[NgsDataFile] = Field(default_factory=list, max_length=50)
+
+
 def _error(exc: Exception) -> HTTPException:
     message = str(exc)
     if isinstance(exc, ConnectorUnavailable):
@@ -609,10 +632,13 @@ async def _records(
     kind: str | None,
     cursor: str | None,
     limit: int,
+    body_schema: str | None = None,
 ) -> dict[str, Any]:
     filters = [ExperimentResearchRecord.subject_resource_id == subject_resource_id]
     if kind is not None:
         filters.append(ExperimentResearchRecord.record_kind == kind)
+    if body_schema is not None:
+        filters.append(ExperimentResearchRecord.body.contains(f'"schema":"{body_schema}"'))
     if cursor is not None:
         anchor = await session.get(ExperimentResearchRecord, cursor)
         if anchor is None or anchor.subject_resource_id != subject_resource_id:
@@ -1945,6 +1971,66 @@ async def list_global_experiment_revisions(
         await _global_experiment(session, project_id, experiment_id)
         return await _revisions(session, experiment_id, cursor, limit)
     except ExperimentServiceError as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/{project_id}/ngs-data-records")
+async def list_ngs_data_records(
+    project_id: str,
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        await _project(session, project_id)
+        page = await _records(session, project_id, "observation", cursor, limit, "bns.ngs-data-record.v1")
+        return {"schema": "bns.ngs-data-record-list.v1", "items": [
+            {"id": item["id"], "created_at": item["created_at"], "author": item["author"],
+             "payload": NgsDataRecordRequest.model_validate_json(item["body"]).model_dump(mode="json", by_alias=True)}
+            for item in page["items"]
+        ], "next_cursor": page["next_cursor"]}
+    except ExperimentServiceError as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/{project_id}/ngs-data-records", status_code=status.HTTP_201_CREATED)
+async def append_ngs_data_record(
+    project_id: str,
+    payload: NgsDataRecordRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        actor = await _require_mutation_owner(request, session, resource_id=project_id)
+        await _project(session, project_id)
+        body = canonical_json(payload.model_dump(mode="json", by_alias=True))
+        existing = (await session.execute(select(ExperimentResearchRecord).where(
+            ExperimentResearchRecord.subject_resource_id == project_id,
+            ExperimentResearchRecord.record_kind == "observation",
+            ExperimentResearchRecord.body.contains(f'"record_key":"{payload.record_key}"'),
+        ))).scalars().first()
+        if existing is not None:
+            if existing.body != body:
+                raise HTTPException(409, detail="This record key already contains different data. Start a new record.")
+            record = _record_json(existing)
+        else:
+            for file in payload.files:
+                expected_root = PurePosixPath("inputs", "bns-projects", project_id)
+                relative = PurePosixPath(file.path)
+                if relative.parent != expected_root or ".." in relative.parts:
+                    raise HTTPException(422, detail="Uploaded files must belong to this Project's input directory.")
+                try:
+                    resolved = resolve_allowed_path(file.path)
+                    if resolved.parent != resolve_allowed_path(str(expected_root)) or not resolved.is_file() or resolved.stat().st_size != file.size:
+                        raise ValueError("missing file or changed size")
+                except (ValueError, OSError) as exc:
+                    raise HTTPException(422, detail="An uploaded input is missing or its size changed.") from exc
+            record = await _append_record_route(session, project_id=project_id, subject_resource_id=project_id,
+                payload=ResearchRecordRequest(record_kind="observation", body=body, author=actor))
+        return {"id": record["id"], "created_at": record["created_at"], "author": record["author"],
+                "payload": payload.model_dump(mode="json", by_alias=True)}
+    except ExperimentServiceError as exc:
+        await session.rollback()
         raise _error(exc) from exc
 
 

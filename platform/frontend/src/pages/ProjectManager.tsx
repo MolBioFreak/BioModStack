@@ -29,6 +29,7 @@ import { ProjectAttachmentDialog } from '../components/project-manager/ProjectAt
 import { ManagerDialog, type ManagerDialogMode } from '../components/project-manager/ManagerDialog';
 import { ProjectInspector, hasDomainWorkspace } from '../components/project-manager/ProjectInspector';
 import { DNASequenceProjectWorkspace } from '../components/project-manager/DNASequenceProjectWorkspace';
+import { NativeProjectTools } from '../components/project-manager/NativeProjectTools';
 import { ProjectTree } from '../components/project-manager/ProjectTree';
 import { RelationshipMap } from '../components/project-manager/RelationshipMap';
 import { RunPanel } from '../components/project-manager/RunPanel';
@@ -107,7 +108,7 @@ function selectedDomainIsProtein(summary: ProjectManagerReadModel): boolean {
         || payloadSchema === 'bms.protein-in-silico-experiment.v1';
 }
 
-export function NativeProjectDataPanel({ summary, stateRevisionId, onCreateExperiment, onCreateWorkspace, onSelectNode, actionsDisabled = false }: {
+export function NativeProjectDataPanel({ summary, stateRevisionId, onSelectNode, actionsDisabled = false }: {
     summary: ProjectManagerReadModel;
     stateRevisionId: string | null;
     actionsDisabled?: boolean;
@@ -116,7 +117,7 @@ export function NativeProjectDataPanel({ summary, stateRevisionId, onCreateExper
     onSelectNode: (nodeKey: string, nodeType: string, subjectId: string | null) => void;
 }) {
     const context = useMemo(() => nativeProjectContext(summary), [summary]);
-    const isNativeProject = summary.project.project_scope === 'ngs_molbio_local' || context !== null;
+    const isNativeProject = true;
     const stateQuery = useQuery({
         queryKey: ['project-manager', 'native-domain-state', context?.domainExperimentId ?? null],
         queryFn: () => fetchMolBioNgsDomainState(context?.domainExperimentId as string),
@@ -140,21 +141,15 @@ export function NativeProjectDataPanel({ summary, stateRevisionId, onCreateExper
 
     if (!isNativeProject) return null;
     if (!context) {
-        const experiments = summary.tree.nodes.filter((node) => node.node_type === 'global_experiment');
         const workspaces = summary.tree.nodes.filter((node) => node.node_type === 'domain_experiment');
-        const selectedExperiment = globalExperimentForNode(summary, summary.selection.node_key);
         return (
             <section className="m-4 rounded-xl border border-border-primary bg-surface-secondary p-5" aria-label="Project workspace setup">
-                <h2 className="text-base font-semibold text-content">{workspaces.length ? 'Choose a workspace' : 'Set up this project'}</h2>
+                <h2 className="text-base font-semibold text-content">{workspaces.length ? 'Choose a workspace' : 'DNA sequences'}</h2>
                 <p className="mt-2 text-sm text-content-secondary">{workspaces.length
                     ? 'Select the workspace whose DNA sequences and NGS data you want to open.'
-                    : experiments.length
-                        ? 'Select an experiment and add its NGS/MolBio workspace to organize DNA sequences and NGS data.'
-                        : 'Create an experiment, then add its NGS/MolBio workspace to organize DNA sequences and NGS data.'}</p>
+                    : 'No DNA sequences attached yet. Use Add DNA sequence above, or export a saved plasmid from MolBio to this Project.'}</p>
                 <div className="mt-4 flex flex-wrap gap-2">
-                    {summary.allowed_actions.includes('create_global_experiment') && <button type="button" disabled={actionsDisabled} onClick={onCreateExperiment} className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white">New experiment</button>}
-                    {selectedExperiment && <button type="button" disabled={actionsDisabled} onClick={onCreateWorkspace} className="rounded-lg border border-accent px-3 py-2 text-sm text-accent">Add NGS/MolBio workspace</button>}
-                    {(workspaces.length ? workspaces : experiments).map((node) => <button key={node.node_key} type="button" disabled={actionsDisabled} onClick={() => onSelectNode(node.node_key, node.node_type, node.subject_id)} className="rounded-lg border border-border-primary px-3 py-2 text-sm text-content">Open {node.label}</button>)}
+                    {workspaces.map((node) => <button key={node.node_key} type="button" disabled={actionsDisabled} onClick={() => onSelectNode(node.node_key, node.node_type, node.subject_id)} className="rounded-lg border border-border-primary px-3 py-2 text-sm text-content">Open {node.label}</button>)}
                 </div>
             </section>
         );
@@ -196,26 +191,11 @@ function LocalProjectAssociationBadge({ project }: { project: ProjectListItem })
 function ProjectsIndex() {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
-    const [searchParams, setSearchParams] = useSearchParams();
     const [dialogMode, setDialogMode] = useState<ManagerDialogMode | null>(null);
     const [query, setQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [archiveFilter, setArchiveFilter] = useState('active');
-    const requestedScope = searchParams.get('scope');
-    const scope = requestedScope === 'global' || requestedScope === 'ngs-molbio' ? requestedScope : 'all';
-    const apiScope = scope === 'ngs-molbio' ? 'ngs_molbio_local' : scope;
-    useEffect(() => {
-        if (requestedScope === null || requestedScope === 'all' || requestedScope === 'global' || requestedScope === 'ngs-molbio') return;
-        const next = new URLSearchParams(searchParams);
-        next.delete('scope');
-        setSearchParams(next, { replace: true });
-    }, [requestedScope, searchParams, setSearchParams]);
-    const selectScope = (nextScope: 'all' | 'global' | 'ngs-molbio') => {
-        const next = new URLSearchParams(searchParams);
-        if (nextScope === 'all') next.delete('scope');
-        else next.set('scope', nextScope);
-        setSearchParams(next);
-    };
+    const apiScope = 'all';
     const projectsQuery = useInfiniteQuery({
         queryKey: ['project-manager', 'projects', apiScope, query.trim(), statusFilter, archiveFilter],
         initialPageParam: undefined as string | undefined,
@@ -248,18 +228,13 @@ function ProjectsIndex() {
             <div className="mx-auto max-w-6xl">
                 <header className="flex flex-wrap items-end justify-between gap-4">
                     <div>
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent">Research organization</p>
-                        <h1 className="mt-2 text-2xl font-semibold text-content sm:text-3xl">Project Manager</h1>
-                        <p className="mt-2 max-w-2xl text-sm text-content-secondary">Open a durable Project relationship map or create a new research container. Scientific records remain authoritative in their owning BMS stores.</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent">BNS Plasmid Development Toolkit</p>
+                        <h1 className="mt-2 text-2xl font-semibold text-content sm:text-3xl">Projects</h1>
+                        <p className="mt-2 max-w-2xl text-sm text-content-secondary">Organize plasmids, DNA sequences, and NGS data. Open a Project to use MolBio and NGS tools.</p>
                     </div>
                     <button type="button" onClick={() => setDialogMode('create_project')} className="rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white focus:ring-2 focus:ring-accent">Create Project</button>
                 </header>
 
-                <div role="tablist" aria-label="Project scope" className="mt-6 inline-flex rounded-xl border border-border-primary bg-surface-secondary p-1">
-                    {([['all', 'All'], ['global', 'Global'], ['ngs-molbio', 'NGS/MolBio']] as const).map(([value, label]) => (
-                        <button key={value} type="button" role="tab" aria-selected={scope === value} onClick={() => selectScope(value)} className={`rounded-lg px-4 py-2 text-sm font-semibold focus:ring-2 focus:ring-accent ${scope === value ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`}>{label}</button>
-                    ))}
-                </div>
                 <section aria-label="Project discovery controls" className="mt-3 grid gap-3 rounded-xl border border-border-primary bg-surface-secondary p-3 md:grid-cols-[minmax(12rem,1fr)_auto_auto_auto]">
                     <input aria-label="Search Projects" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, objective, owner, or tag" className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-sm text-content" />
                     <select aria-label="Project status filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs text-content"><option value="all">All statuses</option><option value="draft">Draft</option><option value="active">Active</option><option value="on_hold">On hold</option><option value="completed">Completed</option></select>
@@ -280,9 +255,9 @@ function ProjectsIndex() {
                             const failureCount = typeof project.unresolved_failure_count === 'number' ? project.unresolved_failure_count : typeof payload.unresolved_failure_count === 'number' ? payload.unresolved_failure_count : null;
                             return (
                                 <Link data-project-card key={project.id} to={`/projects/${encodeURIComponent(project.id)}`} className="group rounded-2xl border border-border-primary bg-surface-secondary p-5 shadow-sm outline-none transition hover:-translate-y-0.5 hover:border-accent hover:shadow-xl focus:ring-2 focus:ring-accent">
-                                    <div className="flex flex-wrap items-start justify-between gap-2"><div className="flex flex-wrap gap-2"><span className="rounded-full border border-border-primary px-2 py-1 text-xs font-semibold text-content-secondary">{projectScope === 'ngs_molbio_local' ? 'NGS/MolBio' : 'Global'}</span>{projectScope === 'ngs_molbio_local' ? <LocalProjectAssociationBadge project={project} /> : null}</div><span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-muted">{project.status}</span></div>
+                                    <div className="flex flex-wrap items-start justify-between gap-2"><div className="flex flex-wrap gap-2"><span className="rounded-full border border-border-primary px-2 py-1 text-xs font-semibold text-content-secondary">NGS/MolBio</span>{projectScope === 'ngs_molbio_local' ? <LocalProjectAssociationBadge project={project} /> : null}</div><span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-muted">{project.status}</span></div>
                                     <h2 className="mt-4 text-lg font-semibold text-content group-hover:text-accent">{project.name}</h2>
-                                    <p className="mt-2 line-clamp-3 text-xs leading-5 text-content-secondary">{typeof payload.research_objective === 'string' ? payload.research_objective : project.description || 'No research objective recorded.'}</p>
+                                    <p className="mt-2 line-clamp-3 text-xs leading-5 text-content-secondary">{typeof payload.research_objective === 'string' ? payload.research_objective : project.description || 'No description recorded.'}</p>
                                     <div className="mt-3 space-y-1 text-[10px] text-content-muted"><p>{activeCount === null ? 'Active experiments unavailable' : `${activeCount} active experiments`}</p><p>{failureCount === null ? 'Unresolved failures unavailable' : `${failureCount} unresolved failures`}</p></div>
                                     <p className="mt-4 text-[10px] text-content-muted">Updated {new Date(project.updated_at).toLocaleString()}</p>
                                     <span className="mt-3 inline-flex text-sm font-semibold text-accent">Open Project</span>
@@ -330,8 +305,8 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     const [datasetCursor, setDatasetCursor] = useState<string | undefined>();
     const [activityCursor, setActivityCursor] = useState<string | undefined>();
     const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
-    const [treeOpen, setTreeOpen] = useState(() => window.innerWidth >= 768);
-    const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth >= 1280);
+    const [treeOpen, setTreeOpen] = useState(false);
+    const [inspectorOpen, setInspectorOpen] = useState(false);
     const drawerRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<HTMLDetailsElement>(null);
     const runActionLock = useRef(false);
@@ -850,13 +825,12 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     <Link to="/projects" className="rounded-lg border border-border-primary px-2.5 py-2 text-xs text-content-secondary outline-none hover:text-content focus:ring-2 focus:ring-accent">All Projects</Link>
                     <div className="min-w-0">
                         <h1 className="truncate text-sm font-semibold text-content">{summary.project.name}</h1>
-                        <p className="truncate text-xs text-content-muted">{summary.project.project_scope === 'ngs_molbio_local' ? 'NGS/MolBio Project' : 'Global Project'} · {summary.project.objective?.split('\n')[0] || 'No objective recorded'}</p>
+                        <p className="truncate text-xs text-content-muted">NGS/MolBio Project</p>
                     </div>
                     {busy && <span role="status" className="text-[10px] font-medium text-accent">Refreshing…</span>}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                    {summary.allowed_actions.includes('create_global_experiment') && <button type="button" disabled={!selectionReady} onClick={() => setDialogMode('create_global')} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">New experiment</button>}
-                    {summary.selection.node_type === 'global_experiment' && <button type="button" disabled={!selectionReady} onClick={() => setDialogMode('create_domain')} className="rounded-lg border border-accent px-3 py-2 text-xs text-accent disabled:opacity-50">Add NGS/MolBio workspace</button>}
+                    <button type="button" disabled={!selectionReady} onClick={() => setDialogMode('edit')} className="rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary">Edit selected record</button>
                     <button type="button" disabled={!selectionReady} onClick={() => setAttachOpen(true)} className="rounded-lg border border-accent px-3 py-2 text-xs text-accent disabled:opacity-50">Attach existing record</button>
                     {!showCandidates && <details ref={viewRef} className="relative">
                         <summary className="cursor-pointer rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">View</summary>
@@ -903,9 +877,10 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 )}
                 {projectTreeVisible && <div role="separator" aria-orientation="vertical" aria-label="Resize Project tree" tabIndex={0} onPointerDown={(event) => startRailResize('tree', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setTreeWidth((value) => Math.max(208, value - 16)); if (event.key === 'ArrowRight') setTreeWidth((value) => Math.min(400, value + 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent md:block" />}
                 <main className="flex min-h-0 min-w-0 flex-col md:overflow-y-auto">
+                    <NativeProjectTools key={projectId} projectId={projectId} projectName={summary.project.name} context={nativeProjectContext(summary)} disabled={!selectionReady} />
                     <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} onCreateExperiment={() => setDialogMode('create_global')} onCreateWorkspace={() => setDialogMode('create_domain')} onSelectNode={setSelection} actionsDisabled={!selectionReady} />
                     {!showCandidates && !loadingCandidateOverview && (
-                        <>
+                        <details className="m-4 rounded-xl border border-border-primary bg-surface-secondary p-3"><summary className="cursor-pointer text-sm text-content-secondary">Relationships and workflow details</summary>
                             <RelationshipMap
                                 summary={summary}
                                 onOpenWorkspace={selectionReady && hasDomainWorkspace(summary) ? openNgsMolBioWorkspace : undefined}
@@ -917,7 +892,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                                 <VirtualFolderPanel folder={folderKind} summary={summary} onLoadMore={loadMoreFolder} onSelectRecord={selectFolderRecord} loading={busy} />
                             </div>
                             <RunPanel runs={summary.runs.items} selectedNodeKey={selectedNodeKey ?? summary.selection.node_key} onSelect={inspectExecution} onAction={requestRunAction} actionsDisabled={!selectionReady} pendingAction={runActionMutation.isPending && runActionMutation.variables ? { runId: runActionMutation.variables.run.run_id, action: runActionMutation.variables.action } : null} onLoadMore={summary.runs.next_cursor ? () => setRunCursor(summary.runs.next_cursor ?? undefined) : undefined} />
-                        </>
+                        </details>
                     )}
                 </main>
                 {projectInspectorVisible && <div role="separator" aria-orientation="vertical" aria-label="Resize Project inspector" tabIndex={0} onPointerDown={(event) => startRailResize('inspector', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setInspectorWidth((value) => Math.min(520, value + 16)); if (event.key === 'ArrowRight') setInspectorWidth((value) => Math.max(288, value - 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent xl:block" />}
