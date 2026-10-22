@@ -5,7 +5,7 @@ chex==0.1.90
 colabdesign @ git+https://github.com/sokrypton/ColabDesign.git@d024c4e846fea83c090afcbe89a313eeee8ec01e
 contourpy==1.4.0
 cycler==0.12.1
-dm-haiku==0.0.17
+dm-haiku==0.0.13
 dm-tree==0.1.9
 fonttools==4.67.0
 immutabledict==4.3.1

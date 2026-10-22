@@ -244,6 +244,8 @@ CALIBY_RUNTIME_LOCK
     uv pip install --no-deps -r /opt/caliby/runtime.lock
     # Upstream ddb368c optional AF2 extra at its exact ColabDesign/JAX pins.
     # Transitive closure resolved against runtime.lock without upgrading base.
+    # Haiku 0.0.13 retains JAX 0.4.34 compatibility; 0.0.17 imports a missing
+    # jax.core.take_current_trace despite passing dependency metadata checks.
     uv pip install --no-deps -r /opt/caliby-af2-requirements.lock
     uv pip check
 
