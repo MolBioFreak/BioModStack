@@ -40,6 +40,7 @@ from database import (
     OntRawSignalLookup,
     OntRawSignalRepresentation,
 )
+from services.container_cli_environment import container_cli_environment
 from services.file_lease_signals import register_lease_break_listener
 from services.ont_read_metrics import publish_read_metrics_from_validation
 
@@ -186,7 +187,7 @@ def assert_local_raw_runtime_image(runtime: str, image: str) -> None:
             text=True,
             check=False,
             timeout=30,
-            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+            env=container_cli_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError("local raw-signal runtime image inspection failed") from exc
