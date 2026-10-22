@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "NODE_ENV=production vite",
     "build": "tsc -b && vite build",
+    "build:share": "vite build --config vite.share.config.ts",
     "build:isolated": "BMS_FRONTEND_BUILD_OUT_DIR=${BMS_FRONTEND_BUILD_OUT_DIR:-.artifacts/frontend-dist} pnpm run build",
     "lint": "eslint .",
     "test": "pnpm run test:node && pnpm run test:mounted",
