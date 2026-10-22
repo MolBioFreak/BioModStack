@@ -297,9 +297,9 @@ class ShareApp:
             self.log(request, None, "banned_request")
         raise HTTPError(403, "share_client_banned", "access from this network is blocked")
 
-    def fail(self, request: Request, grant_id: str | None, reason: str, now: float) -> dict[str, Any]:
+    async def fail(self, request: Request, grant_id: str | None, reason: str, now: float) -> dict[str, Any]:
         """Record a failed authentication as a strike and log what it triggered."""
-        result = self.bans.strike(request.client_ip, grant_id, reason, now)
+        result = await asyncio.to_thread(self.bans.strike, request.client_ip, grant_id, reason, now)
         self.log(request, grant_id, reason, strike=result["ip_strikes"], limit=B.STRIKE_LIMIT)
         if result["ip_banned"]:
             self.log(request, grant_id, "ip_banned", network=result["network"],
@@ -317,7 +317,7 @@ class ShareApp:
         passcode = request.headers.get(PASSCODE_HEADER, b"").decode("ascii", "replace")[:MAX_HEADER_VALUE]
         grant = self.index.find_by_key(key)
         if grant is None:
-            self.fail(request, None, "unknown_key", now)
+            await self.fail(request, None, "unknown_key", now)
             raise HTTPError(404, "share_not_found", "this share link is not valid")
         grant_id = str(grant["grant_id"])
         state = G.grant_state(grant, now=int(now))
@@ -336,7 +336,7 @@ class ShareApp:
         async with self._scrypt:
             ok = await asyncio.to_thread(G.verify_passcode, passcode, grant.get("passcode") or {})
         if not ok:
-            result = self.fail(request, grant_id, "wrong_passcode", now)
+            result = await self.fail(request, grant_id, "wrong_passcode", now)
             if result["ip_banned"]:
                 raise HTTPError(403, "share_client_banned", "access from this network is blocked")
             if result["grant_locked"]:
@@ -515,20 +515,24 @@ async def _compute_route(app: ShareApp, request: Request, kind: str):
         raise HTTPError(422, "invalid_request", "request body is not valid JSON") from exc
     if app._compute.locked():
         raise HTTPError(503, "analysis_busy", "restriction analysis capacity is busy")
-    async with app._compute:
-        try:
-            function = compute.analyze if kind == "analyze" else compute.simulate_digest
-            output = await asyncio.wait_for(asyncio.to_thread(function, payload), timeout=60)
-        except compute.ComputeError as exc:
-            raise HTTPError(exc.status, exc.code, exc.message) from exc
-        except compute.DigestGeometryError as exc:
-            raise HTTPError(409, exc.code, str(exc)) from exc
-        except (compute.DigestLimitError, compute.AnalysisLimitError) as exc:
-            raise HTTPError(413, "request_too_large", "restriction request is too large") from exc
-        except compute.InvalidDNAError as exc:
-            raise HTTPError(422, "invalid_dna", "DNA input is invalid") from exc
-        except TimeoutError as exc:
-            raise HTTPError(504, "analysis_timeout", "restriction computation timed out") from exc
+    await app._compute.acquire()
+    function = compute.analyze if kind == "analyze" else compute.simulate_digest
+    # A timed-out thread cannot be killed; keep its slot until it really finishes
+    # so repeated timeouts cannot stack unbounded background computations.
+    task = asyncio.ensure_future(asyncio.to_thread(function, payload))
+    task.add_done_callback(lambda _: app._compute.release())
+    try:
+        output = await asyncio.wait_for(asyncio.shield(task), timeout=60)
+    except compute.ComputeError as exc:
+        raise HTTPError(exc.status, exc.code, exc.message) from exc
+    except compute.DigestGeometryError as exc:
+        raise HTTPError(409, exc.code, str(exc)) from exc
+    except (compute.DigestLimitError, compute.AnalysisLimitError) as exc:
+        raise HTTPError(413, "request_too_large", "restriction request is too large") from exc
+    except compute.InvalidDNAError as exc:
+        raise HTTPError(422, "invalid_dna", "DNA input is invalid") from exc
+    except TimeoutError as exc:
+        raise HTTPError(504, "analysis_timeout", "restriction computation timed out") from exc
     app.log(request, grant["grant_id"], f"{kind}_ok")
     return 200, output, "application/json", ()
 
