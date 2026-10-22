@@ -22,6 +22,7 @@ def render_native_helper(source: Path, user: str) -> dict[str, tuple[str, int]]:
         '__MINKNOW_SYSTEMD_SERVICE__': 'minknow.service',
         '__BMS_NATIVE_API_USER__': user,
         '__BMS_NATIVE_API_UID__': str(account.pw_uid),
+        '__BMS_NATIVE_API_GID__': str(account.pw_gid),
         '__BMS_RECOVERY_GROUP__': group,
         '__BMS_REPO_ROOT__': str(source.parents[1]),
     }
