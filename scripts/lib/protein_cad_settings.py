@@ -68,24 +68,32 @@ def replay_cad_settings(model_id, mode, source_params, params, *, overrides=None
 
     A persisted native settings object marks new intent, including an empty
     object. Pre-contract saved requests retain their old effective effort.
-    Explicit resume effort overrides take precedence over historical lowering.
+    Explicit resume controls override inherited snapshots; native JSON in that
+    same override request retains precedence over its flat controls.
     """
     result = deepcopy(params)
     if not is_cad(model_id, mode, source_params):
         return result
     backend = source_params.get('backend', source_params.get('generator', source_params.get('pcad_backend', 'disco')))
-    if backend != 'disco' or any(key in source_params for key in ('pcad_disco_settings_json', 'disco_settings')):
-        return result
-    if overrides is not None and any(key in overrides for key in (
-            'disco_effort', 'pcad_disco_effort', 'disco_settings', 'pcad_disco_settings_json')):
-        return bind_new_cad_settings(model_id, mode, result)
-    settings = settings_projection(result).get('pcad_disco_settings_json', {})
-    task = source_params.get('design_task', source_params.get('pcad_task', 'unconditional'))
-    # Resume with a newly supplied native object expresses new explicit intent.
-    if any(key in result for key in ('pcad_disco_settings_json', 'disco_settings')):
-        return result
-    if result.get('disco_effort') != source_params.get('disco_effort'):
-        return result
-    settings = legacy_effective_settings(settings, task)
-    result['pcad_disco_settings_json'] = settings
+    native_keys = ('pcad_disco_settings_json', 'disco_settings')
+    if backend == 'disco' and not any(key in source_params for key in native_keys):
+        explicit_effort = overrides is not None and any(key in overrides for key in (
+            'disco_effort', 'pcad_disco_effort', *native_keys))
+        if explicit_effort:
+            result = bind_new_cad_settings(model_id, mode, result)
+        elif (not any(key in result for key in native_keys)
+              and result.get('disco_effort') == source_params.get('disco_effort')):
+            settings = settings_projection(result).get('pcad_disco_settings_json', {})
+            task = source_params.get('design_task', source_params.get('pcad_task', 'unconditional'))
+            result['pcad_disco_settings_json'] = legacy_effective_settings(settings, task)
+    # Admission snapshots are inherited state, not a competing override in this
+    # resume request. Project the explicit delta separately so its native JSON
+    # still wins over its own flat controls, then reconcile only supplied fields.
+    # Do this after historical lowering: changing seeds alone must not reset an
+    # old conditional request's effective effort from max back to fast.
+    if overrides is not None:
+        inherited = settings_projection(result)
+        for key, delta in settings_projection(overrides).items():
+            result[key] = ({**inherited.get(key, {}), **delta}
+                           if key.endswith('_settings_json') else deepcopy(delta))
     return result
