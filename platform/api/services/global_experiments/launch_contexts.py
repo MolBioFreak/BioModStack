@@ -296,7 +296,7 @@ async def workflow_pinned_gpu(
     session: AsyncSession,
     context: ExperimentLaunchContext,
 ) -> int | None:
-    """Resolve an immutable native RFD3 GPU pin from the bound Workflow Revision."""
+    """Read the bound Workflow GPU pin, retaining native RFD3's required pin."""
     if context.workflow_revision_id is None:
         return None
     revision = await session.get(ExperimentRevision, context.workflow_revision_id)
@@ -310,11 +310,11 @@ async def workflow_pinned_gpu(
     payload = decoded_payload if isinstance(decoded_payload, dict) else {}
     raw_scheduler = payload.get("scheduler")
     scheduler: dict[str, Any] = raw_scheduler if isinstance(raw_scheduler, dict) else {}
-    if scheduler.get("model_id") != "protein_local_redesign":
-        return None
     raw_resources = scheduler.get("resources")
     resources: dict[str, Any] = raw_resources if isinstance(raw_resources, dict) else {}
     pinned_gpu = resources.get("pinned_gpu")
+    if scheduler.get("model_id") != "protein_local_redesign":
+        return pinned_gpu
     if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:
         raise LaunchContextError(
             "launch_context_workflow_invalid",

@@ -546,6 +546,9 @@ async def prepare_workflow_setup_launch(
                              if native else stored_draft)
     if native:
         payload["scheduler"]["name"] = plan_contract["capability"]["normalized_job_request"]["name"]
+        payload["scheduler"]["resources"] = {
+            "pinned_gpu": plan_contract["capability"]["normalized_job_request"]["pinned_gpu"],
+        }
     payload["scheduler"]["params"] = {
         **payload["parameters"], "workflow_adapter": payload["adapter_id"],
     }
