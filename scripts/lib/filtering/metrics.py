@@ -139,17 +139,6 @@ def extract_confidence_metrics(metadata: dict, core_protein_scientific_contract=
     Returns:
         Normalized dict with 'plddt', 'ptm', 'pae' keys
     """
-    # Foundry b02eed6: atom-mean pLDDT is a fraction; PAE is Angstrom.
-    # Normalize by native key, never by a value-range heuristic (zero is valid).
-    if 'overall_plddt' in metadata or 'overall_pae' in metadata:
-        metadata = dict(metadata)
-        if metadata.get('overall_plddt') is not None:
-            from numbers import Real
-            value = metadata['overall_plddt']
-            metadata['plddt'] = value * 100.0 if isinstance(value, Real) and not isinstance(value, bool) else value
-            metadata['plddt_units'] = 'percent'
-        if metadata.get('overall_pae') is not None:
-            metadata['pae'] = metadata['overall_pae']
     if core_protein_scientific_contract == 1:
         aliases = {'plddt': ('plddt', 'mean_plddt', 'pLDDT'), 'ptm': ('ptm', 'pTM'), 'pae': ('pae', 'mean_pae', 'PAE'), 'rmsd': ('rmsd', 'rmsd_overall'), 'rmsd_binder': ('rmsd_binder', 'binder_rmsd')}
         from .evidence import alias_value

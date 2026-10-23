@@ -620,10 +620,7 @@ class RF3MetadataConverter(MetadataConverter):
             for k, v in data.items():
                 if k in ['fold_id', 'seq_id', 'description']:
                     out_record[k] = v
-                elif k == 'chain_ptm':
-                    # Pinned native helper populates this from chain pLDDT.
-                    out_record['rf3_chain_mean_plddt_fraction'] = v
-                elif k == 'plddt': # Legacy RF3 metadata
+                elif k == 'plddt': # Common metric, map to global or specific
                      out_record['rf3_plddt'] = v
                 elif k == 'ptm':
                      out_record['rf3_ptm'] = v
@@ -634,21 +631,6 @@ class RF3MetadataConverter(MetadataConverter):
                 else:
                     out_record[k] = v
                     
-            # Foundry b02eed6 native naming/units, without scientific recomputation.
-            out_record['rf3_native_confidence_semantics'] = {
-                'chain_ptm': 'chain_mean_plddt_fraction_not_ptm',
-                'token_res_ids': 'zero_based_token_positions_not_author_residue_ids',
-                'chain_pair_summaries': 'upper_triangular_not_directed_complete',
-            }
-            sample = re.search(r'_seed-(-?\d+)_sample-(\d+)_summary_confidences$', filename)
-            if sample:
-                out_record.update(rf3_seed=int(sample[1]), rf3_sample_idx=int(sample[2]))
-            out_record['description'] = filename.removesuffix('_summary_confidences') + '_model'
-            if data.get('overall_plddt') is not None:
-                out_record['rf3_plddt'] = float(data['overall_plddt']) * 100.0
-                out_record['rf3_plddt_units'] = 'percent'
-            if data.get('overall_pae') is not None:
-                out_record['rf3_pae'] = data['overall_pae']
             yield out_record
         except Exception as e:
             logging.error(f"Error processing {input_file}: {e}")

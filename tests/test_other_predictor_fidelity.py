@@ -43,13 +43,6 @@ def test_native_caliby_metrics_and_sample_identity(tmp_path, monkeypatch):
     assert len(list((tmp_path / 'passed').glob('*.pdb'))) == 2
 
 
-def test_rf3_native_units_and_zeros():
-    for contract in (None, 1):
-        values = extract_confidence_metrics({'overall_plddt': .5, 'overall_pae': 16, 'ptm': .8}, contract)
-        assert (values['plddt'], values['pae'], values['ptm']) == (50, 16, .8)
-        zeros = extract_confidence_metrics({'overall_plddt': 0, 'overall_pae': 0, 'ptm': 0}, contract)
-        assert (zeros['plddt'], zeros['pae'], zeros['ptm']) == (0, 0, 0)
-
 
 def test_af2_boundary_is_inclusive_and_idempotent():
     source = 'mask = [int(i) > feat_holder.binderlen for i in range(len(feat_holder.seq))]'

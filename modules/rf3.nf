@@ -22,8 +22,6 @@ process RunRF3 {
 
     publishDir "${params.out_dir}/run/rf3", mode: 'copy', pattern: "*.log"
 
-    publishDir "${params.out_dir}/run/rf3/batch_${batch_id}", mode: 'copy', pattern: "rf3_results/native_artifacts"
-
     beforeScript """
         mkdir -p rf3_results
     """
@@ -35,7 +33,6 @@ process RunRF3 {
     tuple path("rf3_results/*.cif.gz"), path("rf3_results/*.json"), emit: structures_metadata
     path ("rf3_metadata_${batch_id}.jsonl"), emit: jsonl, topic: metadata_ch_fold_seq
     path "rf3_${batch_id}.log"
-    path "rf3_results/native_artifacts", emit: native_artifacts, optional: true
 
     script:
     def extra_config = params.rf3_extra_config ?: ''
@@ -58,7 +55,6 @@ process RunRF3 {
         mv rf3_results rf3_native_results
         mv rf3_bound rf3_results
     else
-    python3 /scripts/lib/filtering/rf3_association.py --archive-aliases-only --native-root rf3_results --output rf3_aliases
     # Flatten and compress results (RF3 creates nested dirs)
     # Move model CIFs to root and gzip
     find rf3_results -name "*_model.cif" -exec gzip {} \\;
@@ -69,7 +65,6 @@ process RunRF3 {
     # Note: we might need per-residue confidences too? Use *confidences.json
     find rf3_results -name "*_confidences.json" -exec mv {} rf3_results/ \\;
 
-    mv rf3_aliases rf3_results/native_artifacts
     fi
 
     # Convert outputs to pipeline metadata format
@@ -77,7 +72,7 @@ process RunRF3 {
     python3 /scripts/metadata_converter.py \\
         --input_dir rf3_results \\
         --converter rf3 \\
-        --input_ext _summary_confidences.json \\
+        --input_ext ${params.get('core_protein_scientific_contract') == 1 ? '_summary_confidences.json' : 'json'} \\
         -o rf3_metadata_${batch_id}.jsonl
     """
 }
