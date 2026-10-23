@@ -1,10 +1,29 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildResultsViewerMolecularDynamicsRoute, parseMolecularDynamicsHandoffRoute, buildMolecularDynamicsHandoffInitialValues } from '../src/components/gen2StartingStructureState';
-import { hydrateMolecularDynamicsNative, serializeMolecularDynamicsNativeDraft, parseNativeMdp, renderNativeMdp, molecularDynamicsSourceKey, type MolecularDynamicsNativeIntent } from '../src/components/molecularDynamicsUiState';
+import { hydrateMolecularDynamicsNative, serializeMolecularDynamicsNativeDraft, parseNativeMdp, renderNativeMdp, molecularDynamicsSourceKey, resolveMolecularDynamicsCloneSource, type MolecularDynamicsNativeIntent } from '../src/components/molecularDynamicsUiState';
 
 const job = '11111111-1111-4111-8111-111111111111';
 const source = { kind: 'candidate' as const, id: job, candidate_ref: { kind: 'native_document' as const, job_id: job, artifact_id: 'exact-nonprimary', target_state: 'unbound', model: 2 } };
+
+for (const selected of [source, { kind: 'design', id: job, model_number: 2 }]) {
+    for (const stale of [false, true]) {
+        test(`v1 clone preserves ${selected.kind} exact selection, stale fallback=${stale}`, () => {
+            const initial = { intent: { schema_version: 'bms.md.launch-intent.v1', source_ref: selected },
+                ...(stale ? { source_design_id: '22222222-2222-4222-8222-222222222222' } : {}) };
+            assert.deepEqual(resolveMolecularDynamicsCloneSource(JSON.parse(JSON.stringify(initial))), selected);
+        });
+    }
+}
+
+test('Job Clone binds exact source to its retained MD snapshot without changing the CandidateRef', () => {
+    const snapshotJob = '33333333-3333-4333-8333-333333333333';
+    const clone = resolveMolecularDynamicsCloneSource({ source_job_id: snapshotJob,
+        md_source_provenance: { source_ref: source, snapshot: { structure: '/old/worker/selected.pdb' } } });
+    assert.deepEqual(clone, { ...source, snapshot_job_id: snapshotJob });
+    const route = buildResultsViewerMolecularDynamicsRoute(job, null, { sourceRef: clone!, returnTo: `/designs/${job}` });
+    assert.deepEqual(parseMolecularDynamicsHandoffRoute(route.slice(route.indexOf('?'))).sourceRef, clone);
+});
 
 test('exact native document, member and safe parent survive sender and closed receiver without a Design', () => {
     const returnTo = `/designs/${job}?artifact_id=exact-nonprimary&model=2`;

@@ -67,11 +67,12 @@ class StartingStructureSourceRef(_ClosedModel):
     id: str = Field(min_length=1, max_length=256)
     candidate_ref: CandidateRef | None = None
     model_number: int | None = None
+    snapshot_job_id: str | None = None
 
     @model_serializer(mode="wrap")
     def source_wire(self, handler):
         data = handler(self)
-        for field in ("candidate_ref", "model_number"):
+        for field in ("candidate_ref", "model_number", "snapshot_job_id"):
             if data.get(field) is None:
                 data.pop(field, None)
         return data
@@ -1661,8 +1662,55 @@ async def _resolve_source(
     )
 
 
+async def _resolve_retained_source(source_ref: StartingStructureSourceRef, session: Any) -> ResolvedStartingStructure:
+    """Reopen the exact Job-owned source without consulting a deleted producer."""
+    job_id = _require_uuid(source_ref.snapshot_job_id or "", code="MD_STARTING_STRUCTURE_NOT_FOUND")
+    job = await session.get(Job, job_id)
+    if job is None or job.model_id != "molecular_dynamics":
+        raise _error("MD_STARTING_STRUCTURE_NOT_FOUND", "The retained MD source is unavailable.", 404)
+    try:
+        root = Path(str(job.output_dir)).resolve(strict=True)
+    except OSError as exc:
+        raise _error("MD_STARTING_STRUCTURE_NOT_FOUND", "The retained MD source is unavailable.", 404) from exc
+    provenance = dict((job.params or {}).get("md_source_provenance") or {})
+    sidecar = root / "retained_source.json"
+    if sidecar.is_file() and not sidecar.is_symlink():
+        provenance = json.loads(sidecar.read_text(encoding="utf-8"))
+    expected = StartingStructureSourceRef.model_validate(provenance.get("source_ref") or {}).model_dump(mode="json")
+    requested = source_ref.model_dump(mode="json")
+    expected.pop("snapshot_job_id", None)
+    requested.pop("snapshot_job_id", None)
+    if requested != expected:
+        raise _error("MD_STARTING_STRUCTURE_FORBIDDEN", "The retained source belongs to a different selection.", 404)
+    original = provenance.get("original_snapshot") or {}
+    snapshot = provenance.get("snapshot") or {}
+    path = Path(str(original.get("path") or snapshot.get("structure") or ""))
+    if not path.is_absolute():
+        path = root / path
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root / "inputs")
+    except (OSError, ValueError) as exc:
+        raise _error("MD_STARTING_STRUCTURE_FORBIDDEN", "The retained source is not Job-owned.", 404) from exc
+    if path.is_symlink():
+        raise _error("MD_STARTING_STRUCTURE_UNSAFE", "The retained source is symlinked.", 409)
+    result = ResolvedStartingStructure(source_ref=source_ref, path=resolved, label=resolved.name,
+                                      source_provenance=provenance, producer_job_id=provenance.get("source_job_id"),
+                                      design_id=provenance.get("design_id"))
+    digest = original.get("sha256") if original else snapshot.get("structure_sha256")
+    verified = open_resolved_structure_snapshot(result, expected_sha256=str(digest or read_resolved_structure(result).sha256))
+    try:
+        # Keep the verified descriptor alive through preparation and preview.
+        result.descriptor = os.dup(verified.handle.fileno())
+        result.suffix = resolved.suffix
+    finally:
+        verified.handle.close()
+    return result
+
+
 async def resolve_source(source_ref: StartingStructureSourceRef, session: Any) -> ResolvedStartingStructure:
-    resolved = await _resolve_source(source_ref, session)
+    resolved = (await _resolve_retained_source(source_ref, session) if source_ref.snapshot_job_id
+                else await _resolve_source(source_ref, session))
     # Source identity is not reconstructed from mutable primary metadata later.
     resolved.source_ref = source_ref if source_ref.kind != "rcsb" else resolved.source_ref.model_copy(update={"model_number": source_ref.model_number})
     ref = source_ref.candidate_ref
@@ -2284,7 +2332,8 @@ def inspect_resolved_structure(
         f"/api/molecular-dynamics/starting-structures/{encoded_kind}/{encoded_id}/content"
         f"?expected_sha256={structure_file.sha256}"
     )
-    if resolved.source_ref.candidate_ref is not None or resolved.source_ref.model_number is not None:
+    if (resolved.source_ref.candidate_ref is not None or resolved.source_ref.model_number is not None
+            or resolved.source_ref.snapshot_job_id is not None):
         viewer_url += "&selection=" + quote(resolved.source_ref.model_dump_json(exclude_none=True), safe="")
     return StartingStructureInspection(
         schema_version="bms.md.starting-structure-inspection.v1",

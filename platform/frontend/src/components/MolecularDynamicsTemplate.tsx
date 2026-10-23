@@ -28,6 +28,7 @@ import {
     parseMolecularDynamicsServerFilePage,
     parseMolecularDynamicsStartingStructureInspection,
     resolveMolecularDynamicsCloneSource,
+    molecularDynamicsSourceKey,
     storeMolecularDynamicsDraft,
     validateMolecularDynamicsChemistryProfile,
     validateMolecularDynamicsForm,
@@ -402,8 +403,7 @@ export function MolecularDynamicsTemplate({
     ) => {
         const requestGeneration = ++inspectionRequestGenerationRef.current;
         const previousInspection = inspection;
-        const sameSource = previousInspection?.source_ref.kind === sourceRef.kind
-            && previousInspection.source_ref.id === sourceRef.id;
+        const sameSource = previousInspection != null && molecularDynamicsSourceKey(previousInspection.source_ref) === molecularDynamicsSourceKey(sourceRef);
         setSourceBusy(true);
         setSourceError('');
         setAdmissionAuthority(null);

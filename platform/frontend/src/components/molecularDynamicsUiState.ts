@@ -256,6 +256,7 @@ export interface MolecularDynamicsStartingStructureRef {
     id: string;
     candidate_ref?: CandidateRef | null;
     model_number?: number | null;
+    snapshot_job_id?: string | null;
 }
 
 export interface MolecularDynamicsStartingStructureInspection {
@@ -631,14 +632,15 @@ const wireFinite = (value: unknown, contract: string) => {
 
 export const molecularDynamicsSourceKey = (source: MolecularDynamicsStartingStructureRef): string => {
     const ref = source.candidate_ref;
-    return JSON.stringify([source.kind, source.id, source.model_number ?? null,
+    return JSON.stringify([source.kind, source.id, source.model_number ?? null, source.snapshot_job_id ?? null,
         ref?.kind === 'design' ? [ref.kind, ref.job_id, ref.design_id, ref.document?.artifact_id ?? null, ref.document?.target_state ?? null, ref.document?.model ?? null]
         : ref?.kind === 'native_document' ? [ref.kind, ref.job_id, ref.artifact_id, ref.target_state ?? null, ref.model ?? null] : null]);
 };
 
 export const parseMolecularDynamicsSourceRef = (value: unknown, contract: string): MolecularDynamicsStartingStructureRef => {
     const record = wireRecord(value, contract);
-    closedWireKeys(record, ['kind', 'id'], ['candidate_ref', 'model_number'], contract);
+    closedWireKeys(record, ['kind', 'id'], ['candidate_ref', 'model_number', 'snapshot_job_id'], contract);
+    if (record.snapshot_job_id != null && (typeof record.snapshot_job_id !== 'string' || !UUID_RE.test(record.snapshot_job_id))) throw new Error(`Invalid ${contract} snapshot Job.`);
     if (record.model_number != null && !Number.isInteger(record.model_number)) throw new Error(`Invalid ${contract} model.`);
     if (record.kind === 'candidate') {
         const ref = wireRecord(record.candidate_ref, contract);
@@ -991,9 +993,22 @@ export const buildMolecularDynamicsLaunchIntent = ({
 export const resolveMolecularDynamicsCloneSource = (
     initialValues: Record<string, unknown>,
 ): MolecularDynamicsStartingStructureRef | null => {
+    // Actual Clone payloads carry the MD Job ID and its materialized source.
+    // Draft-only reopening has neither and keeps its original source authority.
+    const retained = initialValues.md_source_provenance as Record<string, unknown> | undefined;
+    if (retained?.snapshot && retained.source_ref && typeof initialValues.source_job_id === 'string' && UUID_RE.test(initialValues.source_job_id)) {
+        try { return { ...parseMolecularDynamicsSourceRef(retained.source_ref, 'retained clone source'), snapshot_job_id: initialValues.source_job_id }; } catch { return null; }
+    }
     const nativeIntent = initialValues.intent as MolecularDynamicsNativeIntent | undefined;
     if (nativeIntent?.schema_version === 'bms.md.launch-intent.v2' && nativeIntent.input.kind === 'guided') {
         try { return parseMolecularDynamicsSourceRef(nativeIntent.input.source_ref, 'native clone source'); } catch { return null; }
+    }
+    const legacyIntent = initialValues.intent as MolecularDynamicsLaunchIntent | undefined;
+    if (legacyIntent?.schema_version === 'bms.md.launch-intent.v1') {
+        const source = legacyIntent.source_ref;
+        if (source && (source.kind === 'candidate' || source.model_number != null || source.candidate_ref != null)) {
+            try { return parseMolecularDynamicsSourceRef(source, 'clone source'); } catch { return null; }
+        }
     }
     if (initialValues.source_ref) {
         try { return parseMolecularDynamicsSourceRef(initialValues.source_ref, 'clone source'); } catch { return null; }
