@@ -17,12 +17,17 @@ class Structure(Closed):
     path: str = Field(min_length=1)
 
 
-class Conformer(Structure):
+class ConformerSettings(Closed):
+    """Native per-state settings, shared by exact-reference operation inputs."""
     fixed_pos_seq: str = ""
     fixed_pos_scn: str = ""
     fixed_pos_override_seq: str = ""
     pos_restrict_aatype: str = ""
     symmetry_pos: str = ""
+
+
+class Conformer(Structure, ConformerSettings):
+    pass
 
 
 class Ensemble(Closed):
@@ -92,6 +97,29 @@ def normalize_request(mode: str, params: dict) -> dict:
     if params.get("task", mode) != mode:
         raise ValueError("Caliby task must match mode")
     return REQUEST.validate_python({"task": mode, **params}).model_dump(mode="json")
+
+
+def operation_settings(mode: str, params: dict) -> dict:
+    """Project native settings before the selected source owner binds structures."""
+    from copy import deepcopy
+    from pydantic import create_model
+    if mode not in SUPPORTED_MODES:
+        raise ValueError('Unsupported Caliby operation')
+    native = EnsembleDesign if mode == 'ensemble_design' else SidechainPack
+    projected = create_model('CalibyOperationSettings', __config__=ConfigDict(extra='forbid'),
+        **{key: (field.annotation, deepcopy(field)) for key, field in native.model_fields.items()
+           if key not in {'ensembles', 'structures'}})
+    return projected.model_validate({'task': mode, **params}).model_dump(mode='json')
+
+
+def bind_operation(mode: str, params: dict, groups: list[dict]) -> dict:
+    """Bind ordered exact snapshots; the native contract owns all restrictions."""
+    bound = dict(params)
+    if mode == 'ensemble_design':
+        bound['ensembles'] = groups
+    elif mode == 'sidechain_pack':
+        bound['structures'] = [state for group in groups for state in group['states']]
+    return normalize_request(mode, bound)
 
 
 def parameter_schema(mode: str) -> dict:

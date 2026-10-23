@@ -9,14 +9,30 @@ export type CandidateRef =
     | { kind: 'native_document'; job_id: string; artifact_id: string; target_state?: string; model?: number }
     | { kind: 'native_sequence'; job_id: string; publication_ref: string; native_output_id: string }
     | { kind: 'native_observation'; job_id: string; publication_ref: string; native_record_id: string };
-export type StageInput = { selected: true } | { stage_id: string };
+export type StageInput = ({ selected: true } | { stage_id: string; invocation_id?: string }) & {
+    scope?: 'binder' | 'whole_composition'; chains?: string[];
+};
+/** Native Caliby strings use its author-position/mask grammar unchanged. */
+export interface CalibyConformerSettings {
+    fixed_pos_seq?: string; fixed_pos_scn?: string; fixed_pos_override_seq?: string;
+    pos_restrict_aatype?: string; symmetry_pos?: string;
+}
+export interface SelectedRoundInputGroup {
+    ensemble_id: string;
+    states: Array<{ state_id: string; candidate_ref: CandidateRef; settings?: CalibyConformerSettings | null }>;
+}
+export type SelectedRoundModel = BinderRoundStage & {
+    invocation_id?: string; mode?: string; execution_target_id?: string | null;
+    input_groups?: SelectedRoundInputGroup[];
+};
 export type SelectedRoundStage = { id: string; input: StageInput } & (
-    | { kind: 'sequence_design' | 'prediction'; models: BinderRoundStage[] }
+    | { kind: 'sequence_design' | 'prediction'; models: SelectedRoundModel[] }
     | { kind: 'maturation'; model_id: 'binder_refinement'; mode: 'refine'; params: BinderRoundStage['params'] });
+export interface SelectedRoundPlan { schema_version: 1 | 2; stages: SelectedRoundStage[] }
 export interface SelectedRoundRequest {
     operation: 'round'; source_job_id: string; idempotency_key: string;
     selection: { candidate_refs: CandidateRef[] } | { saved_set_id: string; revision: number };
-    round_plan: { schema_version: 1; stages: SelectedRoundStage[] };
+    round_plan: SelectedRoundPlan;
     execution_target_id: string | null; launch_context_id?: string | null; execution_policy?: ExecutionPolicy;
 }
 export interface SelectedRound {

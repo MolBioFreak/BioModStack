@@ -32,6 +32,15 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def invocation_mode(invocation):
+    """Explicit native modes for v2; historical callers retain their mode."""
+    return getattr(invocation, 'mode', None) or MODES[invocation.model_id]
+
+
+def invocation_key(invocation):
+    return getattr(invocation, 'invocation_id', None) or invocation.model_id
+
+
 def normalize(request):
     from model_registry import get_registry
     from services.binder_round_inputs import BOUND_INPUTS, BLIND_FIXED_PARAMETERS
@@ -41,11 +50,18 @@ def normalize(request):
         invocations = stage.models if stage.kind != 'maturation' else [stage]
         for invocation in invocations:
             model = invocation.model_id
+            if result.round_plan.schema_version == 2 and stage.kind != 'maturation' and 'execution_target_id' not in invocation.model_fields_set:
+                invocation.execution_target_id = result.execution_target_id
             from services.sequence_designer_settings import normalize_historical_sequence_settings
             invocation.params = normalize_historical_sequence_settings(model, invocation.params)
+            mode = invocation_mode(invocation)
+            if model == 'caliby_experimental':
+                from services.caliby_native import operation_settings
+                invocation.params = operation_settings(mode, invocation.params)
+                continue
             definition = registry.get_internal_model_definition(model)
-            if definition is None or not any(m.id == MODES[model] for m in definition.modes):
-                raise ValueError(f'Unsupported model/mode {model}/{MODES[model]}')
+            if definition is None or not any(m.id == mode for m in definition.modes):
+                raise ValueError(f'Unsupported model/mode {model}/{mode}')
             known = {field.name for field in definition.params}
             if set(invocation.params) - known:
                 raise ValueError(f'Unknown {model} settings: {sorted(set(invocation.params) - known)}')
@@ -66,7 +82,7 @@ def normalize(request):
                 # exact producer chain. No placeholder chain is scientific input.
                 errors = []  # Model owner validates the complete source-bound request.
             else:
-                errors = registry.validate_job_params(model, MODES[model], invocation.params)
+                errors = registry.validate_job_params(model, mode, invocation.params)
             errors = [e for e in errors if e not in {f'Missing required parameter: {k}'
                       for k in bound | {'binder_chain', 'binder_chains', 'target_chains', 'design_chain', 'target_chain'}}]
             if errors:
@@ -338,28 +354,36 @@ async def output_refs(session, child):
     return refs
 
 
-def prediction_request(root, row, target, model, params, placement):
+def prediction_request(root, row, target, model, params, placement, *, scope='binder', selected_chains=None, mode=None):
     from services.binder_round_inputs import source_components
-    if row.get('sequence'):
+    if scope == 'whole_composition' and row.get('components'):
+        binder = deepcopy(row['components'])
+    elif row.get('sequence'):
         binder = [{'id': (row.get('binder_chains') or ['binder'])[0], 'type': 'protein', 'sequence': row['sequence']}]
     else:
-        if not row.get('path') or not row.get('binder_chains'):
+        if scope == 'whole_composition' and row.get('path'):
+            from services.binder_diagnostic_selection import independent_structure_components
+            binder = independent_structure_components(Path(row['path']), selected_chains or [])
+        elif not row.get('path') or not row.get('binder_chains'):
             raise ValueError('Prediction needs the selected binder sequence or declared structural binder roles')
-        binder = source_components(row['path'], row['binder_chains'], 'binder')
-    targets = deepcopy(target.get('components') or [])
-    if not targets:
+        else:
+            binder = source_components(row['path'], row['binder_chains'], 'binder')
+    if selected_chains is not None:
+        binder = [component for component in binder if component['id'] in selected_chains]
+    targets = deepcopy((target or {}).get('components') or [])
+    if not targets and scope != 'whole_composition':
         raise ValueError('No independently declared target components are available')
     components, mapping = [], []
     for role, group in [('binder', binder), ('target', targets)]:
         for component in group:
-            label = chr(65 + len(components)) if len(components) < 26 else f'C{len(components)}'
+            label = component['id'] if scope == 'whole_composition' else (chr(65 + len(components)) if len(components) < 26 else f'C{len(components)}')
             components.append({**{k:v for k,v in component.items() if k not in {'source_residues', 'source'}}, 'id': label})
             mapping.append({'id': label, 'source_chain': component['id'], 'role': role,
                             'sequence': component.get('sequence')})
     ref = row['ref']
     params = deepcopy(params)
     params.update(complex_components=components,
-        sequence=''.join(c['sequence'] for c in binder) if model == 'esmfold2' else ':'.join(c.get('sequence', '') for c in components if c.get('type') == 'protein'),
+        sequence=('' if model == 'esmfold2' else ':').join(c.get('sequence', '') for c in components if c.get('type') == 'protein'),
         sequence_name=ref.get('design_id') or ref.get('native_output_id') or ref.get('native_record_id') or ref.get('artifact_id'),
         lineage_root_job_id=root.id, iteration_source_root_job_id=root.id,
         iteration_source_job_id=row['owner_job_id'], source_stage_job_id=row['owner_job_id'],
@@ -368,7 +392,7 @@ def prediction_request(root, row, target, model, params, placement):
         iteration_source_design_ids=[ref['design_id']] if ref['kind'] == 'design' else [])
     if ref['kind'] == 'design':
         params['source_design_id'] = ref['design_id']
-    child = JobCreate(name='selected-prediction', model_id=model, mode=MODES[model], params=params,
+    child = JobCreate(name='selected-prediction', model_id=model, mode=mode or MODES[model], params=params,
                       execution_target_id=placement)
     return child, {'target_binding': target, 'input_components': mapping,
                    'binder_chains': [m['id'] for m in mapping if m['role'] == 'binder'],
@@ -442,6 +466,8 @@ async def plan(session, root, retained):
             for parent_id, parent in list(steps.items()):
                 if parent['metadata']['stage_id'] != stage.input.stage_id or parent.get('superseded_by'):
                     continue
+                if getattr(stage.input, 'invocation_id', None) and parent['metadata'].get('invocation_id') != stage.input.invocation_id:
+                    continue
                 dependency_key = stage.id + ':' + parent_id
                 disposition = retained.setdefault('dependencies', {}).setdefault(dependency_key, {})
                 child = await session.get(Job, parent['job_id']) if parent.get('job_id') else None
@@ -475,20 +501,62 @@ async def plan(session, root, retained):
         invocations = stage.models if stage.kind != 'maturation' else [stage]
         for row, parents in sources:
             for invocation in invocations:
-                targets = row['targets'] if stage.kind == 'prediction' else [None]
+                # An explicit ensemble is one ordered invocation, not one copy
+                # for every independently selected candidate.
+                if getattr(invocation, 'input_groups', []) and row is not sources[0][0]:
+                    continue
+                whole = getattr(stage.input, 'scope', 'binder') == 'whole_composition'
+                targets = row['targets'] if stage.kind == 'prediction' and not whole else [None]
                 if not targets:
                     retained['errors'][stage.id + ':' + digest(row['ref'])] = 'No independently declared target input is available'
                 for target in targets:
                     for sample in range(invocation.params.get('num_parallel_jobs', 1) or 1):
                         key = digest([retained['round_id'], stage.id, row['ref'], invocation.model_id, target, sample])
+                        if request.round_plan.schema_version == 2:
+                            key = digest([retained['round_id'], stage.id, row['ref'], invocation_key(invocation),
+                                          stage.input.model_dump(mode='json'), target, sample,
+                                          [g.model_dump(mode='json') for g in getattr(invocation, 'input_groups', [])]])
                         step_id = str(uuid.uuid5(uuid.NAMESPACE_URL, 'bms:selected-round:' + key))
                         if step_id in steps:
                             continue
                         try:
                             model = invocation.model_id
+                            mode = invocation_mode(invocation)
+                            placement = (invocation.execution_target_id if request.round_plan.schema_version == 2
+                                         and 'execution_target_id' in invocation.model_fields_set else request.execution_target_id)
                             binding = {}
                             if stage.kind == 'prediction':
-                                child, binding = prediction_request(root, row, target, model, invocation.params, request.execution_target_id)
+                                child, binding = prediction_request(root, row, target, model, invocation.params, placement,
+                                    scope=getattr(stage.input, 'scope', 'binder'), selected_chains=getattr(stage.input, 'chains', None), mode=mode)
+                            elif model == 'caliby_experimental':
+                                from services.caliby_native import bind_operation
+                                groups, refs = [], []
+                                for group in getattr(invocation, 'input_groups', []):
+                                    states = []
+                                    for state in group.states:
+                                        resolved = await resolve_ref(session, root, state.candidate_ref, output_format='native')
+                                        if not resolved.get('path'):
+                                            raise ValueError('Caliby requires selected coordinates, not an ancestral sequence backbone')
+                                        refs.append(resolved['ref'])
+                                        states.append({'state_id': state.state_id, 'path': resolved['path'],
+                                            **(state.settings.model_dump(mode='json') if state.settings is not None else {})})
+                                    groups.append({'ensemble_id': group.ensemble_id, 'states': states})
+                                if not groups:
+                                    if not row.get('path'):
+                                        raise ValueError('Caliby requires selected coordinates')
+                                    groups = [{'ensemble_id': digest(row['ref']), 'states': [{'state_id': digest(row['ref']), 'path': row['path']}]}]
+                                    refs = [row['ref']]
+                                child = JobCreate(name='selected-caliby', model_id=model, mode=mode,
+                                    params=bind_operation(mode, invocation.params, groups), execution_target_id=placement)
+                                binding = {'source_refs': refs}
+                            elif model == 'ligandmpnn':
+                                if not row.get('selection_dir'):
+                                    raise ValueError('LigandMPNN requires selected coordinates')
+                                directory = structural_selection(row, root.id)
+                                manifest = json.loads((directory / 'selection_manifest.json').read_text())
+                                child = JobCreate(name='selected-ligandmpnn', model_id=model, mode=mode,
+                                    params={**deepcopy(invocation.params), 'input_pdb': manifest['designs'][0]['selection_pdb_path']},
+                                    execution_target_id=placement)
                             else:
                                 if not row.get('selection_dir'):
                                     raise ValueError('This native model requires a structure; the selected output is sequence-only')
@@ -498,7 +566,8 @@ async def plan(session, root, retained):
                                              else structural_selection(row, root.id))
                                 explicit_stage = next(s for s in retained.get('submitted_request', retained['request'])['round_plan']['stages'] if s['id'] == stage.id)
                                 explicit = (explicit_stage['params'] if stage.kind == 'maturation' else
-                                    next(m['params'] for m in explicit_stage['models'] if m['model_id'] == model))
+                                    next(m['params'] for m in explicit_stage['models'] if
+                                         (m.get('invocation_id') or m['model_id']) == invocation_key(invocation)))
                                 params = role_defaults(model, invocation.params, explicit, row)
                                 if (model == 'binder_refinement' and params.get('ppiflow_task') == 'protein_binder_partial'
                                         and 'ppiflow_input_model' not in explicit):
@@ -506,8 +575,9 @@ async def plan(session, root, retained):
                                     prepared = json.loads((directory / 'selection_manifest.json').read_text())
                                     params['ppiflow_input_model'] = prepared_model(prepared['designs'][0]['selection_pdb_path'])
                                 base = model_request(operation=operation, params=params, source=owner,
-                                    root=root, selection_dir=directory, execution_target_id=request.execution_target_id)
+                                    root=root, selection_dir=directory, execution_target_id=placement)
                                 child = individual_model_requests(base, operation, directory)[0]
+                                child.mode = mode
                             child.name = f'binder-round-{step_id}'
                             child.params['num_parallel_jobs'] = 1
                             child.execution_policy = request.execution_policy.model_copy(deep=True)
@@ -515,6 +585,7 @@ async def plan(session, root, retained):
                             child = normalize_job_request(child)
                             metadata = {'schema_version': 1, 'round_id': retained['round_id'], 'step_id': step_id,
                                 'stage_id': stage.id, 'stage': stage.kind, 'model_id': model, 'root_job_id': root.id,
+                                'invocation_id': getattr(invocation, 'invocation_id', None), 'mode': mode,
                                 'source_job_id': row['owner_job_id'], 'source_ref': row['ref'],
                                 'source_design_id': row['ref'].get('design_id'),
                                 'backbone_design_id': row['ref'].get('design_id'),

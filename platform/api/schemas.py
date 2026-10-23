@@ -2,12 +2,13 @@
 Pydantic schemas for API request/response validation.
 """
 
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, model_validator, model_serializer
 from typing import Optional, List, Any, Literal
 from datetime import datetime
 from enum import Enum
 from services.fampnn_policy_admission import FampnnAnalysisOverrides
 from services.binder_source_materialization import StructureSourceRequest
+from services.caliby_native import ConformerSettings as CalibyConformerSettings
 
 
 def serialize_datetime(dt: datetime) -> str:
@@ -198,18 +199,50 @@ class SelectedRoundInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     selected: Literal[True] | None = None
     stage_id: str | None = None
+    invocation_id: str | None = Field(default=None, min_length=1)
+    scope: Literal['binder', 'whole_composition'] = 'binder'
+    chains: list[str] | None = None
 
     @model_validator(mode='after')
     def one_source(self):
         if (self.selected is not None) == (self.stage_id is not None):
             raise ValueError('Choose selected or an earlier stage')
+        if self.invocation_id is not None and self.stage_id is None:
+            raise ValueError('Invocation output requires an earlier stage')
         return self
+
+
+# Share the native mask domain, not a second scientific settings dictionary.
+class SelectedRoundState(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    state_id: str = Field(min_length=1)
+    candidate_ref: CandidateRef
+    settings: CalibyConformerSettings | None = None
+
+
+class SelectedRoundInputGroup(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    ensemble_id: str = Field(min_length=1)
+    # The first state is the native primary conformer; never sort or deduplicate.
+    states: list[SelectedRoundState] = Field(min_length=1)
 
 
 class SelectedRoundModel(BaseModel):
     model_config = ConfigDict(extra='forbid')
+    invocation_id: str | None = Field(default=None, min_length=1)
+    mode: str | None = Field(default=None, min_length=1)
+    execution_target_id: str | None = None
+    input_groups: list[SelectedRoundInputGroup] = Field(default_factory=list)
     model_id: str
     params: dict[str, Any] = Field(default_factory=dict)
+
+    @model_serializer(mode='wrap')
+    def placement_wire(self, handler):
+        payload = handler(self)
+        # Omitted placement inherits; explicit null means Local, including replay.
+        if 'execution_target_id' not in self.model_fields_set:
+            payload.pop('execution_target_id', None)
+        return payload
 
 
 class SelectedRoundStage(BaseModel):
@@ -228,26 +261,56 @@ class SelectedRoundStage(BaseModel):
             if self.models or self.model_id != 'binder_refinement' or self.mode != 'refine':
                 raise ValueError('Maturation uses binder_refinement/refine')
         else:
-            allowed = ({'proteinmpnn', 'fampnn', 'caliby_binder', 'protonpottsmpnn'}
+            allowed = ({'proteinmpnn', 'fampnn', 'caliby_binder', 'protonpottsmpnn', 'caliby_experimental', 'ligandmpnn'}
                        if self.kind == 'sequence_design' else {'protenix', 'boltz2', 'esmfold2'})
             if not self.models or self.model_id or self.mode or self.params:
                 raise ValueError('Design/prediction stages use models')
-            if any(m.model_id not in allowed for m in self.models) or len({m.model_id for m in self.models}) != len(self.models):
-                raise ValueError('Stage models must be supported and unique')
+            if any(m.model_id not in allowed for m in self.models):
+                raise ValueError('Stage models must be supported')
         return self
 
 
 class SelectedRoundPlan(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     stages: list[SelectedRoundStage] = Field(min_length=1)
+
+    @model_serializer(mode='wrap')
+    def historical_wire(self, handler):
+        payload = handler(self)
+        if self.schema_version == 1:
+            # Existing retained intent digests include this exact legacy wire.
+            # New default fields must not invalidate replay of an old request.
+            for stage in payload.get('stages', []):
+                for field in ('invocation_id', 'scope', 'chains'):
+                    stage.get('input', {}).pop(field, None)
+                for model in stage.get('models', []):
+                    for field in ('invocation_id', 'mode', 'execution_target_id', 'input_groups'):
+                        model.pop(field, None)
+        return payload
 
     @model_validator(mode='after')
     def dependencies(self):
         seen = set()
+        calls = {}
         for stage in self.stages:
+            models = stage.models
+            if self.schema_version == 1:
+                if len({m.model_id for m in models}) != len(models):
+                    raise ValueError('Legacy stage models must be unique')
+                if any(m.model_id in {'caliby_experimental', 'ligandmpnn'} or
+                       m.invocation_id is not None or m.mode is not None or m.input_groups or
+                       m.execution_target_id is not None for m in models):
+                    raise ValueError('Explicit invocation settings require plan v2')
+                if stage.input.scope != 'binder' or stage.input.chains is not None or stage.input.invocation_id:
+                    raise ValueError('Explicit input scope requires plan v2')
+            elif any(not m.invocation_id or not m.mode for m in models) or len({m.invocation_id for m in models}) != len(models):
+                raise ValueError('Plan v2 requires unique invocation IDs and native modes per stage')
             if stage.id in seen or (stage.input.stage_id is not None and stage.input.stage_id not in seen):
                 raise ValueError('Stage IDs must be unique and dependencies must name an earlier stage')
+            if stage.input.invocation_id and stage.input.invocation_id not in calls.get(stage.input.stage_id, set()):
+                raise ValueError('Input invocation must name an earlier call')
+            calls[stage.id] = {m.invocation_id for m in models}
             seen.add(stage.id)
         return self
 
