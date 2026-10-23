@@ -1,7 +1,10 @@
 import { api } from './api';
 
-export const isNativeBinderGeneration = (job: { model_id: string; mode: string } | undefined) => Boolean(job && (
-    (job.model_id === 'boltzgen' && ['protein_binder', 'nanobody_binder', 'peptide_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'].includes(job.mode))
+export const isNativeBinderGeneration = (job: { model_id: string; mode: string; params?: Record<string, unknown>; provenance?: Record<string, unknown> | null } | undefined) => Boolean(job && (
+    Boolean(job.provenance?.native_generation_publication)
+    || (job.model_id === 'protein_modification_experimental' && job.mode === 'de_novo_design'
+        && ['rfd4_proteina', 'complexa'].includes(String(job.params?.generator_model_id ?? job.params?.generator)))
+    || (job.model_id === 'boltzgen' && ['protein_binder', 'nanobody_binder', 'peptide_binder', 'antibody_binder', 'ligand_binder', 'ntp_binder', 'scaffold_around_ligand', 'backbone_docking'].includes(job.mode))
     || (['rfd4_proteina', 'complexa'].includes(job.model_id) && ['generate', 'evaluate'].includes(job.mode))
     || (job.model_id === 'ppiflow' && ['protein_binder', 'antibody_binder', 'nanobody_binder'].includes(job.mode))));
 export interface NativeGenerationDocument {

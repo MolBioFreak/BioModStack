@@ -10,7 +10,7 @@ import { StructureWorkbench } from '../../src/structureViewer/StructureWorkbench
 import Plot from 'react-plotly.js';
 import { api } from '../../src/lib/api';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
-import type { NativeGenerationRecord } from '../../src/lib/nativeBinderResults';
+import { isNativeBinderGeneration, type NativeGenerationRecord } from '../../src/lib/nativeBinderResults';
 import { BinderCandidateSets } from '../../src/components/BinderCandidateSets';
 import { readRoundStorage, writeRoundStorage, type CandidateSet, type CandidateRef } from '../../src/lib/binderSelectedRound';
 import { document as evidenceDocument, fixture as paeFixture } from '../fixtures/scientificViewerFixture';
@@ -24,7 +24,8 @@ const records = [
     { candidate_key: 'historical', metrics: { seq_length: 10, dsasa: null }, structures: [primary] },
 ];
 const original = api.defaults.adapter;
-beforeEach(() => { localStorage.clear(); sessionStorage.clear(); window.history.replaceState({}, '', '/'); vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))); });
+const materializations: unknown[] = [];
+beforeEach(() => { materializations.length = 0; localStorage.clear(); sessionStorage.clear(); window.history.replaceState({}, '', '/'); vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))); });
 let tree: ReactTestRenderer;
 let client: QueryClient;
 const flush = async () => { for (let i = 0; i < 10; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); }); };
@@ -33,6 +34,12 @@ const button = (name: string) => tree.root.findAllByType('button').find(node => 
 async function mount(props: Partial<React.ComponentProps<typeof NativeBinderGenerationResults>> = {}, rows: NativeGenerationRecord[] = records) {
     api.defaults.adapter = async config => {
         let data: unknown;
+        if (config.method === 'post' && config.url === '/api/files/materialize-structure') {
+            materializations.push(JSON.parse(config.data));
+            return { config, status: 200, statusText: 'OK', headers: {}, data: {
+                path: 'inputs/decoded/native.cif', decoded_path: 'inputs/decoded/native.cif', format: 'cif',
+                sha256: 'c'.repeat(64), decoded_sha256: 'c'.repeat(64), model_number: null, model_numbers: [1, 2] } };
+        }
         if (config.method !== 'get') throw new Error(`Unexpected ${config.method} ${config.url}`);
         if (config.url === '/api/jobs/job') data = { id: 'job', saved_selection_sets: [] };
         else if (config.url === '/api/binder-continuation/job/round') data = { job_id: 'job', state: 'not_requested', steps: {}, errors: {} };
@@ -60,6 +67,33 @@ it('sends the inspected native document and MODEL to MD without manufacturing a 
             returnTo: '/designs/job?native_candidate=native&artifact_id=alternate&target_state=B&model_number=2',
         });
     } finally { sender.mockRestore(); }
+});
+
+it('routes canonical CAD and parent generators without switching historical CAD Designs', () => {
+    expect(isNativeBinderGeneration({ model_id: 'protein_cad_experimental', mode: 'design' })).toBe(false);
+    expect(isNativeBinderGeneration({ model_id: 'protein_cad_experimental', mode: 'design', provenance: { native_generation_publication: {} } })).toBe(true);
+    for (const generator of ['rfd4_proteina', 'complexa']) {
+        expect(isNativeBinderGeneration({ model_id: 'protein_modification_experimental', mode: 'de_novo_design', params: { generator_model_id: generator } })).toBe(true);
+        expect(isNativeBinderGeneration({ model_id: 'protein_modification_experimental', mode: 'de_novo_design', params: { generator } })).toBe(true);
+    }
+});
+
+it('decodes a compressed exact document through existing materialization without changing its identity', async () => {
+    const compressed = { ...alternate, logical_path: 'collected/protein_cad_native/native/exact.cif.gz', download_url: '/api/files/exact.cif.gz' };
+    await mount({ artifactId: 'alternate', targetState: 'B' }, [{ candidate_key: 'native',
+        candidate_ref: { kind: 'native_document', job_id: 'job', artifact_id: 'alternate', target_state: 'B' }, structures: [compressed] }]);
+    expect(materializations).toEqual([{ job_id: 'job', document: { artifact_id: 'alternate', target_state: 'B' }, expected_sha256: 'b'.repeat(64), output_format: 'native' }]);
+    expect(tree.root.findByType(StructureWorkbench).props).toMatchObject({ format: 'cif', structureDocumentId: 'alternate',
+        structureUrl: '/api/files/download/inputs/decoded/native.cif', structureContentSha256: 'c'.repeat(64) });
+});
+
+it('keeps sequence-only CAD output inspectable without a synthetic Design or MD structure', async () => {
+    await mount({}, [{ candidate_key: 'sequence', native_output_id: 'native-sequence', sequence: 'ACDE', structures: [],
+        candidate_ref: { kind: 'native_sequence', job_id: 'job', publication_ref: 'publication', native_output_id: 'sequence' } }]);
+    expect(tree.root.findAllByType(StructureWorkbench)).toHaveLength(0);
+    expect(button('Use as MD starting structure')).toBeUndefined();
+    expect(materializations).toEqual([]);
+    expect(text(tree.root)).toContain('No saved molecule');
 });
 
 it('uses page scrolling for candidates and readable measurements below the full-width molecule', async () => {

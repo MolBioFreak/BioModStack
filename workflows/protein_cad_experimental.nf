@@ -1,7 +1,7 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
-include { PrepProteinCadRequest ; RunLaProteina ; RunDISCO ; FinalizeProteinCadOutputs } from '../modules/protein_cad_experimental.nf'
+include { PrepProteinCadRequest ; RunLaProteina ; RunDISCO } from '../modules/protein_cad_experimental.nf'
 
 workflow PROTEIN_CAD_EXPERIMENTAL {
     main:
@@ -9,27 +9,27 @@ workflow PROTEIN_CAD_EXPERIMENTAL {
 
         def backend = (params.pcad_backend ?: 'disco').toString().trim().toLowerCase()
 
+        def native_pdbs
+        def native_jsons
+        def native_manifest
+
         if (backend == 'laproteina') {
             RunLaProteina(PrepProteinCadRequest.out.request, PrepProteinCadRequest.out.input_dir)
-            FinalizeProteinCadOutputs(
-                RunLaProteina.out.pdbs.collect(),
-                RunLaProteina.out.jsons.collect(),
-                RunLaProteina.out.manifest,
-            )
+            native_pdbs = RunLaProteina.out.pdbs
+            native_jsons = RunLaProteina.out.jsons
+            native_manifest = RunLaProteina.out.manifest
         }
         else {
             RunDISCO(PrepProteinCadRequest.out.request, PrepProteinCadRequest.out.input_dir)
-            FinalizeProteinCadOutputs(
-                RunDISCO.out.pdbs.collect(),
-                RunDISCO.out.jsons.collect(),
-                RunDISCO.out.manifest,
-            )
+            native_pdbs = RunDISCO.out.pdbs
+            native_jsons = RunDISCO.out.jsons
+            native_manifest = RunDISCO.out.manifest
         }
 
     emit:
-        pdbs = FinalizeProteinCadOutputs.out.pdbs
-        jsons = FinalizeProteinCadOutputs.out.jsons
-        manifest = FinalizeProteinCadOutputs.out.manifest
+        pdbs = native_pdbs
+        jsons = native_jsons
+        manifest = native_manifest
 }
 
 workflow {

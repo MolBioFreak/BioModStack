@@ -85,11 +85,22 @@ process RunLaProteina {
     path '*.log'
 
     script:
+    def nativeDestination = "'" + "${params.out_dir}/collected/protein_cad_native".replace("'", "'\"'\"'") + "'"
     """
+    native_status=0
     python3 ${params.code_root}/scripts/run_laproteina_inference.py \\
         --request ${request_json} \\
         --input-dir ${input_dir} \\
-        --output-dir .
+        --output-dir . || native_status=\$?
+    if [ "\$native_status" -ne 0 ]; then
+        # Nextflow publishDir skips failed tasks. Retain the same canonical native
+        # tree before propagating the original exit status (also on remote workers).
+        mkdir -p ${nativeDestination} || true
+        for member in raw invocation_* design_manifest.json laproteina_publication.json; do
+            [ ! -e "\$member" ] || cp -R "\$member" ${nativeDestination} || true
+        done
+    fi
+    exit "\$native_status"
     """
 }
 
@@ -120,40 +131,21 @@ process RunDISCO {
     path '*.log'
 
     script:
+    def nativeDestination = "'" + "${params.out_dir}/collected/protein_cad_native".replace("'", "'\"'\"'") + "'"
     """
+    native_status=0
     python3 ${params.code_root}/scripts/run_disco_inference.py \\
         --request ${request_json} \\
         --input-dir ${input_dir} \\
-        --output-dir .
-    """
-}
-
-process FinalizeProteinCadOutputs {
-    label 'process_low'
-
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: 'published/*.pdb', saveAs: { filename -> filename.replace('published/', '') }
-    publishDir "${params.out_dir}/pdb_files", mode: 'copy', pattern: 'published/confidence_*.json', saveAs: { filename -> filename.replace('published/', '') }
-    publishDir "${params.out_dir}/metadata", mode: 'copy', pattern: 'published/design_manifest.json', saveAs: { filename -> filename.replace('published/', '') }
-
-    input:
-    path pdb_files
-    path metadata_jsons
-    path design_manifest
-
-    output:
-    path 'published/*.pdb', optional: true, emit: pdbs
-    path 'published/confidence_*.json', optional: true, emit: jsons
-    path 'published/design_manifest.json', emit: manifest
-
-    script:
-    """
-    mkdir -p published
-    for pdb in ${pdb_files}; do cp "\$pdb" published/; done
-    cp ${design_manifest} published/design_manifest.json
-    for meta in ${metadata_jsons}; do
-        base=\$(basename "\$meta")
-        target="\${base#generator_}"
-        cp "\$meta" "published/confidence_\${target}"
-    done
+        --output-dir . || native_status=\$?
+    if [ "\$native_status" -ne 0 ]; then
+        # Nextflow publishDir skips failed tasks. Retain the same canonical native
+        # tree before propagating the original exit status (also on remote workers).
+        mkdir -p ${nativeDestination} || true
+        for member in raw native disco_output design_manifest.json disco_*.json native_events.jsonl; do
+            [ ! -e "\$member" ] || cp -R "\$member" ${nativeDestination} || true
+        done
+    fi
+    exit "\$native_status"
     """
 }

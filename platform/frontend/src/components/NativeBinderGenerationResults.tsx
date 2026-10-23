@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { materializeExactStructure } from '../lib/api';
 import { BinderPredictionEvidence } from './BinderPredictionEvidence';
 import { BindCraft2SettingsReadback } from './BindCraft2NativeResults';
 import { metricKeys, numericMetricKeys, formatMetric, summarizeMetric, type CohortRow } from '../lib/cohortAnalytics';
@@ -17,6 +18,23 @@ import { describeCohortMetric } from '../lib/cohortMetricPresentation';
 // Load useful visualization and operation owners only when their view is demanded.
 const CohortAnalytics = lazy(() => import('./CohortAnalytics').then(module => ({ default: module.CohortAnalytics })));
 const StructureWorkbench = lazy(() => import('../structureViewer/StructureWorkbench').then(module => ({ default: module.StructureWorkbench })));
+
+function NativeDocumentWorkbench({ jobId, document, collapsed }: { jobId: string; document: NativeGenerationDocument; collapsed: boolean }) {
+    const encoded = /\.(?:cif|mmcif|bcif)(?:\.(?:gz|zst))?(?:$|\?)/i.test(document.logical_path ?? document.download_url ?? '')
+        && /(?:\.(?:gz|zst)|\.bcif)(?:$|\?)/i.test(document.logical_path ?? document.download_url ?? '');
+    const acquired = useQuery({ queryKey: ['native-document-view', jobId, document.artifact_id, document.sha256],
+        enabled: encoded, retry: false, staleTime: Infinity,
+        queryFn: () => materializeExactStructure({ job_id: jobId, document: { artifact_id: document.artifact_id, target_state: document.target_state ?? undefined },
+            expected_sha256: document.sha256, output_format: 'native' }) });
+    if (encoded && !acquired.data) return <p role="status">{acquired.isError ? 'Exact native document could not be decoded. Original download remains available.' : 'Decoding exact native document…'}</p>;
+    const decoded = acquired.data;
+    const path = decoded?.decoded_path ?? decoded?.path;
+    const url = encoded && path ? `/api/files/download/${path.split('/').map(encodeURIComponent).join('/')}` : document.download_url;
+    return <StructureWorkbench mode="standard" structureUrl={url}
+        format={encoded || /\.(cif|mmcif)(?:$|\?)/i.test(document.logical_path ?? document.download_url ?? '') ? 'cif' : 'pdb'}
+        structureDocumentId={document.artifact_id} structureContentSha256={encoded ? decoded?.decoded_sha256 ?? decoded?.sha256 : document.sha256}
+        alphafoldView={false} height={520} showSequenceTrack showMeasurements showM6Workbench hideControls={false} workbenchCollapsed={collapsed} />;
+}
 
 export interface NativeWorkbenchAdapter {
     key: string; title: string; recordLabel?: string;
@@ -362,7 +380,7 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                             <label className="mb-2 block text-xs">Structure <select className={`${control} ml-2 max-w-full`} aria-label="Published document" value={document ? String(documents.indexOf(document)) : ''} onChange={event => { const doc = documents[Number(event.target.value)]; if (doc) inspect(row, doc); }}>
                                 {!document && <option value="">{explicit ? 'Requested document unavailable' : 'Choose a saved structure'}</option>}{documents.map((doc, i) => <option key={`${doc.artifact_id}:${doc.target_state}:${i}`} value={i}>{nativeDocumentLabel(doc)}{doc.primary ? ' · primary' : ''}</option>)}
                             </select></label>
-                            {document?.download_url ? <StructureWorkbench key={`${document.artifact_id}:${document.target_state}:${document.download_url}`} mode="standard" structureUrl={document.download_url} format={/\.(cif|mmcif)(?:$|\?)/i.test(document.logical_path ?? document.download_url) ? 'cif' : 'pdb'} structureDocumentId={document.artifact_id} structureContentSha256={document.sha256} alphafoldView={false} height={520} showSequenceTrack showMeasurements showM6Workbench hideControls={false} workbenchCollapsed={!viewerToolsOpen} /> : <p role="status">{explicit ? 'Requested native document is unavailable. The Design primary structure is not substituted.' : documents.some(doc => doc.download_url) ? 'Choose a saved structure above to inspect this candidate.' : 'No downloadable native structure was published for this record.'}</p>}
+                            {document?.download_url ? <NativeDocumentWorkbench key={`${document.artifact_id}:${document.target_state}:${document.download_url}`} jobId={jobId} document={document} collapsed={!viewerToolsOpen} /> : <p role="status">{explicit ? 'Requested native document is unavailable. The Design primary structure is not substituted.' : documents.some(doc => doc.download_url) ? 'Choose a saved structure above to inspect this candidate.' : 'No downloadable native structure was published for this record.'}</p>}
                         </div>}
                         </div>{adapter?.related?.(row)}</div>
                         {document?.artifact_id && <nav aria-label="Continue exact native document">{(['redesign', 'sequence', 'prediction'] as const).map(destination => {

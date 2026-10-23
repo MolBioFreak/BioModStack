@@ -12,7 +12,10 @@ async def resolve_native_source(session, job_id: str, artifact_id: str) -> tuple
     # root or a surviving ancestor Job. Lineage remains descriptive metadata.
     from services.binder_diagnostic_selection import root_id
     lineage_root = root_id(owner)
-    if owner.model_id in {'rfd4_proteina', 'complexa'}:
+    from services.rfd4_proteina_results import has_native_publication, publication_model, PUBLICATIONS
+    if has_native_publication(owner):
+        producer = publication_model(owner)
+        prefix = PUBLICATIONS[producer][0] + '/'
         # The native index/ingester registers output-relative JobArtifacts. Do
         # not interpret its observation manifest as a second custody authority.
         artifact = await session.get(JobArtifact, artifact_id)
@@ -24,7 +27,7 @@ async def resolve_native_source(session, job_id: str, artifact_id: str) -> tuple
         relative = Path(artifact.logical_path)
         if (relative.is_absolute() or '..' in relative.parts or '\\' in artifact.logical_path
                 or relative.as_posix() != artifact.logical_path
-                or not artifact.logical_path.startswith(f'collected/{owner.model_id}/')
+                or not artifact.logical_path.startswith(prefix)
                 or structure_suffix(relative) not in {'.pdb', '.cif', '.mmcif', '.bcif',
                     '.cif.gz', '.mmcif.gz', '.cif.zst', '.mmcif.zst', '.bcif.gz', '.bcif.zst'}):
             raise HTTPException(404, 'Selected native structure not found')
@@ -37,7 +40,7 @@ async def resolve_native_source(session, job_id: str, artifact_id: str) -> tuple
             raise ValueError('Selected native document identity changed')
         return expected, {'artifact_id': artifact.id, 'artifact_sha256': artifact.sha256,
             'owner_job_id': owner.id, 'lineage_root_job_id': lineage_root,
-            'source_parent_job_id': owner.parent_job_id, 'producer_model_id': owner.model_id,
+            'source_parent_job_id': owner.parent_job_id, 'producer_model_id': producer,
             'target_state': document.get('target_state'), 'producer_document': document}
     owners = {
         'bindcraft2': ('bindcraft2_native_publication', 'bindcraft2/native/'),

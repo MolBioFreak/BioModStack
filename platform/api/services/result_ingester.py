@@ -5118,8 +5118,8 @@ async def _ingest_job_results(
     with session.no_autoflush:
         job_result = await session.execute(select(Job).where(Job.id == job_id))
         current_job = job_result.scalar_one_or_none()
-    if current_job is not None and current_job.model_id in {'rfd4_proteina', 'complexa'}:
-        from services.rfd4_proteina_results import publish_native_generation
+    from services.rfd4_proteina_results import has_native_publication, publish_native_generation
+    if current_job is not None and has_native_publication(current_job, output_path):
         await publish_native_generation(session, current_job, output_path)
         return 0  # Native documents/observations are not synthetic Designs.
     if current_job is not None and current_job.model_id == "nanopore":

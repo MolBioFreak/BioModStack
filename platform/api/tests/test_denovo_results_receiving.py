@@ -47,6 +47,9 @@ async def test_rfd3_v2_incremental_empty_partial_and_replacement(admission, tmp_
         empty = (await client.get('/result')).json()
         assert empty['counts']['generated'] == 0 and empty['population']['missing'] == 2
         assert empty['execution_status'] == 'failed' and empty['candidates'] == []
+        from services.global_experiments.adapters import NativeBinderJobResultAdapter
+        project_receipt = await NativeBinderJobResultAdapter(job.model_id).verify(admission, job.id)
+        assert project_receipt['metadata']['job_status'] == 'failed'
         descriptors = []
         for role, name, data in [('candidate_structure', 'one.cif', 'data_fixture\n'), ('candidate_metadata', 'one.json', '{}')]:
             artifact = output / name; artifact.write_text(data)

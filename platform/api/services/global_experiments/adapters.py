@@ -3301,6 +3301,10 @@ class NativeBinderJobResultAdapter:
     _MODES = {
         "bindcraft2": {"campaign", "resume", "score", "rank", "filter", "campaign_output", "archive", "unarchive"},
         "ligandmpnn": {"interface_context"},
+        "rfd4_proteina": {"generate", "evaluate"},
+        "complexa": {"generate", "evaluate"},
+        "protein_modification_experimental": {"de_novo_design"},
+        "protein_cad_experimental": {"design"},
         "esmfold2": {"blind_pose"},
         "ppiflow": {"protein_binder", "antibody_binder", "nanobody_binder"},
         "boltzgen": {"protein_binder", "nanobody_binder", "peptide_binder", "antibody_binder", "ligand_binder", "ntp_binder", "scaffold_around_ligand", "backbone_docking"},
@@ -3318,7 +3322,6 @@ class NativeBinderJobResultAdapter:
         statement = select(Job).where(
             Job.model_id == self.model_id,
             Job.mode.in_(self._MODES[self.model_id]),
-            Job.status.in_(("completed", "succeeded")),
         )
         if normalized:
             pattern = f"%{normalized}%"
@@ -3334,11 +3337,23 @@ class NativeBinderJobResultAdapter:
         job = await core_session.get(Job, entity_id)
         if job is None or job.model_id != self.model_id or job.mode not in self._MODES[self.model_id]:
             raise AdapterError("entity_not_found", "Native result does not belong to this adapter")
-        if job.status not in {"completed", "succeeded"}:
-            raise AdapterError("source_contract_unavailable", "Native Job result is not complete")
+        # Execution status is evidence, not native population membership. Failed,
+        # cancelled and still-running Jobs may own a registered partial publication.
         from services.core_protein_result_contract import CandidateIntegrityError
+        from services.rfd4_proteina_results import has_native_publication
+        from fastapi import HTTPException
         try:
-            if self.model_id == "bindcraft2":
+            if has_native_publication(job):
+                from services.rfd4_proteina_results import read_published_generation_page
+                publication = (await read_published_generation_page(job, core_session, limit=1))['publication']
+            elif self.model_id == 'protein_modification_experimental' and (job.params or {}).get('rfd3_generation_request'):
+                from services.rfd3_generation_results import read_generation_results
+                result = await read_generation_results(job, core_session, limit=1)
+                publication = {key: result[key] for key in ('schema', 'result_manifest_sha256', 'result_schema', 'population', 'counts')}
+            elif self.model_id in {'protein_modification_experimental', 'protein_cad_experimental'}:
+                # Historical Design-backed receiving remains with its existing owner.
+                publication = await TypedCoreJobResultAdapter(self.model_id).verify(core_session, entity_id)
+            elif self.model_id == "bindcraft2":
                 from services.bindcraft2_publication import read_published_native_results
                 _, publication = await read_published_native_results(job, core_session)
             elif self.model_id in {"ppiflow", "boltzgen"}:
@@ -3353,7 +3368,7 @@ class NativeBinderJobResultAdapter:
             else:
                 from services.binder_blind_pose_selected import read_selected
                 publication = (await read_selected(job, core_session))["publication"]
-        except (ValueError, OSError, KeyError, TypeError, CandidateIntegrityError) as exc:
+        except (ValueError, OSError, KeyError, TypeError, CandidateIntegrityError, HTTPException) as exc:
             raise AdapterError("source_contract_unavailable", "Native publication is unavailable or changed") from exc
         return _receipt(
             self, entity_id=job.id,
