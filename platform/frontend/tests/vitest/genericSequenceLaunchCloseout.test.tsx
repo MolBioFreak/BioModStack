@@ -311,6 +311,7 @@ vi.mock('../../src/components/SequenceManagerModal', () => ({ SequenceManagerMod
 vi.mock('../../src/components/TemplateManagerModal', () => ({ TemplateManagerModal: () => null }));
 import { JobSubmission } from '../../src/components/JobSubmission';
 import { prepareDeNovoContinuation } from '../../src/lib/deNovoContinuation';
+import recipes from './fixtures/deNovoContinuationRecipes.json';
 
 it('prediction handoff uses native author/model residue identity, not display-PDB chain truncation or nucleic acids', async () => {
     const source = { job_id: 'source', design_id: 'selected', output_format: 'native' as const };
@@ -322,7 +323,7 @@ it('prediction handoff uses native author/model residue identity, not display-PD
     ];
     api.defaults.adapter = async config => {
         expect(config.url).toBe('/api/files/materialize-structure');
-        return { data: { path: retained.path, format: 'cif', source_structure: retained, author_residues: residues }, status: 200, statusText: 'OK', headers: {}, config };
+        return { data: { path: retained.path, format: 'cif', source_structure: retained, author_residues: residues, native_recipe: recipes.legacyAuthor }, status: 200, statusText: 'OK', headers: {}, config };
     };
     const draft = await prepareDeNovoContinuation(source, 'prediction');
     expect(draft).toMatchObject({ source_structure: retained, sequence: '', _continuation_chains: [{ model_number: 2, id: 'AA', sequence: 'AG' }] });

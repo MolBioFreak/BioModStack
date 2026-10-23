@@ -1242,6 +1242,13 @@ export const uploadImmutableFile = async (path: string, file: File, sha256: stri
 };
 
 export interface StructureMaterialization {
+    native_recipe?: {
+        complex_components: import('../components/protenixChemistry').ProtenixComponent[];
+        covalent_bonds: import('../components/protenixChemistry').ProtenixBond[];
+        entries: Array<{ id: string; model_number: number; auth_asym_id: string; positions: unknown[] }>;
+        unresolved: unknown[];
+        declared_chemistry?: Record<string, unknown>;
+    };
     source_structure?: StructureSourceSelection;
     original_path?: string; original_sha256?: string;
     path: string; format: 'pdb' | 'cif' | 'bcif'; sha256: string;

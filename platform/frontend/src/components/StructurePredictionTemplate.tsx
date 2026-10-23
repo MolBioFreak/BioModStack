@@ -1,4 +1,5 @@
 import { BoltzChemistryControls, type BoltzConstraint, type BoltzProperty } from './BoltzChemistryControls';
+import type { ContinuationRecipe } from '../lib/deNovoContinuation';
 import { ProtenixChemistryControls } from './ProtenixChemistryControls';
 import { transportProtenixComponent, identifyProtenixComponent, protenixEntityKey, remapProtenixEndpoints, protenixEndpointErrors, orderedProtenixComponents, updateProtenixComponent, type ProtenixComponent, type ProtenixBond, type ProtenixConstraint } from './protenixChemistry';
 import { Esmfold2SettingsControls } from './Esmfold2SettingsControls';
@@ -232,7 +233,8 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
     const continuationCandidateSource = initialValues?._continuation_source ?? initialValues?.source_structure;
     const [continuationSource, setContinuationSource] = useState(initialValues?.source_structure);
     const [continuationChain, setContinuationChain] = useState(initialValues?._continuation_chain ?? '');
-    const continuationChains = initialValues?._continuation_chains as Array<{ model_number: number; id: string; sequence: string }> | undefined;
+    const continuationRecipe = initialValues?._continuation_recipe as ContinuationRecipe | undefined;
+    const continuationChains = initialValues?._continuation_chains as Array<{ model_number: number; id: string; auth_asym_id?: string; sequence: string; component?: ProtenixComponent }> | undefined;
     const [sequence, setSequence] = useState(initialPrimarySequence);
     const [sequenceName, setSequenceName] = useState(initialPrimaryName);
     const [sequenceHandoffError, setSequenceHandoffError] = useState('');
@@ -760,6 +762,7 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
             source_structure: continuationSource,
             _source_prepared: initialValues?._source_prepared,
             _continuation_source: continuationCandidateSource,
+            _continuation_recipe: continuationRecipe,
             _continuation_chains: continuationChains, _continuation_chain: continuationChain,
             primary_chain_id: continuationChain ? primaryChainId : undefined,
             execution_target_id: executionTargetId ?? null,
@@ -1440,14 +1443,47 @@ export function StructurePredictionTemplate({ onBack, initialValues: savedInitia
                         setSequence(chain?.sequence ?? '');
                         if (chain) {
                             setPrimaryChainId(chain.id);
+                            if (chain.component) setPrimaryChemistry(identifyProtenixComponent(structuredClone(chain.component), protenixEntityKey(primaryChemistry)));
                             setContinuationSource(continuationCandidateSource ? { ...continuationCandidateSource, model_number: chain.model_number } : undefined);
                         } else setContinuationSource(undefined);
                     }}>
                         <option value="">Select a protein chain…</option>
-                        {continuationChains.map(chain => <option key={`${chain.model_number}:${chain.id}`} value={`${chain.model_number}:${chain.id}`}>Model {chain.model_number} · author chain {chain.id}</option>)}
+                        {continuationChains.map(chain => <option key={`${chain.model_number}:${chain.id}`} value={`${chain.model_number}:${chain.id}`}>Model {chain.model_number} · author chain {chain.auth_asym_id ?? chain.id}</option>)}
                     </select>
                 </label>
                 <p className="text-sm text-slate-300">These are the published residue sequences. Generated backbones may contain placeholder sequences; prediction does not validate a designed sequence. Edit the sequence below if needed. The generated pose is not used as conditioning.</p>
+                {continuationRecipe && <>
+                    <label className="block text-sm">Adopt whole molecular recipe with explicitly selected primary protein
+                        <select aria-label="Adopt native molecular recipe" value="" onChange={event => {
+                            const chosen = continuationRecipe.complex_components.find(c => c.id === event.target.value);
+                            const entry = continuationRecipe.entries.find(e => e.id === chosen?.id);
+                            if (!chosen || !entry) return;
+                            const selectedIds = continuationRecipe.entries.filter(e => e.model_number === entry.model_number).map(e => e.id);
+                            const all = continuationRecipe.complex_components;
+                            const components = all.flatMap((c, i) => selectedIds.includes(c.id) ? [identifyProtenixComponent(structuredClone(c), `recipe:${i}`)] : []);
+                            const selectedBonds = continuationRecipe.covalent_bonds.filter(bond =>
+                                selectedIds.includes(all[(bond.left_entity ?? bond.entity1 ?? 0) - 1]?.id) &&
+                                selectedIds.includes(all[(bond.right_entity ?? bond.entity2 ?? 0) - 1]?.id));
+                            const bonds = remapProtenixEndpoints(all.map(c => c.id), components.map(c => c.id), selectedBonds).bonds;
+                            const keys = components.map(protenixEntityKey);
+                            originalComponentIds.current = keys; setEndpointRoster(keys);
+                            setPrimaryChemistry(components.find(c => c.id === chosen.id)!);
+                            setNativeLigands(components.filter(c => c.id !== chosen.id).map(c => ({ ...c, name: c.name ?? '' })));
+                            setSequence(chosen.sequence ?? ''); setPrimaryChainId(chosen.id);
+                            setProtenixBonds(bonds);
+                            setProtenixConstraint(undefined);
+                            setSequenceAnnotationOrigins(Object.fromEntries(components.filter(c => c.sequence).map(c => [protenixEntityKey(c), c.sequence!])));
+                            setContinuationChain(`${entry.model_number}:${chosen.id}`);
+                            setContinuationSource(continuationCandidateSource ? { ...continuationCandidateSource, model_number: entry.model_number } : undefined);
+                        }}>
+                            <option value="">Choose primary protein and adopt…</option>
+                            {continuationChains?.map(c => <option key={`${c.model_number}:${c.id}`} value={c.id}>Whole composition · primary {c.id} · model {c.model_number}</option>)}
+                        </select>
+                    </label>
+                    <details><summary>Retained molecular recipe and unresolved source evidence</summary><pre className="whitespace-pre-wrap">{JSON.stringify(continuationRecipe, null, 2)}</pre></details>
+                    <p>Only explicit molecular composition is adopted. Coordinates, generated pose restraints and templates are not prediction inputs. Unresolved observations remain visible for review.</p>
+                </>}
+                {!continuationRecipe && <p>Native recipe unavailable. Retained author positions: {JSON.stringify(initialValues?._source_prepared?.author_residues ?? [])}</p>}
                 <button type="button" onClick={() => { setContinuationSource(undefined); setContinuationChain(''); setSequence(''); }}>Clear selected source</button>
             </section>}
             {/* Header */}

@@ -1,6 +1,8 @@
 import { materializeExactStructure, type StructureSourceSelection, type StructureMaterialization } from './api';
 
 
+export type ContinuationRecipe = NonNullable<StructureMaterialization['native_recipe']>;
+
 export type DeNovoDestination = 'redesign' | 'sequence' | 'prediction';
 export const sequenceDestinations = [
     ['proteinmpnn', 'design', 'ProteinMPNN design'],
@@ -66,18 +68,14 @@ export async function prepareDeNovoContinuation(source: StructureSourceSelection
         _redesign_source: { type: 'run', name: prepared.path.split('/').pop(), path: prepared.path,
             url: `/api/files/download/${encodeURIComponent(prepared.path)}`, sourceStructure: retainedSource, prepared },
     };
-    // Use the materializer's native author residue inventory, not the display
-    // CIF-to-PDB projection (which cannot preserve multi-character author chains).
-    const aminoAcids: Record<string, string> = { ALA: 'A', ARG: 'R', ASN: 'N', ASP: 'D', CYS: 'C', GLN: 'Q', GLU: 'E', GLY: 'G', HIS: 'H', ILE: 'I', LEU: 'L', LYS: 'K', MET: 'M', PHE: 'F', PRO: 'P', SER: 'S', THR: 'T', TRP: 'W', TYR: 'Y', VAL: 'V', MSE: 'M', HYP: 'P', PYL: 'O', SEC: 'U', UNK: 'X' };
-    const chains = new Map<string, { model_number: number; id: string; sequence: string }>();
-    for (const residue of native.author_residues) {
-        const letter = aminoAcids[residue.residue_name];
-        if (!letter) continue; // Never translate DNA/RNA/ligands into protein.
-        const key = JSON.stringify([residue.model_number, residue.auth_asym_id]);
-        const chain = chains.get(key) ?? { model_number: residue.model_number, id: residue.auth_asym_id, sequence: '' };
-        chain.sequence += letter; chains.set(key, chain);
-    }
-    return { ...common, _continuation_chains: [...chains.values()], sequence: '' };
+    // The model-owned recipe, not a browser amino-acid alphabet, owns chemistry.
+    const recipe = native.native_recipe;
+    const chains = recipe?.complex_components.flatMap(component => {
+        const entry = recipe.entries.find(item => item.id === component.id);
+        return entry && ['protein', 'peptide'].includes(component.type)
+            ? [{ model_number: entry.model_number, id: component.id, auth_asym_id: entry.auth_asym_id, sequence: component.sequence ?? '', component }] : [];
+    }) ?? [];
+    return { ...common, _continuation_recipe: recipe, _continuation_chains: chains, sequence: '' };
 }
 
 export function inspectedResultState() {

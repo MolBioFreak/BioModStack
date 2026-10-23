@@ -1,4 +1,9 @@
 import React, { act } from 'react';
+import recipes from './fixtures/deNovoContinuationRecipes.json';
+import { writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
+const protenixSchema = JSON.parse(execFileSync(process.env.BMS_TEST_API_PYTHON ?? '../api/.venv/bin/python', ['-c', 'import json; from scripts.protenix_chemistry import parameter_schema; print(json.dumps(parameter_schema()))'], { cwd: resolve('../..'), encoding: 'utf8' }));
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -7,6 +12,8 @@ import { isolateDeNovoTransport } from './deNovoTransport';
 import { api } from '../../src/lib/api';
 import { NativeBinderGenerationResults } from '../../src/components/NativeBinderGenerationResults';
 import { JobSubmission } from '../../src/components/JobSubmission';
+import { StructurePredictionTemplate } from '../../src/components/StructurePredictionTemplate';
+import { prepareDeNovoContinuation } from '../../src/lib/deNovoContinuation';
 import ShapeBlueprintTemplate from '../../src/components/ShapeBlueprintTemplate';
 import { ThemeProvider } from '../../src/components/ThemeProvider';
 
@@ -26,7 +33,7 @@ const documents = [
 const source = { job_id: jobId, document: { artifact_id: 'alternate', target_state: 'B' }, model_number: 2 };
 const materialized = {
     path: 'inputs/retained/alternate.pdb', format: 'pdb', sha256: 'a'.repeat(64), model_number: 2,
-    source_structure: source,
+    source_structure: source, native_recipe: recipes.simple,
     author_residues: [
         { model_number: 2, auth_asym_id: 'A', auth_seq_id: 1, residue_name: 'ALA' },
         { model_number: 2, auth_asym_id: 'A', auth_seq_id: 2, residue_name: 'GLY' },
@@ -87,6 +94,7 @@ beforeEach(() => {
         else if (url === '/api/jobs' && config.method === 'post') throw Error('Offline capture: no Job created');
         else if (['/api/templates', '/api/user-templates'].includes(url)) data = [];
         else if (url === '/api/models/frustrampnn/integration') data = { workflows: {} };
+        else if (url === '/api/models/protenix') data = { id: 'protenix', params: [], modes: [{ id: 'complex', parameter_schema: protenixSchema }] };
         else if (url === '/api/models/boltz2') data = { id: 'boltz2', params: [], modes: [] };
         else if (url === `/api/designs/by-job/${jobId}/binder-evidence`) data = { records: [], total: 0, offset: 0, limit: 100 };
         else if (url === '/api/gpu/status' || url === '/api/system/status') data = { gpus: [{ index: 0, name: 'Offline transport fixture GPU', memory_total_mb: 24000 }], gpu_error: null };
@@ -136,6 +144,10 @@ it('Results alternate document reaches actual blind prediction and emits no gene
 });
 
 it('Results prediction materialization retains the inspected MODEL as well as artifact/state', async () => {
+    for (const label of ['Design sequence from exact structure', 'Redesign exact structure']) {
+        const link = new URL(await resultLink(label), window.location.origin);
+        expect(JSON.parse(link.searchParams.get('source_structure')!)).toEqual(source);
+    }
     const route = await resultLink('Predict exact structure');
     await mount(<JobSubmission />, route);
     await vi.waitFor(() => expect(posts.some(p => p.url === '/api/files/materialize-structure')).toBe(true));
@@ -148,7 +160,7 @@ it('Results prediction does not silently delete a modified residue from the sele
     api.defaults.adapter = async config => {
         if (config.url !== '/api/files/materialize-structure') return prior(config);
         posts.push({ url: config.url, body: JSON.parse(String(config.data)) });
-        return { config, status: 200, statusText: 'OK', headers: {}, data: { ...materialized, author_residues: [
+        return { config, status: 200, statusText: 'OK', headers: {}, data: { ...materialized, native_recipe: recipes.modified, author_residues: [
             { model_number: 2, auth_asym_id: 'A', auth_seq_id: 1, residue_name: 'ALA' },
             { model_number: 2, auth_asym_id: 'A', auth_seq_id: 2, residue_name: 'SEP' },
             { model_number: 2, auth_asym_id: 'A', auth_seq_id: 3, residue_name: 'GLY' },
@@ -161,6 +173,73 @@ it('Results prediction does not silently delete a modified residue from the sele
     // must remain represented or explicitly disclosed, not silently become AG.
     const sequence = [...document.querySelectorAll('textarea')].find(n => n.value === 'AG');
     expect(sequence && !document.body.textContent?.includes('SEP'), 'ALA/SEP/GLY was silently adopted as AG without the modified position').toBeFalsy();
+    expect(posts.filter(p => p.url === '/api/jobs')).toEqual([]);
+});
+
+it('adopts emitted native mixed recipe through the real roster and captures converter-ready wire', async () => {
+    const route = await resultLink('Predict exact structure');
+    const prior = api.defaults.adapter as (config: any) => Promise<any>;
+    api.defaults.adapter = async config => {
+        if (config.url !== '/api/files/materialize-structure') return prior(config);
+        posts.push({ url: config.url, body: JSON.parse(String(config.data)) });
+        return { config, status: 200, statusText: 'OK', headers: {}, data: { ...materialized, native_recipe: recipes.mixed } };
+    };
+    await mount(<JobSubmission />, route);
+    await vi.waitFor(async () => { await settle(); expect(document.querySelector('[aria-label="Adopt native molecular recipe"]')).not.toBeNull(); });
+    expect([...document.querySelectorAll('textarea')].some(n => n.value === 'ASGMPX')).toBe(false);
+    await edit(document.querySelector<HTMLSelectElement>('[aria-label="Adopt native molecular recipe"]')!, 'A');
+    const protenix = [...document.querySelectorAll<HTMLButtonElement>('button')].find(n => n.querySelector('span')?.textContent === 'Protenix')!;
+    expect(protenix).toBeTruthy(); await act(async () => protenix.click()); await settle();
+    const field = (name: string) => document.querySelector<HTMLInputElement>(`[aria-label="${name}"]`)!;
+    expect(field('Entity 1 sequence').value).toBe('ASGMPX');
+    expect(field('Entity 1 modification 1 CCD').value).toBe('CCD_SEP');
+    expect(field('Entity 3 sequence').value).toBe('A');
+    expect(field('Entity 4 sequence').value).toBe('U');
+    await edit(field('Entity 1 ID'), 'renamed');
+    await edit(field('Entity 1 count'), '2');
+    await edit(field('Entity 1 copy IDs (comma separated)'), 'copyA,copyB');
+    await edit(field('Entity 1 unpairedMsa'), '>query\nASGMPX\n');
+    await edit(field('Entity 1 pairedMsa'), '');
+    await edit(field('Entity 2 ligand_file'), 'inputs/structure_prediction/ligand.pdb');
+    expect(field('Bond 1 left entity').value).toBe('1');
+    expect(document.body.textContent).toContain('ZZZ');
+    await click('Launch Prediction');
+    const request = posts.find(p => p.url === '/api/jobs')?.body;
+    expect(request, document.body.textContent ?? '').toMatchObject({ model_id: 'protenix', execution_target_id: null, source_structure: source });
+    expect(request.params.complex_components).toHaveLength(4);
+    expect(request.params.complex_components[0]).toMatchObject({ id: 'renamed', sequence: 'ASGMPX', count: 2, copy_ids: ['copyA', 'copyB'], unpairedMsa: '>query\nASGMPX\n', modifications: recipes.mixed.complex_components[0].modifications });
+    expect(request.params.covalent_bonds).toEqual(recipes.mixed.covalent_bonds);
+    for (const key of ['input_pdb', 'input_structure', 'templates', 'initial_guess', 'restraints', 'fixed_target_source_path', 'target_source', 'source_structure']) expect(request.params[key], key).toBeUndefined();
+    expect(request.parent_job_id).toBeFalsy();
+    if (process.env.BMS_CONTINUATION_WIRE) writeFileSync(process.env.BMS_CONTINUATION_WIRE, JSON.stringify(request, null, 2));
+});
+
+it('native recipe survives cold draft reopen and rebases existing bonds after roster deletion', async () => {
+    const prior = api.defaults.adapter as (config: any) => Promise<any>;
+    api.defaults.adapter = async config => {
+        if (config.url !== '/api/files/materialize-structure') return prior(config);
+        return { config, status: 200, statusText: 'OK', headers: {}, data: { ...materialized, native_recipe: recipes.mixed } };
+    };
+    const prepared = await prepareDeNovoContinuation(source, 'prediction');
+    let draft: any;
+    const receive = (value: any) => { draft = JSON.parse(JSON.stringify(value.editor_state)); };
+    await mount(<StructurePredictionTemplate initialValues={{ ...prepared, pred_method: 'protenix' }} onBack={() => {}} onDraftChange={receive} />);
+    await edit(document.querySelector<HTMLSelectElement>('[aria-label="Adopt native molecular recipe"]')!, 'A');
+    const field = (name: string) => document.querySelector<HTMLInputElement>(`[aria-label="${name}"]`)!;
+    await edit(field('Entity 1 ID'), 'retained-primary');
+    await settle();
+    expect(draft.complex_components.map((c: any) => c.id)).toEqual(['retained-primary', 'L', 'D', 'R']);
+    expect(draft._continuation_recipe).toEqual(recipes.mixed);
+    await close();
+    await mount(<StructurePredictionTemplate initialValues={draft} onBack={() => {}} onDraftChange={receive} />);
+    expect(field('Entity 1 modification 1 CCD').value).toBe('CCD_SEP');
+    expect(field('Bond 1 right entity').value).toBe('3');
+    const remove = [...document.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === '×')!;
+    expect(remove).toBeTruthy(); await act(async () => remove.click()); await settle();
+    expect(draft.complex_components.map((c: any) => c.id)).toEqual(['retained-primary', 'D', 'R']);
+    expect(field('Bond 1 right entity').value).toBe('2');
+    expect(draft.covalent_bonds[0]).toMatchObject({ left_entity: 1, right_entity: 2, left_position: 2 });
+    expect(draft.source_structure).toEqual(source);
     expect(posts.filter(p => p.url === '/api/jobs')).toEqual([]);
 });
 

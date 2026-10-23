@@ -1,0 +1,1234 @@
+{
+  "simple": {
+    "complex_components": [
+      {
+        "id": "A",
+        "type": "protein",
+        "count": 1,
+        "sequence": "AG"
+      }
+    ],
+    "covalent_bonds": [],
+    "entries": [
+      {
+        "id": "A",
+        "model_number": 2,
+        "auth_asym_id": "A",
+        "positions": [
+          {
+            "model_number": 2,
+            "auth_asym_id": "A",
+            "auth_seq_id": "1",
+            "pdbx_PDB_ins_code": "",
+            "component_id": "ALA",
+            "hetero_flag": " ",
+            "polymer_membership": null,
+            "canonical_amino_acid": "A",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "PDB ATOM/HETATM",
+            "atoms": [
+              {
+                "id": "1",
+                "auth_atom_id": "CA",
+                "alt_id": "",
+                "type_symbol": "C",
+                "model_atom_index": 0
+              }
+            ]
+          },
+          {
+            "model_number": 2,
+            "auth_asym_id": "A",
+            "auth_seq_id": "2",
+            "pdbx_PDB_ins_code": "",
+            "component_id": "GLY",
+            "hetero_flag": " ",
+            "polymer_membership": null,
+            "canonical_amino_acid": "G",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "PDB ATOM/HETATM",
+            "atoms": [
+              {
+                "id": "2",
+                "auth_atom_id": "CA",
+                "alt_id": "",
+                "type_symbol": "C",
+                "model_atom_index": 1
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "unresolved": [],
+    "declared_chemistry": {
+      "pdb_records": []
+    }
+  },
+  "modified": {
+    "complex_components": [
+      {
+        "id": "A",
+        "type": "protein",
+        "count": 1,
+        "sequence": "ASG",
+        "modifications": [
+          {
+            "ptmPosition": 2,
+            "ptmType": "CCD_SEP"
+          }
+        ]
+      }
+    ],
+    "covalent_bonds": [],
+    "entries": [
+      {
+        "id": "A",
+        "model_number": 2,
+        "auth_asym_id": "A",
+        "positions": [
+          {
+            "model_number": 2,
+            "auth_asym_id": "A",
+            "auth_seq_id": "1",
+            "pdbx_PDB_ins_code": "",
+            "component_id": "ALA",
+            "hetero_flag": " ",
+            "polymer_membership": null,
+            "canonical_amino_acid": "A",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "PDB ATOM/HETATM",
+            "atoms": [
+              {
+                "id": "1",
+                "auth_atom_id": "CA",
+                "alt_id": "",
+                "type_symbol": "C",
+                "model_atom_index": 0
+              }
+            ]
+          },
+          {
+            "model_number": 2,
+            "auth_asym_id": "A",
+            "auth_seq_id": "2",
+            "pdbx_PDB_ins_code": "",
+            "component_id": "SEP",
+            "hetero_flag": " ",
+            "polymer_membership": null,
+            "canonical_amino_acid": "S",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "PDB ATOM/HETATM",
+            "atoms": [
+              {
+                "id": "2",
+                "auth_atom_id": "CA",
+                "alt_id": "",
+                "type_symbol": "C",
+                "model_atom_index": 1
+              }
+            ]
+          },
+          {
+            "model_number": 2,
+            "auth_asym_id": "A",
+            "auth_seq_id": "3",
+            "pdbx_PDB_ins_code": "",
+            "component_id": "GLY",
+            "hetero_flag": " ",
+            "polymer_membership": null,
+            "canonical_amino_acid": "G",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "PDB ATOM/HETATM",
+            "atoms": [
+              {
+                "id": "3",
+                "auth_atom_id": "CA",
+                "alt_id": "",
+                "type_symbol": "C",
+                "model_atom_index": 2
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "unresolved": [],
+    "declared_chemistry": {
+      "pdb_records": []
+    }
+  },
+  "mixed": {
+    "complex_components": [
+      {
+        "id": "A",
+        "type": "protein",
+        "count": 1,
+        "sequence": "ASGMPX",
+        "modifications": [
+          {
+            "ptmPosition": 2,
+            "ptmType": "CCD_SEP"
+          },
+          {
+            "ptmPosition": 4,
+            "ptmType": "CCD_MSE"
+          },
+          {
+            "ptmPosition": 5,
+            "ptmType": "CCD_HYP"
+          }
+        ]
+      },
+      {
+        "id": "L",
+        "type": "ligand",
+        "count": 1,
+        "ccd": "LIG"
+      },
+      {
+        "id": "D",
+        "type": "dna",
+        "count": 1,
+        "sequence": "A"
+      },
+      {
+        "id": "R",
+        "type": "rna",
+        "count": 1,
+        "sequence": "U"
+      }
+    ],
+    "covalent_bonds": [
+      {
+        "left_entity": 1,
+        "left_position": 2,
+        "left_copy": 1,
+        "left_atom": "CA",
+        "right_entity": 3,
+        "right_position": 1,
+        "right_copy": 1,
+        "right_atom": "CA"
+      }
+    ],
+    "entries": [
+      {
+        "id": "A",
+        "model_number": 2,
+        "auth_asym_id": "long_author",
+        "positions": [
+          {
+            "model_number": 2,
+            "label_asym_id": "A",
+            "auth_asym_id": "long_author",
+            "label_seq_id": "1",
+            "auth_seq_id": "42",
+            "pdbx_PDB_ins_code": "B",
+            "label_comp_id": "ALA",
+            "auth_comp_id": null,
+            "label_entity_id": "1",
+            "component_id": "ALA",
+            "polymer_membership": true,
+            "polymer_type": "polypeptide(L)",
+            "polymer_evidence_origin": "_entity",
+            "canonical_amino_acid": "A",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "110",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "ALA",
+                "label_asym_id": "A",
+                "label_entity_id": "1",
+                "label_seq_id": "1",
+                "pdbx_PDB_ins_code": "B",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "42",
+                "auth_asym_id": "long_author",
+                "pdbx_PDB_model_num": "2",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 0
+              }
+            ]
+          },
+          {
+            "model_number": 2,
+            "label_asym_id": "A",
+            "auth_asym_id": "long_author",
+            "label_seq_id": "2",
+            "auth_seq_id": "43",
+            "pdbx_PDB_ins_code": "B",
+            "label_comp_id": "SEP",
+            "auth_comp_id": null,
+            "label_entity_id": "1",
+            "component_id": "SEP",
+            "polymer_membership": true,
+            "polymer_type": "polypeptide(L)",
+            "polymer_evidence_origin": "_entity",
+            "canonical_amino_acid": "S",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "111",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "SEP",
+                "label_asym_id": "A",
+                "label_entity_id": "1",
+                "label_seq_id": "2",
+                "pdbx_PDB_ins_code": "B",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "43",
+                "auth_asym_id": "long_author",
+                "pdbx_PDB_model_num": "2",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 1
+              }
+            ]
+          },
+          {
+            "model_number": 2,
+            "label_asym_id": "A",
+            "auth_asym_id": "long_author",
+            "label_seq_id": "3",
+            "auth_seq_id": "44",
+            "pdbx_PDB_ins_code": "B",
+            "label_comp_id": "GLY",
+            "auth_comp_id": null,
+            "label_entity_id": "1",
+            "component_id": "GLY",
+            "polymer_membership": true,
+            "polymer_type": "polypeptide(L)",
+            "polymer_evidence_origin": "_entity",
+            "canonical_amino_acid": "G",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "112",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "GLY",
+                "label_asym_id": "A",
+                "label_entity_id": "1",
+                "label_seq_id": "3",
+                "pdbx_PDB_ins_code": "B",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "44",
+                "auth_asym_id": "long_author",
+                "pdbx_PDB_model_num": "2",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 2
+              }
+            ]
+          },
+          {
+            "model_number": 2,
+            "label_asym_id": "A",
+            "auth_asym_id": "long_author",
+            "label_seq_id": "4",
+            "auth_seq_id": "45",
+            "pdbx_PDB_ins_code": "B",
+            "label_comp_id": "MSE",
+            "auth_comp_id": null,
+            "label_entity_id": "1",
+            "component_id": "MSE",
+            "polymer_membership": true,
+            "polymer_type": "polypeptide(L)",
+            "polymer_evidence_origin": "_entity",
+            "canonical_amino_acid": "M",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "113",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "MSE",
+                "label_asym_id": "A",
+                "label_entity_id": "1",
+                "label_seq_id": "4",
+                "pdbx_PDB_ins_code": "B",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "45",
+                "auth_asym_id": "long_author",
+                "pdbx_PDB_model_num": "2",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 3
+              }
+            ]
+          },
+          {
+            "model_number": 2,
+            "label_asym_id": "A",
+            "auth_asym_id": "long_author",
+            "label_seq_id": "5",
+            "auth_seq_id": "46",
+            "pdbx_PDB_ins_code": "B",
+            "label_comp_id": "HYP",
+            "auth_comp_id": null,
+            "label_entity_id": "1",
+            "component_id": "HYP",
+            "polymer_membership": true,
+            "polymer_type": "polypeptide(L)",
+            "polymer_evidence_origin": "_entity",
+            "canonical_amino_acid": "P",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "114",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "HYP",
+                "label_asym_id": "A",
+                "label_entity_id": "1",
+                "label_seq_id": "5",
+                "pdbx_PDB_ins_code": "B",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "46",
+                "auth_asym_id": "long_author",
+                "pdbx_PDB_model_num": "2",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 4
+              }
+            ]
+          },
+          {
+            "model_number": 2,
+            "label_asym_id": "A",
+            "auth_asym_id": "long_author",
+            "label_seq_id": "6",
+            "auth_seq_id": "47",
+            "pdbx_PDB_ins_code": "B",
+            "label_comp_id": "ZZZ",
+            "auth_comp_id": null,
+            "label_entity_id": "1",
+            "component_id": "ZZZ",
+            "polymer_membership": true,
+            "polymer_type": "polypeptide(L)",
+            "polymer_evidence_origin": "_entity",
+            "canonical_amino_acid": null,
+            "canonical_mapping_origin": null,
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "115",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "ZZZ",
+                "label_asym_id": "A",
+                "label_entity_id": "1",
+                "label_seq_id": "6",
+                "pdbx_PDB_ins_code": "B",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "47",
+                "auth_asym_id": "long_author",
+                "pdbx_PDB_model_num": "2",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 5
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "L",
+        "model_number": 2,
+        "auth_asym_id": "ligand",
+        "positions": [
+          {
+            "model_number": 2,
+            "label_asym_id": "L",
+            "auth_asym_id": "ligand",
+            "label_seq_id": ".",
+            "auth_seq_id": "48",
+            "pdbx_PDB_ins_code": "B",
+            "label_comp_id": "LIG",
+            "auth_comp_id": null,
+            "label_entity_id": "2",
+            "component_id": "LIG",
+            "polymer_membership": false,
+            "polymer_type": null,
+            "polymer_evidence_origin": "_entity",
+            "canonical_amino_acid": null,
+            "canonical_mapping_origin": null,
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "116",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "LIG",
+                "label_asym_id": "L",
+                "label_entity_id": "2",
+                "label_seq_id": ".",
+                "pdbx_PDB_ins_code": "B",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "48",
+                "auth_asym_id": "ligand",
+                "pdbx_PDB_model_num": "2",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 6
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "D",
+        "model_number": 2,
+        "auth_asym_id": "dna",
+        "positions": [
+          {
+            "model_number": 2,
+            "label_asym_id": "D",
+            "auth_asym_id": "dna",
+            "label_seq_id": "1",
+            "auth_seq_id": "49",
+            "pdbx_PDB_ins_code": "B",
+            "label_comp_id": "DA",
+            "auth_comp_id": null,
+            "label_entity_id": "3",
+            "component_id": "DA",
+            "polymer_membership": true,
+            "polymer_type": "polydeoxyribonucleotide",
+            "polymer_evidence_origin": "_entity",
+            "canonical_amino_acid": null,
+            "canonical_mapping_origin": null,
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "117",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "DA",
+                "label_asym_id": "D",
+                "label_entity_id": "3",
+                "label_seq_id": "1",
+                "pdbx_PDB_ins_code": "B",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "49",
+                "auth_asym_id": "dna",
+                "pdbx_PDB_model_num": "2",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 7
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "R",
+        "model_number": 2,
+        "auth_asym_id": "rna",
+        "positions": [
+          {
+            "model_number": 2,
+            "label_asym_id": "R",
+            "auth_asym_id": "rna",
+            "label_seq_id": "1",
+            "auth_seq_id": "50",
+            "pdbx_PDB_ins_code": "B",
+            "label_comp_id": "U",
+            "auth_comp_id": null,
+            "label_entity_id": "4",
+            "component_id": "U",
+            "polymer_membership": true,
+            "polymer_type": "polyribonucleotide",
+            "polymer_evidence_origin": "_entity",
+            "canonical_amino_acid": null,
+            "canonical_mapping_origin": null,
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "118",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "U",
+                "label_asym_id": "R",
+                "label_entity_id": "4",
+                "label_seq_id": "1",
+                "pdbx_PDB_ins_code": "B",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "50",
+                "auth_asym_id": "rna",
+                "pdbx_PDB_model_num": "2",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 8
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "unresolved": [
+      {
+        "model_number": 2,
+        "label_asym_id": "A",
+        "auth_asym_id": "long_author",
+        "label_seq_id": "6",
+        "auth_seq_id": "47",
+        "pdbx_PDB_ins_code": "B",
+        "label_comp_id": "ZZZ",
+        "auth_comp_id": null,
+        "label_entity_id": "1",
+        "component_id": "ZZZ",
+        "polymer_membership": true,
+        "polymer_type": "polypeptide(L)",
+        "polymer_evidence_origin": "_entity",
+        "canonical_amino_acid": null,
+        "canonical_mapping_origin": null,
+        "evidence_origin": "_atom_site",
+        "atoms": [
+          {
+            "group_PDB": "ATOM",
+            "id": "115",
+            "type_symbol": "C",
+            "label_atom_id": "CA",
+            "label_alt_id": ".",
+            "label_comp_id": "ZZZ",
+            "label_asym_id": "A",
+            "label_entity_id": "1",
+            "label_seq_id": "6",
+            "pdbx_PDB_ins_code": "B",
+            "Cartn_x": "1.000",
+            "Cartn_y": "2.000",
+            "Cartn_z": "3.000",
+            "occupancy": "1.0",
+            "B_iso_or_equiv": "20.0",
+            "auth_seq_id": "47",
+            "auth_asym_id": "long_author",
+            "pdbx_PDB_model_num": "2",
+            "annotation_CoordinateGroup_1_atom": "2",
+            "annotation_src-component_1_atom": "A42-50",
+            "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+            "annotation_src-index-group_1_atom": "5",
+            "is_unindexed_insertion": "True",
+            "model_atom_index": 5
+          }
+        ]
+      }
+    ],
+    "declared_chemistry": {
+      "chem_comp_bond": [
+        {
+          "comp_id": "SEP",
+          "atom_id_1": "OG",
+          "atom_id_2": "P",
+          "value_order": "SING"
+        }
+      ],
+      "struct_conn": [
+        {
+          "id": "bond1",
+          "conn_type_id": "covale",
+          "ptnr1_label_asym_id": "A",
+          "ptnr1_label_seq_id": "2",
+          "ptnr1_label_atom_id": "CA",
+          "ptnr2_label_asym_id": "D",
+          "ptnr2_label_seq_id": "1",
+          "ptnr2_label_atom_id": "CA"
+        }
+      ],
+      "entity": [
+        {
+          "id": "1",
+          "type": "polymer"
+        },
+        {
+          "id": "2",
+          "type": "non-polymer"
+        },
+        {
+          "id": "3",
+          "type": "polymer"
+        },
+        {
+          "id": "4",
+          "type": "polymer"
+        }
+      ],
+      "entity_poly": [
+        {
+          "entity_id": "1",
+          "type": "polypeptide(L)"
+        },
+        {
+          "entity_id": "3",
+          "type": "polydeoxyribonucleotide"
+        },
+        {
+          "entity_id": "4",
+          "type": "polyribonucleotide"
+        }
+      ]
+    }
+  },
+  "legacyMulti": {
+    "complex_components": [
+      {
+        "id": "A",
+        "type": "protein",
+        "count": 1,
+        "sequence": "AG"
+      },
+      {
+        "id": "authorB",
+        "type": "protein",
+        "count": 1,
+        "sequence": "MK"
+      },
+      {
+        "id": "DNA",
+        "type": "dna",
+        "count": 1,
+        "sequence": "A"
+      }
+    ],
+    "covalent_bonds": [],
+    "entries": [
+      {
+        "id": "A",
+        "model_number": 1,
+        "auth_asym_id": "A",
+        "positions": [
+          {
+            "model_number": 1,
+            "label_asym_id": "A",
+            "auth_asym_id": "A",
+            "label_seq_id": "1",
+            "auth_seq_id": "1",
+            "pdbx_PDB_ins_code": "?",
+            "label_comp_id": "ALA",
+            "auth_comp_id": null,
+            "label_entity_id": "1",
+            "component_id": "ALA",
+            "polymer_membership": true,
+            "polymer_type": "polypeptide(L)",
+            "polymer_evidence_origin": "_entity_poly",
+            "canonical_amino_acid": "A",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "1",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "ALA",
+                "label_asym_id": "A",
+                "label_entity_id": "1",
+                "label_seq_id": "1",
+                "pdbx_PDB_ins_code": "?",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "1",
+                "auth_asym_id": "A",
+                "pdbx_PDB_model_num": "1",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 0
+              }
+            ]
+          },
+          {
+            "model_number": 1,
+            "label_asym_id": "A",
+            "auth_asym_id": "A",
+            "label_seq_id": "2",
+            "auth_seq_id": "2",
+            "pdbx_PDB_ins_code": "?",
+            "label_comp_id": "GLY",
+            "auth_comp_id": null,
+            "label_entity_id": "1",
+            "component_id": "GLY",
+            "polymer_membership": true,
+            "polymer_type": "polypeptide(L)",
+            "polymer_evidence_origin": "_entity_poly",
+            "canonical_amino_acid": "G",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "2",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "GLY",
+                "label_asym_id": "A",
+                "label_entity_id": "1",
+                "label_seq_id": "2",
+                "pdbx_PDB_ins_code": "?",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "2",
+                "auth_asym_id": "A",
+                "pdbx_PDB_model_num": "1",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 1
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "authorB",
+        "model_number": 2,
+        "auth_asym_id": "authorB",
+        "positions": [
+          {
+            "model_number": 2,
+            "label_asym_id": "authorB",
+            "auth_asym_id": "authorB",
+            "label_seq_id": "1",
+            "auth_seq_id": "9",
+            "pdbx_PDB_ins_code": "?",
+            "label_comp_id": "MET",
+            "auth_comp_id": null,
+            "label_entity_id": "1",
+            "component_id": "MET",
+            "polymer_membership": true,
+            "polymer_type": "polypeptide(L)",
+            "polymer_evidence_origin": "_entity_poly",
+            "canonical_amino_acid": "M",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "3",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "MET",
+                "label_asym_id": "authorB",
+                "label_entity_id": "1",
+                "label_seq_id": "1",
+                "pdbx_PDB_ins_code": "?",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "9",
+                "auth_asym_id": "authorB",
+                "pdbx_PDB_model_num": "2",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 0
+              }
+            ]
+          },
+          {
+            "model_number": 2,
+            "label_asym_id": "authorB",
+            "auth_asym_id": "authorB",
+            "label_seq_id": "2",
+            "auth_seq_id": "10",
+            "pdbx_PDB_ins_code": "?",
+            "label_comp_id": "LYS",
+            "auth_comp_id": null,
+            "label_entity_id": "1",
+            "component_id": "LYS",
+            "polymer_membership": true,
+            "polymer_type": "polypeptide(L)",
+            "polymer_evidence_origin": "_entity_poly",
+            "canonical_amino_acid": "K",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "4",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "LYS",
+                "label_asym_id": "authorB",
+                "label_entity_id": "1",
+                "label_seq_id": "2",
+                "pdbx_PDB_ins_code": "?",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "10",
+                "auth_asym_id": "authorB",
+                "pdbx_PDB_model_num": "2",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 1
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "DNA",
+        "model_number": 2,
+        "auth_asym_id": "DNA",
+        "positions": [
+          {
+            "model_number": 2,
+            "label_asym_id": "DNA",
+            "auth_asym_id": "DNA",
+            "label_seq_id": "1",
+            "auth_seq_id": "1",
+            "pdbx_PDB_ins_code": "?",
+            "label_comp_id": "DA",
+            "auth_comp_id": null,
+            "label_entity_id": "2",
+            "component_id": "DA",
+            "polymer_membership": true,
+            "polymer_type": "polydeoxyribonucleotide",
+            "polymer_evidence_origin": "_entity_poly",
+            "canonical_amino_acid": null,
+            "canonical_mapping_origin": null,
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "5",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "DA",
+                "label_asym_id": "DNA",
+                "label_entity_id": "2",
+                "label_seq_id": "1",
+                "pdbx_PDB_ins_code": "?",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "1",
+                "auth_asym_id": "DNA",
+                "pdbx_PDB_model_num": "2",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 2
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "unresolved": [],
+    "declared_chemistry": {
+      "entity_poly": [
+        {
+          "entity_id": "1",
+          "type": "polypeptide(L)"
+        },
+        {
+          "entity_id": "2",
+          "type": "polydeoxyribonucleotide"
+        }
+      ]
+    }
+  },
+  "legacyAuthor": {
+    "complex_components": [
+      {
+        "id": "AA",
+        "type": "protein",
+        "count": 1,
+        "sequence": "AG"
+      },
+      {
+        "id": "DNA",
+        "type": "dna",
+        "count": 1,
+        "sequence": "A"
+      }
+    ],
+    "covalent_bonds": [],
+    "entries": [
+      {
+        "id": "AA",
+        "model_number": 2,
+        "auth_asym_id": "AA",
+        "positions": [
+          {
+            "model_number": 2,
+            "label_asym_id": "AA",
+            "auth_asym_id": "AA",
+            "label_seq_id": "1",
+            "auth_seq_id": "1",
+            "pdbx_PDB_ins_code": "?",
+            "label_comp_id": "ALA",
+            "auth_comp_id": null,
+            "label_entity_id": "1",
+            "component_id": "ALA",
+            "polymer_membership": true,
+            "polymer_type": "polypeptide(L)",
+            "polymer_evidence_origin": "_entity_poly",
+            "canonical_amino_acid": "A",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "1",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "ALA",
+                "label_asym_id": "AA",
+                "label_entity_id": "1",
+                "label_seq_id": "1",
+                "pdbx_PDB_ins_code": "?",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "1",
+                "auth_asym_id": "AA",
+                "pdbx_PDB_model_num": "2",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 0
+              }
+            ]
+          },
+          {
+            "model_number": 2,
+            "label_asym_id": "AA",
+            "auth_asym_id": "AA",
+            "label_seq_id": "2",
+            "auth_seq_id": "1",
+            "pdbx_PDB_ins_code": "B",
+            "label_comp_id": "GLY",
+            "auth_comp_id": null,
+            "label_entity_id": "1",
+            "component_id": "GLY",
+            "polymer_membership": true,
+            "polymer_type": "polypeptide(L)",
+            "polymer_evidence_origin": "_entity_poly",
+            "canonical_amino_acid": "G",
+            "canonical_mapping_origin": "Bio.Data.PDBData.protein_letters_3to1_extended",
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "2",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "GLY",
+                "label_asym_id": "AA",
+                "label_entity_id": "1",
+                "label_seq_id": "2",
+                "pdbx_PDB_ins_code": "B",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "1",
+                "auth_asym_id": "AA",
+                "pdbx_PDB_model_num": "2",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 1
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "DNA",
+        "model_number": 2,
+        "auth_asym_id": "DNA",
+        "positions": [
+          {
+            "model_number": 2,
+            "label_asym_id": "DNA",
+            "auth_asym_id": "DNA",
+            "label_seq_id": "1",
+            "auth_seq_id": "1",
+            "pdbx_PDB_ins_code": "?",
+            "label_comp_id": "DA",
+            "auth_comp_id": null,
+            "label_entity_id": "2",
+            "component_id": "DA",
+            "polymer_membership": true,
+            "polymer_type": "polydeoxyribonucleotide",
+            "polymer_evidence_origin": "_entity_poly",
+            "canonical_amino_acid": null,
+            "canonical_mapping_origin": null,
+            "evidence_origin": "_atom_site",
+            "atoms": [
+              {
+                "group_PDB": "ATOM",
+                "id": "3",
+                "type_symbol": "C",
+                "label_atom_id": "CA",
+                "label_alt_id": ".",
+                "label_comp_id": "DA",
+                "label_asym_id": "DNA",
+                "label_entity_id": "2",
+                "label_seq_id": "1",
+                "pdbx_PDB_ins_code": "?",
+                "Cartn_x": "1.000",
+                "Cartn_y": "2.000",
+                "Cartn_z": "3.000",
+                "occupancy": "1.0",
+                "B_iso_or_equiv": "20.0",
+                "auth_seq_id": "1",
+                "auth_asym_id": "DNA",
+                "pdbx_PDB_model_num": "2",
+                "annotation_CoordinateGroup_1_atom": "2",
+                "annotation_src-component_1_atom": "A42-50",
+                "annotation_src-coordinate-conditioned-region_1_atom": "A42-50",
+                "annotation_src-index-group_1_atom": "5",
+                "is_unindexed_insertion": "True",
+                "model_atom_index": 2
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "unresolved": [],
+    "declared_chemistry": {
+      "entity_poly": [
+        {
+          "entity_id": "1",
+          "type": "polypeptide(L)"
+        },
+        {
+          "entity_id": "2",
+          "type": "polydeoxyribonucleotide"
+        }
+      ]
+    }
+  }
+}

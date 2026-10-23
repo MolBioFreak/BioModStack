@@ -32,6 +32,7 @@ import ShapeBlueprintTemplate from '../../src/components/ShapeBlueprintTemplate'
 import ProteinLocalRedesignTemplate from '../../src/components/ProteinLocalRedesignTemplate';
 import { StructurePredictionTemplate } from '../../src/components/StructurePredictionTemplate';
 import { prepareDeNovoContinuation } from '../../src/lib/deNovoContinuation';
+import recipes from './fixtures/deNovoContinuationRecipes.json';
 import { fetchSystemStatus } from '../../src/lib/api';
 
 // Synthetic UI-only geometry metadata and minimal PDB, never submitted or persisted.
@@ -270,7 +271,7 @@ const source = { job_id: 'returned-parent', request_id: 'native-request', candid
 const retained = { ...source, path: 'inputs/retained/selected.pdb', expected_sha256: '7'.repeat(64) };
 const selectedMaterialization = {
     path: retained.path, format: 'pdb', sha256: retained.expected_sha256, model_number: 1,
-    source_structure: retained,
+    source_structure: retained, native_recipe: recipes.legacyMulti,
     author_residues: [
         { model_number: 1, auth_asym_id: 'A', auth_seq_id: 1, residue_name: 'ALA' },
         { model_number: 1, auth_asym_id: 'A', auth_seq_id: 2, residue_name: 'GLY' },

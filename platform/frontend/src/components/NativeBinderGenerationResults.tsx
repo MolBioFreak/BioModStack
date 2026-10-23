@@ -366,7 +366,10 @@ function NativeGenerationWorkbench({ adapter, jobId, status, launchContextId, se
                         </div>}
                         </div>{adapter?.related?.(row)}</div>
                         {document?.artifact_id && <nav aria-label="Continue exact native document">{(['redesign', 'sequence', 'prediction'] as const).map(destination => {
-                            const href = new URL(continuationHref({ job_id: jobId, ...(row.design_id ? { design_id: row.design_id } : {}), document: { artifact_id: document.artifact_id, ...(document.target_state != null ? { target_state: document.target_state } : {}) } }, destination), window.location.origin);
+                            const requestedModel = new URLSearchParams(window.location.search).get('model_number');
+                            const nativeRef = row.candidate_ref;
+                            const model = requestedModel ? Number(requestedModel) : nativeRef?.kind === 'design' ? nativeRef.document?.model : nativeRef?.kind === 'native_document' ? nativeRef.model : undefined;
+                            const href = new URL(continuationHref({ job_id: jobId, ...(model != null ? { model_number: model } : {}), ...(row.design_id ? { design_id: row.design_id } : {}), document: { artifact_id: document.artifact_id, ...(document.target_state != null ? { target_state: document.target_state } : {}) } }, destination), window.location.origin);
                             const back = new URL(href.searchParams.get('return_to')!, window.location.origin);
                             back.searchParams.set('native_candidate', activeId!); back.searchParams.set('artifact_id', document.artifact_id);
                             if (document.target_state != null) back.searchParams.set('target_state', document.target_state); else back.searchParams.delete('target_state');

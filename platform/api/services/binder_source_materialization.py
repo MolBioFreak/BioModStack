@@ -262,6 +262,15 @@ def materialize_source_bytes(raw: bytes, suffix: str, destination: Path, *, outp
         if output_format != 'native' or model_number is not None:
             raise ValueError(f'Could not prepare the requested structure representation: {exc}') from exc
         inspection_error, identity = str(exc), []
+    from services.protenix_chemistry import recipe_from_source_positions
+    try:
+        ledger['native_recipe'] = recipe_from_source_positions(ledger['source_positions'], ledger['declared_chemistry'])
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        # Recipe enrichment is observational. Never turn incomplete chemical
+        # metadata into a refusal of an otherwise unchanged native acquisition.
+        ledger['native_recipe'] = {'complex_components': [], 'covalent_bonds': [], 'entries': [],
+            'unresolved': [{'inspection_error': str(exc)}, *ledger['source_positions']],
+            'declared_chemistry': ledger['declared_chemistry']}
     selected_path, selected_bytes = consumed, consumed_bytes
     if output_format == 'pdb' and native_format != 'pdb':
         from routers.jobs import _cif_selection_pdb
