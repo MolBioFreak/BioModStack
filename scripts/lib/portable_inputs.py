@@ -539,6 +539,16 @@ def discover_native_input_references(model_id, mode, params, generated_inputs, *
             else:
                 for i, state in enumerate(params.get('structures', [])):
                     visit(state['path'], None, ('structures', i, 'path'))
+    if model_id == 'molecular_dynamics':
+        spec_input = (params.get('md_job_spec') or {}).get('input') or {}
+        if spec_input.get('structure'):
+            visit(spec_input['structure'], None, ('md_job_spec', 'input', 'structure'), 'native-snapshot')
+    snapshot = (params.get('md_source_provenance') or {}).get('snapshot') or {}
+    if snapshot.get('structure'):
+        # The collector consumes this executable derivative binding as well as
+        # md_job_spec.input.structure. Preserve the typed provenance around it.
+        visit(snapshot['structure'], None,
+              ('md_source_provenance', 'snapshot', 'structure'), 'native-snapshot')
     original_snapshot = (params.get('md_source_provenance') or {}).get('original_snapshot') or {}
     if original_snapshot.get('path'):
         # Retain the original document independently of the selected MODEL

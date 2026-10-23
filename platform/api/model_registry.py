@@ -102,7 +102,7 @@ class ModelIntegration(BaseModel):
 class RuntimeDependencyRef(BaseModel):
     """Trusted managed-storage binding, never an operator path or download URL."""
     model_config = {"extra": "forbid", "frozen": True}
-    kind: str = Field(pattern=r"^(image|weights)$")
+    kind: str = Field(pattern=r"^(image|weights|runtime_data)$")
     # Nested managed members are resolved by the existing contained-root owner.
     # Reject empty/dot/traversal segments rather than normalizing their spelling.
     relative_path: str = Field(pattern=r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$")
@@ -315,6 +315,8 @@ def workflow_pack_dependencies(workflow_id: str):
             refs.append(RuntimeDependencyRef(kind='image', relative_path=LABEL_ASSETS[label][0]))
         for model_id in ('ligandmpnn', 'protonpottsmpnn', 'frustrampnn'):
             refs.extend(model_runtime_dependencies(model_id, internal=True))
+        refs.append(RuntimeDependencyRef(kind='runtime_data',
+            relative_path='md-preparation/env-v1-explicit.txt'))
         refs.extend(RuntimeDependencyRef(kind='weights', relative_path=member)
                     for members in groups.values() for member in members)
         return tuple(dict.fromkeys(refs))
@@ -411,6 +413,10 @@ def native_checkpoint_dependencies(process: str, params: dict):
             dependencies.append(SelectedDependency('weights:complexa:' + member, 'weights',
                 'complexa/' + member, 'scripts/bms_complexa/config.py:compose_request',
                 selector='complexa_weights_dir', selector_subpath=member))
+        if params.get('complexa_autoguidance_checkpoint'):
+            dependencies.append(SelectedDependency('weights:complexa_autoguidance_checkpoint',
+                'weights', None, 'modules/complexa.nf:RunComplexa',
+                selector='complexa_autoguidance_checkpoint'))
     elif process in {'PrepCanonicalConforNetsRequest', 'RunCanonicalConforNets'}:
         dependencies.append(SelectedDependency('weights:openfold3:checkpoint', 'weights',
             'openfold3/of3-p2-155k.pt', 'cm_request.confornets.checkpoint',

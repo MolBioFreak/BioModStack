@@ -650,7 +650,7 @@ def _declared_runtime_records(path, prefix, publication, *, resolved=None, model
 
 def independent_plan(selection, *, dependencies=None, publication=None):
     """Resolve only reviewed registry dependencies; no Job or biological inputs."""
-    from paths import get_container_dir, get_weights_root
+    from paths import get_container_dir, get_weights_root, get_data_root
     entries = []
     resolved = {}
     refs = _independent_dependencies(selection) if dependencies is None else dependencies
@@ -663,7 +663,8 @@ def independent_plan(selection, *, dependencies=None, publication=None):
                     else getattr(selection, 'model_id', None))
         if selection.kind == 'image' and ref.kind != 'image':
             continue
-        root = (get_container_dir() if ref.kind == 'image' else get_weights_root()).resolve()
+        root = {'image': get_container_dir, 'weights': get_weights_root,
+                'runtime_data': get_data_root}[ref.kind]().resolve()
         # Preserve installation selection authority before resolving legacy aliases.
         path = (image_reference(ref.relative_path, root)[0].resolve() if ref.kind == 'image'
                 else root / ref.relative_path)
@@ -671,7 +672,8 @@ def independent_plan(selection, *, dependencies=None, publication=None):
         selected = (_selected_weight_members(path, model_id, resolved=resolved) if ref.kind == 'weights' and model_id is not None and path.exists() else None)
         if ((path.is_symlink() and selected is None) or (ref.kind != 'image' and not path.resolve().is_relative_to(root))):
             raise ValueError('Independent runtime asset is not a contained regular asset')
-        prefix = ('containers/' if ref.kind == 'image' else 'weights/') + ref.relative_path
+        prefix = {'image': 'containers/', 'weights': 'weights/',
+                  'runtime_data': 'data/'}[ref.kind] + ref.relative_path
         for record in _declared_runtime_records(path, prefix, publication, resolved=resolved, model_id=model_id):
             suffix = record.relative_path[len(prefix):].lstrip('/')
             local = resolved.get(('runtime-source', record.relative_path)) or (path / suffix if suffix else path)
@@ -777,7 +779,8 @@ def independent_preview(selection, target, *, compiled_plan=None):
     else:
         try:
             refs = _independent_dependencies(selection)
-            dependencies = [dict(name=('containers/' if r.kind == 'image' else 'weights/') + r.relative_path,
+            dependencies = [dict(name={'image': 'containers/', 'weights': 'weights/',
+                                      'runtime_data': 'data/'}[r.kind] + r.relative_path,
                                  kind=r.kind) for r in refs]
         except ValueError:
             blockers = ['binding_unavailable: Use the typed workflow form to prepare its selected dependencies; '

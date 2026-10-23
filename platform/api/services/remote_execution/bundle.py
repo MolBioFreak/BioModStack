@@ -1089,6 +1089,16 @@ def _rewrite_maturation_pdb_paths(value: str, path_map: dict[str, str]) -> str:
     return ','.join(_rewrite(part.strip(), path_map) for part in value.split(','))
 
 
+def _rewrite_md_source_provenance(value: str, path_map: dict[str, str]) -> str:
+    """Relocate the two executable snapshot leaves, not observational strings."""
+    document = json.loads(value)
+    for section, field in (('snapshot', 'structure'), ('original_snapshot', 'path')):
+        snapshot = document.get(section)
+        if isinstance(snapshot, dict) and isinstance(snapshot.get(field), str):
+            snapshot[field] = _rewrite(snapshot[field], path_map)
+    return json.dumps(document, separators=(',', ':'))
+
+
 def _relocate_ngs_clone_lock(params, *, staging_root, remote_runtime, remote_source,
                              nextflow_executable, expected_lock_sha256):
     """Project only host-owned lock locations; retain every scientific identity."""
@@ -1943,6 +1953,12 @@ def prepare_remote_bundle(
             path_map[command[command.index(flag) + 1]] = destination
     nextflow_executable = str(command[0]) if command else ""
     translated_command = [_rewrite(str(value), path_map) for value in command]
+    if job.model_id == 'molecular_dynamics':
+        for flag in ('--md_source_provenance_json',):
+            if flag in command:
+                position = command.index(flag) + 1
+                translated_command[position] = _rewrite_md_source_provenance(
+                    str(command[position]), path_map)
     if job.model_id == 'bindcraft2' and '--bc2_campaign_dir' in command:
         # The same local prefix names both prepared inputs and native output.
         # Only the compilation argument follows the transported input mapping.
@@ -2084,6 +2100,20 @@ def prepare_remote_bundle(
             attempt_id=attempt_id, target_id=target.id,
             lease_id=assignment['lease_id'],
             resources={**resources, 'gpu_id': job.assigned_gpu})
+        if job.model_id == 'molecular_dynamics':
+            # The callback owner consumes typed parent params, independently of
+            # root argv. Keep the immutable selected plan unchanged while binding
+            # only executable MD snapshot leaves in this worker placement copy.
+            from copy import deepcopy
+            placed = deepcopy(context['parent']['params'])
+            if isinstance(placed.get('md_source_provenance'), dict):
+                placed['md_source_provenance'] = json.loads(_rewrite_md_source_provenance(
+                    json.dumps(placed['md_source_provenance']), path_map))
+            spec = placed.get('md_job_spec')
+            if isinstance(spec, dict) and isinstance(spec.get('input'), dict):
+                if isinstance(spec['input'].get('structure'), str):
+                    spec['input']['structure'] = _rewrite(spec['input']['structure'], path_map)
+            context['parent']['params'] = placed
         context['resource_lock_path'] = resource_lock
         context.update(ledger_path=f'{remote_attempt}/component-runtime.sqlite',
                        root_state_path=f'{remote_attempt}/component-state.json',

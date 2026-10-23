@@ -7113,9 +7113,13 @@ def compile_nextflow_invocation(
              'boltzgen_input_pdb', 'boltzgen_ligand_pdb', 'boltzgen_dna_structure'}},
             sort_keys=True, separators=(',', ':'))
     for key, value in params.items():
-        if key in {'rfd4_request', 'complexa_request', 'md_source_provenance', 'native_sources'}:
-            # Structured request/provenance lives in the native projection, not argv.
+        if key in {'rfd4_request', 'complexa_request', 'md_source_provenance', 'md_job_spec', 'native_sources'}:
+            # Scientific objects remain typed in the native projection. The MD
+            # collector additionally consumes one JSON wire, never flattened keys.
             native_parameters[key] = deepcopy(value)
+            if key == 'md_source_provenance' and model_id == 'molecular_dynamics' and value is not None:
+                cmd.extend(['--md_source_provenance_json',
+                    json.dumps(value, allow_nan=False, separators=(',', ':'))])
             continue
         if key in {'pcad_laproteina_settings_json', 'pcad_disco_settings_json', 'pcad_disco_jobs_json'}:
             wire = value if isinstance(value, str) else json.dumps(value, allow_nan=False, separators=(',', ':'))

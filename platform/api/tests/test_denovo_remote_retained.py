@@ -17,15 +17,8 @@ from test_remote_bundle_runtime_gaps import package
 
 @pytest.fixture
 def protenix_package(tmp_path, monkeypatch, request):
-    # Isolate this owner-level Protenix transport test from unrelated registry
-    # declarations. Load the real descriptor; no model execution is substituted.
-    import model_registry
-    definitions = tmp_path / 'model-definitions'
-    definitions.mkdir()
-    source = Path(model_registry.__file__).parent / 'config/models/protenix.yaml'
-    shutil.copy2(source, definitions / source.name)
-    registry = model_registry.ModelRegistry(definitions)
-    monkeypatch.setattr(model_registry, 'get_registry', lambda: registry)
+    # Exercise the complete installed source registry, not a Protenix-only
+    # overlay: unrelated native declarations must remain loadable together.
     return request.getfixturevalue('package')
 
 
@@ -142,13 +135,26 @@ def test_md_original_and_derivative_portable_after_controller_hidden(tmp_path, m
     params = {'md_job_config': str(document)}
     if original_present:
         params['md_source_provenance'] = {'source_path': '/absent/observational/original.pdb', 'original_snapshot': {
-            'path': str(original), 'sha256': hashlib.sha256(original.read_bytes()).hexdigest()}}
+            'path': str(original), 'sha256': hashlib.sha256(original.read_bytes()).hexdigest()},
+            'snapshot': {'structure': str(derivative), 'model': 2},
+            'source': {'document_id': 'retained-document', 'model': 2}}
     refs, assets = _input_inventory(tmp_path, monkeypatch, root, params, 'molecular_dynamics', 'simulate')
     assert {r['source_path'] for r in refs} == {str(document), str(derivative), *([str(original)] if original_present else [])}
     _place_and_hide(tmp_path, monkeypatch, root, refs, assets)
     assert portable.resolve_input_path(derivative).read_bytes() == b'MODEL        2\nENDMDL\n'
     if original_present:
         assert portable.resolve_input_path(original).read_bytes() != portable.resolve_input_path(derivative).read_bytes()
+        selectors = {tuple(r['selector']) for r in refs}
+        assert ('md_source_provenance', 'snapshot', 'structure') in selectors
+        assert ('md_source_provenance', 'original_snapshot', 'path') in selectors
+        mapping = {str(p): str(portable.resolve_input_path(p)) for p in (original, derivative)}
+        worker_params = json.loads(bundle._rewrite_md_source_provenance(
+            json.dumps(params['md_source_provenance']), mapping))
+        assert Path(worker_params['snapshot']['structure']).read_bytes() == b'MODEL        2\nENDMDL\n'
+        assert Path(worker_params['original_snapshot']['path']).read_bytes() != Path(worker_params['snapshot']['structure']).read_bytes()
+        assert worker_params['snapshot']['model'] == 2
+        assert worker_params['source'] == params['md_source_provenance']['source']
+        assert worker_params['source_path'] == '/absent/observational/original.pdb'
     relocated = portable.resolve_input_path(document)
     bound = portable.bind_native_document(json.loads(relocated.read_text()), 'md-job', owner=relocated)
     assert Path(bound['input']['structure']).read_bytes() == portable.resolve_input_path(derivative).read_bytes()
