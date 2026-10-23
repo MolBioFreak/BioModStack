@@ -99,10 +99,8 @@ function ProvisionChooser({ target, onChanged, inventoryVisible = true }: Props)
   const valid = kind !== 'workflow' && !models.isError && modelEntries.some(item => item.id === modelId)
     && selections.some(item => item.model_id === modelId);
   const selectedWorkflow = kind === 'workflow' ? workflows.find(item => item.id === modelId) : undefined;
-  const familySelection = !catalog.isError && selectedWorkflow?.id === DE_NOVO_PRELOAD_SELECTION.model_id
-    ? catalog.data?.find((item): item is CatalogProvisionSelection => item.kind === 'model' && item.model_id === selectedWorkflow.id) : undefined;
   const pack = catalog.data?.find((item): item is WorkflowPackSelection =>
-    item.kind === 'workflow_pack' && item.workflow_id === modelId);
+    item.kind === 'workflow_pack' && item.workflow_id === (modelId === 'protein_modification_experimental' ? 'de_novo_design' : modelId));
   const operation = target.preload;
   const live = Boolean(operation) && (ACTIVE_PHASES.includes(operation!.phase) || Boolean(operation!.recovery_required));
   return <section aria-label="Independent worker provisioning" className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-[var(--text-primary)]">
@@ -129,12 +127,13 @@ function ProvisionChooser({ target, onChanged, inventoryVisible = true }: Props)
     {selectedWorkflow && <div className="space-y-2 text-sm">
       <p>{selectedWorkflow.description}</p>
       {pack ? <>
-        <p>{pack.workflow_id === 'antibody_denovo'
+        <p>{pack.workflow_id === 'de_novo_design'
+          ? 'Downloads all supported De Novo generator, sequence, packing, prediction and MD base assets. Optional native oracles, corpora and custom checkpoints remain selected-request additions.'
+          : pack.workflow_id === 'antibody_denovo'
           ? 'Downloads the binder generators, sequence designers, validators and optional operation assets. Jobs keep their own settings and biological inputs.'
           : 'Downloads the workflow’s supported local predictors and shared assets, including optional analysis assets. Jobs keep their own settings; inputs and MSA requests stay with each job.'}</p>
         <ProvisionActions key={JSON.stringify(pack)} target={target} onChanged={onChanged} selection={pack} prepareInOneClick />
       </> : <>
-      {familySelection && <CatalogProvisionPanel target={target} onChanged={onChanged} selection={familySelection} showStatus={false} />}
       <p>For current-request dependencies, open the existing workflow configuration to choose scientific settings and this worker. Unsaved preparation is available only where that form has “Preview artifact downloads”. Otherwise, the saved-Job preload below can use an existing job as its dependency recipe without rerunning it. Opening the launcher does not prepare assets or launch a Job.</p>
       <a className={buttonClass} href={`${import.meta.env.BASE_URL}submit?template=${encodeURIComponent(selectedWorkflow.id)}`}>Configure {selectedWorkflow.name}</a>
       </>}
@@ -169,7 +168,7 @@ export function WorkflowProvisionPanel({ target, onChanged, workflowRequest }: P
     <PreparationStatus target={target} onChanged={onChanged} />
   </section>;
 }
-export const DE_NOVO_PRELOAD_SELECTION: CatalogProvisionSelection = { kind: 'model', model_id: 'protein_modification_experimental' };
+export const DE_NOVO_PRELOAD_SELECTION: WorkflowPackSelection = { kind: 'workflow_pack', workflow_id: 'de_novo_design' };
 
 type ProvisionActionsProps = Props & { selection: ProvisionSelection | null; retryOperationId?: string; prepareInOneClick?: boolean };
 
@@ -184,9 +183,9 @@ export function ProvisionActions(props: ProvisionActionsProps) {
   return <BoundProvisionActions key={binding} {...props} />;
 }
 
-export function CatalogProvisionPanel({ target, onChanged, selection, showStatus = true }: Props & { selection: CatalogProvisionSelection; showStatus?: boolean }) {
+export function CatalogProvisionPanel({ target, onChanged, selection, showStatus = true }: Props & { selection: CatalogProvisionSelection | WorkflowPackSelection; showStatus?: boolean }) {
   return <section aria-label="Independent dependency preparation" className="mt-3 space-y-3">
-    <h4>{selection.model_id === DE_NOVO_PRELOAD_SELECTION.model_id ? 'All De Novo dependencies' : 'Independent dependency preparation'}</h4>
+    <h4>{selection.kind === 'workflow_pack' && selection.workflow_id === DE_NOVO_PRELOAD_SELECTION.workflow_id ? 'All De Novo dependencies' : 'Independent dependency preparation'}</h4>
     <p className="text-xs">Prepare the catalog's full dependency set, independently of the current scientific draft. {PREPARATION_CAVEAT}</p>
     <ProvisionActions target={target} onChanged={onChanged} selection={selection} />
     {showStatus && <PreparationStatus target={target} onChanged={onChanged} />}

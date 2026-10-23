@@ -21,7 +21,7 @@ vi.mock('../../src/components/ProteinLocalRedesignTemplate', () => ({ ProteinLoc
 vi.mock('../../src/components/ShapeBlueprintTemplate', () => ({ default: () => null }));
 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
-const catalog: ProvisionSelection[] = [{ kind: 'model', model_id: 'protenix' }, { kind: 'image', model_id: 'protenix' }, { kind: 'image', model_id: 'foldcp' }, { kind: 'model', model_id: 'esmfold2' }, { kind: 'workflow_pack', workflow_id: 'structure_prediction' }, { kind: 'workflow_pack', workflow_id: 'antibody_denovo' }];
+const catalog: ProvisionSelection[] = [{ kind: 'model', model_id: 'protenix' }, { kind: 'image', model_id: 'protenix' }, { kind: 'image', model_id: 'foldcp' }, { kind: 'model', model_id: 'esmfold2' }, { kind: 'workflow_pack', workflow_id: 'structure_prediction' }, { kind: 'workflow_pack', workflow_id: 'antibody_denovo' }, { kind: 'workflow_pack', workflow_id: 'de_novo_design' }];
 const compactEmpty = { artifact_summary: { total_count: 0, verified_count: 0, total_bytes: 0, verified_bytes: 0 }, cached_artifact_count: 0 };
 const artifacts = [{ name: 'runtime/protenix.sif', sha256: 'a'.repeat(64), size_bytes: 1234 }];
 const preview = (selection: ProvisionSelection): ProvisionPreview => ({ selection, artifacts, total_bytes: 1234, preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'download_only' });
@@ -165,6 +165,18 @@ it('prepares the entire workflow from one explicit click using its fresh digest,
   expect(posts.some(post => post.url.endsWith('/runtime-inventory/refresh'))).toBe(false);
   await act(async () => { await client.invalidateQueries(); await settle(); });
   expect(posts).toHaveLength(2);
+});
+
+it('prepares the De Novo whole pack without using the selected request or saved Job', async () => {
+  await render();
+  await select('Preparation workflow', 'protein_modification_experimental');
+  expect(posts).toEqual([]);
+  expect(container.textContent).toContain('Optional native oracles, corpora and custom checkpoints');
+  await click('Prepare entire workflow', true);
+  expect(posts).toEqual([
+    { url: '/api/execution-targets/vast%3A123/provision/preview', body: { kind: 'workflow_pack', workflow_id: 'de_novo_design' } },
+    { url: '/api/execution-targets/vast%3A123/provision', body: { kind: 'workflow_pack', workflow_id: 'de_novo_design', preview_sha256: 'b'.repeat(64) } },
+  ]);
 });
 
 it('prepares all de novo binder dependencies in one click, without substituting a configured generator', async () => {
