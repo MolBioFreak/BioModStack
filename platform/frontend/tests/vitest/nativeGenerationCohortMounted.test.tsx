@@ -187,16 +187,16 @@ it('exports matching, selected and all-loaded scopes as exact native JSON and pr
         formula: '=SUM(A1:A2)', plus: '+cmd', minus: '-cmd', at: '@cmd', tab: '\tcmd', carriage: '\rcmd', quote: 'a,"b"', negative: -2.5 };
     await mount(rows, { selectedDesignIds: ['external-design', 'design/0', 'design/1204'] });
     await change('Search candidates', 'input-1204');
-    expect(JSON.parse(await exported('Native JSON'))).toEqual([rows[1204]]);
+    expect(JSON.parse(await exported('Native JSON')).records.map((entry: any) => entry.native_record)).toEqual([rows[1204]]);
     const csv = await exported('Metrics CSV');
     expect(csv).toContain('"0.1234567890123456"'); expect(csv).toContain('"false"'); expect(csv).toContain('"Explicit null"');
     for (const value of ['=SUM(A1:A2)', '+cmd', '-cmd', '@cmd', '\tcmd', '\rcmd']) expect(csv).toContain(`"'${value}"`);
     expect(csv).toContain('"a,""b"""'); expect(csv).toContain('"-2.5"'); expect(csv).not.toContain('"\'-2.5"');
     await change('Export scope', 'selected');
-    expect(JSON.parse(await exported('Native JSON'))).toEqual([rows[0], rows[1204]]);
+    expect(JSON.parse(await exported('Native JSON')).records.map((entry: any) => entry.native_record)).toEqual([rows[0], rows[1204]]);
     expect((await exported('Metrics CSV')).split('\r\n')).toHaveLength(3);
     await change('Export scope', 'all');
-    expect(JSON.parse(await exported('Native JSON'))).toEqual(rows);
+    expect(JSON.parse(await exported('Native JSON')).records.map((entry: any) => entry.native_record)).toEqual(rows);
     expect((await exported('Metrics CSV')).split('\r\n')).toHaveLength(1206);
     expect((rows[1204].metrics as any).formula).toBe('=SUM(A1:A2)');
 });
@@ -205,7 +205,7 @@ it('retains the first 1000 usable records after a later-page error and retries t
     const rows = fixture(); let fail = true;
     await mount(rows, {}, async config => { if (config.params.offset === 1000 && fail) throw new Error('test-only later page failure'); return response(config, rows); });
     expect(text(tree.root)).toContain('partially loaded'); expect(cohortIds()).toHaveLength(1000); expect(tableRows()).toHaveLength(25);
-    expect(JSON.parse(await exported('Native JSON'))).toEqual(rows.slice(0, 1000));
+    expect(JSON.parse(await exported('Native JSON')).records.map((entry: any) => entry.native_record)).toEqual(rows.slice(0, 1000));
     await change('Search candidates', 'input-999'); expect(visibleIds()).toEqual(['native:999']);
     fail = false; await click('Retry native readback'); await flush();
     expect(text(tree.root)).not.toContain('partially loaded');
@@ -225,7 +225,7 @@ it('does not let a delayed previous-job page populate the new job', async () => 
     await click('Dashboard'); await flush();
     expect(pending.signal.aborted).toBe(true); expect(cohortIds()).toEqual(['new-job-only']);
     await act(async () => finish(response(pending, old))); await flush();
-    expect(cohortIds()).toEqual(['new-job-only']); expect(JSON.parse(await exported('Native JSON'))).toEqual(fresh);
+    expect(cohortIds()).toEqual(['new-job-only']); expect(JSON.parse(await exported('Native JSON')).records.map((entry: any) => entry.native_record)).toEqual(fresh);
     expect(text(tree.root)).not.toContain('native:1000');
 });
 
@@ -292,7 +292,7 @@ it('projects BoltzGen verified native scalars without turning disposition criter
     expect(text(tableRows()[1])).not.toContain('0.2');
     expect((await exported('Metrics CSV')).split('\r\n')[0]).toContain('"design_ptm","affinity_probability","filter_rmsd"');
     expect(await exported('Metrics CSV')).toContain('"Not reported"');
-    expect(JSON.parse(await exported('Native JSON'))).toEqual(rows);
+    expect(JSON.parse(await exported('Native JSON')).records.map((entry: any) => entry.native_record)).toEqual(rows);
     await click('Candidate 1');
     expect(tree.root.findByType(StructureWorkbench).props).toMatchObject({ structureUrl: '/api/files/selected-cif.cif', structureDocumentId: 'native-cif', structureContentSha256: 'c'.repeat(64), format: 'cif' });
     expect(text(control('Candidate structure inspector'))).toContain('Filter RMSD (angstrom)');
@@ -309,7 +309,7 @@ it('keeps no-metric historical records inspectable and exportable with no invent
     const rows = [{ candidate_key: 'historical-only', metrics: {}, structures: [] }]; await mount(rows);
     expect(visibleIds()).toEqual(['historical-only']); expect(text(tree.root)).toContain('No finite numeric observations');
     expect(tree.root.findAllByType(Plot)).toHaveLength(0);
-    expect(JSON.parse(await exported('Native JSON'))).toEqual(rows);
+    expect(JSON.parse(await exported('Native JSON')).records.map((entry: any) => entry.native_record)).toEqual(rows);
     await click('Candidate 1'); expect(text(tree.root)).toContain('No downloadable native structure was published');
     expect(changes).not.toHaveBeenCalled();
 });

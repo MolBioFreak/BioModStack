@@ -108,16 +108,19 @@ def _cad_manifest(native, raw, model):
 
 
 def _records(manifest, model):
+    """Iterate immutable snapshot rows; copy only at the returned-page boundary."""
     if model in {'laproteina', 'disco'}:
-        return copy.deepcopy(manifest['records'])
-    if model == 'rfd4_proteina':
-        return copy.deepcopy(manifest['records']) + [
-            {**copy.deepcopy(event), 'population': event.get('population', 'event')}
-            for event in manifest.get('events', []) if event.get('event') != 'native_writer']
-    return [dict(copy.deepcopy(row), document=row['path'], population=row['role'])
-            for row in manifest['documents']] + [
-                dict(copy.deepcopy(row), population='observation', metrics=copy.deepcopy(row['values']))
-                for row in manifest['observations']]
+        yield from manifest['records']
+    elif model == 'rfd4_proteina':
+        yield from manifest['records']
+        for event in manifest.get('events', []):
+            if event.get('event') != 'native_writer':
+                yield {**event, 'population': event.get('population', 'event')}
+    else:
+        for row in manifest['documents']:
+            yield dict(row, document=row['path'], population=row['role'])
+        for row in manifest['observations']:
+            yield dict(row, population='observation', metrics=row['values'])
 
 
 async def publish_native_generation(session, job, output_path):
@@ -205,35 +208,55 @@ async def read_published_generation_page(job, session, *, offset=0, limit=100):
         raise ValueError('Invalid native page')
     model = publication_model(job)
     prefix, name, contract = PUBLICATIONS[model]
-    artifacts = list((await session.scalars(select(JobArtifact).where(
+    owner = (
         JobArtifact.owner_job_id == job.id, JobArtifact.attempt == (job.retry_count or 0),
-        JobArtifact.logical_path.startswith(prefix + '/')))).all())
-    owned = {a.logical_path.removeprefix(prefix + '/'): a for a in artifacts}
-    index = owned.get(name)
+        JobArtifact.logical_path.startswith(prefix + '/'))
+    index = await session.scalar(select(JobArtifact).where(*owner, JobArtifact.logical_path == prefix + '/' + name))
     receipt = (job.provenance or {}).get(PUBLICATION_KEY)
     if index is None or receipt is None:
         raise ValueError('Native publication is not registered')
     if (receipt != (index.provenance or {}).get('publication')
             or receipt['remote_attempt_id'] != job.remote_attempt_id
             or receipt['attempt'] != (job.retry_count or 0)
-            or receipt['manifest_sha256'] != index.sha256
-            or set(owned) != set(receipt['files'])):
+            or receipt['manifest_sha256'] != index.sha256):
         raise ValueError('Native publication identity changed')
-    for relative, artifact in owned.items():
-        if (artifact.sha256, artifact.bytes) != (receipt['files'][relative]['sha256'], receipt['files'][relative]['bytes']):
-            raise ValueError('Native artifact identity changed')
+    manifest = index.provenance['native_generation_manifest']
+    records = []
+    total = 0
+    for position, raw in enumerate(_records(manifest, model)):
+        total += 1
+        if offset <= position < offset + limit:
+            records.append((position, raw))
+    needed = {row.get('document') for _, row in records}
     from urllib.parse import quote
     from paths import to_allowed_relative
     downloads = {}
-    for artifact in artifacts:
+    owned = {}
+    artifacts = []
+    seen = set()
+    # Verify the full custody inventory, but do not instantiate/copy every
+    # JobArtifact (each index can contain large model-owned metadata). Stream
+    # scalar columns in bounded DB batches; retain objects only for this page.
+    inventory = await session.stream(select(JobArtifact.id, JobArtifact.logical_path,
+        JobArtifact.storage_path, JobArtifact.sha256, JobArtifact.bytes).where(*owner).execution_options(yield_per=500))
+    async for artifact in inventory:
+        relative = artifact.logical_path.removeprefix(prefix + '/')
+        info = receipt['files'].get(relative)
+        if relative in seen or info is None or (artifact.sha256, artifact.bytes) != (info['sha256'], info['bytes']):
+            raise ValueError('Native artifact identity changed')
+        seen.add(relative)
         try:
-            downloads[artifact.id] = '/api/files/download/' + quote(to_allowed_relative(Path(artifact.storage_path)), safe='/')
+            download = '/api/files/download/' + quote(to_allowed_relative(Path(artifact.storage_path)), safe='/')
         except ValueError:
-            downloads[artifact.id] = None
-    manifest = index.provenance['native_generation_manifest']
-    records = _records(manifest, model)
+            download = None
+        artifacts.append({'path': artifact.logical_path, 'bytes': artifact.bytes, 'download_url': download})
+        if relative in needed:
+            owned[relative] = artifact
+            downloads[artifact.id] = download
+    if seen != set(receipt['files']):
+        raise ValueError('Native publication identity changed')
     result = []
-    for position, raw in enumerate(records[offset:offset + limit], offset):
+    for position, raw in records:
         row = copy.deepcopy(raw)
         # The event ordinal is scoped to the immutable publication, never used
         # to pair a metric with a neighboring document or candidate.
@@ -259,9 +282,8 @@ async def read_published_generation_page(job, session, *, offset=0, limit=100):
             'population_completeness': manifest.get('population_completeness'),
             'observation_errors': manifest.get('observation_errors', []),
             'missingness': manifest.get('missingness'), 'records': result,
-            'offset': offset, 'limit': limit, 'total': len(records),
-            'artifacts': [{'path': a.logical_path, 'bytes': a.bytes,
-                          'download_url': downloads[a.id]} for a in artifacts]}
+            'offset': offset, 'limit': limit, 'total': total,
+            'artifacts': artifacts}
 
 
 async def read_publication_record(job, session, ref):

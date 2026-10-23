@@ -1,18 +1,26 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchDesignById, fetchDesignResidueMetrics, fetchNativeStructureDocument, fetchNativeResidueMetrics } from '../lib/api';
+import { fetchDesignById, fetchDesignResidueMetrics, type NativeStructureDocumentResponse } from '../lib/api';
+import { fetchNativeComparison } from '../lib/nativeBinderResults';
 import type { CandidateDocuments } from '../lib/binderDiagnosticSelection';
 import type { NativeCandidateSource } from '../lib/binderContinuation';
-import { parseScientificNativeMetric } from '../lib/scientificViewerIdentity';
+import { parseScientificNativeMetric, type ScientificNativeMetric } from '../lib/scientificViewerIdentity';
 import { comparisonChain, comparisonProfiles, type ComparisonProfile } from './nativeComparisonProfiles';
 import { useThemeColors } from './useThemeColors';
 const Plot = lazy(() => import('react-plotly.js'));
 
 interface Design { id: string; name: string; plddt_overall: number | null }
+/** Model-qualified display subset, using native labels, never array-offset correspondence. */
+function selectedModel(metric: ScientificNativeMetric, model?: number): ScientificNativeMetric {
+    if (metric.status !== 'ok' || model == null) return metric;
+    const indices = metric.residues.flatMap((residue, index) => residue.modelId === String(model) ? [index] : []);
+    if (!indices.length) return { status: 'unavailable', reason: `Native confidence unavailable for MODEL ${model}` };
+    return { ...metric, residues: indices.map(index => metric.residues[index]), values: indices.map(index => metric.values[index]) };
+}
 interface DesignComparePaneProps {
     designs: Design[]; preSelectedId?: string; selectedDesignIds?: string[];
     onSelectedDesignIdsChange?: (ids: string[]) => void;
-    candidateDocuments?: CandidateDocuments;
+    candidateDocuments?: Record<string, CandidateDocuments[string] & { model?: number }>;
     selectedNativeSources?: NativeCandidateSource[];
 }
 
@@ -24,25 +32,27 @@ export function DesignComparePane({ designs, preSelectedId, selectedDesignIds, o
     const selectedIds = selectedDesignIds ?? localIds;
     const metrics = useQuery({
         queryKey: ['native-comparison-profiles', [...selectedIds].sort().map(id => [id, candidateDocuments[id]]),
-            selectedNativeSources.map(source => [source.job_id, source.artifact_id, source.document?.target_state])],
+            selectedNativeSources.map(source => [source.job_id, source.artifact_id, source.document?.target_state, source.document?.model])],
         queryFn: () => Promise.all([
             ...selectedIds.map(async (id): Promise<ComparisonProfile> => {
                 try {
                     const selected = candidateDocuments[id];
-                    const [design, raw] = await Promise.all([fetchDesignById(id, undefined, selected), fetchDesignResidueMetrics(id, selected)]);
-                    return { id, name: label(id, design.data.name), metric: parseScientificNativeMetric(raw.data,
-                        design.data.id === id ? design.data.scientific_structure_document : null, 'residue_plddt', id) };
+                    const selector = selected ? { ...selected, ...(selected.model != null ? { model_number: selected.model } : {}) } : undefined;
+                    const [design, raw] = await Promise.all([fetchDesignById(id, undefined, selector), fetchDesignResidueMetrics(id, selector)]);
+                    return { id, name: label(id, design.data.name), metric: selectedModel(parseScientificNativeMetric(raw.data,
+                        design.data.id === id ? design.data.scientific_structure_document : null, 'residue_plddt', id), selected?.model) };
                 } catch { return { id, name: label(id), metric: { status: 'unavailable', reason: 'Native readback failed' } }; }
             }),
             ...selectedNativeSources.map(async (source, index): Promise<ComparisonProfile> => {
                 // Native identity stays artifact-scoped; it is not an ORM Design ID.
-                const id = `native:${source.job_id}:${source.artifact_id}`, name = `Native candidate ${index + 1}`;
+                const candidateId = `native:${source.job_id}:${source.artifact_id}`;
+                const id = `${candidateId}:${JSON.stringify([source.document?.target_state, source.document?.model])}`, name = `Native candidate ${index + 1}`;
                 try {
                     const [metadata, raw] = await Promise.all([
-                        fetchNativeStructureDocument(source.job_id, source.artifact_id, source.document?.target_state),
-                        fetchNativeResidueMetrics(source.job_id, source.artifact_id, source.document?.target_state),
+                        fetchNativeComparison<NativeStructureDocumentResponse>(source, 'document'),
+                        fetchNativeComparison<unknown>(source, 'residue-metrics'),
                     ]);
-                    return { id, name, metric: parseScientificNativeMetric(raw.data, metadata.data.document, 'residue_plddt', id, source) };
+                    return { id, name, metric: selectedModel(parseScientificNativeMetric(raw.data, metadata.data.document, 'residue_plddt', candidateId, source), source.document?.model) };
                 } catch { return { id, name, metric: { status: 'unavailable', reason: 'Native readback failed' } }; }
             }),
         ]), enabled: selectedIds.length + selectedNativeSources.length > 0, staleTime: 300000,
@@ -77,7 +87,7 @@ export function DesignComparePane({ designs, preSelectedId, selectedDesignIds, o
                 legend: { orientation: 'h', y: 1.05 }, hovermode: 'closest', dragmode: 'zoom' }}
             config={{ responsive: true, displaylogo: false, toImageButtonOptions: { format: 'svg', filename: 'native-confidence-comparison' } }}
             useResizeHandler style={{ width: '100%', minWidth: 0 }} /> </Suspense> : <p>Native confidence unavailable for this selection. Retained rows remain below.</p>}
-        <a className="underline" download="native-confidence-comparison.json" href={`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify({ correspondence: 'exact published identity labels; no alignment', profiles, chain }, null, 2))}`}>Export native values and identities</a>
+        <a className="underline" download="native-confidence-comparison.json" href={`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify({ schema: 'bms.native-confidence-comparison.v1', correspondence: 'exact published identity labels; no alignment', selection: { design_ids: selectedIds, documents: candidateDocuments, native_sources: selectedNativeSources }, read_status: metrics.isFetching ? 'loading' : metrics.isError ? 'failed' : 'loaded', profiles, chain }, null, 2))}`}>Export native values and identities</a>
         <details><summary className="text-sm">Profile sources</summary><div className="overflow-auto"><table className="w-full text-sm text-left"><thead><tr><th>Candidate / document</th><th>Native scope / units</th><th>Displayed points</th><th>Shared labels / unmatched</th><th>Availability</th></tr></thead>
             <tbody>{profiles.map(({ id }) => {
                 const row = chart.rows.find(p => p.id === id);
